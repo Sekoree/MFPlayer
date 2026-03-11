@@ -20,6 +20,12 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MIDI", "MIDI", "{6FD506B3-1
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PMLib", "PMLib\PMLib.csproj", "{BFF82F62-49BB-4B0E-9237-45249A41E235}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "External", "External", "{2324C408-E57C-4199-A5FC-61D6D5DB5C92}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MDK.SDK.NET", "..\MDK.SDK.NET\src\MDK.SDK.NET.csproj", "{92B54C01-0F80-4C3F-A4EB-DF7F09502B56}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mdk.Avalonia.Example", "..\MDK.SDK.NET\Example\Mdk.Avalonia.Example\Mdk.Avalonia.Example.csproj", "{0F0E2EA3-3B0D-436B-88F0-FC1D733122A0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -46,6 +52,14 @@ Global
 		{BFF82F62-49BB-4B0E-9237-45249A41E235}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BFF82F62-49BB-4B0E-9237-45249A41E235}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BFF82F62-49BB-4B0E-9237-45249A41E235}.Release|Any CPU.Build.0 = Release|Any CPU
+		{92B54C01-0F80-4C3F-A4EB-DF7F09502B56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{92B54C01-0F80-4C3F-A4EB-DF7F09502B56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{92B54C01-0F80-4C3F-A4EB-DF7F09502B56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{92B54C01-0F80-4C3F-A4EB-DF7F09502B56}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0F0E2EA3-3B0D-436B-88F0-FC1D733122A0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0F0E2EA3-3B0D-436B-88F0-FC1D733122A0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0F0E2EA3-3B0D-436B-88F0-FC1D733122A0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0F0E2EA3-3B0D-436B-88F0-FC1D733122A0}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -55,5 +69,7 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{BFF82F62-49BB-4B0E-9237-45249A41E235} = {6FD506B3-14CF-45F3-A11F-EB8C831991E2}
+		{92B54C01-0F80-4C3F-A4EB-DF7F09502B56} = {2324C408-E57C-4199-A5FC-61D6D5DB5C92}
+		{0F0E2EA3-3B0D-436B-88F0-FC1D733122A0} = {2324C408-E57C-4199-A5FC-61D6D5DB5C92}
 	EndGlobalSection
 EndGlobal
