@@ -1,5 +1,8 @@
-﻿using FFmpeg.AutoGen;
-using ManagedBass;
+﻿using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using AudioEx;
+using FFmpeg.AutoGen;
+using Ownaudio.Core;
 
 internal class Program
 {
@@ -22,10 +25,18 @@ internal class Program
     {
         Console.WriteLine("Hello, World!");
 
-        var b = Bass.Init(Frequency: 48000);
-        Console.WriteLine($"Bass.Init: {b}");
+        using var engine = AudioEngineFactory.CreateDefault();
 
-        var testFile = "/home/seko/Music/テレパシ/01_01_テレパシ.flac";
+        var config = new AudioConfig()
+        {
+            SampleRate = 48000,
+            Channels = 2,
+            BufferSize = 512
+        };
+        engine.Initialize(config);
+        engine.Start();
+
+        var testFile = "/home/sekoree/Music/テレパシ/01_01_テレパシ.flac";
 
         ffmpeg.RootPath = "/lib/";
         DynamicallyLoadedBindings.Initialize();
@@ -78,15 +89,13 @@ internal class Program
         s_streamIndex   = streamIndex;
         s_outSampleRate = outSampleRate;
         s_outChannels   = outChannels;
-
-        var ch = Bass.CreateStream(48000, 2, BassFlags.Float, StreamCallback);
-        Console.WriteLine($"Bass.CreateStream: {ch}");
-
-        var playResult = Bass.ChannelPlay(ch);
-        Console.WriteLine($"Bass.ChannelPlay: {playResult}");
-
-        while (Bass.ChannelIsActive(ch) == PlaybackState.Playing)
-            Thread.Sleep(10);
+        
+        while (true)
+        {
+            var sendToEngine = StreamCallback(engine);
+            if (sendToEngine == 0)
+                break;
+        }
 
         // Cleanup
         var pktPtr   = (AVPacket*)s_packet;
@@ -96,26 +105,23 @@ internal class Program
         ffmpeg.av_frame_free(&framePtr);
         ffmpeg.avcodec_free_context(&codecContext);
         ffmpeg.avformat_close_input(&fContext);
-
-        Bass.StreamFree(ch);
-        Bass.Free();
     }
 
-    static unsafe int StreamCallback(int handle, nint buffer, int length, nint user)
+    static unsafe int StreamCallback(IAudioEngine engine)
     {
         var swrCtx   = (SwrContext*)s_swrCtx;
         var codecCtx = (AVCodecContext*)s_codecCtx;
         var fCtx     = (AVFormatContext*)s_fCtx;
         var pkt      = (AVPacket*)s_packet;
         var frm      = (AVFrame*)s_frame;
-        var output   = (float*)buffer;
-        var needed   = length / sizeof(float);
         var written  = 0;
+        var buffer = new float[engine.FramesPerBuffer * s_outChannels * sizeof(float)];
+        var needed  = buffer.Length / sizeof(float);
 
         // 1. Drain leftover samples from the previous callback
-        var fromOverflow = Math.Min(s_overflow.Count, needed);
+        var fromOverflow = Math.Min(s_overflow.Count, 512);
         for (int i = 0; i < fromOverflow; i++)
-            output[written++] = s_overflow[i];
+            buffer[written++] = s_overflow[i];
         s_overflow.RemoveRange(0, fromOverflow);
 
         // 2. Decode until BASS's buffer is filled
@@ -156,7 +162,9 @@ internal class Program
             // 4. Write what fits into BASS's buffer
             var canWrite = Math.Min(totalFloats, needed - written);
             for (int i = 0; i < canWrite; i++)
-                output[written++] = convertedFloats[i];
+                buffer[written++] = convertedFloats[i];
+            
+            engine.Send(buffer);
 
             // 5. Store any leftover for the next callback
             for (int i = canWrite; i < totalFloats; i++)
@@ -167,8 +175,9 @@ internal class Program
         }
 
         // Signal end of stream to BASS
-        if (s_decoderEof && written == 0 && s_overflow.Count == 0)
-            return (int)StreamProcedureType.End;
+        //if (s_decoderEof && written == 0 && s_overflow.Count == 0)
+        //    return (int)StreamProcedureType.End;
+        //engine.Send(
 
         return written * sizeof(float);
     }

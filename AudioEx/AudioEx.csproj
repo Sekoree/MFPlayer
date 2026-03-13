@@ -18,6 +18,7 @@
       <PackageReference Include="FFmpeg.AutoGen" />
       <PackageReference Include="ManagedBass" />
       <PackageReference Include="ManagedBass.Mix" />
+      <PackageReference Include="OwnAudioSharp.Basic" />
     </ItemGroup>
 
 </Project>
