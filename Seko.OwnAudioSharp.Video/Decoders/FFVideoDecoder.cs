@@ -365,15 +365,42 @@ public unsafe class FFVideoDecoder : IVideoDecoder
 
     private static double ResolveFrameRate(AVStream* stream)
     {
+        if (IsSingleFrameStream(stream))
+            return 1.0;
+
         var frameRate = ffmpeg.av_q2d(stream->avg_frame_rate);
-        if (frameRate > 0)
+        if (IsReasonableFrameRate(frameRate))
             return frameRate;
 
         frameRate = ffmpeg.av_q2d(stream->r_frame_rate);
-        if (frameRate > 0)
+        if (IsReasonableFrameRate(frameRate))
             return frameRate;
 
+        if (stream->nb_frames > 1 && stream->duration > 0)
+        {
+            var seconds = stream->duration * ffmpeg.av_q2d(stream->time_base);
+            if (seconds > 0)
+            {
+                var estimated = stream->nb_frames / seconds;
+                if (IsReasonableFrameRate(estimated))
+                    return estimated;
+            }
+        }
+
         return 30.0;
+    }
+
+    private static bool IsSingleFrameStream(AVStream* stream)
+    {
+        if ((stream->disposition & ffmpeg.AV_DISPOSITION_ATTACHED_PIC) != 0)
+            return true;
+
+        return stream->nb_frames == 1;
+    }
+
+    private static bool IsReasonableFrameRate(double frameRate)
+    {
+        return frameRate is >= 1.0 and <= 240.0;
     }
 
     private static int ResolveVideoStreamIndex(AVFormatContext* formatContext, int? preferredStreamIndex, out AVCodec* codec)

@@ -1,10 +1,10 @@
 using System;
-using System.Threading;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using FFmpeg.AutoGen;
 using Ownaudio.Core;
+using OwnaudioNET.Core;
 using OwnaudioNET.Mixing;
 using Seko.OwnAudioSharp.Video.Decoders;
 using Seko.OwnAudioSharp.Video.Sources;
@@ -36,10 +36,48 @@ public partial class MainWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.F11)
+        switch (e.Key)
         {
-            this.WindowState = this.WindowState == WindowState.FullScreen ? WindowState.Normal : WindowState.FullScreen;
+            case Key.F11:
+                WindowState = WindowState == WindowState.FullScreen ? WindowState.Normal : WindowState.FullScreen;
+                break;
+            case Key.Space:
+                TogglePlayPause();
+                e.Handled = true;
+                break;
+            case Key.Left:
+                SeekRelative(-1.0);
+                e.Handled = true;
+                break;
+            case Key.Right:
+                SeekRelative(1.0);
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                Close();
+                e.Handled = true;
+                break;
         }
+    }
+
+    private void TogglePlayPause()
+    {
+        if (_audioSource == null)
+            return;
+
+        if (_audioSource.State == AudioState.Playing)
+            _audioSource.Pause();
+        else
+            _audioSource.Play();
+    }
+
+    private void SeekRelative(double deltaSeconds)
+    {
+        if (_audioSource == null)
+            return;
+
+        var newPosition = Math.Max(0.0, _audioSource.Position + deltaSeconds);
+        _audioSource.Seek(newPosition);
     }
 
     protected override void OnOpened(EventArgs e)

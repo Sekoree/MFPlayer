@@ -220,7 +220,8 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
             // Multiple views can request at effectively the same clock time.
             // Avoid consuming extra frames for duplicate pulls within one tick.
             var currentFrame = _currentFrame;
-            if (_hasCurrentFrame && currentFrame != null && masterTimestamp <= _lastServedMasterTimestamp + _options.DuplicateRequestWindowSeconds)
+            var masterDelta = masterTimestamp - _lastServedMasterTimestamp;
+            if (_hasCurrentFrame && currentFrame != null && masterDelta >= 0 && masterDelta <= _options.DuplicateRequestWindowSeconds)
             {
                 frame = currentFrame;
                 return true;
@@ -436,10 +437,12 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
             return true;
         }
 
-        if (_options.UseDedicatedDecodeThread)
+        // After a seek/hard-resync, we can have no current frame while the background
+        // decode thread is still refilling the queue. Decode one frame inline so the
+        // caller does not sit on a stale image for noticeable time.
+        if (_options.UseDedicatedDecodeThread && _hasCurrentFrame)
             return false;
 
-        // Fallback sync decode when background thread is disabled.
         lock (_decoderLock)
         {
             if (_videoDecoder.IsEndOfStream)
@@ -455,6 +458,7 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         }
 
         _hasPendingFrame = true;
+        Interlocked.Increment(ref _decodedFrameCount);
         return true;
     }
 
@@ -624,5 +628,23 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
     private static void DisposeFrame(VideoFrame? frame)
     {
         frame?.Dispose();
+    }
+
+    public bool Seek(double positionInSeconds)
+    {
+        ThrowIfDisposed();
+
+        if (double.IsNaN(positionInSeconds) || double.IsInfinity(positionInSeconds))
+            return false;
+
+        var durationSeconds = StreamInfo.Duration.TotalSeconds;
+        var clamped = durationSeconds > 0
+            ? Math.Clamp(positionInSeconds, 0.0, durationSeconds)
+            : Math.Max(0.0, positionInSeconds);
+
+        lock (_syncLock)
+        {
+            return SeekInternal(clamped);
+        }
     }
 }
