@@ -1,7 +1,6 @@
-﻿using AudioEx;
-using System.Threading;
-using FFmpeg.AutoGen;
+﻿using FFmpeg.AutoGen;
 using Ownaudio.Core;
+using Ownaudio.Native;
 using OwnaudioNET.Mixing;
 using SDL3;
 using Seko.OwnAudioSharp.Video;
@@ -10,17 +9,20 @@ using Seko.OwnAudioSharp.Video.Sources;
 
 namespace AudioEx;
 
-internal class Program
+internal static class Program
 {
     public static void Main(string[] args)
     {
-        var testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
+        string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
+        if (args.Length > 0)
+            testFile = args[0];
 
         ffmpeg.RootPath = "/lib/";
         DynamicallyLoadedBindings.Initialize();
-        Console.WriteLine($"ffmpeg.av_version_info: {ffmpeg.av_version_info()}");
+        Console.WriteLine($"FFmpeg version: {ffmpeg.av_version_info()}");
 
-        using var engine = AudioEngineFactory.CreateDefault();
+        // --- Audio engine setup ---
+        using var engine = new NativeAudioEngine();
         var config = new AudioConfig
         {
             SampleRate = 48000,
@@ -30,28 +32,34 @@ internal class Program
         engine.Initialize(config);
         engine.Start();
 
+        // --- Source setup ---
         using var audioSource = new FFAudioSource(testFile, config);
         using var videoSource = new FFVideoSource(testFile, new FFVideoSourceOptions
         {
             UseDedicatedDecodeThread = true,
             QueueCapacity = 6,
+            EnableDriftCorrection = true,
+            DriftCorrectionDeadZoneSeconds = 0.006,
+            DriftCorrectionRate = 0.03,
+            MaxCorrectionStepSeconds = 0.003,
             DecoderOptions = new FFVideoDecoderOptions
             {
                 EnableHardwareDecoding = true,
                 ThreadCount = GetSafeVideoThreadCount()
             }
         });
-        using var mixer = new AudioMixer(engine);
 
+        using var mixer = new AudioMixer(engine);
         mixer.AddSource(audioSource);
         audioSource.AttachToClock(mixer.MasterClock);
         videoSource.AttachToClock(mixer.MasterClock);
 
-        mixer.Start();
-        audioSource.Play();
-
+        // --- SDL window ---
         if (!SDL.Init(SDL.InitFlags.Video))
+        {
+            Console.Error.WriteLine("SDL_Init failed.");
             return;
+        }
 
         if (!SDL.CreateWindowAndRenderer("MFPlayer", 1280, 720, SDL.WindowFlags.Resizable, out var window, out var renderer))
         {
@@ -60,6 +68,8 @@ internal class Program
         }
 
         var info = videoSource.StreamInfo;
+        Console.WriteLine($"Stream: {info}");
+
         var texture = SDL.CreateTexture(
             renderer,
             SDL.PixelFormat.ABGR8888,
@@ -75,27 +85,35 @@ internal class Program
             return;
         }
 
+        // --- Frame sharing (zero-allocation fast path) ---
         var frameLock = new Lock();
         VideoFrame? latestFrame = null;
         var hasFrame = false;
-        var lastDecodedFrames = 0L;
-        var lastPresentedFrames = 0L;
-        var lastDroppedFrames = 0L;
-        var lastStatsLogTime = DateTime.UtcNow;
 
-        videoSource.FrameReady += (_, e) =>
+        videoSource.FrameReadyFast += (frame, _) =>
         {
             VideoFrame? previous;
             lock (frameLock)
             {
                 previous = latestFrame;
-                latestFrame = e.Frame.AddRef();
+                latestFrame = frame.AddRef();
                 hasFrame = true;
             }
 
             previous?.Dispose();
         };
 
+        // --- Stats ---
+        var lastDecodedFrames = 0L;
+        var lastPresentedFrames = 0L;
+        var lastDroppedFrames = 0L;
+        var lastStatsLogTime = DateTime.UtcNow;
+
+        // --- Playback start ---
+        mixer.Start();
+        audioSource.Play();
+
+        // --- Main loop ---
         var loop = true;
         while (loop)
         {
@@ -105,9 +123,10 @@ internal class Program
                     loop = false;
             }
 
-            // Pump decoder against the shared master clock.
+            // Drive frame advancement against the shared master clock.
             videoSource.RequestNextFrame(out _);
 
+            // Render current frame.
             SDL.SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL.RenderClear(renderer);
 
@@ -133,38 +152,50 @@ internal class Program
 
             SDL.RenderPresent(renderer);
 
+            // Stop loop when both streams are exhausted.
+            if (videoSource.IsEndOfStream && audioSource.IsEndOfStream)
+            {
+                Console.WriteLine("[Playback] End of stream reached.");
+                loop = false;
+            }
+
+            // Per-second stats.
             var now = DateTime.UtcNow;
             if ((now - lastStatsLogTime).TotalSeconds >= 1)
             {
-                var decodedFrames = videoSource.DecodedFrameCount;
+                var decodedFrames  = videoSource.DecodedFrameCount;
                 var presentedFrames = videoSource.PresentedFrameCount;
-                var droppedFrames = videoSource.DroppedFrameCount;
-                var masterTimestamp = mixer.MasterClock.CurrentTimestamp;
-                var audioTimestamp = audioSource.Position;
-                var videoTimestamp = videoSource.CurrentFramePtsSeconds;
-                var correctionOffsetMs = videoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
-                var expectedVideoTimestamp = masterTimestamp - videoSource.StartOffset;
-                var expectedAudioTimestamp = masterTimestamp - audioSource.StartOffset;
-                var audioMasterDriftMs = (audioTimestamp - expectedAudioTimestamp) * 1000.0;
-                var videoMasterDriftMs = double.IsNaN(videoTimestamp)
-                    ? double.NaN
-                    : (videoTimestamp - expectedVideoTimestamp) * 1000.0;
-                var avDriftMs = double.IsNaN(videoTimestamp)
-                    ? double.NaN
-                    : (videoTimestamp - audioTimestamp) * 1000.0;
+                var droppedFrames  = videoSource.DroppedFrameCount;
+                var masterTs   = mixer.MasterClock.CurrentTimestamp;
+                var audioTs    = audioSource.Position;
+                var videoTs    = videoSource.CurrentFramePtsSeconds;
+                var corrMs     = videoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
+                var expectedVideo  = masterTs - videoSource.StartOffset;
+                var expectedAudio  = masterTs - audioSource.StartOffset;
+                var audioMasterDrift = (audioTs - expectedAudio) * 1000.0;
+                var videoMasterDrift = double.IsNaN(videoTs) ? double.NaN : (videoTs - expectedVideo) * 1000.0;
+                var avDrift    = double.IsNaN(videoTs) ? double.NaN : (videoTs - audioTs) * 1000.0;
 
                 Console.WriteLine(
-                    $"[Video] target={videoSource.StreamInfo.FrameRate:F1} fps, presented={presentedFrames - lastPresentedFrames}, decoded={decodedFrames - lastDecodedFrames}, dropped={droppedFrames - lastDroppedFrames}, queue={videoSource.QueueDepth}, hw={videoSource.IsHardwareDecoding}, master={masterTimestamp:F3}s, audio={audioTimestamp:F3}s, video={videoTimestamp:F3}s, a-m={audioMasterDriftMs:F1}ms, v-m={videoMasterDriftMs:F1}ms, a-v={avDriftMs:F1}ms, corr={correctionOffsetMs:F1}ms");
+                    $"[Video] target={info.FrameRate:F1} fps | " +
+                    $"presented={presentedFrames - lastPresentedFrames} | " +
+                    $"decoded={decodedFrames - lastDecodedFrames} | " +
+                    $"dropped={droppedFrames - lastDroppedFrames} | " +
+                    $"queue={videoSource.QueueDepth} | hw={videoSource.IsHardwareDecoding} | " +
+                    $"master={masterTs:F3}s | audio={audioTs:F3}s | video={videoTs:F3}s | " +
+                    $"a-m={audioMasterDrift:F1}ms | v-m={videoMasterDrift:F1}ms | " +
+                    $"a-v={avDrift:F1}ms | corr={corrMs:F1}ms");
 
-                lastDecodedFrames = decodedFrames;
+                lastDecodedFrames  = decodedFrames;
                 lastPresentedFrames = presentedFrames;
-                lastDroppedFrames = droppedFrames;
-                lastStatsLogTime = now;
+                lastDroppedFrames  = droppedFrames;
+                lastStatsLogTime   = now;
             }
 
             SDL.Delay(1);
         }
 
+        // --- Cleanup ---
         lock (frameLock)
         {
             latestFrame?.Dispose();

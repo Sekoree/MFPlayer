@@ -5,6 +5,10 @@ using Ownaudio.Decoders;
 
 namespace Seko.OwnAudioSharp.Video.Decoders;
 
+/// <summary>
+/// FFmpeg-based audio decoder that resamples decoded PCM to interleaved 32-bit float at the
+/// requested sample-rate and channel count.
+/// </summary>
 public unsafe class FFAudioDecoder : IAudioDecoder
 {
     private const int AvioBufferSize = 32 * 1024;
@@ -35,6 +39,7 @@ public unsafe class FFAudioDecoder : IAudioDecoder
 
     private byte[] _pendingBuffer = Array.Empty<byte>();
     private byte[] _convertBuffer = Array.Empty<byte>();
+    private byte[] _legacyDecodeBuffer = Array.Empty<byte>();
     private int _pendingStart;
     private int _pendingLength;
     private bool _inputEof;
@@ -42,10 +47,17 @@ public unsafe class FFAudioDecoder : IAudioDecoder
     private bool _decoderEof;
     private bool _disposed;
 
+    /// <summary>Metadata describing the output audio stream (resampled parameters).</summary>
     public AudioStreamInfo StreamInfo { get; private set; }
 
-    public FFAudioDecoder(string file, int outSampleReate = 44100, int outChannels = 2)
-        : this(outSampleReate, outChannels)
+    /// <summary>
+    /// Initializes a new <see cref="FFAudioDecoder"/> that reads from a file.
+    /// </summary>
+    /// <param name="file">Path to the media file.</param>
+    /// <param name="outSampleRate">Output sample rate in Hz. Default: <c>44100</c>.</param>
+    /// <param name="outChannels">Number of output channels (1 = mono, 2 = stereo). Default: <c>2</c>.</param>
+    public FFAudioDecoder(string file, int outSampleRate = 44100, int outChannels = 2, int? preferredStreamIndex = null)
+        : this(outSampleRate, outChannels)
     {
         try
         {
@@ -60,7 +72,7 @@ public unsafe class FFAudioDecoder : IAudioDecoder
             _formatCtx = (nint)fCtx;
             _canSeek = true;
 
-            InitializeCodecAndResampler(fCtx);
+            InitializeCodecAndResampler(fCtx, preferredStreamIndex);
         }
         catch
         {
@@ -69,8 +81,15 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         }
     }
 
-    public FFAudioDecoder(Stream stream, int outSampleReate = 44100, int outChannels = 2, bool leaveOpen = false)
-        : this(outSampleReate, outChannels)
+    /// <summary>
+    /// Initializes a new <see cref="FFAudioDecoder"/> that reads from a <see cref="Stream"/>.
+    /// </summary>
+    /// <param name="stream">Readable input stream.</param>
+    /// <param name="outSampleRate">Output sample rate in Hz. Default: <c>44100</c>.</param>
+    /// <param name="outChannels">Number of output channels. Default: <c>2</c>.</param>
+    /// <param name="leaveOpen">When <see langword="true"/> the stream is not disposed with this instance.</param>
+    public FFAudioDecoder(Stream stream, int outSampleRate = 44100, int outChannels = 2, bool leaveOpen = false, int? preferredStreamIndex = null)
+        : this(outSampleRate, outChannels)
     {
         ArgumentNullException.ThrowIfNull(stream);
         if (!stream.CanRead)
@@ -121,7 +140,7 @@ public unsafe class FFAudioDecoder : IAudioDecoder
 
             _formatCtx = (nint)fCtx;
 
-            InitializeCodecAndResampler(fCtx);
+            InitializeCodecAndResampler(fCtx, preferredStreamIndex);
         }
         catch
         {
@@ -136,17 +155,13 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         _outChannels = outChannels;
     }
 
-    private void InitializeCodecAndResampler(AVFormatContext* fCtx)
+    private void InitializeCodecAndResampler(AVFormatContext* fCtx, int? preferredStreamIndex)
     {
         var findStreamInfoResult = ffmpeg.avformat_find_stream_info(fCtx, null);
         if (findStreamInfoResult < 0)
             throw new Exception($"avformat_find_stream_info: {GetErrorText(findStreamInfoResult)}");
 
-        AVCodec* localInCodec = null;
-        _streamIndex = ffmpeg.av_find_best_stream(fCtx, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &localInCodec, 0);
-        if (_streamIndex < 0)
-            throw new Exception($"av_find_best_stream: {GetErrorText(_streamIndex)}");
-        var inCodec = localInCodec;
+        var inCodec = ResolveAudioStreamAndCodec(fCtx, preferredStreamIndex, out _streamIndex);
 
         var stream = fCtx->streams[_streamIndex];
         var codecContext = ffmpeg.avcodec_alloc_context3(inCodec);
@@ -211,13 +226,17 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         );
     }
 
+    /// <summary>
+    /// Legacy single-frame decode path. Returns <see cref="AudioDecoderResult"/> with
+    /// <c>Frame = null</c>; prefer <see cref="ReadFrames(Span{byte})"/> for new code.
+    /// </summary>
     public AudioDecoderResult DecodeNextFrame()
     {
         EnsureNotDisposed();
 
         var frameBytes = _outChannels * sizeof(float) * 1024;
-        var buffer = new byte[frameBytes];
-        var result = ReadFrames(buffer);
+        EnsureLegacyDecodeBufferCapacity(frameBytes);
+        var result = ReadFrames(_legacyDecodeBuffer.AsSpan(0, frameBytes));
 
         if (!result.IsSucceeded)
             return new AudioDecoderResult(frame: null, succeeded: false, eof: result.IsEOF, errorMessage: result.ErrorMessage);
@@ -229,11 +248,28 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         return new AudioDecoderResult(frame: null, succeeded: true, eof: false);
     }
 
+    private void EnsureLegacyDecodeBufferCapacity(int requiredBytes)
+    {
+        if (_legacyDecodeBuffer.Length >= requiredBytes)
+            return;
+
+        var newSize = Math.Max(requiredBytes, Math.Max(_legacyDecodeBuffer.Length * 2, 8192));
+        Array.Resize(ref _legacyDecodeBuffer, newSize);
+    }
+
+    /// <summary>
+    /// Reads decoded PCM frames into <paramref name="buffer"/>.
+    /// </summary>
+    /// <param name="buffer">Destination byte buffer sized as a multiple of <c>channels × sizeof(float)</c>.</param>
     public AudioDecoderResult ReadFrames(byte[] buffer)
     {
         return ReadFrames(buffer.AsSpan());
     }
 
+    /// <summary>
+    /// Reads decoded PCM frames into <paramref name="buffer"/>.
+    /// </summary>
+    /// <param name="buffer">Destination span sized as a multiple of <c>channels × sizeof(float)</c>.</param>
     public AudioDecoderResult ReadFrames(Span<byte> buffer)
     {
         EnsureNotDisposed();
@@ -276,6 +312,12 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         return _decoderEof ? AudioDecoderResult.CreateEOF() : AudioDecoderResult.CreateSuccess(0);
     }
 
+    /// <summary>
+    /// Seeks the stream to <paramref name="position"/>, flushes codec and resampler state.
+    /// </summary>
+    /// <param name="position">Target position. Clamped to zero if negative.</param>
+    /// <param name="error">Human-readable error on failure.</param>
+    /// <returns><see langword="true"/> on success.</returns>
     public bool TrySeek(TimeSpan position, out string error)
     {
         EnsureNotDisposed();
@@ -326,6 +368,7 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         return true;
     }
 
+    /// <summary>Releases all native FFmpeg resources and optionally disposes the input stream.</summary>
     public void Dispose()
     {
         if (_disposed)
@@ -603,7 +646,6 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         public Stream Stream { get; }
         public bool LeaveOpen { get; }
         public Lock SyncRoot { get; } = new();
-        public byte[] Scratch { get; set; } = Array.Empty<byte>();
     }
 
     private static int ReadPacket(void* opaque, byte* buffer, int bufferSize)
@@ -616,14 +658,11 @@ public unsafe class FFAudioDecoder : IAudioDecoder
 
             lock (state.SyncRoot)
             {
-                if (state.Scratch.Length < bufferSize)
-                    state.Scratch = new byte[bufferSize];
-
-                var bytesRead = state.Stream.Read(state.Scratch, 0, bufferSize);
+                var destination = new Span<byte>(buffer, bufferSize);
+                var bytesRead = state.Stream.Read(destination);
                 if (bytesRead <= 0)
                     return ffmpeg.AVERROR_EOF;
 
-                Marshal.Copy(state.Scratch, 0, (nint)buffer, bytesRead);
                 return bytesRead;
             }
         }
@@ -674,6 +713,34 @@ public unsafe class FFAudioDecoder : IAudioDecoder
 
         var handle = GCHandle.FromIntPtr((nint)opaque);
         return handle.Target as StreamIoState;
+    }
+
+    private static AVCodec* ResolveAudioStreamAndCodec(AVFormatContext* formatContext, int? preferredStreamIndex, out int streamIndex)
+    {
+        if (preferredStreamIndex.HasValue)
+        {
+            var index = preferredStreamIndex.Value;
+            if (index < 0 || index >= formatContext->nb_streams)
+                throw new ArgumentOutOfRangeException(nameof(preferredStreamIndex), $"Audio stream index {index} is outside stream range.");
+
+            var stream = formatContext->streams[index];
+            if (stream->codecpar->codec_type != AVMediaType.AVMEDIA_TYPE_AUDIO)
+                throw new ArgumentException($"Stream {index} is not an audio stream.", nameof(preferredStreamIndex));
+
+            var explicitCodec = ffmpeg.avcodec_find_decoder(stream->codecpar->codec_id);
+            if (explicitCodec == null)
+                throw new InvalidOperationException($"No decoder found for stream {index} codec id {stream->codecpar->codec_id}.");
+
+            streamIndex = index;
+            return explicitCodec;
+        }
+
+        AVCodec* bestCodec = null;
+        streamIndex = ffmpeg.av_find_best_stream(formatContext, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &bestCodec, 0);
+        if (streamIndex < 0)
+            throw new Exception($"av_find_best_stream(audio): {GetErrorText(streamIndex)}");
+
+        return bestCodec;
     }
 
     private void EnsureNotDisposed()

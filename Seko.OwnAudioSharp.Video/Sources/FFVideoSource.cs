@@ -1,21 +1,21 @@
 using OwnaudioNET.Interfaces;
 using OwnaudioNET.Synchronization;
 using Seko.OwnAudioSharp.Video.Decoders;
+using Seko.OwnAudioSharp.Video.Events;
 
 namespace Seko.OwnAudioSharp.Video.Sources;
 
-public sealed class VideoFrameReadyEventArgs : EventArgs
-{
-    public VideoFrameReadyEventArgs(VideoFrame frame, double masterTimestamp)
-    {
-        Frame = frame;
-        MasterTimestamp = masterTimestamp;
-    }
 
-    public VideoFrame Frame { get; }
-    public double MasterTimestamp { get; }
-}
-
+/// <summary>
+/// Clock-driven video source that decodes frames via an <see cref="IVideoDecoder"/> and presents
+/// them in sync with an OwnAudio <see cref="MasterClock"/>.
+/// <para>
+/// A dedicated background thread pre-fills a bounded queue of decoded <see cref="VideoFrame"/>
+/// objects. On each call to <see cref="RequestNextFrame"/> (or <see cref="TryGetFrameAtTime"/>) the
+/// source promotes the next due frame, fires <see cref="FrameReady"/> / <see cref="FrameReadyFast"/>
+/// and returns the current frame to the caller.
+/// </para>
+/// </summary>
 public sealed class FFVideoSource : IDisposable, ISynchronizable
 {
     private readonly Lock _syncLock = new();
@@ -43,49 +43,101 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
     private double _currentFramePtsSeconds = double.NaN;
     private double _lastPromotedMasterTimestamp = double.NaN;
     private double _driftCorrectionOffsetSeconds;
+    private double _frameDurationSeconds;
 
+    /// <summary>Initializes a new instance for the file at <paramref name="filePath"/> with default options.</summary>
     public FFVideoSource(string filePath)
         : this(filePath, new FFVideoSourceOptions())
     {
     }
 
-    public FFVideoSource(string filePath, FFVideoSourceOptions options)
+    /// <summary>Initializes a new instance for the file at <paramref name="filePath"/> with the given <see cref="FFVideoSourceOptions"/>.</summary>
+    public FFVideoSource(string filePath, FFVideoSourceOptions options, int? streamIndex = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         _options = options;
-        _videoDecoder = new FFVideoDecoder(filePath, _options.DecoderOptions);
+        _videoDecoder = new FFVideoDecoder(filePath, ResolveDecoderOptions(options.DecoderOptions, streamIndex));
         _ownsDecoder = true;
+        _frameDurationSeconds = ResolveFrameDurationSeconds(_videoDecoder.StreamInfo.FrameRate);
+        _videoDecoder.StreamInfoChanged += OnDecoderStreamInfoChanged;
         _decodeQueue = new Queue<VideoFrame>(Math.Max(2, _options.QueueCapacity));
         StartDecodeThreadIfNeeded();
     }
 
+    /// <summary>Initializes a new instance for the given decoder with default options.</summary>
     public FFVideoSource(IVideoDecoder videoDecoder, bool ownsDecoder = false)
         : this(videoDecoder, new FFVideoSourceOptions(), ownsDecoder)
     {
     }
 
+    /// <summary>Initializes a new instance for the given decoder with the specified options.</summary>
     public FFVideoSource(IVideoDecoder videoDecoder, FFVideoSourceOptions options, bool ownsDecoder = false)
     {
         ArgumentNullException.ThrowIfNull(videoDecoder);
         _options = options;
         _videoDecoder = videoDecoder;
         _ownsDecoder = ownsDecoder;
+        _frameDurationSeconds = ResolveFrameDurationSeconds(_videoDecoder.StreamInfo.FrameRate);
+        _videoDecoder.StreamInfoChanged += OnDecoderStreamInfoChanged;
         _decodeQueue = new Queue<VideoFrame>(Math.Max(2, _options.QueueCapacity));
         StartDecodeThreadIfNeeded();
     }
 
+    /// <summary>
+    /// Fired on the calling thread each time a new frame is promoted.
+    /// Subscribing allocates a <see cref="VideoFrameReadyEventArgs"/> per frame; prefer
+    /// <see cref="FrameReadyFast"/> for zero-allocation consumers.
+    /// </summary>
     public event EventHandler<VideoFrameReadyEventArgs>? FrameReady;
 
+    /// <summary>
+    /// Zero-allocation alternative to <see cref="FrameReady"/>.
+    /// The <see cref="VideoFrame"/> argument is the promoted frame (same object returned by
+    /// <see cref="RequestNextFrame"/>); the <see langword="double"/> is the master clock timestamp.
+    /// Do not hold a reference without calling <see cref="VideoFrame.AddRef"/>.
+    /// </summary>
+    public event Action<VideoFrame, double>? FrameReadyFast;
+
+    /// <summary>Raised when decoder stream metadata changes at runtime (for example, resolution changes).</summary>
+    public event EventHandler<VideoStreamInfoChangedEventArgs>? StreamInfoChanged;
+
+    /// <summary>Metadata describing the underlying video stream.</summary>
     public VideoStreamInfo StreamInfo => _videoDecoder.StreamInfo;
+
+    /// <summary><see langword="true"/> when a hardware-accelerated decode context is active.</summary>
     public bool IsHardwareDecoding => _videoDecoder.IsHardwareDecoding;
+
+    /// <summary><see langword="true"/> once the decoder has consumed and flushed all frames.</summary>
+    public bool IsEndOfStream => _videoDecoder.IsEndOfStream;
+
+    /// <summary>
+    /// Master clock offset in seconds. The source treats <c>masterTimestamp - StartOffset</c> as
+    /// the stream-relative playback position.
+    /// </summary>
     public double StartOffset { get; set; }
+
+    /// <summary><see langword="true"/> when a <see cref="MasterClock"/> is attached.</summary>
     public bool IsAttachedToClock => _masterClock != null;
+
+    /// <summary>Total number of frames decoded by the background thread.</summary>
     public long DecodedFrameCount => Interlocked.Read(ref _decodedFrameCount);
+
+    /// <summary>Total number of frames promoted to the current-frame slot and fired via <see cref="FrameReady"/>.</summary>
     public long PresentedFrameCount => Interlocked.Read(ref _presentedFrameCount);
+
+    /// <summary>Total number of frames discarded due to late arrival or queue overflow.</summary>
     public long DroppedFrameCount => Interlocked.Read(ref _droppedFrameCount);
+
+    /// <summary>PTS (seconds) of the most recently promoted frame, or <see cref="double.NaN"/> before the first frame.</summary>
     public double CurrentFramePtsSeconds => Interlocked.CompareExchange(ref _currentFramePtsSeconds, 0, 0);
+
+    /// <summary>Master clock timestamp at which the last frame was promoted.</summary>
     public double LastPromotedMasterTimestamp => Interlocked.CompareExchange(ref _lastPromotedMasterTimestamp, 0, 0);
+
+    /// <summary>Current drift-correction offset applied to the target time (seconds).</summary>
     public double CurrentDriftCorrectionOffsetSeconds => Interlocked.CompareExchange(ref _driftCorrectionOffsetSeconds, 0, 0);
+
+    /// <summary>Number of frames currently held in the decode pre-fetch queue.</summary>
     public int QueueDepth
     {
         get
@@ -95,10 +147,18 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         }
     }
 
+    // ISynchronizable
+    /// <inheritdoc/>
     public long SamplePosition { get; private set; }
+    /// <inheritdoc/>
     public string? SyncGroupId { get; set; }
+    /// <inheritdoc/>
     public bool IsSynchronized { get; set; }
 
+    /// <summary>
+    /// Attaches the source to a <see cref="MasterClock"/>. If the clock is already running ahead
+    /// of <see cref="StartOffset"/> the source seeks to the current clock position.
+    /// </summary>
     public void AttachToClock(MasterClock clock)
     {
         ThrowIfDisposed();
@@ -121,6 +181,7 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         }
     }
 
+    /// <summary>Detaches the source from its current <see cref="MasterClock"/>.</summary>
     public void DetachFromClock()
     {
         ThrowIfDisposed();
@@ -132,6 +193,14 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         }
     }
 
+    /// <summary>
+    /// Attempts to return the frame that should be displayed at <paramref name="masterTimestamp"/>.
+    /// Promotes a pending frame when its PTS is due, applies late-drop and drift-correction policy,
+    /// and fires <see cref="FrameReady"/> / <see cref="FrameReadyFast"/> on promotion.
+    /// </summary>
+    /// <param name="masterTimestamp">Absolute master clock position in seconds.</param>
+    /// <param name="frame">The current frame on success.</param>
+    /// <returns><see langword="true"/> if a frame is available.</returns>
     public bool TryGetFrameAtTime(double masterTimestamp, out VideoFrame frame)
     {
         ThrowIfDisposed();
@@ -181,9 +250,12 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
                 return _hasCurrentFrame;
             }
 
-            while (_hasPendingFrame && _pendingFrame != null && _pendingFrame.PtsSeconds <= relativeTime - _options.LateDropThresholdSeconds)
+            var maxDropsThisRequest = Math.Max(0, _options.MaxDropsPerRequest);
+            var droppedThisRequest = 0;
+            while (droppedThisRequest < maxDropsThisRequest && ShouldDropPendingFrame(relativeTime))
             {
                 DropPendingFrame();
+                droppedThisRequest++;
                 if (!EnsurePendingFrame())
                     break;
             }
@@ -203,6 +275,13 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         }
     }
 
+    /// <summary>
+    /// Convenience wrapper over <see cref="TryGetFrameAtTime"/> using the attached
+    /// <see cref="MasterClock"/>'s current timestamp.
+    /// This is the primary method the render loop should call each frame.
+    /// </summary>
+    /// <param name="frame">The current frame on success.</param>
+    /// <returns><see langword="false"/> if no clock is attached or no frame is yet available.</returns>
     public bool RequestNextFrame(out VideoFrame frame)
     {
         ThrowIfDisposed();
@@ -215,6 +294,10 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         return TryGetFrameAtTime(_masterClock.CurrentTimestamp, out frame);
     }
 
+    /// <summary>
+    /// Seeks to the position corresponding to <paramref name="samplePosition"/> on the attached
+    /// clock. Called by the synchronisation layer when a hard re-sync is required.
+    /// </summary>
     public void ResyncTo(long samplePosition)
     {
         ThrowIfDisposed();
@@ -229,6 +312,7 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         }
     }
 
+    /// <summary>Stops the decode thread, disposes all buffered frames and optionally the underlying decoder.</summary>
     public void Dispose()
     {
         if (_disposed)
@@ -241,6 +325,8 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         if (_decodeThread is { IsAlive: true })
             _decodeThread.Join(TimeSpan.FromSeconds(1));
         _decodeWakeEvent.Dispose();
+
+        _videoDecoder.StreamInfoChanged -= OnDecoderStreamInfoChanged;
 
         ClearFrameCache();
         ClearDecodeQueue();
@@ -269,7 +355,10 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         Interlocked.Exchange(ref _currentFramePtsSeconds, _currentFrame!.PtsSeconds);
         Interlocked.Exchange(ref _lastPromotedMasterTimestamp, masterTimestamp);
         Interlocked.Increment(ref _presentedFrameCount);
-        FrameReady?.Invoke(this, new VideoFrameReadyEventArgs(_currentFrame!, masterTimestamp));
+
+        var currentFrame = _currentFrame!;
+        FrameReadyFast?.Invoke(currentFrame, masterTimestamp);
+        FrameReady?.Invoke(this, new VideoFrameReadyEventArgs(currentFrame, masterTimestamp));
     }
 
     private void DropPendingFrame()
@@ -281,6 +370,58 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         _pendingFrame = null;
         _hasPendingFrame = false;
         Interlocked.Increment(ref _droppedFrameCount);
+    }
+
+    private bool ShouldDropPendingFrame(double relativeTime)
+    {
+        if (!_hasPendingFrame || _pendingFrame == null)
+            return false;
+
+        var effectiveLateThreshold = GetEffectiveLateDropThresholdSeconds();
+        if (_pendingFrame.PtsSeconds > relativeTime - effectiveLateThreshold)
+            return false;
+
+        if (!_options.UseDedicatedDecodeThread)
+            return true;
+
+        // Keep the only available pending frame when decode is starved.
+        // This favors continuity over aggressive catch-up dropping.
+        lock (_decodeQueue)
+            return _decodeQueue.Count > 0;
+    }
+
+    private double GetEffectiveLateDropThresholdSeconds()
+    {
+        var frameBased = _frameDurationSeconds * Math.Max(0.0, _options.LateDropFrameMultiplier);
+        return Math.Max(_options.LateDropThresholdSeconds, frameBased);
+    }
+
+    private static double ResolveFrameDurationSeconds(double frameRate)
+    {
+        if (frameRate <= 0 || double.IsNaN(frameRate) || double.IsInfinity(frameRate))
+            return 1.0 / 30.0;
+
+        return 1.0 / frameRate;
+    }
+
+    private static FFVideoDecoderOptions ResolveDecoderOptions(FFVideoDecoderOptions baseOptions, int? streamIndex)
+    {
+        if (!streamIndex.HasValue)
+            return baseOptions;
+
+        return new FFVideoDecoderOptions
+        {
+            PreferredStreamIndex = streamIndex,
+            EnableHardwareDecoding = baseOptions.EnableHardwareDecoding,
+            PreferredHardwareDevice = baseOptions.PreferredHardwareDevice,
+            ThreadCount = baseOptions.ThreadCount
+        };
+    }
+
+    private void OnDecoderStreamInfoChanged(VideoStreamInfo streamInfo)
+    {
+        _frameDurationSeconds = ResolveFrameDurationSeconds(streamInfo.FrameRate);
+        StreamInfoChanged?.Invoke(this, new VideoStreamInfoChangedEventArgs(streamInfo));
     }
 
     private bool EnsurePendingFrame()
@@ -329,7 +470,7 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
 
         ClearFrameCache();
         lock (_decodeQueue)
-            _decodeQueue.Clear();
+            ClearDecodeQueueLocked();
         _seekRequested = true;
         _decodeWakeEvent.Set();
 
@@ -424,19 +565,25 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
                 continue;
             }
 
-            lock (_decodeQueue)
+            var enqueued = false;
+            while (_decodeThreadRunning && !enqueued)
             {
-                if (_decodeQueue.Count < Math.Max(2, _options.QueueCapacity))
+                lock (_decodeQueue)
                 {
-                    _decodeQueue.Enqueue(frame);
-                    Interlocked.Increment(ref _decodedFrameCount);
+                    if (_decodeQueue.Count < Math.Max(2, _options.QueueCapacity))
+                    {
+                        _decodeQueue.Enqueue(frame);
+                        Interlocked.Increment(ref _decodedFrameCount);
+                        enqueued = true;
+                    }
                 }
-                else
-                {
-                    DisposeFrame(frame);
-                    Interlocked.Increment(ref _droppedFrameCount);
-                }
+
+                if (!enqueued)
+                    _decodeWakeEvent.WaitOne(2);
             }
+
+            if (!enqueued)
+                DisposeFrame(frame);
         }
     }
 
@@ -465,10 +612,13 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
     private void ClearDecodeQueue()
     {
         lock (_decodeQueue)
-        {
-            while (_decodeQueue.Count > 0)
-                DisposeFrame(_decodeQueue.Dequeue());
-        }
+            ClearDecodeQueueLocked();
+    }
+
+    private void ClearDecodeQueueLocked()
+    {
+        while (_decodeQueue.Count > 0)
+            DisposeFrame(_decodeQueue.Dequeue());
     }
 
     private static void DisposeFrame(VideoFrame? frame)
@@ -476,4 +626,3 @@ public sealed class FFVideoSource : IDisposable, ISynchronizable
         frame?.Dispose();
     }
 }
-

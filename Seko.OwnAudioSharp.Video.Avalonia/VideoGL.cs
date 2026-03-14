@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.OpenGL;
@@ -23,6 +24,7 @@ public class VideoGL : OpenGlControlBase, IDisposable
         nint pixels);
 
     private readonly FFVideoSource _source;
+    private readonly bool _master;
     private readonly Lock _frameLock = new();
 
     private VideoFrame? _latestFrame;
@@ -39,22 +41,24 @@ public class VideoGL : OpenGlControlBase, IDisposable
 
     private bool _glReady;
     private bool _disposed;
+    private bool _masterLoopStarted;
 
     public bool KeepAspectRatio { get; set; } = true;
 
-    public VideoGL(FFVideoSource source)
+    public VideoGL(FFVideoSource source, bool master = true)
     {
         _source = source;
-        _source.FrameReady += SourceFrameReady;
+        _master = master;
+        _source.FrameReadyFast += SourceFrameReadyFast;
     }
 
-    private void SourceFrameReady(object? sender, VideoFrameReadyEventArgs e)
+    private void SourceFrameReadyFast(VideoFrame frame, double _)
     {
         VideoFrame? previous;
         lock (_frameLock)
         {
             previous = _latestFrame;
-            _latestFrame = e.Frame.AddRef();
+            _latestFrame = frame.AddRef();
             _hasFrame = true;
         }
 
@@ -136,10 +140,16 @@ public class VideoGL : OpenGlControlBase, IDisposable
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
 
         _glReady = true;
+
+        if (_master)
+            StartMasterLoop();
     }
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)
     {
+        if (_master && _glReady)
+            _source.RequestNextFrame(out _);
+
         var pixelSize = GetPixelSize();
         gl.BindFramebuffer(GlConsts.GL_FRAMEBUFFER, fb);
         gl.Viewport(0, 0, pixelSize.Width, pixelSize.Height);
@@ -163,62 +173,62 @@ public class VideoGL : OpenGlControlBase, IDisposable
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _texture);
 
-            var frameHandle = GCHandle.Alloc(frame.RgbaData, GCHandleType.Pinned);
-            try
-            {
-                var internalFormat = GlConsts.GL_RGBA8;
+            var internalFormat = GlConsts.GL_RGBA8;
                 var format = GlConsts.GL_RGBA;
 
-                if (!_textureInitialized || _textureWidth != frame.Width || _textureHeight != frame.Height)
+                unsafe
                 {
-                    _textureWidth = frame.Width;
-                    _textureHeight = frame.Height;
-                    _textureInitialized = true;
+                    var rgbaData = frame.RgbaData;
+                    fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(rgbaData))
+                    {
+                        var pixels = (nint)ptr;
 
-                    gl.TexImage2D(
-                        GlConsts.GL_TEXTURE_2D,
-                        0,
-                        internalFormat,
-                        _textureWidth,
-                        _textureHeight,
-                        0,
-                        format,
-                        GlConsts.GL_UNSIGNED_BYTE,
-                        nint.Zero);
-                }
+                        if (!_textureInitialized || _textureWidth != frame.Width || _textureHeight != frame.Height)
+                        {
+                            _textureWidth = frame.Width;
+                            _textureHeight = frame.Height;
+                            _textureInitialized = true;
 
-                if (_texSubImage2D != null)
-                {
-                    _texSubImage2D(
-                        GlConsts.GL_TEXTURE_2D,
-                        0,
-                        0,
-                        0,
-                        frame.Width,
-                        frame.Height,
-                        format,
-                        GlConsts.GL_UNSIGNED_BYTE,
-                        frameHandle.AddrOfPinnedObject());
+                            gl.TexImage2D(
+                                GlConsts.GL_TEXTURE_2D,
+                                0,
+                                internalFormat,
+                                _textureWidth,
+                                _textureHeight,
+                                0,
+                                format,
+                                GlConsts.GL_UNSIGNED_BYTE,
+                                nint.Zero);
+                        }
+
+                        if (_texSubImage2D != null)
+                        {
+                            _texSubImage2D(
+                                GlConsts.GL_TEXTURE_2D,
+                                0,
+                                0,
+                                0,
+                                frame.Width,
+                                frame.Height,
+                                format,
+                                GlConsts.GL_UNSIGNED_BYTE,
+                                pixels);
+                        }
+                        else
+                        {
+                            gl.TexImage2D(
+                                GlConsts.GL_TEXTURE_2D,
+                                0,
+                                internalFormat,
+                                frame.Width,
+                                frame.Height,
+                                0,
+                                format,
+                                GlConsts.GL_UNSIGNED_BYTE,
+                                pixels);
+                        }
+                    }
                 }
-                else
-                {
-                    // Fallback when glTexSubImage2D is not exposed by the backend wrapper.
-                    gl.TexImage2D(
-                        GlConsts.GL_TEXTURE_2D,
-                        0,
-                        internalFormat,
-                        frame.Width,
-                        frame.Height,
-                        0,
-                        format,
-                        GlConsts.GL_UNSIGNED_BYTE,
-                        frameHandle.AddrOfPinnedObject());
-                }
-            }
-            finally
-            {
-                frameHandle.Free();
-            }
         }
         finally
         {
@@ -235,6 +245,9 @@ public class VideoGL : OpenGlControlBase, IDisposable
         gl.BindVertexArray(0);
         gl.UseProgram(0);
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
+
+        if (_master && !_disposed && IsVisible)
+            RequestNextFrameRendering();
     }
 
     protected override void OnOpenGlDeinit(GlInterface gl)
@@ -273,7 +286,7 @@ public class VideoGL : OpenGlControlBase, IDisposable
             return;
 
         _disposed = true;
-        _source.FrameReady -= SourceFrameReady;
+        _source.FrameReadyFast -= SourceFrameReadyFast;
 
         lock (_frameLock)
         {
@@ -281,6 +294,15 @@ public class VideoGL : OpenGlControlBase, IDisposable
             _latestFrame = null;
             _hasFrame = false;
         }
+    }
+
+    private void StartMasterLoop()
+    {
+        if (_masterLoopStarted || _disposed)
+            return;
+
+        _masterLoopStarted = true;
+        Dispatcher.UIThread.Post(RequestNextFrameRendering, DispatcherPriority.Background);
     }
 
     private static int BuildProgram(GlInterface gl, string vertexSource, string fragmentSource)

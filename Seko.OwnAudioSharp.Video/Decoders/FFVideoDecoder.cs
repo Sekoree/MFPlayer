@@ -3,6 +3,10 @@ using FFmpeg.AutoGen;
 
 namespace Seko.OwnAudioSharp.Video.Decoders;
 
+/// <summary>
+/// FFmpeg-based video decoder that produces RGBA32 <see cref="VideoFrame"/> objects.
+/// Supports both software and hardware-accelerated (VAAPI/VDPAU/Vulkan) decoding.
+/// </summary>
 public unsafe class FFVideoDecoder : IVideoDecoder
 {
     private const int SwsBilinear = 2;
@@ -21,6 +25,9 @@ public unsafe class FFVideoDecoder : IVideoDecoder
     private int _width;
     private int _height;
     private int _rgbaStride;
+    private int _swsSrcWidth = -1;
+    private int _swsSrcHeight = -1;
+    private AVPixelFormat _swsSrcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
 
     private bool _inputEof;
     private bool _drainPacketSent;
@@ -29,20 +36,34 @@ public unsafe class FFVideoDecoder : IVideoDecoder
     private bool _isHardwareDecoding;
     private double _lastPtsSeconds;
     private readonly double _fallbackFrameDuration;
+    private readonly double _streamFrameRate;
+    private readonly TimeSpan _streamDuration;
 
-    public VideoStreamInfo StreamInfo { get; }
+    /// <summary>Metadata describing the decoded video stream.</summary>
+    public VideoStreamInfo StreamInfo { get; private set; }
+
+    /// <summary><see langword="true"/> once the decoder has consumed and flushed all frames.</summary>
     public bool IsEndOfStream => _decoderEof;
+
+    /// <summary><see langword="true"/> when a hardware-accelerated decode context is active.</summary>
     public bool IsHardwareDecoding => _isHardwareDecoding;
 
+    /// <inheritdoc/>
+    public event Action<VideoStreamInfo>? StreamInfoChanged;
+
+    /// <summary>Initializes a new <see cref="FFVideoDecoder"/> with default options.</summary>
+    /// <param name="filePath">Path to the media file to open.</param>
     public FFVideoDecoder(string filePath)
         : this(filePath, new FFVideoDecoderOptions())
     {
     }
 
+    /// <summary>Initializes a new <see cref="FFVideoDecoder"/>.</summary>
+    /// <param name="filePath">Path to the media file to open.</param>
+    /// <param name="options">Decoder configuration.</param>
     public FFVideoDecoder(string filePath, FFVideoDecoderOptions options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-        options ??= new FFVideoDecoderOptions();
 
         try
         {
@@ -60,10 +81,8 @@ public unsafe class FFVideoDecoder : IVideoDecoder
             if (findStreamInfoResult < 0)
                 throw new Exception($"avformat_find_stream_info: {GetErrorText(findStreamInfoResult)}");
 
-            AVCodec* codec = null;
-            _videoStreamIndex = ffmpeg.av_find_best_stream(fCtx, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
-            if (_videoStreamIndex < 0)
-                throw new Exception($"av_find_best_stream(video): {GetErrorText(_videoStreamIndex)}");
+            AVCodec* codec;
+            _videoStreamIndex = ResolveVideoStreamIndex(fCtx, options.PreferredStreamIndex, out codec);
 
             var stream = fCtx->streams[_videoStreamIndex];
             _timeBase = stream->time_base;
@@ -107,31 +126,15 @@ public unsafe class FFVideoDecoder : IVideoDecoder
 
             _rgbaStride = rgbaFrame->linesize[0];
 
-            _swsCtx = (nint)ffmpeg.sws_getContext(
-                _width,
-                _height,
-                cCtx->pix_fmt,
-                _width,
-                _height,
-                AVPixelFormat.AV_PIX_FMT_RGBA,
-                SwsBilinear,
-                null,
-                null,
-                null);
-            if (_swsCtx == 0)
-                throw new Exception("sws_getContext failed");
+            _swsCtx = 0;
 
-            var frameRate = ResolveFrameRate(stream);
-            _fallbackFrameDuration = frameRate > 0 ? 1.0 / frameRate : 1.0 / 30.0;
+            _streamFrameRate = ResolveFrameRate(stream);
+            _streamDuration = fCtx->duration > 0
+                ? TimeSpan.FromSeconds(fCtx->duration / (double)ffmpeg.AV_TIME_BASE)
+                : TimeSpan.Zero;
+            _fallbackFrameDuration = _streamFrameRate > 0 ? 1.0 / _streamFrameRate : 1.0 / 30.0;
 
-            StreamInfo = new VideoStreamInfo(
-                width: _width,
-                height: _height,
-                frameRate: frameRate,
-                duration: fCtx->duration > 0
-                    ? TimeSpan.FromSeconds(fCtx->duration / (double)ffmpeg.AV_TIME_BASE)
-                    : TimeSpan.Zero,
-                pixelFormat: VideoPixelFormat.Rgba32);
+            UpdateStreamInfo(raiseEvent: false);
         }
         catch
         {
@@ -140,6 +143,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
         }
     }
 
+    /// <inheritdoc/>
     public bool TryDecodeNextFrame(out VideoFrame frame, out string? error)
     {
         EnsureNotDisposed();
@@ -174,19 +178,46 @@ public unsafe class FFVideoDecoder : IVideoDecoder
                     sourceFrame = swFrame;
                 }
 
-                ffmpeg.sws_scale(
+                if (!EnsureScaleContext(sourceFrame, out error))
+                {
+                    ffmpeg.av_frame_unref(decodedFrame);
+                    ffmpeg.av_frame_unref(swFrame);
+                    return false;
+                }
+
+                var makeWritableResult = ffmpeg.av_frame_make_writable(rgbaFrame);
+                if (makeWritableResult < 0)
+                {
+                    ffmpeg.av_frame_unref(decodedFrame);
+                    ffmpeg.av_frame_unref(swFrame);
+                    error = $"av_frame_make_writable(rgba) failed: {GetErrorText(makeWritableResult)}";
+                    return false;
+                }
+
+                var scaledHeight = ffmpeg.sws_scale(
                     (SwsContext*)_swsCtx,
                     sourceFrame->data,
                     sourceFrame->linesize,
                     0,
-                    codecCtx->height,
+                    sourceFrame->height,
                     rgbaFrame->data,
                     rgbaFrame->linesize);
+
+                if (scaledHeight <= 0)
+                {
+                    ffmpeg.av_frame_unref(decodedFrame);
+                    ffmpeg.av_frame_unref(swFrame);
+                    error = "sws_scale failed.";
+                    return false;
+                }
 
                 var ptsSeconds = ResolvePtsSeconds(decodedFrame);
                 var dataLength = _rgbaStride * _height;
                 frame = VideoFrame.CreatePooled(dataLength, _width, _height, _rgbaStride, ptsSeconds);
-                Marshal.Copy((nint)rgbaFrame->data[0], frame.RgbaData, 0, dataLength);
+                fixed (byte* dst = frame.RgbaData)
+                {
+                    Buffer.MemoryCopy(rgbaFrame->data[0], dst, frame.RgbaData.Length, dataLength);
+                }
 
                 ffmpeg.av_frame_unref(decodedFrame);
                 ffmpeg.av_frame_unref(swFrame);
@@ -263,6 +294,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
         }
     }
 
+    /// <inheritdoc/>
     public bool TrySeek(TimeSpan position, out string error)
     {
         EnsureNotDisposed();
@@ -303,6 +335,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
         return true;
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed)
@@ -341,6 +374,158 @@ public unsafe class FFVideoDecoder : IVideoDecoder
             return frameRate;
 
         return 30.0;
+    }
+
+    private static int ResolveVideoStreamIndex(AVFormatContext* formatContext, int? preferredStreamIndex, out AVCodec* codec)
+    {
+        codec = null;
+
+        if (preferredStreamIndex.HasValue)
+        {
+            var index = preferredStreamIndex.Value;
+            if (index < 0 || index >= formatContext->nb_streams)
+                throw new ArgumentOutOfRangeException(nameof(preferredStreamIndex), $"Video stream index {index} is outside stream range.");
+
+            var stream = formatContext->streams[index];
+            if (stream->codecpar->codec_type != AVMediaType.AVMEDIA_TYPE_VIDEO)
+                throw new ArgumentException($"Stream {index} is not a video stream.", nameof(preferredStreamIndex));
+
+            codec = ffmpeg.avcodec_find_decoder(stream->codecpar->codec_id);
+            if (codec == null)
+                throw new InvalidOperationException($"No decoder found for stream {index} codec id {stream->codecpar->codec_id}.");
+
+            return index;
+        }
+
+        AVCodec* bestCodec = null;
+        var selected = ffmpeg.av_find_best_stream(formatContext, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, &bestCodec, 0);
+        if (selected < 0)
+            throw new Exception($"av_find_best_stream(video): {GetErrorText(selected)}");
+
+        codec = bestCodec;
+
+        return selected;
+    }
+
+    private bool EnsureScaleContext(AVFrame* sourceFrame, out string? error)
+    {
+        error = null;
+
+        if (sourceFrame->width <= 0 || sourceFrame->height <= 0)
+        {
+            error = "Decoded frame has invalid dimensions.";
+            return false;
+        }
+
+        if (sourceFrame->data[0] == null)
+        {
+            error = "Decoded frame has invalid source pointers.";
+            return false;
+        }
+
+        var sourcePixelFormat = (AVPixelFormat)sourceFrame->format;
+        if (sourcePixelFormat == AVPixelFormat.AV_PIX_FMT_NONE)
+        {
+            error = "Decoded frame has unknown pixel format.";
+            return false;
+        }
+
+        if (!EnsureOutputFrameForSource(sourceFrame, out error))
+            return false;
+
+        if (_swsCtx != 0 &&
+            _swsSrcWidth == sourceFrame->width &&
+            _swsSrcHeight == sourceFrame->height &&
+            _swsSrcPixelFormat == sourcePixelFormat)
+        {
+            return true;
+        }
+
+        var swsContext = ffmpeg.sws_getCachedContext(
+            (SwsContext*)_swsCtx,
+            sourceFrame->width,
+            sourceFrame->height,
+            sourcePixelFormat,
+            _width,
+            _height,
+            AVPixelFormat.AV_PIX_FMT_RGBA,
+            SwsBilinear,
+            null,
+            null,
+            null);
+
+        if (swsContext == null)
+        {
+            error = $"sws_getCachedContext failed for source format {sourcePixelFormat}.";
+            return false;
+        }
+
+        _swsCtx = (nint)swsContext;
+        _swsSrcWidth = sourceFrame->width;
+        _swsSrcHeight = sourceFrame->height;
+        _swsSrcPixelFormat = sourcePixelFormat;
+        return true;
+    }
+
+    private bool EnsureOutputFrameForSource(AVFrame* sourceFrame, out string? error)
+    {
+        error = null;
+
+        if (_width == sourceFrame->width && _height == sourceFrame->height)
+            return true;
+
+        var rgbaFrame = (AVFrame*)_rgbaFrame;
+        ffmpeg.av_frame_unref(rgbaFrame);
+
+        _width = sourceFrame->width;
+        _height = sourceFrame->height;
+
+        rgbaFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
+        rgbaFrame->width = _width;
+        rgbaFrame->height = _height;
+
+        var frameBufferResult = ffmpeg.av_frame_get_buffer(rgbaFrame, 1);
+        if (frameBufferResult < 0)
+        {
+            error = $"av_frame_get_buffer(rgba) resize failed: {GetErrorText(frameBufferResult)}";
+            return false;
+        }
+
+        _rgbaStride = rgbaFrame->linesize[0];
+        UpdateStreamInfo(raiseEvent: true);
+
+        // Force scaler reconfiguration after output geometry changes.
+        _swsSrcWidth = -1;
+        _swsSrcHeight = -1;
+        _swsSrcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+        return true;
+    }
+
+    private void UpdateStreamInfo(bool raiseEvent)
+    {
+        var updated = new VideoStreamInfo(
+            width: _width,
+            height: _height,
+            frameRate: _streamFrameRate,
+            duration: _streamDuration,
+            pixelFormat: VideoPixelFormat.Rgba32);
+
+        var previous = StreamInfo;
+        StreamInfo = updated;
+
+        if (!raiseEvent)
+            return;
+
+        if (previous.Width == updated.Width &&
+            previous.Height == updated.Height &&
+            previous.FrameRate == updated.FrameRate &&
+            previous.Duration == updated.Duration &&
+            previous.PixelFormat == updated.PixelFormat)
+        {
+            return;
+        }
+
+        StreamInfoChanged?.Invoke(updated);
     }
 
     private void EnsureNotDisposed()

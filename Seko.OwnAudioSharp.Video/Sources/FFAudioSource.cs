@@ -9,6 +9,11 @@ using Seko.OwnAudioSharp.Video.Decoders;
 
 namespace Seko.OwnAudioSharp.Video.Sources;
 
+/// <summary>
+/// OwnAudio audio source backed by <see cref="FFAudioDecoder"/>.
+/// Implements <see cref="IMasterClockSource"/> so it can drive or follow an OwnAudio
+/// <see cref="MasterClock"/> for A/V synchronisation.
+/// </summary>
 public class FFAudioSource : BaseAudioSource, IMasterClockSource
 {
     private readonly Lock _decoderLock = new();
@@ -25,30 +30,41 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
 
     private const double HardSyncThresholdSeconds = 0.050;
 
-    public FFAudioSource(string filePath, AudioConfig config)
+    /// <summary>Initializes a new instance that reads from a file.</summary>
+    /// <param name="filePath">Path to the media file.</param>
+    /// <param name="config">Audio engine configuration (sample rate, channels, buffer size).</param>
+    public FFAudioSource(string filePath, AudioConfig config, int? streamIndex = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentNullException.ThrowIfNull(config);
 
         _config = config;
-        _audioDecoder = new FFAudioDecoder(filePath, config.SampleRate, config.Channels);
+        _audioDecoder = new FFAudioDecoder(filePath, config.SampleRate, config.Channels, streamIndex);
         _ownsDecoder = true;
         _streamInfo = _audioDecoder.StreamInfo;
         _decodeBuffer = new byte[Math.Max(1, config.BufferSize * config.Channels * sizeof(float))];
     }
 
-    public FFAudioSource(Stream stream, AudioConfig config, bool leaveOpen = false)
+    /// <summary>Initializes a new instance that reads from a <see cref="Stream"/>.</summary>
+    /// <param name="stream">Readable input stream.</param>
+    /// <param name="config">Audio engine configuration.</param>
+    /// <param name="leaveOpen">When <see langword="true"/> the stream is not disposed with this instance.</param>
+    public FFAudioSource(Stream stream, AudioConfig config, bool leaveOpen = false, int? streamIndex = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(config);
 
         _config = config;
-        _audioDecoder = new FFAudioDecoder(stream, config.SampleRate, config.Channels, leaveOpen);
+        _audioDecoder = new FFAudioDecoder(stream, config.SampleRate, config.Channels, leaveOpen, streamIndex);
         _ownsDecoder = true;
         _streamInfo = _audioDecoder.StreamInfo;
         _decodeBuffer = new byte[Math.Max(1, config.BufferSize * config.Channels * sizeof(float))];
     }
 
+    /// <summary>Initializes a new instance wrapping a pre-built <see cref="FFAudioDecoder"/>.</summary>
+    /// <param name="audioDecoder">Decoder whose output parameters must match <paramref name="config"/>.</param>
+    /// <param name="config">Audio engine configuration.</param>
+    /// <param name="ownsDecoder">When <see langword="true"/> the decoder is disposed with this instance.</param>
     public FFAudioSource(FFAudioDecoder audioDecoder, AudioConfig config, bool ownsDecoder = false)
     {
         ArgumentNullException.ThrowIfNull(audioDecoder);
@@ -69,15 +85,27 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
         _decodeBuffer = new byte[Math.Max(1, config.BufferSize * config.Channels * sizeof(float))];
     }
 
+    /// <inheritdoc/>
     public override AudioConfig Config => _config;
+    /// <inheritdoc/>
     public override AudioStreamInfo StreamInfo => _streamInfo;
+    /// <summary>Current playback position in seconds.</summary>
     public override double Position => Volatile.Read(ref _positionSeconds);
+    /// <summary>Total stream duration in seconds.</summary>
     public override double Duration => _streamInfo.Duration.TotalSeconds;
+    /// <summary><see langword="true"/> once the end of the audio stream has been reached.</summary>
     public override bool IsEndOfStream => _isEndOfStream;
 
+    /// <summary>
+    /// Master clock offset in seconds. The source treats <c>masterTimestamp - StartOffset</c> as
+    /// the stream-relative playback position when synchronising.
+    /// </summary>
     public double StartOffset { get; set; }
+
+    /// <summary><see langword="true"/> when a <see cref="MasterClock"/> is attached.</summary>
     public bool IsAttachedToClock => _masterClock != null;
 
+    /// <inheritdoc/>
     public override int ReadSamples(Span<float> buffer, int frameCount)
     {
         ThrowIfDisposed();
@@ -156,6 +184,7 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
         return framesWritten;
     }
 
+    /// <inheritdoc/>
     public override bool Seek(double positionInSeconds)
     {
         ThrowIfDisposed();
@@ -173,7 +202,16 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
 
         return true;
     }
-    
+
+    /// <summary>
+    /// Reads audio frames aligned to <paramref name="masterTimestamp"/>. If the current position
+    /// drifts beyond <c>50 ms</c> a hard seek is performed before decoding.
+    /// </summary>
+    /// <param name="masterTimestamp">Absolute master clock position in seconds.</param>
+    /// <param name="buffer">Destination float sample buffer.</param>
+    /// <param name="frameCount">Number of audio frames requested.</param>
+    /// <param name="result">Details of the read operation on return.</param>
+    /// <returns><see langword="true"/> on success or end-of-stream.</returns>
     public bool ReadSamplesAtTime(double masterTimestamp, Span<float> buffer, int frameCount, out ReadResult result)
     {
         ThrowIfDisposed();
@@ -211,6 +249,10 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
         return true;
     }
 
+    /// <summary>
+    /// Attaches the source to a <see cref="MasterClock"/>. The source seeks to the current clock
+    /// position if the clock is already running ahead of <see cref="StartOffset"/>.
+    /// </summary>
     public void AttachToClock(MasterClock clock)
     {
         ThrowIfDisposed();
@@ -233,6 +275,7 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
         IsSynchronized = true;
     }
 
+    /// <summary>Detaches the source from its current <see cref="MasterClock"/>.</summary>
     public void DetachFromClock()
     {
         ThrowIfDisposed();
@@ -288,6 +331,7 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
         if (_decodeBuffer.Length >= requiredBytes)
             return;
 
-        Array.Resize(ref _decodeBuffer, requiredBytes);
+        var newSize = Math.Max(requiredBytes, Math.Max(_decodeBuffer.Length * 2, 4096));
+        Array.Resize(ref _decodeBuffer, newSize);
     }
 }
