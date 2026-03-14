@@ -19,6 +19,12 @@
       <PackageReference Include="ManagedBass" />
       <PackageReference Include="ManagedBass.Mix" />
       <PackageReference Include="OwnAudioSharp.Basic" />
+      <PackageReference Include="SDL3-CS" />
+      <PackageReference Include="SDL3-CS.Native" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Seko.OwnAudioSharp.Video\Seko.OwnAudioSharp.Video.csproj" />
     </ItemGroup>
 
 </Project>
