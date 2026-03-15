@@ -103,8 +103,8 @@ public partial class MainWindow : Window
 
         _started = true;
 
-        //const string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
-        const string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
+        const string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
+        //const string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
 
         ffmpeg.RootPath = "/lib/";
         DynamicallyLoadedBindings.Initialize();

@@ -1,5 +1,6 @@
 ﻿using FFmpeg.AutoGen;
 using Ownaudio.Core;
+using Ownaudio.Linux;
 using Ownaudio.Native;
 using SDL3;
 using Seko.OwnAudioNET.Video;
@@ -25,7 +26,7 @@ internal static class Program
         Console.WriteLine($"FFmpeg version: {ffmpeg.av_version_info()}");
 
         // --- Audio engine setup ---
-        using var engine = new NativeAudioEngine();
+        using var engine = new PulseAudioEngine();
         var config = new AudioConfig
         {
             SampleRate = 48000,
@@ -169,7 +170,7 @@ internal static class Program
                     seekLock.Exit();
                 }
             }
-
+            
             // --- Main loop ---
             var loop = true;
             while (loop)
@@ -289,9 +290,8 @@ internal static class Program
                     var gen0Delta = GC.CollectionCount(0) - lastGen0Count;
                     var gen1Delta = GC.CollectionCount(1) - lastGen1Count;
                     var gen2Delta = GC.CollectionCount(2) - lastGen2Count;
-
-                    Console.Write(
-                        $"[Video] target={videoSource.StreamInfo.FrameRate:F1} fps | " +
+                    
+                    var outString = $"[Video] target={videoSource.StreamInfo.FrameRate:F1} fps | " +
                         $"presented={presentedFrames - lastPresentedFrames} | " +
                         $"decoded={decodedFrames - lastDecodedFrames} | " +
                         $"dropped={droppedFrames - lastDroppedFrames} | " +
@@ -301,10 +301,13 @@ internal static class Program
                         $"a-v={avDrift:F1}ms | corr={corrMs:F1}ms | " +
                         $"gc.alloc={FormatBytes(allocatedBytesPerSecond)}/s | " +
                         $"gc.heap={FormatBytes(managedHeapBytes)} | " +
-                        $"gc.gen={gen0Delta}/{gen1Delta}/{gen2Delta}");
-
-                    // Move cursor back to overwrite the last message.
-                    Console.Write('\r');
+                        $"gc.gen={gen0Delta}/{gen1Delta}/{gen2Delta}";
+                    
+                    //check if longer than console width
+                    var consoleLines = Console.WindowWidth > 0 ? (int)Math.Ceiling(outString.Length / (double)Console.WindowWidth) : 1;
+                    Console.WriteLine(outString);
+                    Console.SetCursorPosition(0, Console.CursorTop - consoleLines);
+                    
 
                     lastDecodedFrames = decodedFrames;
                     lastPresentedFrames = presentedFrames;
