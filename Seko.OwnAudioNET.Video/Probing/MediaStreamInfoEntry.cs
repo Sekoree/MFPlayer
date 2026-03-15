@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video.Probing;
+namespace Seko.OwnAudioNET.Video.Probing;
 
 /// <summary>Describes one container stream discovered by <see cref="MediaStreamCatalog"/>.</summary>
 public readonly record struct MediaStreamInfoEntry(

@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video.Probing;
+namespace Seko.OwnAudioNET.Video.Probing;
 
 /// <summary>Logical stream type reported by <see cref="MediaStreamCatalog"/>.</summary>
 public enum MediaStreamKind

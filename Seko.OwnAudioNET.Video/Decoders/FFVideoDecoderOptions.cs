@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video.Decoders;
+namespace Seko.OwnAudioNET.Video.Decoders;
 
 /// <summary>Tuning options forwarded to <see cref="FFVideoDecoder"/> at construction time.</summary>
 public sealed class FFVideoDecoderOptions

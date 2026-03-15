@@ -1,6 +1,6 @@
-using Seko.OwnAudioSharp.Video.Decoders;
+using Seko.OwnAudioNET.Video.Decoders;
 
-namespace Seko.OwnAudioSharp.Video.Sources;
+namespace Seko.OwnAudioNET.Video.Sources;
 
 /// <summary>Tuning options for <see cref="FFVideoSource"/>.</summary>
 public sealed class FFVideoSourceOptions
@@ -73,6 +73,7 @@ public sealed class FFVideoSourceOptions
     /// Default: <c>0.004</c> s.
     /// </summary>
     public double MaxCorrectionStepSeconds { get; init; } = 0.004;
+
 
     /// <summary>Decoder options forwarded to <see cref="FFVideoDecoder"/> when the source owns the decoder.</summary>
     public FFVideoDecoderOptions DecoderOptions { get; init; } = new();

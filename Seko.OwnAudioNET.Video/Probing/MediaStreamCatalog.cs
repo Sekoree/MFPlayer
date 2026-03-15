@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
 
-namespace Seko.OwnAudioSharp.Video.Probing;
+namespace Seko.OwnAudioNET.Video.Probing;
 
 /// <summary>Utility methods to inspect all streams in a media file.</summary>
 public static unsafe class MediaStreamCatalog

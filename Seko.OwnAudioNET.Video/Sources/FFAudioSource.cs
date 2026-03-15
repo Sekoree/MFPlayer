@@ -5,9 +5,9 @@ using OwnaudioNET.Core;
 using OwnaudioNET.Interfaces;
 using OwnaudioNET.Sources;
 using OwnaudioNET.Synchronization;
-using Seko.OwnAudioSharp.Video.Decoders;
+using Seko.OwnAudioNET.Video.Decoders;
 
-namespace Seko.OwnAudioSharp.Video.Sources;
+namespace Seko.OwnAudioNET.Video.Sources;
 
 /// <summary>
 /// OwnAudio audio source backed by <see cref="FFAudioDecoder"/>.

@@ -21,6 +21,6 @@
 
     <ItemGroup>
       <ProjectReference Include="..\AudioEx\AudioEx.csproj" />
-      <ProjectReference Include="..\Seko.OwnAudioSharp.Video.Avalonia\Seko.OwnAudioSharp.Video.Avalonia.csproj" />
+      <ProjectReference Include="..\Seko.OwnAudioNET.Video.Avalonia\Seko.OwnAudioNET.Video.Avalonia.csproj" />
     </ItemGroup>
 </Project>

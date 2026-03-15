@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 
-namespace Seko.OwnAudioSharp.Video;
+namespace Seko.OwnAudioNET.Video;
 
 /// <summary>
 /// A reference-counted, pooled RGBA video frame produced by <see cref="Decoders.IVideoDecoder"/>.
@@ -16,6 +16,8 @@ public sealed class VideoFrame : IDisposable
 {
     private static readonly ConcurrentBag<VideoFrame> _objectPool = new();
     private const int MaxObjectPoolSize = 48;
+    private static int _pooledObjectCount;
+    [ThreadStatic] private static VideoFrame? _threadLocalFrame;
 
     private byte[]? _rgbaData;
     private readonly bool _pooled;
@@ -62,8 +64,17 @@ public sealed class VideoFrame : IDisposable
     {
         var buffer = ArrayPool<byte>.Shared.Rent(dataLength);
 
+        var cached = _threadLocalFrame;
+        if (cached != null)
+        {
+            _threadLocalFrame = null;
+            cached.Reinitialize(buffer, dataLength, width, height, stride, ptsSeconds);
+            return cached;
+        }
+
         if (_objectPool.TryTake(out var recycled))
         {
+            Interlocked.Decrement(ref _pooledObjectCount);
             recycled.Reinitialize(buffer, dataLength, width, height, stride, ptsSeconds);
             return recycled;
         }
@@ -121,8 +132,24 @@ public sealed class VideoFrame : IDisposable
                     ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
 
                 // Return the wrapper object to the pool for the next frame.
-                if (_pooled && _objectPool.Count < MaxObjectPoolSize)
-                    _objectPool.Add(this);
+                if (_pooled)
+                {
+                    if (_threadLocalFrame == null)
+                    {
+                        _threadLocalFrame = this;
+                        return;
+                    }
+
+                    var pooledCount = Interlocked.Increment(ref _pooledObjectCount);
+                    if (pooledCount <= MaxObjectPoolSize)
+                    {
+                        _objectPool.Add(this);
+                    }
+                    else
+                    {
+                        Interlocked.Decrement(ref _pooledObjectCount);
+                    }
+                }
             }
 
             return;

@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video.Decoders;
+namespace Seko.OwnAudioNET.Video.Decoders;
 
 /// <summary>Provides raw decoded video frames from an underlying media stream.</summary>
 public interface IVideoDecoder : IDisposable

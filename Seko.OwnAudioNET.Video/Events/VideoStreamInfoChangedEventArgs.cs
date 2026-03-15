@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video.Events;
+namespace Seko.OwnAudioNET.Video.Events;
 
 /// <summary>Event arguments carrying updated stream metadata after a decoder format change.</summary>
 public sealed class VideoStreamInfoChangedEventArgs : EventArgs

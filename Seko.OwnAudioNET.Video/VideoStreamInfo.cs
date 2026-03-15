@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video;
+namespace Seko.OwnAudioNET.Video;
 
 
 /// <summary>Immutable metadata snapshot describing a video stream.</summary>

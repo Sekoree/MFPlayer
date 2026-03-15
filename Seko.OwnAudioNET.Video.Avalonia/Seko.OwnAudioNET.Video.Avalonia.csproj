@@ -12,7 +12,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Seko.OwnAudioSharp.Video\Seko.OwnAudioSharp.Video.csproj" />
+      <ProjectReference Include="..\Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj" />
     </ItemGroup>
 
 </Project>

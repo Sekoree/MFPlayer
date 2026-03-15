@@ -3,7 +3,7 @@ using FFmpeg.AutoGen;
 using Ownaudio;
 using Ownaudio.Decoders;
 
-namespace Seko.OwnAudioSharp.Video.Decoders;
+namespace Seko.OwnAudioNET.Video.Decoders;
 
 /// <summary>
 /// FFmpeg-based audio decoder that resamples decoded PCM to interleaved 32-bit float at the

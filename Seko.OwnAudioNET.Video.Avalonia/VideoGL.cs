@@ -4,13 +4,23 @@ using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
-using Seko.OwnAudioSharp.Video;
-using Seko.OwnAudioSharp.Video.Sources;
+using Seko.OwnAudioNET.Video;
+using Seko.OwnAudioNET.Video.Sources;
 
 namespace VideoTest;
 
 public class VideoGL : OpenGlControlBase, IDisposable
 {
+    private static readonly float[] QuadVertices =
+    [
+        -1f, -1f, 0f, 1f,
+         1f, -1f, 1f, 1f,
+         1f,  1f, 1f, 0f,
+        -1f, -1f, 0f, 1f,
+         1f,  1f, 1f, 0f,
+        -1f,  1f, 0f, 0f
+    ];
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void TexSubImage2DProc(
         int target,
@@ -23,7 +33,7 @@ public class VideoGL : OpenGlControlBase, IDisposable
         int type,
         nint pixels);
 
-    private readonly FFVideoSource _source;
+    private readonly IVideoSource _source;
     private readonly bool _master;
     private readonly Lock _frameLock = new();
 
@@ -42,13 +52,16 @@ public class VideoGL : OpenGlControlBase, IDisposable
     private bool _glReady;
     private bool _disposed;
     private bool _masterLoopStarted;
+    private int _renderRequestQueued;
+    private readonly Action _requestRenderAction;
 
     public bool KeepAspectRatio { get; set; } = true;
 
-    public VideoGL(FFVideoSource source, bool master = true)
+    public VideoGL(IVideoSource source, bool master = true)
     {
         _source = source;
         _master = master;
+        _requestRenderAction = RequestNextFrameRendering;
         _source.FrameReadyFast += SourceFrameReadyFast;
     }
 
@@ -64,7 +77,7 @@ public class VideoGL : OpenGlControlBase, IDisposable
 
         previous?.Dispose();
 
-        Dispatcher.UIThread.Post(RequestNextFrameRendering, DispatcherPriority.Background);
+        QueueRenderRequest();
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -75,7 +88,7 @@ public class VideoGL : OpenGlControlBase, IDisposable
             return;
 
         if (change.Property == BoundsProperty || change.Property == Visual.IsVisibleProperty)
-            RequestNextFrameRendering();
+            QueueRenderRequest();
     }
 
     protected override void OnOpenGlInit(GlInterface gl)
@@ -99,23 +112,12 @@ public class VideoGL : OpenGlControlBase, IDisposable
         gl.BindVertexArray(_vao);
         gl.BindBuffer(GlConsts.GL_ARRAY_BUFFER, _vbo);
 
-        float[] vertices =
-        [
-            // pos.xy, uv.xy
-            -1f, -1f, 0f, 1f,
-             1f, -1f, 1f, 1f,
-             1f,  1f, 1f, 0f,
-            -1f, -1f, 0f, 1f,
-             1f,  1f, 1f, 0f,
-            -1f,  1f, 0f, 0f
-        ];
-
-        var handle = GCHandle.Alloc(vertices, GCHandleType.Pinned);
+        var handle = GCHandle.Alloc(QuadVertices, GCHandleType.Pinned);
         try
         {
             gl.BufferData(
                 GlConsts.GL_ARRAY_BUFFER,
-                vertices.Length * sizeof(float),
+                QuadVertices.Length * sizeof(float),
                 handle.AddrOfPinnedObject(),
                 GlConsts.GL_STATIC_DRAW);
         }
@@ -147,6 +149,8 @@ public class VideoGL : OpenGlControlBase, IDisposable
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)
     {
+        Interlocked.Exchange(ref _renderRequestQueued, 0);
+
         if (_master && _glReady)
             _source.RequestNextFrame(out _);
 
@@ -247,7 +251,7 @@ public class VideoGL : OpenGlControlBase, IDisposable
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
 
         if (_master && !_disposed && IsVisible)
-            RequestNextFrameRendering();
+            QueueRenderRequest();
     }
 
     protected override void OnOpenGlDeinit(GlInterface gl)
@@ -302,7 +306,18 @@ public class VideoGL : OpenGlControlBase, IDisposable
             return;
 
         _masterLoopStarted = true;
-        Dispatcher.UIThread.Post(RequestNextFrameRendering, DispatcherPriority.Background);
+        QueueRenderRequest();
+    }
+
+    private void QueueRenderRequest()
+    {
+        if (_disposed)
+            return;
+
+        if (Interlocked.Exchange(ref _renderRequestQueued, 1) == 1)
+            return;
+
+        Dispatcher.UIThread.Post(_requestRenderAction, DispatcherPriority.Background);
     }
 
     private static int BuildProgram(GlInterface gl, string vertexSource, string fragmentSource)

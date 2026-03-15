@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video.Events;
+namespace Seko.OwnAudioNET.Video.Events;
 
 /// <summary>Event arguments carrying a newly promoted <see cref="VideoFrame"/>.</summary>
 public sealed class VideoFrameReadyEventArgs : EventArgs

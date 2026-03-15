@@ -1,4 +1,4 @@
-namespace Seko.OwnAudioSharp.Video;
+namespace Seko.OwnAudioNET.Video;
 
 /// <summary>Pixel format of a decoded video frame.</summary>
 public enum VideoPixelFormat

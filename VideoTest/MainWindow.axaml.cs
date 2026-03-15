@@ -1,20 +1,22 @@
 using System;
+using System.Threading;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using FFmpeg.AutoGen;
 using Ownaudio.Core;
-using OwnaudioNET.Core;
-using OwnaudioNET.Mixing;
-using Seko.OwnAudioSharp.Video.Decoders;
-using Seko.OwnAudioSharp.Video.Sources;
+using Seko.OwnAudioNET.Video.Mixing;
+using Seko.OwnAudioNET.Video.Decoders;
+using Seko.OwnAudioNET.Video.Sources;
 
 namespace VideoTest;
 
 public partial class MainWindow : Window
 {
+    private const double SeekStepSeconds = 5.0;
+
     private IAudioEngine? _engine;
-    private AudioMixer? _mixer;
+    private AVMixer? _mixer;
     private FFAudioSource? _audioSource;
     private FFVideoSource? _videoSource;
     private VideoGL? _videoGl;
@@ -27,6 +29,7 @@ public partial class MainWindow : Window
     private long _lastDecodedFrames;
     private long _lastPresentedFrames;
     private long _lastDroppedFrames;
+    private readonly object _seekLock = new();
 
     public MainWindow()
     {
@@ -46,11 +49,11 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case Key.Left:
-                SeekRelative(-1.0);
+                SeekRelative(-SeekStepSeconds);
                 e.Handled = true;
                 break;
             case Key.Right:
-                SeekRelative(1.0);
+                SeekRelative(SeekStepSeconds);
                 e.Handled = true;
                 break;
             case Key.Escape:
@@ -62,22 +65,33 @@ public partial class MainWindow : Window
 
     private void TogglePlayPause()
     {
-        if (_audioSource == null)
-            return;
-
-        if (_audioSource.State == AudioState.Playing)
-            _audioSource.Pause();
+        var running = _mixer?.IsRunning ?? false;
+        if (running)
+        {
+            _mixer?.Pause();
+            Console.WriteLine("[Video] Paused.");
+        }
         else
-            _audioSource.Play();
+        {
+            _mixer?.Start();
+            Console.WriteLine("[Video] Playing.");
+        }
     }
 
     private void SeekRelative(double deltaSeconds)
     {
-        if (_audioSource == null)
+        if (_mixer == null || !Monitor.TryEnter(_seekLock))
             return;
 
-        var newPosition = Math.Max(0.0, _audioSource.Position + deltaSeconds);
-        _audioSource.Seek(newPosition);
+        try
+        {
+            var newTimelinePosition = Math.Max(0.0, _mixer.MasterClock.CurrentTimestamp + deltaSeconds);
+            _mixer.Seek(newTimelinePosition, safeSeek: true);
+        }
+        finally
+        {
+            Monitor.Exit(_seekLock);
+        }
     }
 
     protected override void OnOpened(EventArgs e)
@@ -121,11 +135,9 @@ public partial class MainWindow : Window
             //DriftCorrectionRate = 0.03,
             //MaxCorrectionStepSeconds = 0.003
         });
-        _mixer = new AudioMixer(_engine);
-
-        _mixer.AddSource(_audioSource);
-        _audioSource.AttachToClock(_mixer.MasterClock);
-        _videoSource.AttachToClock(_mixer.MasterClock);
+        _mixer = new AVMixer(_engine);
+        _mixer.AddAudioSource(_audioSource);
+        _mixer.AddVideoSource(_videoSource);
 
         _videoGl = new VideoGL(_videoSource);
         _videoGl2 = new VideoGL(_videoSource, false);
@@ -138,7 +150,7 @@ public partial class MainWindow : Window
 
         _videoStatsTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {
-            if (_videoSource == null || _audioSource == null || _mixer == null)
+            if (_videoSource == null || _audioSource == null || _mixer is not { IsRunning: true })
                 return;
 
             // Stop logging once playback has finished.
@@ -197,7 +209,7 @@ public partial class MainWindow : Window
         {
             _mixer?.Stop();
             if (_audioSource != null)
-                _mixer?.RemoveSource(_audioSource);
+                _mixer?.RemoveAudioSource(_audioSource);
         }
         catch
         {

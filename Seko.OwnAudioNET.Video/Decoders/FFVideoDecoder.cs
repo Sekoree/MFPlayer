@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
 
-namespace Seko.OwnAudioSharp.Video.Decoders;
+namespace Seko.OwnAudioNET.Video.Decoders;
 
 /// <summary>
 /// FFmpeg-based video decoder that produces RGBA32 <see cref="VideoFrame"/> objects.
@@ -214,9 +214,10 @@ public unsafe class FFVideoDecoder : IVideoDecoder
                 var ptsSeconds = ResolvePtsSeconds(decodedFrame);
                 var dataLength = _rgbaStride * _height;
                 frame = VideoFrame.CreatePooled(dataLength, _width, _height, _rgbaStride, ptsSeconds);
-                fixed (byte* dst = frame.RgbaData)
+                var rgbaData = frame.RgbaData;
+                fixed (byte* dst = &MemoryMarshal.GetArrayDataReference(rgbaData))
                 {
-                    Buffer.MemoryCopy(rgbaFrame->data[0], dst, frame.RgbaData.Length, dataLength);
+                    Buffer.MemoryCopy(rgbaFrame->data[0], dst, rgbaData.Length, dataLength);
                 }
 
                 ffmpeg.av_frame_unref(decodedFrame);
