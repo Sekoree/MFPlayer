@@ -1,16 +1,21 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
-using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Sources;
 
-namespace VideoTest;
+namespace Seko.OwnAudioNET.Video.Avalonia;
 
 public class VideoGL : OpenGlControlBase, IDisposable
 {
+    private const int GlR8 = 0x8229;
+    private const int GlRg8 = 0x822B;
+    private const int GlRed = 0x1903;
+    private const int GlRg = 0x8227;
+    private const int GlTexture1 = GlConsts.GL_TEXTURE0 + 1;
+    private const int GlTexture2 = GlConsts.GL_TEXTURE0 + 2;
+
     private static readonly float[] QuadVertices =
     [
         -1f, -1f, 0f, 1f,
@@ -33,6 +38,12 @@ public class VideoGL : OpenGlControlBase, IDisposable
         int type,
         nint pixels);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int GetUniformLocationProc(int program, [MarshalAs(UnmanagedType.LPStr)] string name);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void Uniform1iProc(int location, int value);
+
     private readonly IVideoSource _source;
     private readonly bool _master;
     private readonly Lock _frameLock = new();
@@ -41,13 +52,31 @@ public class VideoGL : OpenGlControlBase, IDisposable
     private bool _hasFrame;
 
     private int _program;
+    private int _yuvProgram;
     private int _vbo;
     private int _vao;
-    private int _texture;
+    private int _textureRgba;
+    private int _textureY;
+    private int _textureUv;
+    private int _textureU;
+    private int _textureV;
     private int _textureWidth;
     private int _textureHeight;
-    private bool _textureInitialized;
+    private bool _rgbaTextureInitialized;
     private TexSubImage2DProc? _texSubImage2D;
+    private GetUniformLocationProc? _getUniformLocation;
+    private Uniform1iProc? _uniform1i;
+    private bool _canUseGpuYuvPath;
+    private int _yuvTextureYLocation = -1;
+    private int _yuvTextureULocation = -1;
+    private int _yuvTextureVLocation = -1;
+    private int _yuvPixelFormatLocation = -1;
+    private bool _useYuvProgramThisFrame;
+    private int _yuvPixelFormatThisFrame;
+    private byte[]? _plane0Scratch;
+    private byte[]? _plane1Scratch;
+    private byte[]? _plane2Scratch;
+    private byte[]? _rgbaConvertedScratch;
 
     private bool _glReady;
     private bool _disposed;
@@ -99,12 +128,26 @@ public class VideoGL : OpenGlControlBase, IDisposable
         if (texSubProc != nint.Zero)
             _texSubImage2D = Marshal.GetDelegateForFunctionPointer<TexSubImage2DProc>(texSubProc);
 
+        var getUniformLocationProc = gl.GetProcAddress("glGetUniformLocation");
+        if (getUniformLocationProc != nint.Zero)
+            _getUniformLocation = Marshal.GetDelegateForFunctionPointer<GetUniformLocationProc>(getUniformLocationProc);
+
+        var uniform1IProc = gl.GetProcAddress("glUniform1i");
+        if (uniform1IProc != nint.Zero)
+            _uniform1i = Marshal.GetDelegateForFunctionPointer<Uniform1iProc>(uniform1IProc);
+
         var vertexShaderSource = BuildVertexShader(gl.ContextInfo.Version.Type);
         var fragmentShaderSource = BuildFragmentShader(gl.ContextInfo.Version.Type);
+        var yuvFragmentShaderSource = BuildYuvFragmentShader(gl.ContextInfo.Version.Type);
 
         _program = BuildProgram(gl, vertexShaderSource, fragmentShaderSource);
         if (_program == 0)
             return;
+
+        _yuvProgram = BuildProgram(gl, vertexShaderSource, yuvFragmentShaderSource);
+        _canUseGpuYuvPath = _yuvProgram != 0 && _getUniformLocation != null && _uniform1i != null;
+        if (_canUseGpuYuvPath)
+            InitializeYuvUniformLocations(gl);
 
         _vao = gl.GenVertexArray();
         _vbo = gl.GenBuffer();
@@ -135,8 +178,28 @@ public class VideoGL : OpenGlControlBase, IDisposable
         gl.BindBuffer(GlConsts.GL_ARRAY_BUFFER, 0);
         gl.BindVertexArray(0);
 
-        _texture = gl.GenTexture();
-        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _texture);
+        _textureRgba = gl.GenTexture();
+        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureRgba);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MIN_FILTER, GlConsts.GL_LINEAR);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MAG_FILTER, GlConsts.GL_LINEAR);
+
+        _textureY = gl.GenTexture();
+        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MIN_FILTER, GlConsts.GL_LINEAR);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MAG_FILTER, GlConsts.GL_LINEAR);
+
+        _textureUv = gl.GenTexture();
+        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MIN_FILTER, GlConsts.GL_LINEAR);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MAG_FILTER, GlConsts.GL_LINEAR);
+
+        _textureU = gl.GenTexture();
+        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MIN_FILTER, GlConsts.GL_LINEAR);
+        gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MAG_FILTER, GlConsts.GL_LINEAR);
+
+        _textureV = gl.GenTexture();
+        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
         gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MIN_FILTER, GlConsts.GL_LINEAR);
         gl.TexParameteri(GlConsts.GL_TEXTURE_2D, GlConsts.GL_TEXTURE_MAG_FILTER, GlConsts.GL_LINEAR);
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
@@ -174,65 +237,19 @@ public class VideoGL : OpenGlControlBase, IDisposable
 
         try
         {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _texture);
+            _useYuvProgramThisFrame = false;
+            _yuvPixelFormatThisFrame = 0;
 
-            var internalFormat = GlConsts.GL_RGBA8;
-                var format = GlConsts.GL_RGBA;
+            var uploaded = frame.PixelFormat switch
+            {
+                VideoPixelFormat.Rgba32 => UploadRgbaFrame(gl, frame),
+                VideoPixelFormat.Nv12 => UploadNv12Frame(gl, frame),
+                VideoPixelFormat.Yuv420p => UploadYuv420pFrame(gl, frame),
+                _ => false
+            };
 
-                unsafe
-                {
-                    var rgbaData = frame.RgbaData;
-                    fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(rgbaData))
-                    {
-                        var pixels = (nint)ptr;
-
-                        if (!_textureInitialized || _textureWidth != frame.Width || _textureHeight != frame.Height)
-                        {
-                            _textureWidth = frame.Width;
-                            _textureHeight = frame.Height;
-                            _textureInitialized = true;
-
-                            gl.TexImage2D(
-                                GlConsts.GL_TEXTURE_2D,
-                                0,
-                                internalFormat,
-                                _textureWidth,
-                                _textureHeight,
-                                0,
-                                format,
-                                GlConsts.GL_UNSIGNED_BYTE,
-                                nint.Zero);
-                        }
-
-                        if (_texSubImage2D != null)
-                        {
-                            _texSubImage2D(
-                                GlConsts.GL_TEXTURE_2D,
-                                0,
-                                0,
-                                0,
-                                frame.Width,
-                                frame.Height,
-                                format,
-                                GlConsts.GL_UNSIGNED_BYTE,
-                                pixels);
-                        }
-                        else
-                        {
-                            gl.TexImage2D(
-                                GlConsts.GL_TEXTURE_2D,
-                                0,
-                                internalFormat,
-                                frame.Width,
-                                frame.Height,
-                                0,
-                                format,
-                                GlConsts.GL_UNSIGNED_BYTE,
-                                pixels);
-                        }
-                    }
-                }
+            if (!uploaded)
+                return;
         }
         finally
         {
@@ -243,7 +260,16 @@ public class VideoGL : OpenGlControlBase, IDisposable
         var drawViewport = GetDrawViewport(pixelSize, _textureWidth, _textureHeight, KeepAspectRatio);
         gl.Viewport(drawViewport.X, drawViewport.Y, drawViewport.Width, drawViewport.Height);
 
-        gl.UseProgram(_program);
+        if (_useYuvProgramThisFrame)
+        {
+            gl.UseProgram(_yuvProgram);
+            if (_uniform1i != null && _yuvPixelFormatLocation >= 0)
+                _uniform1i(_yuvPixelFormatLocation, _yuvPixelFormatThisFrame);
+        }
+        else
+        {
+            gl.UseProgram(_program);
+        }
         gl.BindVertexArray(_vao);
         gl.DrawArrays(GlConsts.GL_TRIANGLES, 0, 6);
         gl.BindVertexArray(0);
@@ -268,10 +294,34 @@ public class VideoGL : OpenGlControlBase, IDisposable
             _vao = 0;
         }
 
-        if (_texture != 0)
+        if (_textureRgba != 0)
         {
-            gl.DeleteTexture(_texture);
-            _texture = 0;
+            gl.DeleteTexture(_textureRgba);
+            _textureRgba = 0;
+        }
+
+        if (_textureY != 0)
+        {
+            gl.DeleteTexture(_textureY);
+            _textureY = 0;
+        }
+
+        if (_textureUv != 0)
+        {
+            gl.DeleteTexture(_textureUv);
+            _textureUv = 0;
+        }
+
+        if (_textureU != 0)
+        {
+            gl.DeleteTexture(_textureU);
+            _textureU = 0;
+        }
+
+        if (_textureV != 0)
+        {
+            gl.DeleteTexture(_textureV);
+            _textureV = 0;
         }
 
         if (_program != 0)
@@ -280,7 +330,15 @@ public class VideoGL : OpenGlControlBase, IDisposable
             _program = 0;
         }
 
+        if (_yuvProgram != 0)
+        {
+            gl.DeleteProgram(_yuvProgram);
+            _yuvProgram = 0;
+        }
+
         _glReady = false;
+        _rgbaTextureInitialized = false;
+        _useYuvProgramThisFrame = false;
         base.OnOpenGlDeinit(gl);
     }
 
@@ -409,6 +467,379 @@ public class VideoGL : OpenGlControlBase, IDisposable
                    FragColor = texture(uTexture, vTexCoord);
                }
                """;
+    }
+
+    private static string BuildYuvFragmentShader(GlProfileType profileType)
+    {
+        if (profileType == GlProfileType.OpenGLES)
+        {
+            return """
+                   #version 300 es
+                   precision mediump float;
+                   in vec2 vTexCoord;
+                   uniform sampler2D uTextureY;
+                   uniform sampler2D uTextureU;
+                   uniform sampler2D uTextureV;
+                   uniform int uPixelFormat;
+                   out vec4 FragColor;
+                   
+                   vec3 yuvToRgb(float y, float u, float v)
+                   {
+                       float r = y + 1.5748 * v;
+                       float g = y - 0.1873 * u - 0.4681 * v;
+                       float b = y + 1.8556 * u;
+                       return clamp(vec3(r, g, b), 0.0, 1.0);
+                   }
+                   
+                   void main()
+                   {
+                       float y = texture(uTextureY, vTexCoord).r;
+                       float u;
+                       float v;
+                       if (uPixelFormat == 1)
+                       {
+                           vec2 uv = texture(uTextureU, vTexCoord).rg;
+                           u = uv.r - 0.5;
+                           v = uv.g - 0.5;
+                       }
+                       else
+                       {
+                           u = texture(uTextureU, vTexCoord).r - 0.5;
+                           v = texture(uTextureV, vTexCoord).r - 0.5;
+                       }
+
+                       FragColor = vec4(yuvToRgb(y, u, v), 1.0);
+                   }
+                   """;
+        }
+
+        return """
+               #version 330 core
+               in vec2 vTexCoord;
+               uniform sampler2D uTextureY;
+               uniform sampler2D uTextureU;
+               uniform sampler2D uTextureV;
+               uniform int uPixelFormat;
+               out vec4 FragColor;
+
+               vec3 yuvToRgb(float y, float u, float v)
+               {
+                   float r = y + 1.5748 * v;
+                   float g = y - 0.1873 * u - 0.4681 * v;
+                   float b = y + 1.8556 * u;
+                   return clamp(vec3(r, g, b), 0.0, 1.0);
+               }
+
+               void main()
+               {
+                   float y = texture(uTextureY, vTexCoord).r;
+                   float u;
+                   float v;
+                   if (uPixelFormat == 1)
+                   {
+                       vec2 uv = texture(uTextureU, vTexCoord).rg;
+                       u = uv.r - 0.5;
+                       v = uv.g - 0.5;
+                   }
+                   else
+                   {
+                       u = texture(uTextureU, vTexCoord).r - 0.5;
+                       v = texture(uTextureV, vTexCoord).r - 0.5;
+                   }
+
+                   FragColor = vec4(yuvToRgb(y, u, v), 1.0);
+               }
+               """;
+    }
+
+    private unsafe bool UploadRgbaFrame(GlInterface gl, VideoFrame frame)
+    {
+        if (frame.GetPlaneLength(0) <= 0 || frame.Width <= 0 || frame.Height <= 0)
+            return false;
+
+        var rgbaData = GetTightlyPackedPlane(frame, 0, frame.Width * 4, frame.Height, ref _plane0Scratch);
+        if (rgbaData == null)
+            return false;
+
+        return UploadRgbaPixels(gl, frame.Width, frame.Height, rgbaData);
+    }
+
+    private unsafe bool UploadRgbaPixels(GlInterface gl, int width, int height, byte[] rgbaData)
+    {
+        gl.ActiveTexture(GlConsts.GL_TEXTURE0);
+        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureRgba);
+
+        var internalFormat = GlConsts.GL_RGBA8;
+        var format = GlConsts.GL_RGBA;
+
+        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(rgbaData))
+        {
+            var pixels = (nint)ptr;
+
+            if (!_rgbaTextureInitialized || _textureWidth != width || _textureHeight != height)
+            {
+                _textureWidth = width;
+                _textureHeight = height;
+                _rgbaTextureInitialized = true;
+
+                gl.TexImage2D(
+                    GlConsts.GL_TEXTURE_2D,
+                    0,
+                    internalFormat,
+                    _textureWidth,
+                    _textureHeight,
+                    0,
+                    format,
+                    GlConsts.GL_UNSIGNED_BYTE,
+                    nint.Zero);
+            }
+
+            if (_texSubImage2D != null)
+            {
+                _texSubImage2D(
+                    GlConsts.GL_TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    width,
+                    height,
+                    format,
+                    GlConsts.GL_UNSIGNED_BYTE,
+                    pixels);
+            }
+            else
+            {
+                gl.TexImage2D(
+                    GlConsts.GL_TEXTURE_2D,
+                    0,
+                    internalFormat,
+                    width,
+                    height,
+                    0,
+                    format,
+                    GlConsts.GL_UNSIGNED_BYTE,
+                    pixels);
+            }
+        }
+
+        return true;
+    }
+
+    private unsafe bool UploadNv12Frame(GlInterface gl, VideoFrame frame)
+    {
+        if (frame.Width <= 0 || frame.Height <= 0)
+            return false;
+
+        var width = frame.Width;
+        var height = frame.Height;
+        var chromaWidth = (width + 1) / 2;
+        var chromaHeight = (height + 1) / 2;
+
+        var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
+        var uvPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, chromaHeight, ref _plane1Scratch);
+        if (yPlane == null || uvPlane == null)
+            return false;
+
+        if (_canUseGpuYuvPath)
+        {
+            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
+            UploadSingleChannelTexture(gl, width, height, yPlane);
+
+            gl.ActiveTexture(GlTexture1);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
+            UploadDualChannelTexture(gl, chromaWidth, chromaHeight, uvPlane);
+
+            gl.ActiveTexture(GlTexture2);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
+            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
+
+            _textureWidth = width;
+            _textureHeight = height;
+            _useYuvProgramThisFrame = true;
+            _yuvPixelFormatThisFrame = 1;
+            _rgbaTextureInitialized = false;
+            return true;
+        }
+
+        var pixelCount = checked(width * height);
+        var rgbaLength = checked(pixelCount * 4);
+        if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
+            _rgbaConvertedScratch = new byte[rgbaLength];
+
+        ConvertNv12ToRgba(yPlane, uvPlane, width, height, _rgbaConvertedScratch);
+        return UploadRgbaPixels(gl, width, height, _rgbaConvertedScratch);
+    }
+
+    private unsafe bool UploadYuv420pFrame(GlInterface gl, VideoFrame frame)
+    {
+        if (frame.Width <= 0 || frame.Height <= 0)
+            return false;
+
+        var width = frame.Width;
+        var height = frame.Height;
+        var chromaWidth = (width + 1) / 2;
+        var chromaHeight = (height + 1) / 2;
+
+        var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
+        var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth, chromaHeight, ref _plane1Scratch);
+        var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth, chromaHeight, ref _plane2Scratch);
+        if (yPlane == null || uPlane == null || vPlane == null)
+            return false;
+
+        if (_canUseGpuYuvPath)
+        {
+            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
+            UploadSingleChannelTexture(gl, width, height, yPlane);
+
+            gl.ActiveTexture(GlTexture1);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
+            UploadSingleChannelTexture(gl, chromaWidth, chromaHeight, uPlane);
+
+            gl.ActiveTexture(GlTexture2);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
+            UploadSingleChannelTexture(gl, chromaWidth, chromaHeight, vPlane);
+            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
+
+            _textureWidth = width;
+            _textureHeight = height;
+            _useYuvProgramThisFrame = true;
+            _yuvPixelFormatThisFrame = 2;
+            _rgbaTextureInitialized = false;
+            return true;
+        }
+
+        var pixelCount = checked(width * height);
+        var rgbaLength = checked(pixelCount * 4);
+        if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
+            _rgbaConvertedScratch = new byte[rgbaLength];
+
+        ConvertYuv420pToRgba(yPlane, uPlane, vPlane, width, height, _rgbaConvertedScratch);
+        return UploadRgbaPixels(gl, width, height, _rgbaConvertedScratch);
+    }
+
+    private unsafe void UploadSingleChannelTexture(GlInterface gl, int width, int height, byte[] data)
+    {
+        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
+        {
+            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlR8, width, height, 0, GlRed, GlConsts.GL_UNSIGNED_BYTE, (nint)ptr);
+        }
+    }
+
+    private unsafe void UploadDualChannelTexture(GlInterface gl, int width, int height, byte[] data)
+    {
+        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
+        {
+            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlRg8, width, height, 0, GlRg, GlConsts.GL_UNSIGNED_BYTE, (nint)ptr);
+        }
+    }
+
+    private void InitializeYuvUniformLocations(GlInterface gl)
+    {
+        if (_getUniformLocation == null || _uniform1i == null || _yuvProgram == 0)
+            return;
+
+        gl.UseProgram(_yuvProgram);
+        _yuvTextureYLocation = _getUniformLocation(_yuvProgram, "uTextureY");
+        _yuvTextureULocation = _getUniformLocation(_yuvProgram, "uTextureU");
+        _yuvTextureVLocation = _getUniformLocation(_yuvProgram, "uTextureV");
+        _yuvPixelFormatLocation = _getUniformLocation(_yuvProgram, "uPixelFormat");
+
+        if (_yuvTextureYLocation >= 0)
+            _uniform1i(_yuvTextureYLocation, 0);
+        if (_yuvTextureULocation >= 0)
+            _uniform1i(_yuvTextureULocation, 1);
+        if (_yuvTextureVLocation >= 0)
+            _uniform1i(_yuvTextureVLocation, 2);
+
+        gl.UseProgram(0);
+    }
+
+    private static byte[]? GetTightlyPackedPlane(VideoFrame frame, int planeIndex, int rowBytes, int rows, ref byte[]? scratch)
+    {
+        if (rowBytes <= 0 || rows <= 0)
+            return null;
+
+        var stride = frame.GetPlaneStride(planeIndex);
+        var source = frame.GetPlaneData(planeIndex);
+        if (source.Length == 0 || stride <= 0)
+            return null;
+
+        var tightLength = checked(rowBytes * rows);
+        if (stride == rowBytes && source.Length >= tightLength)
+            return source;
+
+        if (scratch == null || scratch.Length < tightLength)
+            scratch = new byte[tightLength];
+
+        var destinationOffset = 0;
+        var sourceOffset = 0;
+        for (var row = 0; row < rows; row++)
+        {
+            if (sourceOffset + rowBytes > source.Length)
+                return null;
+
+            Buffer.BlockCopy(source, sourceOffset, scratch, destinationOffset, rowBytes);
+            sourceOffset += stride;
+            destinationOffset += rowBytes;
+        }
+
+        return scratch;
+    }
+
+    private static void ConvertNv12ToRgba(byte[] yPlane, byte[] uvPlane, int width, int height, byte[] destination)
+    {
+        var uvWidth = (width + 1) / 2;
+        for (var y = 0; y < height; y++)
+        {
+            var yRowOffset = y * width;
+            var uvRowOffset = (y / 2) * uvWidth * 2;
+            var dstRowOffset = y * width * 4;
+            for (var x = 0; x < width; x++)
+            {
+                var yValue = yPlane[yRowOffset + x];
+                var uvOffset = uvRowOffset + (x / 2) * 2;
+                var uValue = uvPlane[uvOffset];
+                var vValue = uvPlane[uvOffset + 1];
+                WriteRgbaPixel(destination, dstRowOffset + x * 4, yValue, uValue, vValue);
+            }
+        }
+    }
+
+    private static void ConvertYuv420pToRgba(byte[] yPlane, byte[] uPlane, byte[] vPlane, int width, int height, byte[] destination)
+    {
+        var chromaWidth = (width + 1) / 2;
+        for (var y = 0; y < height; y++)
+        {
+            var yRowOffset = y * width;
+            var uvRowOffset = (y / 2) * chromaWidth;
+            var dstRowOffset = y * width * 4;
+            for (var x = 0; x < width; x++)
+            {
+                var yValue = yPlane[yRowOffset + x];
+                var uvOffset = uvRowOffset + (x / 2);
+                var uValue = uPlane[uvOffset];
+                var vValue = vPlane[uvOffset];
+                WriteRgbaPixel(destination, dstRowOffset + x * 4, yValue, uValue, vValue);
+            }
+        }
+    }
+
+    private static void WriteRgbaPixel(byte[] destination, int destinationOffset, int y, int u, int v)
+    {
+        var c = y - 16;
+        var d = u - 128;
+        var e = v - 128;
+
+        var r = (298 * c + 409 * e + 128) >> 8;
+        var g = (298 * c - 100 * d - 208 * e + 128) >> 8;
+        var b = (298 * c + 516 * d + 128) >> 8;
+
+        destination[destinationOffset] = (byte)Math.Clamp(r, 0, 255);
+        destination[destinationOffset + 1] = (byte)Math.Clamp(g, 0, 255);
+        destination[destinationOffset + 2] = (byte)Math.Clamp(b, 0, 255);
+        destination[destinationOffset + 3] = 255;
     }
 
     private PixelSize GetPixelSize()

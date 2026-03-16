@@ -133,6 +133,18 @@ public sealed class FFVideoSource : BaseVideoSource
         get => (int)Math.Max(0, Interlocked.Read(ref _decodeQueueDepth));
     }
 
+    /// <summary>Last decoder source pixel format name (FFmpeg AVPixelFormat string).</summary>
+    public string DecoderSourcePixelFormatName =>
+        _videoDecoder is FFVideoDecoder ffVideoDecoder
+            ? ffVideoDecoder.LastSourcePixelFormatName
+            : "unknown";
+
+    /// <summary>Current decoder output pixel format name.</summary>
+    public string DecoderOutputPixelFormatName =>
+        _videoDecoder is FFVideoDecoder ffVideoDecoder
+            ? ffVideoDecoder.LastOutputPixelFormatName
+            : StreamInfo.PixelFormat.ToString();
+
 
     /// <summary>
     /// Attaches the source to a <see cref="MasterClock"/>. If the clock is already running ahead
@@ -445,7 +457,10 @@ public sealed class FFVideoSource : BaseVideoSource
             PreferredStreamIndex = streamIndex,
             EnableHardwareDecoding = baseOptions.EnableHardwareDecoding,
             PreferredHardwareDevice = baseOptions.PreferredHardwareDevice,
-            ThreadCount = baseOptions.ThreadCount
+            ThreadCount = baseOptions.ThreadCount,
+            PreferredOutputPixelFormats = baseOptions.PreferredOutputPixelFormats,
+            PreferSourcePixelFormatWhenSupported = baseOptions.PreferSourcePixelFormatWhenSupported,
+            PreferLowestConversionCost = baseOptions.PreferLowestConversionCost
         };
     }
 

@@ -4,10 +4,10 @@ using FFmpeg.AutoGen;
 namespace Seko.OwnAudioNET.Video.Decoders;
 
 /// <summary>
-/// FFmpeg-based video decoder that produces RGBA32 <see cref="VideoFrame"/> objects.
+/// FFmpeg-based video decoder that produces format-negotiated <see cref="VideoFrame"/> objects.
 /// Supports both software and hardware-accelerated (VAAPI/VDPAU/Vulkan) decoding.
 /// </summary>
-public unsafe class FFVideoDecoder : IVideoDecoder
+public unsafe partial class FFVideoDecoder : IVideoDecoder
 {
     private const int SwsBilinear = 2;
 
@@ -15,7 +15,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
     private nint _codecCtx;
     private nint _packet;
     private nint _frame;
-    private nint _rgbaFrame;
+    private nint _outputFrame;
     private nint _swsCtx;
     private nint _hwDeviceCtx;
     private nint _swFrame;
@@ -24,10 +24,20 @@ public unsafe class FFVideoDecoder : IVideoDecoder
     private AVRational _timeBase;
     private int _width;
     private int _height;
-    private int _rgbaStride;
+    private int _outputPlane0Stride;
+    private int _outputPlane1Stride;
+    private int _outputPlane2Stride;
     private int _swsSrcWidth = -1;
     private int _swsSrcHeight = -1;
     private AVPixelFormat _swsSrcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+    private AVPixelFormat _swsDstPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+
+    private readonly VideoPixelFormat[] _preferredOutputFormats;
+    private readonly bool _preferSourcePixelFormatWhenSupported;
+    private readonly bool _preferLowestConversionCost;
+    private VideoPixelFormat _activeOutputFormat;
+    private AVPixelFormat _activeOutputAvPixelFormat;
+    private AVPixelFormat _lastSourceAvPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
 
     private bool _inputEof;
     private bool _drainPacketSent;
@@ -48,6 +58,12 @@ public unsafe class FFVideoDecoder : IVideoDecoder
     /// <summary><see langword="true"/> when a hardware-accelerated decode context is active.</summary>
     public bool IsHardwareDecoding => _isHardwareDecoding;
 
+    /// <summary>Last decoded source pixel format reported by FFmpeg (for diagnostics).</summary>
+    public string LastSourcePixelFormatName => _lastSourceAvPixelFormat.ToString();
+
+    /// <summary>Current active decoder output pixel format (for diagnostics).</summary>
+    public string LastOutputPixelFormatName => _activeOutputFormat.ToString();
+
     /// <inheritdoc/>
     public event Action<VideoStreamInfo>? StreamInfoChanged;
 
@@ -64,6 +80,12 @@ public unsafe class FFVideoDecoder : IVideoDecoder
     public FFVideoDecoder(string filePath, FFVideoDecoderOptions options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        _preferredOutputFormats = ResolvePreferredOutputFormats(options.PreferredOutputPixelFormats);
+        _preferSourcePixelFormatWhenSupported = options.PreferSourcePixelFormatWhenSupported;
+        _preferLowestConversionCost = options.PreferLowestConversionCost;
+        _activeOutputFormat = _preferredOutputFormats[0];
+        _activeOutputAvPixelFormat = ToAvPixelFormat(_activeOutputFormat);
 
         try
         {
@@ -110,21 +132,23 @@ public unsafe class FFVideoDecoder : IVideoDecoder
 
             _packet = (nint)ffmpeg.av_packet_alloc();
             _frame = (nint)ffmpeg.av_frame_alloc();
-            _rgbaFrame = (nint)ffmpeg.av_frame_alloc();
+            _outputFrame = (nint)ffmpeg.av_frame_alloc();
             _swFrame = (nint)ffmpeg.av_frame_alloc();
-            if (_packet == 0 || _frame == 0 || _rgbaFrame == 0 || _swFrame == 0)
+            if (_packet == 0 || _frame == 0 || _outputFrame == 0 || _swFrame == 0)
                 throw new Exception("av_packet_alloc/av_frame_alloc failed");
 
-            var rgbaFrame = (AVFrame*)_rgbaFrame;
-            rgbaFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
-            rgbaFrame->width = _width;
-            rgbaFrame->height = _height;
+            var outputFrame = (AVFrame*)_outputFrame;
+            outputFrame->format = (int)_activeOutputAvPixelFormat;
+            outputFrame->width = _width;
+            outputFrame->height = _height;
 
-            var frameBufferResult = ffmpeg.av_frame_get_buffer(rgbaFrame, 1);
+            var frameBufferResult = ffmpeg.av_frame_get_buffer(outputFrame, 1);
             if (frameBufferResult < 0)
-                throw new Exception($"av_frame_get_buffer(rgba): {GetErrorText(frameBufferResult)}");
+                throw new Exception($"av_frame_get_buffer(output): {GetErrorText(frameBufferResult)}");
 
-            _rgbaStride = rgbaFrame->linesize[0];
+            _outputPlane0Stride = outputFrame->linesize[0];
+            _outputPlane1Stride = outputFrame->linesize[1];
+            _outputPlane2Stride = outputFrame->linesize[2];
 
             _swsCtx = 0;
 
@@ -156,7 +180,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
         var packet = (AVPacket*)_packet;
         var decodedFrame = (AVFrame*)_frame;
         var swFrame = (AVFrame*)_swFrame;
-        var rgbaFrame = (AVFrame*)_rgbaFrame;
+        var outputFrame = (AVFrame*)_outputFrame;
 
         while (true)
         {
@@ -178,46 +202,61 @@ public unsafe class FFVideoDecoder : IVideoDecoder
                     sourceFrame = swFrame;
                 }
 
-                if (!EnsureScaleContext(sourceFrame, out error))
+                var selectedOutputFormat = SelectOutputPixelFormat(sourceFrame);
+                _lastSourceAvPixelFormat = (AVPixelFormat)sourceFrame->format;
+                if (!EnsureOutputFrameForSource(sourceFrame, selectedOutputFormat, out error))
                 {
                     ffmpeg.av_frame_unref(decodedFrame);
                     ffmpeg.av_frame_unref(swFrame);
                     return false;
                 }
 
-                var makeWritableResult = ffmpeg.av_frame_make_writable(rgbaFrame);
-                if (makeWritableResult < 0)
+                var sourceForCopy = sourceFrame;
+                var needsConversion = !CanCopyFrameDirectly(sourceFrame, selectedOutputFormat);
+                if (needsConversion)
                 {
-                    ffmpeg.av_frame_unref(decodedFrame);
-                    ffmpeg.av_frame_unref(swFrame);
-                    error = $"av_frame_make_writable(rgba) failed: {GetErrorText(makeWritableResult)}";
-                    return false;
-                }
+                    if (!EnsureScaleContext(sourceFrame, selectedOutputFormat, out error))
+                    {
+                        ffmpeg.av_frame_unref(decodedFrame);
+                        ffmpeg.av_frame_unref(swFrame);
+                        return false;
+                    }
 
-                var scaledHeight = ffmpeg.sws_scale(
-                    (SwsContext*)_swsCtx,
-                    sourceFrame->data,
-                    sourceFrame->linesize,
-                    0,
-                    sourceFrame->height,
-                    rgbaFrame->data,
-                    rgbaFrame->linesize);
+                    var makeWritableResult = ffmpeg.av_frame_make_writable(outputFrame);
+                    if (makeWritableResult < 0)
+                    {
+                        ffmpeg.av_frame_unref(decodedFrame);
+                        ffmpeg.av_frame_unref(swFrame);
+                        error = $"av_frame_make_writable(output) failed: {GetErrorText(makeWritableResult)}";
+                        return false;
+                    }
 
-                if (scaledHeight <= 0)
-                {
-                    ffmpeg.av_frame_unref(decodedFrame);
-                    ffmpeg.av_frame_unref(swFrame);
-                    error = "sws_scale failed.";
-                    return false;
+                    var scaledHeight = ffmpeg.sws_scale(
+                        (SwsContext*)_swsCtx,
+                        sourceFrame->data,
+                        sourceFrame->linesize,
+                        0,
+                        sourceFrame->height,
+                        outputFrame->data,
+                        outputFrame->linesize);
+
+                    if (scaledHeight <= 0)
+                    {
+                        ffmpeg.av_frame_unref(decodedFrame);
+                        ffmpeg.av_frame_unref(swFrame);
+                        error = "sws_scale failed.";
+                        return false;
+                    }
+
+                    sourceForCopy = outputFrame;
                 }
 
                 var ptsSeconds = ResolvePtsSeconds(decodedFrame);
-                var dataLength = _rgbaStride * _height;
-                frame = VideoFrame.CreatePooled(dataLength, _width, _height, _rgbaStride, ptsSeconds);
-                var rgbaData = frame.RgbaData;
-                fixed (byte* dst = &MemoryMarshal.GetArrayDataReference(rgbaData))
+                if (!TryCopyFrameToVideoFrame(sourceForCopy, selectedOutputFormat, ptsSeconds, out frame, out error))
                 {
-                    Buffer.MemoryCopy(rgbaFrame->data[0], dst, rgbaData.Length, dataLength);
+                    ffmpeg.av_frame_unref(decodedFrame);
+                    ffmpeg.av_frame_unref(swFrame);
+                    return false;
                 }
 
                 ffmpeg.av_frame_unref(decodedFrame);
@@ -435,7 +474,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
         return selected;
     }
 
-    private bool EnsureScaleContext(AVFrame* sourceFrame, out string? error)
+    private bool EnsureScaleContext(AVFrame* sourceFrame, VideoPixelFormat outputFormat, out string? error)
     {
         error = null;
 
@@ -458,13 +497,13 @@ public unsafe class FFVideoDecoder : IVideoDecoder
             return false;
         }
 
-        if (!EnsureOutputFrameForSource(sourceFrame, out error))
-            return false;
+        var destinationPixelFormat = ToAvPixelFormat(outputFormat);
 
         if (_swsCtx != 0 &&
             _swsSrcWidth == sourceFrame->width &&
             _swsSrcHeight == sourceFrame->height &&
-            _swsSrcPixelFormat == sourcePixelFormat)
+            _swsSrcPixelFormat == sourcePixelFormat &&
+            _swsDstPixelFormat == destinationPixelFormat)
         {
             return true;
         }
@@ -476,7 +515,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
             sourcePixelFormat,
             _width,
             _height,
-            AVPixelFormat.AV_PIX_FMT_RGBA,
+            destinationPixelFormat,
             SwsBilinear,
             null,
             null,
@@ -492,40 +531,49 @@ public unsafe class FFVideoDecoder : IVideoDecoder
         _swsSrcWidth = sourceFrame->width;
         _swsSrcHeight = sourceFrame->height;
         _swsSrcPixelFormat = sourcePixelFormat;
+        _swsDstPixelFormat = destinationPixelFormat;
         return true;
     }
 
-    private bool EnsureOutputFrameForSource(AVFrame* sourceFrame, out string? error)
+    private bool EnsureOutputFrameForSource(AVFrame* sourceFrame, VideoPixelFormat outputFormat, out string? error)
     {
         error = null;
 
-        if (_width == sourceFrame->width && _height == sourceFrame->height)
+        var outputAvPixelFormat = ToAvPixelFormat(outputFormat);
+        if (_width == sourceFrame->width &&
+            _height == sourceFrame->height &&
+            _activeOutputFormat == outputFormat)
             return true;
 
-        var rgbaFrame = (AVFrame*)_rgbaFrame;
-        ffmpeg.av_frame_unref(rgbaFrame);
+        var outputFrame = (AVFrame*)_outputFrame;
+        ffmpeg.av_frame_unref(outputFrame);
 
         _width = sourceFrame->width;
         _height = sourceFrame->height;
+        _activeOutputFormat = outputFormat;
+        _activeOutputAvPixelFormat = outputAvPixelFormat;
 
-        rgbaFrame->format = (int)AVPixelFormat.AV_PIX_FMT_RGBA;
-        rgbaFrame->width = _width;
-        rgbaFrame->height = _height;
+        outputFrame->format = (int)_activeOutputAvPixelFormat;
+        outputFrame->width = _width;
+        outputFrame->height = _height;
 
-        var frameBufferResult = ffmpeg.av_frame_get_buffer(rgbaFrame, 1);
+        var frameBufferResult = ffmpeg.av_frame_get_buffer(outputFrame, 1);
         if (frameBufferResult < 0)
         {
-            error = $"av_frame_get_buffer(rgba) resize failed: {GetErrorText(frameBufferResult)}";
+            error = $"av_frame_get_buffer(output) resize failed: {GetErrorText(frameBufferResult)}";
             return false;
         }
 
-        _rgbaStride = rgbaFrame->linesize[0];
+        _outputPlane0Stride = outputFrame->linesize[0];
+        _outputPlane1Stride = outputFrame->linesize[1];
+        _outputPlane2Stride = outputFrame->linesize[2];
         UpdateStreamInfo(raiseEvent: true);
 
         // Force scaler reconfiguration after output geometry changes.
         _swsSrcWidth = -1;
         _swsSrcHeight = -1;
         _swsSrcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+        _swsDstPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
         return true;
     }
 
@@ -536,7 +584,7 @@ public unsafe class FFVideoDecoder : IVideoDecoder
             height: _height,
             frameRate: _streamFrameRate,
             duration: _streamDuration,
-            pixelFormat: VideoPixelFormat.Rgba32);
+            pixelFormat: _activeOutputFormat);
 
         var previous = StreamInfo;
         StreamInfo = updated;
@@ -578,11 +626,11 @@ public unsafe class FFVideoDecoder : IVideoDecoder
             _frame = 0;
         }
 
-        if (_rgbaFrame != 0)
+        if (_outputFrame != 0)
         {
-            var f = (AVFrame*)_rgbaFrame;
+            var f = (AVFrame*)_outputFrame;
             ffmpeg.av_frame_free(&f);
-            _rgbaFrame = 0;
+            _outputFrame = 0;
         }
 
         if (_packet != 0)

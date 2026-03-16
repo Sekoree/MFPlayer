@@ -3,6 +3,7 @@ using Ownaudio.Core;
 using Ownaudio.Linux;
 using Ownaudio.Native;
 using SDL3;
+using System.Diagnostics;
 using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Decoders;
 using Seko.OwnAudioNET.Video.Mixing;
@@ -17,7 +18,7 @@ internal static class Program
 
     public static void Main(string[] args)
     {
-        string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
+        string testFile = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
         if (args.Length > 0)
             testFile = args[0];
 
@@ -26,7 +27,7 @@ internal static class Program
         Console.WriteLine($"FFmpeg version: {ffmpeg.av_version_info()}");
 
         // --- Audio engine setup ---
-        using var engine = new PulseAudioEngine();
+        using var engine = new NativeAudioEngine();
         var config = new AudioConfig
         {
             SampleRate = 48000,
@@ -47,11 +48,19 @@ internal static class Program
                 videoSource = new FFVideoSource(testFile, new FFVideoSourceOptions
                 {
                     UseDedicatedDecodeThread = true,
-                    QueueCapacity = 6,
+                    QueueCapacity = 30,
                     DecoderOptions = new FFVideoDecoderOptions
                     {
                         EnableHardwareDecoding = true,
-                        ThreadCount = GetSafeVideoThreadCount()
+                        ThreadCount = GetSafeVideoThreadCount(),
+                        PreferredOutputPixelFormats =
+                        [
+                            //VideoPixelFormat.Nv12,
+                            VideoPixelFormat.Yuv420p,
+                            //VideoPixelFormat.Rgba32
+                        ],
+                        PreferSourcePixelFormatWhenSupported = true,
+                        PreferLowestConversionCost = true
                     }
                 }, streamIndex: videoStream.Index);
             }
@@ -97,12 +106,10 @@ internal static class Program
             var info = videoSource.StreamInfo;
             Console.WriteLine($"Stream: {info}");
 
-            var texture = SDL.CreateTexture(
-                renderer,
-                SDL.PixelFormat.ABGR8888,
-                SDL.TextureAccess.Streaming,
-                Math.Max(1, info.Width),
-                Math.Max(1, info.Height));
+            var texturePixelFormat = info.PixelFormat;
+            var textureWidth = Math.Max(1, info.Width);
+            var textureHeight = Math.Max(1, info.Height);
+            var texture = CreateVideoTexture(renderer, texturePixelFormat, textureWidth, textureHeight);
 
             if (texture == nint.Zero)
             {
@@ -116,7 +123,11 @@ internal static class Program
             var frameLock = new Lock();
             VideoFrame? latestFrame = null;
             var hasFrame = false;
+            var latestFrameVersion = 0L;
+            var lastUploadedFrameVersion = -1L;
             var presentedVideoFrameCounter = 0;
+            var uploadedVideoFrameCounter = 0L;
+            var uploadedVideoTicks = 0L;
 
             videoSource.FrameReadyFast += (frame, _) =>
             {
@@ -126,6 +137,7 @@ internal static class Program
                     previous = latestFrame;
                     latestFrame = frame.AddRef();
                     hasFrame = true;
+                    latestFrameVersion++;
                 }
 
                 Interlocked.Increment(ref presentedVideoFrameCounter);
@@ -136,6 +148,8 @@ internal static class Program
             var lastDecodedFrames = 0L;
             var lastPresentedFrames = 0L;
             var lastDroppedFrames = 0L;
+            var lastUploadedFrames = 0L;
+            var lastUploadedTicks = 0L;
             var lastStatsLogTime = DateTime.UtcNow;
             var fpsWindowStart = DateTime.UtcNow;
             var renderLoopFrameCounter = 0;
@@ -161,6 +175,8 @@ internal static class Program
                         latestFrame?.Dispose();
                         latestFrame = null;
                         hasFrame = false;
+                        latestFrameVersion = 0;
+                        lastUploadedFrameVersion = -1;
                     }
 
                     mixer.Seek(positionSeconds, safeSeek: true);
@@ -235,20 +251,54 @@ internal static class Program
                 SDL.GetRenderOutputSize(renderer, out var outputWidth, out var outputHeight);
 
                 VideoFrame? frameToRender = null;
+                var frameVersion = -1L;
                 lock (frameLock)
                 {
                     if (hasFrame)
+                    {
                         frameToRender = latestFrame?.AddRef();
+                        frameVersion = latestFrameVersion;
+                    }
                 }
 
                 if (frameToRender != null)
                 {
                     try
                     {
-                        SDL.UpdateTexture(texture, nint.Zero, frameToRender.RgbaData, frameToRender.Stride);
-                        var destination = GetAspectFitRect(outputWidth, outputHeight, frameToRender.Width,
-                            frameToRender.Height);
-                        SDL.RenderTexture(renderer, texture, nint.Zero, in destination);
+                        var textureUpdatedThisFrame = false;
+                        if (texture == nint.Zero ||
+                            texturePixelFormat != frameToRender.PixelFormat ||
+                            textureWidth != frameToRender.Width ||
+                            textureHeight != frameToRender.Height)
+                        {
+                            if (texture != nint.Zero)
+                                SDL.DestroyTexture(texture);
+
+                            texturePixelFormat = frameToRender.PixelFormat;
+                            textureWidth = Math.Max(1, frameToRender.Width);
+                            textureHeight = Math.Max(1, frameToRender.Height);
+                            texture = CreateVideoTexture(renderer, texturePixelFormat, textureWidth, textureHeight);
+                            lastUploadedFrameVersion = -1;
+                        }
+
+                        if (texture != nint.Zero && frameVersion != lastUploadedFrameVersion)
+                        {
+                            var uploadStart = Stopwatch.GetTimestamp();
+                            if (UploadFrameToTexture(texture, frameToRender))
+                            {
+                                lastUploadedFrameVersion = frameVersion;
+                                textureUpdatedThisFrame = true;
+                                uploadedVideoFrameCounter++;
+                                uploadedVideoTicks += Stopwatch.GetTimestamp() - uploadStart;
+                            }
+                        }
+
+                        if (texture != nint.Zero && (textureUpdatedThisFrame || lastUploadedFrameVersion >= 0))
+                        {
+                            var destination = GetAspectFitRect(outputWidth, outputHeight, frameToRender.Width,
+                                frameToRender.Height);
+                            SDL.RenderTexture(renderer, texture, nint.Zero, in destination);
+                        }
                     }
                     finally
                     {
@@ -256,7 +306,9 @@ internal static class Program
                     }
                 }
 
-                DrawFpsOverlay(renderer, outputWidth, renderLoopFps, presentedVideoFps);
+                var overlayPath =
+                    $"VID {OverlayPixelFormatCode(videoSource.DecoderSourcePixelFormatName)}.{OverlayPixelFormatCode(videoSource.DecoderOutputPixelFormatName)}.{OverlayTextureFormatCode(texturePixelFormat)}";
+                DrawFpsOverlay(renderer, outputWidth, renderLoopFps, presentedVideoFps, overlayPath);
 
                 SDL.RenderPresent(renderer);
 
@@ -290,12 +342,20 @@ internal static class Program
                     var gen0Delta = GC.CollectionCount(0) - lastGen0Count;
                     var gen1Delta = GC.CollectionCount(1) - lastGen1Count;
                     var gen2Delta = GC.CollectionCount(2) - lastGen2Count;
+                    var uploadedFrames = uploadedVideoFrameCounter;
+                    var uploadedFrameDelta = uploadedFrames - lastUploadedFrames;
+                    var uploadedTicksDelta = uploadedVideoTicks - lastUploadedTicks;
+                    var uploadMs = uploadedTicksDelta * 1000.0 / Stopwatch.Frequency;
+                    var uploadMsPerFrame = uploadedFrameDelta > 0 ? uploadMs / uploadedFrameDelta : 0;
                     
                     var outString = $"[Video] target={videoSource.StreamInfo.FrameRate:F1} fps | " +
                         $"presented={presentedFrames - lastPresentedFrames} | " +
+                        $"uploaded={uploadedFrameDelta} | " +
                         $"decoded={decodedFrames - lastDecodedFrames} | " +
                         $"dropped={droppedFrames - lastDroppedFrames} | " +
                         $"queue={videoSource.QueueDepth} | hw={videoSource.IsHardwareDecoding} | " +
+                        $"fmt={videoSource.DecoderSourcePixelFormatName}->{videoSource.DecoderOutputPixelFormatName} | " +
+                        $"tex={texturePixelFormat} | up={uploadMsPerFrame:F2}ms | " +
                         $"master={masterTs:F3}s | audio={audioTs:F3}s | video={videoTs:F3}s | " +
                         $"a-m={audioMasterDrift:F1}ms | v-m={videoMasterDrift:F1}ms | " +
                         $"a-v={avDrift:F1}ms | corr={corrMs:F1}ms | " +
@@ -312,6 +372,8 @@ internal static class Program
                     lastDecodedFrames = decodedFrames;
                     lastPresentedFrames = presentedFrames;
                     lastDroppedFrames = droppedFrames;
+                    lastUploadedFrames = uploadedFrames;
+                    lastUploadedTicks = uploadedVideoTicks;
                     lastStatsLogTime = now;
                     lastAllocatedBytes = totalAllocatedBytes;
                     lastGen0Count += gen0Delta;
@@ -342,8 +404,86 @@ internal static class Program
 
     private static int GetSafeVideoThreadCount()
     {
-        var suggested = Math.Max(2, Environment.ProcessorCount / 4);
-        return Math.Min(8, suggested);
+        var suggested = Math.Max(4, Environment.ProcessorCount / 2);
+        return Math.Min(16, suggested);
+    }
+
+    private static nint CreateVideoTexture(nint renderer, VideoPixelFormat pixelFormat, int width, int height)
+    {
+        var sdlFormat = pixelFormat switch
+        {
+            VideoPixelFormat.Rgba32 => SDL.PixelFormat.ABGR8888,
+            VideoPixelFormat.Nv12 => SDL.PixelFormat.NV12,
+            VideoPixelFormat.Yuv420p => SDL.PixelFormat.IYUV,
+            _ => SDL.PixelFormat.ABGR8888
+        };
+
+        return SDL.CreateTexture(
+            renderer,
+            sdlFormat,
+            SDL.TextureAccess.Streaming,
+            Math.Max(1, width),
+            Math.Max(1, height));
+    }
+
+    private static unsafe bool UploadFrameToTexture(nint texture, VideoFrame frame)
+    {
+        if (frame.PixelFormat == VideoPixelFormat.Rgba32)
+        {
+            if (frame.GetPlaneLength(0) <= 0)
+                return false;
+
+            return SDL.UpdateTexture(
+                texture,
+                nint.Zero,
+                frame.GetPlaneData(0),
+                frame.GetPlaneStride(0));
+        }
+
+        var yPlane = frame.GetPlaneData(0);
+        var uPlane = frame.GetPlaneData(1);
+        var vPlane = frame.GetPlaneData(2);
+        if (yPlane.Length == 0 || uPlane.Length == 0)
+            return false;
+
+        fixed (byte* yPtr = &yPlane[0])
+        {
+            if (frame.PixelFormat == VideoPixelFormat.Nv12)
+            {
+                fixed (byte* uvPtr = &uPlane[0])
+                {
+                    return SDL.UpdateNVTexture(
+                        texture,
+                        nint.Zero,
+                        (nint)yPtr,
+                        frame.GetPlaneStride(0),
+                        (nint)uvPtr,
+                        frame.GetPlaneStride(1));
+                }
+            }
+
+            if (frame.PixelFormat == VideoPixelFormat.Yuv420p)
+            {
+                if (vPlane.Length == 0)
+                    return false;
+
+                fixed (byte* uPtr = &uPlane[0])
+                fixed (byte* vPtr = &vPlane[0])
+                {
+                    return SDL.UpdateYUVTexture(
+                        texture,
+                        nint.Zero,
+                        (nint)yPtr,
+                        frame.GetPlaneStride(0),
+                        (nint)uPtr,
+                        frame.GetPlaneStride(1),
+                        (nint)vPtr,
+                        frame.GetPlaneStride(2));
+                }
+            }
+        }
+
+        return false;
     }
 
     private static SDL.FRect GetAspectFitRect(int outputWidth, int outputHeight, int sourceWidth, int sourceHeight)
@@ -403,10 +543,11 @@ internal static class Program
         return $"{value:F0} B";
     }
 
-    private static void DrawFpsOverlay(nint renderer, int outputWidth, double fps, double videoFps)
+    private static void DrawFpsOverlay(nint renderer, int outputWidth, double fps, double videoFps, string renderPath)
     {
         var line1 = $"FPS {fps:0.0}";
         var line2 = $"VID {videoFps:0.0}";
+        var line3 = renderPath;
         const int scale = 3;
         const int spacing = 2;
         const int glyphWidth = 5;
@@ -417,8 +558,9 @@ internal static class Program
 
         var line1Width = (line1.Length * glyphWidth * scale) + ((line1.Length - 1) * spacing);
         var line2Width = (line2.Length * glyphWidth * scale) + ((line2.Length - 1) * spacing);
-        var textWidth = Math.Max(line1Width, line2Width);
-        var textHeight = glyphHeight * scale * 2 + lineSpacing;
+        var line3Width = (line3.Length * glyphWidth * scale) + ((line3.Length - 1) * spacing);
+        var textWidth = Math.Max(line1Width, Math.Max(line2Width, line3Width));
+        var textHeight = glyphHeight * scale * 3 + lineSpacing * 2;
 
         var box = new SDL.FRect
         {
@@ -434,6 +576,45 @@ internal static class Program
         SDL.SetRenderDrawColor(renderer, 255, 255, 255, 255);
         DrawBitmapText(renderer, line1, box.X + padding, box.Y + padding, scale, spacing);
         DrawBitmapText(renderer, line2, box.X + padding, box.Y + padding + glyphHeight * scale + lineSpacing, scale, spacing);
+        DrawBitmapText(renderer, line3, box.X + padding, box.Y + padding + (glyphHeight * scale + lineSpacing) * 2, scale, spacing);
+    }
+
+    private static string ShortPixelFormatName(string formatName)
+    {
+        const string avPrefix = "AV_PIX_FMT_";
+        return formatName.StartsWith(avPrefix, StringComparison.OrdinalIgnoreCase)
+            ? formatName[avPrefix.Length..]
+            : formatName;
+    }
+
+    private static string OverlayPixelFormatCode(string formatName)
+    {
+        var shortName = ShortPixelFormatName(formatName).ToUpperInvariant();
+        if (shortName.Contains("YUV422P10"))
+            return "42210";
+        if (shortName.Contains("YUV422"))
+            return "422";
+        if (shortName.Contains("YUV420"))
+            return "420";
+        if (shortName.Contains("NV12"))
+            return "12";
+        if (shortName.Contains("RGBA"))
+            return "8888";
+        if (shortName.Contains("P010"))
+            return "10010";
+
+        return "0";
+    }
+
+    private static string OverlayTextureFormatCode(VideoPixelFormat textureFormat)
+    {
+        return textureFormat switch
+        {
+            VideoPixelFormat.Nv12 => "12",
+            VideoPixelFormat.Yuv420p => "420",
+            VideoPixelFormat.Rgba32 => "8888",
+            _ => "0"
+        };
     }
 
     private static void DrawBitmapText(nint renderer, string text, float x, float y, int scale, int spacing)

@@ -5,6 +5,8 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using FFmpeg.AutoGen;
 using Ownaudio.Core;
+using Seko.OwnAudioNET.Video;
+using Seko.OwnAudioNET.Video.Avalonia;
 using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.Decoders;
 using Seko.OwnAudioNET.Video.Sources;
@@ -103,7 +105,7 @@ public partial class MainWindow : Window
 
         _started = true;
 
-        const string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
+        const string testFile = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
         //const string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
 
         ffmpeg.RootPath = "/lib/";
@@ -124,11 +126,19 @@ public partial class MainWindow : Window
         _videoSource = new FFVideoSource(testFile, new FFVideoSourceOptions
         {
             UseDedicatedDecodeThread = true,
-            QueueCapacity = 15,
+            QueueCapacity = 30,
             DecoderOptions = new FFVideoDecoderOptions
             {
                 EnableHardwareDecoding = true,
                 ThreadCount = GetSafeVideoThreadCount(),
+                PreferredOutputPixelFormats =
+                [
+                    VideoPixelFormat.Nv12,
+                    VideoPixelFormat.Yuv420p,
+                    VideoPixelFormat.Rgba32
+                ],
+                PreferSourcePixelFormatWhenSupported = true,
+                PreferLowestConversionCost = true
             },
             //EnableDriftCorrection = false,
             //DriftCorrectionDeadZoneSeconds = 0.006,

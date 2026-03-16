@@ -21,7 +21,7 @@ public interface IVideoDecoder : IDisposable
     /// Reads and converts the next video frame into a pooled <see cref="VideoFrame"/>.
     /// </summary>
     /// <param name="frame">
-    /// The decoded RGBA frame on success. Callers must call <see cref="VideoFrame.Dispose"/> when done.
+    /// The decoded frame on success. Callers must call <see cref="VideoFrame.Dispose"/> when done.
     /// </param>
     /// <param name="error">Human-readable error description on failure, otherwise <see langword="null"/>.</param>
     /// <returns><see langword="true"/> if a frame was produced; <see langword="false"/> on error or end-of-stream.</returns>

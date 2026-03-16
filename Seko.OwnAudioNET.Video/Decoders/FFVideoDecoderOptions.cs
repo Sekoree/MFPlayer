@@ -26,4 +26,27 @@ public sealed class FFVideoDecoderOptions
     /// <c>0</c> lets FFmpeg choose automatically. Default: <c>0</c>.
     /// </summary>
     public int ThreadCount { get; init; } = 0;
+
+    /// <summary>
+    /// Preferred decoder output formats in priority order. The decoder picks the first supported
+    /// entry, optionally preferring source-native output when that format is also listed.
+    /// Default: <see cref="VideoPixelFormat.Rgba32"/>.
+    /// </summary>
+    public IReadOnlyList<VideoPixelFormat> PreferredOutputPixelFormats { get; init; } =
+        [VideoPixelFormat.Rgba32];
+
+    /// <summary>
+    /// When <see langword="true"/>, and the decoded source format maps to a listed preferred output
+    /// format, the decoder keeps that source format to avoid a conversion pass.
+    /// Default: <see langword="true"/>.
+    /// </summary>
+    public bool PreferSourcePixelFormatWhenSupported { get; init; } = true;
+
+    /// <summary>
+    /// When <see langword="true"/>, the decoder chooses the preferred output format with the lowest
+    /// estimated conversion cost for the current source pixel format. This helps keep expensive
+    /// conversions (for example to RGBA) off the hot path when a YUV output is available.
+    /// Default: <see langword="true"/>.
+    /// </summary>
+    public bool PreferLowestConversionCost { get; init; } = true;
 }
