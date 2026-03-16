@@ -25,7 +25,15 @@ public unsafe partial class FFVideoDecoder
 
 	private static bool IsSupportedOutputFormat(VideoPixelFormat format)
 	{
-		return format is VideoPixelFormat.Rgba32 or VideoPixelFormat.Nv12 or VideoPixelFormat.Yuv420p;
+		return format is VideoPixelFormat.Rgba32
+			or VideoPixelFormat.Nv12
+			or VideoPixelFormat.Yuv420p
+			or VideoPixelFormat.Yuv422p
+			or VideoPixelFormat.Yuv422p10le
+			or VideoPixelFormat.P010le
+			or VideoPixelFormat.Yuv420p10le
+			or VideoPixelFormat.Yuv444p
+			or VideoPixelFormat.Yuv444p10le;
 	}
 
 	private VideoPixelFormat SelectOutputPixelFormat(AVFrame* sourceFrame)
@@ -74,25 +82,79 @@ public unsafe partial class FFVideoDecoder
 		{
 			VideoPixelFormat.Yuv420p => sourcePixelFormat switch
 			{
-				AVPixelFormat.AV_PIX_FMT_NV12 => 1,
-				AVPixelFormat.AV_PIX_FMT_YUV422P => 2,
-				AVPixelFormat.AV_PIX_FMT_YUV422P10LE => 2,
-				AVPixelFormat.AV_PIX_FMT_YUV422P10BE => 2,
-				AVPixelFormat.AV_PIX_FMT_P010LE => 2,
-				AVPixelFormat.AV_PIX_FMT_P010BE => 2,
-				AVPixelFormat.AV_PIX_FMT_RGBA => 6,
-				_ => 4
+				AVPixelFormat.AV_PIX_FMT_NV12         => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P10LE  => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV422P       => 2,
+				AVPixelFormat.AV_PIX_FMT_YUV422P10LE  => 2,
+				AVPixelFormat.AV_PIX_FMT_YUV422P10BE  => 2,
+				AVPixelFormat.AV_PIX_FMT_P010LE        => 2,
+				AVPixelFormat.AV_PIX_FMT_P010BE        => 2,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
 			},
 			VideoPixelFormat.Nv12 => sourcePixelFormat switch
 			{
-				AVPixelFormat.AV_PIX_FMT_YUV420P => 1,
-				AVPixelFormat.AV_PIX_FMT_YUV422P => 3,
-				AVPixelFormat.AV_PIX_FMT_YUV422P10LE => 3,
-				AVPixelFormat.AV_PIX_FMT_YUV422P10BE => 3,
-				AVPixelFormat.AV_PIX_FMT_P010LE => 1,
-				AVPixelFormat.AV_PIX_FMT_P010BE => 1,
-				AVPixelFormat.AV_PIX_FMT_RGBA => 6,
-				_ => 4
+				AVPixelFormat.AV_PIX_FMT_YUV420P       => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P10LE  => 1,
+				AVPixelFormat.AV_PIX_FMT_P010LE        => 1,
+				AVPixelFormat.AV_PIX_FMT_P010BE        => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV422P       => 3,
+				AVPixelFormat.AV_PIX_FMT_YUV422P10LE  => 3,
+				AVPixelFormat.AV_PIX_FMT_YUV422P10BE  => 3,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
+			},
+			VideoPixelFormat.Yuv422p => sourcePixelFormat switch
+			{
+				AVPixelFormat.AV_PIX_FMT_YUV422P10LE  => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV422P10BE  => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P       => 2,
+				AVPixelFormat.AV_PIX_FMT_NV12          => 2,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
+			},
+			VideoPixelFormat.Yuv422p10le => sourcePixelFormat switch
+			{
+				AVPixelFormat.AV_PIX_FMT_YUV422P       => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P       => 2,
+				AVPixelFormat.AV_PIX_FMT_NV12          => 2,
+				AVPixelFormat.AV_PIX_FMT_P010LE        => 3,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
+			},
+			VideoPixelFormat.P010le => sourcePixelFormat switch
+			{
+				AVPixelFormat.AV_PIX_FMT_YUV420P10LE  => 1,
+				AVPixelFormat.AV_PIX_FMT_NV12          => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P       => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV422P10LE  => 3,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
+			},
+			VideoPixelFormat.Yuv420p10le => sourcePixelFormat switch
+			{
+				AVPixelFormat.AV_PIX_FMT_P010LE        => 1,
+				AVPixelFormat.AV_PIX_FMT_NV12          => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P       => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV422P10LE  => 2,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
+			},
+			VideoPixelFormat.Yuv444p => sourcePixelFormat switch
+			{
+				AVPixelFormat.AV_PIX_FMT_YUV444P10LE  => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P       => 3,
+				AVPixelFormat.AV_PIX_FMT_NV12          => 3,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
+			},
+			VideoPixelFormat.Yuv444p10le => sourcePixelFormat switch
+			{
+				AVPixelFormat.AV_PIX_FMT_YUV444P       => 1,
+				AVPixelFormat.AV_PIX_FMT_YUV420P       => 4,
+				AVPixelFormat.AV_PIX_FMT_NV12          => 4,
+				AVPixelFormat.AV_PIX_FMT_RGBA          => 6,
+				_                                       => 4
 			},
 			VideoPixelFormat.Rgba32 => sourcePixelFormat == AVPixelFormat.AV_PIX_FMT_RGBA ? 0 : 8,
 			_ => 10
@@ -103,10 +165,16 @@ public unsafe partial class FFVideoDecoder
 	{
 		return outputFormat switch
 		{
-			VideoPixelFormat.Rgba32 => AVPixelFormat.AV_PIX_FMT_RGBA,
-			VideoPixelFormat.Yuv420p => AVPixelFormat.AV_PIX_FMT_YUV420P,
-			VideoPixelFormat.Nv12 => AVPixelFormat.AV_PIX_FMT_NV12,
-			_ => AVPixelFormat.AV_PIX_FMT_RGBA
+			VideoPixelFormat.Rgba32       => AVPixelFormat.AV_PIX_FMT_RGBA,
+			VideoPixelFormat.Yuv420p      => AVPixelFormat.AV_PIX_FMT_YUV420P,
+			VideoPixelFormat.Nv12         => AVPixelFormat.AV_PIX_FMT_NV12,
+			VideoPixelFormat.Yuv422p      => AVPixelFormat.AV_PIX_FMT_YUV422P,
+			VideoPixelFormat.Yuv422p10le  => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
+			VideoPixelFormat.P010le       => AVPixelFormat.AV_PIX_FMT_P010LE,
+			VideoPixelFormat.Yuv420p10le  => AVPixelFormat.AV_PIX_FMT_YUV420P10LE,
+			VideoPixelFormat.Yuv444p      => AVPixelFormat.AV_PIX_FMT_YUV444P,
+			VideoPixelFormat.Yuv444p10le  => AVPixelFormat.AV_PIX_FMT_YUV444P10LE,
+			_                             => AVPixelFormat.AV_PIX_FMT_RGBA
 		};
 	}
 
@@ -122,6 +190,24 @@ public unsafe partial class FFVideoDecoder
 				return true;
 			case AVPixelFormat.AV_PIX_FMT_NV12:
 				pixelFormat = VideoPixelFormat.Nv12;
+				return true;
+			case AVPixelFormat.AV_PIX_FMT_YUV422P:
+				pixelFormat = VideoPixelFormat.Yuv422p;
+				return true;
+			case AVPixelFormat.AV_PIX_FMT_YUV422P10LE:
+				pixelFormat = VideoPixelFormat.Yuv422p10le;
+				return true;
+			case AVPixelFormat.AV_PIX_FMT_P010LE:
+				pixelFormat = VideoPixelFormat.P010le;
+				return true;
+			case AVPixelFormat.AV_PIX_FMT_YUV420P10LE:
+				pixelFormat = VideoPixelFormat.Yuv420p10le;
+				return true;
+			case AVPixelFormat.AV_PIX_FMT_YUV444P:
+				pixelFormat = VideoPixelFormat.Yuv444p;
+				return true;
+			case AVPixelFormat.AV_PIX_FMT_YUV444P10LE:
+				pixelFormat = VideoPixelFormat.Yuv444p10le;
 				return true;
 			default:
 				pixelFormat = default;
@@ -140,10 +226,18 @@ public unsafe partial class FFVideoDecoder
 
 		return outputFormat switch
 		{
-			VideoPixelFormat.Rgba32 => frame->data[0] != null && frame->linesize[0] > 0,
-			VideoPixelFormat.Nv12 => frame->data[0] != null && frame->data[1] != null && frame->linesize[0] > 0 && frame->linesize[1] > 0,
-			VideoPixelFormat.Yuv420p => frame->data[0] != null && frame->data[1] != null && frame->data[2] != null &&
-										frame->linesize[0] > 0 && frame->linesize[1] > 0 && frame->linesize[2] > 0,
+			VideoPixelFormat.Rgba32 =>
+				frame->data[0] != null && frame->linesize[0] > 0,
+
+			VideoPixelFormat.Nv12 or VideoPixelFormat.P010le =>
+				frame->data[0] != null && frame->data[1] != null &&
+				frame->linesize[0] > 0 && frame->linesize[1] > 0,
+
+			VideoPixelFormat.Yuv420p or VideoPixelFormat.Yuv422p or VideoPixelFormat.Yuv444p or
+			VideoPixelFormat.Yuv422p10le or VideoPixelFormat.Yuv420p10le or VideoPixelFormat.Yuv444p10le =>
+				frame->data[0] != null && frame->data[1] != null && frame->data[2] != null &&
+				frame->linesize[0] > 0 && frame->linesize[1] > 0 && frame->linesize[2] > 0,
+
 			_ => false
 		};
 	}
@@ -178,9 +272,10 @@ public unsafe partial class FFVideoDecoder
 				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
 				return true;
 			}
+
 			case VideoPixelFormat.Nv12:
 			{
-				var yStride = sourceFrame->linesize[0];
+				var yStride  = sourceFrame->linesize[0];
 				var uvStride = sourceFrame->linesize[1];
 				if (sourceFrame->data[0] == null || sourceFrame->data[1] == null || yStride <= 0 || uvStride <= 0)
 				{
@@ -189,13 +284,14 @@ public unsafe partial class FFVideoDecoder
 				}
 
 				var chromaHeight = (height + 1) / 2;
-				var yBytes = checked(yStride * height);
+				var yBytes  = checked(yStride  * height);
 				var uvBytes = checked(uvStride * chromaHeight);
 				frame = VideoFrame.CreatePooledNv12(yBytes, uvBytes, width, height, yStride, uvStride, ptsSeconds);
 				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
 				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
 				return true;
 			}
+
 			case VideoPixelFormat.Yuv420p:
 			{
 				var yStride = sourceFrame->linesize[0];
@@ -218,6 +314,108 @@ public unsafe partial class FFVideoDecoder
 				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
 				return true;
 			}
+
+			// ── 4:2:2 – chroma has FULL height ────────────────────────────────────
+			case VideoPixelFormat.Yuv422p:
+			case VideoPixelFormat.Yuv422p10le:
+			{
+				var yStride = sourceFrame->linesize[0];
+				var uStride = sourceFrame->linesize[1];
+				var vStride = sourceFrame->linesize[2];
+				if (sourceFrame->data[0] == null || sourceFrame->data[1] == null || sourceFrame->data[2] == null ||
+					yStride <= 0 || uStride <= 0 || vStride <= 0)
+				{
+					error = $"{outputFormat} frame has invalid source pointers.";
+					return false;
+				}
+
+				// 4:2:2: chroma planes have the same height as luma
+				var yBytes = checked(yStride * height);
+				var uBytes = checked(uStride * height);
+				var vBytes = checked(vStride * height);
+
+				frame = outputFormat == VideoPixelFormat.Yuv422p
+					? VideoFrame.CreatePooledYuv422p(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds)
+					: VideoFrame.CreatePooledYuv422p10le(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds);
+
+				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
+				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
+				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
+				return true;
+			}
+
+			// ── P010LE: semi-planar 4:2:0 10-bit MSB ─────────────────────────────
+			case VideoPixelFormat.P010le:
+			{
+				var yStride  = sourceFrame->linesize[0];
+				var uvStride = sourceFrame->linesize[1];
+				if (sourceFrame->data[0] == null || sourceFrame->data[1] == null || yStride <= 0 || uvStride <= 0)
+				{
+					error = "P010LE frame has invalid source pointers.";
+					return false;
+				}
+
+				var chromaHeight = (height + 1) / 2;
+				var yBytes  = checked(yStride  * height);
+				var uvBytes = checked(uvStride * chromaHeight);
+				frame = VideoFrame.CreatePooledP010le(yBytes, uvBytes, width, height, yStride, uvStride, ptsSeconds);
+				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
+				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
+				return true;
+			}
+
+			// ── 4:2:0 10-bit planar ───────────────────────────────────────────────
+			case VideoPixelFormat.Yuv420p10le:
+			{
+				var yStride = sourceFrame->linesize[0];
+				var uStride = sourceFrame->linesize[1];
+				var vStride = sourceFrame->linesize[2];
+				if (sourceFrame->data[0] == null || sourceFrame->data[1] == null || sourceFrame->data[2] == null ||
+					yStride <= 0 || uStride <= 0 || vStride <= 0)
+				{
+					error = "YUV420p10le frame has invalid source pointers.";
+					return false;
+				}
+
+				var chromaHeight = (height + 1) / 2;
+				var yBytes = checked(yStride * height);
+				var uBytes = checked(uStride * chromaHeight);
+				var vBytes = checked(vStride * chromaHeight);
+				frame = VideoFrame.CreatePooledYuv420p10le(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds);
+				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
+				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
+				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
+				return true;
+			}
+
+			// ── 4:4:4 – all planes full size ──────────────────────────────────────
+			case VideoPixelFormat.Yuv444p:
+			case VideoPixelFormat.Yuv444p10le:
+			{
+				var yStride = sourceFrame->linesize[0];
+				var uStride = sourceFrame->linesize[1];
+				var vStride = sourceFrame->linesize[2];
+				if (sourceFrame->data[0] == null || sourceFrame->data[1] == null || sourceFrame->data[2] == null ||
+					yStride <= 0 || uStride <= 0 || vStride <= 0)
+				{
+					error = $"{outputFormat} frame has invalid source pointers.";
+					return false;
+				}
+
+				var yBytes = checked(yStride * height);
+				var uBytes = checked(uStride * height);
+				var vBytes = checked(vStride * height);
+
+				frame = outputFormat == VideoPixelFormat.Yuv444p
+					? VideoFrame.CreatePooledYuv444p(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds)
+					: VideoFrame.CreatePooledYuv444p10le(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds);
+
+				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
+				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
+				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
+				return true;
+			}
+
 			default:
 				error = $"Unsupported output format {outputFormat}.";
 				return false;
@@ -235,4 +433,3 @@ public unsafe partial class FFVideoDecoder
 		}
 	}
 }
-

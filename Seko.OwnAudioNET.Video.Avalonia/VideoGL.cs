@@ -7,14 +7,17 @@ using Seko.OwnAudioNET.Video.Sources;
 
 namespace Seko.OwnAudioNET.Video.Avalonia;
 
-public class VideoGL : OpenGlControlBase, IDisposable
+public partial class VideoGL : OpenGlControlBase, IDisposable
 {
     private const int GlR8 = 0x8229;
+    private const int GlR16 = 0x822A;
     private const int GlRg8 = 0x822B;
+    private const int GlRg16 = 0x822C;
     private const int GlRed = 0x1903;
     private const int GlRg = 0x8227;
     private const int GlTexture1 = GlConsts.GL_TEXTURE0 + 1;
     private const int GlTexture2 = GlConsts.GL_TEXTURE0 + 2;
+    private const int GlUnsignedShort = 0x1403;
 
     private static readonly float[] QuadVertices =
     [
@@ -73,9 +76,13 @@ public class VideoGL : OpenGlControlBase, IDisposable
     private int _yuvPixelFormatLocation = -1;
     private bool _useYuvProgramThisFrame;
     private int _yuvPixelFormatThisFrame;
+    private bool _can16BitTextures;
     private byte[]? _plane0Scratch;
     private byte[]? _plane1Scratch;
     private byte[]? _plane2Scratch;
+    private byte[]? _plane0Scratch8;
+    private byte[]? _plane1Scratch8;
+    private byte[]? _plane2Scratch8;
     private byte[]? _rgbaConvertedScratch;
 
     private bool _glReady;
@@ -146,6 +153,10 @@ public class VideoGL : OpenGlControlBase, IDisposable
 
         _yuvProgram = BuildProgram(gl, vertexShaderSource, yuvFragmentShaderSource);
         _canUseGpuYuvPath = _yuvProgram != 0 && _getUniformLocation != null && _uniform1i != null;
+        var glVersion = gl.ContextInfo.Version;
+        _can16BitTextures = glVersion.Type == GlProfileType.OpenGL
+            ? glVersion.Major >= 3
+            : (glVersion.Major > 3 || (glVersion.Major == 3 && glVersion.Minor >= 2));
         if (_canUseGpuYuvPath)
             InitializeYuvUniformLocations(gl);
 
@@ -245,6 +256,12 @@ public class VideoGL : OpenGlControlBase, IDisposable
                 VideoPixelFormat.Rgba32 => UploadRgbaFrame(gl, frame),
                 VideoPixelFormat.Nv12 => UploadNv12Frame(gl, frame),
                 VideoPixelFormat.Yuv420p => UploadYuv420pFrame(gl, frame),
+                VideoPixelFormat.Yuv422p => UploadYuv422pFrame(gl, frame),
+                VideoPixelFormat.Yuv444p => UploadYuv444pFrame(gl, frame),
+                VideoPixelFormat.Yuv422p10le => UploadYuv422p10leFrame(gl, frame),
+                VideoPixelFormat.P010le => UploadP010leFrame(gl, frame),
+                VideoPixelFormat.Yuv420p10le => UploadYuv420p10leFrame(gl, frame),
+                VideoPixelFormat.Yuv444p10le => UploadYuv444p10leFrame(gl, frame),
                 _ => false
             };
 
@@ -493,19 +510,26 @@ public class VideoGL : OpenGlControlBase, IDisposable
                    
                    void main()
                    {
-                       float y = texture(uTextureY, vTexCoord).r;
+                       // uPixelFormat:
+                       //  1 = NV12         (semi-planar,  8-bit)
+                       //  2 = YUV planar   (8-bit:  420p / 422p / 444p)
+                       //  3 = P010LE       (semi-planar, 10-bit MSB-aligned)
+                       //  4 = YUV10 planar (10-bit LSB-packed: 420p10le / 422p10le / 444p10le)
+                       float scale = (uPixelFormat == 4) ? (65535.0 / 1023.0) : 1.0;
+
+                       float y = texture(uTextureY, vTexCoord).r * scale;
                        float u;
                        float v;
-                       if (uPixelFormat == 1)
+                       if (uPixelFormat == 1 || uPixelFormat == 3)
                        {
-                           vec2 uv = texture(uTextureU, vTexCoord).rg;
+                           vec2 uv = texture(uTextureU, vTexCoord).rg * scale;
                            u = uv.r - 0.5;
                            v = uv.g - 0.5;
                        }
                        else
                        {
-                           u = texture(uTextureU, vTexCoord).r - 0.5;
-                           v = texture(uTextureV, vTexCoord).r - 0.5;
+                           u = texture(uTextureU, vTexCoord).r * scale - 0.5;
+                           v = texture(uTextureV, vTexCoord).r * scale - 0.5;
                        }
 
                        FragColor = vec4(yuvToRgb(y, u, v), 1.0);
@@ -532,19 +556,26 @@ public class VideoGL : OpenGlControlBase, IDisposable
 
                void main()
                {
-                   float y = texture(uTextureY, vTexCoord).r;
+                   // uPixelFormat:
+                   //  1 = NV12         (semi-planar,  8-bit)
+                   //  2 = YUV planar   (8-bit:  420p / 422p / 444p)
+                   //  3 = P010LE       (semi-planar, 10-bit MSB-aligned)
+                   //  4 = YUV10 planar (10-bit LSB-packed: 420p10le / 422p10le / 444p10le)
+                   float scale = (uPixelFormat == 4) ? (65535.0 / 1023.0) : 1.0;
+
+                   float y = texture(uTextureY, vTexCoord).r * scale;
                    float u;
                    float v;
-                   if (uPixelFormat == 1)
+                   if (uPixelFormat == 1 || uPixelFormat == 3)
                    {
-                       vec2 uv = texture(uTextureU, vTexCoord).rg;
+                       vec2 uv = texture(uTextureU, vTexCoord).rg * scale;
                        u = uv.r - 0.5;
                        v = uv.g - 0.5;
                    }
                    else
                    {
-                       u = texture(uTextureU, vTexCoord).r - 0.5;
-                       v = texture(uTextureV, vTexCoord).r - 0.5;
+                       u = texture(uTextureU, vTexCoord).r * scale - 0.5;
+                       v = texture(uTextureV, vTexCoord).r * scale - 0.5;
                    }
 
                    FragColor = vec4(yuvToRgb(y, u, v), 1.0);
@@ -552,188 +583,7 @@ public class VideoGL : OpenGlControlBase, IDisposable
                """;
     }
 
-    private unsafe bool UploadRgbaFrame(GlInterface gl, VideoFrame frame)
-    {
-        if (frame.GetPlaneLength(0) <= 0 || frame.Width <= 0 || frame.Height <= 0)
-            return false;
-
-        var rgbaData = GetTightlyPackedPlane(frame, 0, frame.Width * 4, frame.Height, ref _plane0Scratch);
-        if (rgbaData == null)
-            return false;
-
-        return UploadRgbaPixels(gl, frame.Width, frame.Height, rgbaData);
-    }
-
-    private unsafe bool UploadRgbaPixels(GlInterface gl, int width, int height, byte[] rgbaData)
-    {
-        gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-        gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureRgba);
-
-        var internalFormat = GlConsts.GL_RGBA8;
-        var format = GlConsts.GL_RGBA;
-
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(rgbaData))
-        {
-            var pixels = (nint)ptr;
-
-            if (!_rgbaTextureInitialized || _textureWidth != width || _textureHeight != height)
-            {
-                _textureWidth = width;
-                _textureHeight = height;
-                _rgbaTextureInitialized = true;
-
-                gl.TexImage2D(
-                    GlConsts.GL_TEXTURE_2D,
-                    0,
-                    internalFormat,
-                    _textureWidth,
-                    _textureHeight,
-                    0,
-                    format,
-                    GlConsts.GL_UNSIGNED_BYTE,
-                    nint.Zero);
-            }
-
-            if (_texSubImage2D != null)
-            {
-                _texSubImage2D(
-                    GlConsts.GL_TEXTURE_2D,
-                    0,
-                    0,
-                    0,
-                    width,
-                    height,
-                    format,
-                    GlConsts.GL_UNSIGNED_BYTE,
-                    pixels);
-            }
-            else
-            {
-                gl.TexImage2D(
-                    GlConsts.GL_TEXTURE_2D,
-                    0,
-                    internalFormat,
-                    width,
-                    height,
-                    0,
-                    format,
-                    GlConsts.GL_UNSIGNED_BYTE,
-                    pixels);
-            }
-        }
-
-        return true;
-    }
-
-    private unsafe bool UploadNv12Frame(GlInterface gl, VideoFrame frame)
-    {
-        if (frame.Width <= 0 || frame.Height <= 0)
-            return false;
-
-        var width = frame.Width;
-        var height = frame.Height;
-        var chromaWidth = (width + 1) / 2;
-        var chromaHeight = (height + 1) / 2;
-
-        var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
-        var uvPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, chromaHeight, ref _plane1Scratch);
-        if (yPlane == null || uvPlane == null)
-            return false;
-
-        if (_canUseGpuYuvPath)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            UploadDualChannelTexture(gl, chromaWidth, chromaHeight, uvPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 1;
-            _rgbaTextureInitialized = false;
-            return true;
-        }
-
-        var pixelCount = checked(width * height);
-        var rgbaLength = checked(pixelCount * 4);
-        if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
-            _rgbaConvertedScratch = new byte[rgbaLength];
-
-        ConvertNv12ToRgba(yPlane, uvPlane, width, height, _rgbaConvertedScratch);
-        return UploadRgbaPixels(gl, width, height, _rgbaConvertedScratch);
-    }
-
-    private unsafe bool UploadYuv420pFrame(GlInterface gl, VideoFrame frame)
-    {
-        if (frame.Width <= 0 || frame.Height <= 0)
-            return false;
-
-        var width = frame.Width;
-        var height = frame.Height;
-        var chromaWidth = (width + 1) / 2;
-        var chromaHeight = (height + 1) / 2;
-
-        var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
-        var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth, chromaHeight, ref _plane1Scratch);
-        var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth, chromaHeight, ref _plane2Scratch);
-        if (yPlane == null || uPlane == null || vPlane == null)
-            return false;
-
-        if (_canUseGpuYuvPath)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadSingleChannelTexture(gl, chromaWidth, chromaHeight, uPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadSingleChannelTexture(gl, chromaWidth, chromaHeight, vPlane);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 2;
-            _rgbaTextureInitialized = false;
-            return true;
-        }
-
-        var pixelCount = checked(width * height);
-        var rgbaLength = checked(pixelCount * 4);
-        if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
-            _rgbaConvertedScratch = new byte[rgbaLength];
-
-        ConvertYuv420pToRgba(yPlane, uPlane, vPlane, width, height, _rgbaConvertedScratch);
-        return UploadRgbaPixels(gl, width, height, _rgbaConvertedScratch);
-    }
-
-    private unsafe void UploadSingleChannelTexture(GlInterface gl, int width, int height, byte[] data)
-    {
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
-        {
-            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlR8, width, height, 0, GlRed, GlConsts.GL_UNSIGNED_BYTE, (nint)ptr);
-        }
-    }
-
-    private unsafe void UploadDualChannelTexture(GlInterface gl, int width, int height, byte[] data)
-    {
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
-        {
-            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlRg8, width, height, 0, GlRg, GlConsts.GL_UNSIGNED_BYTE, (nint)ptr);
-        }
-    }
+    // Upload helpers are defined in VideoGL.Uploads.cs
 
     private void InitializeYuvUniformLocations(GlInterface gl)
     {
@@ -824,6 +674,94 @@ public class VideoGL : OpenGlControlBase, IDisposable
                 WriteRgbaPixel(destination, dstRowOffset + x * 4, yValue, uValue, vValue);
             }
         }
+    }
+
+    private static void ConvertYuv422pToRgba(byte[] yPlane, byte[] uPlane, byte[] vPlane, int width, int height, byte[] destination)
+    {
+        var chromaWidth = (width + 1) / 2;
+        for (var y = 0; y < height; y++)
+        {
+            var yRowOffset = y * width;
+            var uvRowOffset = y * chromaWidth;
+            var dstRowOffset = y * width * 4;
+            for (var x = 0; x < width; x++)
+            {
+                var yValue = yPlane[yRowOffset + x];
+                var uvOffset = uvRowOffset + (x / 2);
+                var uValue = uPlane[uvOffset];
+                var vValue = vPlane[uvOffset];
+                WriteRgbaPixel(destination, dstRowOffset + x * 4, yValue, uValue, vValue);
+            }
+        }
+    }
+
+    private static void ConvertYuv444pToRgba(byte[] yPlane, byte[] uPlane, byte[] vPlane, int width, int height, byte[] destination)
+    {
+        for (var y = 0; y < height; y++)
+        {
+            var rowOffset = y * width;
+            var dstRowOffset = y * width * 4;
+            for (var x = 0; x < width; x++)
+            {
+                var idx = rowOffset + x;
+                WriteRgbaPixel(destination, dstRowOffset + x * 4, yPlane[idx], uPlane[idx], vPlane[idx]);
+            }
+        }
+    }
+
+    private static byte[]? Downscale10BitTo8Bit(byte[] source16, int width, int height, ref byte[]? scratch)
+    {
+        var pixelCount = width * height;
+        if (source16.Length < pixelCount * 2)
+            return null;
+
+        if (scratch == null || scratch.Length < pixelCount)
+            scratch = new byte[pixelCount];
+
+        for (var i = 0; i < pixelCount; i++)
+        {
+            var lo = source16[i * 2];
+            var hi = source16[i * 2 + 1];
+            var value = (ushort)(lo | (hi << 8));
+            scratch[i] = (byte)(value >> 2);
+        }
+
+        return scratch;
+    }
+
+    private static byte[]? Downscale10BitMsbTo8Bit(byte[] source16, int width, int height, ref byte[]? scratch)
+    {
+        var pixelCount = width * height;
+        if (source16.Length < pixelCount * 2)
+            return null;
+
+        if (scratch == null || scratch.Length < pixelCount)
+            scratch = new byte[pixelCount];
+
+        for (var i = 0; i < pixelCount; i++)
+            scratch[i] = source16[i * 2 + 1];
+
+        return scratch;
+    }
+
+    private static byte[]? Downscale10BitMsbDualTo8Bit(byte[] source16, int chromaWidth, int chromaHeight, ref byte[]? scratch)
+    {
+        var texelCount = chromaWidth * chromaHeight;
+        var srcBytes = texelCount * 4;
+        if (source16.Length < srcBytes)
+            return null;
+
+        var dstBytes = texelCount * 2;
+        if (scratch == null || scratch.Length < dstBytes)
+            scratch = new byte[dstBytes];
+
+        for (var i = 0; i < texelCount; i++)
+        {
+            scratch[i * 2] = source16[i * 4 + 1];
+            scratch[i * 2 + 1] = source16[i * 4 + 3];
+        }
+
+        return scratch;
     }
 
     private static void WriteRgbaPixel(byte[] destination, int destinationOffset, int y, int u, int v)

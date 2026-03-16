@@ -117,6 +117,103 @@ public sealed class VideoFrame : IDisposable
         return frame;
     }
 
+    /// <summary>Generic factory for any 3-plane format. Callers supply pre-computed byte lengths and strides.</summary>
+    internal static VideoFrame CreatePooled3Plane(
+        VideoPixelFormat pixelFormat,
+        int plane0Length, int plane1Length, int plane2Length,
+        int width, int height,
+        int plane0Stride, int plane1Stride, int plane2Stride,
+        double ptsSeconds)
+    {
+        var plane0 = ArrayPool<byte>.Shared.Rent(Math.Max(1, plane0Length));
+        var plane1 = ArrayPool<byte>.Shared.Rent(Math.Max(1, plane1Length));
+        var plane2 = ArrayPool<byte>.Shared.Rent(Math.Max(1, plane2Length));
+
+        var frame = RentFrame();
+        frame.Reinitialize(
+            pixelFormat: pixelFormat,
+            plane0: plane0, plane0Length: plane0Length, plane0Stride: plane0Stride,
+            plane1: plane1, plane1Length: plane1Length, plane1Stride: plane1Stride,
+            plane2: plane2, plane2Length: plane2Length, plane2Stride: plane2Stride,
+            width: width, height: height, ptsSeconds: ptsSeconds);
+        return frame;
+    }
+
+    /// <summary>Generic factory for any 2-plane (semi-planar) format.</summary>
+    internal static VideoFrame CreatePooled2Plane(
+        VideoPixelFormat pixelFormat,
+        int plane0Length, int plane1Length,
+        int width, int height,
+        int plane0Stride, int plane1Stride,
+        double ptsSeconds)
+    {
+        var plane0 = ArrayPool<byte>.Shared.Rent(Math.Max(1, plane0Length));
+        var plane1 = ArrayPool<byte>.Shared.Rent(Math.Max(1, plane1Length));
+
+        var frame = RentFrame();
+        frame.Reinitialize(
+            pixelFormat: pixelFormat,
+            plane0: plane0, plane0Length: plane0Length, plane0Stride: plane0Stride,
+            plane1: plane1, plane1Length: plane1Length, plane1Stride: plane1Stride,
+            plane2: null, plane2Length: 0, plane2Stride: 0,
+            width: width, height: height, ptsSeconds: ptsSeconds);
+        return frame;
+    }
+
+    // ── 4:2:2 8-bit ──────────────────────────────────────────────────────────
+    internal static VideoFrame CreatePooledYuv422p(
+        int yLength, int uLength, int vLength,
+        int width, int height,
+        int yStride, int uStride, int vStride,
+        double ptsSeconds) =>
+        CreatePooled3Plane(VideoPixelFormat.Yuv422p,
+            yLength, uLength, vLength, width, height, yStride, uStride, vStride, ptsSeconds);
+
+    // ── 4:2:2 10-bit ─────────────────────────────────────────────────────────
+    internal static VideoFrame CreatePooledYuv422p10le(
+        int yLength, int uLength, int vLength,
+        int width, int height,
+        int yStride, int uStride, int vStride,
+        double ptsSeconds) =>
+        CreatePooled3Plane(VideoPixelFormat.Yuv422p10le,
+            yLength, uLength, vLength, width, height, yStride, uStride, vStride, ptsSeconds);
+
+    // ── 4:2:0 10-bit semi-planar (P010LE) ────────────────────────────────────
+    internal static VideoFrame CreatePooledP010le(
+        int yLength, int uvLength,
+        int width, int height,
+        int yStride, int uvStride,
+        double ptsSeconds) =>
+        CreatePooled2Plane(VideoPixelFormat.P010le,
+            yLength, uvLength, width, height, yStride, uvStride, ptsSeconds);
+
+    // ── 4:2:0 10-bit planar ───────────────────────────────────────────────────
+    internal static VideoFrame CreatePooledYuv420p10le(
+        int yLength, int uLength, int vLength,
+        int width, int height,
+        int yStride, int uStride, int vStride,
+        double ptsSeconds) =>
+        CreatePooled3Plane(VideoPixelFormat.Yuv420p10le,
+            yLength, uLength, vLength, width, height, yStride, uStride, vStride, ptsSeconds);
+
+    // ── 4:4:4 8-bit ───────────────────────────────────────────────────────────
+    internal static VideoFrame CreatePooledYuv444p(
+        int yLength, int uLength, int vLength,
+        int width, int height,
+        int yStride, int uStride, int vStride,
+        double ptsSeconds) =>
+        CreatePooled3Plane(VideoPixelFormat.Yuv444p,
+            yLength, uLength, vLength, width, height, yStride, uStride, vStride, ptsSeconds);
+
+    // ── 4:4:4 10-bit ──────────────────────────────────────────────────────────
+    internal static VideoFrame CreatePooledYuv444p10le(
+        int yLength, int uLength, int vLength,
+        int width, int height,
+        int yStride, int uStride, int vStride,
+        double ptsSeconds) =>
+        CreatePooled3Plane(VideoPixelFormat.Yuv444p10le,
+            yLength, uLength, vLength, width, height, yStride, uStride, vStride, ptsSeconds);
+
     internal static VideoFrame CreatePooledYuv420p(int yLength, int uLength, int vLength, int width, int height, int yStride, int uStride, int vStride, double ptsSeconds)
     {
         var plane0 = ArrayPool<byte>.Shared.Rent(Math.Max(1, yLength));

@@ -21,17 +21,14 @@ public partial class MainWindow : Window
     private AVMixer? _mixer;
     private FFAudioSource? _audioSource;
     private FFVideoSource? _videoSource;
-    private VideoGL? _videoGl;
-    private VideoGL? _videoGl2;
-    private VideoGL? _videoGl3;
-    private VideoGL? _videoGl4;
+    private VideoGL[] _videoViews = [];
     private DispatcherTimer? _videoStatsTimer;
     private bool _isDisposed;
     private bool _started;
     private long _lastDecodedFrames;
     private long _lastPresentedFrames;
     private long _lastDroppedFrames;
-    private readonly object _seekLock = new();
+    private readonly Lock _seekLock = new();
 
     public MainWindow()
     {
@@ -71,18 +68,18 @@ public partial class MainWindow : Window
         if (running)
         {
             _mixer?.Pause();
-            Console.WriteLine("[Video] Paused.");
+            ConsolePrintLine("[Video] Paused.");
         }
         else
         {
             _mixer?.Start();
-            Console.WriteLine("[Video] Playing.");
+            ConsolePrintLine("[Video] Playing.");
         }
     }
 
     private void SeekRelative(double deltaSeconds)
     {
-        if (_mixer == null || !Monitor.TryEnter(_seekLock))
+        if (_mixer == null || !_seekLock.TryEnter())
             return;
 
         try
@@ -92,7 +89,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            Monitor.Exit(_seekLock);
+            _seekLock.Exit();
         }
     }
 
@@ -105,7 +102,7 @@ public partial class MainWindow : Window
 
         _started = true;
 
-        const string testFile = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
+        const string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
         //const string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
 
         ffmpeg.RootPath = "/lib/";
@@ -133,6 +130,8 @@ public partial class MainWindow : Window
                 ThreadCount = GetSafeVideoThreadCount(),
                 PreferredOutputPixelFormats =
                 [
+                    VideoPixelFormat.Yuv422p10le,  // ProRes native – zero-cost direct copy
+                    VideoPixelFormat.Yuv422p,
                     VideoPixelFormat.Nv12,
                     VideoPixelFormat.Yuv420p,
                     VideoPixelFormat.Rgba32
@@ -149,14 +148,17 @@ public partial class MainWindow : Window
         _mixer.AddAudioSource(_audioSource);
         _mixer.AddVideoSource(_videoSource);
 
-        _videoGl = new VideoGL(_videoSource);
-        _videoGl2 = new VideoGL(_videoSource, false);
-        _videoGl3 = new VideoGL(_videoSource, false);
-        _videoGl4 = new VideoGL(_videoSource, false);
-        VideoControl.Content = _videoGl;
-        VideoControl2.Content = _videoGl2;
-        VideoControl3.Content = _videoGl3;
-        VideoControl4.Content = _videoGl4;
+        _videoViews =
+        [
+            new VideoGL(_videoSource),
+            new VideoGL(_videoSource, false),
+            new VideoGL(_videoSource, false),
+            new VideoGL(_videoSource, false)
+        ];
+        VideoControl.Content = _videoViews[0];
+        VideoControl2.Content = _videoViews[1];
+        VideoControl3.Content = _videoViews[2];
+        VideoControl4.Content = _videoViews[3];
 
         _videoStatsTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {
@@ -167,7 +169,7 @@ public partial class MainWindow : Window
             if (_videoSource.IsEndOfStream && _audioSource.IsEndOfStream)
             {
                 _videoStatsTimer?.Stop();
-                Console.WriteLine("[Video] Playback finished.");
+                ConsolePrintLine("[Video] Playback finished.");
                 return;
             }
 
@@ -192,8 +194,23 @@ public partial class MainWindow : Window
             var presentedDelta = presentedFrames - _lastPresentedFrames;
             var droppedDelta = droppedFrames - _lastDroppedFrames;
 
-            Title = $"VideoTest - target {_videoSource.StreamInfo.FrameRate:F1} fps | presented {presentedDelta} | decoded {decodedDelta} | dropped {droppedDelta} | queue {_videoSource.QueueDepth} | hw {_videoSource.IsHardwareDecoding} | a-v {avDriftMs:F1}ms | v-m {videoMasterDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
-            Console.WriteLine($"[Video] target={_videoSource.StreamInfo.FrameRate:F1} fps, presented={presentedDelta}, decoded={decodedDelta}, dropped={droppedDelta}, queue={_videoSource.QueueDepth}, hw={_videoSource.IsHardwareDecoding}, master={masterTimestamp:F3}s, audio={audioTimestamp:F3}s, video={videoTimestamp:F3}s, a-m={audioMasterDriftMs:F1}ms, v-m={videoMasterDriftMs:F1}ms, a-v={avDriftMs:F1}ms, corr={correctionOffsetMs:F1}ms");
+            // Pixel-format conversion info: "yuv422p10le" (direct) or "yuv422p10le→nv12" (converted)
+            var srcFmt = FmtName(_videoSource.DecoderSourcePixelFormatName);
+            var dstFmt = FmtName(_videoSource.DecoderOutputPixelFormatName);
+            var fmtInfo = string.Equals(srcFmt, dstFmt, StringComparison.OrdinalIgnoreCase)
+                ? srcFmt
+                : $"{srcFmt}→{dstFmt}";
+
+            Title = $"VideoTest - {_videoSource.StreamInfo.FrameRate:F1} fps | pres {presentedDelta} dec {decodedDelta} drop {droppedDelta} | q {_videoSource.QueueDepth} | hw {_videoSource.IsHardwareDecoding} | {fmtInfo} | a-v {avDriftMs:F1}ms | v-m {videoMasterDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
+
+            ConsoleOverwriteLine(
+                $"[Video] {_videoSource.StreamInfo.FrameRate:F1}fps" +
+                $"  pres={presentedDelta} dec={decodedDelta} drop={droppedDelta}" +
+                $"  q={_videoSource.QueueDepth}  hw={_videoSource.IsHardwareDecoding}" +
+                $"  fmt={fmtInfo}" +
+                $"  m={masterTimestamp:F3}s a={audioTimestamp:F3}s v={videoTimestamp:F3}s" +
+                $"  a-m={audioMasterDriftMs:+0.0;-0.0}ms v-m={videoMasterDriftMs:+0.0;-0.0}ms a-v={avDriftMs:+0.0;-0.0}ms" +
+                $"  corr={correctionOffsetMs:+0.0;-0.0}ms");
 
             _lastDecodedFrames = decodedFrames;
             _lastPresentedFrames = presentedFrames;
@@ -226,10 +243,9 @@ public partial class MainWindow : Window
             // Best effort during shutdown.
         }
 
-        _videoGl?.Dispose();
-        _videoGl2?.Dispose();
-        _videoGl3?.Dispose();
-        _videoGl4?.Dispose();
+        foreach (var view in _videoViews)
+            view.Dispose();
+        _videoViews = [];
         _videoStatsTimer?.Stop();
         _videoStatsTimer = null;
         _videoSource?.Dispose();
@@ -251,11 +267,5 @@ public partial class MainWindow : Window
         }
 
         base.OnClosed(e);
-    }
-
-    private static int GetSafeVideoThreadCount()
-    {
-        var suggested = Math.Max(2, Environment.ProcessorCount / 4);
-        return Math.Min(8, suggested);
     }
 }
