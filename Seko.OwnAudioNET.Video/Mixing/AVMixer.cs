@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Numerics;
 using Ownaudio.Core;
 using OwnaudioNET.Events;
 using OwnaudioNET.Interfaces;
@@ -1353,7 +1354,20 @@ public sealed class AVMixer : IDisposable
         if (sourceChannels == outputChannels)
         {
             var sampleCount = framesRead * outputChannels;
-            for (var i = 0; i < sampleCount; i++)
+            var i = 0;
+
+            if (Vector.IsHardwareAccelerated)
+            {
+                var width = Vector<float>.Count;
+                var simdEnd = sampleCount - (sampleCount % width);
+                for (; i < simdEnd; i += width)
+                {
+                    var mixed = new Vector<float>(mixBuffer, i) + new Vector<float>(sourceBuffer, i);
+                    mixed.CopyTo(mixBuffer, i);
+                }
+            }
+
+            for (; i < sampleCount; i++)
                 mixBuffer[i] += sourceBuffer[i];
             return;
         }

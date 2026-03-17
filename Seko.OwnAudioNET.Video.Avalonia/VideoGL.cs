@@ -3,31 +3,19 @@ using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
+using Seko.OwnaudioNET.OpenGL;
 using Seko.OwnAudioNET.Video.Sources;
 
 namespace Seko.OwnAudioNET.Video.Avalonia;
 
 public partial class VideoGL : OpenGlControlBase, IDisposable
 {
-    private const int GlR8 = 0x8229;
-    private const int GlR16 = 0x822A;
-    private const int GlRg8 = 0x822B;
-    private const int GlRg16 = 0x822C;
-    private const int GlRed = 0x1903;
-    private const int GlRg = 0x8227;
-    private const int GlTexture1 = GlConsts.GL_TEXTURE0 + 1;
-    private const int GlTexture2 = GlConsts.GL_TEXTURE0 + 2;
-    private const int GlUnsignedShort = 0x1403;
+    // Constants not in Avalonia's GlConsts — sourced from VideoGlConstants
+    private const int GlTexture1      = VideoGlConstants.Texture1;
+    private const int GlTexture2      = VideoGlConstants.Texture2;
 
-    private static readonly float[] QuadVertices =
-    [
-        -1f, -1f, 0f, 1f,
-         1f, -1f, 1f, 1f,
-         1f,  1f, 1f, 0f,
-        -1f, -1f, 0f, 1f,
-         1f,  1f, 1f, 0f,
-        -1f,  1f, 0f, 0f
-    ];
+    // QuadVertices → VideoGlGeometry.QuadVertices (shared)
+    // TextureUploadState struct → Seko.OwnaudioNET.OpenGL.TextureUploadState (shared)
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void TexSubImage2DProc(
@@ -79,7 +67,7 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
     private int _yuvTextureVLocation = -1;
     private int _yuvPixelFormatLocation = -1;
     private bool _useYuvProgramThisFrame;
-    private int _yuvPixelFormatThisFrame;
+    private VideoGlUploadPlanner.VideoGlYuvMode _yuvPixelFormatThisFrame = VideoGlUploadPlanner.VideoGlYuvMode.None;
     private bool _can16BitTextures;
     private byte[]? _plane0Scratch;
     private byte[]? _plane1Scratch;
@@ -102,15 +90,7 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
     private long _diagRenderRequestPostedCount;
     private long _diagRenderRequestCoalescedCount;
 
-    private struct TextureUploadState
-    {
-        public bool IsInitialized;
-        public int Width;
-        public int Height;
-        public int InternalFormat;
-        public int Format;
-        public int Type;
-    }
+    // TextureUploadState is defined in Seko.OwnaudioNET.OpenGL.VideoGlGeometry
 
     public readonly record struct VideoGlDiagnostics(
         long AdvanceTicks,
@@ -219,12 +199,12 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         gl.BindVertexArray(_vao);
         gl.BindBuffer(GlConsts.GL_ARRAY_BUFFER, _vbo);
 
-        var handle = GCHandle.Alloc(QuadVertices, GCHandleType.Pinned);
+        var handle = GCHandle.Alloc(VideoGlGeometry.QuadVertices, GCHandleType.Pinned);
         try
         {
             gl.BufferData(
                 GlConsts.GL_ARRAY_BUFFER,
-                QuadVertices.Length * sizeof(float),
+                VideoGlGeometry.QuadVertices.Length * sizeof(float),
                 handle.AddrOfPinnedObject(),
                 GlConsts.GL_STATIC_DRAW);
         }
@@ -301,7 +281,7 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         try
         {
             _useYuvProgramThisFrame = false;
-            _yuvPixelFormatThisFrame = 0;
+            _yuvPixelFormatThisFrame = VideoGlUploadPlanner.VideoGlYuvMode.None;
 
             var uploaded = frame.PixelFormat switch
             {
@@ -333,7 +313,7 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         {
             gl.UseProgram(_yuvProgram);
             if (_uniform1i != null && _yuvPixelFormatLocation >= 0)
-                _uniform1i(_yuvPixelFormatLocation, _yuvPixelFormatThisFrame);
+                _uniform1i(_yuvPixelFormatLocation, (int)_yuvPixelFormatThisFrame);
         }
         else
         {
@@ -531,160 +511,19 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
     }
 
     private static string BuildVertexShader(GlProfileType profileType)
-    {
-        if (profileType == GlProfileType.OpenGLES)
-        {
-            return """
-                   #version 300 es
-                   layout(location = 0) in vec2 aPosition;
-                   layout(location = 1) in vec2 aTexCoord;
-                   out vec2 vTexCoord;
-                   void main()
-                   {
-                       gl_Position = vec4(aPosition, 0.0, 1.0);
-                       vTexCoord = aTexCoord;
-                   }
-                   """;
-        }
-
-        return """
-               #version 330 core
-               layout(location = 0) in vec2 aPosition;
-               layout(location = 1) in vec2 aTexCoord;
-               out vec2 vTexCoord;
-               void main()
-               {
-                   gl_Position = vec4(aPosition, 0.0, 1.0);
-                   vTexCoord = aTexCoord;
-               }
-               """;
-    }
+        => profileType == GlProfileType.OpenGLES
+            ? VideoGlShaders.VertexShaderEs
+            : VideoGlShaders.VertexShaderCore;
 
     private static string BuildFragmentShader(GlProfileType profileType)
-    {
-        if (profileType == GlProfileType.OpenGLES)
-        {
-            return """
-                   #version 300 es
-                   precision mediump float;
-                   in vec2 vTexCoord;
-                   uniform sampler2D uTexture;
-                   out vec4 FragColor;
-                   void main()
-                   {
-                       FragColor = texture(uTexture, vTexCoord);
-                   }
-                   """;
-        }
-
-        return """
-               #version 330 core
-               in vec2 vTexCoord;
-               uniform sampler2D uTexture;
-               out vec4 FragColor;
-               void main()
-               {
-                   FragColor = texture(uTexture, vTexCoord);
-               }
-               """;
-    }
+        => profileType == GlProfileType.OpenGLES
+            ? VideoGlShaders.FragmentShaderEs
+            : VideoGlShaders.FragmentShaderCore;
 
     private static string BuildYuvFragmentShader(GlProfileType profileType)
-    {
-        if (profileType == GlProfileType.OpenGLES)
-        {
-            return """
-                   #version 300 es
-                   precision mediump float;
-                   in vec2 vTexCoord;
-                   uniform sampler2D uTextureY;
-                   uniform sampler2D uTextureU;
-                   uniform sampler2D uTextureV;
-                   uniform int uPixelFormat;
-                   out vec4 FragColor;
-                   
-                   vec3 yuvToRgb(float y, float u, float v)
-                   {
-                       float r = y + 1.5748 * v;
-                       float g = y - 0.1873 * u - 0.4681 * v;
-                       float b = y + 1.8556 * u;
-                       return clamp(vec3(r, g, b), 0.0, 1.0);
-                   }
-                   
-                   void main()
-                   {
-                       // uPixelFormat:
-                       //  1 = NV12         (semi-planar,  8-bit)
-                       //  2 = YUV planar   (8-bit:  420p / 422p / 444p)
-                       //  3 = P010LE       (semi-planar, 10-bit MSB-aligned)
-                       //  4 = YUV10 planar (10-bit LSB-packed: 420p10le / 422p10le / 444p10le)
-                       float scale = (uPixelFormat == 4) ? (65535.0 / 1023.0) : 1.0;
-
-                       float y = texture(uTextureY, vTexCoord).r * scale;
-                       float u;
-                       float v;
-                       if (uPixelFormat == 1 || uPixelFormat == 3)
-                       {
-                           vec2 uv = texture(uTextureU, vTexCoord).rg * scale;
-                           u = uv.r - 0.5;
-                           v = uv.g - 0.5;
-                       }
-                       else
-                       {
-                           u = texture(uTextureU, vTexCoord).r * scale - 0.5;
-                           v = texture(uTextureV, vTexCoord).r * scale - 0.5;
-                       }
-
-                       FragColor = vec4(yuvToRgb(y, u, v), 1.0);
-                   }
-                   """;
-        }
-
-        return """
-               #version 330 core
-               in vec2 vTexCoord;
-               uniform sampler2D uTextureY;
-               uniform sampler2D uTextureU;
-               uniform sampler2D uTextureV;
-               uniform int uPixelFormat;
-               out vec4 FragColor;
-
-               vec3 yuvToRgb(float y, float u, float v)
-               {
-                   float r = y + 1.5748 * v;
-                   float g = y - 0.1873 * u - 0.4681 * v;
-                   float b = y + 1.8556 * u;
-                   return clamp(vec3(r, g, b), 0.0, 1.0);
-               }
-
-               void main()
-               {
-                   // uPixelFormat:
-                   //  1 = NV12         (semi-planar,  8-bit)
-                   //  2 = YUV planar   (8-bit:  420p / 422p / 444p)
-                   //  3 = P010LE       (semi-planar, 10-bit MSB-aligned)
-                   //  4 = YUV10 planar (10-bit LSB-packed: 420p10le / 422p10le / 444p10le)
-                   float scale = (uPixelFormat == 4) ? (65535.0 / 1023.0) : 1.0;
-
-                   float y = texture(uTextureY, vTexCoord).r * scale;
-                   float u;
-                   float v;
-                   if (uPixelFormat == 1 || uPixelFormat == 3)
-                   {
-                       vec2 uv = texture(uTextureU, vTexCoord).rg * scale;
-                       u = uv.r - 0.5;
-                       v = uv.g - 0.5;
-                   }
-                   else
-                   {
-                       u = texture(uTextureU, vTexCoord).r * scale - 0.5;
-                       v = texture(uTextureV, vTexCoord).r * scale - 0.5;
-                   }
-
-                   FragColor = vec4(yuvToRgb(y, u, v), 1.0);
-               }
-               """;
-    }
+        => profileType == GlProfileType.OpenGLES
+            ? VideoGlShaders.YuvFragmentShaderEs
+            : VideoGlShaders.YuvFragmentShaderCore;
 
     // Upload helpers are defined in VideoGL.Uploads.cs
 
@@ -710,178 +549,31 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
     }
 
     private static byte[]? GetTightlyPackedPlane(VideoFrame frame, int planeIndex, int rowBytes, int rows, ref byte[]? scratch)
-    {
-        if (rowBytes <= 0 || rows <= 0)
-            return null;
-
-        var stride = frame.GetPlaneStride(planeIndex);
-        var source = frame.GetPlaneData(planeIndex);
-        if (source.Length == 0 || stride <= 0)
-            return null;
-
-        var tightLength = checked(rowBytes * rows);
-        if (stride == rowBytes && source.Length >= tightLength)
-            return source;
-
-        if (scratch == null || scratch.Length < tightLength)
-            scratch = new byte[tightLength];
-
-        var destinationOffset = 0;
-        var sourceOffset = 0;
-        for (var row = 0; row < rows; row++)
-        {
-            if (sourceOffset + rowBytes > source.Length)
-                return null;
-
-            Buffer.BlockCopy(source, sourceOffset, scratch, destinationOffset, rowBytes);
-            sourceOffset += stride;
-            destinationOffset += rowBytes;
-        }
-
-        return scratch;
-    }
+        => VideoFramePacking.GetTightlyPackedPlane(frame, planeIndex, rowBytes, rows, ref scratch);
 
     private static void ConvertNv12ToRgba(byte[] yPlane, byte[] uvPlane, int width, int height, byte[] destination)
-    {
-        var uvWidth = (width + 1) / 2;
-        for (var y = 0; y < height; y++)
-        {
-            var yRowOffset = y * width;
-            var uvRowOffset = (y / 2) * uvWidth * 2;
-            var dstRowOffset = y * width * 4;
-            for (var x = 0; x < width; x++)
-            {
-                var yValue = yPlane[yRowOffset + x];
-                var uvOffset = uvRowOffset + (x / 2) * 2;
-                var uValue = uvPlane[uvOffset];
-                var vValue = uvPlane[uvOffset + 1];
-                WriteRgbaPixel(destination, dstRowOffset + x * 4, yValue, uValue, vValue);
-            }
-        }
-    }
+        => VideoGlYuvConverter.ConvertNv12ToRgba(yPlane, uvPlane, width, height, destination);
 
     private static void ConvertYuv420pToRgba(byte[] yPlane, byte[] uPlane, byte[] vPlane, int width, int height, byte[] destination)
-    {
-        var chromaWidth = (width + 1) / 2;
-        for (var y = 0; y < height; y++)
-        {
-            var yRowOffset = y * width;
-            var uvRowOffset = (y / 2) * chromaWidth;
-            var dstRowOffset = y * width * 4;
-            for (var x = 0; x < width; x++)
-            {
-                var yValue = yPlane[yRowOffset + x];
-                var uvOffset = uvRowOffset + (x / 2);
-                var uValue = uPlane[uvOffset];
-                var vValue = vPlane[uvOffset];
-                WriteRgbaPixel(destination, dstRowOffset + x * 4, yValue, uValue, vValue);
-            }
-        }
-    }
+        => VideoGlYuvConverter.ConvertYuv420pToRgba(yPlane, uPlane, vPlane, width, height, destination);
 
     private static void ConvertYuv422pToRgba(byte[] yPlane, byte[] uPlane, byte[] vPlane, int width, int height, byte[] destination)
-    {
-        var chromaWidth = (width + 1) / 2;
-        for (var y = 0; y < height; y++)
-        {
-            var yRowOffset = y * width;
-            var uvRowOffset = y * chromaWidth;
-            var dstRowOffset = y * width * 4;
-            for (var x = 0; x < width; x++)
-            {
-                var yValue = yPlane[yRowOffset + x];
-                var uvOffset = uvRowOffset + (x / 2);
-                var uValue = uPlane[uvOffset];
-                var vValue = vPlane[uvOffset];
-                WriteRgbaPixel(destination, dstRowOffset + x * 4, yValue, uValue, vValue);
-            }
-        }
-    }
+        => VideoGlYuvConverter.ConvertYuv422pToRgba(yPlane, uPlane, vPlane, width, height, destination);
 
     private static void ConvertYuv444pToRgba(byte[] yPlane, byte[] uPlane, byte[] vPlane, int width, int height, byte[] destination)
-    {
-        for (var y = 0; y < height; y++)
-        {
-            var rowOffset = y * width;
-            var dstRowOffset = y * width * 4;
-            for (var x = 0; x < width; x++)
-            {
-                var idx = rowOffset + x;
-                WriteRgbaPixel(destination, dstRowOffset + x * 4, yPlane[idx], uPlane[idx], vPlane[idx]);
-            }
-        }
-    }
+        => VideoGlYuvConverter.ConvertYuv444pToRgba(yPlane, uPlane, vPlane, width, height, destination);
 
     private static byte[]? Downscale10BitTo8Bit(byte[] source16, int width, int height, ref byte[]? scratch)
-    {
-        var pixelCount = width * height;
-        if (source16.Length < pixelCount * 2)
-            return null;
-
-        if (scratch == null || scratch.Length < pixelCount)
-            scratch = new byte[pixelCount];
-
-        for (var i = 0; i < pixelCount; i++)
-        {
-            var lo = source16[i * 2];
-            var hi = source16[i * 2 + 1];
-            var value = (ushort)(lo | (hi << 8));
-            scratch[i] = (byte)(value >> 2);
-        }
-
-        return scratch;
-    }
+        => VideoGlYuvConverter.Downscale10BitTo8Bit(source16, width, height, ref scratch);
 
     private static byte[]? Downscale10BitMsbTo8Bit(byte[] source16, int width, int height, ref byte[]? scratch)
-    {
-        var pixelCount = width * height;
-        if (source16.Length < pixelCount * 2)
-            return null;
-
-        if (scratch == null || scratch.Length < pixelCount)
-            scratch = new byte[pixelCount];
-
-        for (var i = 0; i < pixelCount; i++)
-            scratch[i] = source16[i * 2 + 1];
-
-        return scratch;
-    }
+        => VideoGlYuvConverter.Downscale10BitMsbTo8Bit(source16, width, height, ref scratch);
 
     private static byte[]? Downscale10BitMsbDualTo8Bit(byte[] source16, int chromaWidth, int chromaHeight, ref byte[]? scratch)
-    {
-        var texelCount = chromaWidth * chromaHeight;
-        var srcBytes = texelCount * 4;
-        if (source16.Length < srcBytes)
-            return null;
-
-        var dstBytes = texelCount * 2;
-        if (scratch == null || scratch.Length < dstBytes)
-            scratch = new byte[dstBytes];
-
-        for (var i = 0; i < texelCount; i++)
-        {
-            scratch[i * 2] = source16[i * 4 + 1];
-            scratch[i * 2 + 1] = source16[i * 4 + 3];
-        }
-
-        return scratch;
-    }
+        => VideoGlYuvConverter.Downscale10BitMsbDualTo8Bit(source16, chromaWidth, chromaHeight, ref scratch);
 
     private static void WriteRgbaPixel(byte[] destination, int destinationOffset, int y, int u, int v)
-    {
-        var c = y - 16;
-        var d = u - 128;
-        var e = v - 128;
-
-        var r = (298 * c + 409 * e + 128) >> 8;
-        var g = (298 * c - 100 * d - 208 * e + 128) >> 8;
-        var b = (298 * c + 516 * d + 128) >> 8;
-
-        destination[destinationOffset] = (byte)Math.Clamp(r, 0, 255);
-        destination[destinationOffset + 1] = (byte)Math.Clamp(g, 0, 255);
-        destination[destinationOffset + 2] = (byte)Math.Clamp(b, 0, 255);
-        destination[destinationOffset + 3] = 255;
-    }
+        => VideoGlYuvConverter.WriteRgbaPixel(destination, destinationOffset, y, u, v);
 
     private PixelSize GetPixelSize()
     {
@@ -896,19 +588,8 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         if (!keepAspectRatio || videoWidth <= 0 || videoHeight <= 0)
             return new PixelRect(0, 0, surface.Width, surface.Height);
 
-        var surfaceAspect = surface.Width / (double)surface.Height;
-        var videoAspect = videoWidth / (double)videoHeight;
-
-        if (videoAspect > surfaceAspect)
-        {
-            var targetHeight = Math.Max(1, (int)Math.Round(surface.Width / videoAspect));
-            var y = (surface.Height - targetHeight) / 2;
-            return new PixelRect(0, y, surface.Width, targetHeight);
-        }
-
-        var targetWidth = Math.Max(1, (int)Math.Round(surface.Height * videoAspect));
-        var x = (surface.Width - targetWidth) / 2;
-        return new PixelRect(x, 0, targetWidth, surface.Height);
+        var vp = VideoFramePacking.GetAspectFitViewport(surface.Width, surface.Height, videoWidth, videoHeight);
+        return new PixelRect(vp.X, vp.Y, vp.Width, vp.Height);
     }
 }
 

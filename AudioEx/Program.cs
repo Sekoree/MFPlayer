@@ -41,7 +41,8 @@ internal static class Program
     private static void Run(string[] args)
     {
         //string testFile = "/home/sekoree/Videos/Mesmerizer German Cover CALYTRIX Chiyo.mp4";
-        string testFile = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
+        //string testFile = "/run/media/seko/New Stuff/Other_Content/おねがいダーリン_0611.mov";
+        string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
         if (args.Length > 0)
             testFile = args[0];
 
@@ -77,7 +78,7 @@ internal static class Program
                 }, streamIndex: videoStream.Index);
             }
 
-            using var mixer = new AVMixer(engine, clockStyle: AVClockStyle.AudioDriven);
+            using var mixer = new AVMixer(engine, clockStyle: AVClockStyle.Hybrid);
             mixer.AddAudioSource(audioSource);
             if (videoSource != null)
             {

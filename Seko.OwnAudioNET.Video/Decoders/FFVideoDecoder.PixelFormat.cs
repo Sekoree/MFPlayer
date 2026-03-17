@@ -39,16 +39,22 @@ public unsafe partial class FFVideoDecoder
 	private VideoPixelFormat SelectOutputPixelFormat(AVFrame* sourceFrame)
 	{
 		var sourcePixelFormat = (AVPixelFormat)sourceFrame->format;
+		if (_hasCachedSelectionOutputFormat && sourcePixelFormat == _cachedSelectionSourceAvPixelFormat)
+			return _cachedSelectionOutputFormat;
+
+		VideoPixelFormat selected;
 		if (_preferSourcePixelFormatWhenSupported &&
 			TryMapAvPixelFormat(sourcePixelFormat, out var mappedSourceFormat) &&
 			Array.IndexOf(_preferredOutputFormats, mappedSourceFormat) >= 0)
 		{
-			return mappedSourceFormat;
+			selected = mappedSourceFormat;
+			_cacheSelection(sourcePixelFormat, selected);
+			return selected;
 		}
 
 		if (_preferLowestConversionCost)
 		{
-			var selected = _preferredOutputFormats[0];
+			selected = _preferredOutputFormats[0];
 			var selectedCost = EstimateConversionCost(sourcePixelFormat, selected);
 			for (var i = 1; i < _preferredOutputFormats.Length; i++)
 			{
@@ -61,16 +67,30 @@ public unsafe partial class FFVideoDecoder
 				}
 			}
 
+			_cacheSelection(sourcePixelFormat, selected);
 			return selected;
 		}
 
 		foreach (var preferred in _preferredOutputFormats)
 		{
 			if (IsSupportedOutputFormat(preferred))
-				return preferred;
+			{
+				selected = preferred;
+				_cacheSelection(sourcePixelFormat, selected);
+				return selected;
+			}
 		}
 
-		return VideoPixelFormat.Rgba32;
+		selected = VideoPixelFormat.Rgba32;
+		_cacheSelection(sourcePixelFormat, selected);
+		return selected;
+
+		void _cacheSelection(AVPixelFormat src, VideoPixelFormat dst)
+		{
+			_cachedSelectionSourceAvPixelFormat = src;
+			_cachedSelectionOutputFormat = dst;
+			_hasCachedSelectionOutputFormat = true;
+		}
 	}
 
 	private static int EstimateConversionCost(AVPixelFormat sourcePixelFormat, VideoPixelFormat outputFormat)
@@ -267,9 +287,16 @@ public unsafe partial class FFVideoDecoder
 					return false;
 				}
 
-				var bytes = checked(stride * height);
-				frame = VideoFrame.CreatePooledRgba32(bytes, width, height, stride, ptsSeconds);
-				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
+				var rowBytes = checked(width * 4);
+				if (stride < rowBytes)
+				{
+					error = "RGBA frame stride is smaller than expected row bytes.";
+					return false;
+				}
+
+				var bytes = checked(rowBytes * height);
+				frame = VideoFrame.CreatePooledRgba32(bytes, width, height, rowBytes, ptsSeconds);
+				CopyPlaneRows(sourceFrame->data[0], stride, frame.GetPlaneData(0), rowBytes, rowBytes, height);
 				return true;
 			}
 
@@ -284,11 +311,19 @@ public unsafe partial class FFVideoDecoder
 				}
 
 				var chromaHeight = (height + 1) / 2;
-				var yBytes  = checked(yStride  * height);
-				var uvBytes = checked(uvStride * chromaHeight);
-				frame = VideoFrame.CreatePooledNv12(yBytes, uvBytes, width, height, yStride, uvStride, ptsSeconds);
-				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
-				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
+				var yRowBytes = width;
+				var uvRowBytes = checked(((width + 1) / 2) * 2);
+				if (yStride < yRowBytes || uvStride < uvRowBytes)
+				{
+					error = "NV12 frame stride is smaller than expected row bytes.";
+					return false;
+				}
+
+				var yBytes  = checked(yRowBytes * height);
+				var uvBytes = checked(uvRowBytes * chromaHeight);
+				frame = VideoFrame.CreatePooledNv12(yBytes, uvBytes, width, height, yRowBytes, uvRowBytes, ptsSeconds);
+				CopyPlaneRows(sourceFrame->data[0], yStride, frame.GetPlaneData(0), yRowBytes, yRowBytes, height);
+				CopyPlaneRows(sourceFrame->data[1], uvStride, frame.GetPlaneData(1), uvRowBytes, uvRowBytes, chromaHeight);
 				return true;
 			}
 
@@ -304,14 +339,24 @@ public unsafe partial class FFVideoDecoder
 					return false;
 				}
 
+				var chromaWidth = (width + 1) / 2;
 				var chromaHeight = (height + 1) / 2;
-				var yBytes = checked(yStride * height);
-				var uBytes = checked(uStride * chromaHeight);
-				var vBytes = checked(vStride * chromaHeight);
-				frame = VideoFrame.CreatePooledYuv420p(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds);
-				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
-				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
-				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
+				var yRowBytes = width;
+				var uRowBytes = chromaWidth;
+				var vRowBytes = chromaWidth;
+				if (yStride < yRowBytes || uStride < uRowBytes || vStride < vRowBytes)
+				{
+					error = "YUV420p frame stride is smaller than expected row bytes.";
+					return false;
+				}
+
+				var yBytes = checked(yRowBytes * height);
+				var uBytes = checked(uRowBytes * chromaHeight);
+				var vBytes = checked(vRowBytes * chromaHeight);
+				frame = VideoFrame.CreatePooledYuv420p(yBytes, uBytes, vBytes, width, height, yRowBytes, uRowBytes, vRowBytes, ptsSeconds);
+				CopyPlaneRows(sourceFrame->data[0], yStride, frame.GetPlaneData(0), yRowBytes, yRowBytes, height);
+				CopyPlaneRows(sourceFrame->data[1], uStride, frame.GetPlaneData(1), uRowBytes, uRowBytes, chromaHeight);
+				CopyPlaneRows(sourceFrame->data[2], vStride, frame.GetPlaneData(2), vRowBytes, vRowBytes, chromaHeight);
 				return true;
 			}
 
@@ -330,17 +375,26 @@ public unsafe partial class FFVideoDecoder
 				}
 
 				// 4:2:2: chroma planes have the same height as luma
-				var yBytes = checked(yStride * height);
-				var uBytes = checked(uStride * height);
-				var vBytes = checked(vStride * height);
+				var chromaWidth = (width + 1) / 2;
+				var yRowBytes = outputFormat == VideoPixelFormat.Yuv422p ? width : checked(width * 2);
+				var uvRowBytes = outputFormat == VideoPixelFormat.Yuv422p ? chromaWidth : checked(chromaWidth * 2);
+				if (yStride < yRowBytes || uStride < uvRowBytes || vStride < uvRowBytes)
+				{
+					error = $"{outputFormat} frame stride is smaller than expected row bytes.";
+					return false;
+				}
+
+				var yBytes = checked(yRowBytes * height);
+				var uBytes = checked(uvRowBytes * height);
+				var vBytes = checked(uvRowBytes * height);
 
 				frame = outputFormat == VideoPixelFormat.Yuv422p
-					? VideoFrame.CreatePooledYuv422p(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds)
-					: VideoFrame.CreatePooledYuv422p10le(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds);
+					? VideoFrame.CreatePooledYuv422p(yBytes, uBytes, vBytes, width, height, yRowBytes, uvRowBytes, uvRowBytes, ptsSeconds)
+					: VideoFrame.CreatePooledYuv422p10le(yBytes, uBytes, vBytes, width, height, yRowBytes, uvRowBytes, uvRowBytes, ptsSeconds);
 
-				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
-				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
-				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
+				CopyPlaneRows(sourceFrame->data[0], yStride, frame.GetPlaneData(0), yRowBytes, yRowBytes, height);
+				CopyPlaneRows(sourceFrame->data[1], uStride, frame.GetPlaneData(1), uvRowBytes, uvRowBytes, height);
+				CopyPlaneRows(sourceFrame->data[2], vStride, frame.GetPlaneData(2), uvRowBytes, uvRowBytes, height);
 				return true;
 			}
 
@@ -356,11 +410,19 @@ public unsafe partial class FFVideoDecoder
 				}
 
 				var chromaHeight = (height + 1) / 2;
-				var yBytes  = checked(yStride  * height);
-				var uvBytes = checked(uvStride * chromaHeight);
-				frame = VideoFrame.CreatePooledP010le(yBytes, uvBytes, width, height, yStride, uvStride, ptsSeconds);
-				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
-				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
+				var yRowBytes = checked(width * 2);
+				var uvRowBytes = checked(((width + 1) / 2) * 4);
+				if (yStride < yRowBytes || uvStride < uvRowBytes)
+				{
+					error = "P010LE frame stride is smaller than expected row bytes.";
+					return false;
+				}
+
+				var yBytes  = checked(yRowBytes * height);
+				var uvBytes = checked(uvRowBytes * chromaHeight);
+				frame = VideoFrame.CreatePooledP010le(yBytes, uvBytes, width, height, yRowBytes, uvRowBytes, ptsSeconds);
+				CopyPlaneRows(sourceFrame->data[0], yStride, frame.GetPlaneData(0), yRowBytes, yRowBytes, height);
+				CopyPlaneRows(sourceFrame->data[1], uvStride, frame.GetPlaneData(1), uvRowBytes, uvRowBytes, chromaHeight);
 				return true;
 			}
 
@@ -377,14 +439,23 @@ public unsafe partial class FFVideoDecoder
 					return false;
 				}
 
+				var chromaWidth = (width + 1) / 2;
 				var chromaHeight = (height + 1) / 2;
-				var yBytes = checked(yStride * height);
-				var uBytes = checked(uStride * chromaHeight);
-				var vBytes = checked(vStride * chromaHeight);
-				frame = VideoFrame.CreatePooledYuv420p10le(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds);
-				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
-				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
-				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
+				var yRowBytes = checked(width * 2);
+				var uvRowBytes = checked(chromaWidth * 2);
+				if (yStride < yRowBytes || uStride < uvRowBytes || vStride < uvRowBytes)
+				{
+					error = "YUV420p10le frame stride is smaller than expected row bytes.";
+					return false;
+				}
+
+				var yBytes = checked(yRowBytes * height);
+				var uBytes = checked(uvRowBytes * chromaHeight);
+				var vBytes = checked(uvRowBytes * chromaHeight);
+				frame = VideoFrame.CreatePooledYuv420p10le(yBytes, uBytes, vBytes, width, height, yRowBytes, uvRowBytes, uvRowBytes, ptsSeconds);
+				CopyPlaneRows(sourceFrame->data[0], yStride, frame.GetPlaneData(0), yRowBytes, yRowBytes, height);
+				CopyPlaneRows(sourceFrame->data[1], uStride, frame.GetPlaneData(1), uvRowBytes, uvRowBytes, chromaHeight);
+				CopyPlaneRows(sourceFrame->data[2], vStride, frame.GetPlaneData(2), uvRowBytes, uvRowBytes, chromaHeight);
 				return true;
 			}
 
@@ -402,17 +473,24 @@ public unsafe partial class FFVideoDecoder
 					return false;
 				}
 
-				var yBytes = checked(yStride * height);
-				var uBytes = checked(uStride * height);
-				var vBytes = checked(vStride * height);
+				var rowBytes = outputFormat == VideoPixelFormat.Yuv444p ? width : checked(width * 2);
+				if (yStride < rowBytes || uStride < rowBytes || vStride < rowBytes)
+				{
+					error = $"{outputFormat} frame stride is smaller than expected row bytes.";
+					return false;
+				}
+
+				var yBytes = checked(rowBytes * height);
+				var uBytes = checked(rowBytes * height);
+				var vBytes = checked(rowBytes * height);
 
 				frame = outputFormat == VideoPixelFormat.Yuv444p
-					? VideoFrame.CreatePooledYuv444p(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds)
-					: VideoFrame.CreatePooledYuv444p10le(yBytes, uBytes, vBytes, width, height, yStride, uStride, vStride, ptsSeconds);
+					? VideoFrame.CreatePooledYuv444p(yBytes, uBytes, vBytes, width, height, rowBytes, rowBytes, rowBytes, ptsSeconds)
+					: VideoFrame.CreatePooledYuv444p10le(yBytes, uBytes, vBytes, width, height, rowBytes, rowBytes, rowBytes, ptsSeconds);
 
-				CopyPlane(sourceFrame->data[0], frame.GetPlaneData(0), frame.GetPlaneLength(0));
-				CopyPlane(sourceFrame->data[1], frame.GetPlaneData(1), frame.GetPlaneLength(1));
-				CopyPlane(sourceFrame->data[2], frame.GetPlaneData(2), frame.GetPlaneLength(2));
+				CopyPlaneRows(sourceFrame->data[0], yStride, frame.GetPlaneData(0), rowBytes, rowBytes, height);
+				CopyPlaneRows(sourceFrame->data[1], uStride, frame.GetPlaneData(1), rowBytes, rowBytes, height);
+				CopyPlaneRows(sourceFrame->data[2], vStride, frame.GetPlaneData(2), rowBytes, rowBytes, height);
 				return true;
 			}
 
@@ -430,6 +508,28 @@ public unsafe partial class FFVideoDecoder
 		fixed (byte* dst = &MemoryMarshal.GetArrayDataReference(destination))
 		{
 			Buffer.MemoryCopy(src, dst, destination.Length, bytesToCopy);
+		}
+	}
+
+	private static void CopyPlaneRows(
+		byte* src,
+		int srcStride,
+		byte[] destination,
+		int dstStride,
+		int rowBytes,
+		int rows)
+	{
+		if (rows <= 0 || rowBytes <= 0)
+			return;
+
+		fixed (byte* dstBase = &MemoryMarshal.GetArrayDataReference(destination))
+		{
+			for (var row = 0; row < rows; row++)
+			{
+				var srcRow = src + row * srcStride;
+				var dstRow = dstBase + row * dstStride;
+				Buffer.MemoryCopy(srcRow, dstRow, destination.Length - row * dstStride, rowBytes);
+			}
 		}
 	}
 }

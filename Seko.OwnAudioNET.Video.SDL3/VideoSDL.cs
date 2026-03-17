@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Seko.OwnaudioNET.OpenGL;
 using Seko.OwnAudioNET.Video;
 using SDL3;
 
@@ -23,33 +24,26 @@ public sealed partial class VideoSDL : IDisposable
 {
     public event Action<SDL.Keycode>? KeyDown;
 
-    // ── GL constants ────────────────────────────────────────────────────────────
-    private const int GlArrayBuffer      = 0x8892;
-    private const int GlStaticDraw       = 0x88E4;
-    private const int GlFloat            = 0x1406;
-    private const int GlTriangles        = 0x0004;
-    private const int GlTexture2D        = 0x0DE1;
-    private const int GlTexture0         = 0x84C0;
-    private const int GlTexture1         = GlTexture0 + 1;
-    private const int GlTexture2         = GlTexture0 + 2;
-    private const int GlColorBufferBit   = 0x00004000;
-    private const int GlVertexShader     = 0x8B31;
-    private const int GlFragmentShader   = 0x8B30;
-    private const int GlCompileStatus    = 0x8B81;
-    private const int GlLinkStatus       = 0x8B82;
-    private const int GlTextureMinFilter = 0x2801;
-    private const int GlTextureMagFilter = 0x2800;
-    private const int GlLinear           = 0x2601;
-    private const int GlRgba8            = 0x8058;
-    private const int GlRgba             = 0x1908;
-    private const int GlUnsignedByte     = 0x1401;
-    private const int GlR8               = 0x8229;
-    private const int GlR16              = 0x822A;
-    private const int GlRg8              = 0x822B;
-    private const int GlRg16             = 0x822C;
-    private const int GlRed              = 0x1903;
-    private const int GlRg               = 0x8227;
-    private const int GlUnsignedShort    = 0x1403;
+    // ── GL constants (sourced from VideoGlConstants) ─────────────────────────
+    private const int GlArrayBuffer      = VideoGlConstants.ArrayBuffer;
+    private const int GlStaticDraw       = VideoGlConstants.StaticDraw;
+    private const int GlFloat            = VideoGlConstants.Float;
+    private const int GlTriangles        = VideoGlConstants.Triangles;
+    private const int GlTexture2D        = VideoGlConstants.Texture2D;
+    private const int GlTexture0         = VideoGlConstants.Texture0;
+    private const int GlTexture1         = VideoGlConstants.Texture1;
+    private const int GlTexture2         = VideoGlConstants.Texture2;
+    private const int GlColorBufferBit   = VideoGlConstants.ColorBufferBit;
+    private const int GlVertexShader     = VideoGlConstants.VertexShader;
+    private const int GlFragmentShader   = VideoGlConstants.FragmentShader;
+    private const int GlCompileStatus    = VideoGlConstants.CompileStatus;
+    private const int GlLinkStatus       = VideoGlConstants.LinkStatus;
+    private const int GlTextureMinFilter = VideoGlConstants.TextureMinFilter;
+    private const int GlTextureMagFilter = VideoGlConstants.TextureMagFilter;
+    private const int GlLinear           = VideoGlConstants.Linear;
+    private const int GlRgba8            = VideoGlConstants.Rgba8;
+    private const int GlRgba             = VideoGlConstants.Rgba;
+    private const int GlUnsignedByte     = VideoGlConstants.UnsignedByte;
 
     // ── GL delegate type declarations ────────────────────────────────────────────
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -177,7 +171,7 @@ public sealed partial class VideoSDL : IDisposable
     private int _textureWidth;
     private int _textureHeight;
     private bool _useYuvProgram;
-    private int _yuvPixelFormat;
+    private VideoGlUploadPlanner.VideoGlYuvMode _yuvPixelFormat = VideoGlUploadPlanner.VideoGlYuvMode.None;
     private int _yuvTextureYLocation  = -1;
     private int _yuvTextureULocation  = -1;
     private int _yuvTextureVLocation  = -1;
@@ -222,22 +216,9 @@ public sealed partial class VideoSDL : IDisposable
     private long        _latestFrameVersion;
     private long        _lastRenderedVersion = -1;
 
-    // ── Geometry ─────────────────────────────────────────────────────────────────
-    private static readonly float[] QuadVertices =
-    [
-        -1f, -1f, 0f, 1f,
-         1f, -1f, 1f, 1f,
-         1f,  1f, 1f, 0f,
-        -1f, -1f, 0f, 1f,
-         1f,  1f, 1f, 0f,
-        -1f,  1f, 0f, 0f
-    ];
-
-    private struct TextureUploadState
-    {
-        public bool IsInitialized;
-        public int  Width, Height, InternalFormat, Format, Type;
-    }
+    // ── Geometry / texture state (shared via Seko.OwnaudioNET.OpenGL) ────────────
+    // QuadVertices  → VideoGlGeometry.QuadVertices
+    // TextureUploadState struct → Seko.OwnaudioNET.OpenGL.TextureUploadState
 
     // ── Properties ───────────────────────────────────────────────────────────────
 
@@ -607,7 +588,6 @@ public sealed partial class VideoSDL : IDisposable
             }
 
             SDL.GLSwapWindow(_sdlWindow);
-            SDL.Delay(1);
         }
 
         DisposeGlResources();
@@ -646,8 +626,8 @@ public sealed partial class VideoSDL : IDisposable
         _glBindVertexArray!(_vao);
         _glBindBuffer!(GlArrayBuffer, _vbo);
 
-        var h = GCHandle.Alloc(QuadVertices, GCHandleType.Pinned);
-        try   { _glBufferData!(GlArrayBuffer, QuadVertices.Length * sizeof(float), h.AddrOfPinnedObject(), GlStaticDraw); }
+        var h = GCHandle.Alloc(VideoGlGeometry.QuadVertices, GCHandleType.Pinned);
+        try   { _glBufferData!(GlArrayBuffer, VideoGlGeometry.QuadVertices.Length * sizeof(float), h.AddrOfPinnedObject(), GlStaticDraw); }
         finally { h.Free(); }
 
         var stride = 4 * sizeof(float);
@@ -734,7 +714,7 @@ public sealed partial class VideoSDL : IDisposable
     {
         var vp = KeepAspectRatio
             ? GetAspectFitRect(surfaceW, surfaceH, _textureWidth, _textureHeight)
-            : new ViewportRect(0, 0, Math.Max(1, surfaceW), Math.Max(1, surfaceH));
+            : new VideoGlViewport(0, 0, Math.Max(1, surfaceW), Math.Max(1, surfaceH));
         _glViewport!(vp.X, vp.Y, vp.Width, vp.Height);
 
         if (!_useYuvProgram)
@@ -745,7 +725,7 @@ public sealed partial class VideoSDL : IDisposable
         else
         {
             _glActiveTexture!(GlTexture0); _glBindTexture!(GlTexture2D, _textureY);
-            var semiPlanar = _yuvPixelFormat == 1 || _yuvPixelFormat == 3;
+            var semiPlanar = VideoGlUploadPlanner.IsSemiPlanar(_yuvPixelFormat);
             _glActiveTexture!(GlTexture1); _glBindTexture!(GlTexture2D, semiPlanar ? _textureUv : _textureU);
             if (!semiPlanar) { _glActiveTexture!(GlTexture2); _glBindTexture!(GlTexture2D, _textureV); }
             _glActiveTexture!(GlTexture0);
@@ -755,7 +735,7 @@ public sealed partial class VideoSDL : IDisposable
         {
             _glUseProgram!(_yuvProgram);
             if (_yuvPixelFormatLocation >= 0)
-                _glUniform1I!(_yuvPixelFormatLocation, _yuvPixelFormat);
+                _glUniform1I!(_yuvPixelFormatLocation, (int)_yuvPixelFormat);
         }
         else
         {
@@ -908,131 +888,187 @@ public sealed partial class VideoSDL : IDisposable
 
     // ── Texture upload ────────────────────────────────────────────────────────────
 
-    private unsafe void UploadTexture2D(ref TextureUploadState state,
+    private void UploadTexture2D(ref TextureUploadState state,
         int width, int height, int internalFormat, int format, int type, byte[] data)
     {
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
-        {
-            var pixels = (nint)ptr;
-            var realloc = !state.IsInitialized
-                       || state.Width          != width
-                       || state.Height         != height
-                       || state.InternalFormat != internalFormat
-                       || state.Format         != format
-                       || state.Type           != type;
-
-            if (realloc)
-            {
-                _glTexImage2D!(GlTexture2D, 0, internalFormat, width, height, 0, format, type, nint.Zero);
-                state = new TextureUploadState { IsInitialized = true, Width = width, Height = height, InternalFormat = internalFormat, Format = format, Type = type };
-            }
-
-            if (_glTexSubImage2D != null)
-                _glTexSubImage2D(GlTexture2D, 0, 0, 0, width, height, format, type, pixels);
-            else
-                _glTexImage2D!(GlTexture2D, 0, internalFormat, width, height, 0, format, type, pixels);
-        }
+        VideoGlTextureUploadOrchestrator.UploadTexture2D(
+            ref state,
+            width,
+            height,
+            internalFormat,
+            format,
+            type,
+            data,
+            (ifmt, w, h, fmt, t, pixels) => _glTexImage2D!(GlTexture2D, 0, ifmt, w, h, 0, fmt, t, pixels),
+            _glTexSubImage2D == null
+                ? null
+                : (w, h, fmt, t, pixels) => _glTexSubImage2D(GlTexture2D, 0, 0, 0, w, h, fmt, t, pixels));
     }
 
     // ── Upload methods ────────────────────────────────────────────────────────────
 
     private bool UploadRgbaFrame(VideoFrame frame)
-    {
-        if (frame.Width <= 0 || frame.Height <= 0) return false;
-        var rgba = GetTightlyPackedPlane(frame, 0, frame.Width * 4, frame.Height, ref _plane0Scratch);
-        if (rgba == null) return false;
-        _glActiveTexture!(GlTexture0); _glBindTexture!(GlTexture2D, _textureRgba);
-        UploadTexture2D(ref _rgbaState, frame.Width, frame.Height, GlRgba8, GlRgba, GlUnsignedByte, rgba);
-        SetCurrentFrameState(frame.Width, frame.Height, false, 0);
-        return true;
-    }
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Rgba32);
 
     private bool UploadNv12Frame(VideoFrame frame)
-    {
-        var (w, h, cw, ch) = (frame.Width, frame.Height, (frame.Width + 1) / 2, (frame.Height + 1) / 2);
-        var y  = GetTightlyPackedPlane(frame, 0, w,      h,  ref _plane0Scratch);
-        var uv = GetTightlyPackedPlane(frame, 1, cw * 2, ch, ref _plane1Scratch);
-        if (y == null || uv == null) return false;
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Nv12);
 
-        _glActiveTexture!(GlTexture0); _glBindTexture!(GlTexture2D, _textureY);
-        UploadTexture2D(ref _yState, w, h, GlR8, GlRed, GlUnsignedByte, y);
-        _glActiveTexture!(GlTexture1); _glBindTexture!(GlTexture2D, _textureUv);
-        UploadTexture2D(ref _uvState, cw, ch, GlRg8, GlRg, GlUnsignedByte, uv);
-        _glActiveTexture!(GlTexture2); _glBindTexture!(GlTexture2D, _textureUv);
-        _glActiveTexture!(GlTexture0);
-        SetCurrentFrameState(w, h, true, 1);
-        return true;
-    }
+    private bool UploadYuv420pFrame(VideoFrame frame)
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Yuv420p);
 
-    private bool UploadYuv420pFrame(VideoFrame f)  => UploadPlanar8Bit(f, (f.Width + 1)/2, (f.Height + 1)/2, 2);
-    private bool UploadYuv422pFrame(VideoFrame f)  => UploadPlanar8Bit(f, (f.Width + 1)/2, f.Height,         2);
-    private bool UploadYuv444pFrame(VideoFrame f)  => UploadPlanar8Bit(f, f.Width,          f.Height,         2);
+    private bool UploadYuv422pFrame(VideoFrame frame)
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Yuv422p);
 
-    private bool UploadYuv420p10leFrame(VideoFrame f) => UploadPlanar16Bit(f, (f.Width + 1)/2, (f.Height + 1)/2, 4);
-    private bool UploadYuv422p10leFrame(VideoFrame f) => UploadPlanar16Bit(f, (f.Width + 1)/2, f.Height,         4);
-    private bool UploadYuv444p10leFrame(VideoFrame f) => UploadPlanar16Bit(f, f.Width,          f.Height,         4);
+    private bool UploadYuv444pFrame(VideoFrame frame)
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Yuv444p);
+
+    private bool UploadYuv420p10leFrame(VideoFrame frame)
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Yuv420p10le);
+
+    private bool UploadYuv422p10leFrame(VideoFrame frame)
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Yuv422p10le);
+
+    private bool UploadYuv444p10leFrame(VideoFrame frame)
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.Yuv444p10le);
 
     private bool UploadP010leFrame(VideoFrame frame)
-    {
-        var (w, h, cw, ch) = (frame.Width, frame.Height, (frame.Width + 1) / 2, (frame.Height + 1) / 2);
-        var y  = GetTightlyPackedPlane(frame, 0, w * 2,  h,  ref _plane0Scratch);
-        var uv = GetTightlyPackedPlane(frame, 1, cw * 4, ch, ref _plane1Scratch);
-        if (y == null || uv == null) return false;
+        => UploadFrameWithGpuPlan(frame, VideoPixelFormat.P010le);
 
-        _glActiveTexture!(GlTexture0); _glBindTexture!(GlTexture2D, _textureY);
-        UploadTexture2D(ref _yState, w, h, GlR16, GlRed, GlUnsignedShort, y);
-        _glActiveTexture!(GlTexture1); _glBindTexture!(GlTexture2D, _textureUv);
-        UploadTexture2D(ref _uvState, cw, ch, GlRg16, GlRg, GlUnsignedShort, uv);
-        _glActiveTexture!(GlTexture2); _glBindTexture!(GlTexture2D, _textureUv);
+    private bool UploadFrameWithGpuPlan(VideoFrame frame, VideoPixelFormat pixelFormat)
+    {
+        var w = frame.Width;
+        var h = frame.Height;
+        if (w <= 0 || h <= 0)
+            return false;
+
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(pixelFormat, w, h);
+        if (!plan.IsSupported)
+            return false;
+
+        byte[]? p0 = null;
+        byte[]? p1 = null;
+        byte[]? p2 = null;
+
+        for (var i = 0; i < plan.PlaneCount; i++)
+        {
+            var descriptor = GetPlaneDescriptor(plan, i);
+            ref var scratch = ref GetPlaneScratch(descriptor.PlaneIndex);
+            var packed = GetTightlyPackedPlane(
+                frame,
+                descriptor.PlaneIndex,
+                descriptor.RowBytes,
+                descriptor.Height,
+                ref scratch);
+            if (packed == null)
+                return false;
+
+            if (i == 0) p0 = packed;
+            else if (i == 1) p1 = packed;
+            else p2 = packed;
+        }
+
+        for (var i = 0; i < plan.PlaneCount; i++)
+        {
+            var descriptor = GetPlaneDescriptor(plan, i);
+            var data = i == 0 ? p0 : i == 1 ? p1 : p2;
+            if (data == null)
+                return false;
+
+            var textureUnit = GetTextureUnit(descriptor.Slot);
+            var textureId = GetTextureId(descriptor.Slot);
+
+            _glActiveTexture!(textureUnit);
+            _glBindTexture!(GlTexture2D, textureId);
+
+            ref var state = ref GetTextureState(descriptor.Slot);
+            UploadTexture2D(
+                ref state,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.InternalFormat,
+                descriptor.Format,
+                descriptor.Type,
+                data);
+        }
+
+        if (plan.IsYuv && VideoGlUploadPlanner.IsSemiPlanar(plan.YuvMode))
+        {
+            _glActiveTexture!(GlTexture2);
+            _glBindTexture!(GlTexture2D, _textureUv);
+        }
+
         _glActiveTexture!(GlTexture0);
-        SetCurrentFrameState(w, h, true, 3);
+        SetCurrentFrameState(w, h, plan.IsYuv, plan.YuvMode);
         return true;
     }
 
-    private bool UploadPlanar8Bit(VideoFrame frame, int cw, int ch, int fmtCode)
-    {
-        var (w, h) = (frame.Width, frame.Height);
-        var y = GetTightlyPackedPlane(frame, 0, w,  h,  ref _plane0Scratch);
-        var u = GetTightlyPackedPlane(frame, 1, cw, ch, ref _plane1Scratch);
-        var v = GetTightlyPackedPlane(frame, 2, cw, ch, ref _plane2Scratch);
-        if (y == null || u == null || v == null) return false;
+    private static VideoGlUploadPlanner.VideoGlPlanePlan GetPlaneDescriptor(
+        in VideoGlUploadPlanner.VideoGlGpuPlan plan,
+        int index)
+        => index switch
+        {
+            0 => plan.Plane0,
+            1 => plan.Plane1,
+            2 => plan.Plane2,
+            _ => throw new ArgumentOutOfRangeException(nameof(index))
+        };
 
-        _glActiveTexture!(GlTexture0); _glBindTexture!(GlTexture2D, _textureY);
-        UploadTexture2D(ref _yState, w, h, GlR8, GlRed, GlUnsignedByte, y);
-        _glActiveTexture!(GlTexture1); _glBindTexture!(GlTexture2D, _textureU);
-        UploadTexture2D(ref _uState, cw, ch, GlR8, GlRed, GlUnsignedByte, u);
-        _glActiveTexture!(GlTexture2); _glBindTexture!(GlTexture2D, _textureV);
-        UploadTexture2D(ref _vState, cw, ch, GlR8, GlRed, GlUnsignedByte, v);
-        _glActiveTexture!(GlTexture0);
-        SetCurrentFrameState(w, h, true, fmtCode);
-        return true;
+    private ref byte[]? GetPlaneScratch(int planeIndex)
+    {
+        switch (planeIndex)
+        {
+            case 0: return ref _plane0Scratch;
+            case 1: return ref _plane1Scratch;
+            case 2: return ref _plane2Scratch;
+            default: throw new ArgumentOutOfRangeException(nameof(planeIndex));
+        }
     }
 
-    private bool UploadPlanar16Bit(VideoFrame frame, int cw, int ch, int fmtCode)
-    {
-        var (w, h) = (frame.Width, frame.Height);
-        var y = GetTightlyPackedPlane(frame, 0, w * 2,  h,  ref _plane0Scratch);
-        var u = GetTightlyPackedPlane(frame, 1, cw * 2, ch, ref _plane1Scratch);
-        var v = GetTightlyPackedPlane(frame, 2, cw * 2, ch, ref _plane2Scratch);
-        if (y == null || u == null || v == null) return false;
+    private int GetTextureUnit(VideoGlUploadPlanner.VideoGlPlaneSlot slot)
+        => slot switch
+        {
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Rgba => GlTexture0,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Y => GlTexture0,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Uv => GlTexture1,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.U => GlTexture1,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.V => GlTexture2,
+            _ => GlTexture0
+        };
 
-        _glActiveTexture!(GlTexture0); _glBindTexture!(GlTexture2D, _textureY);
-        UploadTexture2D(ref _yState, w, h, GlR16, GlRed, GlUnsignedShort, y);
-        _glActiveTexture!(GlTexture1); _glBindTexture!(GlTexture2D, _textureU);
-        UploadTexture2D(ref _uState, cw, ch, GlR16, GlRed, GlUnsignedShort, u);
-        _glActiveTexture!(GlTexture2); _glBindTexture!(GlTexture2D, _textureV);
-        UploadTexture2D(ref _vState, cw, ch, GlR16, GlRed, GlUnsignedShort, v);
-        _glActiveTexture!(GlTexture0);
-        SetCurrentFrameState(w, h, true, fmtCode);
-        return true;
+    private int GetTextureId(VideoGlUploadPlanner.VideoGlPlaneSlot slot)
+        => slot switch
+        {
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Rgba => _textureRgba,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Y => _textureY,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Uv => _textureUv,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.U => _textureU,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.V => _textureV,
+            _ => _textureRgba
+        };
+
+    private ref TextureUploadState GetTextureState(VideoGlUploadPlanner.VideoGlPlaneSlot slot)
+    {
+        switch (slot)
+        {
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.Rgba: return ref _rgbaState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.Y: return ref _yState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.Uv: return ref _uvState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.U: return ref _uState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.V: return ref _vState;
+            default: throw new ArgumentOutOfRangeException(nameof(slot));
+        }
     }
 
-    private void SetCurrentFrameState(int width, int height, bool useYuv, int fmtCode)
+    private void SetCurrentFrameState(
+        int width,
+        int height,
+        bool useYuv,
+        VideoGlUploadPlanner.VideoGlYuvMode yuvMode)
     {
         _textureWidth  = width;
         _textureHeight = height;
         _useYuvProgram = useYuv;
-        _yuvPixelFormat = fmtCode;
+        _yuvPixelFormat = yuvMode;
     }
 
     // ── SDL helpers ───────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
-using System.Runtime.InteropServices;
 using Avalonia.OpenGL;
+using Seko.OwnaudioNET.OpenGL;
+using Seko.OwnAudioNET.Video;
 
 namespace Seko.OwnAudioNET.Video.Avalonia;
 
@@ -36,34 +37,17 @@ public partial class VideoGL
 
         var width = frame.Width;
         var height = frame.Height;
-        var chromaWidth = (width + 1) / 2;
-        var chromaHeight = (height + 1) / 2;
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Nv12, width, height);
+        var chromaWidth = plan.Plane1.Width;
+        var chromaHeight = plan.Plane1.Height;
 
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uvPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, chromaHeight, ref _plane1Scratch);
         if (yPlane == null || uvPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            UploadDualChannelTexture(ref _uvState, gl, chromaWidth, chromaHeight, uvPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 1;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uvPlane, null))
             return true;
-        }
 
         var pixelCount = checked(width * height);
         var rgbaLength = checked(pixelCount * 4);
@@ -81,8 +65,9 @@ public partial class VideoGL
 
         var width = frame.Width;
         var height = frame.Height;
-        var chromaWidth = (width + 1) / 2;
-        var chromaHeight = (height + 1) / 2;
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv420p, width, height);
+        var chromaWidth = plan.Plane1.Width;
+        var chromaHeight = plan.Plane1.Height;
 
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth, chromaHeight, ref _plane1Scratch);
@@ -90,27 +75,8 @@ public partial class VideoGL
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadSingleChannelTexture(ref _uState, gl, chromaWidth, chromaHeight, uPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadSingleChannelTexture(ref _vState, gl, chromaWidth, chromaHeight, vPlane);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 2;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
             return true;
-        }
 
         var pixelCount = checked(width * height);
         var rgbaLength = checked(pixelCount * 4);
@@ -128,7 +94,8 @@ public partial class VideoGL
 
         var width = frame.Width;
         var height = frame.Height;
-        var chromaWidth = (width + 1) / 2;
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv422p, width, height);
+        var chromaWidth = plan.Plane1.Width;
 
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth, height, ref _plane1Scratch);
@@ -136,27 +103,8 @@ public partial class VideoGL
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadSingleChannelTexture(ref _uState, gl, chromaWidth, height, uPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadSingleChannelTexture(ref _vState, gl, chromaWidth, height, vPlane);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 2;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
             return true;
-        }
 
         var rgbaLength = checked(width * height * 4);
         if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
@@ -173,6 +121,7 @@ public partial class VideoGL
 
         var width = frame.Width;
         var height = frame.Height;
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv444p, width, height);
 
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, width, height, ref _plane1Scratch);
@@ -180,27 +129,8 @@ public partial class VideoGL
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadSingleChannelTexture(ref _uState, gl, width, height, uPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadSingleChannelTexture(ref _vState, gl, width, height, vPlane);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 2;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
             return true;
-        }
 
         var rgbaLength = checked(width * height * 4);
         if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
@@ -217,34 +147,16 @@ public partial class VideoGL
         if (width <= 0 || height <= 0)
             return false;
 
-        var chromaWidth = (width + 1) / 2;
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv422p10le, width, height);
+        var chromaWidth = plan.Plane1.Width;
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, height, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth * 2, height, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath && _can16BitTextures)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadR16Texture(ref _uState, gl, chromaWidth, height, uPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadR16Texture(ref _vState, gl, chromaWidth, height, vPlane);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 4;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
             return true;
-        }
 
         var y8 = Downscale10BitTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var u8 = Downscale10BitTo8Bit(uPlane, chromaWidth, height, ref _plane1Scratch8);
@@ -266,35 +178,17 @@ public partial class VideoGL
         if (width <= 0 || height <= 0)
             return false;
 
-        var chromaWidth = (width + 1) / 2;
-        var chromaHeight = (height + 1) / 2;
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv420p10le, width, height);
+        var chromaWidth = plan.Plane1.Width;
+        var chromaHeight = plan.Plane1.Height;
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, chromaHeight, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth * 2, chromaHeight, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath && _can16BitTextures)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadR16Texture(ref _uState, gl, chromaWidth, chromaHeight, uPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadR16Texture(ref _vState, gl, chromaWidth, chromaHeight, vPlane);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 4;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
             return true;
-        }
 
         var y8 = Downscale10BitTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var u8 = Downscale10BitTo8Bit(uPlane, chromaWidth, chromaHeight, ref _plane1Scratch8);
@@ -316,33 +210,15 @@ public partial class VideoGL
         if (width <= 0 || height <= 0)
             return false;
 
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv444p10le, width, height);
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, width * 2, height, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, width * 2, height, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath && _can16BitTextures)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadR16Texture(ref _uState, gl, width, height, uPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadR16Texture(ref _vState, gl, width, height, vPlane);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 4;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
             return true;
-        }
 
         var y8 = Downscale10BitTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var u8 = Downscale10BitTo8Bit(uPlane, width, height, ref _plane1Scratch8);
@@ -364,33 +240,16 @@ public partial class VideoGL
         if (width <= 0 || height <= 0)
             return false;
 
-        var chromaWidth = (width + 1) / 2;
-        var chromaHeight = (height + 1) / 2;
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.P010le, width, height);
+        var chromaWidth = plan.Plane1.Width;
+        var chromaHeight = plan.Plane1.Height;
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uvPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 4, chromaHeight, ref _plane1Scratch);
         if (yPlane == null || uvPlane == null)
             return false;
 
-        if (_canUseGpuYuvPath && _can16BitTextures)
-        {
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(ref _yState, gl, width, height, yPlane);
-
-            gl.ActiveTexture(GlTexture1);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            UploadRg16Texture(ref _uvState, gl, chromaWidth, chromaHeight, uvPlane);
-
-            gl.ActiveTexture(GlTexture2);
-            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            gl.ActiveTexture(GlConsts.GL_TEXTURE0);
-
-            _textureWidth = width;
-            _textureHeight = height;
-            _useYuvProgramThisFrame = true;
-            _yuvPixelFormatThisFrame = 3;
+        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uvPlane, null))
             return true;
-        }
 
         var y8 = Downscale10BitMsbTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var uv8 = Downscale10BitMsbDualTo8Bit(uvPlane, chromaWidth, chromaHeight, ref _plane1Scratch8);
@@ -404,54 +263,123 @@ public partial class VideoGL
         return UploadRgbaPixels(gl, width, height, _rgbaConvertedScratch);
     }
 
-    private unsafe void UploadTexture2D(ref TextureUploadState state, GlInterface gl, int width, int height, int internalFormat, int format, int type, byte[] data)
+    private bool TryUploadGpuPlan(
+        GlInterface gl,
+        int width,
+        int height,
+        in VideoGlUploadPlanner.VideoGlGpuPlan plan,
+        byte[] plane0,
+        byte[]? plane1,
+        byte[]? plane2)
     {
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
+        if (!plan.IsSupported)
+            return false;
+
+        if (plan.IsYuv && !_canUseGpuYuvPath)
+            return false;
+
+        if (plan.Is10Bit && !_can16BitTextures)
+            return false;
+
+        for (var i = 0; i < plan.PlaneCount; i++)
         {
-            var pixels = (nint)ptr;
-            var reallocate = !state.IsInitialized ||
-                             state.Width != width ||
-                             state.Height != height ||
-                             state.InternalFormat != internalFormat ||
-                             state.Format != format ||
-                             state.Type != type;
+            var descriptor = GetPlaneDescriptor(plan, i);
+            var data = i == 0 ? plane0 : i == 1 ? plane1 : plane2;
+            if (data == null)
+                return false;
 
-            if (reallocate)
-            {
-                gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, nint.Zero);
-                state.IsInitialized = true;
-                state.Width = width;
-                state.Height = height;
-                state.InternalFormat = internalFormat;
-                state.Format = format;
-                state.Type = type;
-            }
+            var textureUnit = GetTextureUnit(descriptor.Slot);
+            var textureId = GetTextureId(descriptor.Slot);
+            gl.ActiveTexture(textureUnit);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, textureId);
 
-            if (_texSubImage2D != null)
-                _texSubImage2D(GlConsts.GL_TEXTURE_2D, 0, 0, 0, width, height, format, type, pixels);
-            else
-                gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, pixels);
+            ref var state = ref GetTextureState(descriptor.Slot);
+            UploadTexture2D(
+                ref state,
+                gl,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.InternalFormat,
+                descriptor.Format,
+                descriptor.Type,
+                data);
+        }
+
+        if (plan.IsYuv && VideoGlUploadPlanner.IsSemiPlanar(plan.YuvMode))
+        {
+            gl.ActiveTexture(GlTexture2);
+            gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
+        }
+
+        gl.ActiveTexture(GlConsts.GL_TEXTURE0);
+        _textureWidth = width;
+        _textureHeight = height;
+        _useYuvProgramThisFrame = plan.IsYuv;
+        _yuvPixelFormatThisFrame = plan.YuvMode;
+        return true;
+    }
+
+    private static VideoGlUploadPlanner.VideoGlPlanePlan GetPlaneDescriptor(
+        in VideoGlUploadPlanner.VideoGlGpuPlan plan,
+        int index)
+        => index switch
+        {
+            0 => plan.Plane0,
+            1 => plan.Plane1,
+            2 => plan.Plane2,
+            _ => throw new ArgumentOutOfRangeException(nameof(index))
+        };
+
+    private int GetTextureUnit(VideoGlUploadPlanner.VideoGlPlaneSlot slot)
+        => slot switch
+        {
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Rgba => GlConsts.GL_TEXTURE0,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Y => GlConsts.GL_TEXTURE0,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Uv => GlTexture1,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.U => GlTexture1,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.V => GlTexture2,
+            _ => GlConsts.GL_TEXTURE0
+        };
+
+    private int GetTextureId(VideoGlUploadPlanner.VideoGlPlaneSlot slot)
+        => slot switch
+        {
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Rgba => _textureRgba,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Y => _textureY,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.Uv => _textureUv,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.U => _textureU,
+            VideoGlUploadPlanner.VideoGlPlaneSlot.V => _textureV,
+            _ => _textureRgba
+        };
+
+    private ref TextureUploadState GetTextureState(VideoGlUploadPlanner.VideoGlPlaneSlot slot)
+    {
+        switch (slot)
+        {
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.Rgba: return ref _rgbaState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.Y: return ref _yState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.Uv: return ref _uvState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.U: return ref _uState;
+            case VideoGlUploadPlanner.VideoGlPlaneSlot.V: return ref _vState;
+            default: throw new ArgumentOutOfRangeException(nameof(slot));
         }
     }
 
-    private unsafe void UploadSingleChannelTexture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
+    private void UploadTexture2D(ref TextureUploadState state, GlInterface gl, int width, int height, int internalFormat, int format, int type, byte[] data)
     {
-        UploadTexture2D(ref state, gl, width, height, GlR8, GlRed, GlConsts.GL_UNSIGNED_BYTE, data);
+        VideoGlTextureUploadOrchestrator.UploadTexture2D(
+            ref state,
+            width,
+            height,
+            internalFormat,
+            format,
+            type,
+            data,
+            (ifmt, w, h, fmt, t, pixels) => gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, ifmt, w, h, 0, fmt, t, pixels),
+            _texSubImage2D == null
+                ? null
+                : (w, h, fmt, t, pixels) => _texSubImage2D(GlConsts.GL_TEXTURE_2D, 0, 0, 0, w, h, fmt, t, pixels));
     }
 
-    private unsafe void UploadDualChannelTexture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
-    {
-        UploadTexture2D(ref state, gl, width, height, GlRg8, GlRg, GlConsts.GL_UNSIGNED_BYTE, data);
-    }
-
-    private unsafe void UploadR16Texture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
-    {
-        UploadTexture2D(ref state, gl, width, height, GlR16, GlRed, GlUnsignedShort, data);
-    }
-
-    private unsafe void UploadRg16Texture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
-    {
-        UploadTexture2D(ref state, gl, width, height, GlRg16, GlRg, GlUnsignedShort, data);
-    }
 }
 

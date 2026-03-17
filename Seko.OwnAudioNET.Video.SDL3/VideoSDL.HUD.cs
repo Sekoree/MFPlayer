@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Seko.OwnaudioNET.OpenGL;
 using SDL3;
 
 namespace Seko.OwnAudioNET.Video.SDL3;
@@ -386,14 +387,14 @@ public sealed partial class VideoSDL
         };
     }
 
-    private const int GlBlend = 0x0BE2;
-    private const int GlSrcAlpha = 0x0302;
-    private const int GlOneMinusSrcAlpha = 0x0303;
-    private const int GlTriangleFan = 0x0006;
-    private const int GlNearest = 0x2600;
-    private const int GlTextureWrapS = 0x2802;
-    private const int GlTextureWrapT = 0x2803;
-    private const int GlClampToEdge = 0x812F;
+    private const int GlBlend            = VideoGlConstants.Blend;
+    private const int GlSrcAlpha         = VideoGlConstants.SrcAlpha;
+    private const int GlOneMinusSrcAlpha = VideoGlConstants.OneMinusSrcAlpha;
+    private const int GlTriangleFan      = VideoGlConstants.TriangleFan;
+    private const int GlNearest          = VideoGlConstants.Nearest;
+    private const int GlTextureWrapS     = VideoGlConstants.TextureWrapS;
+    private const int GlTextureWrapT     = VideoGlConstants.TextureWrapT;
+    private const int GlClampToEdge      = VideoGlConstants.ClampToEdge;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BlendFuncProc(int sfactor, int dfactor);

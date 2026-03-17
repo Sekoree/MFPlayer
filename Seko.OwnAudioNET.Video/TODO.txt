@@ -1,6 +1,7 @@
-1. Avalonia VideoGL control slightly slow (decoder runs out of queued frames when a lot happens on screen again), might just be hardware limitation.
- - Only happens on the Avalonia (VideoTest) Project even with just 1 view, AudioEx using SDL is fine.
-2. Add Seek To Frame function (if the video stream info doesnt have a frame counter yet, add)
-3. On single frame videos or music with cover art (which is also just 1 frame), when seeking the frame vanishes, should stay on the last frame, ,aybe option for a source/decoder to hold last frame(?)
-4. Clocking issue, the clock seems to be locked to the soundcard Quantum/buffer, 48kHz with 1024 quantum/buffer will have 21.3ms latency, which is not fast enough for 60fps video, perhaps the AVMixer needs some kind of Audio and Video clock, that can tick independently of each other but are still synchronized
-5. Add option to disable audio resampling, if the output device supports the sample rate of the audio stream, it should be able to just pass it through without resampling, this would reduce latency and improve performance.
+1. Hybrid Clock still affected by soundcard buffer -> <512 fine for 60fps, 1ß24 lands in the 45fps range again
+VideoTest -> OnegaiDarling -> small (audio?) stuttering starts near the end, seems to be able to recover though
+          -> (Release) -> fine?
+          -> Shootingstar -> ~250sec big stutter/small freeze, seems to recover a bit but still a few audio stutters
+          -> (Release) ->  ~250sec audio stutter, ~278sec video stutter, instant recovery
+AudioEx -> OnegaiDraling -> seemed fine
+        -> Shootingstar -> also fine?

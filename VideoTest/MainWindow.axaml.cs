@@ -145,7 +145,8 @@ public partial class MainWindow : Window
 
         _started = true;
 
-        const string testFile = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
+        const string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
+        //const string testFile = "/run/media/seko/New Stuff/Other_Content/おねがいダーリン_0611.mov";
         //const string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
 
         ffmpeg.RootPath = "/lib/";
@@ -187,7 +188,7 @@ public partial class MainWindow : Window
             //DriftCorrectionRate = 0.03,
             //MaxCorrectionStepSeconds = 0.003
         });
-        _mixer = new AVMixer(_engine, clockStyle: AVClockStyle.AudioDriven);
+        _mixer = new AVMixer(_engine, clockStyle: AVClockStyle.Hybrid);
         _mixer.AddAudioSource(_audioSource);
         _mixer.AddVideoSource(_videoSource);
 

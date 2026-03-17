@@ -38,6 +38,9 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
     private VideoPixelFormat _activeOutputFormat;
     private AVPixelFormat _activeOutputAvPixelFormat;
     private AVPixelFormat _lastSourceAvPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+    private AVPixelFormat _cachedSelectionSourceAvPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+    private VideoPixelFormat _cachedSelectionOutputFormat;
+    private bool _hasCachedSelectionOutputFormat;
 
     private bool _inputEof;
     private bool _drainPacketSent;
