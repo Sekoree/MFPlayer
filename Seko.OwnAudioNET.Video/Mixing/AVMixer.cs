@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Ownaudio.Core;
 using OwnaudioNET.Events;
 using OwnaudioNET.Interfaces;
@@ -33,6 +34,7 @@ public sealed class AVMixer : IDisposable
     private IEffectProcessor[] _cachedEffects = Array.Empty<IEffectProcessor>();
     private volatile bool _effectsChanged;
     private readonly int _bufferSizeInFrames;
+    private readonly double _bufferDurationSeconds;
     private volatile float _masterVolume = 1.0f;
     private volatile float _leftPeak;
     private volatile float _rightPeak;
@@ -40,11 +42,17 @@ public sealed class AVMixer : IDisposable
     private long _totalUnderruns;
     private volatile bool _stopRequested;
     private volatile bool _isRunning;
+    private int _clockStyle;
+    private double _hybridCorrectionRate = 0.25;
+    private double _hybridMaxCorrectionStepSeconds = 0.010;
+    private double _hybridCorrectionDeadZoneSeconds = 0.002;
+    private long _lastClockTick;
+    private bool _clockTickInitialized;
     private bool _mixThreadStarted;
     private bool _disposed;
 
     /// <summary>Initializes a new AV mixer using the provided engine for audio rendering.</summary>
-    public AVMixer(IAudioEngine engine, int bufferSizeInFrames = 512)
+    public AVMixer(IAudioEngine engine, int bufferSizeInFrames = 512, AVClockStyle clockStyle = AVClockStyle.AudioDriven)
     {
         ArgumentNullException.ThrowIfNull(engine);
         _engine = engine;
@@ -56,6 +64,8 @@ public sealed class AVMixer : IDisposable
             BufferSize = _engine.FramesPerBuffer
         };
         _masterClock = new MasterClock(sampleRate: 48000, channels: 2, mode: ClockMode.Realtime);
+        _bufferDurationSeconds = _bufferSizeInFrames / (double)_masterClock.SampleRate;
+        _clockStyle = (int)clockStyle;
 
         _mixThread = new Thread(MixThreadLoop)
         {
@@ -80,6 +90,34 @@ public sealed class AVMixer : IDisposable
 
     /// <summary>Shared timeline clock used by both audio and video sources.</summary>
     public MasterClock MasterClock => _masterClock;
+
+    /// <summary>Clock policy used to advance the shared master timeline.</summary>
+    public AVClockStyle ClockStyle
+    {
+        get => (AVClockStyle)Volatile.Read(ref _clockStyle);
+        set => Volatile.Write(ref _clockStyle, (int)value);
+    }
+
+    /// <summary>Hybrid correction gain in range [0, 1].</summary>
+    public double HybridCorrectionRate
+    {
+        get => Volatile.Read(ref _hybridCorrectionRate);
+        set => Volatile.Write(ref _hybridCorrectionRate, Math.Clamp(value, 0.0, 1.0));
+    }
+
+    /// <summary>Maximum absolute correction step applied by hybrid mode per mix cycle (seconds).</summary>
+    public double HybridMaxCorrectionStepSeconds
+    {
+        get => Volatile.Read(ref _hybridMaxCorrectionStepSeconds);
+        set => Volatile.Write(ref _hybridMaxCorrectionStepSeconds, Math.Clamp(value, 0.0, 0.100));
+    }
+
+    /// <summary>Hybrid mode dead-zone where no correction is applied (seconds).</summary>
+    public double HybridCorrectionDeadZoneSeconds
+    {
+        get => Volatile.Read(ref _hybridCorrectionDeadZoneSeconds);
+        set => Volatile.Write(ref _hybridCorrectionDeadZoneSeconds, Math.Clamp(value, 0.0, 0.050));
+    }
 
     /// <summary>Gets whether the mixer transport is currently running.</summary>
     public bool IsRunning => _isRunning;
@@ -343,6 +381,7 @@ public sealed class AVMixer : IDisposable
         ThrowIfDisposed();
         _isRunning = true;
         _pauseEvent.Set();
+        ResetClockDriverState();
 
         if (!_mixThreadStarted)
         {
@@ -361,6 +400,7 @@ public sealed class AVMixer : IDisposable
         ThrowIfDisposed();
         _isRunning = false;
         _pauseEvent.Reset();
+        _clockTickInitialized = false;
 
         var videoSources = GetVideoSourceSnapshot();
         foreach (var videoSource in videoSources)
@@ -373,6 +413,7 @@ public sealed class AVMixer : IDisposable
         ThrowIfDisposed();
         _isRunning = false;
         _pauseEvent.Reset();
+        _clockTickInitialized = false;
 
         var audioSources = GetAudioSourceSnapshot();
         foreach (var source in audioSources)
@@ -1107,7 +1148,7 @@ public sealed class AVMixer : IDisposable
 
             Array.Clear(mixBuffer, 0, sampleCount);
             var hasActiveSources = false;
-            var masterTimestamp = _masterClock.CurrentTimestamp;
+            var masterTimestamp = ResolveMasterTimestampForMixCycle();
 
             var audioSources = GetAudioSourceSnapshot();
             foreach (var source in audioSources)
@@ -1152,7 +1193,7 @@ public sealed class AVMixer : IDisposable
                 Thread.Sleep(5);
             }
 
-            _masterClock.Advance(_bufferSizeInFrames);
+            AdvanceMasterClockAfterMixCycle(masterTimestamp);
 
             if (!hasActiveSources)
                 Thread.Sleep(1);
@@ -1338,6 +1379,78 @@ public sealed class AVMixer : IDisposable
             for (var channel = 0; channel < mappedChannels; channel++)
                 mixBuffer[outputBase + channel] += sourceBuffer[sourceBase + channel];
         }
+    }
+
+    private double ResolveMasterTimestampForMixCycle()
+    {
+        var style = (AVClockStyle)Volatile.Read(ref _clockStyle);
+        if (style is AVClockStyle.AudioDriven or AVClockStyle.Hybrid)
+            return _masterClock.CurrentTimestamp;
+
+        var elapsedSeconds = ReadAndUpdateElapsedClockSeconds();
+        if (elapsedSeconds > 0)
+            _masterClock.SeekTo(Math.Max(0, _masterClock.CurrentTimestamp + elapsedSeconds));
+
+        return _masterClock.CurrentTimestamp;
+    }
+
+    private void AdvanceMasterClockAfterMixCycle(double masterTimestampAtCycleStart)
+    {
+        var style = (AVClockStyle)Volatile.Read(ref _clockStyle);
+        if (style == AVClockStyle.AudioDriven)
+        {
+            _masterClock.Advance(_bufferSizeInFrames);
+            return;
+        }
+
+        if (style != AVClockStyle.Hybrid)
+            return;
+
+        _masterClock.Advance(_bufferSizeInFrames);
+
+        var elapsedSeconds = ReadAndUpdateElapsedClockSeconds();
+        if (elapsedSeconds <= 0)
+            return;
+
+        var targetTimestamp = masterTimestampAtCycleStart + elapsedSeconds;
+        var currentTimestamp = _masterClock.CurrentTimestamp;
+        var driftSeconds = targetTimestamp - currentTimestamp;
+
+        var deadZone = Volatile.Read(ref _hybridCorrectionDeadZoneSeconds);
+        if (Math.Abs(driftSeconds) <= deadZone)
+            return;
+
+        var rate = Volatile.Read(ref _hybridCorrectionRate);
+        var maxStep = Volatile.Read(ref _hybridMaxCorrectionStepSeconds);
+        var correctionStep = Math.Clamp(driftSeconds * rate, -maxStep, maxStep);
+        if (Math.Abs(correctionStep) <= 0)
+            return;
+
+        _masterClock.SeekTo(Math.Max(0, currentTimestamp + correctionStep));
+    }
+
+    private void ResetClockDriverState()
+    {
+        _lastClockTick = Stopwatch.GetTimestamp();
+        _clockTickInitialized = true;
+    }
+
+    private double ReadAndUpdateElapsedClockSeconds()
+    {
+        var nowTicks = Stopwatch.GetTimestamp();
+        if (!_clockTickInitialized)
+        {
+            _lastClockTick = nowTicks;
+            _clockTickInitialized = true;
+            return 0;
+        }
+
+        var deltaTicks = nowTicks - _lastClockTick;
+        _lastClockTick = nowTicks;
+        if (deltaTicks <= 0)
+            return 0;
+
+        return deltaTicks / (double)Stopwatch.Frequency;
     }
 
     private sealed class SyncGroupState

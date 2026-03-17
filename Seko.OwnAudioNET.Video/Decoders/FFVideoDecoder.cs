@@ -48,6 +48,7 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
     private readonly double _fallbackFrameDuration;
     private readonly double _streamFrameRate;
     private readonly TimeSpan _streamDuration;
+    private readonly long? _streamFrameCount;
 
     /// <summary>Metadata describing the decoded video stream.</summary>
     public VideoStreamInfo StreamInfo { get; private set; }
@@ -156,6 +157,7 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
             _streamDuration = fCtx->duration > 0
                 ? TimeSpan.FromSeconds(fCtx->duration / (double)ffmpeg.AV_TIME_BASE)
                 : TimeSpan.Zero;
+            _streamFrameCount = ResolveFrameCount(stream, _streamFrameRate, _streamDuration);
             _fallbackFrameDuration = _streamFrameRate > 0 ? 1.0 / _streamFrameRate : 1.0 / 30.0;
 
             UpdateStreamInfo(raiseEvent: false);
@@ -443,6 +445,21 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
         return frameRate is >= 1.0 and <= 240.0;
     }
 
+    private static long? ResolveFrameCount(AVStream* stream, double frameRate, TimeSpan streamDuration)
+    {
+        if (stream->nb_frames > 0)
+            return stream->nb_frames;
+
+        if (IsSingleFrameStream(stream))
+            return 1;
+
+        if (!IsReasonableFrameRate(frameRate) || streamDuration <= TimeSpan.Zero)
+            return null;
+
+        var estimated = (long)Math.Round(streamDuration.TotalSeconds * frameRate, MidpointRounding.AwayFromZero);
+        return estimated > 0 ? estimated : null;
+    }
+
     private static int ResolveVideoStreamIndex(AVFormatContext* formatContext, int? preferredStreamIndex, out AVCodec* codec)
     {
         codec = null;
@@ -584,7 +601,8 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
             height: _height,
             frameRate: _streamFrameRate,
             duration: _streamDuration,
-            pixelFormat: _activeOutputFormat);
+            pixelFormat: _activeOutputFormat,
+            frameCount: _streamFrameCount);
 
         var previous = StreamInfo;
         StreamInfo = updated;
@@ -596,7 +614,8 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
             previous.Height == updated.Height &&
             previous.FrameRate == updated.FrameRate &&
             previous.Duration == updated.Duration &&
-            previous.PixelFormat == updated.PixelFormat)
+            previous.PixelFormat == updated.PixelFormat &&
+            previous.FrameCount == updated.FrameCount)
         {
             return;
         }

@@ -1,8 +1,8 @@
 using System.Diagnostics;
 
-namespace AudioEx;
+namespace Seko.OwnAudioNET.Video.SDL3;
 
-internal sealed partial class SdlVideoGlRenderer
+public sealed partial class VideoSDL
 {
     private void UpdateRenderFps()
     {
@@ -10,11 +10,11 @@ internal sealed partial class SdlVideoGlRenderer
         var now = Stopwatch.GetTimestamp();
         var elapsed = now - _lastHudUpdateTime;
 
-        // Update FPS once per second using Stopwatch ticks (not TimeSpan ticks).
+        // Refresh once per second using Stopwatch ticks (not TimeSpan ticks).
         if (elapsed >= Stopwatch.Frequency)
         {
-            var framesDelta = Interlocked.Read(ref _renderedFrameCount);
-            _currentRenderFps = framesDelta * Stopwatch.Frequency / (double)elapsed;
+            var frames = Interlocked.Read(ref _renderedFrameCount);
+            _currentRenderFps = frames * Stopwatch.Frequency / (double)elapsed;
             Interlocked.Exchange(ref _renderedFrameCount, 0);
             _lastHudUpdateTime = now;
             _hudTextDirty = true;

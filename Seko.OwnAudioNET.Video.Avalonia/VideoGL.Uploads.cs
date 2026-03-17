@@ -22,58 +22,9 @@ public partial class VideoGL
         gl.ActiveTexture(GlConsts.GL_TEXTURE0);
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureRgba);
 
-        var internalFormat = GlConsts.GL_RGBA8;
-        var format = GlConsts.GL_RGBA;
-
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(rgbaData))
-        {
-            var pixels = (nint)ptr;
-
-            if (!_rgbaTextureInitialized || _textureWidth != width || _textureHeight != height)
-            {
-                _textureWidth = width;
-                _textureHeight = height;
-                _rgbaTextureInitialized = true;
-
-                gl.TexImage2D(
-                    GlConsts.GL_TEXTURE_2D,
-                    0,
-                    internalFormat,
-                    _textureWidth,
-                    _textureHeight,
-                    0,
-                    format,
-                    GlConsts.GL_UNSIGNED_BYTE,
-                    nint.Zero);
-            }
-
-            if (_texSubImage2D != null)
-            {
-                _texSubImage2D(
-                    GlConsts.GL_TEXTURE_2D,
-                    0,
-                    0,
-                    0,
-                    width,
-                    height,
-                    format,
-                    GlConsts.GL_UNSIGNED_BYTE,
-                    pixels);
-            }
-            else
-            {
-                gl.TexImage2D(
-                    GlConsts.GL_TEXTURE_2D,
-                    0,
-                    internalFormat,
-                    width,
-                    height,
-                    0,
-                    format,
-                    GlConsts.GL_UNSIGNED_BYTE,
-                    pixels);
-            }
-        }
+        UploadTexture2D(ref _rgbaState, gl, width, height, GlConsts.GL_RGBA8, GlConsts.GL_RGBA, GlConsts.GL_UNSIGNED_BYTE, rgbaData);
+        _textureWidth = width;
+        _textureHeight = height;
 
         return true;
     }
@@ -97,11 +48,11 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(gl, width, height, yPlane);
+            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            UploadDualChannelTexture(gl, chromaWidth, chromaHeight, uvPlane);
+            UploadDualChannelTexture(ref _uvState, gl, chromaWidth, chromaHeight, uvPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
@@ -111,7 +62,6 @@ public partial class VideoGL
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 1;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -144,22 +94,21 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(gl, width, height, yPlane);
+            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadSingleChannelTexture(gl, chromaWidth, chromaHeight, uPlane);
+            UploadSingleChannelTexture(ref _uState, gl, chromaWidth, chromaHeight, uPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadSingleChannelTexture(gl, chromaWidth, chromaHeight, vPlane);
+            UploadSingleChannelTexture(ref _vState, gl, chromaWidth, chromaHeight, vPlane);
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
 
             _textureWidth = width;
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 2;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -191,22 +140,21 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(gl, width, height, yPlane);
+            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadSingleChannelTexture(gl, chromaWidth, height, uPlane);
+            UploadSingleChannelTexture(ref _uState, gl, chromaWidth, height, uPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadSingleChannelTexture(gl, chromaWidth, height, vPlane);
+            UploadSingleChannelTexture(ref _vState, gl, chromaWidth, height, vPlane);
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
 
             _textureWidth = width;
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 2;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -236,22 +184,21 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadSingleChannelTexture(gl, width, height, yPlane);
+            UploadSingleChannelTexture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadSingleChannelTexture(gl, width, height, uPlane);
+            UploadSingleChannelTexture(ref _uState, gl, width, height, uPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadSingleChannelTexture(gl, width, height, vPlane);
+            UploadSingleChannelTexture(ref _vState, gl, width, height, vPlane);
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
 
             _textureWidth = width;
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 2;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -281,22 +228,21 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(gl, width, height, yPlane);
+            UploadR16Texture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadR16Texture(gl, chromaWidth, height, uPlane);
+            UploadR16Texture(ref _uState, gl, chromaWidth, height, uPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadR16Texture(gl, chromaWidth, height, vPlane);
+            UploadR16Texture(ref _vState, gl, chromaWidth, height, vPlane);
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
 
             _textureWidth = width;
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 4;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -332,22 +278,21 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(gl, width, height, yPlane);
+            UploadR16Texture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadR16Texture(gl, chromaWidth, chromaHeight, uPlane);
+            UploadR16Texture(ref _uState, gl, chromaWidth, chromaHeight, uPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadR16Texture(gl, chromaWidth, chromaHeight, vPlane);
+            UploadR16Texture(ref _vState, gl, chromaWidth, chromaHeight, vPlane);
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
 
             _textureWidth = width;
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 4;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -381,22 +326,21 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(gl, width, height, yPlane);
+            UploadR16Texture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureU);
-            UploadR16Texture(gl, width, height, uPlane);
+            UploadR16Texture(ref _uState, gl, width, height, uPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureV);
-            UploadR16Texture(gl, width, height, vPlane);
+            UploadR16Texture(ref _vState, gl, width, height, vPlane);
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
 
             _textureWidth = width;
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 4;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -431,11 +375,11 @@ public partial class VideoGL
         {
             gl.ActiveTexture(GlConsts.GL_TEXTURE0);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureY);
-            UploadR16Texture(gl, width, height, yPlane);
+            UploadR16Texture(ref _yState, gl, width, height, yPlane);
 
             gl.ActiveTexture(GlTexture1);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
-            UploadRg16Texture(gl, chromaWidth, chromaHeight, uvPlane);
+            UploadRg16Texture(ref _uvState, gl, chromaWidth, chromaHeight, uvPlane);
 
             gl.ActiveTexture(GlTexture2);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, _textureUv);
@@ -445,7 +389,6 @@ public partial class VideoGL
             _textureHeight = height;
             _useYuvProgramThisFrame = true;
             _yuvPixelFormatThisFrame = 3;
-            _rgbaTextureInitialized = false;
             return true;
         }
 
@@ -461,36 +404,54 @@ public partial class VideoGL
         return UploadRgbaPixels(gl, width, height, _rgbaConvertedScratch);
     }
 
-    private unsafe void UploadSingleChannelTexture(GlInterface gl, int width, int height, byte[] data)
+    private unsafe void UploadTexture2D(ref TextureUploadState state, GlInterface gl, int width, int height, int internalFormat, int format, int type, byte[] data)
     {
         fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
         {
-            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlR8, width, height, 0, GlRed, GlConsts.GL_UNSIGNED_BYTE, (nint)ptr);
+            var pixels = (nint)ptr;
+            var reallocate = !state.IsInitialized ||
+                             state.Width != width ||
+                             state.Height != height ||
+                             state.InternalFormat != internalFormat ||
+                             state.Format != format ||
+                             state.Type != type;
+
+            if (reallocate)
+            {
+                gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, nint.Zero);
+                state.IsInitialized = true;
+                state.Width = width;
+                state.Height = height;
+                state.InternalFormat = internalFormat;
+                state.Format = format;
+                state.Type = type;
+            }
+
+            if (_texSubImage2D != null)
+                _texSubImage2D(GlConsts.GL_TEXTURE_2D, 0, 0, 0, width, height, format, type, pixels);
+            else
+                gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, pixels);
         }
     }
 
-    private unsafe void UploadDualChannelTexture(GlInterface gl, int width, int height, byte[] data)
+    private unsafe void UploadSingleChannelTexture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
     {
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
-        {
-            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlRg8, width, height, 0, GlRg, GlConsts.GL_UNSIGNED_BYTE, (nint)ptr);
-        }
+        UploadTexture2D(ref state, gl, width, height, GlR8, GlRed, GlConsts.GL_UNSIGNED_BYTE, data);
     }
 
-    private unsafe void UploadR16Texture(GlInterface gl, int width, int height, byte[] data)
+    private unsafe void UploadDualChannelTexture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
     {
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
-        {
-            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlR16, width, height, 0, GlRed, GlUnsignedShort, (nint)ptr);
-        }
+        UploadTexture2D(ref state, gl, width, height, GlRg8, GlRg, GlConsts.GL_UNSIGNED_BYTE, data);
     }
 
-    private unsafe void UploadRg16Texture(GlInterface gl, int width, int height, byte[] data)
+    private unsafe void UploadR16Texture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
     {
-        fixed (byte* ptr = &MemoryMarshal.GetArrayDataReference(data))
-        {
-            gl.TexImage2D(GlConsts.GL_TEXTURE_2D, 0, GlRg16, width, height, 0, GlRg, GlUnsignedShort, (nint)ptr);
-        }
+        UploadTexture2D(ref state, gl, width, height, GlR16, GlRed, GlUnsignedShort, data);
+    }
+
+    private unsafe void UploadRg16Texture(ref TextureUploadState state, GlInterface gl, int width, int height, byte[] data)
+    {
+        UploadTexture2D(ref state, gl, width, height, GlRg16, GlRg, GlUnsignedShort, data);
     }
 }
 

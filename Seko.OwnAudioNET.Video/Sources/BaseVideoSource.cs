@@ -94,6 +94,44 @@ public abstract class BaseVideoSource : IVideoSource
     public abstract bool Seek(double positionInSeconds);
 
     /// <inheritdoc/>
+    public virtual bool SeekToFrame(long frameIndex)
+    {
+        if (frameIndex < 0)
+            return false;
+
+        var frameRate = StreamInfo.FrameRate;
+        if (frameRate <= 0 || double.IsNaN(frameRate) || double.IsInfinity(frameRate))
+            return false;
+
+        var frameCount = StreamInfo.FrameCount;
+        if (frameCount.HasValue && frameIndex >= frameCount.Value)
+            return false;
+
+        var seconds = frameIndex / frameRate;
+        return Seek(seconds);
+    }
+
+    /// <inheritdoc/>
+    public virtual bool SeekToStart()
+    {
+        return Seek(0);
+    }
+
+    /// <inheritdoc/>
+    public virtual bool SeekToEnd()
+    {
+        var frameCount = StreamInfo.FrameCount;
+        if (frameCount is > 0)
+            return SeekToFrame(frameCount.Value - 1);
+
+        var duration = Duration;
+        if (duration <= 0 || double.IsNaN(duration) || double.IsInfinity(duration))
+            return false;
+
+        return Seek(duration);
+    }
+
+    /// <inheritdoc/>
     public abstract void AttachToClock(OwnaudioNET.Synchronization.MasterClock clock);
 
     /// <inheritdoc/>

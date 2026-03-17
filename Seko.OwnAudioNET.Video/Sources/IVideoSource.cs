@@ -63,6 +63,15 @@ public interface IVideoSource : IDisposable, ISynchronizable
     /// <summary>Seeks to the given media position.</summary>
     bool Seek(double positionInSeconds);
 
+    /// <summary>Seeks to an absolute frame index. Returns <see langword="false"/> when out of range.</summary>
+    bool SeekToFrame(long frameIndex);
+
+    /// <summary>Seeks to the start of the stream (frame 0).</summary>
+    bool SeekToStart();
+
+    /// <summary>Seeks to the final presentable frame when known.</summary>
+    bool SeekToEnd();
+
     /// <summary>Transitions the source into the playing state.</summary>
     void Play();
 

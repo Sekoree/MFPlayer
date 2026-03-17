@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private long _lastDecodedFrames;
     private long _lastPresentedFrames;
     private long _lastDroppedFrames;
+    private VideoGL.VideoGlDiagnostics[] _lastVideoGlDiagnosticsPerView = [];
     private readonly Lock _seekLock = new();
 
     public MainWindow()
@@ -53,6 +54,14 @@ public partial class MainWindow : Window
                 break;
             case Key.Right:
                 SeekRelative(SeekStepSeconds);
+                e.Handled = true;
+                break;
+            case Key.Home:
+                SeekToStart();
+                e.Handled = true;
+                break;
+            case Key.End:
+                SeekToEnd();
                 e.Handled = true;
                 break;
             case Key.Escape:
@@ -86,6 +95,40 @@ public partial class MainWindow : Window
         {
             var newTimelinePosition = Math.Max(0.0, _mixer.MasterClock.CurrentTimestamp + deltaSeconds);
             _mixer.Seek(newTimelinePosition, safeSeek: true);
+        }
+        finally
+        {
+            _seekLock.Exit();
+        }
+    }
+
+    private void SeekToStart()
+    {
+        if (_mixer == null || !_seekLock.TryEnter())
+            return;
+
+        try
+        {
+            _mixer.Seek(0, safeSeek: true);
+        }
+        finally
+        {
+            _seekLock.Exit();
+        }
+    }
+
+    private void SeekToEnd()
+    {
+        if (_mixer == null || _videoSource == null || !_seekLock.TryEnter())
+            return;
+
+        try
+        {
+            if (!_videoSource.SeekToEnd())
+                return;
+
+            var timelineTarget = Math.Max(0, _videoSource.Position + _videoSource.StartOffset);
+            _mixer.Seek(timelineTarget, safeSeek: true);
         }
         finally
         {
@@ -144,24 +187,22 @@ public partial class MainWindow : Window
             //DriftCorrectionRate = 0.03,
             //MaxCorrectionStepSeconds = 0.003
         });
-        _mixer = new AVMixer(_engine);
+        _mixer = new AVMixer(_engine, clockStyle: AVClockStyle.AudioDriven);
         _mixer.AddAudioSource(_audioSource);
         _mixer.AddVideoSource(_videoSource);
-        
-        _audioSource.AttachToClock(_mixer.MasterClock);
-        _videoSource.AttachToClock(_mixer.MasterClock);
 
         _videoViews =
         [
             new VideoGL(_videoSource),
-            //new VideoGL(_videoSource, false),
-            //new VideoGL(_videoSource, false),
-            //new VideoGL(_videoSource, false)
+            new VideoGL(_videoSource, false),
+            new VideoGL(_videoSource, false),
+            new VideoGL(_videoSource, false)
         ];
+        _lastVideoGlDiagnosticsPerView = new VideoGL.VideoGlDiagnostics[_videoViews.Length];
         VideoControl.Content = _videoViews[0];
-        //VideoControl2.Content = _videoViews[1];
-        //VideoControl3.Content = _videoViews[2];
-        //VideoControl4.Content = _videoViews[3];
+        VideoControl2.Content = _videoViews[1];
+        VideoControl3.Content = _videoViews[2];
+        VideoControl4.Content = _videoViews[3];
 
         _videoStatsTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {
@@ -197,6 +238,26 @@ public partial class MainWindow : Window
             var presentedDelta = presentedFrames - _lastPresentedFrames;
             var droppedDelta = droppedFrames - _lastDroppedFrames;
 
+            if (_lastVideoGlDiagnosticsPerView.Length != _videoViews.Length)
+                _lastVideoGlDiagnosticsPerView = new VideoGL.VideoGlDiagnostics[_videoViews.Length];
+
+            var perViewDiagText = new string[_videoViews.Length];
+            for (var i = 0; i < _videoViews.Length; i++)
+            {
+                var currentDiag = _videoViews[i].GetDiagnosticsSnapshot();
+                var lastDiag = _lastVideoGlDiagnosticsPerView[i];
+                var advanceTicksDelta = currentDiag.AdvanceTicks - lastDiag.AdvanceTicks;
+                var advanceSuccessDelta = currentDiag.AdvanceSuccess - lastDiag.AdvanceSuccess;
+                var frameReadyDelta = currentDiag.FrameReadyEvents - lastDiag.FrameReadyEvents;
+                var renderDelta = currentDiag.RenderCalls - lastDiag.RenderCalls;
+                var renderPostedDelta = currentDiag.RenderRequestPosted - lastDiag.RenderRequestPosted;
+                var renderCoalescedDelta = currentDiag.RenderRequestCoalesced - lastDiag.RenderRequestCoalesced;
+
+                perViewDiagText[i] =
+                    $"v{i + 1}[tick={advanceTicksDelta} ok={advanceSuccessDelta} ready={frameReadyDelta} ren={renderDelta} rq+={renderPostedDelta} rq={renderCoalescedDelta}]";
+                _lastVideoGlDiagnosticsPerView[i] = currentDiag;
+            }
+
             // Pixel-format conversion info: "yuv422p10le" (direct) or "yuv422p10le→nv12" (converted)
             var srcFmt = FmtName(_videoSource.DecoderSourcePixelFormatName);
             var dstFmt = FmtName(_videoSource.DecoderOutputPixelFormatName);
@@ -213,7 +274,8 @@ public partial class MainWindow : Window
                 $"  fmt={fmtInfo}" +
                 $"  m={masterTimestamp:F3}s a={audioTimestamp:F3}s v={videoTimestamp:F3}s" +
                 $"  a-m={audioMasterDriftMs:+0.0;-0.0}ms v-m={videoMasterDriftMs:+0.0;-0.0}ms a-v={avDriftMs:+0.0;-0.0}ms" +
-                $"  corr={correctionOffsetMs:+0.0;-0.0}ms");
+                $"  corr={correctionOffsetMs:+0.0;-0.0}ms" +
+                $"  {string.Join(" ", perViewDiagText)}");
 
             _lastDecodedFrames = decodedFrames;
             _lastPresentedFrames = presentedFrames;
@@ -249,6 +311,7 @@ public partial class MainWindow : Window
         foreach (var view in _videoViews)
             view.Dispose();
         _videoViews = [];
+        _lastVideoGlDiagnosticsPerView = [];
         _videoStatsTimer?.Stop();
         _videoStatsTimer = null;
         _videoSource?.Dispose();

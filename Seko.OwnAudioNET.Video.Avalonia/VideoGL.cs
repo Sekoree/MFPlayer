@@ -65,7 +65,11 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
     private int _textureV;
     private int _textureWidth;
     private int _textureHeight;
-    private bool _rgbaTextureInitialized;
+    private TextureUploadState _rgbaState;
+    private TextureUploadState _yState;
+    private TextureUploadState _uvState;
+    private TextureUploadState _uState;
+    private TextureUploadState _vState;
     private TexSubImage2DProc? _texSubImage2D;
     private GetUniformLocationProc? _getUniformLocation;
     private Uniform1iProc? _uniform1i;
@@ -90,6 +94,42 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
     private bool _masterLoopStarted;
     private int _renderRequestQueued;
     private readonly Action _requestRenderAction;
+    private Timer? _frameAdvanceTimer;
+    private long _diagAdvanceTickCount;
+    private long _diagAdvanceSuccessCount;
+    private long _diagFrameReadyCount;
+    private long _diagRenderCount;
+    private long _diagRenderRequestPostedCount;
+    private long _diagRenderRequestCoalescedCount;
+
+    private struct TextureUploadState
+    {
+        public bool IsInitialized;
+        public int Width;
+        public int Height;
+        public int InternalFormat;
+        public int Format;
+        public int Type;
+    }
+
+    public readonly record struct VideoGlDiagnostics(
+        long AdvanceTicks,
+        long AdvanceSuccess,
+        long FrameReadyEvents,
+        long RenderCalls,
+        long RenderRequestPosted,
+        long RenderRequestCoalesced);
+
+    public VideoGlDiagnostics GetDiagnosticsSnapshot()
+    {
+        return new VideoGlDiagnostics(
+            Interlocked.Read(ref _diagAdvanceTickCount),
+            Interlocked.Read(ref _diagAdvanceSuccessCount),
+            Interlocked.Read(ref _diagFrameReadyCount),
+            Interlocked.Read(ref _diagRenderCount),
+            Interlocked.Read(ref _diagRenderRequestPostedCount),
+            Interlocked.Read(ref _diagRenderRequestCoalescedCount));
+    }
 
     public bool KeepAspectRatio { get; set; } = true;
 
@@ -99,10 +139,23 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         _master = master;
         _requestRenderAction = RequestNextFrameRendering;
         _source.FrameReadyFast += SourceFrameReadyFast;
+        _source.StreamInfoChanged += OnSourceStreamInfoChanged;
+    }
+
+    private void OnSourceStreamInfoChanged(object? sender, Events.VideoStreamInfoChangedEventArgs e)
+    {
+        if (_frameAdvanceTimer == null)
+            return;
+
+        var intervalMs = ComputeAdvanceIntervalMs(e.StreamInfo.FrameRate);
+        var period = TimeSpan.FromMilliseconds(intervalMs);
+        _frameAdvanceTimer.Change(period, period);
     }
 
     private void SourceFrameReadyFast(VideoFrame frame, double _)
     {
+        Interlocked.Increment(ref _diagFrameReadyCount);
+
         VideoFrame? previous;
         lock (_frameLock)
         {
@@ -223,10 +276,9 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)
     {
+        Interlocked.Increment(ref _diagRenderCount);
         Interlocked.Exchange(ref _renderRequestQueued, 0);
 
-        if (_master && _glReady)
-            _source.RequestNextFrame(out _);
 
         var pixelSize = GetPixelSize();
         gl.BindFramebuffer(GlConsts.GL_FRAMEBUFFER, fb);
@@ -293,8 +345,8 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         gl.UseProgram(0);
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
 
-        if (_master && !_disposed && IsVisible)
-            QueueRenderRequest();
+        // Rendering is triggered by frame promotions (FrameReadyFast) and property changes.
+        // Avoid a continuous self-queued render loop that can monopolize UI/GPU time.
     }
 
     protected override void OnOpenGlDeinit(GlInterface gl)
@@ -354,7 +406,11 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         }
 
         _glReady = false;
-        _rgbaTextureInitialized = false;
+        _rgbaState = default;
+        _yState = default;
+        _uvState = default;
+        _uState = default;
+        _vState = default;
         _useYuvProgramThisFrame = false;
         base.OnOpenGlDeinit(gl);
     }
@@ -365,7 +421,10 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
             return;
 
         _disposed = true;
+        _frameAdvanceTimer?.Dispose();
+        _frameAdvanceTimer = null;
         _source.FrameReadyFast -= SourceFrameReadyFast;
+        _source.StreamInfoChanged -= OnSourceStreamInfoChanged;
 
         lock (_frameLock)
         {
@@ -381,7 +440,44 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
             return;
 
         _masterLoopStarted = true;
+
+        // Drive frame advancement at ~125 Hz independently of the GL render cadence.
+        // This decouples clock-based frame consumption from Avalonia compositor scheduling,
+        // preventing the decode queue from stalling when renders are delayed.
+        var intervalMs = ComputeAdvanceIntervalMs(_source.StreamInfo.FrameRate);
+        _frameAdvanceTimer = new Timer(
+            static state => ((VideoGL)state!).AdvanceFrameCallback(),
+            this,
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(intervalMs));
+
+        // Seed the render loop so the control paints its initial state.
         QueueRenderRequest();
+    }
+
+    /// <summary>
+    /// Computes the frame-advance polling interval in milliseconds.
+    /// Targets ~80% of the stream's frame interval so we never miss a frame's presentation
+    /// window; falls back to 8 ms (~125 Hz) when the frame rate is unknown.
+    /// </summary>
+    private static int ComputeAdvanceIntervalMs(double fps)
+    {
+        if (fps > 0 && !double.IsNaN(fps) && !double.IsInfinity(fps))
+            return Math.Max(1, (int)(800.0 / fps));   // 80% of frame period in ms
+
+        return 8; // default ~125 Hz
+    }
+
+    private void AdvanceFrameCallback()
+    {
+        if (_disposed || !_glReady)
+            return;
+
+        Interlocked.Increment(ref _diagAdvanceTickCount);
+        if (_source.RequestNextFrame(out _))
+            Interlocked.Increment(ref _diagAdvanceSuccessCount);
+
+        // FrameReadyFast → SourceFrameReadyFast → QueueRenderRequest will fire on promotion.
     }
 
     private void QueueRenderRequest()
@@ -390,9 +486,16 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
             return;
 
         if (Interlocked.Exchange(ref _renderRequestQueued, 1) == 1)
+        {
+            Interlocked.Increment(ref _diagRenderRequestCoalescedCount);
             return;
+        }
 
-        Dispatcher.UIThread.Post(_requestRenderAction, DispatcherPriority.Background);
+        Interlocked.Increment(ref _diagRenderRequestPostedCount);
+
+        // Use Render priority so the invalidation isn't delayed behind normal UI work,
+        // keeping the GL surface updated within the same compositor frame.
+        Dispatcher.UIThread.Post(_requestRenderAction, DispatcherPriority.Render);
     }
 
     private static int BuildProgram(GlInterface gl, string vertexSource, string fragmentSource)
@@ -808,3 +911,4 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         return new PixelRect(x, 0, targetWidth, surface.Height);
     }
 }
+

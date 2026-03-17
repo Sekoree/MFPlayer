@@ -2,11 +2,13 @@
 using Ownaudio.Core;
 using Ownaudio.Native;
 using SDL3;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Decoders;
 using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.Probing;
+using Seko.OwnAudioNET.Video.SDL3;
 using Seko.OwnAudioNET.Video.Sources;
 
 namespace AudioEx;
@@ -75,13 +77,11 @@ internal static class Program
                 }, streamIndex: videoStream.Index);
             }
 
-            using var mixer = new AVMixer(engine);
+            using var mixer = new AVMixer(engine, clockStyle: AVClockStyle.AudioDriven);
             mixer.AddAudioSource(audioSource);
-            audioSource.AttachToClock(mixer.MasterClock);
             if (videoSource != null)
             {
                 mixer.AddVideoSource(videoSource);
-                videoSource.AttachToClock(mixer.MasterClock);
             }
 
 
@@ -99,52 +99,21 @@ internal static class Program
                 return;
             }
 
-            // --- SDL window ---
-            if (!SDL.Init(SDL.InitFlags.Video))
-            {
-                Console.WriteLine($"SDL_Init failed: {SDL.GetError()}");
-                return;
-            }
-
-            SDL.GLResetAttributes();
-            SDL.GLSetAttribute(SDL.GLAttr.ContextProfileMask, (int)SDL.GLProfile.Core);
-            SDL.GLSetAttribute(SDL.GLAttr.ContextMajorVersion, 3);
-            SDL.GLSetAttribute(SDL.GLAttr.ContextMinorVersion, 3);
-            SDL.GLSetAttribute(SDL.GLAttr.DoubleBuffer, 1);
-
-            var window = SDL.CreateWindow("MFPlayer", 1280, 720, SDL.WindowFlags.Resizable | SDL.WindowFlags.OpenGL);
-            if (window == nint.Zero)
-            {
-                Console.WriteLine($"SDL_CreateWindow failed: {SDL.GetError()}");
-                SDL.Quit();
-                return;
-            }
-
-            var glContext = SDL.GLCreateContext(window);
-            if (glContext == nint.Zero || !SDL.GLMakeCurrent(window, glContext))
-            {
-                Console.WriteLine($"GL context creation/make-current failed: {SDL.GetError()}");
-                if (glContext != nint.Zero)
-                    SDL.GLDestroyContext(glContext);
-                SDL.DestroyWindow(window);
-                SDL.Quit();
-                return;
-            }
-
-            SDL.GLSetSwapInterval(1);
-
             var info = videoSource.StreamInfo;
             Console.WriteLine($"Stream: {info}");
 
-            using var videoRenderer = new SdlVideoGlRenderer();
-            if (!videoRenderer.Initialize(out var glError))
+            using var videoRenderer = new VideoSDL
             {
-                Console.WriteLine($"OpenGL init failed: {glError}");
-                SDL.GLDestroyContext(glContext);
-                SDL.DestroyWindow(window);
-                SDL.Quit();
+                EnableHudOverlay = false,
+                KeepAspectRatio = true
+            };
+
+            if (!videoRenderer.Initialize(1280, 720, "MFPlayer", out var glError))
+            {
+                Console.WriteLine($"VideoSDL init failed: {glError}");
                 return;
             }
+            videoRenderer.Start();
 
             // Update renderer with initial format info
             videoRenderer.UpdateFormatInfo(videoSource.DecoderSourcePixelFormatName, 
@@ -152,44 +121,12 @@ internal static class Program
                                            info.FrameRate);
             videoRenderer.UpdateHudDiagnostics(queueDepth: 0, uploadMsPerFrame: 0, avDriftMs: 0, isHardwareDecoding: videoSource.IsHardwareDecoding, droppedFrames: 0);
 
-            Console.WriteLine("OpenGL renderer initialised successfully.");
+            Console.WriteLine("VideoSDL renderer initialised successfully.");
 
             // --- Frame sharing (zero-allocation fast path) ---
-            var frameLock = new Lock();
-            VideoFrame? latestFrame = null;
-            var hasFrame = false;
-            var latestFrameVersion = 0L;
-            var lastUploadedFrameVersion = -1L;
             var uploadedVideoFrameCounter = 0L;
-            var uploadedVideoTicks = 0L;
-
-            videoSource.FrameReadyFast += (frame, _) =>
-            {
-                VideoFrame? previous;
-                lock (frameLock)
-                {
-                    previous = latestFrame;
-                    latestFrame = frame.AddRef();
-                    hasFrame = true;
-                    latestFrameVersion++;
-                }
-
-                previous?.Dispose();
-            };
-
-            // --- Stats ---
-            var lastDecodedFrames = 0L;
-            var lastPresentedFrames = 0L;
-            var lastDroppedFrames = 0L;
-            var lastUploadedFrames = 0L;
-            var lastUploadedTicks = 0L;
-            var lastStatsLogTime = DateTime.UtcNow;
-            var lastAllocatedBytes = GC.GetTotalAllocatedBytes(false);
-            var lastGen0Count = GC.CollectionCount(0);
-            var lastGen1Count = GC.CollectionCount(1);
-            var lastGen2Count = GC.CollectionCount(2);
-
-            // --- Seek helper ---
+            var exitRequested = 0;
+            var controlActions = new ConcurrentQueue<Action>();
             var seekLock = new Lock();
 
             void PerformSeek(double positionSeconds)
@@ -199,15 +136,6 @@ internal static class Program
 
                 try
                 {
-                    lock (frameLock)
-                    {
-                        latestFrame?.Dispose();
-                        latestFrame = null;
-                        hasFrame = false;
-                        latestFrameVersion = 0;
-                        lastUploadedFrameVersion = -1;
-                    }
-
                     mixer.Seek(positionSeconds, safeSeek: true);
                 }
                 finally
@@ -215,98 +143,106 @@ internal static class Program
                     seekLock.Exit();
                 }
             }
-            
+
+            videoRenderer.KeyDown += key =>
+            {
+                switch (key)
+                {
+                    case SDL.Keycode.Space:
+                        controlActions.Enqueue(() =>
+                        {
+                            if (mixer.IsRunning)
+                            {
+                                mixer.Pause();
+                                ConsolePrintLine("[Playback] Paused.");
+                            }
+                            else
+                            {
+                                mixer.Start();
+                                ConsolePrintLine("[Playback] Playing.");
+                            }
+                        });
+                        break;
+
+                    case SDL.Keycode.Left:
+                        controlActions.Enqueue(() => PerformSeek(Math.Max(0.0, audioSource.Position - SeekStepSeconds)));
+                        break;
+
+                    case SDL.Keycode.Right:
+                        controlActions.Enqueue(() => PerformSeek(audioSource.Position + SeekStepSeconds));
+                        break;
+
+                    case SDL.Keycode.Home:
+                        controlActions.Enqueue(() => PerformSeek(0.0));
+                        break;
+
+                    case SDL.Keycode.End:
+                        controlActions.Enqueue(() =>
+                        {
+                            if (videoSource.SeekToEnd())
+                                PerformSeek(Math.Max(0.0, videoSource.Position + videoSource.StartOffset));
+                        });
+                        break;
+
+                    case SDL.Keycode.F11:
+                        controlActions.Enqueue(() =>
+                        {
+                            var window = videoRenderer.SdlWindowPtr;
+                            if (window == nint.Zero)
+                                return;
+
+                            var isFullscreen = (SDL.GetWindowFlags(window) & SDL.WindowFlags.Fullscreen) != 0;
+                            SDL.SetWindowFullscreen(window, !isFullscreen);
+                        });
+                        break;
+
+                    case SDL.Keycode.H:
+                        controlActions.Enqueue(() =>
+                        {
+                            videoRenderer.EnableHudOverlay = !videoRenderer.EnableHudOverlay;
+                            ConsolePrintLine(videoRenderer.EnableHudOverlay
+                                ? "[Video] HUD enabled."
+                                : "[Video] HUD disabled.");
+                        });
+                        break;
+
+                    case SDL.Keycode.Escape:
+                        Interlocked.Exchange(ref exitRequested, 1);
+                        break;
+                }
+            };
+
+            videoSource.FrameReadyFast += (frame, _) =>
+            {
+                videoRenderer.PushFrame(frame);
+            };
+
+            // --- Stats ---
+            var lastDecodedFrames = 0L;
+            var lastPresentedFrames = 0L;
+            var lastDroppedFrames = 0L;
+            var lastUploadedFrames = 0L;
+            var lastStatsLogTime = DateTime.UtcNow;
+            var lastAllocatedBytes = GC.GetTotalAllocatedBytes(false);
+            var lastGen0Count = GC.CollectionCount(0);
+            var lastGen1Count = GC.CollectionCount(1);
+            var lastGen2Count = GC.CollectionCount(2);
+
             // --- Main loop ---
             var loop = true;
             while (loop)
             {
-                while (SDL.PollEvent(out var e))
+                while (controlActions.TryDequeue(out var action))
+                    action();
+
+                if (Interlocked.CompareExchange(ref exitRequested, 0, 0) != 0 || !videoRenderer.IsRunning)
                 {
-                    switch ((SDL.EventType)e.Type)
-                    {
-                        case SDL.EventType.Quit:
-                            loop = false;
-                            break;
-
-                        case SDL.EventType.KeyDown:
-                            switch (e.Key.Key)
-                            {
-                                case SDL.Keycode.Space:
-                                    if (mixer.IsRunning)
-                                        mixer.Pause();
-                                    else
-                                        mixer.Start();
-                                    break;
-
-                                case SDL.Keycode.Left:
-                                    PerformSeek(Math.Max(0.0, audioSource.Position - SeekStepSeconds));
-                                    break;
-
-                                case SDL.Keycode.Right:
-                                    PerformSeek(audioSource.Position + SeekStepSeconds);
-                                    break;
-
-                                case SDL.Keycode.Escape:
-                                    loop = false;
-                                    break;
-                                case SDL.Keycode.F11:
-                                    var isFullscreen = (SDL.GetWindowFlags(window) & SDL.WindowFlags.Fullscreen) != 0;
-                                    SDL.SetWindowFullscreen(window, !isFullscreen);
-                                    break;
-                            }
-
-                            break;
-                    }
+                    loop = false;
+                    continue;
                 }
 
                 // Drive frame advancement against the shared master clock.
                 videoSource.RequestNextFrame(out _);
-
-                SDL.GetWindowSizeInPixels(window, out var outputWidth, out var outputHeight);
-                outputWidth = Math.Max(1, outputWidth);
-                outputHeight = Math.Max(1, outputHeight);
-
-                VideoFrame? frameToRender = null;
-                var frameVersion = -1L;
-                lock (frameLock)
-                {
-                    if (hasFrame)
-                    {
-                        frameToRender = latestFrame?.AddRef();
-                        frameVersion = latestFrameVersion;
-                    }
-                }
-
-                if (frameToRender != null)
-                {
-                    try
-                    {
-                        if (frameVersion != lastUploadedFrameVersion)
-                        {
-                            var uploadStart = Stopwatch.GetTimestamp();
-                            if (videoRenderer.RenderFrame(frameToRender, outputWidth, outputHeight))
-                            {
-                                lastUploadedFrameVersion = frameVersion;
-                                uploadedVideoFrameCounter++;
-                                uploadedVideoTicks += Stopwatch.GetTimestamp() - uploadStart;
-                            }
-                        }
-                        else
-                        {
-                            videoRenderer.RenderLastFrame(outputWidth, outputHeight);
-                        }
-                    }
-                    finally
-                    {
-                        frameToRender.Dispose();
-                    }
-                }
-                else
-                {
-                    videoRenderer.RenderLastFrame(outputWidth, outputHeight);
-                }
-
-                SDL.GLSwapWindow(window);
 
                 // Stop loop when both streams are exhausted.
                 if (videoSource.IsEndOfStream && audioSource.IsEndOfStream)
@@ -335,11 +271,11 @@ internal static class Program
                     var gen0Delta = GC.CollectionCount(0) - lastGen0Count;
                     var gen1Delta = GC.CollectionCount(1) - lastGen1Count;
                     var gen2Delta = GC.CollectionCount(2) - lastGen2Count;
-                    var uploadedFrames = uploadedVideoFrameCounter;
+                    var diag = videoRenderer.GetDiagnosticsSnapshot();
+                    var uploadedFrames = diag.FramesRendered;
                     var uploadedFrameDelta = uploadedFrames - lastUploadedFrames;
-                    var uploadedTicksDelta = uploadedVideoTicks - lastUploadedTicks;
-                    var uploadMs = uploadedTicksDelta * 1000.0 / Stopwatch.Frequency;
-                    var uploadMsPerFrame = uploadedFrameDelta > 0 ? uploadMs / uploadedFrameDelta : 0;
+                    uploadedVideoFrameCounter = uploadedFrames;
+                    var uploadMsPerFrame = 0d;
 
                     videoRenderer.UpdateHudDiagnostics(
                         queueDepth: videoSource.QueueDepth,
@@ -364,7 +300,6 @@ internal static class Program
                     lastPresentedFrames = presentedFrames;
                     lastDroppedFrames = droppedFrames;
                     lastUploadedFrames = uploadedFrames;
-                    lastUploadedTicks = uploadedVideoTicks;
                     lastStatsLogTime = now;
                     lastAllocatedBytes = totalAllocatedBytes;
                     lastGen0Count += gen0Delta;
@@ -372,20 +307,10 @@ internal static class Program
                     lastGen2Count += gen2Delta;
                 }
 
-                SDL.Delay(1);
+                Thread.Sleep(1);
             }
 
-            // --- Cleanup ---
-            lock (frameLock)
-            {
-                latestFrame?.Dispose();
-                latestFrame = null;
-            }
-
-            SDL.GLMakeCurrent(window, nint.Zero);
-            SDL.GLDestroyContext(glContext);
-            SDL.DestroyWindow(window);
-            SDL.Quit();
+            videoRenderer.Stop();
         }
         finally
         {

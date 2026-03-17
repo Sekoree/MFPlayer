@@ -208,6 +208,47 @@ public sealed class FFVideoSource : BaseVideoSource
         return true;
     }
 
+    /// <inheritdoc/>
+    public override bool SeekToFrame(long frameIndex)
+    {
+        ThrowIfDisposed();
+
+        if (frameIndex < 0)
+            return false;
+
+        var frameCount = StreamInfo.FrameCount;
+        if (frameCount.HasValue && frameIndex >= frameCount.Value)
+            return false;
+
+        var frameRate = StreamInfo.FrameRate;
+        if (frameRate <= 0 || double.IsNaN(frameRate) || double.IsInfinity(frameRate))
+            return false;
+
+        var positionSeconds = frameIndex / frameRate;
+        return Seek(positionSeconds);
+    }
+
+    /// <inheritdoc/>
+    public override bool SeekToStart()
+    {
+        return Seek(0);
+    }
+
+    /// <inheritdoc/>
+    public override bool SeekToEnd()
+    {
+        var frameCount = StreamInfo.FrameCount;
+        if (frameCount is > 0)
+            return SeekToFrame(frameCount.Value - 1);
+
+        var duration = Duration;
+        if (duration <= 0 || double.IsNaN(duration) || double.IsInfinity(duration))
+            return false;
+
+        var target = Math.Max(0, duration - Math.Max(_frameDurationSeconds, 0.001));
+        return Seek(target);
+    }
+
     /// <summary>
     /// Attempts to return the frame that should be displayed at <paramref name="masterTimestamp"/>.
     /// Promotes a pending frame when its PTS is due, applies late-drop and drift-correction policy,
@@ -537,6 +578,10 @@ public sealed class FFVideoSource : BaseVideoSource
         var clampedSeconds = Math.Max(0, seconds);
         var target = TimeSpan.FromSeconds(clampedSeconds);
         VideoFrame? primedFrame;
+        VideoFrame? preservedFrame = null;
+
+        if (_options.HoldLastFrameOnEndOfStream && _hasCurrentFrame && _currentFrame != null)
+            preservedFrame = _currentFrame.AddRef();
 
         lock (_decoderLock)
         {
@@ -554,6 +599,7 @@ public sealed class FFVideoSource : BaseVideoSource
 
         if (primedFrame != null)
         {
+            preservedFrame?.Dispose();
             _currentFrame = primedFrame;
             _hasCurrentFrame = true;
 
@@ -565,6 +611,16 @@ public sealed class FFVideoSource : BaseVideoSource
             Interlocked.Increment(ref _presentedFrameCount);
 
             RaiseFrameReady(primedFrame, clampedSeconds + StartOffset);
+        }
+        else if (preservedFrame != null)
+        {
+            _currentFrame = preservedFrame;
+            _hasCurrentFrame = true;
+
+            var preservedPts = preservedFrame.PtsSeconds;
+            SetPlaybackPosition(preservedPts);
+            Interlocked.Exchange(ref _currentFramePtsSeconds, preservedPts);
+            Interlocked.Exchange(ref _lastPromotedMasterTimestamp, clampedSeconds + StartOffset);
         }
         else
         {
@@ -694,7 +750,15 @@ public sealed class FFVideoSource : BaseVideoSource
 
         if (relativeTime >= _currentFrame.PtsSeconds + Math.Max(_frameDurationSeconds, 0.001))
         {
-            SetPosition(_currentFrame.PtsSeconds);
+            if (_options.HoldLastFrameOnEndOfStream)
+            {
+                SetPosition(_currentFrame.PtsSeconds);
+            }
+            else
+            {
+                ClearFrameCache();
+            }
+
             SetState(VideoPlaybackState.EndOfStream);
         }
     }

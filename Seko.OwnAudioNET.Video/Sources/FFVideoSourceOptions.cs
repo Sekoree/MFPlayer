@@ -74,6 +74,12 @@ public sealed class FFVideoSourceOptions
     /// </summary>
     public double MaxCorrectionStepSeconds { get; init; } = 0.004;
 
+    /// <summary>
+    /// When <see langword="true"/>, keeps the latest successfully presented frame visible after
+    /// EOS or when a seek position cannot immediately provide a new frame. Default: <see langword="true"/>.
+    /// </summary>
+    public bool HoldLastFrameOnEndOfStream { get; init; } = true;
+
 
     /// <summary>Decoder options forwarded to <see cref="FFVideoDecoder"/> when the source owns the decoder.</summary>
     public FFVideoDecoderOptions DecoderOptions { get; init; } = new();

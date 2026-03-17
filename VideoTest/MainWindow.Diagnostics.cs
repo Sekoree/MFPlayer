@@ -6,8 +6,8 @@ public partial class MainWindow
 {
     private static int GetSafeVideoThreadCount()
     {
-        var suggested = Math.Max(2, Environment.ProcessorCount / 4);
-        return Math.Min(8, suggested);
+        var suggested = Math.Max(4, Environment.ProcessorCount / 2);
+        return Math.Min(16, suggested);
     }
 
     /// <summary>
@@ -51,4 +51,3 @@ public partial class MainWindow
             : name.ToLowerInvariant();
     }
 }
-
