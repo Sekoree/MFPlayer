@@ -17,7 +17,29 @@ internal static class Program
 
     public static void Main(string[] args)
     {
-        string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
+        // Capture unhandled exceptions from background threads (e.g. the FFmpeg decode
+        // thread) which would otherwise kill the process silently.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            Console.WriteLine($"[FATAL] Unhandled exception: {e.ExceptionObject}");
+            Console.Out.Flush();
+        };
+
+        try
+        {
+            Run(args);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[FATAL] {ex}");
+            Console.Out.Flush();
+        }
+    }
+
+    private static void Run(string[] args)
+    {
+        //string testFile = "/home/sekoree/Videos/Mesmerizer German Cover CALYTRIX Chiyo.mp4";
+        string testFile = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
         if (args.Length > 0)
             testFile = args[0];
 
@@ -55,8 +77,12 @@ internal static class Program
 
             using var mixer = new AVMixer(engine);
             mixer.AddAudioSource(audioSource);
+            audioSource.AttachToClock(mixer.MasterClock);
             if (videoSource != null)
+            {
                 mixer.AddVideoSource(videoSource);
+                videoSource.AttachToClock(mixer.MasterClock);
+            }
 
 
             // --- Playback start ---
@@ -76,7 +102,7 @@ internal static class Program
             // --- SDL window ---
             if (!SDL.Init(SDL.InitFlags.Video))
             {
-                Console.Error.WriteLine("SDL_Init failed.");
+                Console.WriteLine($"SDL_Init failed: {SDL.GetError()}");
                 return;
             }
 
@@ -89,6 +115,7 @@ internal static class Program
             var window = SDL.CreateWindow("MFPlayer", 1280, 720, SDL.WindowFlags.Resizable | SDL.WindowFlags.OpenGL);
             if (window == nint.Zero)
             {
+                Console.WriteLine($"SDL_CreateWindow failed: {SDL.GetError()}");
                 SDL.Quit();
                 return;
             }
@@ -96,6 +123,7 @@ internal static class Program
             var glContext = SDL.GLCreateContext(window);
             if (glContext == nint.Zero || !SDL.GLMakeCurrent(window, glContext))
             {
+                Console.WriteLine($"GL context creation/make-current failed: {SDL.GetError()}");
                 if (glContext != nint.Zero)
                     SDL.GLDestroyContext(glContext);
                 SDL.DestroyWindow(window);
@@ -111,12 +139,20 @@ internal static class Program
             using var videoRenderer = new SdlVideoGlRenderer();
             if (!videoRenderer.Initialize(out var glError))
             {
-                Console.Error.WriteLine($"OpenGL init failed: {glError}");
+                Console.WriteLine($"OpenGL init failed: {glError}");
                 SDL.GLDestroyContext(glContext);
                 SDL.DestroyWindow(window);
                 SDL.Quit();
                 return;
             }
+
+            // Update renderer with initial format info
+            videoRenderer.UpdateFormatInfo(videoSource.DecoderSourcePixelFormatName, 
+                                           videoSource.DecoderOutputPixelFormatName,
+                                           info.FrameRate);
+            videoRenderer.UpdateHudDiagnostics(queueDepth: 0, uploadMsPerFrame: 0, avDriftMs: 0, isHardwareDecoding: videoSource.IsHardwareDecoding, droppedFrames: 0);
+
+            Console.WriteLine("OpenGL renderer initialised successfully.");
 
             // --- Frame sharing (zero-allocation fast path) ---
             var frameLock = new Lock();
@@ -283,21 +319,18 @@ internal static class Program
                 var now = DateTime.UtcNow;
                 if ((now - lastStatsLogTime).TotalSeconds >= 1)
                 {
-                    var elapsedSeconds = Math.Max(0.001, (now - lastStatsLogTime).TotalSeconds);
+                    // Update renderer with latest format info
+                    videoRenderer.UpdateFormatInfo(videoSource.DecoderSourcePixelFormatName,
+                                                   videoSource.DecoderOutputPixelFormatName,
+                                                   videoSource.StreamInfo.FrameRate);
+
                     var decodedFrames = videoSource.DecodedFrameCount;
                     var presentedFrames = videoSource.PresentedFrameCount;
                     var droppedFrames = videoSource.DroppedFrameCount;
-                    var masterTs = mixer.MasterClock.CurrentTimestamp;
                     var audioTs = audioSource.Position;
                     var videoTs = videoSource.CurrentFramePtsSeconds;
-                    var corrMs = videoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
-                    var expectedVideo = masterTs - videoSource.StartOffset;
-                    var expectedAudio = masterTs - audioSource.StartOffset;
-                    var audioMasterDrift = (audioTs - expectedAudio) * 1000.0;
-                    var videoMasterDrift = double.IsNaN(videoTs) ? double.NaN : (videoTs - expectedVideo) * 1000.0;
                     var avDrift = double.IsNaN(videoTs) ? double.NaN : (videoTs - audioTs) * 1000.0;
                     var totalAllocatedBytes = GC.GetTotalAllocatedBytes(false);
-                    var allocatedBytesPerSecond = (totalAllocatedBytes - lastAllocatedBytes) / elapsedSeconds;
                     var managedHeapBytes = GC.GetTotalMemory(false);
                     var gen0Delta = GC.CollectionCount(0) - lastGen0Count;
                     var gen1Delta = GC.CollectionCount(1) - lastGen1Count;
@@ -307,29 +340,25 @@ internal static class Program
                     var uploadedTicksDelta = uploadedVideoTicks - lastUploadedTicks;
                     var uploadMs = uploadedTicksDelta * 1000.0 / Stopwatch.Frequency;
                     var uploadMsPerFrame = uploadedFrameDelta > 0 ? uploadMs / uploadedFrameDelta : 0;
-                    
-                    var srcFmt = FmtName(videoSource.DecoderSourcePixelFormatName);
-                    var dstFmt = FmtName(videoSource.DecoderOutputPixelFormatName);
-                    var fmtInfo = string.Equals(srcFmt, dstFmt, StringComparison.OrdinalIgnoreCase)
-                        ? srcFmt
-                        : $"{srcFmt}->{dstFmt}";
+
+                    videoRenderer.UpdateHudDiagnostics(
+                        queueDepth: videoSource.QueueDepth,
+                        uploadMsPerFrame: uploadMsPerFrame,
+                        avDriftMs: avDrift,
+                        isHardwareDecoding: videoSource.IsHardwareDecoding,
+                        droppedFrames: droppedFrames - lastDroppedFrames);
 
                     ConsoleOverwriteLine(
-                        $"[Video] {videoSource.StreamInfo.FrameRate:F1}fps" +
-                        $"  pres={presentedFrames - lastPresentedFrames}" +
+                        $"[Render] {videoRenderer.RenderFps:F1}fps [Video] {videoRenderer.VideoFps:F1}fps {videoRenderer.PixelFormatInfo} " +
+                        $"| pres={presentedFrames - lastPresentedFrames}" +
                         $" up={uploadedFrameDelta}" +
                         $" dec={decodedFrames - lastDecodedFrames}" +
                         $" drop={droppedFrames - lastDroppedFrames}" +
                         $" q={videoSource.QueueDepth}" +
                         $" hw={videoSource.IsHardwareDecoding}" +
-                        $" fmt={fmtInfo}" +
                         $" upms={uploadMsPerFrame:F2}" +
-                        $" m={masterTs:F3}s a={audioTs:F3}s v={videoTs:F3}s" +
-                        $" a-m={audioMasterDrift:F1}ms v-m={videoMasterDrift:F1}ms a-v={avDrift:F1}ms" +
-                        $" corr={corrMs:F1}ms" +
-                        $" alloc={FormatBytes(allocatedBytesPerSecond)}/s" +
-                        $" heap={FormatBytes(managedHeapBytes)}" +
-                        $" gc={gen0Delta}/{gen1Delta}/{gen2Delta}");
+                        $" a-v={avDrift:F1}ms" +
+                        $" heap={FormatBytes(managedHeapBytes)}");
 
                     lastDecodedFrames = decodedFrames;
                     lastPresentedFrames = presentedFrames;
@@ -378,6 +407,8 @@ internal static class Program
             ThreadCount = threadCount,
             PreferredOutputPixelFormats =
             [
+                VideoPixelFormat.Yuv422p10le,  // ProRes 422 HQ native
+                VideoPixelFormat.Yuv422p,      // ProRes 422 native
                 VideoPixelFormat.Nv12,
                 VideoPixelFormat.Yuv420p,
                 VideoPixelFormat.Rgba32
@@ -408,13 +439,6 @@ internal static class Program
         Console.WriteLine("\n" + message);
     }
 
-    private static string FmtName(string name)
-    {
-        const string prefix = "AV_PIX_FMT_";
-        return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? name[prefix.Length..].ToLowerInvariant()
-            : name.ToLowerInvariant();
-    }
 
     private static string FormatBytes(double bytes)
     {

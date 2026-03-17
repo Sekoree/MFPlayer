@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Seko.OwnAudioNET.Video;
 using SDL3;
@@ -65,41 +66,89 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
     private TextureUploadState _uState;
     private TextureUploadState _vState;
 
+    // HUD / diagnostics
+    private long _renderedFrameCount;
+    private long _lastHudUpdateTime;
+    private double _currentRenderFps;
+    private string _currentPixelFormatInfo = "---";
+    private double _currentVideoFps;
+    private int _currentQueueDepth;
+    private double _currentUploadMsPerFrame;
+    private double _currentAvDriftMs;
+    private bool _currentHardwareDecoding;
+    private long _currentDroppedFrames;
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void ViewportProc(int x, int y, int width, int height);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void ClearColorProc(float r, float g, float b, float a);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void ClearProc(int mask);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int CreateShaderProc(int type);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void ShaderSourceProc(int shader, int count, nint strings, nint lengths);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void CompileShaderProc(int shader);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void GetShaderIvProc(int shader, int pname, out int param);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void GetShaderInfoLogProc(int shader, int maxLength, out int length, nint infoLog);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void DeleteShaderProc(int shader);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int CreateProgramProc();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void AttachShaderProc(int program, int shader);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void LinkProgramProc(int program);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void GetProgramIvProc(int program, int pname, out int param);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void GetProgramInfoLogProc(int program, int maxLength, out int length, nint infoLog);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void UseProgramProc(int program);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void DeleteProgramProc(int program);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BindAttribLocationProc(int program, int index, [MarshalAs(UnmanagedType.LPStr)] string name);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int GetUniformLocationProc(int program, [MarshalAs(UnmanagedType.LPStr)] string name);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void Uniform1IProc(int location, int value);
-    private delegate int GenVertexArraysProc();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void GenVertexArraysProc(int n, out int arrays);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BindVertexArrayProc(int array);
-    private delegate void DeleteVertexArraysProc(int array);
-    private delegate int GenBuffersProc();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void DeleteVertexArraysProc(int n, in int arrays);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void GenBuffersProc(int n, out int buffers);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BindBufferProc(int target, int buffer);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BufferDataProc(int target, nint size, nint data, int usage);
-    private delegate void DeleteBuffersProc(int buffer);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void DeleteBuffersProc(int n, in int buffers);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void EnableVertexAttribArrayProc(int index);
-    private delegate void VertexAttribPointerProc(int index, int size, int type, byte normalized, int stride, nint pointer);
-    private delegate int GenTexturesProc();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void VertexAttribPointerProc(int index, int size, int type, int normalized, int stride, nint pointer);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void GenTexturesProc(int n, out int textures);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void ActiveTextureProc(int texture);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BindTextureProc(int target, int texture);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void TexParameteriProc(int target, int pname, int param);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void TexImage2DProc(int target, int level, int internalFormat, int width, int height, int border, int format, int type, nint pixels);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void TexSubImage2DProc(int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, nint pixels);
-    private delegate void DeleteTexturesProc(int texture);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void DeleteTexturesProc(int n, in int textures);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void DrawArraysProc(int mode, int first, int count);
 
     private ViewportProc? _glViewport;
@@ -163,6 +212,46 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
     {
     }
 
+    /// <summary>Current renderer frame rate (frames per second).</summary>
+    public double RenderFps => _currentRenderFps;
+
+    /// <summary>Video frame rate from the stream.</summary>
+    public double VideoFps => _currentVideoFps;
+
+    /// <summary>Pixel format conversion info (e.g., "yuv422p10le" or "yuv422p10le→nv12").</summary>
+    public string PixelFormatInfo => _currentPixelFormatInfo;
+
+    /// <summary>Update pixel format information from video source metadata.</summary>
+    public void UpdateFormatInfo(string sourceFormatName, string outputFormatName, double videoFrameRate)
+    {
+        var srcFmt = FmtName(sourceFormatName);
+        var dstFmt = FmtName(outputFormatName);
+        _currentPixelFormatInfo = string.Equals(srcFmt, dstFmt, StringComparison.OrdinalIgnoreCase)
+            ? srcFmt
+            : $"{srcFmt}→{dstFmt}";
+        _currentVideoFps = videoFrameRate;
+        _hudTextDirty = true;
+    }
+
+    /// <summary>Update additional per-second diagnostics shown in the HUD overlay.</summary>
+    public void UpdateHudDiagnostics(int queueDepth, double uploadMsPerFrame, double avDriftMs, bool isHardwareDecoding, long droppedFrames)
+    {
+        _currentQueueDepth = Math.Max(0, queueDepth);
+        _currentUploadMsPerFrame = Math.Max(0, uploadMsPerFrame);
+        _currentAvDriftMs = avDriftMs;
+        _currentHardwareDecoding = isHardwareDecoding;
+        _currentDroppedFrames = Math.Max(0, droppedFrames);
+        _hudTextDirty = true;
+    }
+
+    private static string FmtName(string name)
+    {
+        const string prefix = "AV_PIX_FMT_";
+        return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? name[prefix.Length..].ToLowerInvariant()
+            : name.ToLowerInvariant();
+    }
+
     public bool Initialize(out string error)
     {
         error = string.Empty;
@@ -195,8 +284,15 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
         if (_yuvTextureVLocation >= 0) _glUniform1I!(_yuvTextureVLocation, 2);
         _glUseProgram!(0);
 
-        _vao = _glGenVertexArrays!();
-        _vbo = _glGenBuffers!();
+        // Explicitly bind uTexture to unit 0 for the RGBA program (GLSL default is 0,
+        // but being explicit avoids surprises with some drivers).
+        _glUseProgram!(_program);
+        var uTextureLocation = _glGetUniformLocation!(_program, "uTexture");
+        if (uTextureLocation >= 0) _glUniform1I!(uTextureLocation, 0);
+        _glUseProgram!(0);
+
+        _glGenVertexArrays!(1, out _vao);
+        _glGenBuffers!(1, out _vbo);
         _glBindVertexArray!(_vao);
         _glBindBuffer!(GlArrayBuffer, _vbo);
 
@@ -219,17 +315,25 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
         _glBindBuffer!(GlArrayBuffer, 0);
         _glBindVertexArray!(0);
 
-        _textureRgba = _glGenTextures!();
-        _textureY = _glGenTextures!();
-        _textureUv = _glGenTextures!();
-        _textureU = _glGenTextures!();
-        _textureV = _glGenTextures!();
+        _glGenTextures!(1, out _textureRgba);
+        _glGenTextures!(1, out _textureY);
+        _glGenTextures!(1, out _textureUv);
+        _glGenTextures!(1, out _textureU);
+        _glGenTextures!(1, out _textureV);
 
         ConfigureTexture(_textureRgba);
         ConfigureTexture(_textureY);
         ConfigureTexture(_textureUv);
         ConfigureTexture(_textureU);
         ConfigureTexture(_textureV);
+
+        // Initialize HUD rendering
+        LoadHudGlFunctions();
+        InitializeHudRendering();
+
+        _renderedFrameCount = 0;
+        _currentRenderFps = 0;
+        _lastHudUpdateTime = Stopwatch.GetTimestamp();
 
         _initialized = true;
         return true;
@@ -267,6 +371,8 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
         }
 
         DrawCurrentFrame(surfaceWidth, surfaceHeight);
+        RenderHudOverlay(surfaceWidth, surfaceHeight);
+        UpdateRenderFps();
         return true;
     }
 
@@ -283,6 +389,8 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
             return false;
 
         DrawCurrentFrame(surfaceWidth, surfaceHeight);
+        RenderHudOverlay(surfaceWidth, surfaceHeight);
+        UpdateRenderFps();
         return true;
     }
 
@@ -290,6 +398,36 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
     {
         var viewport = GetAspectFitRect(surfaceWidth, surfaceHeight, _textureWidth, _textureHeight);
         _glViewport!(viewport.X, viewport.Y, viewport.Width, viewport.Height);
+
+        // Always rebind textures before drawing.  This is required for the
+        // RenderLastFrame path where no upload occurred and therefore no bind
+        // was performed since the previous DrawCurrentFrame call (which
+        // unbound unit 0 at its tail).
+        if (!_useYuvProgram)
+        {
+            _glActiveTexture!(GlTexture0);
+            _glBindTexture!(GlTexture2D, _textureRgba);
+        }
+        else
+        {
+            // Y plane → unit 0 (always)
+            _glActiveTexture!(GlTexture0);
+            _glBindTexture!(GlTexture2D, _textureY);
+
+            // UV / U plane → unit 1
+            _glActiveTexture!(GlTexture1);
+            var isSemiPlanar = _yuvPixelFormat == 1 || _yuvPixelFormat == 3; // NV12 / P010LE
+            _glBindTexture!(GlTexture2D, isSemiPlanar ? _textureUv : _textureU);
+
+            // V plane → unit 2 (planar formats only)
+            if (!isSemiPlanar)
+            {
+                _glActiveTexture!(GlTexture2);
+                _glBindTexture!(GlTexture2D, _textureV);
+            }
+
+            _glActiveTexture!(GlTexture0);
+        }
 
         if (_useYuvProgram)
         {
@@ -306,7 +444,6 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
         _glDrawArrays!(GlTriangles, 0, 6);
         _glBindVertexArray!(0);
         _glUseProgram!(0);
-        _glBindTexture!(GlTexture2D, 0);
     }
 
     public void Dispose()
@@ -316,13 +453,15 @@ internal sealed partial class SdlVideoGlRenderer : IDisposable
 
         _disposed = true;
 
-        if (_textureRgba != 0) _glDeleteTextures?.Invoke(_textureRgba);
-        if (_textureY != 0) _glDeleteTextures?.Invoke(_textureY);
-        if (_textureUv != 0) _glDeleteTextures?.Invoke(_textureUv);
-        if (_textureU != 0) _glDeleteTextures?.Invoke(_textureU);
-        if (_textureV != 0) _glDeleteTextures?.Invoke(_textureV);
-        if (_vbo != 0) _glDeleteBuffers?.Invoke(_vbo);
-        if (_vao != 0) _glDeleteVertexArrays?.Invoke(_vao);
+        DisposeHudResources();
+
+        if (_textureRgba != 0) { var t = _textureRgba; _glDeleteTextures?.Invoke(1, in t); }
+        if (_textureY != 0)    { var t = _textureY;    _glDeleteTextures?.Invoke(1, in t); }
+        if (_textureUv != 0)   { var t = _textureUv;   _glDeleteTextures?.Invoke(1, in t); }
+        if (_textureU != 0)    { var t = _textureU;    _glDeleteTextures?.Invoke(1, in t); }
+        if (_textureV != 0)    { var t = _textureV;    _glDeleteTextures?.Invoke(1, in t); }
+        if (_vbo != 0) { var b = _vbo; _glDeleteBuffers?.Invoke(1, in b); }
+        if (_vao != 0) { var a = _vao; _glDeleteVertexArrays?.Invoke(1, in a); }
         if (_program != 0) _glDeleteProgram?.Invoke(_program);
         if (_yuvProgram != 0) _glDeleteProgram?.Invoke(_yuvProgram);
     }

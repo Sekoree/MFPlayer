@@ -102,7 +102,7 @@ public partial class MainWindow : Window
 
         _started = true;
 
-        const string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
+        const string testFile = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
         //const string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
 
         ffmpeg.RootPath = "/lib/";
@@ -147,18 +147,21 @@ public partial class MainWindow : Window
         _mixer = new AVMixer(_engine);
         _mixer.AddAudioSource(_audioSource);
         _mixer.AddVideoSource(_videoSource);
+        
+        _audioSource.AttachToClock(_mixer.MasterClock);
+        _videoSource.AttachToClock(_mixer.MasterClock);
 
         _videoViews =
         [
             new VideoGL(_videoSource),
-            new VideoGL(_videoSource, false),
-            new VideoGL(_videoSource, false),
-            new VideoGL(_videoSource, false)
+            //new VideoGL(_videoSource, false),
+            //new VideoGL(_videoSource, false),
+            //new VideoGL(_videoSource, false)
         ];
         VideoControl.Content = _videoViews[0];
-        VideoControl2.Content = _videoViews[1];
-        VideoControl3.Content = _videoViews[2];
-        VideoControl4.Content = _videoViews[3];
+        //VideoControl2.Content = _videoViews[1];
+        //VideoControl3.Content = _videoViews[2];
+        //VideoControl4.Content = _videoViews[3];
 
         _videoStatsTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {

@@ -1,7 +1,26 @@
+using System.Diagnostics;
+
 namespace AudioEx;
 
 internal sealed partial class SdlVideoGlRenderer
 {
+    private void UpdateRenderFps()
+    {
+        Interlocked.Increment(ref _renderedFrameCount);
+        var now = Stopwatch.GetTimestamp();
+        var elapsed = now - _lastHudUpdateTime;
+
+        // Update FPS once per second using Stopwatch ticks (not TimeSpan ticks).
+        if (elapsed >= Stopwatch.Frequency)
+        {
+            var framesDelta = Interlocked.Read(ref _renderedFrameCount);
+            _currentRenderFps = framesDelta * Stopwatch.Frequency / (double)elapsed;
+            Interlocked.Exchange(ref _renderedFrameCount, 0);
+            _lastHudUpdateTime = now;
+            _hudTextDirty = true;
+        }
+    }
+
     private static string BuildVertexShader() =>
         """
         #version 330 core
