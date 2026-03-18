@@ -1,4 +1,5 @@
 using Seko.OwnAudioNET.Video.Events;
+using Seko.OwnAudioNET.Video.Clocks;
 
 namespace Seko.OwnAudioNET.Video.Sources;
 
@@ -132,7 +133,7 @@ public abstract class BaseVideoSource : IVideoSource
     }
 
     /// <inheritdoc/>
-    public abstract void AttachToClock(OwnaudioNET.Synchronization.MasterClock clock);
+    public abstract void AttachToClock(IVideoClock clock);
 
     /// <inheritdoc/>
     public abstract void DetachFromClock();

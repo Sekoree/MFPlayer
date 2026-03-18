@@ -1,5 +1,5 @@
 using OwnaudioNET.Interfaces;
-using OwnaudioNET.Synchronization;
+using Seko.OwnAudioNET.Video.Clocks;
 using Seko.OwnAudioNET.Video.Events;
 
 namespace Seko.OwnAudioNET.Video.Sources;
@@ -82,7 +82,7 @@ public interface IVideoSource : IDisposable, ISynchronizable
     void Stop();
 
     /// <summary>Attaches this source to a master clock for synchronized playback.</summary>
-    void AttachToClock(MasterClock clock);
+    void AttachToClock(IVideoClock clock);
 
     /// <summary>Detaches this source from the current master clock.</summary>
     void DetachFromClock();

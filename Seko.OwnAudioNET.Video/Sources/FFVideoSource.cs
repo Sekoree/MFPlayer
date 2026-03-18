@@ -1,5 +1,5 @@
-using OwnaudioNET.Synchronization;
 using Seko.OwnAudioNET.Video.Decoders;
+using Seko.OwnAudioNET.Video.Clocks;
 
 namespace Seko.OwnAudioNET.Video.Sources;
 
@@ -30,7 +30,7 @@ public sealed class FFVideoSource : BaseVideoSource
     private Thread? _decodeThread;
     private volatile bool _decodeThreadRunning;
 
-    private MasterClock? _masterClock;
+    private IVideoClock? _masterClock;
     private VideoFrame? _currentFrame;
     private bool _hasCurrentFrame;
     private VideoFrame? _pendingFrame;
@@ -150,7 +150,7 @@ public sealed class FFVideoSource : BaseVideoSource
     /// Attaches the source to a <see cref="MasterClock"/>. If the clock is already running ahead
     /// of <see cref="StartOffset"/> the source seeks to the current clock position.
     /// </summary>
-    public override void AttachToClock(MasterClock clock)
+    public override void AttachToClock(IVideoClock clock)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(clock);
@@ -319,9 +319,7 @@ public sealed class FFVideoSource : BaseVideoSource
                 return _hasCurrentFrame;
             }
 
-            var maxDropsThisRequest = playbackState == VideoPlaybackState.Playing
-                ? Math.Max(0, _options.MaxDropsPerRequest)
-                : 0;
+            var maxDropsThisRequest = ComputeMaxDropsThisRequest(relativeTime, playbackState);
             var droppedThisRequest = 0;
             while (droppedThisRequest < maxDropsThisRequest && ShouldDropPendingFrame(relativeTime))
             {
@@ -352,7 +350,7 @@ public sealed class FFVideoSource : BaseVideoSource
 
     /// <summary>
     /// Convenience wrapper over <see cref="TryGetFrameAtTime"/> using the attached
-    /// <see cref="MasterClock"/>'s current timestamp.
+    /// attached <see cref="Clocks.IVideoClock"/>'s current timestamp.
     /// This is the primary method the render loop should call each frame.
     /// </summary>
     /// <param name="frame">The current frame on success.</param>
@@ -478,6 +476,30 @@ public sealed class FFVideoSource : BaseVideoSource
     {
         var frameBased = _frameDurationSeconds * Math.Max(0.0, _options.LateDropFrameMultiplier);
         return Math.Max(_options.LateDropThresholdSeconds, frameBased);
+    }
+
+    private int ComputeMaxDropsThisRequest(double relativeTime, VideoPlaybackState playbackState)
+    {
+        if (playbackState != VideoPlaybackState.Playing)
+            return 0;
+
+        var configuredBudget = Math.Max(0, _options.MaxDropsPerRequest);
+        if (!_hasPendingFrame || _pendingFrame == null)
+            return configuredBudget;
+
+        if (_frameDurationSeconds <= 0 || double.IsNaN(_frameDurationSeconds) || double.IsInfinity(_frameDurationSeconds))
+            return configuredBudget;
+
+        var latenessSeconds = relativeTime - _pendingFrame.PtsSeconds - GetEffectiveLateDropThresholdSeconds();
+        if (latenessSeconds <= 0)
+            return configuredBudget;
+
+        // If a transient stall leaves us several frame intervals behind, let one request drop a
+        // small burst so we converge quickly instead of dragging visible A/V skew forward for many
+        // render ticks. Keep the burst bounded to avoid blowing through a whole queue at once.
+        var adaptiveBudget = (int)Math.Ceiling(latenessSeconds / _frameDurationSeconds);
+        adaptiveBudget = Math.Clamp(adaptiveBudget, 0, 8);
+        return Math.Max(configuredBudget, adaptiveBudget);
     }
 
     private static double ResolveFrameDurationSeconds(double frameRate)
@@ -709,7 +731,10 @@ public sealed class FFVideoSource : BaseVideoSource
     {
         var absDrift = Math.Abs(signedDriftSeconds);
         if (absDrift <= _options.DriftCorrectionDeadZoneSeconds)
+        {
+            RelaxDriftCorrectionOffset();
             return;
+        }
 
         // signedDrift = currentVideoPts - targetPts.
         // If video lags (negative), push target forward (positive offset) to catch up.
@@ -719,6 +744,23 @@ public sealed class FFVideoSource : BaseVideoSource
         _driftCorrectionOffsetSeconds += correction;
         // Avoid unbounded offset growth when stream stalls.
         _driftCorrectionOffsetSeconds = Math.Clamp(_driftCorrectionOffsetSeconds, -0.100, 0.100);
+    }
+
+    private void RelaxDriftCorrectionOffset()
+    {
+        if (_driftCorrectionOffsetSeconds == 0)
+            return;
+
+        var relaxStep = Math.Max(_options.MaxCorrectionStepSeconds * 0.5, 0.0005);
+        if (Math.Abs(_driftCorrectionOffsetSeconds) <= relaxStep)
+        {
+            _driftCorrectionOffsetSeconds = 0;
+            return;
+        }
+
+        _driftCorrectionOffsetSeconds += _driftCorrectionOffsetSeconds > 0
+            ? -relaxStep
+            : relaxStep;
     }
 
 

@@ -1,7 +1,9 @@
 ﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
-using Seko.OwnaudioNET.OpenGL;
+using Seko.OwnAudioNET.Video.OpenGL;
 using Seko.OwnAudioNET.Video;
+using Seko.OwnAudioNET.Video.Engine;
+using Seko.OwnAudioNET.Video.Sources;
 using SDL3;
 
 namespace Seko.OwnAudioNET.Video.SDL3;
@@ -20,9 +22,11 @@ namespace Seko.OwnAudioNET.Video.SDL3;
 /// borderless child window directly.
 /// </para>
 /// </summary>
-public sealed partial class VideoSDL : IDisposable
+public sealed partial class VideoSDL : IVideoOutput
 {
     public event Action<SDL.Keycode>? KeyDown;
+    private readonly Action<VideoFrame, double> _attachedFrameHandler;
+    private IVideoSource? _attachedSource;
 
     // ── GL constants (sourced from VideoGlConstants) ─────────────────────────
     private const int GlArrayBuffer      = VideoGlConstants.ArrayBuffer;
@@ -257,6 +261,17 @@ public sealed partial class VideoSDL : IDisposable
     /// <summary>Preserve source aspect ratio while rendering.</summary>
     public bool KeepAspectRatio { get; set; } = true;
 
+    public Guid Id { get; } = Guid.NewGuid();
+
+    public IVideoSource? Source => _attachedSource;
+
+    public bool IsAttached => _attachedSource != null;
+
+    public VideoSDL()
+    {
+        _attachedFrameHandler = OnSourceFrameReady;
+    }
+
     public readonly record struct VideoSdlDiagnostics(long RenderCalls, long FramesSubmitted, long FramesRendered);
 
     public VideoSdlDiagnostics GetDiagnosticsSnapshot() =>
@@ -371,10 +386,10 @@ public sealed partial class VideoSDL : IDisposable
     }
 
     /// <summary>
-    /// Push a decoded video frame for display. Thread-safe; can be called from any thread.
-    /// The class takes one extra reference and disposes it when no longer needed.
+    /// Queues a decoded frame for display. Frame delivery is expected to come from
+    /// <see cref="AttachSource(IVideoSource)"/> (typically via <see cref="IVideoEngine"/>).
     /// </summary>
-    public void PushFrame(VideoFrame frame)
+    private void PushFrame(VideoFrame frame)
     {
         Interlocked.Increment(ref _diagFramesSubmitted);
         VideoFrame? previous;
@@ -487,6 +502,8 @@ public sealed partial class VideoSDL : IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        DetachSource();
+
         Stop();
 
         lock (_frameLock)
@@ -507,6 +524,33 @@ public sealed partial class VideoSDL : IDisposable
         }
         if (_sdlOwnsSubsystem)
             SDL.Quit();
+    }
+
+    public bool AttachSource(IVideoSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        if (ReferenceEquals(_attachedSource, source))
+            return true;
+
+        DetachSource();
+        source.FrameReadyFast += _attachedFrameHandler;
+        _attachedSource = source;
+        return true;
+    }
+
+    public void DetachSource()
+    {
+        if (_attachedSource == null)
+            return;
+
+        _attachedSource.FrameReadyFast -= _attachedFrameHandler;
+        _attachedSource = null;
+    }
+
+    private void OnSourceFrameReady(VideoFrame frame, double _)
+    {
+        PushFrame(frame);
     }
 
     // ── Render loop (background thread) ──────────────────────────────────────────

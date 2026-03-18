@@ -1,5 +1,5 @@
 using Avalonia.OpenGL;
-using Seko.OwnaudioNET.OpenGL;
+using Seko.OwnAudioNET.Video.OpenGL;
 using Seko.OwnAudioNET.Video;
 
 namespace Seko.OwnAudioNET.Video.Avalonia;

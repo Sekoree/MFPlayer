@@ -6,13 +6,14 @@ using OwnaudioNET.Events;
 using OwnaudioNET.Interfaces;
 using OwnaudioNET.Core;
 using OwnaudioNET.Synchronization;
+using Seko.OwnAudioNET.Video.Clocks;
 using Seko.OwnAudioNET.Video.Sources;
 
 namespace Seko.OwnAudioNET.Video.Mixing;
 
 /// <summary>
 /// Mixes audio sources directly to an <see cref="IAudioEngine"/> while coordinating video
-/// sources against one shared <see cref="MasterClock"/>.
+/// sources with dedicated audio and video clocks.
 /// </summary>
 public sealed class AVMixer : IDisposable
 {
@@ -26,16 +27,18 @@ public sealed class AVMixer : IDisposable
     private IVideoSource[] _cachedVideoSources = Array.Empty<IVideoSource>();
     private volatile bool _sourceSnapshotsDirty = true;
     private readonly ConcurrentDictionary<string, SyncGroupState> _syncGroups = new(StringComparer.Ordinal);
-    private readonly MasterClock _masterClock;
+    private readonly MasterClock _audioClock;
+    private readonly MasterClock _videoClock;
+    private readonly IVideoClock _videoClockAdapter;
     private readonly ManualResetEventSlim _pauseEvent = new(initialState: false);
     private readonly Thread _mixThread;
+    private readonly Thread _clockThread;
     private readonly Lock _syncLock = new();
     private readonly Lock _effectsLock = new();
     private readonly List<IEffectProcessor> _masterEffects = new();
     private IEffectProcessor[] _cachedEffects = Array.Empty<IEffectProcessor>();
     private volatile bool _effectsChanged;
     private readonly int _bufferSizeInFrames;
-    private readonly double _bufferDurationSeconds;
     private volatile float _masterVolume = 1.0f;
     private volatile float _leftPeak;
     private volatile float _rightPeak;
@@ -43,36 +46,53 @@ public sealed class AVMixer : IDisposable
     private long _totalUnderruns;
     private volatile bool _stopRequested;
     private volatile bool _isRunning;
-    private int _clockStyle;
-    private double _hybridCorrectionRate = 0.25;
-    private double _hybridMaxCorrectionStepSeconds = 0.010;
-    private double _hybridCorrectionDeadZoneSeconds = 0.002;
-    private long _lastClockTick;
-    private bool _clockTickInitialized;
+    private double _transportBaseTimestampSeconds;
+    private long _transportBaseTicks;
+    private long _submittedFramesToEngine;
     private bool _mixThreadStarted;
+    private bool _clockThreadStarted;
     private bool _disposed;
+    private const int ClockPublishIntervalMs = 2;
+
+    // Diagnostic value published for callers that display clock correction. It now represents the
+    // leash applied to the raw wall-clock video timeline to keep it from leading queued audio too
+    // far, rather than a slow accumulator-based drift nudge.
+    private double _videoClockDriftAdjustSeconds;
+    private const double MinVideoClockLeadAllowanceSeconds = 1.0 / 60.0;
+    private const double MaxVideoClockLeadAllowanceSeconds = 0.050;
+    private const double VideoClockLeadBufferMultiplier = 2.0;
 
     /// <summary>Initializes a new AV mixer using the provided engine for audio rendering.</summary>
-    public AVMixer(IAudioEngine engine, int bufferSizeInFrames = 512, AVClockStyle clockStyle = AVClockStyle.AudioDriven)
+    public AVMixer(IAudioEngine engine, int bufferSizeInFrames = 0)
     {
         ArgumentNullException.ThrowIfNull(engine);
         _engine = engine;
-        _bufferSizeInFrames = Math.Max(1, bufferSizeInFrames);
+        _bufferSizeInFrames = bufferSizeInFrames > 0
+            ? bufferSizeInFrames
+            : Math.Max(1, _engine.FramesPerBuffer);
         _config = new AudioConfig
         {
             SampleRate = 48000,
             Channels = 2,
-            BufferSize = _engine.FramesPerBuffer
+            BufferSize = _bufferSizeInFrames
         };
-        _masterClock = new MasterClock(sampleRate: 48000, channels: 2, mode: ClockMode.Realtime);
-        _bufferDurationSeconds = _bufferSizeInFrames / (double)_masterClock.SampleRate;
-        _clockStyle = (int)clockStyle;
+        _audioClock = new MasterClock(sampleRate: 48000, channels: 2, mode: ClockMode.Realtime);
+        _videoClock = new MasterClock(sampleRate: 48000, channels: 2, mode: ClockMode.Realtime);
+        _videoClockAdapter = new MasterClockVideoClockAdapter(_videoClock);
+        ResetTransportState(0, resetSubmittedFrames: true);
 
         _mixThread = new Thread(MixThreadLoop)
         {
             Name = "AVMixer.MixThread",
             IsBackground = true,
             Priority = ThreadPriority.Highest
+        };
+
+        _clockThread = new Thread(ClockThreadLoop)
+        {
+            Name = "AVMixer.ClockThread",
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal
         };
     }
 
@@ -85,40 +105,25 @@ public sealed class AVMixer : IDisposable
     /// <summary>Gets the current clock rendering mode (Realtime or Offline).</summary>
     public ClockMode RenderingMode
     {
-        get => _masterClock.Mode;
-        set => _masterClock.Mode = value;
+        get => _audioClock.Mode;
+        set
+        {
+            _audioClock.Mode = value;
+            _videoClock.Mode = value;
+        }
     }
 
-    /// <summary>Shared timeline clock used by both audio and video sources.</summary>
-    public MasterClock MasterClock => _masterClock;
+    /// <summary>Clock followed by audio sources and driven from submitted engine buffers.</summary>
+    public MasterClock AudioClock => _audioClock;
 
-    /// <summary>Clock policy used to advance the shared master timeline.</summary>
-    public AVClockStyle ClockStyle
-    {
-        get => (AVClockStyle)Volatile.Read(ref _clockStyle);
-        set => Volatile.Write(ref _clockStyle, (int)value);
-    }
+    /// <summary>Clock followed by video sources and driven from transport elapsed time.</summary>
+    public MasterClock VideoClock => _videoClock;
 
-    /// <summary>Hybrid correction gain in range [0, 1].</summary>
-    public double HybridCorrectionRate
-    {
-        get => Volatile.Read(ref _hybridCorrectionRate);
-        set => Volatile.Write(ref _hybridCorrectionRate, Math.Clamp(value, 0.0, 1.0));
-    }
-
-    /// <summary>Maximum absolute correction step applied by hybrid mode per mix cycle (seconds).</summary>
-    public double HybridMaxCorrectionStepSeconds
-    {
-        get => Volatile.Read(ref _hybridMaxCorrectionStepSeconds);
-        set => Volatile.Write(ref _hybridMaxCorrectionStepSeconds, Math.Clamp(value, 0.0, 0.100));
-    }
-
-    /// <summary>Hybrid mode dead-zone where no correction is applied (seconds).</summary>
-    public double HybridCorrectionDeadZoneSeconds
-    {
-        get => Volatile.Read(ref _hybridCorrectionDeadZoneSeconds);
-        set => Volatile.Write(ref _hybridCorrectionDeadZoneSeconds, Math.Clamp(value, 0.0, 0.050));
-    }
+    /// <summary>
+    /// Current correction applied to the raw wall-clock video timeline (seconds). Negative values
+    /// mean the video clock was held back so it would not outrun queued audio too far.
+    /// </summary>
+    public double VideoClockDriftAdjustSeconds => Volatile.Read(ref _videoClockDriftAdjustSeconds);
 
     /// <summary>Gets whether the mixer transport is currently running.</summary>
     public bool IsRunning => _isRunning;
@@ -160,7 +165,7 @@ public sealed class AVMixer : IDisposable
     /// <summary>Raised when a clock-synchronized source misses part of a requested buffer.</summary>
     public event EventHandler<TrackDropoutEventArgs>? TrackDropout;
 
-    /// <summary>Adds an audio source and attaches it to the shared master clock when supported.</summary>
+    /// <summary>Adds an audio source and attaches it to the dedicated audio clock when supported.</summary>
     public bool AddAudioSource(IAudioSource source)
     {
         ThrowIfDisposed();
@@ -173,7 +178,7 @@ public sealed class AVMixer : IDisposable
         source.Error += OnAudioSourceError;
 
         if (source is IMasterClockSource clockSource)
-            clockSource.AttachToClock(MasterClock);
+            clockSource.AttachToClock(AudioClock);
 
         if (_isRunning && source.State != AudioState.Playing)
             source.Play();
@@ -217,7 +222,7 @@ public sealed class AVMixer : IDisposable
         return true;
     }
 
-    /// <summary>Adds a video source, attaches it to the shared clock, and aligns to current transport state.</summary>
+    /// <summary>Adds a video source, attaches it to the dedicated video clock, and aligns to current transport state.</summary>
     public bool AddVideoSource(IVideoSource source)
     {
         ThrowIfDisposed();
@@ -227,7 +232,7 @@ public sealed class AVMixer : IDisposable
             return false;
 
         InvalidateSourceSnapshots();
-        source.AttachToClock(MasterClock);
+        source.AttachToClock(_videoClockAdapter);
         if (IsRunning)
             source.Play();
         else
@@ -380,15 +385,27 @@ public sealed class AVMixer : IDisposable
     public void Start()
     {
         ThrowIfDisposed();
+        if (_isRunning)
+            return;
+
+        ResetClockDriverState();
         _isRunning = true;
         _pauseEvent.Set();
-        ResetClockDriverState();
 
         if (!_mixThreadStarted)
         {
             _mixThreadStarted = true;
             _mixThread.Start();
         }
+
+        if (!_clockThreadStarted)
+        {
+            _clockThreadStarted = true;
+            _clockThread.Start();
+        }
+
+        PublishAudioClockTimestamp();
+        PublishVideoClockTimestamp();
 
         var videoSources = GetVideoSourceSnapshot();
         foreach (var videoSource in videoSources)
@@ -399,9 +416,15 @@ public sealed class AVMixer : IDisposable
     public void Pause()
     {
         ThrowIfDisposed();
+        if (!_isRunning)
+            return;
+
+        var pausedTimestamp = ResolveVideoClockTimestamp();
         _isRunning = false;
         _pauseEvent.Reset();
-        _clockTickInitialized = false;
+        ResetTransportState(pausedTimestamp, resetSubmittedFrames: true);
+        PublishAudioClockTimestamp(pausedTimestamp);
+        PublishVideoClockTimestamp(pausedTimestamp);
 
         var videoSources = GetVideoSourceSnapshot();
         foreach (var videoSource in videoSources)
@@ -414,7 +437,9 @@ public sealed class AVMixer : IDisposable
         ThrowIfDisposed();
         _isRunning = false;
         _pauseEvent.Reset();
-        _clockTickInitialized = false;
+        ResetTransportState(0, resetSubmittedFrames: true);
+        PublishAudioClockTimestamp(0);
+        PublishVideoClockTimestamp(0);
 
         var audioSources = GetAudioSourceSnapshot();
         foreach (var source in audioSources)
@@ -429,7 +454,6 @@ public sealed class AVMixer : IDisposable
             }
         }
 
-        _masterClock.SeekTo(0);
         _leftPeak = 0f;
         _rightPeak = 0f;
 
@@ -463,7 +487,9 @@ public sealed class AVMixer : IDisposable
 
         lock (_syncLock)
         {
-            MasterClock.SeekTo(target);
+            ResetTransportState(target, resetSubmittedFrames: true);
+            PublishAudioClockTimestamp(target);
+            PublishVideoClockTimestamp(target);
 
             var audioSources = GetAudioSourceSnapshot();
             foreach (var source in audioSources)
@@ -574,7 +600,7 @@ public sealed class AVMixer : IDisposable
         if (toleranceInFrames < 0)
             toleranceInFrames = 0;
 
-        var masterSamplePosition = _masterClock.CurrentSamplePosition;
+        var masterSamplePosition = _audioClock.CurrentSamplePosition;
         var groupIds = _syncGroups.Keys.ToArray();
         foreach (var groupId in groupIds)
             CheckAndResyncGroup(groupId, masterSamplePosition, toleranceInFrames);
@@ -931,6 +957,18 @@ public sealed class AVMixer : IDisposable
             }
         }
 
+        if (_clockThreadStarted && _clockThread.IsAlive)
+        {
+            try
+            {
+                _clockThread.Join(TimeSpan.FromSeconds(2));
+            }
+            catch
+            {
+                // Best effort thread shutdown.
+            }
+        }
+
         var videoSources = GetVideoSourceSnapshot();
         foreach (var source in videoSources)
         {
@@ -1188,6 +1226,8 @@ public sealed class AVMixer : IDisposable
             {
                 _engine.Send(mixBuffer.AsSpan(0, sampleCount));
                 Interlocked.Add(ref _totalMixedFrames, _bufferSizeInFrames);
+                Interlocked.Add(ref _submittedFramesToEngine, _bufferSizeInFrames);
+                PublishAudioClockTimestamp();
             }
             catch
             {
@@ -1199,6 +1239,29 @@ public sealed class AVMixer : IDisposable
             if (!hasActiveSources)
                 Thread.Sleep(1);
         }
+    }
+
+    private void ClockThreadLoop()
+    {
+        while (!_stopRequested)
+        {
+            if (!_isRunning)
+            {
+                _pauseEvent.Wait(100);
+                continue;
+            }
+
+            ApplyVideoClockDriftCorrection();
+            PublishVideoClockTimestamp();
+            PublishAudioClockTimestamp();
+            Thread.Sleep(ClockPublishIntervalMs);
+        }
+    }
+
+    private void ApplyVideoClockDriftCorrection()
+    {
+        // The correction is derived directly inside ResolveVideoClockTimestamp so it can react to
+        // the latest wall-clock and submitted-audio positions atomically.
     }
 
     private void ApplyMasterEffects(float[] mixBuffer, int sampleCount)
@@ -1273,7 +1336,7 @@ public sealed class AVMixer : IDisposable
             if (result.FramesRead < _bufferSizeInFrames || !string.IsNullOrWhiteSpace(result.ErrorMessage))
             {
                 var missedFrames = Math.Max(0, _bufferSizeInFrames - result.FramesRead);
-                var currentSamplePosition = _masterClock.CurrentSamplePosition;
+                var currentSamplePosition = _audioClock.CurrentSamplePosition;
                 if (BufferUnderrun != null)
                     OnBufferUnderrun(new BufferUnderrunEventArgs(missedFrames, currentSamplePosition));
 
@@ -1397,74 +1460,103 @@ public sealed class AVMixer : IDisposable
 
     private double ResolveMasterTimestampForMixCycle()
     {
-        var style = (AVClockStyle)Volatile.Read(ref _clockStyle);
-        if (style is AVClockStyle.AudioDriven or AVClockStyle.Hybrid)
-            return _masterClock.CurrentTimestamp;
-
-        var elapsedSeconds = ReadAndUpdateElapsedClockSeconds();
-        if (elapsedSeconds > 0)
-            _masterClock.SeekTo(Math.Max(0, _masterClock.CurrentTimestamp + elapsedSeconds));
-
-        return _masterClock.CurrentTimestamp;
+        return ResolveAudioClockTimestamp();
     }
 
-    private void AdvanceMasterClockAfterMixCycle(double masterTimestampAtCycleStart)
+    private void AdvanceMasterClockAfterMixCycle(double _)
     {
-        var style = (AVClockStyle)Volatile.Read(ref _clockStyle);
-        if (style == AVClockStyle.AudioDriven)
-        {
-            _masterClock.Advance(_bufferSizeInFrames);
-            return;
-        }
-
-        if (style != AVClockStyle.Hybrid)
-            return;
-
-        _masterClock.Advance(_bufferSizeInFrames);
-
-        var elapsedSeconds = ReadAndUpdateElapsedClockSeconds();
-        if (elapsedSeconds <= 0)
-            return;
-
-        var targetTimestamp = masterTimestampAtCycleStart + elapsedSeconds;
-        var currentTimestamp = _masterClock.CurrentTimestamp;
-        var driftSeconds = targetTimestamp - currentTimestamp;
-
-        var deadZone = Volatile.Read(ref _hybridCorrectionDeadZoneSeconds);
-        if (Math.Abs(driftSeconds) <= deadZone)
-            return;
-
-        var rate = Volatile.Read(ref _hybridCorrectionRate);
-        var maxStep = Volatile.Read(ref _hybridMaxCorrectionStepSeconds);
-        var correctionStep = Math.Clamp(driftSeconds * rate, -maxStep, maxStep);
-        if (Math.Abs(correctionStep) <= 0)
-            return;
-
-        _masterClock.SeekTo(Math.Max(0, currentTimestamp + correctionStep));
+        PublishAudioClockTimestamp();
+        PublishVideoClockTimestamp();
     }
 
     private void ResetClockDriverState()
     {
-        _lastClockTick = Stopwatch.GetTimestamp();
-        _clockTickInitialized = true;
+        ResetTransportState(ResolveVideoClockTimestamp(), resetSubmittedFrames: false);
+        PublishAudioClockTimestamp();
+        PublishVideoClockTimestamp();
     }
 
     private double ReadAndUpdateElapsedClockSeconds()
     {
-        var nowTicks = Stopwatch.GetTimestamp();
-        if (!_clockTickInitialized)
-        {
-            _lastClockTick = nowTicks;
-            _clockTickInitialized = true;
-            return 0;
-        }
-
-        var deltaTicks = nowTicks - _lastClockTick;
-        _lastClockTick = nowTicks;
-        if (deltaTicks <= 0)
+        var baseTicks = Volatile.Read(ref _transportBaseTicks);
+        if (baseTicks <= 0)
             return 0;
 
-        return deltaTicks / (double)Stopwatch.Frequency;
+        var deltaTicks = Stopwatch.GetTimestamp() - baseTicks;
+        return deltaTicks <= 0 ? 0 : deltaTicks / (double)Stopwatch.Frequency;
+    }
+
+    private void ResetTransportState(double playbackTimestampSeconds, bool resetSubmittedFrames)
+    {
+        if (resetSubmittedFrames)
+            Interlocked.Exchange(ref _submittedFramesToEngine, 0);
+
+        // Always reset the video-clock drift correction so the adjustment from a previous
+        // playback segment does not carry over into the new timeline position.
+        Volatile.Write(ref _videoClockDriftAdjustSeconds, 0.0);
+
+        Volatile.Write(ref _transportBaseTimestampSeconds, Math.Max(0, playbackTimestampSeconds));
+        Volatile.Write(ref _transportBaseTicks, Stopwatch.GetTimestamp());
+    }
+
+    private double ResolveAudioClockTimestamp()
+    {
+        var baseTimestamp = Volatile.Read(ref _transportBaseTimestampSeconds);
+        if (!_isRunning)
+            return Math.Max(0, baseTimestamp);
+
+        var elapsedSeconds = ReadAndUpdateElapsedClockSeconds();
+        var submittedFrames = Interlocked.Read(ref _submittedFramesToEngine);
+        var submittedSeconds = Math.Max(0, submittedFrames / (double)_audioClock.SampleRate);
+
+        // Audio is played continuously by the device between mix submissions. Use wall time as the
+        // playback estimator, but never allow the clock to advance beyond the audio that has actually
+        // been queued to the engine. This removes buffer-quantized clock steps while still preventing
+        // the transport from free-running past an underrun.
+        var playbackProgress = Math.Min(Math.Max(0, elapsedSeconds), submittedSeconds);
+        return Math.Max(0, baseTimestamp + playbackProgress);
+    }
+
+    private double ResolveVideoClockTimestamp()
+    {
+        var baseTimestamp = Volatile.Read(ref _transportBaseTimestampSeconds);
+        if (!_isRunning)
+            return Math.Max(0, baseTimestamp);
+
+        var elapsedSeconds = ReadAndUpdateElapsedClockSeconds();
+        var rawVideoTimestamp = Math.Max(0, baseTimestamp + elapsedSeconds);
+        var audioTimestamp = ResolveAudioClockTimestamp();
+        var maxLeadSeconds = ResolveVideoClockLeadAllowanceSeconds();
+        var leashedVideoTimestamp = Math.Min(rawVideoTimestamp, audioTimestamp + maxLeadSeconds);
+        Volatile.Write(ref _videoClockDriftAdjustSeconds, leashedVideoTimestamp - rawVideoTimestamp);
+        return leashedVideoTimestamp;
+    }
+
+    private double ResolveVideoClockLeadAllowanceSeconds()
+    {
+        var bufferSeconds = _bufferSizeInFrames / (double)_videoClock.SampleRate;
+        var allowance = Math.Max(MinVideoClockLeadAllowanceSeconds, bufferSeconds * VideoClockLeadBufferMultiplier);
+        return Math.Min(allowance, MaxVideoClockLeadAllowanceSeconds);
+    }
+
+    private void PublishAudioClockTimestamp()
+    {
+        PublishAudioClockTimestamp(ResolveAudioClockTimestamp());
+    }
+
+    private void PublishVideoClockTimestamp()
+    {
+        PublishVideoClockTimestamp(ResolveVideoClockTimestamp());
+    }
+
+    private void PublishAudioClockTimestamp(double timestampSeconds)
+    {
+        _audioClock.SeekTo(Math.Max(0, timestampSeconds));
+    }
+
+    private void PublishVideoClockTimestamp(double timestampSeconds)
+    {
+        _videoClock.SeekTo(Math.Max(0, timestampSeconds));
     }
 
     private sealed class SyncGroupState

@@ -3,12 +3,13 @@ using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
-using Seko.OwnaudioNET.OpenGL;
+using Seko.OwnAudioNET.Video.Engine;
+using Seko.OwnAudioNET.Video.OpenGL;
 using Seko.OwnAudioNET.Video.Sources;
 
 namespace Seko.OwnAudioNET.Video.Avalonia;
 
-public partial class VideoGL : OpenGlControlBase, IDisposable
+public partial class VideoGL : OpenGlControlBase, IVideoOutput
 {
     // Constants not in Avalonia's GlConsts — sourced from VideoGlConstants
     private const int GlTexture1      = VideoGlConstants.Texture1;
@@ -35,8 +36,7 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void Uniform1iProc(int location, int value);
 
-    private readonly IVideoSource _source;
-    private readonly bool _master;
+    private readonly IVideoEngine _engine;
     private readonly Lock _frameLock = new();
 
     private VideoFrame? _latestFrame;
@@ -79,10 +79,8 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
 
     private bool _glReady;
     private bool _disposed;
-    private bool _masterLoopStarted;
     private int _renderRequestQueued;
     private readonly Action _requestRenderAction;
-    private Timer? _frameAdvanceTimer;
     private long _diagAdvanceTickCount;
     private long _diagAdvanceSuccessCount;
     private long _diagFrameReadyCount;
@@ -113,23 +111,17 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
 
     public bool KeepAspectRatio { get; set; } = true;
 
-    public VideoGL(IVideoSource source, bool master = true)
+    public Guid Id { get; } = Guid.NewGuid();
+
+    public IVideoSource? Source { get; private set; }
+
+    public bool IsAttached => Source != null;
+
+    public VideoGL(IVideoEngine engine)
     {
-        _source = source;
-        _master = master;
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _requestRenderAction = RequestNextFrameRendering;
-        _source.FrameReadyFast += SourceFrameReadyFast;
-        _source.StreamInfoChanged += OnSourceStreamInfoChanged;
-    }
-
-    private void OnSourceStreamInfoChanged(object? sender, Events.VideoStreamInfoChangedEventArgs e)
-    {
-        if (_frameAdvanceTimer == null)
-            return;
-
-        var intervalMs = ComputeAdvanceIntervalMs(e.StreamInfo.FrameRate);
-        var period = TimeSpan.FromMilliseconds(intervalMs);
-        _frameAdvanceTimer.Change(period, period);
+        _engine.AddVideoOutput(this);
     }
 
     private void SourceFrameReadyFast(VideoFrame frame, double _)
@@ -146,6 +138,8 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
 
         previous?.Dispose();
 
+        Interlocked.Increment(ref _diagAdvanceTickCount);
+        Interlocked.Increment(ref _diagAdvanceSuccessCount);
         QueueRenderRequest();
     }
 
@@ -249,9 +243,7 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
 
         _glReady = true;
-
-        if (_master)
-            StartMasterLoop();
+        QueueRenderRequest();
     }
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)
@@ -401,10 +393,17 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
             return;
 
         _disposed = true;
-        _frameAdvanceTimer?.Dispose();
-        _frameAdvanceTimer = null;
-        _source.FrameReadyFast -= SourceFrameReadyFast;
-        _source.StreamInfoChanged -= OnSourceStreamInfoChanged;
+
+        try
+        {
+            _engine.RemoveVideoOutput(this);
+        }
+        catch
+        {
+            // Best effort during shutdown.
+        }
+
+        DetachSource();
 
         lock (_frameLock)
         {
@@ -414,50 +413,27 @@ public partial class VideoGL : OpenGlControlBase, IDisposable
         }
     }
 
-    private void StartMasterLoop()
+    public bool AttachSource(IVideoSource source)
     {
-        if (_masterLoopStarted || _disposed)
-            return;
+        ArgumentNullException.ThrowIfNull(source);
 
-        _masterLoopStarted = true;
+        if (ReferenceEquals(Source, source))
+            return true;
 
-        // Drive frame advancement at ~125 Hz independently of the GL render cadence.
-        // This decouples clock-based frame consumption from Avalonia compositor scheduling,
-        // preventing the decode queue from stalling when renders are delayed.
-        var intervalMs = ComputeAdvanceIntervalMs(_source.StreamInfo.FrameRate);
-        _frameAdvanceTimer = new Timer(
-            static state => ((VideoGL)state!).AdvanceFrameCallback(),
-            this,
-            TimeSpan.Zero,
-            TimeSpan.FromMilliseconds(intervalMs));
-
-        // Seed the render loop so the control paints its initial state.
+        DetachSource();
+        source.FrameReadyFast += SourceFrameReadyFast;
+        Source = source;
         QueueRenderRequest();
+        return true;
     }
 
-    /// <summary>
-    /// Computes the frame-advance polling interval in milliseconds.
-    /// Targets ~80% of the stream's frame interval so we never miss a frame's presentation
-    /// window; falls back to 8 ms (~125 Hz) when the frame rate is unknown.
-    /// </summary>
-    private static int ComputeAdvanceIntervalMs(double fps)
+    public void DetachSource()
     {
-        if (fps > 0 && !double.IsNaN(fps) && !double.IsInfinity(fps))
-            return Math.Max(1, (int)(800.0 / fps));   // 80% of frame period in ms
-
-        return 8; // default ~125 Hz
-    }
-
-    private void AdvanceFrameCallback()
-    {
-        if (_disposed || !_glReady)
+        if (Source == null)
             return;
 
-        Interlocked.Increment(ref _diagAdvanceTickCount);
-        if (_source.RequestNextFrame(out _))
-            Interlocked.Increment(ref _diagAdvanceSuccessCount);
-
-        // FrameReadyFast → SourceFrameReadyFast → QueueRenderRequest will fire on promotion.
+        Source.FrameReadyFast -= SourceFrameReadyFast;
+        Source = null;
     }
 
     private void QueueRenderRequest()

@@ -4,11 +4,10 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using FFmpeg.AutoGen;
-using Ownaudio.Core;
 using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Avalonia;
-using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.Decoders;
+using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Sources;
 
 namespace VideoTest;
@@ -17,9 +16,7 @@ public partial class MainWindow : Window
 {
     private const double SeekStepSeconds = 5.0;
 
-    private IAudioEngine? _engine;
-    private AVMixer? _mixer;
-    private FFAudioSource? _audioSource;
+    private IVideoEngine? _videoEngine;
     private FFVideoSource? _videoSource;
     private VideoGL[] _videoViews = [];
     private DispatcherTimer? _videoStatsTimer;
@@ -73,28 +70,28 @@ public partial class MainWindow : Window
 
     private void TogglePlayPause()
     {
-        var running = _mixer?.IsRunning ?? false;
+        var running = _videoEngine?.IsRunning ?? false;
         if (running)
         {
-            _mixer?.Pause();
+            _videoEngine?.Pause();
             ConsolePrintLine("[Video] Paused.");
         }
         else
         {
-            _mixer?.Start();
+            _videoEngine?.Start();
             ConsolePrintLine("[Video] Playing.");
         }
     }
 
     private void SeekRelative(double deltaSeconds)
     {
-        if (_mixer == null || !_seekLock.TryEnter())
+        if (_videoEngine == null || !_seekLock.TryEnter())
             return;
 
         try
         {
-            var newTimelinePosition = Math.Max(0.0, _mixer.MasterClock.CurrentTimestamp + deltaSeconds);
-            _mixer.Seek(newTimelinePosition, safeSeek: true);
+            var newTimelinePosition = Math.Max(0.0, _videoEngine.Position + deltaSeconds);
+            _videoEngine.Seek(newTimelinePosition, safeSeek: true);
         }
         finally
         {
@@ -104,12 +101,12 @@ public partial class MainWindow : Window
 
     private void SeekToStart()
     {
-        if (_mixer == null || !_seekLock.TryEnter())
+        if (_videoEngine == null || !_seekLock.TryEnter())
             return;
 
         try
         {
-            _mixer.Seek(0, safeSeek: true);
+            _videoEngine.Seek(0, safeSeek: true);
         }
         finally
         {
@@ -119,7 +116,7 @@ public partial class MainWindow : Window
 
     private void SeekToEnd()
     {
-        if (_mixer == null || _videoSource == null || !_seekLock.TryEnter())
+        if (_videoEngine == null || _videoSource == null || !_seekLock.TryEnter())
             return;
 
         try
@@ -128,7 +125,7 @@ public partial class MainWindow : Window
                 return;
 
             var timelineTarget = Math.Max(0, _videoSource.Position + _videoSource.StartOffset);
-            _mixer.Seek(timelineTarget, safeSeek: true);
+            _videoEngine.Seek(timelineTarget, safeSeek: true);
         }
         finally
         {
@@ -146,35 +143,24 @@ public partial class MainWindow : Window
         _started = true;
 
         const string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
-        //const string testFile = "/run/media/seko/New Stuff/Other_Content/おねがいダーリン_0611.mov";
-        //const string testFile = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
 
         ffmpeg.RootPath = "/lib/";
         DynamicallyLoadedBindings.Initialize();
 
-        _engine = AudioEngineFactory.CreateDefault();
-        var config = new AudioConfig
-        {
-            SampleRate = 48000,
-            Channels = 2,
-            BufferSize = 512
-        };
-
-        _engine.Initialize(config);
-        _engine.Start();
-
-        _audioSource = new FFAudioSource(testFile, config);
         _videoSource = new FFVideoSource(testFile, new FFVideoSourceOptions
         {
             UseDedicatedDecodeThread = true,
             QueueCapacity = 30,
+            LateDropThresholdSeconds = 0.050,
+            LateDropFrameMultiplier = 3.0,
+            MaxDropsPerRequest = 1,
             DecoderOptions = new FFVideoDecoderOptions
             {
                 EnableHardwareDecoding = true,
                 ThreadCount = GetSafeVideoThreadCount(),
                 PreferredOutputPixelFormats =
                 [
-                    VideoPixelFormat.Yuv422p10le,  // ProRes native – zero-cost direct copy
+                    VideoPixelFormat.Yuv422p10le,
                     VideoPixelFormat.Yuv422p,
                     VideoPixelFormat.Nv12,
                     VideoPixelFormat.Yuv420p,
@@ -183,21 +169,21 @@ public partial class MainWindow : Window
                 PreferSourcePixelFormatWhenSupported = true,
                 PreferLowestConversionCost = true
             },
-            //EnableDriftCorrection = false,
-            //DriftCorrectionDeadZoneSeconds = 0.006,
-            //DriftCorrectionRate = 0.03,
-            //MaxCorrectionStepSeconds = 0.003
+            EnableDriftCorrection = true,
+            DriftCorrectionDeadZoneSeconds = 0.006,
+            DriftCorrectionRate = 0.03,
+            MaxCorrectionStepSeconds = 0.003
         });
-        _mixer = new AVMixer(_engine, clockStyle: AVClockStyle.Hybrid);
-        _mixer.AddAudioSource(_audioSource);
-        _mixer.AddVideoSource(_videoSource);
+
+        _videoEngine = new VideoEngine();
+        _videoEngine.AddVideoSource(_videoSource);
 
         _videoViews =
         [
-            new VideoGL(_videoSource),
-            new VideoGL(_videoSource, false),
-            new VideoGL(_videoSource, false),
-            new VideoGL(_videoSource, false)
+            new VideoGL(_videoEngine),
+            new VideoGL(_videoEngine),
+            new VideoGL(_videoEngine),
+            new VideoGL(_videoEngine)
         ];
         _lastVideoGlDiagnosticsPerView = new VideoGL.VideoGlDiagnostics[_videoViews.Length];
         VideoControl.Content = _videoViews[0];
@@ -207,11 +193,10 @@ public partial class MainWindow : Window
 
         _videoStatsTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {
-            if (_videoSource == null || _audioSource == null || _mixer is not { IsRunning: true })
+            if (_videoSource == null || _videoEngine == null)
                 return;
 
-            // Stop logging once playback has finished.
-            if (_videoSource.IsEndOfStream && _audioSource.IsEndOfStream)
+            if (_videoSource.IsEndOfStream)
             {
                 _videoStatsTimer?.Stop();
                 ConsolePrintLine("[Video] Playback finished.");
@@ -221,19 +206,13 @@ public partial class MainWindow : Window
             var decodedFrames = _videoSource.DecodedFrameCount;
             var presentedFrames = _videoSource.PresentedFrameCount;
             var droppedFrames = _videoSource.DroppedFrameCount;
-            var masterTimestamp = _mixer.MasterClock.CurrentTimestamp;
-            var audioTimestamp = _audioSource.Position;
+            var masterTimestamp = _videoEngine.Position;
             var videoTimestamp = _videoSource.CurrentFramePtsSeconds;
             var correctionOffsetMs = _videoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
             var expectedVideoTimestamp = masterTimestamp - _videoSource.StartOffset;
-            var expectedAudioTimestamp = masterTimestamp - _audioSource.StartOffset;
-            var audioMasterDriftMs = (audioTimestamp - expectedAudioTimestamp) * 1000.0;
             var videoMasterDriftMs = double.IsNaN(videoTimestamp)
                 ? double.NaN
                 : (videoTimestamp - expectedVideoTimestamp) * 1000.0;
-            var avDriftMs = double.IsNaN(videoTimestamp)
-                ? double.NaN
-                : (videoTimestamp - audioTimestamp) * 1000.0;
 
             var decodedDelta = decodedFrames - _lastDecodedFrames;
             var presentedDelta = presentedFrames - _lastPresentedFrames;
@@ -259,22 +238,21 @@ public partial class MainWindow : Window
                 _lastVideoGlDiagnosticsPerView[i] = currentDiag;
             }
 
-            // Pixel-format conversion info: "yuv422p10le" (direct) or "yuv422p10le→nv12" (converted)
             var srcFmt = FmtName(_videoSource.DecoderSourcePixelFormatName);
             var dstFmt = FmtName(_videoSource.DecoderOutputPixelFormatName);
             var fmtInfo = string.Equals(srcFmt, dstFmt, StringComparison.OrdinalIgnoreCase)
                 ? srcFmt
                 : $"{srcFmt}→{dstFmt}";
 
-            Title = $"VideoTest - {_videoSource.StreamInfo.FrameRate:F1} fps | pres {presentedDelta} dec {decodedDelta} drop {droppedDelta} | q {_videoSource.QueueDepth} | hw {_videoSource.IsHardwareDecoding} | {fmtInfo} | a-v {avDriftMs:F1}ms | v-m {videoMasterDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
+            Title = $"VideoTest - {_videoSource.StreamInfo.FrameRate:F1} fps | pres {presentedDelta} dec {decodedDelta} drop {droppedDelta} | q {_videoSource.QueueDepth} | hw {_videoSource.IsHardwareDecoding} | {fmtInfo} | v-m {videoMasterDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
 
             ConsoleOverwriteLine(
                 $"[Video] {_videoSource.StreamInfo.FrameRate:F1}fps" +
                 $"  pres={presentedDelta} dec={decodedDelta} drop={droppedDelta}" +
                 $"  q={_videoSource.QueueDepth}  hw={_videoSource.IsHardwareDecoding}" +
                 $"  fmt={fmtInfo}" +
-                $"  m={masterTimestamp:F3}s a={audioTimestamp:F3}s v={videoTimestamp:F3}s" +
-                $"  a-m={audioMasterDriftMs:+0.0;-0.0}ms v-m={videoMasterDriftMs:+0.0;-0.0}ms a-v={avDriftMs:+0.0;-0.0}ms" +
+                $"  m={masterTimestamp:F3}s v={videoTimestamp:F3}s" +
+                $"  v-m={videoMasterDriftMs:+0.0;-0.0}ms" +
                 $"  corr={correctionOffsetMs:+0.0;-0.0}ms" +
                 $"  {string.Join(" ", perViewDiagText)}");
 
@@ -284,8 +262,7 @@ public partial class MainWindow : Window
         });
         _videoStatsTimer.Start();
 
-        _mixer.Start();
-        _audioSource.Play();
+        _videoEngine.Start();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -300,9 +277,9 @@ public partial class MainWindow : Window
 
         try
         {
-            _mixer?.Stop();
-            if (_audioSource != null)
-                _mixer?.RemoveAudioSource(_audioSource);
+            _videoEngine?.Stop();
+            if (_videoSource != null)
+                _videoEngine?.RemoveVideoSource(_videoSource);
         }
         catch
         {
@@ -316,23 +293,9 @@ public partial class MainWindow : Window
         _videoStatsTimer?.Stop();
         _videoStatsTimer = null;
         _videoSource?.Dispose();
-        _audioSource?.Dispose();
-        _mixer?.Dispose();
-
-        if (_engine != null)
-        {
-            try
-            {
-                _engine.Stop();
-            }
-            catch
-            {
-                // Best effort during shutdown.
-            }
-
-            _engine.Dispose();
-        }
+        _videoEngine?.Dispose();
 
         base.OnClosed(e);
     }
 }
+

@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using Seko.OwnaudioNET.OpenGL;
+using Seko.OwnAudioNET.Video.OpenGL;
 
 namespace Seko.OwnAudioNET.Video.SDL3;
 
