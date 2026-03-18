@@ -1,9 +1,10 @@
+using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Sources;
 
 namespace Seko.OwnAudioNET.Video.Engine;
 
 /// <summary>
-/// Output sink that can be registered to <see cref="IVideoEngine"/> for engine-managed source wiring.
+/// Output sink that can be used by source-driven transport engines and sink-style output engines.
 /// </summary>
 public interface IVideoOutput : IDisposable
 {
@@ -21,5 +22,11 @@ public interface IVideoOutput : IDisposable
 
     /// <summary>Detaches the currently attached source.</summary>
     void DetachSource();
+
+    /// <summary>
+    /// Pushes a frame into the output sink.
+    /// Returns <see langword="false"/> when the output rejects the frame.
+    /// </summary>
+    bool PushFrame(VideoFrame frame, double masterTimestamp);
 }
 

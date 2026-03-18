@@ -68,6 +68,12 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
     /// <summary>Current active decoder output pixel format (for diagnostics).</summary>
     public string LastOutputPixelFormatName => _activeOutputFormat.ToString();
 
+    /// <summary>Preferred prefetch queue size for sources wrapping this decoder.</summary>
+    public int QueueCapacity { get; }
+
+    /// <summary>Whether sources wrapping this decoder should use a dedicated decode thread.</summary>
+    public bool UseDedicatedDecodeThread { get; }
+
     /// <inheritdoc/>
     public event Action<VideoStreamInfo>? StreamInfoChanged;
 
@@ -84,6 +90,9 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
     public FFVideoDecoder(string filePath, FFVideoDecoderOptions options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        QueueCapacity = Math.Max(2, options.QueueCapacity);
+        UseDedicatedDecodeThread = options.UseDedicatedDecodeThread;
 
         _preferredOutputFormats = ResolvePreferredOutputFormats(options.PreferredOutputPixelFormats);
         _preferSourcePixelFormatWhenSupported = options.PreferSourcePixelFormatWhenSupported;

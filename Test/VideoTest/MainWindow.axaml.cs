@@ -16,7 +16,7 @@ public partial class MainWindow : Window
 {
     private const double SeekStepSeconds = 5.0;
 
-    private IVideoEngine? _videoEngine;
+    private IVideoTransportEngine? _videoEngine;
     private FFVideoSource? _videoSource;
     private VideoGL[] _videoViews = [];
     private DispatcherTimer? _videoStatsTimer;
@@ -147,37 +147,35 @@ public partial class MainWindow : Window
         ffmpeg.RootPath = "/lib/";
         DynamicallyLoadedBindings.Initialize();
 
-        _videoSource = new FFVideoSource(testFile, new FFVideoSourceOptions
+        var decoder = new FFVideoDecoder(testFile, new FFVideoDecoderOptions
         {
+            EnableHardwareDecoding = true,
+            ThreadCount = GetSafeVideoThreadCount(),
             UseDedicatedDecodeThread = true,
             QueueCapacity = 30,
-            LateDropThresholdSeconds = 0.050,
-            LateDropFrameMultiplier = 3.0,
-            MaxDropsPerRequest = 1,
-            DecoderOptions = new FFVideoDecoderOptions
-            {
-                EnableHardwareDecoding = true,
-                ThreadCount = GetSafeVideoThreadCount(),
-                PreferredOutputPixelFormats =
-                [
-                    VideoPixelFormat.Yuv422p10le,
-                    VideoPixelFormat.Yuv422p,
-                    VideoPixelFormat.Nv12,
-                    VideoPixelFormat.Yuv420p,
-                    VideoPixelFormat.Rgba32
-                ],
-                PreferSourcePixelFormatWhenSupported = true,
-                PreferLowestConversionCost = true
-            },
-            EnableDriftCorrection = true,
-            DriftCorrectionDeadZoneSeconds = 0.006,
-            DriftCorrectionRate = 0.03,
-            MaxCorrectionStepSeconds = 0.003
+            PreferredOutputPixelFormats =
+            [
+                VideoPixelFormat.Yuv422p10le,
+                VideoPixelFormat.Yuv422p,
+                VideoPixelFormat.Nv12,
+                VideoPixelFormat.Yuv420p,
+                VideoPixelFormat.Rgba32
+            ],
+            PreferSourcePixelFormatWhenSupported = true,
+            PreferLowestConversionCost = true
         });
 
-        _videoEngine = new VideoEngine();
-        _videoEngine.AddVideoSource(_videoSource);
+        _videoSource = new FFVideoSource(decoder, new FFVideoSourceOptions
+        {
+            HoldLastFrameOnEndOfStream = true
+        }, ownsDecoder: true);
 
+        _videoEngine = new VideoTransportEngine(new VideoTransportEngineConfig
+        {
+            PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+        });
+        _videoEngine.AddVideoSource(_videoSource);
+        
         _videoViews =
         [
             new VideoGL(_videoEngine),

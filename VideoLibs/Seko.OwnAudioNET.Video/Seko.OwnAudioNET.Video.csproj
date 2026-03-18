@@ -12,4 +12,8 @@
       <PackageReference Include="OwnAudioSharp.Basic" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="Mixing\" />
+    </ItemGroup>
+
 </Project>

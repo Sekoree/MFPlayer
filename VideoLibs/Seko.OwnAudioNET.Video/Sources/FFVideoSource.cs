@@ -6,17 +6,21 @@ namespace Seko.OwnAudioNET.Video.Sources;
 
 /// <summary>
 /// Clock-driven video source that decodes frames via an <see cref="IVideoDecoder"/> and presents
-/// them in sync with an OwnAudio <see cref="MasterClock"/>.
+/// them against an attached shared playback clock.
+/// Intended for source-based transport/mixer scenarios; direct decoder-to-output playback should use
+/// <see cref="FFVideoDecoder"/> + <c>VideoEngine.PushFrame</c> instead.
 /// <para>
 /// A dedicated background thread pre-fills a bounded queue of decoded <see cref="VideoFrame"/>
 /// objects. On each call to <see cref="RequestNextFrame"/> (or <see cref="TryGetFrameAtTime"/>) the
-/// source promotes the next due frame, fires <see cref="FrameReady"/> / <see cref="FrameReadyFast"/>
+/// source promotes the next due frame, raises its frame-ready events,
 /// and returns the current frame to the caller.
 /// </para>
 /// </summary>
 public sealed class FFVideoSource : BaseVideoSource
 {
     private readonly record struct DecodedFrameEntry(VideoFrame Frame, long SeekEpoch);
+    private const double DuplicateRequestWindowSeconds = 0.002;
+    private const int DefaultQueueCapacity = 6;
 
     private readonly Lock _syncLock = new();
     private readonly Lock _decoderLock = new();
@@ -24,6 +28,7 @@ public sealed class FFVideoSource : BaseVideoSource
     private readonly bool _ownsDecoder;
     private readonly FFVideoSourceOptions _options;
     private readonly int _queueCapacity;
+    private readonly bool _useDedicatedDecodeThread;
 
     private readonly Queue<DecodedFrameEntry> _decodeQueue;
     private readonly AutoResetEvent _decodeWakeEvent = new(false);
@@ -43,26 +48,28 @@ public sealed class FFVideoSource : BaseVideoSource
     private long _decodeQueueDepth;
     private double _currentFramePtsSeconds = double.NaN;
     private double _lastPromotedMasterTimestamp = double.NaN;
-    private double _driftCorrectionOffsetSeconds;
     private double _frameDurationSeconds;
     private long _seekEpoch;
     private double _seekPresentationFloorSeconds = double.NegativeInfinity;
     private const double SeekFrameToleranceFloorSeconds = 0.001;
 
     /// <summary>Initializes a new instance for the file at <paramref name="filePath"/> with default options.</summary>
+    [Obsolete("Prefer constructing FFVideoSource with an IVideoDecoder instance for explicit decoder ownership.")]
     public FFVideoSource(string filePath)
         : this(filePath, new FFVideoSourceOptions())
     {
     }
 
     /// <summary>Initializes a new instance for the file at <paramref name="filePath"/> with the given <see cref="FFVideoSourceOptions"/>.</summary>
+    [Obsolete("Prefer constructing FFVideoSource with an IVideoDecoder instance for explicit decoder ownership.")]
     public FFVideoSource(string filePath, FFVideoSourceOptions options, int? streamIndex = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         _options = options;
         _videoDecoder = new FFVideoDecoder(filePath, ResolveDecoderOptions(options.DecoderOptions, streamIndex));
         _ownsDecoder = true;
-        _queueCapacity = Math.Max(2, _options.QueueCapacity);
+        _queueCapacity = ResolveQueueCapacity(_videoDecoder);
+        _useDedicatedDecodeThread = ResolveUseDedicatedDecodeThread(_videoDecoder);
         _frameDurationSeconds = ResolveFrameDurationSeconds(_videoDecoder.StreamInfo.FrameRate);
         _videoDecoder.StreamInfoChanged += OnDecoderStreamInfoChanged;
         _decodeQueue = new Queue<DecodedFrameEntry>(_queueCapacity);
@@ -82,7 +89,8 @@ public sealed class FFVideoSource : BaseVideoSource
         _options = options;
         _videoDecoder = videoDecoder;
         _ownsDecoder = ownsDecoder;
-        _queueCapacity = Math.Max(2, _options.QueueCapacity);
+        _queueCapacity = ResolveQueueCapacity(_videoDecoder);
+        _useDedicatedDecodeThread = ResolveUseDedicatedDecodeThread(_videoDecoder);
         _frameDurationSeconds = ResolveFrameDurationSeconds(_videoDecoder.StreamInfo.FrameRate);
         _videoDecoder.StreamInfoChanged += OnDecoderStreamInfoChanged;
         _decodeQueue = new Queue<DecodedFrameEntry>(_queueCapacity);
@@ -106,7 +114,7 @@ public sealed class FFVideoSource : BaseVideoSource
     /// </summary>
     public override double StartOffset { get; set; }
 
-    /// <summary><see langword="true"/> when a <see cref="MasterClock"/> is attached.</summary>
+    /// <summary><see langword="true"/> when a playback clock is attached.</summary>
     public override bool IsAttachedToClock => _masterClock != null;
 
     /// <summary>Total number of frames decoded by the background thread.</summary>
@@ -124,8 +132,8 @@ public sealed class FFVideoSource : BaseVideoSource
     /// <summary>Master clock timestamp at which the last frame was promoted.</summary>
     public double LastPromotedMasterTimestamp => Interlocked.CompareExchange(ref _lastPromotedMasterTimestamp, 0, 0);
 
-    /// <summary>Current drift-correction offset applied to the target time (seconds).</summary>
-    public double CurrentDriftCorrectionOffsetSeconds => Interlocked.CompareExchange(ref _driftCorrectionOffsetSeconds, 0, 0);
+    /// <summary>Reserved for future engine/mixer-owned timing correction. Currently always zero.</summary>
+    public double CurrentDriftCorrectionOffsetSeconds => 0;
 
     /// <summary>Number of frames currently held in the decode pre-fetch queue.</summary>
     public int QueueDepth
@@ -251,8 +259,7 @@ public sealed class FFVideoSource : BaseVideoSource
 
     /// <summary>
     /// Attempts to return the frame that should be displayed at <paramref name="masterTimestamp"/>.
-    /// Promotes a pending frame when its PTS is due, applies late-drop and drift-correction policy,
-    /// and fires <see cref="FrameReady"/> / <see cref="FrameReadyFast"/> on promotion.
+    /// Promotes a pending frame when its PTS is due and raises frame-ready events on promotion.
     /// </summary>
     /// <param name="masterTimestamp">Absolute master clock position in seconds.</param>
     /// <param name="frame">The current frame on success.</param>
@@ -288,28 +295,10 @@ public sealed class FFVideoSource : BaseVideoSource
                 _hasCurrentFrame &&
                 currentFrame != null &&
                 masterDelta >= 0 &&
-                masterDelta <= _options.DuplicateRequestWindowSeconds)
+                masterDelta <= DuplicateRequestWindowSeconds)
             {
                 frame = currentFrame;
                 return true;
-            }
-
-            if (playbackState == VideoPlaybackState.Playing && _hasCurrentFrame && currentFrame != null)
-            {
-                var signedDrift = currentFrame.PtsSeconds - relativeTime;
-                var drift = Math.Abs(signedDrift);
-
-                if (_options.EnableDriftCorrection)
-                    ApplyDriftCorrection(signedDrift);
-
-                if (drift > _options.HardSeekThresholdSeconds)
-                {
-                    if (!SeekInternal(relativeTime))
-                    {
-                        frame = default!;
-                        return false;
-                    }
-                }
             }
 
             if (!EnsurePendingFrame(seekEpoch))
@@ -317,16 +306,6 @@ public sealed class FFVideoSource : BaseVideoSource
                 UpdateEndOfStreamState(relativeTime);
                 frame = _hasCurrentFrame ? _currentFrame! : default!;
                 return _hasCurrentFrame;
-            }
-
-            var maxDropsThisRequest = ComputeMaxDropsThisRequest(relativeTime, playbackState);
-            var droppedThisRequest = 0;
-            while (droppedThisRequest < maxDropsThisRequest && ShouldDropPendingFrame(relativeTime))
-            {
-                DropPendingFrame();
-                droppedThisRequest++;
-                if (!EnsurePendingFrame(seekEpoch))
-                    break;
             }
 
             if (!_hasCurrentFrame && _hasPendingFrame)
@@ -454,54 +433,6 @@ public sealed class FFVideoSource : BaseVideoSource
         Interlocked.Increment(ref _droppedFrameCount);
     }
 
-    private bool ShouldDropPendingFrame(double relativeTime)
-    {
-        if (!_hasPendingFrame || _pendingFrame == null)
-            return false;
-
-        var effectiveLateThreshold = GetEffectiveLateDropThresholdSeconds();
-        if (_pendingFrame.PtsSeconds > relativeTime - effectiveLateThreshold)
-            return false;
-
-        if (!_options.UseDedicatedDecodeThread)
-            return true;
-
-        // Keep the only available pending frame when decode is starved.
-        // This favors continuity over aggressive catch-up dropping.
-        lock (_decodeQueue)
-            return _decodeQueue.Count > 0;
-    }
-
-    private double GetEffectiveLateDropThresholdSeconds()
-    {
-        var frameBased = _frameDurationSeconds * Math.Max(0.0, _options.LateDropFrameMultiplier);
-        return Math.Max(_options.LateDropThresholdSeconds, frameBased);
-    }
-
-    private int ComputeMaxDropsThisRequest(double relativeTime, VideoPlaybackState playbackState)
-    {
-        if (playbackState != VideoPlaybackState.Playing)
-            return 0;
-
-        var configuredBudget = Math.Max(0, _options.MaxDropsPerRequest);
-        if (!_hasPendingFrame || _pendingFrame == null)
-            return configuredBudget;
-
-        if (_frameDurationSeconds <= 0 || double.IsNaN(_frameDurationSeconds) || double.IsInfinity(_frameDurationSeconds))
-            return configuredBudget;
-
-        var latenessSeconds = relativeTime - _pendingFrame.PtsSeconds - GetEffectiveLateDropThresholdSeconds();
-        if (latenessSeconds <= 0)
-            return configuredBudget;
-
-        // If a transient stall leaves us several frame intervals behind, let one request drop a
-        // small burst so we converge quickly instead of dragging visible A/V skew forward for many
-        // render ticks. Keep the burst bounded to avoid blowing through a whole queue at once.
-        var adaptiveBudget = (int)Math.Ceiling(latenessSeconds / _frameDurationSeconds);
-        adaptiveBudget = Math.Clamp(adaptiveBudget, 0, 8);
-        return Math.Max(configuredBudget, adaptiveBudget);
-    }
-
     private static double ResolveFrameDurationSeconds(double frameRate)
     {
         if (frameRate <= 0 || double.IsNaN(frameRate) || double.IsInfinity(frameRate))
@@ -521,10 +452,24 @@ public sealed class FFVideoSource : BaseVideoSource
             EnableHardwareDecoding = baseOptions.EnableHardwareDecoding,
             PreferredHardwareDevice = baseOptions.PreferredHardwareDevice,
             ThreadCount = baseOptions.ThreadCount,
+            QueueCapacity = baseOptions.QueueCapacity,
+            UseDedicatedDecodeThread = baseOptions.UseDedicatedDecodeThread,
             PreferredOutputPixelFormats = baseOptions.PreferredOutputPixelFormats,
             PreferSourcePixelFormatWhenSupported = baseOptions.PreferSourcePixelFormatWhenSupported,
             PreferLowestConversionCost = baseOptions.PreferLowestConversionCost
         };
+    }
+
+    private static int ResolveQueueCapacity(IVideoDecoder decoder)
+    {
+        return decoder is FFVideoDecoder ffVideoDecoder
+            ? Math.Max(2, ffVideoDecoder.QueueCapacity)
+            : DefaultQueueCapacity;
+    }
+
+    private static bool ResolveUseDedicatedDecodeThread(IVideoDecoder decoder)
+    {
+        return decoder is not FFVideoDecoder ffVideoDecoder || ffVideoDecoder.UseDedicatedDecodeThread;
     }
 
     private void OnDecoderStreamInfoChanged(VideoStreamInfo streamInfo)
@@ -548,7 +493,7 @@ public sealed class FFVideoSource : BaseVideoSource
         // After a seek/hard-resync, we can have no current frame while the background
         // decode thread is still refilling the queue. Decode one frame inline so the
         // caller does not sit on a stale image for noticeable time.
-        if (_options.UseDedicatedDecodeThread && _hasCurrentFrame)
+        if (_useDedicatedDecodeThread && _hasCurrentFrame)
             return false;
 
         lock (_decoderLock)
@@ -721,59 +666,16 @@ public sealed class FFVideoSource : BaseVideoSource
         _currentFrame = null;
         _pendingFrame = null;
         _lastServedMasterTimestamp = double.NegativeInfinity;
-        Interlocked.Exchange(ref _driftCorrectionOffsetSeconds, 0.0);
         Interlocked.Exchange(ref _currentFramePtsSeconds, double.NaN);
         Interlocked.Exchange(ref _lastPromotedMasterTimestamp, double.NaN);
     }
-
-
-    private void ApplyDriftCorrection(double signedDriftSeconds)
-    {
-        var absDrift = Math.Abs(signedDriftSeconds);
-        if (absDrift <= _options.DriftCorrectionDeadZoneSeconds)
-        {
-            RelaxDriftCorrectionOffset();
-            return;
-        }
-
-        // signedDrift = currentVideoPts - targetPts.
-        // If video lags (negative), push target forward (positive offset) to catch up.
-        var correction = -signedDriftSeconds * _options.DriftCorrectionRate;
-        correction = Math.Clamp(correction, -_options.MaxCorrectionStepSeconds, _options.MaxCorrectionStepSeconds);
-
-        _driftCorrectionOffsetSeconds += correction;
-        // Avoid unbounded offset growth when stream stalls.
-        _driftCorrectionOffsetSeconds = Math.Clamp(_driftCorrectionOffsetSeconds, -0.100, 0.100);
-    }
-
-    private void RelaxDriftCorrectionOffset()
-    {
-        if (_driftCorrectionOffsetSeconds == 0)
-            return;
-
-        var relaxStep = Math.Max(_options.MaxCorrectionStepSeconds * 0.5, 0.0005);
-        if (Math.Abs(_driftCorrectionOffsetSeconds) <= relaxStep)
-        {
-            _driftCorrectionOffsetSeconds = 0;
-            return;
-        }
-
-        _driftCorrectionOffsetSeconds += _driftCorrectionOffsetSeconds > 0
-            ? -relaxStep
-            : relaxStep;
-    }
-
 
     private double ResolveRelativeTime(double masterTimestamp, VideoPlaybackState playbackState)
     {
         if (playbackState is VideoPlaybackState.Paused or VideoPlaybackState.EndOfStream)
             return Position;
 
-        var relativeTime = masterTimestamp - StartOffset;
-        if (_options.EnableDriftCorrection)
-            relativeTime += _driftCorrectionOffsetSeconds;
-
-        return relativeTime;
+        return masterTimestamp - StartOffset;
     }
 
     private void UpdateEndOfStreamState(double relativeTime)
@@ -816,7 +718,7 @@ public sealed class FFVideoSource : BaseVideoSource
 
     private void StartDecodeThreadIfNeeded()
     {
-        if (!_options.UseDedicatedDecodeThread)
+        if (!_useDedicatedDecodeThread)
             return;
 
         _decodeThreadRunning = true;

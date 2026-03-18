@@ -1,10 +1,15 @@
 namespace Seko.OwnAudioNET.Video.Engine;
 
 /// <summary>
-/// Playback-clock configuration for <see cref="VideoEngine"/>.
+/// Playback-clock configuration for <see cref="VideoTransportEngine"/>.
 /// </summary>
-public sealed class VideoEngineConfig
+public sealed class VideoTransportEngineConfig
 {
+    /// <summary>
+    /// Chooses how the shared timeline clock should be driven.
+    /// </summary>
+    public VideoTransportClockSyncMode ClockSyncMode { get; set; } = VideoTransportClockSyncMode.DualModeAuto;
+
     /// <summary>
     /// Optional upper bound for frame advancement frequency.
     /// <see langword="null"/> means source-driven cadence only.
@@ -18,9 +23,10 @@ public sealed class VideoEngineConfig
     public double UnknownSourcePollFps { get; set; } = 120;
 
     /// <summary>
-    /// Hint for future output-layer integration. The engine itself remains clock-driven.
+    /// Best-effort presentation policy propagated to attached outputs that support it.
+    /// The transport engine itself remains clock-driven.
     /// </summary>
-    public VideoPresentationSyncMode PresentationSyncMode { get; set; } = VideoPresentationSyncMode.None;
+    public VideoTransportPresentationSyncMode PresentationSyncMode { get; set; } = VideoTransportPresentationSyncMode.None;
 
     /// <summary>Lower bound for the frame-advance cadence in milliseconds.</summary>
     public int MinimumAdvanceIntervalMs { get; set; } = 1;
@@ -28,7 +34,7 @@ public sealed class VideoEngineConfig
     /// <summary>Upper bound for the frame-advance cadence in milliseconds.</summary>
     public int MaximumAdvanceIntervalMs { get; set; } = 16;
 
-    internal VideoEngineConfig CloneNormalized()
+    internal VideoTransportEngineConfig CloneNormalized()
     {
         var minimum = Math.Max(1, MinimumAdvanceIntervalMs);
         var maximum = Math.Max(minimum, MaximumAdvanceIntervalMs);
@@ -41,8 +47,9 @@ public sealed class VideoEngineConfig
         if (double.IsNaN(normalizedUnknownPollFps) || double.IsInfinity(normalizedUnknownPollFps) || normalizedUnknownPollFps <= 0)
             normalizedUnknownPollFps = 120;
 
-        return new VideoEngineConfig
+        return new VideoTransportEngineConfig
         {
+            ClockSyncMode = ClockSyncMode,
             TargetFpsLimit = normalizedLimit,
             UnknownSourcePollFps = normalizedUnknownPollFps,
             PresentationSyncMode = PresentationSyncMode,
@@ -53,9 +60,26 @@ public sealed class VideoEngineConfig
 }
 
 /// <summary>
-/// Presentation sync policy hint for outputs consuming <see cref="VideoEngine"/>.
+/// Clock sync policy used by <see cref="VideoTransportEngine"/>.
 /// </summary>
-public enum VideoPresentationSyncMode
+public enum VideoTransportClockSyncMode
+{
+    /// <summary>Engine drives a local realtime timeline clock.</summary>
+    VideoOnly = 0,
+
+    /// <summary>Engine follows an externally-driven clock (typically audio-led).</summary>
+    AudioLed = 1,
+
+    /// <summary>
+    /// Engine follows an external clock when present; otherwise it falls back to local realtime driving.
+    /// </summary>
+    DualModeAuto = 2
+}
+
+/// <summary>
+/// Presentation sync policy for outputs consuming <see cref="VideoTransportEngine"/>.
+/// </summary>
+public enum VideoTransportPresentationSyncMode
 {
     /// <summary>Pure clock-driven updates with no explicit presentation synchronization.</summary>
     None = 0,
@@ -66,4 +90,5 @@ public enum VideoPresentationSyncMode
     /// <summary>Require VSync-synced presentation when available; otherwise fall back to clock-only.</summary>
     RequireVSync = 2
 }
+
 

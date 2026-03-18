@@ -13,6 +13,7 @@ namespace Seko.OwnAudioNET.Video.Sources;
 /// OwnAudio audio source backed by <see cref="FFAudioDecoder"/>.
 /// Implements <see cref="IMasterClockSource"/> so it can drive or follow an OwnAudio
 /// <see cref="MasterClock"/> for A/V synchronisation.
+/// Intended for source-based mixer pipelines; prefer decoder-first construction for explicit ownership.
 /// </summary>
 public class FFAudioSource : BaseAudioSource, IMasterClockSource
 {
@@ -33,6 +34,8 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
     /// <summary>Initializes a new instance that reads from a file.</summary>
     /// <param name="filePath">Path to the media file.</param>
     /// <param name="config">Audio engine configuration (sample rate, channels, buffer size).</param>
+    /// <param name="streamIndex">Optional audio stream index to decode.</param>
+    [Obsolete("Prefer constructing FFAudioSource with an FFAudioDecoder instance for explicit decoder ownership.")]
     public FFAudioSource(string filePath, AudioConfig config, int? streamIndex = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
@@ -49,6 +52,8 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
     /// <param name="stream">Readable input stream.</param>
     /// <param name="config">Audio engine configuration.</param>
     /// <param name="leaveOpen">When <see langword="true"/> the stream is not disposed with this instance.</param>
+    /// <param name="streamIndex">Optional audio stream index to decode.</param>
+    [Obsolete("Prefer constructing FFAudioSource with an FFAudioDecoder instance for explicit decoder ownership.")]
     public FFAudioSource(Stream stream, AudioConfig config, bool leaveOpen = false, int? streamIndex = null)
     {
         ArgumentNullException.ThrowIfNull(stream);

@@ -18,17 +18,17 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PMLib", "PMLib\PMLib.csproj
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioEx", "AudioEx\AudioEx.csproj", "{B33BF85C-5F4A-4DB2-BFA2-A62CF1ACBEBC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioEx", "Test\AudioEx\AudioEx.csproj", "{B33BF85C-5F4A-4DB2-BFA2-A62CF1ACBEBC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoTest", "VideoTest\VideoTest.csproj", "{136BC955-3AB3-42D8-8E46-C8680F94B4E7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoTest", "Test\VideoTest\VideoTest.csproj", "{136BC955-3AB3-42D8-8E46-C8680F94B4E7}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "VideoLibs", "VideoLibs", "{47F53610-2510-4EC0-BF22-554B68334224}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video", "Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj", "{FA7F6707-61E4-4EF8-9BA2-75CF5E3A0CA7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video", "VideoLibs\Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj", "{FA7F6707-61E4-4EF8-9BA2-75CF5E3A0CA7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video.Avalonia", "Seko.OwnAudioNET.Video.Avalonia\Seko.OwnAudioNET.Video.Avalonia.csproj", "{790CB931-A9AA-44B6-8B2D-080739954CDE}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video.Avalonia", "VideoLibs\Seko.OwnAudioNET.Video.Avalonia\Seko.OwnAudioNET.Video.Avalonia.csproj", "{790CB931-A9AA-44B6-8B2D-080739954CDE}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video.SDL3", "Seko.OwnAudioNET.Video.SDL3\Seko.OwnAudioNET.Video.SDL3.csproj", "{01F79FA0-CA41-4096-BC2F-26BBA9F85D4E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video.SDL3", "VideoLibs\Seko.OwnAudioNET.Video.SDL3\Seko.OwnAudioNET.Video.SDL3.csproj", "{01F79FA0-CA41-4096-BC2F-26BBA9F85D4E}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Reference", "Reference", "{BC0D59F3-3F69-4518-B385-927FA3A96690}"
 EndProject
@@ -40,7 +40,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ownaudio.Native", "Referenc
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ownaudio.Linux", "Reference\OwnAudioEngine\Ownaudio.Linux\Ownaudio.Linux.csproj", "{0FDC7C97-422E-44DC-A102-19C6C3D09AC2}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video.Engine", "Seko.OwnAudioNET.Video.Engine\Seko.OwnAudioNET.Video.Engine.csproj", "{B4E36442-657E-4FFB-B58F-C3425C7B1333}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video.Engine", "VideoLibs\Seko.OwnAudioNET.Video.Engine\Seko.OwnAudioNET.Video.Engine.csproj", "{B4E36442-657E-4FFB-B58F-C3425C7B1333}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

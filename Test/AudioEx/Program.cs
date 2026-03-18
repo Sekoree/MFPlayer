@@ -7,7 +7,6 @@ using Seko.OwnAudioNET.Video.Decoders;
 using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Probing;
 using Seko.OwnAudioNET.Video.SDL3;
-using Seko.OwnAudioNET.Video.Sources;
 
 namespace AudioEx;
 
@@ -38,7 +37,7 @@ internal static class Program
     {
         GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
-        string testFile = "/run/media/sekoree/New Stuff/Other_Content/shootingstar_0611_1.mov";
+        string testFile = "/run/media/seko/New Stuff/Other_Content/shootingstar_0611_1.mov";
         if (args.Length > 0)
             testFile = args[0];
 
@@ -52,29 +51,20 @@ internal static class Program
             return;
         }
 
-        var videoSource = new FFVideoSource(testFile, new FFVideoSourceOptions
-        {
-            UseDedicatedDecodeThread = true,
-            QueueCapacity = 30,
-            LateDropThresholdSeconds = 0.050,
-            LateDropFrameMultiplier = 3.0,
-            MaxDropsPerRequest = 1,
-            EnableDriftCorrection = true,
-            DriftCorrectionDeadZoneSeconds = 0.006,
-            DriftCorrectionRate = 0.03,
-            MaxCorrectionStepSeconds = 0.003,
-            DecoderOptions = CreateDemoDecoderOptions(GetSafeVideoThreadCount())
-        }, streamIndex: videoStream.Index);
+        var decoderOptions = CreateDemoDecoderOptions(GetSafeVideoThreadCount(), videoStream.Index);
+        using var videoDecoder = new FFVideoDecoder(testFile, decoderOptions);
 
-        try
+        var streamInfo = videoDecoder.StreamInfo;
+        var outputEngine = new VideoEngine(new VideoEngineConfig
         {
-            var videoEngine = new VideoEngine();
+            FpsLimit = streamInfo.FrameRate > 0 ? streamInfo.FrameRate : null,
+            PixelFormatPolicy = VideoEnginePixelFormatPolicy.Auto,
+            DropRejectedFrames = false
+        });
+
             try
             {
-                videoEngine.AddVideoSource(videoSource);
-
-                var info = videoSource.StreamInfo;
-                Console.WriteLine($"Stream: {info}");
+                Console.WriteLine($"Stream: {streamInfo}");
 
                 var videoRenderer = new VideoSDL
                 {
@@ -91,15 +81,15 @@ internal static class Program
                     }
 
                     videoRenderer.Start();
-                    videoEngine.AddVideoOutput(videoRenderer);
-                    videoRenderer.UpdateFormatInfo(videoSource.DecoderSourcePixelFormatName,
-                        videoSource.DecoderOutputPixelFormatName,
-                        info.FrameRate);
+                    outputEngine.AddOutput(videoRenderer);
+                    videoRenderer.UpdateFormatInfo(videoDecoder.LastSourcePixelFormatName,
+                        videoDecoder.LastOutputPixelFormatName,
+                        streamInfo.FrameRate);
                     videoRenderer.UpdateHudDiagnostics(
                         queueDepth: 0,
                         uploadMsPerFrame: 0,
                         avDriftMs: 0,
-                        isHardwareDecoding: videoSource.IsHardwareDecoding,
+                        isHardwareDecoding: videoDecoder.IsHardwareDecoding,
                         droppedFrames: 0);
 
                     Console.WriteLine("VideoSDL renderer initialised successfully.");
@@ -107,6 +97,9 @@ internal static class Program
                     var exitRequested = 0;
                     var controlActions = new ConcurrentQueue<Action>();
                     var seekLock = new Lock();
+                    var isPlaying = true;
+                    var decodePrimePending = false;
+                    var timelineSeconds = 0.0;
 
                     void PerformSeek(double positionSeconds)
                     {
@@ -115,7 +108,16 @@ internal static class Program
 
                         try
                         {
-                            videoEngine.Seek(positionSeconds, safeSeek: true);
+                            var target = Math.Max(0, positionSeconds);
+                            if (videoDecoder.TrySeek(TimeSpan.FromSeconds(target), out var seekError))
+                            {
+                                timelineSeconds = target;
+                                decodePrimePending = true;
+                            }
+                            else
+                            {
+                                ConsolePrintLine($"[Playback] Seek failed: {seekError}");
+                            }
                         }
                         finally
                         {
@@ -130,25 +132,17 @@ internal static class Program
                             case SDL.Keycode.Space:
                                 controlActions.Enqueue(() =>
                                 {
-                                    if (videoEngine.IsRunning)
-                                    {
-                                        videoEngine.Pause();
-                                        ConsolePrintLine("[Playback] Paused.");
-                                    }
-                                    else
-                                    {
-                                        videoEngine.Start();
-                                        ConsolePrintLine("[Playback] Playing.");
-                                    }
+                                    isPlaying = !isPlaying;
+                                    ConsolePrintLine(isPlaying ? "[Playback] Playing." : "[Playback] Paused.");
                                 });
                                 break;
 
                             case SDL.Keycode.Left:
-                                controlActions.Enqueue(() => PerformSeek(Math.Max(0.0, videoEngine.Position - SeekStepSeconds)));
+                                controlActions.Enqueue(() => PerformSeek(timelineSeconds - SeekStepSeconds));
                                 break;
 
                             case SDL.Keycode.Right:
-                                controlActions.Enqueue(() => PerformSeek(videoEngine.Position + SeekStepSeconds));
+                                controlActions.Enqueue(() => PerformSeek(timelineSeconds + SeekStepSeconds));
                                 break;
 
                             case SDL.Keycode.Home:
@@ -156,11 +150,7 @@ internal static class Program
                                 break;
 
                             case SDL.Keycode.End:
-                                controlActions.Enqueue(() =>
-                                {
-                                    if (videoSource.SeekToEnd())
-                                        PerformSeek(Math.Max(0.0, videoSource.Position + videoSource.StartOffset));
-                                });
+                                controlActions.Enqueue(() => PerformSeek(Math.Max(0, streamInfo.Duration.TotalSeconds - 0.001)));
                                 break;
 
                             case SDL.Keycode.F11:
@@ -193,12 +183,13 @@ internal static class Program
 
 
                     var lastDecodedFrames = 0L;
-                    var lastPresentedFrames = 0L;
+                    var lastSubmittedFrames = 0L;
                     var lastDroppedFrames = 0L;
                     var lastUploadedFrames = 0L;
                     var lastStatsLogTime = DateTime.UtcNow;
-
-                    videoEngine.Start();
+                    var decodedFrames = 0L;
+                    var submittedFrames = 0L;
+                    var droppedFrames = 0L;
 
                     var loop = true;
                     while (loop)
@@ -212,78 +203,89 @@ internal static class Program
                             continue;
                         }
 
-                        if (videoSource.IsEndOfStream)
+                        if (isPlaying || decodePrimePending)
                         {
-                            ConsolePrintLine("[Playback] End of stream reached.");
-                            loop = false;
-                            continue;
+                            if (videoDecoder.TryDecodeNextFrame(out var frame, out var decodeError))
+                            {
+                                using (frame)
+                                {
+                                    timelineSeconds = frame.PtsSeconds;
+                                    if (outputEngine.PushFrame(frame, timelineSeconds))
+                                        submittedFrames++;
+                                    else
+                                        droppedFrames++;
+                                }
+
+                                decodedFrames++;
+                                decodePrimePending = false;
+                            }
+                            else if (videoDecoder.IsEndOfStream)
+                            {
+                                ConsolePrintLine("[Playback] End of stream reached.");
+                                loop = false;
+                                continue;
+                            }
+                            else if (!string.IsNullOrWhiteSpace(decodeError))
+                            {
+                                ConsolePrintLine($"[Playback] Decode error: {decodeError}");
+                                Thread.Sleep(5);
+                            }
                         }
 
                         var now = DateTime.UtcNow;
                         if ((now - lastStatsLogTime).TotalSeconds >= 1)
                         {
-                            videoRenderer.UpdateFormatInfo(videoSource.DecoderSourcePixelFormatName,
-                                videoSource.DecoderOutputPixelFormatName,
-                                videoSource.StreamInfo.FrameRate);
+                            videoRenderer.UpdateFormatInfo(videoDecoder.LastSourcePixelFormatName,
+                                videoDecoder.LastOutputPixelFormatName,
+                                streamInfo.FrameRate);
 
-                            var decodedFrames = videoSource.DecodedFrameCount;
-                            var presentedFrames = videoSource.PresentedFrameCount;
-                            var droppedFrames = videoSource.DroppedFrameCount;
-                            var masterTs = videoEngine.Position;
-                            var videoTs = videoSource.CurrentFramePtsSeconds;
-                            var videoMasterDriftMs = double.IsNaN(videoTs)
-                                ? double.NaN
-                                : (videoTs - (masterTs - videoSource.StartOffset)) * 1000.0;
-                            var correctionOffsetMs = videoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
+                            var masterTs = timelineSeconds;
+                            var videoTs = timelineSeconds;
                             var diag = videoRenderer.GetDiagnosticsSnapshot();
                             var uploadedFrames = diag.FramesRendered;
                             var uploadedFrameDelta = uploadedFrames - lastUploadedFrames;
 
                             videoRenderer.UpdateHudDiagnostics(
-                                queueDepth: videoSource.QueueDepth,
+                                queueDepth: 0,
                                 uploadMsPerFrame: 0,
-                                avDriftMs: videoMasterDriftMs,
-                                isHardwareDecoding: videoSource.IsHardwareDecoding,
+                                avDriftMs: 0,
+                                isHardwareDecoding: videoDecoder.IsHardwareDecoding,
                                 droppedFrames: droppedFrames - lastDroppedFrames);
 
                             ConsoleOverwriteLine(
                                 $"[Render] {videoRenderer.RenderFps:F1}fps [Video] {videoRenderer.VideoFps:F1}fps {videoRenderer.PixelFormatInfo} " +
-                                $"| pres={presentedFrames - lastPresentedFrames}" +
+                                $"| sub={submittedFrames - lastSubmittedFrames}" +
                                 $" up={uploadedFrameDelta}" +
                                 $" dec={decodedFrames - lastDecodedFrames}" +
                                 $" drop={droppedFrames - lastDroppedFrames}" +
-                                $" q={videoSource.QueueDepth}" +
-                                $" hw={videoSource.IsHardwareDecoding}" +
+                                $" q=0" +
+                                $" hw={videoDecoder.IsHardwareDecoding}" +
                                 $" m={masterTs:F3}s v={videoTs:F3}s" +
-                                $" v-m={videoMasterDriftMs:+0.0;-0.0}ms" +
-                                $" corr={correctionOffsetMs:+0.0;-0.0}ms");
+                                $" v-m=+0.0ms" +
+                                $" corr=+0.0ms");
 
                             lastDecodedFrames = decodedFrames;
-                            lastPresentedFrames = presentedFrames;
+                            lastSubmittedFrames = submittedFrames;
                             lastDroppedFrames = droppedFrames;
                             lastUploadedFrames = uploadedFrames;
                             lastStatsLogTime = now;
                         }
 
-                        Thread.Sleep(videoEngine.IsRunning ? 1 : 10);
+                        Thread.Sleep(isPlaying ? 0 : 10);
                     }
 
                     videoRenderer.Stop();
                 }
                 finally
                 {
+                    outputEngine.RemoveOutput(videoRenderer);
                     videoRenderer.Dispose();
                 }
             }
             finally
             {
-                videoEngine.Dispose();
+                outputEngine.Dispose();
             }
-        }
-        finally
-        {
-            videoSource.Dispose();
-        }
     }
 
     private static int GetSafeVideoThreadCount()
@@ -293,10 +295,11 @@ internal static class Program
         return Math.Min(6, suggested);
     }
 
-    private static FFVideoDecoderOptions CreateDemoDecoderOptions(int threadCount)
+    private static FFVideoDecoderOptions CreateDemoDecoderOptions(int threadCount, int? streamIndex)
     {
         return new FFVideoDecoderOptions
         {
+            PreferredStreamIndex = streamIndex,
             EnableHardwareDecoding = true,
             ThreadCount = threadCount,
             PreferredOutputPixelFormats =

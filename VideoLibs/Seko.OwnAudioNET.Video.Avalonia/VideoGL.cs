@@ -9,7 +9,7 @@ using Seko.OwnAudioNET.Video.Sources;
 
 namespace Seko.OwnAudioNET.Video.Avalonia;
 
-public partial class VideoGL : OpenGlControlBase, IVideoOutput
+public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentationSyncAwareOutput
 {
     // Constants not in Avalonia's GlConsts — sourced from VideoGlConstants
     private const int GlTexture1      = VideoGlConstants.Texture1;
@@ -36,7 +36,8 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void Uniform1iProc(int location, int value);
 
-    private readonly IVideoEngine _engine;
+    private readonly IVideoTransportEngine? _transportEngine;
+    private readonly IVideoOutputEngine? _sinkEngine;
     private readonly Lock _frameLock = new();
 
     private VideoFrame? _latestFrame;
@@ -87,6 +88,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput
     private long _diagRenderCount;
     private long _diagRenderRequestPostedCount;
     private long _diagRenderRequestCoalescedCount;
+    private int _presentationSyncMode = (int)VideoTransportPresentationSyncMode.PreferVSync;
 
     // TextureUploadState is defined in Seko.OwnaudioNET.OpenGL.VideoGlGeometry
 
@@ -117,15 +119,41 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput
 
     public bool IsAttached => Source != null;
 
-    public VideoGL(IVideoEngine engine)
+    public VideoTransportPresentationSyncMode PresentationSyncMode
     {
-        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        get => (VideoTransportPresentationSyncMode)Volatile.Read(ref _presentationSyncMode);
+        set => Volatile.Write(ref _presentationSyncMode, (int)value);
+    }
+
+    public VideoGL()
+    {
         _requestRenderAction = RequestNextFrameRendering;
-        _engine.AddVideoOutput(this);
+    }
+
+    public VideoGL(IVideoTransportEngine engine)
+    {
+        _transportEngine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _requestRenderAction = RequestNextFrameRendering;
+        _transportEngine.AddVideoOutput(this);
+    }
+
+    public VideoGL(IVideoOutputEngine engine)
+    {
+        _sinkEngine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _requestRenderAction = RequestNextFrameRendering;
+        _sinkEngine.AddOutput(this);
     }
 
     private void SourceFrameReadyFast(VideoFrame frame, double _)
     {
+        PushFrame(frame, _);
+    }
+
+    public bool PushFrame(VideoFrame frame, double masterTimestamp)
+    {
+        if (_disposed)
+            return false;
+
         Interlocked.Increment(ref _diagFrameReadyCount);
 
         VideoFrame? previous;
@@ -141,6 +169,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput
         Interlocked.Increment(ref _diagAdvanceTickCount);
         Interlocked.Increment(ref _diagAdvanceSuccessCount);
         QueueRenderRequest();
+        return true;
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -396,7 +425,8 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput
 
         try
         {
-            _engine.RemoveVideoOutput(this);
+            _transportEngine?.RemoveVideoOutput(this);
+            _sinkEngine?.RemoveOutput(this);
         }
         catch
         {
@@ -449,9 +479,14 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput
 
         Interlocked.Increment(ref _diagRenderRequestPostedCount);
 
-        // Use Render priority so the invalidation isn't delayed behind normal UI work,
-        // keeping the GL surface updated within the same compositor frame.
-        Dispatcher.UIThread.Post(_requestRenderAction, DispatcherPriority.Render);
+        // Avalonia presentation remains compositor-driven either way. For transport modes that
+        // prefer display synchronization we post at Render priority; otherwise we use Normal
+        // priority for a softer clock-driven invalidation path.
+        var priority = PresentationSyncMode == VideoTransportPresentationSyncMode.None
+            ? DispatcherPriority.Normal
+            : DispatcherPriority.Render;
+
+        Dispatcher.UIThread.Post(_requestRenderAction, priority);
     }
 
     private static int BuildProgram(GlInterface gl, string vertexSource, string fragmentSource)

@@ -22,7 +22,7 @@ namespace Seko.OwnAudioNET.Video.SDL3;
 /// borderless child window directly.
 /// </para>
 /// </summary>
-public sealed partial class VideoSDL : IVideoOutput
+public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAwareOutput
 {
     public event Action<SDL.Keycode>? KeyDown;
     private readonly Action<VideoFrame, double> _attachedFrameHandler;
@@ -210,6 +210,8 @@ public sealed partial class VideoSDL : IVideoOutput
     private nint _sdlGlContext;
     private bool _sdlOwnsSubsystem;
     private bool _disposed;
+    private int _presentationSyncMode = (int)VideoTransportPresentationSyncMode.PreferVSync;
+    private int _appliedSwapInterval = int.MinValue;
 
     // ── Render loop state ─────────────────────────────────────────────────────────
     private Thread?   _renderThread;
@@ -218,6 +220,12 @@ public sealed partial class VideoSDL : IVideoOutput
     private VideoFrame? _latestFrame;
     private bool        _hasFrame;
     private long        _latestFrameVersion;
+            public VideoTransportPresentationSyncMode PresentationSyncMode
+            {
+                get => (VideoTransportPresentationSyncMode)Volatile.Read(ref _presentationSyncMode);
+                set => Volatile.Write(ref _presentationSyncMode, (int)value);
+            }
+
     private long        _lastRenderedVersion = -1;
 
     // ── Geometry / texture state (shared via Seko.OwnaudioNET.OpenGL) ────────────
@@ -387,10 +395,13 @@ public sealed partial class VideoSDL : IVideoOutput
 
     /// <summary>
     /// Queues a decoded frame for display. Frame delivery is expected to come from
-    /// <see cref="AttachSource(IVideoSource)"/> (typically via <see cref="IVideoEngine"/>).
+    /// <see cref="AttachSource(IVideoSource)"/> (typically via <see cref="IVideoTransportEngine"/>).
     /// </summary>
-    private void PushFrame(VideoFrame frame)
+    public bool PushFrame(VideoFrame frame, double masterTimestamp)
     {
+        if (_disposed)
+            return false;
+
         Interlocked.Increment(ref _diagFramesSubmitted);
         VideoFrame? previous;
         lock (_frameLock)
@@ -401,6 +412,7 @@ public sealed partial class VideoSDL : IVideoOutput
             _latestFrameVersion++;
         }
         previous?.Dispose();
+        return true;
     }
 
     /// <summary>Update the pixel-format string shown in the HUD. Thread-safe.</summary>
@@ -550,7 +562,7 @@ public sealed partial class VideoSDL : IVideoOutput
 
     private void OnSourceFrameReady(VideoFrame frame, double _)
     {
-        PushFrame(frame);
+        PushFrame(frame, _);
     }
 
     // ── Render loop (background thread) ──────────────────────────────────────────
@@ -562,7 +574,7 @@ public sealed partial class VideoSDL : IVideoOutput
             Console.Error.WriteLine($"[VideoSDL] GLMakeCurrent failed: {SDL.GetError()}");
             return;
         }
-        SDL.GLSetSwapInterval(1);
+        ApplyPresentationSyncModeIfNeeded();
 
         if (!InitializeGl(out var glError))
         {
@@ -577,6 +589,8 @@ public sealed partial class VideoSDL : IVideoOutput
 
         while (!_stopRequested)
         {
+            ApplyPresentationSyncModeIfNeeded();
+
             while (SDL.PollEvent(out var sdlEvent))
             {
                 switch ((SDL.EventType)sdlEvent.Type)
@@ -636,6 +650,25 @@ public sealed partial class VideoSDL : IVideoOutput
 
         DisposeGlResources();
         SDL.GLMakeCurrent(_sdlWindow, nint.Zero);
+    }
+
+    private void ApplyPresentationSyncModeIfNeeded()
+    {
+        // SDL exposes swap interval as an on/off preference, so Prefer/Require both map to a
+        // best-effort VSync request while None explicitly disables it.
+        var desiredSwapInterval = PresentationSyncMode == VideoTransportPresentationSyncMode.None ? 0 : 1;
+        if (desiredSwapInterval == _appliedSwapInterval)
+            return;
+
+        if (!SDL.GLSetSwapInterval(desiredSwapInterval) && desiredSwapInterval != 0)
+        {
+            if (SDL.GLSetSwapInterval(0))
+                desiredSwapInterval = 0;
+            else
+                return;
+        }
+
+        _appliedSwapInterval = desiredSwapInterval;
     }
 
     // ── GL initialisation (runs on render thread) ─────────────────────────────────

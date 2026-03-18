@@ -8,10 +8,10 @@ namespace Seko.OwnAudioNET.Video.Engine;
 /// Standalone transport engine for one or more <see cref="IVideoSource"/> instances.
 /// Owns playback clock publication, source attachment, and timeline operations without requiring an audio engine.
 /// </summary>
-public interface IVideoEngine : IDisposable
+public interface IVideoTransportEngine : IDisposable
 {
     /// <summary>Playback configuration used by the engine.</summary>
-    VideoEngineConfig Config { get; }
+    VideoTransportEngineConfig Config { get; }
 
     /// <summary>Clock published to attached video sources.</summary>
     IVideoClock Clock { get; }
@@ -109,4 +109,5 @@ public interface IVideoEngine : IDisposable
     /// </summary>
     void Seek(double positionInSeconds, bool safeSeek);
 }
+
 

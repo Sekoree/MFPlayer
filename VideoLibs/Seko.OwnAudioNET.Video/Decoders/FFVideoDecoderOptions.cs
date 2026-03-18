@@ -25,7 +25,20 @@ public sealed class FFVideoDecoderOptions
     /// Number of threads used for software decoding and packet/frame processing.
     /// <c>0</c> lets FFmpeg choose automatically. Default: <c>0</c>.
     /// </summary>
-    public int ThreadCount { get; init; } = 0;
+    public int ThreadCount { get; init; }
+
+    /// <summary>
+    /// Maximum number of decoded frames held in source-side prefetch queues when a source wraps
+    /// this decoder. Higher values smooth over decode spikes at the cost of memory.
+    /// Default: <c>6</c>.
+    /// </summary>
+    public int QueueCapacity { get; init; } = 6;
+
+    /// <summary>
+    /// When <see langword="true"/>, a wrapping source may use a dedicated background decode thread
+    /// to keep render-path decode latency low. Default: <see langword="true"/>.
+    /// </summary>
+    public bool UseDedicatedDecodeThread { get; init; } = true;
 
     /// <summary>
     /// Preferred decoder output formats in priority order. The decoder picks the first supported

@@ -1,7 +1,0 @@
-1. Hybrid Clock still affected by soundcard buffer -> <512 fine for 60fps, 1ß24 lands in the 45fps range again
-VideoTest -> OnegaiDarling -> small (audio?) stuttering starts near the end, seems to be able to recover though
-          -> (Release) -> fine?
-          -> Shootingstar -> ~250sec big stutter/small freeze, seems to recover a bit but still a few audio stutters
-          -> (Release) ->  ~250sec audio stutter, ~278sec video stutter, instant recovery
-AudioEx -> OnegaiDraling -> seemed fine
-        -> Shootingstar -> also fine?

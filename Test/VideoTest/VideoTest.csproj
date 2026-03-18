@@ -20,7 +20,8 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\AudioEx\AudioEx.csproj" />
-      <ProjectReference Include="..\Seko.OwnAudioNET.Video.Avalonia\Seko.OwnAudioNET.Video.Avalonia.csproj" />
+      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj" />
+      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.Engine\Seko.OwnAudioNET.Video.Engine.csproj" />
+      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.Avalonia\Seko.OwnAudioNET.Video.Avalonia.csproj" />
     </ItemGroup>
 </Project>
