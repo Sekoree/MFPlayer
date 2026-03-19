@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Seko.OwnAudioNET.Video.OpenGL;
 using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Engine;
+using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.Sources;
 using SDL3;
 
@@ -389,13 +390,16 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     public void Stop()
     {
         _stopRequested = true;
-        _renderThread?.Join(TimeSpan.FromSeconds(3));
+        var renderThread = _renderThread;
+        if (renderThread != null && !ReferenceEquals(Thread.CurrentThread, renderThread))
+            renderThread.Join(TimeSpan.FromSeconds(3));
+
         _renderThread = null;
     }
 
     /// <summary>
     /// Queues a decoded frame for display. Frame delivery is expected to come from
-    /// <see cref="AttachSource(IVideoSource)"/> (typically via <see cref="IVideoTransportEngine"/>).
+    /// <see cref="AttachSource(IVideoSource)"/> (typically via <see cref="VideoMixer"/> or explicit caller wiring).
     /// </summary>
     public bool PushFrame(VideoFrame frame, double masterTimestamp)
     {
@@ -770,21 +774,22 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
         return true;
     }
 
-    private bool RenderLastFrame(int surfaceW, int surfaceH)
+    private void RenderLastFrame(int surfaceW, int surfaceH)
     {
         Interlocked.Increment(ref _diagRenderCalls);
-        if (!_glInitialized) return false;
+        if (!_glInitialized)
+            return;
 
         _glViewport!(0, 0, surfaceW, surfaceH);
         _glClearColor!(0f, 0f, 0f, 1f);
         _glClear!(GlColorBufferBit);
 
-        if (_textureWidth <= 0 || _textureHeight <= 0) return false;
+        if (_textureWidth <= 0 || _textureHeight <= 0)
+            return;
 
         DrawCurrentFrame(surfaceW, surfaceH);
         RenderHudOverlay(surfaceW, surfaceH);
         UpdateRenderFps();
-        return true;
     }
 
     private void DrawCurrentFrame(int surfaceW, int surfaceH)
@@ -952,14 +957,30 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     private string GetShaderLog(int shader)
     {
         var buf = Marshal.AllocHGlobal(4096);
-        try { _glGetShaderInfoLog!(shader, 4096, out var len, buf); return len > 0 ? Marshal.PtrToStringAnsi(buf, len) ?? "Shader compile failed." : "Shader compile failed."; }
+        try
+        {
+            _glGetShaderInfoLog!(shader, 4096, out var len, buf);
+            if (len <= 0)
+                return "Shader compile failed.";
+
+            var message = Marshal.PtrToStringAnsi(buf, len);
+            return string.IsNullOrWhiteSpace(message) ? "Shader compile failed." : message;
+        }
         finally { Marshal.FreeHGlobal(buf); }
     }
 
     private string GetProgramLog(int program)
     {
         var buf = Marshal.AllocHGlobal(4096);
-        try { _glGetProgramInfoLog!(program, 4096, out var len, buf); return len > 0 ? Marshal.PtrToStringAnsi(buf, len) ?? "Program link failed." : "Program link failed."; }
+        try
+        {
+            _glGetProgramInfoLog!(program, 4096, out var len, buf);
+            if (len <= 0)
+                return "Program link failed.";
+
+            var message = Marshal.PtrToStringAnsi(buf, len);
+            return string.IsNullOrWhiteSpace(message) ? "Program link failed." : message;
+        }
         finally { Marshal.FreeHGlobal(buf); }
     }
 

@@ -1,7 +1,7 @@
 namespace Seko.OwnAudioNET.Video.Engine;
 
 /// <summary>
-/// Playback-clock configuration for <see cref="VideoTransportEngine"/>.
+/// Playback-clock configuration for implementations of <see cref="IVideoTransportEngine"/>.
 /// </summary>
 public sealed class VideoTransportEngineConfig
 {
@@ -23,8 +23,8 @@ public sealed class VideoTransportEngineConfig
     public double UnknownSourcePollFps { get; set; } = 120;
 
     /// <summary>
-    /// Best-effort presentation policy propagated to attached outputs that support it.
-    /// The transport engine itself remains clock-driven.
+    /// Best-effort presentation policy intended for downstream mixers/outputs that support it.
+    /// The transport engine itself remains clock-driven and output-agnostic.
     /// </summary>
     public VideoTransportPresentationSyncMode PresentationSyncMode { get; set; } = VideoTransportPresentationSyncMode.None;
 
@@ -34,7 +34,7 @@ public sealed class VideoTransportEngineConfig
     /// <summary>Upper bound for the frame-advance cadence in milliseconds.</summary>
     public int MaximumAdvanceIntervalMs { get; set; } = 16;
 
-    internal VideoTransportEngineConfig CloneNormalized()
+    public VideoTransportEngineConfig CloneNormalized()
     {
         var minimum = Math.Max(1, MinimumAdvanceIntervalMs);
         var maximum = Math.Max(minimum, MaximumAdvanceIntervalMs);
@@ -60,7 +60,7 @@ public sealed class VideoTransportEngineConfig
 }
 
 /// <summary>
-/// Clock sync policy used by <see cref="VideoTransportEngine"/>.
+/// Clock sync policy used by <see cref="IVideoTransportEngine"/> implementations.
 /// </summary>
 public enum VideoTransportClockSyncMode
 {
@@ -77,7 +77,7 @@ public enum VideoTransportClockSyncMode
 }
 
 /// <summary>
-/// Presentation sync policy for outputs consuming <see cref="VideoTransportEngine"/>.
+/// Presentation sync policy for outputs consuming <see cref="IVideoTransportEngine"/> implementations.
 /// </summary>
 public enum VideoTransportPresentationSyncMode
 {

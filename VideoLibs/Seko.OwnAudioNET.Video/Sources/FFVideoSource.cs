@@ -20,6 +20,11 @@ public sealed class FFVideoSource : BaseVideoSource
 {
     private readonly record struct DecodedFrameEntry(VideoFrame Frame, long SeekEpoch);
     private const double DuplicateRequestWindowSeconds = 0.002;
+    private const double LateFrameToleranceFloorSeconds = 0.004;
+    private const double StarvationRecoveryToleranceFloorSeconds = 0.120;
+    private const double StarvationResyncThresholdFloorSeconds = 0.350;
+    private const int ProactiveInlineDecodeLowQueueThreshold = 1;
+    private const int InlineRecoveryPrefetchQueueTarget = 4;
     private const int DefaultQueueCapacity = 6;
 
     private readonly Lock _syncLock = new();
@@ -285,6 +290,8 @@ public sealed class FFVideoSource : BaseVideoSource
                 return false;
             }
 
+            TryRecoverFromStarvation(relativeTime);
+
             var seekEpoch = Volatile.Read(ref _seekEpoch);
 
             // Multiple views can request at effectively the same clock time.
@@ -298,23 +305,17 @@ public sealed class FFVideoSource : BaseVideoSource
                 masterDelta <= DuplicateRequestWindowSeconds)
             {
                 frame = currentFrame;
+                UpdateEndOfStreamState(relativeTime);
                 return true;
             }
 
-            if (!EnsurePendingFrame(seekEpoch))
+            PromoteReadyFrames(masterTimestamp, relativeTime, seekEpoch);
+
+            if (!_hasCurrentFrame && !EnsurePendingFrame(seekEpoch, relativeTime))
             {
                 UpdateEndOfStreamState(relativeTime);
                 frame = _hasCurrentFrame ? _currentFrame! : default!;
                 return _hasCurrentFrame;
-            }
-
-            if (!_hasCurrentFrame && _hasPendingFrame)
-            {
-                PromotePendingFrame(masterTimestamp);
-            }
-            else if (_hasPendingFrame && _pendingFrame != null && _pendingFrame.PtsSeconds <= relativeTime)
-            {
-                PromotePendingFrame(masterTimestamp);
             }
 
             frame = _hasCurrentFrame ? _currentFrame! : default!;
@@ -478,12 +479,15 @@ public sealed class FFVideoSource : BaseVideoSource
         RaiseStreamInfoChanged(streamInfo);
     }
 
-    private bool EnsurePendingFrame(long requiredSeekEpoch)
+    private bool EnsurePendingFrame(long requiredSeekEpoch, double relativeTime)
     {
         if (_hasPendingFrame)
             return true;
 
-        if (TryDequeueDecodedFrame(requiredSeekEpoch, out var queued))
+        var decodedInline = false;
+        var allowStarvationRecovery = IsQueueStarved();
+
+        if (TryDequeueDecodedFrame(requiredSeekEpoch, relativeTime, allowStarvationRecovery, out var queued))
         {
             _pendingFrame = queued;
             _hasPendingFrame = true;
@@ -493,7 +497,7 @@ public sealed class FFVideoSource : BaseVideoSource
         // After a seek/hard-resync, we can have no current frame while the background
         // decode thread is still refilling the queue. Decode one frame inline so the
         // caller does not sit on a stale image for noticeable time.
-        if (_useDedicatedDecodeThread && _hasCurrentFrame)
+        if (_useDedicatedDecodeThread && _hasCurrentFrame && !ShouldForceInlineCatchUpDecode(relativeTime))
             return false;
 
         lock (_decoderLock)
@@ -513,8 +517,11 @@ public sealed class FFVideoSource : BaseVideoSource
 
                 Interlocked.Increment(ref _decodedFrameCount);
 
-                if (IsFrameEligibleForPresentation(_pendingFrame!.PtsSeconds))
+                if (IsFrameUsableForPresentation(_pendingFrame!.PtsSeconds, relativeTime, allowStarvationRecovery))
+                {
+                    decodedInline = true;
                     break;
+                }
 
                 Interlocked.Increment(ref _droppedFrameCount);
                 DisposeFrame(_pendingFrame);
@@ -537,6 +544,10 @@ public sealed class FFVideoSource : BaseVideoSource
         }
 
         _hasPendingFrame = true;
+
+        if (decodedInline)
+            PrefillQueueAfterInlineRecovery(requiredSeekEpoch, relativeTime);
+
         return true;
     }
 
@@ -725,7 +736,8 @@ public sealed class FFVideoSource : BaseVideoSource
         _decodeThread = new Thread(DecodeThreadProc)
         {
             IsBackground = true,
-            Name = "FFVideoSource-Decode"
+            Name = "FFVideoSource-Decode",
+            Priority = ThreadPriority.AboveNormal
         };
         _decodeThread.Start();
     }
@@ -768,7 +780,9 @@ public sealed class FFVideoSource : BaseVideoSource
                 continue;
             }
 
-            if (!IsFrameEligibleForPresentation(frame.PtsSeconds))
+            var currentRelativeTime = ResolveCurrentRelativeClockTime();
+            var allowStarvationRecovery = Interlocked.Read(ref _decodeQueueDepth) <= ProactiveInlineDecodeLowQueueThreshold && !_hasPendingFrame;
+            if (!IsFrameUsableForPresentation(frame.PtsSeconds, currentRelativeTime, allowStarvationRecovery))
             {
                 Interlocked.Increment(ref _decodedFrameCount);
                 Interlocked.Increment(ref _droppedFrameCount);
@@ -809,7 +823,7 @@ public sealed class FFVideoSource : BaseVideoSource
         return Interlocked.Read(ref _decodeQueueDepth) >= _queueCapacity;
     }
 
-    private bool TryDequeueDecodedFrame(long requiredSeekEpoch, out VideoFrame frame)
+    private bool TryDequeueDecodedFrame(long requiredSeekEpoch, double relativeTime, bool allowStarvationRecovery, out VideoFrame frame)
     {
         lock (_decodeQueue)
         {
@@ -821,7 +835,8 @@ public sealed class FFVideoSource : BaseVideoSource
 
                 if (entry.SeekEpoch == requiredSeekEpoch)
                 {
-                    if (!IsFrameEligibleForPresentation(entry.Frame.PtsSeconds))
+                    var preserveLateFrame = allowStarvationRecovery && _decodeQueue.Count == 0;
+                    if (!IsFrameUsableForPresentation(entry.Frame.PtsSeconds, relativeTime, preserveLateFrame))
                     {
                         Interlocked.Increment(ref _droppedFrameCount);
                         DisposeFrame(entry.Frame);
@@ -838,6 +853,207 @@ public sealed class FFVideoSource : BaseVideoSource
             frame = default!;
             return false;
         }
+    }
+
+    private void PromoteReadyFrames(double masterTimestamp, double relativeTime, long requiredSeekEpoch)
+    {
+        while (true)
+        {
+            if (!_hasPendingFrame && !EnsurePendingFrame(requiredSeekEpoch, relativeTime))
+                return;
+
+            if (!_hasPendingFrame || _pendingFrame == null)
+                return;
+
+            if (IsFrameTooLateForPresentation(_pendingFrame.PtsSeconds, relativeTime, allowStarvationRecovery: IsQueueStarved()))
+            {
+                DropPendingFrame();
+                continue;
+            }
+
+            if (!_hasCurrentFrame)
+            {
+                PromotePendingFrame(masterTimestamp);
+                continue;
+            }
+
+            if (_pendingFrame.PtsSeconds <= relativeTime)
+            {
+                PromotePendingFrame(masterTimestamp);
+                continue;
+            }
+
+            return;
+        }
+    }
+
+    private bool IsFrameUsableForPresentation(double ptsSeconds, double relativeTime, bool allowStarvationRecovery = false)
+    {
+        return IsFrameEligibleForPresentation(ptsSeconds) &&
+               !IsFrameTooLateForPresentation(ptsSeconds, relativeTime, allowStarvationRecovery);
+    }
+
+    private bool IsFrameTooLateForPresentation(double ptsSeconds, double relativeTime, bool allowStarvationRecovery = false)
+    {
+        if (relativeTime < 0)
+            return false;
+
+        var toleranceSeconds = GetLateFrameToleranceSeconds();
+        if (allowStarvationRecovery)
+            toleranceSeconds = Math.Max(toleranceSeconds, GetStarvationRecoveryToleranceSeconds());
+
+        return ptsSeconds < relativeTime - toleranceSeconds;
+    }
+
+    private bool ShouldForceInlineCatchUpDecode(double relativeTime)
+    {
+        if (!_hasCurrentFrame || _currentFrame == null)
+            return true;
+
+        if (QueueDepth == 0 && relativeTime >= _currentFrame.PtsSeconds)
+            return true;
+
+        if (QueueDepth > ProactiveInlineDecodeLowQueueThreshold)
+            return false;
+
+        return IsFrameTooLateForPresentation(_currentFrame.PtsSeconds, relativeTime)
+               || IsFrameCloseToRunningLate(_currentFrame.PtsSeconds, relativeTime);
+    }
+
+    private double ResolveCurrentRelativeClockTime()
+    {
+        var masterClock = _masterClock;
+        if (masterClock == null)
+            return Position;
+
+        var playbackState = State;
+        var relativeTime = playbackState is VideoPlaybackState.Paused or VideoPlaybackState.EndOfStream
+            ? Position
+            : masterClock.CurrentTimestamp - StartOffset;
+
+        return Math.Max(0, relativeTime);
+    }
+
+    private double GetLateFrameToleranceSeconds()
+    {
+        var frameBasedTolerance = _frameDurationSeconds * 0.75;
+        return Math.Max(LateFrameToleranceFloorSeconds, Math.Min(frameBasedTolerance, 0.050));
+    }
+
+    private double GetStarvationRecoveryToleranceSeconds()
+    {
+        var frameBasedTolerance = _frameDurationSeconds * 12.0;
+        return Math.Max(StarvationRecoveryToleranceFloorSeconds, Math.Min(frameBasedTolerance, 0.250));
+    }
+
+    private double GetStarvationResyncThresholdSeconds()
+    {
+        var frameBasedThreshold = _frameDurationSeconds * 24.0;
+        return Math.Max(StarvationResyncThresholdFloorSeconds, Math.Min(frameBasedThreshold, 0.750));
+    }
+
+    private double GetStarvationResyncBacktrackSeconds()
+    {
+        var frameBasedBacktrack = _frameDurationSeconds * 2.0;
+        return Math.Max(_frameDurationSeconds, Math.Min(frameBasedBacktrack, 0.050));
+    }
+
+    private bool IsFrameCloseToRunningLate(double ptsSeconds, double relativeTime)
+    {
+        var proactiveLead = GetProactiveInlineDecodeLeadSeconds();
+        return relativeTime >= ptsSeconds + proactiveLead;
+    }
+
+    private double GetProactiveInlineDecodeLeadSeconds()
+    {
+        var frameBasedLead = _frameDurationSeconds * 0.35;
+        return Math.Max(LateFrameToleranceFloorSeconds, Math.Min(frameBasedLead, 0.012));
+    }
+
+    private bool IsQueueStarved()
+    {
+        return Interlocked.Read(ref _decodeQueueDepth) == 0 && !_hasPendingFrame;
+    }
+
+    private bool IsQueueRunningDry()
+    {
+        return Interlocked.Read(ref _decodeQueueDepth) <= InlineRecoveryPrefetchQueueTarget;
+    }
+
+    private void TryRecoverFromStarvation(double relativeTime)
+    {
+        if (!_useDedicatedDecodeThread || _videoDecoder.IsEndOfStream)
+            return;
+
+        if (!IsQueueRunningDry() || !_hasCurrentFrame || _currentFrame == null)
+            return;
+
+        var lagSeconds = relativeTime - _currentFrame.PtsSeconds;
+        if (lagSeconds < GetStarvationResyncThresholdSeconds())
+            return;
+
+        var targetSeconds = Math.Max(0, relativeTime - GetStarvationResyncBacktrackSeconds());
+        if (!SeekInternal(targetSeconds))
+            return;
+
+        PrefillQueueAfterInlineRecovery(Volatile.Read(ref _seekEpoch), relativeTime);
+    }
+
+    private void PrefillQueueAfterInlineRecovery(long requiredSeekEpoch, double relativeTime)
+    {
+        if (!_useDedicatedDecodeThread)
+            return;
+
+        var targetQueueDepth = Math.Min(_queueCapacity, InlineRecoveryPrefetchQueueTarget);
+        while (QueueDepth < targetQueueDepth)
+        {
+            VideoFrame? frame;
+            lock (_decoderLock)
+            {
+                if (_videoDecoder.IsEndOfStream || requiredSeekEpoch != Volatile.Read(ref _seekEpoch))
+                    break;
+
+                if (!_videoDecoder.TryDecodeNextFrame(out frame, out _))
+                {
+                    DisposeFrame(frame);
+                    break;
+                }
+            }
+
+            Interlocked.Increment(ref _decodedFrameCount);
+
+            if (requiredSeekEpoch != Volatile.Read(ref _seekEpoch))
+            {
+                DisposeFrame(frame);
+                break;
+            }
+
+            if (!IsFrameUsableForPresentation(frame!.PtsSeconds, relativeTime))
+            {
+                Interlocked.Increment(ref _droppedFrameCount);
+                DisposeFrame(frame);
+                continue;
+            }
+
+            var enqueued = false;
+            lock (_decodeQueue)
+            {
+                if (requiredSeekEpoch == Volatile.Read(ref _seekEpoch) && _decodeQueue.Count < _queueCapacity)
+                {
+                    _decodeQueue.Enqueue(new DecodedFrameEntry(frame, requiredSeekEpoch));
+                    Interlocked.Increment(ref _decodeQueueDepth);
+                    enqueued = true;
+                }
+            }
+
+            if (!enqueued)
+            {
+                DisposeFrame(frame);
+                break;
+            }
+        }
+
+        _decodeWakeEvent.Set();
     }
 
     private void ClearDecodeQueue()

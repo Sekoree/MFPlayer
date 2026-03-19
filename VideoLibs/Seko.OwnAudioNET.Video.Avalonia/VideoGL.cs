@@ -36,12 +36,17 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void Uniform1iProc(int location, int value);
 
-    private readonly IVideoTransportEngine? _transportEngine;
     private readonly IVideoOutputEngine? _sinkEngine;
     private readonly Lock _frameLock = new();
+    private readonly Lock _mirrorLock = new();
+    private readonly Action<VideoFrame, double> _mirrorFrameHandler;
 
     private VideoFrame? _latestFrame;
     private bool _hasFrame;
+    private double _latestMasterTimestamp;
+    private bool _hasLatestMasterTimestamp;
+    private Action<VideoFrame, double>? _mirrorFrameSubscribers;
+    private VideoGL? _mirrorParent;
 
     private int _program;
     private int _yuvProgram;
@@ -119,29 +124,50 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
 
     public bool IsAttached => Source != null;
 
+    public VideoGL? MirrorParent
+    {
+        get
+        {
+            lock (_mirrorLock)
+                return _mirrorParent;
+        }
+    }
+
+    public bool IsMirroring => MirrorParent != null;
+
     public VideoTransportPresentationSyncMode PresentationSyncMode
     {
         get => (VideoTransportPresentationSyncMode)Volatile.Read(ref _presentationSyncMode);
-        set => Volatile.Write(ref _presentationSyncMode, (int)value);
+        set
+        {
+            Volatile.Write(ref _presentationSyncMode, (int)value);
+            PropagatePresentationSyncModeToMirrors(value);
+        }
     }
 
     public VideoGL()
     {
+        _mirrorFrameHandler = OnMirrorParentFrameReady;
         _requestRenderAction = RequestNextFrameRendering;
-    }
-
-    public VideoGL(IVideoTransportEngine engine)
-    {
-        _transportEngine = engine ?? throw new ArgumentNullException(nameof(engine));
-        _requestRenderAction = RequestNextFrameRendering;
-        _transportEngine.AddVideoOutput(this);
     }
 
     public VideoGL(IVideoOutputEngine engine)
     {
         _sinkEngine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _mirrorFrameHandler = OnMirrorParentFrameReady;
         _requestRenderAction = RequestNextFrameRendering;
         _sinkEngine.AddOutput(this);
+    }
+
+    public VideoGL(VideoGL parent)
+        : this()
+    {
+        AttachMirrorParent(parent);
+    }
+
+    public static VideoGL CreateMirror(VideoGL parent)
+    {
+        return new VideoGL(parent);
     }
 
     private void SourceFrameReadyFast(VideoFrame frame, double _)
@@ -162,6 +188,8 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
             previous = _latestFrame;
             _latestFrame = frame.AddRef();
             _hasFrame = true;
+            _latestMasterTimestamp = masterTimestamp;
+            _hasLatestMasterTimestamp = true;
         }
 
         previous?.Dispose();
@@ -169,6 +197,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         Interlocked.Increment(ref _diagAdvanceTickCount);
         Interlocked.Increment(ref _diagAdvanceSuccessCount);
         QueueRenderRequest();
+        DispatchMirroredFrame(frame, masterTimestamp);
         return true;
     }
 
@@ -423,9 +452,11 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
 
         _disposed = true;
 
+        DetachMirrorParent();
+        ClearMirrorSubscribers();
+
         try
         {
-            _transportEngine?.RemoveVideoOutput(this);
             _sinkEngine?.RemoveOutput(this);
         }
         catch
@@ -450,6 +481,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         if (ReferenceEquals(Source, source))
             return true;
 
+        DetachMirrorParent();
         DetachSource();
         source.FrameReadyFast += SourceFrameReadyFast;
         Source = source;
@@ -464,6 +496,133 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
 
         Source.FrameReadyFast -= SourceFrameReadyFast;
         Source = null;
+    }
+
+    private void AttachMirrorParent(VideoGL parent)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+
+        if (ReferenceEquals(parent, this))
+            throw new ArgumentException("A VideoGL instance cannot mirror itself.", nameof(parent));
+
+        VideoGL? previousParent;
+        lock (_mirrorLock)
+        {
+            previousParent = _mirrorParent;
+            if (ReferenceEquals(previousParent, parent))
+                return;
+
+            _mirrorParent = parent;
+        }
+
+        if (previousParent != null)
+            previousParent.RemoveMirrorSubscriber(_mirrorFrameHandler);
+
+        DetachSource();
+        parent.AddMirrorSubscriber(_mirrorFrameHandler);
+        PresentationSyncMode = parent.PresentationSyncMode;
+
+        if (parent.TryGetCurrentFrameSnapshot(out var frame, out var masterTimestamp))
+        {
+            try
+            {
+                PushFrame(frame, masterTimestamp);
+            }
+            finally
+            {
+                frame.Dispose();
+            }
+        }
+    }
+
+    private void DetachMirrorParent()
+    {
+        VideoGL? parent;
+        lock (_mirrorLock)
+        {
+            parent = _mirrorParent;
+            _mirrorParent = null;
+        }
+
+        parent?.RemoveMirrorSubscriber(_mirrorFrameHandler);
+    }
+
+    private void AddMirrorSubscriber(Action<VideoFrame, double> subscriber)
+    {
+        lock (_mirrorLock)
+            _mirrorFrameSubscribers += subscriber;
+    }
+
+    private void RemoveMirrorSubscriber(Action<VideoFrame, double> subscriber)
+    {
+        lock (_mirrorLock)
+            _mirrorFrameSubscribers -= subscriber;
+    }
+
+    private void ClearMirrorSubscribers()
+    {
+        lock (_mirrorLock)
+            _mirrorFrameSubscribers = null;
+    }
+
+    private void DispatchMirroredFrame(VideoFrame frame, double masterTimestamp)
+    {
+        Action<VideoFrame, double>? subscribers;
+        lock (_mirrorLock)
+            subscribers = _mirrorFrameSubscribers;
+
+        if (subscribers == null)
+            return;
+
+        foreach (Action<VideoFrame, double> subscriber in subscribers.GetInvocationList())
+        {
+            try
+            {
+                subscriber(frame, masterTimestamp);
+            }
+            catch
+            {
+                // Best effort mirror fan-out.
+            }
+        }
+    }
+
+    private void PropagatePresentationSyncModeToMirrors(VideoTransportPresentationSyncMode mode)
+    {
+        Action<VideoFrame, double>? subscribers;
+        lock (_mirrorLock)
+            subscribers = _mirrorFrameSubscribers;
+
+        if (subscribers == null)
+            return;
+
+        foreach (Action<VideoFrame, double> subscriber in subscribers.GetInvocationList())
+        {
+            if (subscriber.Target is VideoGL mirrorView)
+                mirrorView.PresentationSyncMode = mode;
+        }
+    }
+
+    private void OnMirrorParentFrameReady(VideoFrame frame, double masterTimestamp)
+    {
+        PushFrame(frame, masterTimestamp);
+    }
+
+    private bool TryGetCurrentFrameSnapshot(out VideoFrame frame, out double masterTimestamp)
+    {
+        lock (_frameLock)
+        {
+            if (!_hasFrame || _latestFrame == null || !_hasLatestMasterTimestamp)
+            {
+                frame = default!;
+                masterTimestamp = 0;
+                return false;
+            }
+
+            frame = _latestFrame.AddRef();
+            masterTimestamp = _latestMasterTimestamp;
+            return true;
+        }
     }
 
     private void QueueRenderRequest()

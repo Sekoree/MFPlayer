@@ -24,10 +24,8 @@ public class VideoTransportEngine : IVideoTransportEngine
 
     private readonly Guid _engineId = Guid.NewGuid();
     private readonly ConcurrentDictionary<Guid, IVideoSource> _videoSources = new();
-    private readonly ConcurrentDictionary<Guid, IVideoOutput> _videoOutputs = new();
     private readonly Lock _syncLock = new();
     private readonly Lock _sourceSnapshotLock = new();
-    private readonly Lock _outputSnapshotLock = new();
     private readonly ManualResetEventSlim _pauseEvent = new(initialState: false);
     private readonly Thread _clockThread;
     private readonly IVideoClock _clock;
@@ -36,16 +34,13 @@ public class VideoTransportEngine : IVideoTransportEngine
     private readonly ClockDriveMode _clockDriveMode;
 
     private IVideoSource[] _cachedVideoSources = Array.Empty<IVideoSource>();
-    private IVideoOutput[] _cachedVideoOutputs = Array.Empty<IVideoOutput>();
     private volatile bool _sourceSnapshotsDirty = true;
-    private volatile bool _outputSnapshotsDirty = true;
     private volatile bool _stopRequested;
     private volatile bool _isRunning;
     private volatile bool _disposed;
     private bool _clockThreadStarted;
     private double _transportBaseTimestampSeconds;
     private long _transportBaseTicks;
-    private Guid? _primarySourceId;
 
     public VideoTransportEngine(VideoTransportEngineConfig? config = null)
         : this(videoClock: null, config: config, ownsClock: true)
@@ -109,8 +104,6 @@ public class VideoTransportEngine : IVideoTransportEngine
 
     public int SourceCount => _videoSources.Count;
 
-    public int OutputCount => _videoOutputs.Count;
-
     public event EventHandler<VideoErrorEventArgs>? SourceError;
 
     public bool AddVideoSource(IVideoSource source)
@@ -136,14 +129,6 @@ public class VideoTransportEngine : IVideoTransportEngine
 
         PrimeSource(source);
 
-        lock (_syncLock)
-        {
-            if (_primarySourceId == null || !_videoSources.ContainsKey(_primarySourceId.Value))
-                _primarySourceId = source.Id;
-
-            RebindOutputsToPrimarySourceLocked();
-        }
-
         return true;
     }
 
@@ -166,14 +151,6 @@ public class VideoTransportEngine : IVideoTransportEngine
         source.Error -= OnVideoSourceError;
         InvalidateSourceSnapshots();
 
-        lock (_syncLock)
-        {
-            if (_primarySourceId == sourceId)
-                _primarySourceId = null;
-
-            EnsurePrimarySourceLocked();
-            RebindOutputsToPrimarySourceLocked();
-        }
 
         try
         {
@@ -208,65 +185,6 @@ public class VideoTransportEngine : IVideoTransportEngine
 
     public IVideoSource[] GetSources() => GetVideoSources();
 
-    public bool AddVideoOutput(IVideoOutput output)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(output);
-
-        if (!_videoOutputs.TryAdd(output.Id, output))
-            return false;
-
-        InvalidateOutputSnapshots();
-
-        ApplyOutputPresentationSyncMode(output);
-
-        lock (_syncLock)
-            RebindOutputsToPrimarySourceLocked();
-
-        return true;
-    }
-
-    public bool AddOutput(IVideoOutput output) => AddVideoOutput(output);
-
-    public bool RemoveVideoOutput(IVideoOutput output)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(output);
-        return RemoveVideoOutput(output.Id);
-    }
-
-    public bool RemoveVideoOutput(Guid outputId)
-    {
-        ThrowIfDisposed();
-
-        if (!_videoOutputs.TryRemove(outputId, out var output))
-            return false;
-
-        InvalidateOutputSnapshots();
-        try
-        {
-            output.DetachSource();
-        }
-        catch
-        {
-            // Best effort during removal.
-        }
-
-        return true;
-    }
-
-    public bool RemoveOutput(IVideoOutput output) => RemoveVideoOutput(output);
-
-    public bool RemoveOutput(Guid outputId) => RemoveVideoOutput(outputId);
-
-    public IVideoOutput[] GetVideoOutputs()
-    {
-        EnsureOutputSnapshots();
-        return _cachedVideoOutputs.ToArray();
-    }
-
-    public IVideoOutput[] GetOutputs() => GetVideoOutputs();
-
     public void ClearVideoSources()
     {
         ThrowIfDisposed();
@@ -276,16 +194,6 @@ public class VideoTransportEngine : IVideoTransportEngine
     }
 
     public void ClearSources() => ClearVideoSources();
-
-    public void ClearVideoOutputs()
-    {
-        ThrowIfDisposed();
-
-        foreach (var output in _videoOutputs.Values.ToArray())
-            RemoveVideoOutput(output.Id);
-    }
-
-    public void ClearOutputs() => ClearVideoOutputs();
 
     public void Start()
     {
@@ -301,8 +209,10 @@ public class VideoTransportEngine : IVideoTransportEngine
                 PublishClockTimestamp(Position);
             }
 
+            foreach (var source in GetVideoSourceSnapshot())
+                source.Play();
+
             _isRunning = true;
-            _pauseEvent.Set();
 
             if (!_clockThreadStarted)
             {
@@ -310,8 +220,7 @@ public class VideoTransportEngine : IVideoTransportEngine
                 _clockThread.Start();
             }
 
-            foreach (var source in GetVideoSourceSnapshot())
-                source.Play();
+            _pauseEvent.Set();
         }
 
         PumpSourcesOnce(includePausedSources: true);
@@ -419,31 +328,8 @@ public class VideoTransportEngine : IVideoTransportEngine
             }
         }
 
-        foreach (var output in GetVideoOutputSnapshot())
-        {
-            try
-            {
-                output.DetachSource();
-            }
-            catch
-            {
-                // Best effort during disposal.
-            }
-
-            try
-            {
-                output.Dispose();
-            }
-            catch
-            {
-                // Best effort during disposal.
-            }
-        }
-
         _videoSources.Clear();
-        _videoOutputs.Clear();
         InvalidateSourceSnapshots();
-        InvalidateOutputSnapshots();
         _pauseEvent.Dispose();
 
         if (_ownsClock)
@@ -627,11 +513,6 @@ public class VideoTransportEngine : IVideoTransportEngine
         _sourceSnapshotsDirty = true;
     }
 
-    private void InvalidateOutputSnapshots()
-    {
-        _outputSnapshotsDirty = true;
-    }
-
     private void EnsureSourceSnapshots()
     {
         if (!_sourceSnapshotsDirty)
@@ -653,73 +534,6 @@ public class VideoTransportEngine : IVideoTransportEngine
         return _cachedVideoSources;
     }
 
-    private void EnsureOutputSnapshots()
-    {
-        if (!_outputSnapshotsDirty)
-            return;
-
-        lock (_outputSnapshotLock)
-        {
-            if (!_outputSnapshotsDirty)
-                return;
-
-            _cachedVideoOutputs = _videoOutputs.Values.ToArray();
-            _outputSnapshotsDirty = false;
-        }
-    }
-
-    private IVideoOutput[] GetVideoOutputSnapshot()
-    {
-        EnsureOutputSnapshots();
-        return _cachedVideoOutputs;
-    }
-
-    private void EnsurePrimarySourceLocked()
-    {
-        if (_primarySourceId.HasValue && _videoSources.ContainsKey(_primarySourceId.Value))
-            return;
-
-        _primarySourceId = _videoSources.Keys.FirstOrDefault();
-        if (_primarySourceId == Guid.Empty)
-            _primarySourceId = null;
-    }
-
-    private void RebindOutputsToPrimarySourceLocked()
-    {
-        // Option A routing model: all outputs follow one selected primary source.
-        EnsurePrimarySourceLocked();
-        IVideoSource? primarySource = null;
-        var hasPrimarySource = _primarySourceId.HasValue && _videoSources.TryGetValue(_primarySourceId.Value, out primarySource);
-
-        foreach (var output in _videoOutputs.Values)
-        {
-            try
-            {
-                ApplyOutputPresentationSyncMode(output);
-
-                if (!hasPrimarySource)
-                {
-                    output.DetachSource();
-                    continue;
-                }
-
-                if (ReferenceEquals(output.Source, primarySource))
-                    continue;
-
-                output.AttachSource(primarySource!);
-            }
-            catch
-            {
-                // Output-specific failures should not break transport.
-            }
-        }
-    }
-
-    private void ApplyOutputPresentationSyncMode(IVideoOutput output)
-    {
-        if (output is IVideoPresentationSyncAwareOutput syncAwareOutput)
-            syncAwareOutput.PresentationSyncMode = Config.PresentationSyncMode;
-    }
 
     private static void SeekVideoToTimeline(IVideoSource source, double timelineSeconds)
     {

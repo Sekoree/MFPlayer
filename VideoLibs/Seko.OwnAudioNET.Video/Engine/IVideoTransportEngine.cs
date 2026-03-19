@@ -25,9 +25,6 @@ public interface IVideoTransportEngine : IDisposable
     /// <summary>Number of currently registered video sources.</summary>
     int SourceCount { get; }
 
-    /// <summary>Number of currently registered video outputs.</summary>
-    int OutputCount { get; }
-
     /// <summary>Raised when a registered source reports an error.</summary>
     event EventHandler<VideoErrorEventArgs>? SourceError;
 
@@ -55,41 +52,12 @@ public interface IVideoTransportEngine : IDisposable
     /// <summary>OwnAudio-style alias for <see cref="GetVideoSources"/>.</summary>
     IVideoSource[] GetSources();
 
-    /// <summary>Adds an output and lets the engine manage source wiring for it.</summary>
-    bool AddVideoOutput(IVideoOutput output);
-
-    /// <summary>OwnAudio-style alias for <see cref="AddVideoOutput"/>.</summary>
-    bool AddOutput(IVideoOutput output);
-
-    /// <summary>Removes an output.</summary>
-    bool RemoveVideoOutput(IVideoOutput output);
-
-    /// <summary>Removes an output by ID.</summary>
-    bool RemoveVideoOutput(Guid outputId);
-
-    /// <summary>OwnAudio-style alias for <see cref="RemoveVideoOutput(IVideoOutput)"/>.</summary>
-    bool RemoveOutput(IVideoOutput output);
-
-    /// <summary>OwnAudio-style alias for <see cref="RemoveVideoOutput(Guid)"/>.</summary>
-    bool RemoveOutput(Guid outputId);
-
-    /// <summary>Returns a snapshot of all registered outputs.</summary>
-    IVideoOutput[] GetVideoOutputs();
-
-    /// <summary>OwnAudio-style alias for <see cref="GetVideoOutputs"/>.</summary>
-    IVideoOutput[] GetOutputs();
-
     /// <summary>Removes all registered sources.</summary>
     void ClearVideoSources();
 
     /// <summary>OwnAudio-style alias for <see cref="ClearVideoSources"/>.</summary>
     void ClearSources();
 
-    /// <summary>Removes all registered outputs.</summary>
-    void ClearVideoOutputs();
-
-    /// <summary>OwnAudio-style alias for <see cref="ClearVideoOutputs"/>.</summary>
-    void ClearOutputs();
 
     /// <summary>Starts or resumes playback transport.</summary>
     void Start();
