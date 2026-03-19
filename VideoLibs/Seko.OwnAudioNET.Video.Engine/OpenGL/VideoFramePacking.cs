@@ -8,6 +8,47 @@ namespace Seko.OwnAudioNET.Video.OpenGL;
 public static class VideoFramePacking
 {
     /// <summary>
+    /// Returns plane bytes for texture upload and reports the source stride in bytes.
+    /// When <paramref name="allowStridedUpload"/> is true and the source plane is valid,
+    /// the original array can be returned with its native stride to avoid CPU repacking.
+    /// </summary>
+    public static byte[]? GetPlaneUploadBytes(
+        VideoFrame frame,
+        int planeIndex,
+        int rowBytes,
+        int rows,
+        bool allowStridedUpload,
+        ref byte[]? scratch,
+        out int sourceStrideBytes)
+    {
+        sourceStrideBytes = 0;
+        if (rowBytes <= 0 || rows <= 0)
+            return null;
+
+        var source = frame.GetPlaneData(planeIndex);
+        var stride = frame.GetPlaneStride(planeIndex);
+        if (source.Length == 0 || stride <= 0)
+            return null;
+
+        var requiredLength = checked((rows - 1) * stride + rowBytes);
+        if (requiredLength > source.Length)
+            return null;
+
+        if (allowStridedUpload && stride >= rowBytes)
+        {
+            sourceStrideBytes = stride;
+            return source;
+        }
+
+        var packed = GetTightlyPackedPlane(frame, planeIndex, rowBytes, rows, ref scratch);
+        if (packed == null)
+            return null;
+
+        sourceStrideBytes = rowBytes;
+        return packed;
+    }
+
+    /// <summary>
     /// Returns a byte array whose row stride equals <paramref name="rowBytes"/>.
     /// <para>
     /// If the source plane is already tightly packed the original backing array is

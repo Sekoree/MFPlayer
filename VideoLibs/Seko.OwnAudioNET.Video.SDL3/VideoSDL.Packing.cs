@@ -15,6 +15,16 @@ public sealed partial class VideoSDL
         ref byte[]? scratch)
         => VideoFramePacking.GetTightlyPackedPlane(frame, planeIndex, rowBytes, rows, ref scratch);
 
+    private static byte[]? GetPlaneUploadBytes(
+        VideoFrame frame,
+        int planeIndex,
+        int rowBytes,
+        int rows,
+        bool allowStridedUpload,
+        ref byte[]? scratch,
+        out int sourceStrideBytes)
+        => VideoFramePacking.GetPlaneUploadBytes(frame, planeIndex, rowBytes, rows, allowStridedUpload, ref scratch, out sourceStrideBytes);
+
     /// <summary>
     /// Computes the largest aspect-ratio-preserving viewport rectangle.
     /// Delegates to <see cref="VideoFramePacking.GetAspectFitViewport"/>.

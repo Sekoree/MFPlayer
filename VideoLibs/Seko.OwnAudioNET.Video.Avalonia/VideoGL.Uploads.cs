@@ -11,6 +11,10 @@ public partial class VideoGL
         if (frame.GetPlaneLength(0) <= 0 || frame.Width <= 0 || frame.Height <= 0)
             return false;
 
+        var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Rgba32, frame.Width, frame.Height);
+        if (TryUploadGpuPlanFromFrame(gl, frame, frame.Width, frame.Height, plan))
+            return true;
+
         var rgbaData = GetTightlyPackedPlane(frame, 0, frame.Width * 4, frame.Height, ref _plane0Scratch);
         if (rgbaData == null)
             return false;
@@ -41,13 +45,13 @@ public partial class VideoGL
         var chromaWidth = plan.Plane1.Width;
         var chromaHeight = plan.Plane1.Height;
 
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uvPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, chromaHeight, ref _plane1Scratch);
         if (yPlane == null || uvPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uvPlane, null))
-            return true;
 
         var pixelCount = checked(width * height);
         var rgbaLength = checked(pixelCount * 4);
@@ -69,14 +73,14 @@ public partial class VideoGL
         var chromaWidth = plan.Plane1.Width;
         var chromaHeight = plan.Plane1.Height;
 
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth, chromaHeight, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth, chromaHeight, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
-            return true;
 
         var pixelCount = checked(width * height);
         var rgbaLength = checked(pixelCount * 4);
@@ -97,14 +101,14 @@ public partial class VideoGL
         var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv422p, width, height);
         var chromaWidth = plan.Plane1.Width;
 
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth, height, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth, height, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
-            return true;
 
         var rgbaLength = checked(width * height * 4);
         if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
@@ -123,14 +127,14 @@ public partial class VideoGL
         var height = frame.Height;
         var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv444p, width, height);
 
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, width, height, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, width, height, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
-            return true;
 
         var rgbaLength = checked(width * height * 4);
         if (_rgbaConvertedScratch == null || _rgbaConvertedScratch.Length < rgbaLength)
@@ -149,14 +153,15 @@ public partial class VideoGL
 
         var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv422p10le, width, height);
         var chromaWidth = plan.Plane1.Width;
+
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, height, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth * 2, height, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
-            return true;
 
         var y8 = Downscale10BitTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var u8 = Downscale10BitTo8Bit(uPlane, chromaWidth, height, ref _plane1Scratch8);
@@ -181,14 +186,15 @@ public partial class VideoGL
         var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv420p10le, width, height);
         var chromaWidth = plan.Plane1.Width;
         var chromaHeight = plan.Plane1.Height;
+
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 2, chromaHeight, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, chromaWidth * 2, chromaHeight, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
-            return true;
 
         var y8 = Downscale10BitTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var u8 = Downscale10BitTo8Bit(uPlane, chromaWidth, chromaHeight, ref _plane1Scratch8);
@@ -211,14 +217,15 @@ public partial class VideoGL
             return false;
 
         var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.Yuv444p10le, width, height);
+
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uPlane = GetTightlyPackedPlane(frame, 1, width * 2, height, ref _plane1Scratch);
         var vPlane = GetTightlyPackedPlane(frame, 2, width * 2, height, ref _plane2Scratch);
         if (yPlane == null || uPlane == null || vPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uPlane, vPlane))
-            return true;
 
         var y8 = Downscale10BitTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var u8 = Downscale10BitTo8Bit(uPlane, width, height, ref _plane1Scratch8);
@@ -243,13 +250,14 @@ public partial class VideoGL
         var plan = VideoGlUploadPlanner.CreateGpuUploadPlan(VideoPixelFormat.P010le, width, height);
         var chromaWidth = plan.Plane1.Width;
         var chromaHeight = plan.Plane1.Height;
+
+        if (TryUploadGpuPlanFromFrame(gl, frame, width, height, plan))
+            return true;
+
         var yPlane = GetTightlyPackedPlane(frame, 0, width * 2, height, ref _plane0Scratch);
         var uvPlane = GetTightlyPackedPlane(frame, 1, chromaWidth * 4, chromaHeight, ref _plane1Scratch);
         if (yPlane == null || uvPlane == null)
             return false;
-
-        if (TryUploadGpuPlan(gl, width, height, plan, yPlane, uvPlane, null))
-            return true;
 
         var y8 = Downscale10BitMsbTo8Bit(yPlane, width, height, ref _plane0Scratch8);
         var uv8 = Downscale10BitMsbDualTo8Bit(uvPlane, chromaWidth, chromaHeight, ref _plane1Scratch8);
@@ -263,14 +271,12 @@ public partial class VideoGL
         return UploadRgbaPixels(gl, width, height, _rgbaConvertedScratch);
     }
 
-    private bool TryUploadGpuPlan(
+    private bool TryUploadGpuPlanFromFrame(
         GlInterface gl,
+        VideoFrame frame,
         int width,
         int height,
-        in VideoGlUploadPlanner.VideoGlGpuPlan plan,
-        byte[] plane0,
-        byte[]? plane1,
-        byte[]? plane2)
+        in VideoGlUploadPlanner.VideoGlGpuPlan plan)
     {
         if (!plan.IsSupported)
             return false;
@@ -281,17 +287,76 @@ public partial class VideoGL
         if (plan.Is10Bit && !_can16BitTextures)
             return false;
 
+        byte[]? plane0 = null;
+        byte[]? plane1 = null;
+        byte[]? plane2 = null;
+        var stride0 = 0;
+        var stride1 = 0;
+        var stride2 = 0;
+        var usedStridedUpload = false;
+
+        for (var i = 0; i < plan.PlaneCount; i++)
+        {
+            var descriptor = GetPlaneDescriptor(plan, i);
+            ref var scratch = ref GetPlaneScratch(descriptor.PlaneIndex);
+            var plane = GetPlaneUploadBytes(
+                frame,
+                descriptor.PlaneIndex,
+                descriptor.RowBytes,
+                descriptor.Height,
+                allowStridedUpload: _pixelStoreI != null,
+                ref scratch,
+                out var sourceStrideBytes);
+
+            if (plane == null)
+                return false;
+
+            if (i == 0)
+            {
+                plane0 = plane;
+                stride0 = sourceStrideBytes;
+            }
+            else if (i == 1)
+            {
+                plane1 = plane;
+                stride1 = sourceStrideBytes;
+            }
+            else
+            {
+                plane2 = plane;
+                stride2 = sourceStrideBytes;
+            }
+        }
+
         for (var i = 0; i < plan.PlaneCount; i++)
         {
             var descriptor = GetPlaneDescriptor(plan, i);
             var data = i == 0 ? plane0 : i == 1 ? plane1 : plane2;
+            var sourceStrideBytes = i == 0 ? stride0 : i == 1 ? stride1 : stride2;
             if (data == null)
                 return false;
+
+            Interlocked.Increment(ref _diagUploadPlaneCount);
 
             var textureUnit = GetTextureUnit(descriptor.Slot);
             var textureId = GetTextureId(descriptor.Slot);
             gl.ActiveTexture(textureUnit);
             gl.BindTexture(GlConsts.GL_TEXTURE_2D, textureId);
+
+            if (_pixelStoreI != null)
+            {
+                _pixelStoreI(GlUnpackAlignment, 1);
+                var bytesPerPixel = descriptor.Width > 0 ? Math.Max(1, descriptor.RowBytes / descriptor.Width) : 1;
+                var rowLengthPixels = sourceStrideBytes > descriptor.RowBytes
+                    ? Math.Max(0, sourceStrideBytes / bytesPerPixel)
+                    : 0;
+                _pixelStoreI(GlUnpackRowLength, rowLengthPixels);
+                if (rowLengthPixels > 0)
+                {
+                    usedStridedUpload = true;
+                    Interlocked.Increment(ref _diagStridedUploadPlaneCount);
+                }
+            }
 
             ref var state = ref GetTextureState(descriptor.Slot);
             UploadTexture2D(
@@ -303,7 +368,16 @@ public partial class VideoGL
                 descriptor.Format,
                 descriptor.Type,
                 data);
+
+            if (_pixelStoreI != null)
+            {
+                _pixelStoreI(GlUnpackRowLength, 0);
+                _pixelStoreI(GlUnpackAlignment, 4);
+            }
         }
+
+        if (usedStridedUpload)
+            Interlocked.Increment(ref _diagStridedUploadFrameCount);
 
         if (plan.IsYuv && VideoGlUploadPlanner.IsSemiPlanar(plan.YuvMode))
         {
@@ -329,6 +403,17 @@ public partial class VideoGL
             2 => plan.Plane2,
             _ => throw new ArgumentOutOfRangeException(nameof(index))
         };
+
+    private ref byte[]? GetPlaneScratch(int planeIndex)
+    {
+        switch (planeIndex)
+        {
+            case 0: return ref _plane0Scratch;
+            case 1: return ref _plane1Scratch;
+            case 2: return ref _plane2Scratch;
+            default: throw new ArgumentOutOfRangeException(nameof(planeIndex));
+        }
+    }
 
     private int GetTextureUnit(VideoGlUploadPlanner.VideoGlPlaneSlot slot)
         => slot switch

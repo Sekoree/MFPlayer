@@ -22,7 +22,6 @@ public sealed class FFVideoSource : BaseVideoSource
     private const double DuplicateRequestWindowSeconds = 0.002;
     private const double LateFrameToleranceFloorSeconds = 0.004;
     private const double StarvationRecoveryToleranceFloorSeconds = 0.120;
-    private const double StarvationResyncThresholdFloorSeconds = 0.350;
     private const int ProactiveInlineDecodeLowQueueThreshold = 1;
     private const int InlineRecoveryPrefetchQueueTarget = 4;
     private const int DefaultQueueCapacity = 6;
@@ -51,6 +50,8 @@ public sealed class FFVideoSource : BaseVideoSource
     private long _presentedFrameCount;
     private long _droppedFrameCount;
     private long _decodeQueueDepth;
+    private double _startOffsetSeconds;
+    private double _driftCorrectionOffsetSeconds;
     private double _currentFramePtsSeconds = double.NaN;
     private double _lastPromotedMasterTimestamp = double.NaN;
     private double _frameDurationSeconds;
@@ -117,7 +118,15 @@ public sealed class FFVideoSource : BaseVideoSource
     /// Master clock offset in seconds. The source treats <c>masterTimestamp - StartOffset</c> as
     /// the stream-relative playback position.
     /// </summary>
-    public override double StartOffset { get; set; }
+    public override double StartOffset
+    {
+        get => Volatile.Read(ref _startOffsetSeconds);
+        set
+        {
+            Volatile.Write(ref _startOffsetSeconds, value);
+            Volatile.Write(ref _driftCorrectionOffsetSeconds, 0);
+        }
+    }
 
     /// <summary><see langword="true"/> when a playback clock is attached.</summary>
     public override bool IsAttachedToClock => _masterClock != null;
@@ -137,8 +146,42 @@ public sealed class FFVideoSource : BaseVideoSource
     /// <summary>Master clock timestamp at which the last frame was promoted.</summary>
     public double LastPromotedMasterTimestamp => Interlocked.CompareExchange(ref _lastPromotedMasterTimestamp, 0, 0);
 
-    /// <summary>Reserved for future engine/mixer-owned timing correction. Currently always zero.</summary>
-    public double CurrentDriftCorrectionOffsetSeconds => 0;
+    /// <summary>Current timing correction offset applied by the owning transport/mixer.</summary>
+    public double CurrentDriftCorrectionOffsetSeconds => Volatile.Read(ref _driftCorrectionOffsetSeconds);
+
+    internal void ResetDriftCorrectionOffset()
+    {
+        lock (_syncLock)
+            ResetDriftCorrectionOffsetUnsafe();
+    }
+
+    internal void ApplyDriftCorrectionDelta(double deltaSeconds, double maxAbsoluteOffsetSeconds)
+    {
+        if (double.IsNaN(deltaSeconds) || double.IsInfinity(deltaSeconds) || Math.Abs(deltaSeconds) < 1e-9)
+            return;
+
+        lock (_syncLock)
+        {
+            var currentCorrection = Volatile.Read(ref _driftCorrectionOffsetSeconds);
+            var nextCorrection = Math.Clamp(currentCorrection + deltaSeconds, -Math.Abs(maxAbsoluteOffsetSeconds), Math.Abs(maxAbsoluteOffsetSeconds));
+            var appliedDelta = nextCorrection - currentCorrection;
+            if (Math.Abs(appliedDelta) < 1e-9)
+                return;
+
+            Volatile.Write(ref _startOffsetSeconds, Volatile.Read(ref _startOffsetSeconds) + appliedDelta);
+            Volatile.Write(ref _driftCorrectionOffsetSeconds, nextCorrection);
+        }
+    }
+
+    private void ResetDriftCorrectionOffsetUnsafe()
+    {
+        var currentCorrection = Volatile.Read(ref _driftCorrectionOffsetSeconds);
+        if (Math.Abs(currentCorrection) < 1e-9)
+            return;
+
+        Volatile.Write(ref _startOffsetSeconds, Volatile.Read(ref _startOffsetSeconds) - currentCorrection);
+        Volatile.Write(ref _driftCorrectionOffsetSeconds, 0);
+    }
 
     /// <summary>Number of frames currently held in the decode pre-fetch queue.</summary>
     public int QueueDepth
@@ -484,7 +527,6 @@ public sealed class FFVideoSource : BaseVideoSource
         if (_hasPendingFrame)
             return true;
 
-        var decodedInline = false;
         var allowStarvationRecovery = IsQueueStarved();
 
         if (TryDequeueDecodedFrame(requiredSeekEpoch, relativeTime, allowStarvationRecovery, out var queued))
@@ -519,7 +561,6 @@ public sealed class FFVideoSource : BaseVideoSource
 
                 if (IsFrameUsableForPresentation(_pendingFrame!.PtsSeconds, relativeTime, allowStarvationRecovery))
                 {
-                    decodedInline = true;
                     break;
                 }
 
@@ -545,14 +586,15 @@ public sealed class FFVideoSource : BaseVideoSource
 
         _hasPendingFrame = true;
 
-        if (decodedInline)
-            PrefillQueueAfterInlineRecovery(requiredSeekEpoch, relativeTime);
+        PrefillQueueAfterInlineRecovery(requiredSeekEpoch);
 
         return true;
     }
 
     private bool SeekInternal(double seconds)
     {
+        ResetDriftCorrectionOffsetUnsafe();
+
         var clampedSeconds = Math.Max(0, seconds);
         var target = TimeSpan.FromSeconds(clampedSeconds);
         VideoFrame? primedFrame;
@@ -780,9 +822,9 @@ public sealed class FFVideoSource : BaseVideoSource
                 continue;
             }
 
-            var currentRelativeTime = ResolveCurrentRelativeClockTime();
-            var allowStarvationRecovery = Interlocked.Read(ref _decodeQueueDepth) <= ProactiveInlineDecodeLowQueueThreshold && !_hasPendingFrame;
-            if (!IsFrameUsableForPresentation(frame.PtsSeconds, currentRelativeTime, allowStarvationRecovery))
+            // Producer path should only enforce seek-floor validity.
+            // Late-frame dropping happens on the presentation path where clock context is accurate.
+            if (!IsFrameEligibleForPresentation(frame.PtsSeconds))
             {
                 Interlocked.Increment(ref _decodedFrameCount);
                 Interlocked.Increment(ref _droppedFrameCount);
@@ -920,20 +962,6 @@ public sealed class FFVideoSource : BaseVideoSource
                || IsFrameCloseToRunningLate(_currentFrame.PtsSeconds, relativeTime);
     }
 
-    private double ResolveCurrentRelativeClockTime()
-    {
-        var masterClock = _masterClock;
-        if (masterClock == null)
-            return Position;
-
-        var playbackState = State;
-        var relativeTime = playbackState is VideoPlaybackState.Paused or VideoPlaybackState.EndOfStream
-            ? Position
-            : masterClock.CurrentTimestamp - StartOffset;
-
-        return Math.Max(0, relativeTime);
-    }
-
     private double GetLateFrameToleranceSeconds()
     {
         var frameBasedTolerance = _frameDurationSeconds * 0.75;
@@ -944,18 +972,6 @@ public sealed class FFVideoSource : BaseVideoSource
     {
         var frameBasedTolerance = _frameDurationSeconds * 12.0;
         return Math.Max(StarvationRecoveryToleranceFloorSeconds, Math.Min(frameBasedTolerance, 0.250));
-    }
-
-    private double GetStarvationResyncThresholdSeconds()
-    {
-        var frameBasedThreshold = _frameDurationSeconds * 24.0;
-        return Math.Max(StarvationResyncThresholdFloorSeconds, Math.Min(frameBasedThreshold, 0.750));
-    }
-
-    private double GetStarvationResyncBacktrackSeconds()
-    {
-        var frameBasedBacktrack = _frameDurationSeconds * 2.0;
-        return Math.Max(_frameDurationSeconds, Math.Min(frameBasedBacktrack, 0.050));
     }
 
     private bool IsFrameCloseToRunningLate(double ptsSeconds, double relativeTime)
@@ -975,31 +991,18 @@ public sealed class FFVideoSource : BaseVideoSource
         return Interlocked.Read(ref _decodeQueueDepth) == 0 && !_hasPendingFrame;
     }
 
-    private bool IsQueueRunningDry()
-    {
-        return Interlocked.Read(ref _decodeQueueDepth) <= InlineRecoveryPrefetchQueueTarget;
-    }
-
     private void TryRecoverFromStarvation(double relativeTime)
     {
+        _ = relativeTime;
+
         if (!_useDedicatedDecodeThread || _videoDecoder.IsEndOfStream)
             return;
 
-        if (!IsQueueRunningDry() || !_hasCurrentFrame || _currentFrame == null)
-            return;
-
-        var lagSeconds = relativeTime - _currentFrame.PtsSeconds;
-        if (lagSeconds < GetStarvationResyncThresholdSeconds())
-            return;
-
-        var targetSeconds = Math.Max(0, relativeTime - GetStarvationResyncBacktrackSeconds());
-        if (!SeekInternal(targetSeconds))
-            return;
-
-        PrefillQueueAfterInlineRecovery(Volatile.Read(ref _seekEpoch), relativeTime);
+        if (Interlocked.Read(ref _decodeQueueDepth) <= InlineRecoveryPrefetchQueueTarget)
+            _decodeWakeEvent.Set();
     }
 
-    private void PrefillQueueAfterInlineRecovery(long requiredSeekEpoch, double relativeTime)
+    private void PrefillQueueAfterInlineRecovery(long requiredSeekEpoch)
     {
         if (!_useDedicatedDecodeThread)
             return;
@@ -1028,7 +1031,9 @@ public sealed class FFVideoSource : BaseVideoSource
                 break;
             }
 
-            if (!IsFrameUsableForPresentation(frame!.PtsSeconds, relativeTime))
+            // Keep prefill frames unless they violate seek-floor eligibility.
+            // Presentation-time late filtering decides what gets shown/dropped.
+            if (!IsFrameEligibleForPresentation(frame.PtsSeconds))
             {
                 Interlocked.Increment(ref _droppedFrameCount);
                 DisposeFrame(frame);

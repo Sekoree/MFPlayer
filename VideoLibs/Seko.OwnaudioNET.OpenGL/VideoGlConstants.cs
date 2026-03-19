@@ -34,6 +34,8 @@ public static class VideoGlConstants
     public const int Linear           = 0x2601;
     public const int Nearest          = 0x2600;
     public const int ClampToEdge      = 0x812F;
+    public const int UnpackAlignment  = 0x0CF5;
+    public const int UnpackRowLength  = 0x0CF2;
 
     // ── Buffer / vertex ──────────────────────────────────────────────────────
     public const int ArrayBuffer  = 0x8892;

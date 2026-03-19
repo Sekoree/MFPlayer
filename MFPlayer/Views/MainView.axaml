@@ -12,22 +12,4 @@
     <vm:MainViewModel />
   </Design.DataContext>
 
-  <Border Padding="24"
-          MaxWidth="820"
-          HorizontalAlignment="Center"
-          VerticalAlignment="Center">
-    <StackPanel Spacing="12">
-      <TextBlock Text="{Binding AppTitle}"
-                 FontSize="28"
-                 FontWeight="SemiBold" />
-      <TextBlock Text="{Binding Status}"
-                 TextWrapping="Wrap" />
-      <Separator />
-      <TextBlock Text="{Binding ActiveProjects}"
-                 TextWrapping="Wrap" />
-      <TextBlock Text="{Binding Notes}"
-                 TextWrapping="Wrap"
-                 Opacity="0.85" />
-    </StackPanel>
-  </Border>
 </UserControl>

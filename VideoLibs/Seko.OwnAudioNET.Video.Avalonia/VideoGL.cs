@@ -14,6 +14,8 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     // Constants not in Avalonia's GlConsts — sourced from VideoGlConstants
     private const int GlTexture1      = VideoGlConstants.Texture1;
     private const int GlTexture2      = VideoGlConstants.Texture2;
+    private const int GlUnpackAlignment = VideoGlConstants.UnpackAlignment;
+    private const int GlUnpackRowLength = VideoGlConstants.UnpackRowLength;
 
     // QuadVertices → VideoGlGeometry.QuadVertices (shared)
     // TextureUploadState struct → Seko.OwnaudioNET.OpenGL.TextureUploadState (shared)
@@ -35,6 +37,9 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void Uniform1iProc(int location, int value);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void PixelStoreIProc(int pname, int param);
 
     private readonly IVideoOutputEngine? _sinkEngine;
     private readonly Lock _frameLock = new();
@@ -67,6 +72,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     private TexSubImage2DProc? _texSubImage2D;
     private GetUniformLocationProc? _getUniformLocation;
     private Uniform1iProc? _uniform1i;
+    private PixelStoreIProc? _pixelStoreI;
     private bool _canUseGpuYuvPath;
     private int _yuvTextureYLocation = -1;
     private int _yuvTextureULocation = -1;
@@ -93,6 +99,9 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     private long _diagRenderCount;
     private long _diagRenderRequestPostedCount;
     private long _diagRenderRequestCoalescedCount;
+    private long _diagUploadPlaneCount;
+    private long _diagStridedUploadPlaneCount;
+    private long _diagStridedUploadFrameCount;
     private int _presentationSyncMode = (int)VideoTransportPresentationSyncMode.PreferVSync;
 
     // TextureUploadState is defined in Seko.OwnaudioNET.OpenGL.VideoGlGeometry
@@ -103,7 +112,10 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         long FrameReadyEvents,
         long RenderCalls,
         long RenderRequestPosted,
-        long RenderRequestCoalesced);
+        long RenderRequestCoalesced,
+        long UploadPlanes,
+        long StridedUploadPlanes,
+        long StridedUploadFrames);
 
     public VideoGlDiagnostics GetDiagnosticsSnapshot()
     {
@@ -113,7 +125,10 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
             Interlocked.Read(ref _diagFrameReadyCount),
             Interlocked.Read(ref _diagRenderCount),
             Interlocked.Read(ref _diagRenderRequestPostedCount),
-            Interlocked.Read(ref _diagRenderRequestCoalescedCount));
+            Interlocked.Read(ref _diagRenderRequestCoalescedCount),
+            Interlocked.Read(ref _diagUploadPlaneCount),
+            Interlocked.Read(ref _diagStridedUploadPlaneCount),
+            Interlocked.Read(ref _diagStridedUploadFrameCount));
     }
 
     public bool KeepAspectRatio { get; set; } = true;
@@ -227,6 +242,10 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         var uniform1IProc = gl.GetProcAddress("glUniform1i");
         if (uniform1IProc != nint.Zero)
             _uniform1i = Marshal.GetDelegateForFunctionPointer<Uniform1iProc>(uniform1IProc);
+
+        var pixelStoreIProc = gl.GetProcAddress("glPixelStorei");
+        if (pixelStoreIProc != nint.Zero)
+            _pixelStoreI = Marshal.GetDelegateForFunctionPointer<PixelStoreIProc>(pixelStoreIProc);
 
         var vertexShaderSource = BuildVertexShader(gl.ContextInfo.Version.Type);
         var fragmentShaderSource = BuildFragmentShader(gl.ContextInfo.Version.Type);
@@ -720,6 +739,16 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
 
     private static byte[]? GetTightlyPackedPlane(VideoFrame frame, int planeIndex, int rowBytes, int rows, ref byte[]? scratch)
         => VideoFramePacking.GetTightlyPackedPlane(frame, planeIndex, rowBytes, rows, ref scratch);
+
+    private static byte[]? GetPlaneUploadBytes(
+        VideoFrame frame,
+        int planeIndex,
+        int rowBytes,
+        int rows,
+        bool allowStridedUpload,
+        ref byte[]? scratch,
+        out int sourceStrideBytes)
+        => VideoFramePacking.GetPlaneUploadBytes(frame, planeIndex, rowBytes, rows, allowStridedUpload, ref scratch, out sourceStrideBytes);
 
     private static void ConvertNv12ToRgba(byte[] yPlane, byte[] uvPlane, int width, int height, byte[] destination)
         => VideoGlYuvConverter.ConvertNv12ToRgba(yPlane, uvPlane, width, height, destination);

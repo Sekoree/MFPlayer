@@ -16,19 +16,41 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 {
     private readonly bool _ownsAudioMixer;
     private readonly bool _ownsVideoMixer;
+    private readonly Timer _driftCorrectionTimer;
+    private readonly AudioVideoDriftCorrectionConfig _driftCorrectionConfig;
+    private int _driftCorrectionTickActive;
     private bool _disposed;
 
     public AudioVideoMixer(AudioMixer audioMixer, IVideoMixer videoMixer, bool ownsAudioMixer = false, bool ownsVideoMixer = false)
+        : this(audioMixer, videoMixer, driftCorrectionConfig: null, ownsAudioMixer, ownsVideoMixer)
+    {
+    }
+
+    public AudioVideoMixer(
+        AudioMixer audioMixer,
+        IVideoMixer videoMixer,
+        AudioVideoDriftCorrectionConfig? driftCorrectionConfig,
+        bool ownsAudioMixer = false,
+        bool ownsVideoMixer = false)
     {
         AudioMixer = audioMixer ?? throw new ArgumentNullException(nameof(audioMixer));
         VideoMixer = videoMixer ?? throw new ArgumentNullException(nameof(videoMixer));
         _ownsAudioMixer = ownsAudioMixer;
         _ownsVideoMixer = ownsVideoMixer;
+        _driftCorrectionConfig = (driftCorrectionConfig ?? new AudioVideoDriftCorrectionConfig()).CloneNormalized();
 
         AudioMixer.SourceError += OnAudioSourceError;
         VideoMixer.SourceError += OnVideoSourceError;
         VideoMixer.OutputSourceChanged += OnVideoOutputSourceChanged;
+
+        _driftCorrectionTimer = new Timer(
+            static state => ((AudioVideoMixer)state!).DriftCorrectionTick(),
+            this,
+            Timeout.Infinite,
+            Timeout.Infinite);
     }
+
+    public AudioVideoDriftCorrectionConfig DriftCorrectionConfig => _driftCorrectionConfig;
 
     public AudioMixer AudioMixer { get; }
 
@@ -164,11 +186,15 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         ThrowIfDisposed();
         AudioMixer.Start();
         VideoMixer.Start();
+
+        if (_driftCorrectionConfig.Enabled)
+            _driftCorrectionTimer.Change(_driftCorrectionConfig.CorrectionIntervalMs, _driftCorrectionConfig.CorrectionIntervalMs);
     }
 
     public void Pause()
     {
         ThrowIfDisposed();
+        _driftCorrectionTimer.Change(Timeout.Infinite, Timeout.Infinite);
         AudioMixer.Pause();
         VideoMixer.Pause();
     }
@@ -176,8 +202,10 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
     public void Stop()
     {
         ThrowIfDisposed();
+        _driftCorrectionTimer.Change(Timeout.Infinite, Timeout.Infinite);
         AudioMixer.Stop();
         VideoMixer.Stop();
+        ResetVideoDriftCorrections();
     }
 
     public void Seek(double positionInSeconds)
@@ -202,11 +230,12 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
             }
             catch
             {
-                // Best effort reactivation only.
+                // Ignore.
             }
         }
 
         VideoMixer.Seek(target, safeSeek: false);
+        ResetVideoDriftCorrections();
     }
 
     public void Dispose()
@@ -217,6 +246,8 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         AudioMixer.SourceError -= OnAudioSourceError;
         VideoMixer.SourceError -= OnVideoSourceError;
         VideoMixer.OutputSourceChanged -= OnVideoOutputSourceChanged;
+        _driftCorrectionTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        _driftCorrectionTimer.Dispose();
 
         try
         {
@@ -251,6 +282,75 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(AudioVideoMixer));
+    }
+
+    private void ResetVideoDriftCorrections()
+    {
+        foreach (var videoSource in VideoMixer.GetSources())
+            videoSource.ResetDriftCorrectionOffset();
+    }
+
+    private void DriftCorrectionTick()
+    {
+        if (_disposed || !IsRunning)
+            return;
+
+        if (!_driftCorrectionConfig.Enabled)
+            return;
+
+        if (Interlocked.Exchange(ref _driftCorrectionTickActive, 1) != 0)
+            return;
+
+        try
+        {
+            var masterTimestamp = MasterClock.CurrentTimestamp;
+            foreach (var videoSource in VideoMixer.GetSources())
+            {
+                // Correct only routed sources.
+                if (VideoMixer.GetOutputsForSource(videoSource).Length == 0)
+                    continue;
+
+                if (videoSource.State != VideoPlaybackState.Playing)
+                    continue;
+
+                var frameTimestamp = videoSource.CurrentFramePtsSeconds;
+                if (double.IsNaN(frameTimestamp) || double.IsInfinity(frameTimestamp))
+                    continue;
+
+                var expectedVideoTimestamp = masterTimestamp - videoSource.StartOffset;
+                var driftSeconds = frameTimestamp - expectedVideoTimestamp;
+                var absoluteDrift = Math.Abs(driftSeconds);
+
+                if (absoluteDrift <= _driftCorrectionConfig.DeadbandSeconds)
+                    continue;
+
+                if (absoluteDrift >= _driftCorrectionConfig.HardResyncThresholdSeconds)
+                {
+                    var targetVideoPosition = Math.Max(0, expectedVideoTimestamp);
+                    try
+                    {
+                        videoSource.Seek(targetVideoPosition);
+                    }
+                    catch
+                    {
+                        // Ignore.
+                    }
+
+                    videoSource.ResetDriftCorrectionOffset();
+                    continue;
+                }
+
+                var correctionStep = Math.Clamp(
+                    -driftSeconds * _driftCorrectionConfig.CorrectionGain,
+                    -_driftCorrectionConfig.MaxStepSeconds,
+                    _driftCorrectionConfig.MaxStepSeconds);
+                videoSource.ApplyDriftCorrectionDelta(correctionStep, _driftCorrectionConfig.MaxAbsoluteCorrectionSeconds);
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _driftCorrectionTickActive, 0);
+        }
     }
 }
 

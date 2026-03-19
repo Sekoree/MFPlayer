@@ -47,6 +47,8 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
     private bool _decoderEof;
     private bool _disposed;
     private bool _isHardwareDecoding;
+    private readonly FFSharedDemuxSession? _sharedDemuxSession;
+    private readonly bool _ownsSharedDemuxSession;
     private double _lastPtsSeconds;
     private readonly double _fallbackFrameDuration;
     private readonly double _streamFrameRate;
@@ -88,17 +90,9 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
     /// <param name="filePath">Path to the media file to open.</param>
     /// <param name="options">Decoder configuration.</param>
     public FFVideoDecoder(string filePath, FFVideoDecoderOptions options)
+        : this(options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-
-        QueueCapacity = Math.Max(2, options.QueueCapacity);
-        UseDedicatedDecodeThread = options.UseDedicatedDecodeThread;
-
-        _preferredOutputFormats = ResolvePreferredOutputFormats(options.PreferredOutputPixelFormats);
-        _preferSourcePixelFormatWhenSupported = options.PreferSourcePixelFormatWhenSupported;
-        _preferLowestConversionCost = options.PreferLowestConversionCost;
-        _activeOutputFormat = _preferredOutputFormats[0];
-        _activeOutputAvPixelFormat = ToAvPixelFormat(_activeOutputFormat);
 
         try
         {
@@ -118,52 +112,11 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
 
             AVCodec* codec;
             _videoStreamIndex = ResolveVideoStreamIndex(fCtx, options.PreferredStreamIndex, out codec);
-
             var stream = fCtx->streams[_videoStreamIndex];
             _timeBase = stream->time_base;
 
-            var cCtx = ffmpeg.avcodec_alloc_context3(codec);
-            if (cCtx == null)
-                throw new Exception("avcodec_alloc_context3 failed");
-
-            var parametersResult = ffmpeg.avcodec_parameters_to_context(cCtx, stream->codecpar);
-            if (parametersResult < 0)
-                throw new Exception($"avcodec_parameters_to_context: {GetErrorText(parametersResult)}");
-
-            if (options.ThreadCount > 0)
-                cCtx->thread_count = options.ThreadCount;
-
-            TryEnableHardwareDecoding(cCtx, options);
-
-            var codecOpenResult = ffmpeg.avcodec_open2(cCtx, codec, null);
-            if (codecOpenResult < 0)
-                throw new Exception($"avcodec_open2: {GetErrorText(codecOpenResult)}");
-
-            _codecCtx = (nint)cCtx;
-            _width = cCtx->width;
-            _height = cCtx->height;
-
-            _packet = (nint)ffmpeg.av_packet_alloc();
-            _frame = (nint)ffmpeg.av_frame_alloc();
-            _outputFrame = (nint)ffmpeg.av_frame_alloc();
-            _swFrame = (nint)ffmpeg.av_frame_alloc();
-            if (_packet == 0 || _frame == 0 || _outputFrame == 0 || _swFrame == 0)
-                throw new Exception("av_packet_alloc/av_frame_alloc failed");
-
-            var outputFrame = (AVFrame*)_outputFrame;
-            outputFrame->format = (int)_activeOutputAvPixelFormat;
-            outputFrame->width = _width;
-            outputFrame->height = _height;
-
-            var frameBufferResult = ffmpeg.av_frame_get_buffer(outputFrame, 1);
-            if (frameBufferResult < 0)
-                throw new Exception($"av_frame_get_buffer(output): {GetErrorText(frameBufferResult)}");
-
-            _outputPlane0Stride = outputFrame->linesize[0];
-            _outputPlane1Stride = outputFrame->linesize[1];
-            _outputPlane2Stride = outputFrame->linesize[2];
-
-            _swsCtx = 0;
+            InitializeCodecContext(codec, stream, options);
+            InitializeFrameBuffers();
 
             _streamFrameRate = ResolveFrameRate(stream);
             _streamDuration = fCtx->duration > 0
@@ -181,6 +134,60 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
         }
     }
 
+    /// <summary>Initializes a decoder backed by a shared demux session.</summary>
+    public FFVideoDecoder(FFSharedDemuxSession sharedDemuxSession, FFVideoDecoderOptions options, bool ownsSharedDemuxSession = false)
+        : this(options)
+    {
+        ArgumentNullException.ThrowIfNull(sharedDemuxSession);
+        _sharedDemuxSession = sharedDemuxSession;
+        _ownsSharedDemuxSession = ownsSharedDemuxSession;
+
+        try
+        {
+            if (!_sharedDemuxSession.TryResolveStream(
+                    AVMediaType.AVMEDIA_TYPE_VIDEO,
+                    options.PreferredStreamIndex,
+                    out _videoStreamIndex,
+                    out var codec,
+                    out _timeBase,
+                    out var stream,
+                    out var streamError))
+            {
+                throw new Exception(streamError);
+            }
+
+            InitializeCodecContext(codec, stream, options);
+            InitializeFrameBuffers();
+
+            var sessionDuration = ResolveStreamDuration(stream, _sharedDemuxSession);
+            _streamFrameRate = ResolveFrameRate(stream);
+            _streamDuration = sessionDuration;
+            _streamFrameCount = ResolveFrameCount(stream, _streamFrameRate, _streamDuration);
+            _fallbackFrameDuration = _streamFrameRate > 0 ? 1.0 / _streamFrameRate : 1.0 / 30.0;
+
+            UpdateStreamInfo(raiseEvent: false);
+        }
+        catch
+        {
+            ReleaseResources();
+            throw;
+        }
+    }
+
+    private FFVideoDecoder(FFVideoDecoderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        QueueCapacity = Math.Max(2, options.QueueCapacity);
+        UseDedicatedDecodeThread = options.UseDedicatedDecodeThread;
+
+        _preferredOutputFormats = ResolvePreferredOutputFormats(options.PreferredOutputPixelFormats);
+        _preferSourcePixelFormatWhenSupported = options.PreferSourcePixelFormatWhenSupported;
+        _preferLowestConversionCost = options.PreferLowestConversionCost;
+        _activeOutputFormat = _preferredOutputFormats[0];
+        _activeOutputAvPixelFormat = ToAvPixelFormat(_activeOutputFormat);
+    }
+
     /// <inheritdoc/>
     public bool TryDecodeNextFrame(out VideoFrame frame, out string? error)
     {
@@ -189,7 +196,6 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
         frame = null!;
         error = null;
 
-        var fmtCtx = (AVFormatContext*)_formatCtx;
         var codecCtx = (AVCodecContext*)_codecCtx;
         var packet = (AVPacket*)_packet;
         var decodedFrame = (AVFrame*)_frame;
@@ -311,23 +317,42 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
                 continue;
             }
 
-            var readResult = ffmpeg.av_read_frame(fmtCtx, packet);
-            if (readResult < 0)
+            if (_sharedDemuxSession != null)
             {
-                if (readResult == ffmpeg.AVERROR_EOF)
+                if (!_sharedDemuxSession.TryDequeuePacket(_videoStreamIndex, packet, out var streamEof, out var demuxError))
                 {
-                    _inputEof = true;
+                    if (demuxError != null)
+                    {
+                        error = demuxError;
+                        return false;
+                    }
+
+                    if (streamEof)
+                        _inputEof = true;
+
                     continue;
                 }
-
-                error = $"av_read_frame failed: {GetErrorText(readResult)}";
-                return false;
             }
-
-            if (packet->stream_index != _videoStreamIndex)
+            else
             {
-                ffmpeg.av_packet_unref(packet);
-                continue;
+                var readResult = ffmpeg.av_read_frame((AVFormatContext*)_formatCtx, packet);
+                if (readResult < 0)
+                {
+                    if (readResult == ffmpeg.AVERROR_EOF)
+                    {
+                        _inputEof = true;
+                        continue;
+                    }
+
+                    error = $"av_read_frame failed: {GetErrorText(readResult)}";
+                    return false;
+                }
+
+                if (packet->stream_index != _videoStreamIndex)
+                {
+                    ffmpeg.av_packet_unref(packet);
+                    continue;
+                }
             }
 
             var sendResult = ffmpeg.avcodec_send_packet(codecCtx, packet);
@@ -355,29 +380,38 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
 
         error = string.Empty;
 
-        var fCtx = (AVFormatContext*)_formatCtx;
         var cCtx = (AVCodecContext*)_codecCtx;
         var pkt = (AVPacket*)_packet;
         var frm = (AVFrame*)_frame;
         var sw = (AVFrame*)_swFrame;
-        var stream = fCtx->streams[_videoStreamIndex];
 
         if (position < TimeSpan.Zero)
             position = TimeSpan.Zero;
 
-        var avTimeBaseQ = new AVRational { num = 1, den = ffmpeg.AV_TIME_BASE };
-        var targetUs = (long)Math.Round(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
-        var targetTs = ffmpeg.av_rescale_q(targetUs, avTimeBaseQ, stream->time_base);
-
-        var seekResult = ffmpeg.av_seek_frame(fCtx, _videoStreamIndex, targetTs, ffmpeg.AVSEEK_FLAG_BACKWARD);
-        if (seekResult < 0)
+        if (_sharedDemuxSession != null)
         {
-            error = $"av_seek_frame failed: {GetErrorText(seekResult)}";
-            return false;
+            if (!_sharedDemuxSession.TrySeek(position, out error))
+                return false;
+        }
+        else
+        {
+            var fCtx = (AVFormatContext*)_formatCtx;
+            var stream = fCtx->streams[_videoStreamIndex];
+            var avTimeBaseQ = new AVRational { num = 1, den = ffmpeg.AV_TIME_BASE };
+            var targetUs = (long)Math.Round(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
+            var targetTs = ffmpeg.av_rescale_q(targetUs, avTimeBaseQ, stream->time_base);
+
+            var seekResult = ffmpeg.av_seek_frame(fCtx, _videoStreamIndex, targetTs, ffmpeg.AVSEEK_FLAG_BACKWARD);
+            if (seekResult < 0)
+            {
+                error = $"av_seek_frame failed: {GetErrorText(seekResult)}";
+                return false;
+            }
+
+            ffmpeg.avformat_flush(fCtx);
         }
 
         ffmpeg.avcodec_flush_buffers(cCtx);
-        ffmpeg.avformat_flush(fCtx);
         ffmpeg.av_packet_unref(pkt);
         ffmpeg.av_frame_unref(frm);
         ffmpeg.av_frame_unref(sw);
@@ -397,7 +431,69 @@ public unsafe partial class FFVideoDecoder : IVideoDecoder
 
         _disposed = true;
         ReleaseResources();
+        if (_ownsSharedDemuxSession)
+            _sharedDemuxSession?.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private static TimeSpan ResolveStreamDuration(AVStream* stream, FFSharedDemuxSession session)
+    {
+        var containerDuration = session.ContainerDuration;
+        if (containerDuration > TimeSpan.Zero)
+            return containerDuration;
+
+        if (stream->duration > 0)
+            return TimeSpan.FromSeconds(stream->duration * ffmpeg.av_q2d(stream->time_base));
+
+        return TimeSpan.Zero;
+    }
+
+    private void InitializeCodecContext(AVCodec* codec, AVStream* stream, FFVideoDecoderOptions options)
+    {
+        var cCtx = ffmpeg.avcodec_alloc_context3(codec);
+        if (cCtx == null)
+            throw new Exception("avcodec_alloc_context3 failed");
+
+        var parametersResult = ffmpeg.avcodec_parameters_to_context(cCtx, stream->codecpar);
+        if (parametersResult < 0)
+            throw new Exception($"avcodec_parameters_to_context: {GetErrorText(parametersResult)}");
+
+        if (options.ThreadCount > 0)
+            cCtx->thread_count = options.ThreadCount;
+
+        TryEnableHardwareDecoding(cCtx, options);
+
+        var codecOpenResult = ffmpeg.avcodec_open2(cCtx, codec, null);
+        if (codecOpenResult < 0)
+            throw new Exception($"avcodec_open2: {GetErrorText(codecOpenResult)}");
+
+        _codecCtx = (nint)cCtx;
+        _width = cCtx->width;
+        _height = cCtx->height;
+    }
+
+    private void InitializeFrameBuffers()
+    {
+        _packet = (nint)ffmpeg.av_packet_alloc();
+        _frame = (nint)ffmpeg.av_frame_alloc();
+        _outputFrame = (nint)ffmpeg.av_frame_alloc();
+        _swFrame = (nint)ffmpeg.av_frame_alloc();
+        if (_packet == 0 || _frame == 0 || _outputFrame == 0 || _swFrame == 0)
+            throw new Exception("av_packet_alloc/av_frame_alloc failed");
+
+        var outputFrame = (AVFrame*)_outputFrame;
+        outputFrame->format = (int)_activeOutputAvPixelFormat;
+        outputFrame->width = _width;
+        outputFrame->height = _height;
+
+        var frameBufferResult = ffmpeg.av_frame_get_buffer(outputFrame, 1);
+        if (frameBufferResult < 0)
+            throw new Exception($"av_frame_get_buffer(output): {GetErrorText(frameBufferResult)}");
+
+        _outputPlane0Stride = outputFrame->linesize[0];
+        _outputPlane1Stride = outputFrame->linesize[1];
+        _outputPlane2Stride = outputFrame->linesize[2];
+        _swsCtx = 0;
     }
 
     private double ResolvePtsSeconds(AVFrame* decodedFrame)

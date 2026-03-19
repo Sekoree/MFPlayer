@@ -4,10 +4,17 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using FFmpeg.AutoGen;
+using Ownaudio.Core;
+using OwnaudioNET.Mixing;
 using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Avalonia;
+using Seko.OwnAudioNET.Video.Clocks;
 using Seko.OwnAudioNET.Video.Decoders;
 using Seko.OwnAudioNET.Video.Engine;
+using Seko.OwnAudioNET.Video.Mixing;
+using Seko.OwnAudioNET.Video.Probing;
+using Seko.OwnAudioNET.Video.Sources;
+using AudioPlaybackEngineFactory = OwnaudioNET.Engine.AudioEngineFactory;
 
 namespace VideoTest;
 
@@ -15,8 +22,12 @@ public partial class MainWindow : Window
 {
     private const double SeekStepSeconds = 5.0;
 
-    private FFVideoDecoder? _videoDecoder;
-    private VideoEngine? _videoEngine;
+    private IAudioEngine? _audioEngine;
+    private AudioMixer? _audioMixer;
+    private IAudioVideoMixer? _playbackMixer;
+    private FFVideoSource? _videoSource;
+    private FFAudioSource? _audioSource;
+    private FFSharedDemuxSession? _sharedDemuxSession;
     private VideoGL[] _videoViews = [];
     private DispatcherTimer? _videoStatsTimer;
     private bool _isDisposed;
@@ -26,15 +37,6 @@ public partial class MainWindow : Window
     private long _lastDroppedFrames;
     private VideoGL.VideoGlDiagnostics[] _lastVideoGlDiagnosticsPerView = [];
     private readonly Lock _seekLock = new();
-    private Thread? _playbackThread;
-    private volatile bool _stopPlaybackThread;
-    private bool _isPlaying = true;
-    private bool _decodePrimePending;
-    private bool _isEndOfStream;
-    private long _timelineSecondsBits;
-    private long _decodedFrames;
-    private long _submittedFrames;
-    private long _droppedFrames;
 
     public MainWindow()
     {
@@ -78,30 +80,29 @@ public partial class MainWindow : Window
 
     private void TogglePlayPause()
     {
-        if (_videoDecoder == null)
+        if (_playbackMixer == null)
             return;
 
-        var isPlaying = Volatile.Read(ref _isPlaying);
-        if (isPlaying)
+        if (_playbackMixer.IsRunning)
         {
-            Volatile.Write(ref _isPlaying, false);
+            _playbackMixer.Pause();
             ConsolePrintLine("[Video] Paused.");
         }
         else
         {
-            Volatile.Write(ref _isPlaying, true);
+            _playbackMixer.Start();
             ConsolePrintLine("[Video] Playing.");
         }
     }
 
     private void SeekRelative(double deltaSeconds)
     {
-        if (_videoDecoder == null || !_seekLock.TryEnter())
+        if (_videoSource == null || _playbackMixer == null || !_seekLock.TryEnter())
             return;
 
         try
         {
-            PerformSeek(Math.Max(0.0, GetTimelineSeconds() + deltaSeconds));
+            PerformSeek(Math.Max(0.0, _playbackMixer.Position + deltaSeconds));
         }
         finally
         {
@@ -111,7 +112,7 @@ public partial class MainWindow : Window
 
     private void SeekToStart()
     {
-        if (_videoDecoder == null || !_seekLock.TryEnter())
+        if (_videoSource == null || !_seekLock.TryEnter())
             return;
 
         try
@@ -126,12 +127,12 @@ public partial class MainWindow : Window
 
     private void SeekToEnd()
     {
-        if (_videoDecoder == null || !_seekLock.TryEnter())
+        if (_videoSource == null || !_seekLock.TryEnter())
             return;
 
         try
         {
-            PerformSeek(Math.Max(0, _videoDecoder.StreamInfo.Duration.TotalSeconds - 0.001));
+            PerformSeek(Math.Max(0, _videoSource.StreamInfo.Duration.TotalSeconds - 0.001));
         }
         finally
         {
@@ -141,14 +142,20 @@ public partial class MainWindow : Window
 
     private void BindViewsToEngine()
     {
-        if (_videoEngine == null)
-            throw new InvalidOperationException("Video engine has not been initialized.");
+        if (_playbackMixer == null || _videoSource == null)
+            throw new InvalidOperationException("Playback mixer has not been initialized.");
 
-        var primaryView = new VideoGL(_videoEngine)
+        var primaryView = new VideoGL
         {
             KeepAspectRatio = true,
             PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
         };
+
+        if (!_playbackMixer.AddVideoOutput(primaryView))
+            throw new InvalidOperationException("Failed to add primary VideoGL output to playback mixer.");
+
+        if (!_playbackMixer.BindVideoOutputToSource(primaryView, _videoSource))
+            throw new InvalidOperationException("Failed to bind primary VideoGL output to video source.");
 
         _videoViews =
         [
@@ -164,97 +171,25 @@ public partial class MainWindow : Window
             view.PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync;
         }
 
-        if (_videoEngine.OutputCount != 1)
-            throw new InvalidOperationException($"Expected exactly one engine-bound output for VideoTest mirroring, but found {_videoEngine.OutputCount}.");
+        if (_playbackMixer.VideoOutputCount != 1)
+            throw new InvalidOperationException($"Expected exactly one mixer-bound output for VideoTest mirroring, but found {_playbackMixer.VideoOutputCount}.");
 
         ConsolePrintLine($"[VideoTest] Routed decoder→engine with 1 primary VideoGL mirrored across {_videoViews.Length} Avalonia views.");
     }
 
-    private double GetTimelineSeconds()
-    {
-        return BitConverter.Int64BitsToDouble(Interlocked.Read(ref _timelineSecondsBits));
-    }
-
-    private void SetTimelineSeconds(double value)
-    {
-        Interlocked.Exchange(ref _timelineSecondsBits, BitConverter.DoubleToInt64Bits(Math.Max(0, value)));
-    }
-
     private void PerformSeek(double positionSeconds)
     {
-        if (_videoDecoder == null)
+        if (_playbackMixer == null)
             return;
 
         var target = Math.Max(0, positionSeconds);
-        if (_videoDecoder.TrySeek(TimeSpan.FromSeconds(target), out var seekError))
+        try
         {
-            SetTimelineSeconds(target);
-            _isEndOfStream = false;
-            Volatile.Write(ref _decodePrimePending, true);
+            _playbackMixer.Seek(target);
         }
-        else
+        catch (Exception seekError)
         {
-            ConsolePrintLine($"[Video] Seek failed: {seekError}");
-        }
-    }
-
-    private void PlaybackLoop()
-    {
-        while (!_stopPlaybackThread)
-        {
-            var decoder = _videoDecoder;
-            var engine = _videoEngine;
-            if (decoder == null || engine == null)
-                break;
-
-            if (Volatile.Read(ref _isPlaying) || Volatile.Read(ref _decodePrimePending))
-            {
-                if (!_seekLock.TryEnter())
-                {
-                    Thread.Sleep(1);
-                    continue;
-                }
-
-                try
-                {
-                    if (decoder.TryDecodeNextFrame(out var frame, out var decodeError))
-                    {
-                        using (frame)
-                        {
-                            SetTimelineSeconds(frame.PtsSeconds);
-                            var timelineSeconds = GetTimelineSeconds();
-                            if (engine.PushFrame(frame, timelineSeconds))
-                                Interlocked.Increment(ref _submittedFrames);
-                            else
-                                Interlocked.Increment(ref _droppedFrames);
-                        }
-
-                        Interlocked.Increment(ref _decodedFrames);
-                        _isEndOfStream = false;
-                        Volatile.Write(ref _decodePrimePending, false);
-                    }
-                    else if (decoder.IsEndOfStream)
-                    {
-                        if (!_isEndOfStream)
-                            ConsolePrintLine("[Video] End of stream reached.");
-
-                        _isEndOfStream = true;
-                        Volatile.Write(ref _isPlaying, false);
-                        Volatile.Write(ref _decodePrimePending, false);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(decodeError))
-                    {
-                        ConsolePrintLine($"[Video] Decode error: {decodeError}");
-                        Thread.Sleep(5);
-                    }
-                }
-                finally
-                {
-                    _seekLock.Exit();
-                }
-            }
-
-            Thread.Sleep(Volatile.Read(ref _isPlaying) ? 0 : 10);
+            ConsolePrintLine($"[Video] Seek failed: {seekError.Message}");
         }
     }
 
@@ -267,7 +202,7 @@ public partial class MainWindow : Window
 
         _started = true;
 
-        var testFile = ResolveTestMediaPath(Program.LaunchArgs);
+        var testFile = "/home/seko/Videos/shootingstar_0611_1.mov";
         if (string.IsNullOrWhiteSpace(testFile))
         {
             Title = "VideoTest - no demo video found";
@@ -281,11 +216,45 @@ public partial class MainWindow : Window
 
         DynamicallyLoadedBindings.Initialize();
 
-        FFVideoDecoder decoder;
+        if (!MediaStreamCatalog.TryGetFirstStream(testFile, MediaStreamKind.Video, out var videoStream))
+        {
+            Title = "VideoTest - no video stream";
+            ConsolePrintLine($"[VideoTest] No video stream found in '{testFile}'.");
+            return;
+        }
+
+        if (!MediaStreamCatalog.TryGetFirstStream(testFile, MediaStreamKind.Audio, out var audioStream))
+        {
+            Title = "VideoTest - no audio stream";
+            ConsolePrintLine($"[VideoTest] No audio stream found in '{testFile}'.");
+            return;
+        }
+
+        var useSharedDemux = IsSharedDemuxEnabled();
+        FFVideoDecoder videoDecoder;
+        FFAudioDecoder audioDecoder;
+        var requestedAudioConfig = AudioConfig.Default;
         try
         {
-            decoder = new FFVideoDecoder(testFile, new FFVideoDecoderOptions
+            _audioEngine = AudioPlaybackEngineFactory.CreateEngine(requestedAudioConfig);
+            var startResult = _audioEngine.Start();
+            if (startResult < 0)
+                throw new InvalidOperationException($"Failed to start audio engine. Error code: {startResult}");
+
+            var negotiatedBufferSize = _audioEngine.FramesPerBuffer > 0
+                ? _audioEngine.FramesPerBuffer
+                : requestedAudioConfig.BufferSize;
+
+            var audioConfig = new AudioConfig
             {
+                SampleRate = requestedAudioConfig.SampleRate,
+                Channels = requestedAudioConfig.Channels,
+                BufferSize = negotiatedBufferSize
+            };
+
+            var decoderOptions = new FFVideoDecoderOptions
+            {
+                PreferredStreamIndex = videoStream.Index,
                 EnableHardwareDecoding = true,
                 ThreadCount = GetSafeVideoThreadCount(),
                 UseDedicatedDecodeThread = true,
@@ -300,29 +269,73 @@ public partial class MainWindow : Window
                 ],
                 PreferSourcePixelFormatWhenSupported = true,
                 PreferLowestConversionCost = true
-            });
+            };
+
+            if (useSharedDemux)
+            {
+                _sharedDemuxSession = FFSharedDemuxSession.OpenFile(testFile, new FFSharedDemuxSessionOptions
+                {
+                    InitialStreamIndices = [videoStream.Index, audioStream.Index],
+                    PacketQueueCapacityPerStream = 200
+                });
+                videoDecoder = new FFVideoDecoder(_sharedDemuxSession, decoderOptions);
+                audioDecoder = new FFAudioDecoder(_sharedDemuxSession, audioConfig.SampleRate, audioConfig.Channels, audioStream.Index);
+            }
+            else
+            {
+                videoDecoder = new FFVideoDecoder(testFile, decoderOptions);
+                audioDecoder = new FFAudioDecoder(testFile, audioConfig.SampleRate, audioConfig.Channels, audioStream.Index);
+            }
+
+            _videoSource = new FFVideoSource(
+                videoDecoder,
+                new FFVideoSourceOptions
+                {
+                    HoldLastFrameOnEndOfStream = true
+                },
+                ownsDecoder: true);
+
+            _audioSource = new FFAudioSource(audioDecoder, audioConfig, ownsDecoder: true);
+            _audioMixer = new AudioMixer(_audioEngine, negotiatedBufferSize);
+
+            var videoTransportConfig = new VideoTransportEngineConfig
+            {
+                PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+            }.CloneNormalized();
+            videoTransportConfig.ClockSyncMode = VideoTransportClockSyncMode.AudioLed;
+
+            var videoClock = new MasterClockVideoClockAdapter(_audioMixer.MasterClock);
+            var videoTransport = new VideoTransportEngine(videoClock, videoTransportConfig, ownsClock: false);
+            var videoMixer = new VideoMixer(videoTransport, ownsEngine: true);
+            var driftCorrectionConfig = new AudioVideoDriftCorrectionConfig
+            {
+                Enabled = true
+            };
+            _playbackMixer = new AudioVideoMixer(_audioMixer, videoMixer, driftCorrectionConfig, ownsAudioMixer: false, ownsVideoMixer: true);
+
+            _playbackMixer.AudioSourceError += static (_, args) => ConsolePrintLine($"[Audio] {args.Message}");
+            _playbackMixer.VideoSourceError += static (_, args) => ConsolePrintLine($"[Video] {args.Message}");
+
+            _audioSource.AttachToClock(_audioMixer.MasterClock);
+            if (!_playbackMixer.AddAudioSource(_audioSource))
+                throw new InvalidOperationException("Failed to add audio source to playback mixer.");
+
+            if (!_playbackMixer.AddVideoSource(_videoSource))
+                throw new InvalidOperationException("Failed to add video source to playback mixer.");
+
+            _audioSource.Play();
         }
         catch (Exception ex)
         {
             Title = "VideoTest - decoder init failed";
             ConsolePrintLine($"[VideoTest] Failed to open '{testFile}': {ex.Message}");
+            CleanupPlaybackResources();
             return;
         }
 
-        _videoDecoder = decoder;
-        _videoEngine = new VideoEngine(new VideoEngineConfig
-        {
-            FpsLimit = decoder.StreamInfo.FrameRate > 0 ? decoder.StreamInfo.FrameRate : null,
-            PixelFormatPolicy = VideoEnginePixelFormatPolicy.Auto,
-            DropRejectedFrames = false
-        });
-        SetTimelineSeconds(0);
-        _isPlaying = true;
-        _decodePrimePending = false;
-        _isEndOfStream = false;
-        Interlocked.Exchange(ref _decodedFrames, 0);
-        Interlocked.Exchange(ref _submittedFrames, 0);
-        Interlocked.Exchange(ref _droppedFrames, 0);
+        ConsolePrintLine(useSharedDemux
+            ? $"[VideoTest] Shared demux enabled for stream {videoStream.Index}."
+            : $"[VideoTest] Shared demux disabled; using separate decode session for stream {videoStream.Index}.");
         
         BindViewsToEngine();
 
@@ -332,27 +345,23 @@ public partial class MainWindow : Window
         VideoControl3.Content = _videoViews[2];
         VideoControl4.Content = _videoViews[3];
 
-        _stopPlaybackThread = false;
-        _playbackThread = new Thread(PlaybackLoop)
-        {
-            Name = "VideoTest.PlaybackLoop",
-            IsBackground = true,
-            Priority = ThreadPriority.AboveNormal
-        };
-        _playbackThread.Start();
+        _playbackMixer!.Start();
 
         _videoStatsTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {
-            if (_videoDecoder == null || _videoEngine == null)
+            if (_videoSource == null || _audioSource == null || _playbackMixer == null)
                 return;
 
-            var decodedFrames = Interlocked.Read(ref _decodedFrames);
-            var submittedFrames = Interlocked.Read(ref _submittedFrames);
-            var droppedFrames = Interlocked.Read(ref _droppedFrames);
-            var masterTimestamp = GetTimelineSeconds();
-            var videoTimestamp = masterTimestamp;
-            const double correctionOffsetMs = 0;
-            const double videoMasterDriftMs = 0;
+            var decodedFrames = _videoSource.DecodedFrameCount;
+            var submittedFrames = _videoSource.PresentedFrameCount;
+            var droppedFrames = _videoSource.DroppedFrameCount;
+            var masterTimestamp = _playbackMixer.Position;
+            var videoTimestamp = _videoSource.CurrentFramePtsSeconds;
+            var audioTimestamp = _audioSource.Position;
+            var correctionOffsetMs = _videoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
+            var expectedVideoTimestamp = masterTimestamp - _videoSource.StartOffset;
+            var videoMasterDriftMs = double.IsNaN(videoTimestamp) ? 0 : (videoTimestamp - expectedVideoTimestamp) * 1000.0;
+            var videoAudioDriftMs = double.IsNaN(videoTimestamp) ? 0 : (videoTimestamp - audioTimestamp) * 1000.0;
 
             var decodedDelta = decodedFrames - _lastDecodedFrames;
             var submittedDelta = submittedFrames - _lastSubmittedFrames;
@@ -362,6 +371,10 @@ public partial class MainWindow : Window
                 _lastVideoGlDiagnosticsPerView = new VideoGL.VideoGlDiagnostics[_videoViews.Length];
 
             var perViewDiagText = new string[_videoViews.Length];
+            long totalUploadPlaneDelta = 0;
+            long totalUploadFrameDelta = 0;
+            long totalStridedPlaneDelta = 0;
+            long totalStridedFrameDelta = 0;
             for (var i = 0; i < _videoViews.Length; i++)
             {
                 var currentDiag = _videoViews[i].GetDiagnosticsSnapshot();
@@ -372,29 +385,53 @@ public partial class MainWindow : Window
                 var renderDelta = currentDiag.RenderCalls - lastDiag.RenderCalls;
                 var renderPostedDelta = currentDiag.RenderRequestPosted - lastDiag.RenderRequestPosted;
                 var renderCoalescedDelta = currentDiag.RenderRequestCoalesced - lastDiag.RenderRequestCoalesced;
+                var uploadPlanesDelta = currentDiag.UploadPlanes - lastDiag.UploadPlanes;
+                var stridedPlanesDelta = currentDiag.StridedUploadPlanes - lastDiag.StridedUploadPlanes;
+                var stridedFramesDelta = currentDiag.StridedUploadFrames - lastDiag.StridedUploadFrames;
+                var uploadFramesDelta = renderDelta;
+                var stridedFrameRatio = uploadFramesDelta > 0
+                    ? (stridedFramesDelta / (double)uploadFramesDelta) * 100.0
+                    : 0;
+                var stridedPlaneRatio = uploadPlanesDelta > 0
+                    ? (stridedPlanesDelta / (double)uploadPlanesDelta) * 100.0
+                    : 0;
+                totalUploadPlaneDelta += uploadPlanesDelta;
+                totalUploadFrameDelta += uploadFramesDelta;
+                totalStridedPlaneDelta += stridedPlanesDelta;
+                totalStridedFrameDelta += stridedFramesDelta;
 
                 perViewDiagText[i] =
-                    $"v{i + 1}[tick={advanceTicksDelta} ok={advanceSuccessDelta} ready={frameReadyDelta} ren={renderDelta} rq+={renderPostedDelta} rq={renderCoalescedDelta}]";
+                    $"v{i + 1}[tick={advanceTicksDelta} ok={advanceSuccessDelta} ready={frameReadyDelta} ren={renderDelta} rq+={renderPostedDelta} rq={renderCoalescedDelta} up={uploadFramesDelta} upP={uploadPlanesDelta} strF={stridedFramesDelta}({stridedFrameRatio:0.0}%) strP={stridedPlanesDelta}({stridedPlaneRatio:0.0}%)]";
                 _lastVideoGlDiagnosticsPerView[i] = currentDiag;
             }
 
-            var srcFmt = FmtName(_videoDecoder.LastSourcePixelFormatName);
-            var dstFmt = FmtName(_videoDecoder.LastOutputPixelFormatName);
+            var aggregateStridedFrameRatio = totalUploadFrameDelta > 0
+                ? (totalStridedFrameDelta / (double)totalUploadFrameDelta) * 100.0
+                : 0;
+            var aggregateStridedPlaneRatio = totalUploadPlaneDelta > 0
+                ? (totalStridedPlaneDelta / (double)totalUploadPlaneDelta) * 100.0
+                : 0;
+
+            var srcFmt = FmtName(_videoSource.DecoderSourcePixelFormatName);
+            var dstFmt = FmtName(_videoSource.DecoderOutputPixelFormatName);
             var fmtInfo = string.Equals(srcFmt, dstFmt, StringComparison.OrdinalIgnoreCase)
                 ? srcFmt
                 : $"{srcFmt}→{dstFmt}";
 
-            var engineOutputCount = _videoEngine.OutputCount;
+            var engineOutputCount = _playbackMixer.VideoOutputCount;
 
-            Title = $"VideoTest - engine 1→{engineOutputCount}, UI x{_videoViews.Length} | {_videoDecoder.StreamInfo.FrameRate:F1} fps | sub {submittedDelta} dec {decodedDelta} drop {droppedDelta} | hw {_videoDecoder.IsHardwareDecoding} | {fmtInfo} | v-m {videoMasterDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
+            Title = $"VideoTest - engine 1→{engineOutputCount}, UI x{_videoViews.Length} | {_videoSource.StreamInfo.FrameRate:F1} fps | pres {submittedDelta} dec {decodedDelta} drop {droppedDelta} | up {totalUploadFrameDelta} upP {totalUploadPlaneDelta} | strF {totalStridedFrameDelta} ({aggregateStridedFrameRatio:0.0}%) strP {totalStridedPlaneDelta} ({aggregateStridedPlaneRatio:0.0}%) | hw {_videoSource.IsHardwareDecoding} | {fmtInfo} | v-m {videoMasterDriftMs:F1}ms | v-a {videoAudioDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
 
             ConsoleOverwriteLine(
-                $"[Video] {_videoDecoder.StreamInfo.FrameRate:F1}fps" +
-                $"  sub={submittedDelta} dec={decodedDelta} drop={droppedDelta}" +
-                $"  q=0  hw={_videoDecoder.IsHardwareDecoding}" +
+                $"[A/V] {_videoSource.StreamInfo.FrameRate:F1}fps" +
+                $"  pres={submittedDelta} dec={decodedDelta} drop={droppedDelta}" +
+                $"  q={_videoSource.QueueDepth}  hw={_videoSource.IsHardwareDecoding}" +
+                $"  up={totalUploadFrameDelta} upP={totalUploadPlaneDelta}" +
+                $"  strF={totalStridedFrameDelta}({aggregateStridedFrameRatio:0.0}%) strP={totalStridedPlaneDelta}({aggregateStridedPlaneRatio:0.0}%)" +
                 $"  fmt={fmtInfo}" +
-                $"  m={masterTimestamp:F3}s v={videoTimestamp:F3}s" +
+                $"  m={masterTimestamp:F3}s a={audioTimestamp:F3}s v={videoTimestamp:F3}s" +
                 $"  v-m={videoMasterDriftMs:+0.0;-0.0}ms" +
+                $"  v-a={videoAudioDriftMs:+0.0;-0.0}ms" +
                 $"  corr={correctionOffsetMs:+0.0;-0.0}ms" +
                 $"  {string.Join(" ", perViewDiagText)}");
 
@@ -414,40 +451,66 @@ public partial class MainWindow : Window
         }
 
         _isDisposed = true;
-        _stopPlaybackThread = true;
+        CleanupPlaybackResources();
 
-        if (_playbackThread is { IsAlive: true })
-        {
-            try
-            {
-                _playbackThread.Join(TimeSpan.FromSeconds(2));
-            }
-            catch
-            {
-                // Best effort during shutdown.
-            }
-        }
+        base.OnClosed(e);
+    }
+
+    private void CleanupPlaybackResources()
+    {
+        _videoStatsTimer?.Stop();
+        _videoStatsTimer = null;
 
         try
         {
-            if (_videoViews.Length > 0)
-                _videoEngine?.RemoveOutput(_videoViews[0]);
+            if (_playbackMixer != null && _videoViews.Length > 0)
+                _playbackMixer.RemoveVideoOutput(_videoViews[0]);
         }
         catch
         {
-            // Best effort during shutdown.
         }
 
         foreach (var view in _videoViews)
             view.Dispose();
         _videoViews = [];
         _lastVideoGlDiagnosticsPerView = [];
-        _videoStatsTimer?.Stop();
-        _videoStatsTimer = null;
-        _videoDecoder?.Dispose();
-        _videoEngine?.Dispose();
 
-        base.OnClosed(e);
+        try
+        {
+            _playbackMixer?.Dispose();
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _playbackMixer = null;
+        }
+
+        _videoSource?.Dispose();
+        _videoSource = null;
+        _audioSource?.Dispose();
+        _audioSource = null;
+        _sharedDemuxSession?.Dispose();
+        _sharedDemuxSession = null;
+
+        _audioMixer?.Dispose();
+        _audioMixer = null;
+
+        if (_audioEngine != null)
+        {
+            try
+            {
+                if (_audioEngine.OwnAudioEngineStopped() == 0)
+                    _audioEngine.Stop();
+            }
+            catch
+            {
+            }
+
+            _audioEngine.Dispose();
+            _audioEngine = null;
+        }
     }
 }
 

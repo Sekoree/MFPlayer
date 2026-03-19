@@ -1,13 +1,14 @@
 ﻿using FFmpeg.AutoGen;
 using Ownaudio.Core;
-using OwnaudioNET.Engine;
 using OwnaudioNET.Mixing;
 using SDL3;
 using System.Collections.Concurrent;
 using System.Runtime;
 using Seko.OwnAudioNET.Video;
+using Seko.OwnAudioNET.Video.Clocks;
 using Seko.OwnAudioNET.Video.Decoders;
 using Seko.OwnAudioNET.Video.Engine;
+using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.Probing;
 using Seko.OwnAudioNET.Video.SDL3;
 using Seko.OwnAudioNET.Video.Sources;
@@ -40,54 +41,57 @@ internal static class Program
         public double PositionSeconds { get; }
     }
 
-    private sealed class ControlActionDispatcher
+    private sealed class PlaybackInputState
     {
-        private readonly ConcurrentQueue<ControlAction> _controlActions;
-        private readonly Func<double> _getTimelineSeconds;
-        private readonly Func<double> _getActiveDurationSeconds;
+        public double TimelineSeconds;
 
-        public ControlActionDispatcher(
-            ConcurrentQueue<ControlAction> controlActions,
-            Func<double> getTimelineSeconds,
-            Func<double> getActiveDurationSeconds)
+        public double DurationSeconds;
+    }
+
+    private sealed class PlaylistMedia : IDisposable
+    {
+        private bool _disposed;
+
+        public PlaylistMedia(
+            string filePath,
+            FFVideoSource videoSource,
+            FFAudioSource audioSource,
+            FFSharedDemuxSession? sharedDemuxSession,
+            double startOffsetSeconds,
+            double durationSeconds)
         {
-            _controlActions = controlActions;
-            _getTimelineSeconds = getTimelineSeconds;
-            _getActiveDurationSeconds = getActiveDurationSeconds;
+            Label = Path.GetFileName(filePath);
+            VideoSource = videoSource;
+            AudioSource = audioSource;
+            SharedDemuxSession = sharedDemuxSession;
+            StartOffsetSeconds = startOffsetSeconds;
+            DurationSeconds = durationSeconds;
+            EndOffsetSeconds = startOffsetSeconds + durationSeconds;
         }
 
-        public void OnKeyDown(SDL.Keycode key)
+        public string Label { get; }
+
+        public FFVideoSource VideoSource { get; }
+
+        public FFAudioSource AudioSource { get; }
+
+        public FFSharedDemuxSession? SharedDemuxSession { get; }
+
+        public double StartOffsetSeconds { get; }
+
+        public double DurationSeconds { get; }
+
+        public double EndOffsetSeconds { get; }
+
+        public void Dispose()
         {
-            switch (key)
-            {
-                case SDL.Keycode.Space:
-                    _controlActions.Enqueue(new ControlAction(ControlActionKind.TogglePlayPause, 0));
-                    break;
+            if (_disposed)
+                return;
 
-                case SDL.Keycode.Left:
-                    _controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, _getTimelineSeconds() - SeekStepSeconds));
-                    break;
-
-                case SDL.Keycode.Right:
-                    _controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, _getTimelineSeconds() + SeekStepSeconds));
-                    break;
-
-                case SDL.Keycode.Home:
-                    _controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, 0));
-                    break;
-
-                case SDL.Keycode.End:
-                    _controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, Math.Max(0, _getActiveDurationSeconds() - 0.001)));
-                    break;
-
-                case SDL.Keycode.F11:
-                    _controlActions.Enqueue(new ControlAction(ControlActionKind.ToggleFullscreen, 0));
-                    break;
-
-                case SDL.Keycode.H:
-                    _controlActions.Enqueue(new ControlAction(ControlActionKind.ToggleHud, 0));
-                    break;
-            }
+            VideoSource.Dispose();
+            AudioSource.Dispose();
+            SharedDemuxSession?.Dispose();
+            _disposed = true;
         }
     }
 
@@ -101,7 +105,7 @@ internal static class Program
 
         try
         {
-            Run();
+            Run(args);
         }
         catch (Exception ex)
         {
@@ -110,17 +114,30 @@ internal static class Program
         }
     }
 
-    private static void Run()
+    private static void Run(string[] args)
     {
         GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
-        var testFile60Fps = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
-        var inputFile = testFile60Fps;
+        //var testFile60Fps = "/home/seko/Videos/おねがいダーリン_0611.mov";
+        var testFile60Fps = "/home/seko/Videos/おねがいダーリン_0611.mov";
+        var testFile60Fps2 = "/home/seko/Videos/shootingstar_0611_1.mov";
+        var inputFiles = args.Length > 0
+            ? args.Where(static path => !string.IsNullOrWhiteSpace(path)).ToArray()
+            : [testFile60Fps, testFile60Fps2];
 
-        if (!File.Exists(inputFile))
+        if (inputFiles.Length == 0)
         {
-            Console.WriteLine($"[AudioEx] Missing demo video: {inputFile}");
+            Console.WriteLine("[AudioEx] No media input provided.");
             return;
+        }
+
+        foreach (var file in inputFiles)
+        {
+            if (!File.Exists(file))
+            {
+                Console.WriteLine($"[AudioEx] Missing media file: {file}");
+                return;
+            }
         }
 
         var ffmpegRoot = ResolveFfmpegRootPath();
@@ -130,16 +147,23 @@ internal static class Program
         DynamicallyLoadedBindings.Initialize();
         Console.WriteLine($"FFmpeg version: {ffmpeg.av_version_info()}");
 
-        if (!MediaStreamCatalog.TryGetFirstStream(inputFile, MediaStreamKind.Video, out var videoStream))
+        var streamSelections = new (string FilePath, MediaStreamInfoEntry VideoStream, MediaStreamInfoEntry AudioStream)[inputFiles.Length];
+        for (var i = 0; i < inputFiles.Length; i++)
         {
-            Console.WriteLine($"[AudioEx] No video stream found in '{inputFile}'.");
-            return;
-        }
+            var file = inputFiles[i];
+            if (!MediaStreamCatalog.TryGetFirstStream(file, MediaStreamKind.Video, out var videoStream))
+            {
+                Console.WriteLine($"[AudioEx] No video stream found in '{file}'.");
+                return;
+            }
 
-        if (!MediaStreamCatalog.TryGetFirstStream(inputFile, MediaStreamKind.Audio, out var audioStream))
-        {
-            Console.WriteLine($"[AudioEx] No audio stream found in '{inputFile}'.");
-            return;
+            if (!MediaStreamCatalog.TryGetFirstStream(file, MediaStreamKind.Audio, out var audioStream))
+            {
+                Console.WriteLine($"[AudioEx] No audio stream found in '{file}'.");
+                return;
+            }
+
+            streamSelections[i] = (file, videoStream, audioStream);
         }
 
         var decoderThreadCount = GetSafeVideoThreadCount();
@@ -164,275 +188,428 @@ internal static class Program
                 BufferSize = negotiatedBufferSize
             };
 
-            var decoderOptions = CreateDemoDecoderOptions(decoderThreadCount, videoStream.Index);
-            using var videoSource = new FFVideoSource(
-                new FFVideoDecoder(inputFile, decoderOptions),
-                new FFVideoSourceOptions
-                {
-                    HoldLastFrameOnEndOfStream = true
-                },
-                ownsDecoder: true);
-
-            using var audioSource = new FFAudioSource(
-                new FFAudioDecoder(inputFile, audioConfig.SampleRate, audioConfig.Channels, audioStream.Index),
-                audioConfig,
-                ownsDecoder: true);
-
+            var useSharedDemux = !string.Equals(
+                Environment.GetEnvironmentVariable("AUDIOEX_USE_SHARED_DEMUX"),
+                "0",
+                StringComparison.Ordinal);
             using var audioMixer = new AudioMixer(audioEngine, negotiatedBufferSize);
-            using var playbackMixer = AudioVideoMixerFactory.Create(audioMixer, new VideoTransportEngineConfig
+
+            var videoTransportConfig = new VideoTransportEngineConfig
             {
                 PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
-            });
+            }.CloneNormalized();
+            videoTransportConfig.ClockSyncMode = VideoTransportClockSyncMode.AudioLed;
+
+            var videoClock = new MasterClockVideoClockAdapter(audioMixer.MasterClock);
+            using var videoTransport = new VideoTransportEngine(videoClock, videoTransportConfig, ownsClock: false);
+            using var videoMixer = new VideoMixer(videoTransport, ownsEngine: false);
+            var driftCorrectionConfig = new AudioVideoDriftCorrectionConfig
+            {
+                Enabled = true
+            };
+            using var playbackMixer = new AudioVideoMixer(audioMixer, videoMixer, driftCorrectionConfig, ownsAudioMixer: false, ownsVideoMixer: false);
 
             playbackMixer.AudioSourceError += static (_, e) => ConsolePrintLine($"[Audio] {e.Message}");
             playbackMixer.VideoSourceError += static (_, e) => ConsolePrintLine($"[Video] {e.Message}");
 
-            audioSource.AttachToClock(audioMixer.MasterClock);
-
-            if (!playbackMixer.AddAudioSource(audioSource))
-                throw new InvalidOperationException("Failed to add the audio source to the A/V mixer.");
-
-            if (!playbackMixer.AddVideoSource(videoSource))
-                throw new InvalidOperationException("Failed to add the video source to the A/V mixer.");
-
-            audioSource.Play();
-
-            var mediaDurationSeconds = ResolvePlaybackDurationSeconds(videoSource.Duration, audioSource.Duration);
-            var mediaLabel = Path.GetFileName(inputFile);
-
-            Console.WriteLine($"[Audio] {mediaLabel} | stream={audioStream.Index} codec={audioStream.Codec} | {audioConfig.SampleRate}Hz/{audioConfig.Channels}ch buffer={audioConfig.BufferSize}");
-            Console.WriteLine($"[Video] {mediaLabel} | {videoSource.StreamInfo}");
-
-            var videoRenderer = new VideoSDL
-            {
-                EnableHudOverlay = false,
-                KeepAspectRatio = true
-            };
-
+            var playlist = new List<PlaylistMedia>(streamSelections.Length);
             try
             {
-                if (!videoRenderer.Initialize(1280, 720, "MFPlayer", out var glError))
+                var timelineOffsetSeconds = 0.0;
+                foreach (var selection in streamSelections)
                 {
-                    Console.WriteLine($"VideoSDL init failed: {glError}");
-                    return;
+                    var decoderOptions = CreateDemoDecoderOptions(decoderThreadCount, selection.VideoStream.Index);
+                    FFSharedDemuxSession? sharedDemux = null;
+                    FFVideoDecoder videoDecoder;
+                    FFAudioDecoder audioDecoder;
+
+                    if (useSharedDemux)
+                    {
+                        sharedDemux = FFSharedDemuxSession.OpenFile(selection.FilePath, new FFSharedDemuxSessionOptions
+                        {
+                            InitialStreamIndices = [selection.VideoStream.Index, selection.AudioStream.Index],
+                            PacketQueueCapacityPerStream = 200
+                        });
+                        videoDecoder = new FFVideoDecoder(sharedDemux, decoderOptions);
+                        audioDecoder = new FFAudioDecoder(sharedDemux, audioConfig.SampleRate, audioConfig.Channels, selection.AudioStream.Index);
+                    }
+                    else
+                    {
+                        videoDecoder = new FFVideoDecoder(selection.FilePath, decoderOptions);
+                        audioDecoder = new FFAudioDecoder(selection.FilePath, audioConfig.SampleRate, audioConfig.Channels, selection.AudioStream.Index);
+                    }
+
+                    var videoSource = new FFVideoSource(
+                        videoDecoder,
+                        new FFVideoSourceOptions
+                        {
+                            HoldLastFrameOnEndOfStream = true
+                        },
+                        ownsDecoder: true)
+                    {
+                        StartOffset = timelineOffsetSeconds
+                    };
+
+                    var audioSource = new FFAudioSource(
+                        audioDecoder,
+                        audioConfig,
+                        ownsDecoder: true)
+                    {
+                        StartOffset = timelineOffsetSeconds
+                    };
+
+                    audioSource.AttachToClock(audioMixer.MasterClock);
+
+                    if (!playbackMixer.AddAudioSource(audioSource))
+                        throw new InvalidOperationException($"Failed to add audio source for '{selection.FilePath}'.");
+
+                    if (!playbackMixer.AddVideoSource(videoSource))
+                        throw new InvalidOperationException($"Failed to add video source for '{selection.FilePath}'.");
+
+                    audioSource.Play();
+
+                    var durationSeconds = ResolvePlaybackDurationSeconds(videoSource.Duration, audioSource.Duration);
+                    var playlistItem = new PlaylistMedia(selection.FilePath, videoSource, audioSource, sharedDemux, timelineOffsetSeconds, durationSeconds);
+                    playlist.Add(playlistItem);
+                    timelineOffsetSeconds += durationSeconds;
+
+                    Console.WriteLine(
+                        $"[Audio] {playlistItem.Label} | stream={selection.AudioStream.Index} codec={selection.AudioStream.Codec} | {audioConfig.SampleRate}Hz/{audioConfig.Channels}ch buffer={audioConfig.BufferSize} | start={playlistItem.StartOffsetSeconds:F3}s dur={playlistItem.DurationSeconds:F3}s");
+                    Console.WriteLine($"[Video] {playlistItem.Label} | {playlistItem.VideoSource.StreamInfo} | start={playlistItem.StartOffsetSeconds:F3}s");
                 }
 
-                videoRenderer.Start();
-                if (!playbackMixer.AddVideoOutput(videoRenderer))
-                    throw new InvalidOperationException("Failed to register VideoSDL with the A/V mixer.");
-
-                double GetTimelineSeconds() => playbackMixer.Position;
-                double GetActiveDurationSeconds() => mediaDurationSeconds;
-
-                void PrimeVisibleSource()
+                var playlistDurationSeconds = playlist.Count == 0 ? 0 : playlist[^1].EndOffsetSeconds;
+                var videoRenderer = new VideoSDL
                 {
-                    try
+                    EnableHudOverlay = false,
+                    KeepAspectRatio = true
+                };
+
+                try
+                {
+                    if (!videoRenderer.Initialize(1280, 720, "MFPlayer", out var glError))
                     {
-                        if (videoSource.RequestNextFrame(out _))
+                        Console.WriteLine($"VideoSDL init failed: {glError}");
+                        return;
+                    }
+
+                    videoRenderer.Start();
+                    if (!playbackMixer.AddVideoOutput(videoRenderer))
+                        throw new InvalidOperationException("Failed to register VideoSDL with the A/V mixer.");
+
+                    var activeMedia = playlist[0];
+                    if (!playbackMixer.BindVideoOutputToSource(videoRenderer, activeMedia.VideoSource))
+                        throw new InvalidOperationException($"Failed to bind output to source '{activeMedia.Label}'.");
+
+                    var inputState = new PlaybackInputState
+                    {
+                        TimelineSeconds = 0,
+                        DurationSeconds = playlistDurationSeconds
+                    };
+
+                    PlaylistMedia ResolveActiveMedia(double timelinePositionSeconds)
+                    {
+                        foreach (var item in playlist)
+                        {
+                            if (timelinePositionSeconds < item.EndOffsetSeconds)
+                                return item;
+                        }
+
+                        return playlist[^1];
+                    }
+
+                    void SwitchActiveMedia(PlaylistMedia nextMedia)
+                    {
+                        if (ReferenceEquals(activeMedia, nextMedia))
                             return;
 
-                        videoSource.TryGetFrameAtTime(playbackMixer.Position, out _);
+                        if (!playbackMixer.BindVideoOutputToSource(videoRenderer, nextMedia.VideoSource))
+                            throw new InvalidOperationException($"Failed to bind output to source '{nextMedia.Label}'.");
+
+                        activeMedia = nextMedia;
                     }
-                    catch
+
+                    void PrimeVisibleSource()
                     {
-                        // Best effort immediate refresh only.
-                    }
-                }
-
-                void UpdateRendererDiagnostics()
-                {
-                    var masterTs = playbackMixer.Position;
-                    var videoTs = videoSource.CurrentFramePtsSeconds;
-                    var expectedVideoTimestamp = masterTs - videoSource.StartOffset;
-                    var videoMasterDriftMs = double.IsNaN(videoTs)
-                        ? 0
-                        : (videoTs - expectedVideoTimestamp) * 1000.0;
-
-                    videoRenderer.UpdateFormatInfo(
-                        videoSource.DecoderSourcePixelFormatName,
-                        videoSource.DecoderOutputPixelFormatName,
-                        videoSource.StreamInfo.FrameRate);
-                    videoRenderer.UpdateHudDiagnostics(
-                        queueDepth: videoSource.QueueDepth,
-                        uploadMsPerFrame: 0,
-                        avDriftMs: videoMasterDriftMs,
-                        isHardwareDecoding: videoSource.IsHardwareDecoding,
-                        droppedFrames: videoSource.DroppedFrameCount);
-                }
-
-                if (!playbackMixer.BindVideoOutputToSource(videoRenderer, videoSource))
-                    throw new InvalidOperationException($"Failed to bind output to source '{mediaLabel}'.");
-
-                PrimeVisibleSource();
-                UpdateRendererDiagnostics();
-                playbackMixer.Start();
-                Console.WriteLine("Audio/video mixer initialised successfully.");
-
-                var controlActions = new ConcurrentQueue<ControlAction>();
-                var seekLock = new Lock();
-                var playbackFinished = false;
-                var controlDispatcher = new ControlActionDispatcher(controlActions, GetTimelineSeconds, GetActiveDurationSeconds);
-                videoRenderer.KeyDown += controlDispatcher.OnKeyDown;
-
-                void PerformSeek(double positionSeconds)
-                {
-                    if (!seekLock.TryEnter())
-                        return;
-
-                    try
-                    {
-                        var target = Math.Max(0, positionSeconds);
-                        playbackFinished = false;
-                        playbackMixer.Seek(target);
-                        PrimeVisibleSource();
-                        UpdateRendererDiagnostics();
-                    }
-                    finally
-                    {
-                        seekLock.Exit();
-                    }
-                }
-
-                var lastDecodedFrames = 0L;
-                var lastPresentedFrames = 0L;
-                var lastDroppedFrames = 0L;
-                var lastUploadedFrames = 0L;
-                var lastStatsLogTime = DateTime.UtcNow;
-                var playbackTailToleranceSeconds = Math.Max(
-                    0.050,
-                    Math.Max(
-                        negotiatedBufferSize / (double)audioConfig.SampleRate * 2.0,
-                        1.0 / Math.Max(1.0, videoSource.StreamInfo.FrameRate)));
-
-                bool HasPlaybackFinished()
-                {
-                    if (videoSource.IsEndOfStream && audioSource.IsEndOfStream)
-                        return true;
-
-                    if (!videoSource.IsEndOfStream || mediaDurationSeconds <= 0)
-                        return false;
-
-                    var masterNearTail = playbackMixer.Position >= Math.Max(0, mediaDurationSeconds - playbackTailToleranceSeconds);
-                    var audioNearTail = audioSource.Duration <= 0 ||
-                                        audioSource.Position >= Math.Max(0, audioSource.Duration - playbackTailToleranceSeconds);
-
-                    return masterNearTail && audioNearTail;
-                }
-
-                var loop = true;
-                while (loop)
-                {
-                    while (controlActions.TryDequeue(out var action))
-                    {
-                        switch (action.Kind)
+                        try
                         {
-                            case ControlActionKind.TogglePlayPause:
-                                if (playbackMixer.IsRunning)
-                                {
-                                    playbackMixer.Pause();
-                                    ConsolePrintLine("[Playback] Paused.");
-                                }
-                                else
-                                {
-                                    playbackMixer.Start();
-                                    PrimeVisibleSource();
-                                    ConsolePrintLine("[Playback] Playing.");
-                                }
-                                break;
+                            if (activeMedia.VideoSource.RequestNextFrame(out _))
+                                return;
 
-                            case ControlActionKind.SeekAbsolute:
-                                PerformSeek(action.PositionSeconds);
-                                break;
-
-                            case ControlActionKind.ToggleFullscreen:
-                                var window = videoRenderer.SdlWindowPtr;
-                                if (window != nint.Zero)
-                                {
-                                    var isFullscreen = (SDL.GetWindowFlags(window) & SDL.WindowFlags.Fullscreen) != 0;
-                                    SDL.SetWindowFullscreen(window, !isFullscreen);
-                                }
-
-                                break;
-
-                            case ControlActionKind.ToggleHud:
-                                videoRenderer.EnableHudOverlay = !videoRenderer.EnableHudOverlay;
-                                ConsolePrintLine(videoRenderer.EnableHudOverlay
-                                    ? "[Video] HUD enabled."
-                                    : "[Video] HUD disabled.");
-                                break;
+                            activeMedia.VideoSource.TryGetFrameAtTime(playbackMixer.Position, out _);
+                        }
+                        catch
+                        {
                         }
                     }
 
-                    if (!videoRenderer.IsRunning)
+                    void UpdateRendererDiagnostics()
                     {
-                        loop = false;
-                        continue;
-                    }
-
-                    if (!playbackFinished && HasPlaybackFinished())
-                    {
-                        playbackMixer.Pause();
-                        UpdateRendererDiagnostics();
-                        ConsolePrintLine("[Playback] End of stream reached for the demo media.");
-                        playbackFinished = true;
-                        lastStatsLogTime = DateTime.UtcNow;
-                        Thread.Sleep(10);
-                        continue;
-                    }
-
-                    var now = DateTime.UtcNow;
-                    if (!playbackFinished && (now - lastStatsLogTime).TotalSeconds >= 1)
-                    {
-                        UpdateRendererDiagnostics();
-
-                        var decodedFrames = videoSource.DecodedFrameCount;
-                        var presentedFrames = videoSource.PresentedFrameCount;
-                        var droppedFrames = videoSource.DroppedFrameCount;
                         var masterTs = playbackMixer.Position;
-                        var audioTs = audioSource.Position;
-                        var videoTs = videoSource.CurrentFramePtsSeconds;
-                        var correctionOffsetMs = videoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
-                        var expectedVideoTimestamp = masterTs - videoSource.StartOffset;
+                        var videoTs = activeMedia.VideoSource.CurrentFramePtsSeconds;
+                        var expectedVideoTimestamp = masterTs - activeMedia.VideoSource.StartOffset;
                         var videoMasterDriftMs = double.IsNaN(videoTs)
-                            ? double.NaN
+                            ? 0
                             : (videoTs - expectedVideoTimestamp) * 1000.0;
-                        var videoAudioDriftMs = double.IsNaN(videoTs)
-                            ? double.NaN
-                            : (videoTs - audioTs) * 1000.0;
 
-                        var decodedDelta = decodedFrames - lastDecodedFrames;
-                        var presentedDelta = presentedFrames - lastPresentedFrames;
-                        var droppedDelta = droppedFrames - lastDroppedFrames;
-
-                        var diag = videoRenderer.GetDiagnosticsSnapshot();
-                        var uploadedFrames = diag.FramesRendered;
-                        var uploadedFrameDelta = uploadedFrames - lastUploadedFrames;
-
-                        ConsoleOverwriteLine(
-                            $"[A/V] {mediaLabel}" +
-                            $" | render={videoRenderer.RenderFps:F1}fps src={videoSource.StreamInfo.FrameRate:F1}fps fmt={videoRenderer.PixelFormatInfo}" +
-                            $" | pres={presentedDelta} dec={decodedDelta} drop={droppedDelta} q={videoSource.QueueDepth}" +
-                            $" | up={uploadedFrameDelta} hw={videoSource.IsHardwareDecoding}" +
-                            $" | m={masterTs:F3}s a={audioTs:F3}s v={videoTs:F3}s" +
-                            $" v-m={videoMasterDriftMs:+0.0;-0.0}ms v-a={videoAudioDriftMs:+0.0;-0.0}ms corr={correctionOffsetMs:+0.0;-0.0}ms");
-
-                        lastDecodedFrames = decodedFrames;
-                        lastPresentedFrames = presentedFrames;
-                        lastDroppedFrames = droppedFrames;
-
-                        lastUploadedFrames = uploadedFrames;
-                        lastStatsLogTime = now;
+                        videoRenderer.UpdateFormatInfo(
+                            activeMedia.VideoSource.DecoderSourcePixelFormatName,
+                            activeMedia.VideoSource.DecoderOutputPixelFormatName,
+                            activeMedia.VideoSource.StreamInfo.FrameRate);
+                        videoRenderer.UpdateHudDiagnostics(
+                            queueDepth: activeMedia.VideoSource.QueueDepth,
+                            uploadMsPerFrame: 0,
+                            avDriftMs: videoMasterDriftMs,
+                            isHardwareDecoding: activeMedia.VideoSource.IsHardwareDecoding,
+                            droppedFrames: activeMedia.VideoSource.DroppedFrameCount);
                     }
 
-                    Thread.Sleep(playbackMixer.IsRunning ? 0 : 10);
-                }
+                    PrimeVisibleSource();
+                    UpdateRendererDiagnostics();
+                    playbackMixer.Start();
+                    Console.WriteLine($"Audio/video mixer initialised successfully for {playlist.Count} media item(s).");
 
-                playbackMixer.RemoveVideoOutput(videoRenderer);
-                videoRenderer.Stop();
+                    var controlActions = new ConcurrentQueue<ControlAction>();
+                    var seekLock = new Lock();
+                    var playbackFinished = false;
+                    videoRenderer.KeyDown += key =>
+                    {
+                        switch (key)
+                        {
+                            case SDL.Keycode.Space:
+                                controlActions.Enqueue(new ControlAction(ControlActionKind.TogglePlayPause, 0));
+                                break;
+                            case SDL.Keycode.Left:
+                                controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, inputState.TimelineSeconds - SeekStepSeconds));
+                                break;
+                            case SDL.Keycode.Right:
+                                controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, inputState.TimelineSeconds + SeekStepSeconds));
+                                break;
+                            case SDL.Keycode.Home:
+                                controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, 0));
+                                break;
+                            case SDL.Keycode.End:
+                                controlActions.Enqueue(new ControlAction(ControlActionKind.SeekAbsolute, Math.Max(0, inputState.DurationSeconds - 0.001)));
+                                break;
+                            case SDL.Keycode.F11:
+                                controlActions.Enqueue(new ControlAction(ControlActionKind.ToggleFullscreen, 0));
+                                break;
+                            case SDL.Keycode.H:
+                                controlActions.Enqueue(new ControlAction(ControlActionKind.ToggleHud, 0));
+                                break;
+                        }
+                    };
+
+                    void PerformSeek(double positionSeconds)
+                    {
+                        if (!seekLock.TryEnter())
+                            return;
+
+                        try
+                        {
+                            var target = Math.Clamp(positionSeconds, 0, Math.Max(0, playlistDurationSeconds));
+                            playbackFinished = false;
+                            playbackMixer.Seek(target);
+                            SwitchActiveMedia(ResolveActiveMedia(target));
+                            PrimeVisibleSource();
+                            UpdateRendererDiagnostics();
+                        }
+                        finally
+                        {
+                            seekLock.Exit();
+                        }
+                    }
+
+                    var lastDecodedFrames = 0L;
+                    var lastPresentedFrames = 0L;
+                    var lastDroppedFrames = 0L;
+                    var lastUploadedFrames = 0L;
+                    var lastUploadedPlanes = 0L;
+                    var lastStridedUploadedPlanes = 0L;
+                    var lastStridedUploadedFrames = 0L;
+                    var lastStatsLogTime = DateTime.UtcNow;
+                    var playbackTailToleranceSeconds = Math.Max(0.050, negotiatedBufferSize / (double)audioConfig.SampleRate * 2.0);
+
+                    bool HasPlaybackFinished()
+                    {
+                        if (playlist.All(static item => item.VideoSource.IsEndOfStream && item.AudioSource.IsEndOfStream))
+                            return true;
+
+                        if (playlistDurationSeconds <= 0)
+                            return false;
+
+                        if (playbackMixer.Position < Math.Max(0, playlistDurationSeconds - playbackTailToleranceSeconds))
+                            return false;
+
+                        var lastItem = playlist[^1];
+                        var lastAudioNearTail = lastItem.AudioSource.Duration <= 0 ||
+                                                lastItem.AudioSource.Position >= Math.Max(0, lastItem.AudioSource.Duration - playbackTailToleranceSeconds);
+                        return lastItem.VideoSource.IsEndOfStream && lastAudioNearTail;
+                    }
+
+                    var loop = true;
+                    while (loop)
+                    {
+                        inputState.TimelineSeconds = playbackMixer.Position;
+
+                        while (controlActions.TryDequeue(out var action))
+                        {
+                            switch (action.Kind)
+                            {
+                                case ControlActionKind.TogglePlayPause:
+                                    if (playbackMixer.IsRunning)
+                                    {
+                                        playbackMixer.Pause();
+                                        ConsolePrintLine("[Playback] Paused.");
+                                    }
+                                    else
+                                    {
+                                        playbackMixer.Start();
+                                        PrimeVisibleSource();
+                                        ConsolePrintLine("[Playback] Playing.");
+                                    }
+                                    break;
+
+                                case ControlActionKind.SeekAbsolute:
+                                    PerformSeek(action.PositionSeconds);
+                                    break;
+
+                                case ControlActionKind.ToggleFullscreen:
+                                    var window = videoRenderer.SdlWindowPtr;
+                                    if (window != nint.Zero)
+                                    {
+                                        var isFullscreen = (SDL.GetWindowFlags(window) & SDL.WindowFlags.Fullscreen) != 0;
+                                        SDL.SetWindowFullscreen(window, !isFullscreen);
+                                    }
+
+                                    break;
+
+                                case ControlActionKind.ToggleHud:
+                                    videoRenderer.EnableHudOverlay = !videoRenderer.EnableHudOverlay;
+                                    ConsolePrintLine(videoRenderer.EnableHudOverlay
+                                        ? "[Video] HUD enabled."
+                                        : "[Video] HUD disabled.");
+                                    break;
+                            }
+                        }
+
+                        if (!videoRenderer.IsRunning)
+                        {
+                            loop = false;
+                            continue;
+                        }
+
+                        var nextActive = ResolveActiveMedia(playbackMixer.Position);
+                        if (!ReferenceEquals(nextActive, activeMedia))
+                        {
+                            SwitchActiveMedia(nextActive);
+                            PrimeVisibleSource();
+                            UpdateRendererDiagnostics();
+                        }
+
+                        if (!playbackFinished && HasPlaybackFinished())
+                        {
+                            playbackMixer.Pause();
+                            UpdateRendererDiagnostics();
+                            ConsolePrintLine("[Playback] End of stream reached for all playlist media.");
+                            playbackFinished = true;
+                            loop = false;
+                            continue;
+                        }
+
+                        var now = DateTime.UtcNow;
+                        if (!playbackFinished && (now - lastStatsLogTime).TotalSeconds >= 1)
+                        {
+                            UpdateRendererDiagnostics();
+
+                            var decodedFrames = activeMedia.VideoSource.DecodedFrameCount;
+                            var presentedFrames = activeMedia.VideoSource.PresentedFrameCount;
+                            var droppedFrames = activeMedia.VideoSource.DroppedFrameCount;
+                            var masterTs = playbackMixer.Position;
+                            var audioTs = activeMedia.AudioSource.Position;
+                            var videoTs = activeMedia.VideoSource.CurrentFramePtsSeconds;
+                            var correctionOffsetMs = activeMedia.VideoSource.CurrentDriftCorrectionOffsetSeconds * 1000.0;
+                            var expectedVideoTimestamp = masterTs - activeMedia.VideoSource.StartOffset;
+                            var videoMasterDriftMs = double.IsNaN(videoTs)
+                                ? double.NaN
+                                : (videoTs - expectedVideoTimestamp) * 1000.0;
+                            var videoAudioDriftMs = double.IsNaN(videoTs)
+                                ? double.NaN
+                                : (videoTs - audioTs) * 1000.0;
+
+                            var decodedDelta = decodedFrames - lastDecodedFrames;
+                            var presentedDelta = presentedFrames - lastPresentedFrames;
+                            var droppedDelta = droppedFrames - lastDroppedFrames;
+
+                            var diag = videoRenderer.GetDiagnosticsSnapshot();
+                            var uploadedFrames = diag.FramesRendered;
+                            var uploadedFrameDelta = uploadedFrames - lastUploadedFrames;
+                            var uploadedPlanes = diag.UploadPlanes;
+                            var uploadedPlaneDelta = uploadedPlanes - lastUploadedPlanes;
+                            var stridedUploadedPlanes = diag.StridedUploadPlanes;
+                            var stridedUploadedPlaneDelta = stridedUploadedPlanes - lastStridedUploadedPlanes;
+                            var stridedUploadedFrames = diag.StridedUploadFrames;
+                            var stridedUploadedFrameDelta = stridedUploadedFrames - lastStridedUploadedFrames;
+                            var stridedFrameRatio = uploadedFrameDelta > 0
+                                ? (stridedUploadedFrameDelta / (double)uploadedFrameDelta) * 100.0
+                                : 0;
+                            var stridedPlaneRatio = uploadedPlaneDelta > 0
+                                ? (stridedUploadedPlaneDelta / (double)uploadedPlaneDelta) * 100.0
+                                : 0;
+
+                            ConsoleOverwriteLine(
+                                $"[A/V] {activeMedia.Label}" +
+                                $" | tl={masterTs:F3}/{playlistDurationSeconds:F3}s" +
+                                $" | render={videoRenderer.RenderFps:F1}fps src={activeMedia.VideoSource.StreamInfo.FrameRate:F1}fps fmt={videoRenderer.PixelFormatInfo}" +
+                                $" | pres={presentedDelta} dec={decodedDelta} drop={droppedDelta} q={activeMedia.VideoSource.QueueDepth}" +
+                                $" | up={uploadedFrameDelta} upP={uploadedPlaneDelta} strF={stridedUploadedFrameDelta} ({stridedFrameRatio:0.0}%) strP={stridedUploadedPlaneDelta} ({stridedPlaneRatio:0.0}%) hw={activeMedia.VideoSource.IsHardwareDecoding}" +
+                                $" | m={masterTs:F3}s a={audioTs:F3}s v={videoTs:F3}s" +
+                                $" v-m={videoMasterDriftMs:+0.0;-0.0}ms v-a={videoAudioDriftMs:+0.0;-0.0}ms corr={correctionOffsetMs:+0.0;-0.0}ms");
+
+                            lastDecodedFrames = decodedFrames;
+                            lastPresentedFrames = presentedFrames;
+                            lastDroppedFrames = droppedFrames;
+
+                            lastUploadedFrames = uploadedFrames;
+                            lastUploadedPlanes = uploadedPlanes;
+                            lastStridedUploadedPlanes = stridedUploadedPlanes;
+                            lastStridedUploadedFrames = stridedUploadedFrames;
+                            lastStatsLogTime = now;
+                        }
+
+                        Thread.Sleep(playbackMixer.IsRunning ? 0 : 10);
+                    }
+
+                    playbackMixer.RemoveVideoOutput(videoRenderer);
+                    videoRenderer.Stop();
+                }
+                finally
+                {
+                    videoRenderer.Dispose();
+                }
             }
             finally
             {
-                videoRenderer.Dispose();
+                foreach (var item in playlist)
+                {
+                    try
+                    {
+                        playbackMixer.RemoveVideoSource(item.VideoSource);
+                    }
+                    catch
+                    {
+                    }
+
+                    try
+                    {
+                        playbackMixer.RemoveAudioSource(item.AudioSource);
+                    }
+                    catch
+                    {
+                    }
+
+                    item.Dispose();
+                }
             }
         }
         finally
@@ -445,7 +622,6 @@ internal static class Program
                 }
                 catch
                 {
-                    // Best effort during shutdown.
                 }
             }
         }
@@ -476,7 +652,7 @@ internal static class Program
                 VideoPixelFormat.Yuv422p,
                 VideoPixelFormat.Yuv422p10le
             ],
-            PreferSourcePixelFormatWhenSupported = false,
+            PreferSourcePixelFormatWhenSupported = true,
             PreferLowestConversionCost = true
         };
     }

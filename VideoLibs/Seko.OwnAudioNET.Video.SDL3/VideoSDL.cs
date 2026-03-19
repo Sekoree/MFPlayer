@@ -45,6 +45,8 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     private const int GlLinkStatus       = VideoGlConstants.LinkStatus;
     private const int GlTextureMinFilter = VideoGlConstants.TextureMinFilter;
     private const int GlTextureMagFilter = VideoGlConstants.TextureMagFilter;
+    private const int GlUnpackAlignment  = VideoGlConstants.UnpackAlignment;
+    private const int GlUnpackRowLength  = VideoGlConstants.UnpackRowLength;
     private const int GlLinear           = VideoGlConstants.Linear;
     private const int GlRgba8            = VideoGlConstants.Rgba8;
     private const int GlRgba             = VideoGlConstants.Rgba;
@@ -120,6 +122,8 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void TexSubImage2DProc(int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, nint pixels);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void PixelStoreIProc(int pname, int param);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void DeleteTexturesProc(int n, in int textures);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void DrawArraysProc(int mode, int first, int count);
@@ -159,6 +163,7 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     private TexParameteriProc?         _glTexParameteri;
     private TexImage2DProc?            _glTexImage2D;
     private TexSubImage2DProc?         _glTexSubImage2D;
+    private PixelStoreIProc?           _glPixelStoreI;
     private DeleteTexturesProc?        _glDeleteTextures;
     private DrawArraysProc?            _glDrawArrays;
 
@@ -205,6 +210,9 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     private long   _diagRenderCalls;
     private long   _diagFramesSubmitted;
     private long   _diagFramesRendered;
+    private long   _diagUploadPlaneCount;
+    private long   _diagStridedUploadPlaneCount;
+    private long   _diagStridedUploadFrameCount;
 
     // ── SDL state ─────────────────────────────────────────────────────────────────
     private nint _sdlWindow;
@@ -281,10 +289,22 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
         _attachedFrameHandler = OnSourceFrameReady;
     }
 
-    public readonly record struct VideoSdlDiagnostics(long RenderCalls, long FramesSubmitted, long FramesRendered);
+    public readonly record struct VideoSdlDiagnostics(
+        long RenderCalls,
+        long FramesSubmitted,
+        long FramesRendered,
+        long UploadPlanes,
+        long StridedUploadPlanes,
+        long StridedUploadFrames);
 
     public VideoSdlDiagnostics GetDiagnosticsSnapshot() =>
-        new(Interlocked.Read(ref _diagRenderCalls), Interlocked.Read(ref _diagFramesSubmitted), Interlocked.Read(ref _diagFramesRendered));
+        new(
+            Interlocked.Read(ref _diagRenderCalls),
+            Interlocked.Read(ref _diagFramesSubmitted),
+            Interlocked.Read(ref _diagFramesRendered),
+            Interlocked.Read(ref _diagUploadPlaneCount),
+            Interlocked.Read(ref _diagStridedUploadPlaneCount),
+            Interlocked.Read(ref _diagStridedUploadFrameCount));
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -905,6 +925,7 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
 
         // Optional fast-path for sub-image updates
         Load("glTexSubImage2D", out _glTexSubImage2D);
+        Load("glPixelStorei", out _glPixelStoreI);
         return true;
     }
 
@@ -1046,37 +1067,73 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
         byte[]? p0 = null;
         byte[]? p1 = null;
         byte[]? p2 = null;
+        var s0 = 0;
+        var s1 = 0;
+        var s2 = 0;
+        var usedStridedUpload = false;
 
         for (var i = 0; i < plan.PlaneCount; i++)
         {
             var descriptor = GetPlaneDescriptor(plan, i);
             ref var scratch = ref GetPlaneScratch(descriptor.PlaneIndex);
-            var packed = GetTightlyPackedPlane(
+            var uploadBytes = GetPlaneUploadBytes(
                 frame,
                 descriptor.PlaneIndex,
                 descriptor.RowBytes,
                 descriptor.Height,
-                ref scratch);
-            if (packed == null)
+                allowStridedUpload: _glPixelStoreI != null,
+                ref scratch,
+                out var sourceStrideBytes);
+            if (uploadBytes == null)
                 return false;
 
-            if (i == 0) p0 = packed;
-            else if (i == 1) p1 = packed;
-            else p2 = packed;
+            if (i == 0)
+            {
+                p0 = uploadBytes;
+                s0 = sourceStrideBytes;
+            }
+            else if (i == 1)
+            {
+                p1 = uploadBytes;
+                s1 = sourceStrideBytes;
+            }
+            else
+            {
+                p2 = uploadBytes;
+                s2 = sourceStrideBytes;
+            }
         }
 
         for (var i = 0; i < plan.PlaneCount; i++)
         {
             var descriptor = GetPlaneDescriptor(plan, i);
             var data = i == 0 ? p0 : i == 1 ? p1 : p2;
+            var sourceStrideBytes = i == 0 ? s0 : i == 1 ? s1 : s2;
             if (data == null)
                 return false;
+
+            Interlocked.Increment(ref _diagUploadPlaneCount);
 
             var textureUnit = GetTextureUnit(descriptor.Slot);
             var textureId = GetTextureId(descriptor.Slot);
 
             _glActiveTexture!(textureUnit);
             _glBindTexture!(GlTexture2D, textureId);
+
+            if (_glPixelStoreI != null)
+            {
+                _glPixelStoreI(GlUnpackAlignment, 1);
+                var bytesPerPixel = descriptor.Width > 0 ? Math.Max(1, descriptor.RowBytes / descriptor.Width) : 1;
+                var rowLengthPixels = sourceStrideBytes > descriptor.RowBytes
+                    ? Math.Max(0, sourceStrideBytes / bytesPerPixel)
+                    : 0;
+                _glPixelStoreI(GlUnpackRowLength, rowLengthPixels);
+                if (rowLengthPixels > 0)
+                {
+                    usedStridedUpload = true;
+                    Interlocked.Increment(ref _diagStridedUploadPlaneCount);
+                }
+            }
 
             ref var state = ref GetTextureState(descriptor.Slot);
             UploadTexture2D(
@@ -1087,7 +1144,16 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
                 descriptor.Format,
                 descriptor.Type,
                 data);
+
+            if (_glPixelStoreI != null)
+            {
+                _glPixelStoreI(GlUnpackRowLength, 0);
+                _glPixelStoreI(GlUnpackAlignment, 4);
+            }
         }
+
+        if (usedStridedUpload)
+            Interlocked.Increment(ref _diagStridedUploadFrameCount);
 
         if (plan.IsYuv && VideoGlUploadPlanner.IsSemiPlanar(plan.YuvMode))
         {

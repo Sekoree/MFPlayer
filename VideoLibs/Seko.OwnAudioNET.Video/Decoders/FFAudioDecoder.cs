@@ -46,6 +46,8 @@ public unsafe class FFAudioDecoder : IAudioDecoder
     private bool _drainPacketSent;
     private bool _decoderEof;
     private bool _disposed;
+    private readonly FFSharedDemuxSession? _sharedDemuxSession;
+    private readonly bool _ownsSharedDemuxSession;
 
     /// <summary>Metadata describing the output audio stream (resampled parameters).</summary>
     public AudioStreamInfo StreamInfo { get; private set; }
@@ -149,6 +151,40 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         }
     }
 
+    /// <summary>
+    /// Initializes a new <see cref="FFAudioDecoder"/> that consumes packets from a shared demux session.
+    /// </summary>
+    public FFAudioDecoder(FFSharedDemuxSession sharedDemuxSession, int outSampleRate = 44100, int outChannels = 2, int? preferredStreamIndex = null, bool ownsSharedDemuxSession = false)
+        : this(outSampleRate, outChannels)
+    {
+        ArgumentNullException.ThrowIfNull(sharedDemuxSession);
+        _sharedDemuxSession = sharedDemuxSession;
+        _ownsSharedDemuxSession = ownsSharedDemuxSession;
+        _canSeek = sharedDemuxSession.CanSeek;
+
+        try
+        {
+            if (!_sharedDemuxSession.TryResolveStream(
+                    AVMediaType.AVMEDIA_TYPE_AUDIO,
+                    preferredStreamIndex,
+                    out _streamIndex,
+                    out var codec,
+                    out _,
+                    out var stream,
+                    out var streamError))
+            {
+                throw new Exception(streamError);
+            }
+
+            InitializeCodecAndResampler(stream, codec, _sharedDemuxSession.ContainerDuration);
+        }
+        catch
+        {
+            ReleaseNativeResources();
+            throw;
+        }
+    }
+
     private FFAudioDecoder(int outSampleRate, int outChannels)
     {
         _outSampleRate = outSampleRate;
@@ -162,8 +198,13 @@ public unsafe class FFAudioDecoder : IAudioDecoder
             throw new Exception($"avformat_find_stream_info: {GetErrorText(findStreamInfoResult)}");
 
         var inCodec = ResolveAudioStreamAndCodec(fCtx, preferredStreamIndex, out _streamIndex);
+        InitializeCodecAndResampler(fCtx->streams[_streamIndex], inCodec, fCtx->duration > 0
+            ? TimeSpan.FromSeconds(fCtx->duration / (double)ffmpeg.AV_TIME_BASE)
+            : TimeSpan.Zero);
+    }
 
-        var stream = fCtx->streams[_streamIndex];
+    private void InitializeCodecAndResampler(AVStream* stream, AVCodec* inCodec, TimeSpan containerDuration)
+    {
         var codecContext = ffmpeg.avcodec_alloc_context3(inCodec);
         if (codecContext == null)
             throw new Exception("avcodec_alloc_context3 failed");
@@ -219,9 +260,7 @@ public unsafe class FFAudioDecoder : IAudioDecoder
         StreamInfo = new AudioStreamInfo(
             channels: _outChannels,
             sampleRate: _outSampleRate,
-            duration: fCtx->duration > 0
-                ? TimeSpan.FromSeconds(fCtx->duration / (double)ffmpeg.AV_TIME_BASE)
-                : TimeSpan.Zero,
+            duration: containerDuration,
             bitDepth: sizeof(float) * 8
         );
     }
@@ -330,29 +369,38 @@ public unsafe class FFAudioDecoder : IAudioDecoder
             return false;
         }
 
-        var fCtx = (AVFormatContext*)_formatCtx;
         var cCtx = (AVCodecContext*)_codecCtx;
         var sCtx = (SwrContext*)_swrCtx;
         var pkt = (AVPacket*)_packet;
         var frm = (AVFrame*)_frame;
-        var stream = fCtx->streams[_streamIndex];
 
         if (position < TimeSpan.Zero)
             position = TimeSpan.Zero;
 
-        var avTimeBaseQ = new AVRational { num = 1, den = ffmpeg.AV_TIME_BASE };
-        var targetUs = (long)Math.Round(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
-        var targetTs = ffmpeg.av_rescale_q(targetUs, avTimeBaseQ, stream->time_base);
-
-        var seekResult = ffmpeg.av_seek_frame(fCtx, _streamIndex, targetTs, ffmpeg.AVSEEK_FLAG_BACKWARD);
-        if (seekResult < 0)
+        if (_sharedDemuxSession != null)
         {
-            error = $"av_seek_frame failed: {GetErrorText(seekResult)}";
-            return false;
+            if (!_sharedDemuxSession.TrySeek(position, out error))
+                return false;
+        }
+        else
+        {
+            var fCtx = (AVFormatContext*)_formatCtx;
+            var stream = fCtx->streams[_streamIndex];
+            var avTimeBaseQ = new AVRational { num = 1, den = ffmpeg.AV_TIME_BASE };
+            var targetUs = (long)Math.Round(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
+            var targetTs = ffmpeg.av_rescale_q(targetUs, avTimeBaseQ, stream->time_base);
+
+            var seekResult = ffmpeg.av_seek_frame(fCtx, _streamIndex, targetTs, ffmpeg.AVSEEK_FLAG_BACKWARD);
+            if (seekResult < 0)
+            {
+                error = $"av_seek_frame failed: {GetErrorText(seekResult)}";
+                return false;
+            }
+
+            ffmpeg.avformat_flush(fCtx);
         }
 
         ffmpeg.avcodec_flush_buffers(cCtx);
-        ffmpeg.avformat_flush(fCtx);
         ffmpeg.av_packet_unref(pkt);
         ffmpeg.av_frame_unref(frm);
 
@@ -376,13 +424,14 @@ public unsafe class FFAudioDecoder : IAudioDecoder
 
         _disposed = true;
         ReleaseNativeResources();
+        if (_ownsSharedDemuxSession)
+            _sharedDemuxSession?.Dispose();
 
         GC.SuppressFinalize(this);
     }
 
     private (bool ok, bool eof, string? error) DecodeNextChunkToPending(int bytesPerFrame)
     {
-        var fCtx = (AVFormatContext*)_formatCtx;
         var cCtx = (AVCodecContext*)_codecCtx;
         var sCtx = (SwrContext*)_swrCtx;
         var pkt = (AVPacket*)_packet;
@@ -425,22 +474,38 @@ public unsafe class FFAudioDecoder : IAudioDecoder
                 continue;
             }
 
-            var readResult = ffmpeg.av_read_frame(fCtx, pkt);
-            if (readResult < 0)
+            if (_sharedDemuxSession != null)
             {
-                if (readResult == ffmpeg.AVERROR_EOF)
+                if (!_sharedDemuxSession.TryDequeuePacket(_streamIndex, pkt, out var streamEof, out var demuxError))
                 {
-                    _inputEof = true;
+                    if (demuxError != null)
+                        return (false, false, demuxError);
+
+                    if (streamEof)
+                        _inputEof = true;
+
                     continue;
                 }
-
-                return (false, false, $"av_read_frame failed: {GetErrorText(readResult)}");
             }
-
-            if (pkt->stream_index != _streamIndex)
+            else
             {
-                ffmpeg.av_packet_unref(pkt);
-                continue;
+                var readResult = ffmpeg.av_read_frame((AVFormatContext*)_formatCtx, pkt);
+                if (readResult < 0)
+                {
+                    if (readResult == ffmpeg.AVERROR_EOF)
+                    {
+                        _inputEof = true;
+                        continue;
+                    }
+
+                    return (false, false, $"av_read_frame failed: {GetErrorText(readResult)}");
+                }
+
+                if (pkt->stream_index != _streamIndex)
+                {
+                    ffmpeg.av_packet_unref(pkt);
+                    continue;
+                }
             }
 
             var sendResult = ffmpeg.avcodec_send_packet(cCtx, pkt);
