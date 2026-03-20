@@ -1,16 +1,41 @@
 using System;
 using System.IO;
 using System.Linq;
+using Seko.OwnAudioNET.Video.Probing;
 
 namespace VideoTest;
 
 public partial class MainWindow
 {
 
-    private static int GetSafeVideoThreadCount()
+    private static int GetSafeVideoThreadCount(MediaStreamInfoEntry videoStream)
     {
-        var suggested = Math.Max(4, Environment.ProcessorCount / 2);
-        return Math.Min(16, suggested);
+        var envOverride = Environment.GetEnvironmentVariable("VIDEOTEST_VIDEO_THREADS");
+        if (int.TryParse(envOverride, out var overrideThreads) && overrideThreads > 0)
+            return Math.Clamp(overrideThreads, 1, 32);
+
+        var width = Math.Max(0, videoStream.Width ?? 0);
+        var height = Math.Max(0, videoStream.Height ?? 0);
+        var fps = videoStream.FrameRate.GetValueOrDefault(30);
+        if (fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
+            fps = 30;
+
+        var codec = videoStream.Codec ?? string.Empty;
+        var codecWeight = codec.Contains("prores", StringComparison.OrdinalIgnoreCase)
+            ? 1.6
+            : codec.Contains("hevc", StringComparison.OrdinalIgnoreCase) || codec.Contains("h265", StringComparison.OrdinalIgnoreCase)
+                ? 1.35
+                : codec.Contains("h264", StringComparison.OrdinalIgnoreCase)
+                    ? 1.0
+                    : 1.1;
+
+        var weightedScore = width * (double)height * fps * codecWeight;
+        var isUltraHeavy = weightedScore >= (3840d * 2160d * 60d * 1.25d);
+        var reservedCores = isUltraHeavy ? 2 : 3;
+        var availableCores = Math.Max(2, Environment.ProcessorCount - reservedCores);
+        var suggested = (int)Math.Round(availableCores * (isUltraHeavy ? 0.50 : 0.40), MidpointRounding.AwayFromZero);
+        var minThreads = isUltraHeavy ? 6 : 4;
+        return Math.Clamp(Math.Max(minThreads, suggested), minThreads, 16);
     }
 
     private static bool IsSharedDemuxEnabled()

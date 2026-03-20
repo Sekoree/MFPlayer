@@ -27,6 +27,12 @@ public sealed class AudioVideoDriftCorrectionConfig
     /// <summary>Maximum absolute accumulated correction offset (seconds).</summary>
     public double MaxAbsoluteCorrectionSeconds { get; set; } = 0.120;
 
+    /// <summary>
+    /// After a user seek (or hard resync), drift correction is held for this many milliseconds
+    /// so decode queues can repopulate without immediate corrective churn.
+    /// </summary>
+    public int PostSeekSuppressionMs { get; set; } = 500;
+
     public AudioVideoDriftCorrectionConfig CloneNormalized()
     {
         var normalizedIntervalMs = Math.Max(1, CorrectionIntervalMs);
@@ -45,6 +51,8 @@ public sealed class AudioVideoDriftCorrectionConfig
         if (normalizedMaxAbsolute < normalizedMaxStep)
             normalizedMaxAbsolute = normalizedMaxStep;
 
+        var normalizedPostSeekSuppressionMs = Math.Max(0, PostSeekSuppressionMs);
+
         return new AudioVideoDriftCorrectionConfig
         {
             Enabled = Enabled,
@@ -53,7 +61,8 @@ public sealed class AudioVideoDriftCorrectionConfig
             HardResyncThresholdSeconds = normalizedHardResync,
             CorrectionGain = normalizedGain,
             MaxStepSeconds = normalizedMaxStep,
-            MaxAbsoluteCorrectionSeconds = normalizedMaxAbsolute
+            MaxAbsoluteCorrectionSeconds = normalizedMaxAbsolute,
+            PostSeekSuppressionMs = normalizedPostSeekSuppressionMs
         };
     }
 

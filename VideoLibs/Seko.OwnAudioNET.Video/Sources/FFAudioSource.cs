@@ -6,6 +6,7 @@ using OwnaudioNET.Interfaces;
 using OwnaudioNET.Sources;
 using OwnaudioNET.Synchronization;
 using Seko.OwnAudioNET.Video.Decoders;
+using Seko.OwnAudioNET.Video.Diagnostics;
 
 namespace Seko.OwnAudioNET.Video.Sources;
 
@@ -17,19 +18,27 @@ namespace Seko.OwnAudioNET.Video.Sources;
 /// </summary>
 public class FFAudioSource : BaseAudioSource, IMasterClockSource
 {
+    public readonly record struct DiagnosticsSnapshot(long HardSyncSeekCount, long HardSyncSeekSuppressedCount, long HardSyncSeekFailureCount);
+
     private readonly Lock _decoderLock = new();
     private readonly FFAudioDecoder _audioDecoder;
     private readonly bool _ownsDecoder;
     private readonly AudioConfig _config;
     private readonly AudioStreamInfo _streamInfo;
+    private readonly DiagnosticsCounterStore _diagCounters = new();
     private byte[] _decodeBuffer;
 
     private MasterClock? _masterClock;
     private double _positionSeconds;
     private bool _isEndOfStream;
     private bool _disposed;
+    private double _hardSyncSuppressedUntilTrackSeconds = double.NegativeInfinity;
+    private const string HardSyncSeekCounter = "audio.hardSync.seek";
+    private const string HardSyncSuppressedCounter = "audio.hardSync.suppressed";
+    private const string HardSyncFailureCounter = "audio.hardSync.failure";
 
     private const double HardSyncThresholdSeconds = 0.050;
+    private const double HardSyncSuppressionWindowSeconds = 0.350;
 
     /// <summary>Initializes a new instance that reads from a file.</summary>
     /// <param name="filePath">Path to the media file.</param>
@@ -109,6 +118,14 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
 
     /// <summary><see langword="true"/> when a <see cref="MasterClock"/> is attached.</summary>
     public bool IsAttachedToClock => _masterClock != null;
+
+    public DiagnosticsSnapshot GetDiagnosticsSnapshot()
+    {
+        return new DiagnosticsSnapshot(
+            _diagCounters.Read(HardSyncSeekCounter),
+            _diagCounters.Read(HardSyncSuppressedCounter),
+            _diagCounters.Read(HardSyncFailureCounter));
+    }
 
     /// <inheritdoc/>
     public override int ReadSamples(Span<float> buffer, int frameCount)
@@ -232,9 +249,13 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
 
         var currentPosition = Position;
         var drift = Math.Abs(relativeTimestamp - currentPosition);
-        if (drift > HardSyncThresholdSeconds)
+        if (ShouldSuppressHardSync(relativeTimestamp, drift))
         {
-            if (!Seek(relativeTimestamp))
+            _diagCounters.Increment(HardSyncSuppressedCounter);
+        }
+        else if (drift > HardSyncThresholdSeconds)
+        {
+            if (!TryPerformHardSyncSeek(relativeTimestamp))
             {
                 FillWithSilence(buffer, frameCount * _config.Channels);
                 result = ReadResult.CreateFailure(0, "Seek failed during synchronization.");
@@ -325,10 +346,36 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
 
         _isEndOfStream = false;
         Volatile.Write(ref _positionSeconds, positionInSeconds);
+        SuppressHardSync(positionInSeconds);
         SetSamplePosition((long)(positionInSeconds * _config.SampleRate));
         if (State == AudioState.EndOfStream)
             State = AudioState.Paused;
         return true;
+    }
+
+    private void SuppressHardSync(double trackPositionSeconds)
+    {
+        Volatile.Write(
+            ref _hardSyncSuppressedUntilTrackSeconds,
+            Math.Max(0, trackPositionSeconds) + HardSyncSuppressionWindowSeconds);
+    }
+
+    private bool ShouldSuppressHardSync(double trackPositionSeconds, double driftSeconds)
+    {
+        if (driftSeconds <= HardSyncThresholdSeconds)
+            return false;
+
+        return trackPositionSeconds < Volatile.Read(ref _hardSyncSuppressedUntilTrackSeconds);
+    }
+
+    private bool TryPerformHardSyncSeek(double trackPositionSeconds)
+    {
+        _diagCounters.Increment(HardSyncSeekCounter);
+        if (Seek(trackPositionSeconds))
+            return true;
+
+        _diagCounters.Increment(HardSyncFailureCounter);
+        return false;
     }
 
     private void EnsureDecodeBufferCapacity(int requiredBytes)

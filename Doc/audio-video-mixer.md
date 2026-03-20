@@ -76,10 +76,24 @@ avMixer.Start();
 
 // ... playback lifetime ...
 
-avMixer.Seek(10.0);
+avMixer.Seek(10.0); // default: AudioVideoSeekMode.Auto
+avMixer.Seek(10.0, AudioVideoSeekMode.Safe);
 avMixer.Pause();
 avMixer.Start();
 ```
+
+## Seek modes
+
+`AudioVideoMixer` supports per-call seek policy selection:
+
+- `AudioVideoSeekMode.Auto`
+  - fast on forward seek, safe pause/resume seek on backward seek.
+- `AudioVideoSeekMode.Fast`
+  - always fast seek.
+- `AudioVideoSeekMode.Safe`
+  - always safe pause/resume seek.
+
+Use `Safe` for stress testing seek stability; use `Auto` for normal playback UX.
 
 ## Drift correction config quick guide
 
@@ -97,6 +111,8 @@ avMixer.Start();
   - max micro-adjust per correction tick.
 - `MaxAbsoluteCorrectionSeconds`
   - cap on accumulated correction offset.
+- `PostSeekSuppressionMs`
+  - holds drift-correction ticks briefly after seek/hard-resync so decode queues can recover (post-seek suppression window).
 
 ## Practical tuning tips
 
@@ -122,12 +138,14 @@ avMixer.Start();
   - raise `CorrectionGain` by small steps (`+0.02`) and/or reduce `CorrectionIntervalMs`.
 - Video hunts around sync point (tiny oscillation):
   - increase `DeadbandSeconds` slightly and reduce `CorrectionGain`.
-- Frequent hard resync events:
+- Frequent hard-resync events:
   - increase `HardResyncThresholdSeconds` and verify decode queue stability.
 - Correction offset pegs near max for long periods:
   - increase `MaxAbsoluteCorrectionSeconds` modestly and inspect underlying decode/render bottlenecks.
 
 Keep changes small and test one parameter at a time to avoid introducing oscillation.
+
+Default post-seek suppression is currently tuned to `500 ms`.
 
 ## Quick compare: choosing the right playback model
 
@@ -142,8 +160,9 @@ Keep changes small and test one parameter at a time to avoid introducing oscilla
 - Video stutters when drift correction is enabled:
   - verify correction is applied only to active/routed sources in playlist scenarios.
   - if still too reactive, increase `DeadbandSeconds` and reduce `CorrectionGain`.
-- Frequent hard resyncs:
+- Frequent hard-resyncs:
   - raise `HardResyncThresholdSeconds` slightly and check decode queue pressure (`drop`, `q`).
+  - optionally raise `PostSeekSuppressionMs` if seek recovery is still jittery.
 - Video looks consistently late/early but stable:
   - this is often an intentional `StartOffset` issue; confirm source offsets before tuning drift gain.
 - Large correction offset growth over time:
@@ -158,4 +177,20 @@ Keep changes small and test one parameter at a time to avoid introducing oscilla
 3. Change one parameter only, in small increments.
 4. Re-test both normal playback and seek-heavy interaction.
 5. Save per-machine/profile presets once stable.
+
+## Diagnostics counters (new)
+
+When using `AudioEx`/`VideoTest` diagnostics, you will now see:
+
+- audio hard-sync counters:
+  - `a_hseek` (hard-sync seek attempts)
+  - `a_hsup` (hard-sync seeks suppressed during the post-seek suppression window)
+  - `a_hfail` (hard-sync seek failures)
+- video drift hard-resync counters:
+  - `v_rseek` (hard-resync attempts)
+  - `v_rok` (hard-resync successes)
+  - `v_rfail` (hard-resync failures)
+  - `v_rsup` (drift-correction ticks suppressed during the post-seek suppression window)
+
+The apps also print a `[Burst10s]` summary line with aggregated counter totals and drift ranges (`v-m`, `v-a`).
 

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
@@ -41,6 +42,12 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void PixelStoreIProc(int pname, int param);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void EnableDisableProc(int cap);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void BlendFuncProc(int sfactor, int dfactor);
+
     private readonly IVideoOutputEngine? _sinkEngine;
     private readonly Lock _frameLock = new();
     private readonly Lock _mirrorLock = new();
@@ -73,6 +80,9 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     private GetUniformLocationProc? _getUniformLocation;
     private Uniform1iProc? _uniform1i;
     private PixelStoreIProc? _pixelStoreI;
+    private EnableDisableProc? _glEnable;
+    private EnableDisableProc? _glDisable;
+    private BlendFuncProc? _glBlendFunc;
     private bool _canUseGpuYuvPath;
     private int _yuvTextureYLocation = -1;
     private int _yuvTextureULocation = -1;
@@ -103,6 +113,11 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     private long _diagStridedUploadPlaneCount;
     private long _diagStridedUploadFrameCount;
     private int _presentationSyncMode = (int)VideoTransportPresentationSyncMode.PreferVSync;
+
+    private readonly Lock _hudLock = new();
+    private double _renderFps;
+    private long _lastRenderCountSample;
+    private long _lastRenderFpsSampleTicks;
 
     // TextureUploadState is defined in Seko.OwnaudioNET.OpenGL.VideoGlGeometry
 
@@ -159,6 +174,10 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
             PropagatePresentationSyncModeToMirrors(value);
         }
     }
+
+    public bool EnableHudOverlay { get; set; }
+
+    public double RenderFps => Interlocked.CompareExchange(ref _renderFps, 0, 0);
 
     public VideoGL()
     {
@@ -247,6 +266,18 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         if (pixelStoreIProc != nint.Zero)
             _pixelStoreI = Marshal.GetDelegateForFunctionPointer<PixelStoreIProc>(pixelStoreIProc);
 
+        var enableProc = gl.GetProcAddress("glEnable");
+        if (enableProc != nint.Zero)
+            _glEnable = Marshal.GetDelegateForFunctionPointer<EnableDisableProc>(enableProc);
+
+        var disableProc = gl.GetProcAddress("glDisable");
+        if (disableProc != nint.Zero)
+            _glDisable = Marshal.GetDelegateForFunctionPointer<EnableDisableProc>(disableProc);
+
+        var blendFuncProc = gl.GetProcAddress("glBlendFunc");
+        if (blendFuncProc != nint.Zero)
+            _glBlendFunc = Marshal.GetDelegateForFunctionPointer<BlendFuncProc>(blendFuncProc);
+
         var vertexShaderSource = BuildVertexShader(gl.ContextInfo.Version.Type);
         var fragmentShaderSource = BuildFragmentShader(gl.ContextInfo.Version.Type);
         var yuvFragmentShaderSource = BuildYuvFragmentShader(gl.ContextInfo.Version.Type);
@@ -320,6 +351,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
 
         _glReady = true;
+        InitializeHudRendering(gl);
         QueueRenderRequest();
     }
 
@@ -394,6 +426,9 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         gl.UseProgram(0);
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
 
+        UpdateRenderFpsSample();
+        RenderHudOverlay(gl, pixelSize.Width, pixelSize.Height);
+
         // Rendering is triggered by frame promotions (FrameReadyFast) and property changes.
         // Avoid a continuous self-queued render loop that can monopolize UI/GPU time.
     }
@@ -454,6 +489,8 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
             _yuvProgram = 0;
         }
 
+        ReleaseHudResources(gl);
+
         _glReady = false;
         _rgbaState = default;
         _yState = default;
@@ -461,6 +498,9 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         _uState = default;
         _vState = default;
         _useYuvProgramThisFrame = false;
+        _glEnable = null;
+        _glDisable = null;
+        _glBlendFunc = null;
         base.OnOpenGlDeinit(gl);
     }
 

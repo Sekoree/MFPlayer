@@ -103,7 +103,25 @@ public interface IAudioVideoMixer : IDisposable
     /// <summary>Stops synchronized audio/video playback.</summary>
     void Stop();
 
-    /// <summary>Seeks the shared synchronized A/V timeline.</summary>
+    /// <summary>Seeks the shared synchronized A/V timeline using <see cref="AudioVideoSeekMode.Auto"/>.</summary>
     void Seek(double positionInSeconds);
+
+    /// <summary>
+    /// Seeks the shared synchronized A/V timeline using the requested seek policy.
+    /// </summary>
+    void Seek(double positionInSeconds, AudioVideoSeekMode seekMode);
+}
+
+/// <summary>How video seek operations should be executed inside <see cref="IAudioVideoMixer.Seek(double,AudioVideoSeekMode)"/>.</summary>
+public enum AudioVideoSeekMode
+{
+    /// <summary>Use fast seek for forward jumps and safe seek for backward jumps while running.</summary>
+    Auto = 0,
+
+    /// <summary>Always use fast seek (no pause/resume protection in transport).</summary>
+    Fast = 1,
+
+    /// <summary>Always use safe seek (pause/resume around timeline seek while running).</summary>
+    Safe = 2
 }
 

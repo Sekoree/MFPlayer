@@ -136,6 +136,7 @@ using var decoder = new FFVideoDecoder("/path/to/video.mov", new FFVideoDecoderO
 var videoView = new VideoGL
 {
     KeepAspectRatio = true,
+    EnableHudOverlay = true,
     PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
 };
 
@@ -157,6 +158,22 @@ while (decoder.TryDecodeNextFrame(out var frame, out var error))
 
 if (!string.IsNullOrWhiteSpace(error))
     Console.WriteLine($"Decode stopped: {error}");
+```
+
+Optional HUD updates for live diagnostics:
+
+```csharp
+videoView.UpdateFormatInfo(
+    sourcePixelFormat: "yuv422p10le",
+    outputPixelFormat: "yuv422p10le",
+    videoFps: 60);
+
+videoView.UpdateHudDiagnostics(
+    queueDepth: 12,
+    uploadMsPerFrame: 0,
+    avDriftMs: -4.5,
+    isHardwareDecoding: true,
+    droppedFrames: 0);
 ```
 
 This is the smallest Avalonia path. If you need timeline control (`Start`/`Pause`/`Seek`) and source/output routing, use the `VideoMixer` approach from the main section.

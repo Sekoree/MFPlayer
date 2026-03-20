@@ -95,6 +95,183 @@ internal static class Program
         }
     }
 
+    private sealed class Burst10sAccumulator
+    {
+        private DateTime _windowStartUtc;
+        private long _audioHardSeek;
+        private long _audioHardSuppressed;
+        private long _audioHardFailure;
+        private long _videoResyncAttempt;
+        private long _videoResyncSuccess;
+        private long _videoResyncFailure;
+        private long _videoSuppressedTicks;
+        private double _videoMasterDriftMin = double.PositiveInfinity;
+        private double _videoMasterDriftMax = double.NegativeInfinity;
+        private double _videoAudioDriftMin = double.PositiveInfinity;
+        private double _videoAudioDriftMax = double.NegativeInfinity;
+
+        public Burst10sAccumulator(DateTime windowStartUtc)
+        {
+            _windowStartUtc = windowStartUtc;
+        }
+
+        public void AddCounters(
+            long audioHardSeek,
+            long audioHardSuppressed,
+            long audioHardFailure,
+            long videoSuppressedTicks,
+            long videoResyncAttempt,
+            long videoResyncSuccess,
+            long videoResyncFailure)
+        {
+            _audioHardSeek += audioHardSeek;
+            _audioHardSuppressed += audioHardSuppressed;
+            _audioHardFailure += audioHardFailure;
+            _videoSuppressedTicks += videoSuppressedTicks;
+            _videoResyncAttempt += videoResyncAttempt;
+            _videoResyncSuccess += videoResyncSuccess;
+            _videoResyncFailure += videoResyncFailure;
+        }
+
+        public void AddDriftSamples(double videoMasterDriftMs, double videoAudioDriftMs)
+        {
+            if (!double.IsNaN(videoMasterDriftMs) && !double.IsInfinity(videoMasterDriftMs))
+            {
+                _videoMasterDriftMin = Math.Min(_videoMasterDriftMin, videoMasterDriftMs);
+                _videoMasterDriftMax = Math.Max(_videoMasterDriftMax, videoMasterDriftMs);
+            }
+
+            if (!double.IsNaN(videoAudioDriftMs) && !double.IsInfinity(videoAudioDriftMs))
+            {
+                _videoAudioDriftMin = Math.Min(_videoAudioDriftMin, videoAudioDriftMs);
+                _videoAudioDriftMax = Math.Max(_videoAudioDriftMax, videoAudioDriftMs);
+            }
+        }
+
+        public bool TryBuildSummary(DateTime nowUtc, out string summary)
+        {
+            if ((nowUtc - _windowStartUtc).TotalSeconds < 10)
+            {
+                summary = string.Empty;
+                return false;
+            }
+
+            summary =
+                $"[Burst10s] a_hseek={_audioHardSeek} a_hsup={_audioHardSuppressed} a_hfail={_audioHardFailure}" +
+                $" | v_rseek={_videoResyncAttempt} v_rok={_videoResyncSuccess} v_rfail={_videoResyncFailure} v_rsup={_videoSuppressedTicks}" +
+                $" | v-m={FormatRange(_videoMasterDriftMin, _videoMasterDriftMax)} v-a={FormatRange(_videoAudioDriftMin, _videoAudioDriftMax)}";
+
+            Reset(nowUtc);
+            return true;
+        }
+
+        private void Reset(DateTime nowUtc)
+        {
+            _windowStartUtc = nowUtc;
+            _audioHardSeek = 0;
+            _audioHardSuppressed = 0;
+            _audioHardFailure = 0;
+            _videoResyncAttempt = 0;
+            _videoResyncSuccess = 0;
+            _videoResyncFailure = 0;
+            _videoSuppressedTicks = 0;
+            _videoMasterDriftMin = double.PositiveInfinity;
+            _videoMasterDriftMax = double.NegativeInfinity;
+            _videoAudioDriftMin = double.PositiveInfinity;
+            _videoAudioDriftMax = double.NegativeInfinity;
+        }
+
+        private static string FormatRange(double min, double max)
+        {
+            return !double.IsInfinity(min) && !double.IsInfinity(max)
+                ? $"{min:+0.0;-0.0}..{max:+0.0;-0.0}ms"
+                : "n/a";
+        }
+    }
+
+    private readonly record struct VideoTickDeltas(
+        long Decoded,
+        long Presented,
+        long Dropped,
+        long UploadedFrames,
+        long UploadedPlanes,
+        long StridedUploadedFrames,
+        long StridedUploadedPlanes,
+        double StridedFrameRatio,
+        double StridedPlaneRatio);
+
+    private readonly record struct SyncTickDeltas(
+        long HardSeek,
+        long HardSuppressed,
+        long HardFailure,
+        long DriftSuppressed,
+        long DriftResyncAttempt,
+        long DriftResyncSuccess,
+        long DriftResyncFailure);
+
+    private static VideoTickDeltas ComputeVideoTickDeltas(
+        long decodedFrames,
+        long presentedFrames,
+        long droppedFrames,
+        long uploadedFrames,
+        long uploadedPlanes,
+        long stridedUploadedFrames,
+        long stridedUploadedPlanes,
+        long lastDecodedFrames,
+        long lastPresentedFrames,
+        long lastDroppedFrames,
+        long lastUploadedFrames,
+        long lastUploadedPlanes,
+        long lastStridedUploadedFrames,
+        long lastStridedUploadedPlanes)
+    {
+        var decodedDelta = decodedFrames - lastDecodedFrames;
+        var presentedDelta = presentedFrames - lastPresentedFrames;
+        var droppedDelta = droppedFrames - lastDroppedFrames;
+        var uploadedFrameDelta = uploadedFrames - lastUploadedFrames;
+        var uploadedPlaneDelta = uploadedPlanes - lastUploadedPlanes;
+        var stridedUploadedFrameDelta = stridedUploadedFrames - lastStridedUploadedFrames;
+        var stridedUploadedPlaneDelta = stridedUploadedPlanes - lastStridedUploadedPlanes;
+        var stridedFrameRatio = uploadedFrameDelta > 0
+            ? (stridedUploadedFrameDelta / (double)uploadedFrameDelta) * 100.0
+            : 0;
+        var stridedPlaneRatio = uploadedPlaneDelta > 0
+            ? (stridedUploadedPlaneDelta / (double)uploadedPlaneDelta) * 100.0
+            : 0;
+
+        return new VideoTickDeltas(
+            decodedDelta,
+            presentedDelta,
+            droppedDelta,
+            uploadedFrameDelta,
+            uploadedPlaneDelta,
+            stridedUploadedFrameDelta,
+            stridedUploadedPlaneDelta,
+            stridedFrameRatio,
+            stridedPlaneRatio);
+    }
+
+    private static SyncTickDeltas ComputeSyncTickDeltas(
+        FFAudioSource.DiagnosticsSnapshot audioDiag,
+        AudioVideoMixer.DiagnosticsSnapshot driftDiag,
+        long lastAudioHardSyncSeekCount,
+        long lastAudioHardSyncSuppressedCount,
+        long lastAudioHardSyncFailureCount,
+        long lastDriftSuppressedTickCount,
+        long lastDriftHardResyncAttemptCount,
+        long lastDriftHardResyncSuccessCount,
+        long lastDriftHardResyncFailureCount)
+    {
+        return new SyncTickDeltas(
+            audioDiag.HardSyncSeekCount - lastAudioHardSyncSeekCount,
+            audioDiag.HardSyncSeekSuppressedCount - lastAudioHardSyncSuppressedCount,
+            audioDiag.HardSyncSeekFailureCount - lastAudioHardSyncFailureCount,
+            driftDiag.DriftCorrectionSuppressedTickCount - lastDriftSuppressedTickCount,
+            driftDiag.DriftHardResyncAttemptCount - lastDriftHardResyncAttemptCount,
+            driftDiag.DriftHardResyncSuccessCount - lastDriftHardResyncSuccessCount,
+            driftDiag.DriftHardResyncFailureCount - lastDriftHardResyncFailureCount);
+    }
+
     public static void Main(string[] args)
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -119,8 +296,8 @@ internal static class Program
         GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
         //var testFile60Fps = "/home/seko/Videos/おねがいダーリン_0611.mov";
-        var testFile60Fps = "/home/seko/Videos/おねがいダーリン_0611.mov";
-        var testFile60Fps2 = "/home/seko/Videos/shootingstar_0611_1.mov";
+        var testFile60Fps = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
+        var testFile60Fps2 = "/home/sekoree/Videos/shootingstar_0611_1.mov";
         var inputFiles = args.Length > 0
             ? args.Where(static path => !string.IsNullOrWhiteSpace(path)).ToArray()
             : [testFile60Fps, testFile60Fps2];
@@ -166,7 +343,7 @@ internal static class Program
             streamSelections[i] = (file, videoStream, audioStream);
         }
 
-        var decoderThreadCount = GetSafeVideoThreadCount();
+        var decoderThreadCount = GetSafeVideoThreadCount(streamSelections.Select(static selection => selection.VideoStream));
         var requestedAudioConfig = AudioConfig.Default;
 
         using var audioEngine = AudioPlaybackEngineFactory.CreateEngine(requestedAudioConfig);
@@ -427,7 +604,15 @@ internal static class Program
                     var lastUploadedPlanes = 0L;
                     var lastStridedUploadedPlanes = 0L;
                     var lastStridedUploadedFrames = 0L;
+                    var lastAudioHardSyncSeekCount = 0L;
+                    var lastAudioHardSyncSuppressedCount = 0L;
+                    var lastAudioHardSyncFailureCount = 0L;
+                    var lastDriftSuppressedTickCount = 0L;
+                    var lastDriftHardResyncAttemptCount = 0L;
+                    var lastDriftHardResyncSuccessCount = 0L;
+                    var lastDriftHardResyncFailureCount = 0L;
                     var lastStatsLogTime = DateTime.UtcNow;
+                    var burstAccumulator = new Burst10sAccumulator(lastStatsLogTime);
                     var playbackTailToleranceSeconds = Math.Max(0.050, negotiatedBufferSize / (double)audioConfig.SampleRate * 2.0);
 
                     bool HasPlaybackFinished()
@@ -537,32 +722,58 @@ internal static class Program
                                 ? double.NaN
                                 : (videoTs - audioTs) * 1000.0;
 
-                            var decodedDelta = decodedFrames - lastDecodedFrames;
-                            var presentedDelta = presentedFrames - lastPresentedFrames;
-                            var droppedDelta = droppedFrames - lastDroppedFrames;
-
                             var diag = videoRenderer.GetDiagnosticsSnapshot();
                             var uploadedFrames = diag.FramesRendered;
-                            var uploadedFrameDelta = uploadedFrames - lastUploadedFrames;
                             var uploadedPlanes = diag.UploadPlanes;
-                            var uploadedPlaneDelta = uploadedPlanes - lastUploadedPlanes;
                             var stridedUploadedPlanes = diag.StridedUploadPlanes;
-                            var stridedUploadedPlaneDelta = stridedUploadedPlanes - lastStridedUploadedPlanes;
                             var stridedUploadedFrames = diag.StridedUploadFrames;
-                            var stridedUploadedFrameDelta = stridedUploadedFrames - lastStridedUploadedFrames;
-                            var stridedFrameRatio = uploadedFrameDelta > 0
-                                ? (stridedUploadedFrameDelta / (double)uploadedFrameDelta) * 100.0
-                                : 0;
-                            var stridedPlaneRatio = uploadedPlaneDelta > 0
-                                ? (stridedUploadedPlaneDelta / (double)uploadedPlaneDelta) * 100.0
-                                : 0;
+                            var videoDeltas = ComputeVideoTickDeltas(
+                                decodedFrames,
+                                presentedFrames,
+                                droppedFrames,
+                                uploadedFrames,
+                                uploadedPlanes,
+                                stridedUploadedFrames,
+                                stridedUploadedPlanes,
+                                lastDecodedFrames,
+                                lastPresentedFrames,
+                                lastDroppedFrames,
+                                lastUploadedFrames,
+                                lastUploadedPlanes,
+                                lastStridedUploadedFrames,
+                                lastStridedUploadedPlanes);
+
+                            var audioDiag = activeMedia.AudioSource.GetDiagnosticsSnapshot();
+                            var driftDiag = playbackMixer.GetDiagnosticsSnapshot();
+                            var syncDeltas = ComputeSyncTickDeltas(
+                                audioDiag,
+                                driftDiag,
+                                lastAudioHardSyncSeekCount,
+                                lastAudioHardSyncSuppressedCount,
+                                lastAudioHardSyncFailureCount,
+                                lastDriftSuppressedTickCount,
+                                lastDriftHardResyncAttemptCount,
+                                lastDriftHardResyncSuccessCount,
+                                lastDriftHardResyncFailureCount);
+
+                            burstAccumulator.AddCounters(
+                                syncDeltas.HardSeek,
+                                syncDeltas.HardSuppressed,
+                                syncDeltas.HardFailure,
+                                syncDeltas.DriftSuppressed,
+                                syncDeltas.DriftResyncAttempt,
+                                syncDeltas.DriftResyncSuccess,
+                                syncDeltas.DriftResyncFailure);
+                            burstAccumulator.AddDriftSamples(videoMasterDriftMs, videoAudioDriftMs);
 
                             ConsoleOverwriteLine(
                                 $"[A/V] {activeMedia.Label}" +
                                 $" | tl={masterTs:F3}/{playlistDurationSeconds:F3}s" +
                                 $" | render={videoRenderer.RenderFps:F1}fps src={activeMedia.VideoSource.StreamInfo.FrameRate:F1}fps fmt={videoRenderer.PixelFormatInfo}" +
-                                $" | pres={presentedDelta} dec={decodedDelta} drop={droppedDelta} q={activeMedia.VideoSource.QueueDepth}" +
-                                $" | up={uploadedFrameDelta} upP={uploadedPlaneDelta} strF={stridedUploadedFrameDelta} ({stridedFrameRatio:0.0}%) strP={stridedUploadedPlaneDelta} ({stridedPlaneRatio:0.0}%) hw={activeMedia.VideoSource.IsHardwareDecoding}" +
+                                $" | pres={videoDeltas.Presented} dec={videoDeltas.Decoded} drop={videoDeltas.Dropped} q={activeMedia.VideoSource.QueueDepth}" +
+                                $" | up={videoDeltas.UploadedFrames} upP={videoDeltas.UploadedPlanes} strF={videoDeltas.StridedUploadedFrames} ({videoDeltas.StridedFrameRatio:0.0}%) strP={videoDeltas.StridedUploadedPlanes} ({videoDeltas.StridedPlaneRatio:0.0}%) hw={activeMedia.VideoSource.IsHardwareDecoding}" +
+                                $" | a_hseek={syncDeltas.HardSeek}/{audioDiag.HardSyncSeekCount} a_hsup={syncDeltas.HardSuppressed}/{audioDiag.HardSyncSeekSuppressedCount} a_hfail={syncDeltas.HardFailure}/{audioDiag.HardSyncSeekFailureCount}" +
+                                $" | v_rsup={syncDeltas.DriftSuppressed}/{driftDiag.DriftCorrectionSuppressedTickCount} v_rseek={syncDeltas.DriftResyncAttempt}/{driftDiag.DriftHardResyncAttemptCount} v_rok={syncDeltas.DriftResyncSuccess}/{driftDiag.DriftHardResyncSuccessCount} v_rfail={syncDeltas.DriftResyncFailure}/{driftDiag.DriftHardResyncFailureCount}" +
                                 $" | m={masterTs:F3}s a={audioTs:F3}s v={videoTs:F3}s" +
                                 $" v-m={videoMasterDriftMs:+0.0;-0.0}ms v-a={videoAudioDriftMs:+0.0;-0.0}ms corr={correctionOffsetMs:+0.0;-0.0}ms");
 
@@ -574,7 +785,19 @@ internal static class Program
                             lastUploadedPlanes = uploadedPlanes;
                             lastStridedUploadedPlanes = stridedUploadedPlanes;
                             lastStridedUploadedFrames = stridedUploadedFrames;
+                            lastAudioHardSyncSeekCount = audioDiag.HardSyncSeekCount;
+                            lastAudioHardSyncSuppressedCount = audioDiag.HardSyncSeekSuppressedCount;
+                            lastAudioHardSyncFailureCount = audioDiag.HardSyncSeekFailureCount;
+                            lastDriftSuppressedTickCount = driftDiag.DriftCorrectionSuppressedTickCount;
+                            lastDriftHardResyncAttemptCount = driftDiag.DriftHardResyncAttemptCount;
+                            lastDriftHardResyncSuccessCount = driftDiag.DriftHardResyncSuccessCount;
+                            lastDriftHardResyncFailureCount = driftDiag.DriftHardResyncFailureCount;
                             lastStatsLogTime = now;
+
+                            if (burstAccumulator.TryBuildSummary(now, out var burstSummary))
+                            {
+                                ConsolePrintLine(burstSummary);
+                            }
                         }
 
                         Thread.Sleep(playbackMixer.IsRunning ? 0 : 10);
@@ -627,11 +850,52 @@ internal static class Program
         }
     }
 
-    private static int GetSafeVideoThreadCount()
+    private static int GetSafeVideoThreadCount(IEnumerable<MediaStreamInfoEntry> videoStreams)
     {
-        var availableCores = Math.Max(1, Environment.ProcessorCount - 2);
-        var suggested = Math.Max(2, availableCores / 3);
-        return Math.Min(6, suggested);
+        const int fallbackThreads = 6;
+
+        var envOverride = Environment.GetEnvironmentVariable("AUDIOEX_VIDEO_THREADS");
+        if (int.TryParse(envOverride, out var overrideThreads) && overrideThreads > 0)
+            return Math.Clamp(overrideThreads, 1, 32);
+
+        var streamArray = videoStreams.ToArray();
+        var heaviestScore = 0.0;
+        foreach (var stream in streamArray)
+        {
+            var width = Math.Max(0, stream.Width ?? 0);
+            var height = Math.Max(0, stream.Height ?? 0);
+            var fps = stream.FrameRate.GetValueOrDefault(30);
+            if (fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
+                fps = 30;
+
+            var basePixelsPerSecond = width * (double)height * fps;
+            if (basePixelsPerSecond <= 0)
+                continue;
+
+            var codec = stream.Codec;
+            var codecWeight = codec.Contains("prores", StringComparison.OrdinalIgnoreCase)
+                ? 1.6
+                : codec.Contains("hevc", StringComparison.OrdinalIgnoreCase) || codec.Contains("h265", StringComparison.OrdinalIgnoreCase)
+                    ? 1.35
+                    : codec.Contains("h264", StringComparison.OrdinalIgnoreCase)
+                        ? 1.0
+                        : 1.1;
+
+            var weightedScore = basePixelsPerSecond * codecWeight;
+            if (weightedScore > heaviestScore)
+                heaviestScore = weightedScore;
+        }
+
+        if (heaviestScore <= 0)
+            return fallbackThreads;
+
+        var isUltraHeavy = heaviestScore >= (3840d * 2160d * 60d * 1.25d);
+        var targetFraction = isUltraHeavy ? 0.50 : 0.40;
+        var reservedCores = isUltraHeavy ? 2 : 3;
+        var availableCores = Math.Max(2, Environment.ProcessorCount - reservedCores);
+        var suggested = (int)Math.Round(availableCores * targetFraction, MidpointRounding.AwayFromZero);
+        var minThreads = isUltraHeavy ? 6 : 4;
+        return Math.Clamp(Math.Max(minThreads, suggested), minThreads, 16);
     }
 
     private static FFVideoDecoderOptions CreateDemoDecoderOptions(int threadCount, int? streamIndex)

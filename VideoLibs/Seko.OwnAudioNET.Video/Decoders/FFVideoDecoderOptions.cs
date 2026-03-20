@@ -24,6 +24,8 @@ public sealed class FFVideoDecoderOptions
     /// <summary>
     /// Number of threads used for software decoding and packet/frame processing.
     /// <c>0</c> lets FFmpeg choose automatically. Default: <c>0</c>.
+    /// Heavy mezzanine formats (for example 4K60 ProRes 422/10-bit) may require a higher value
+    /// to maintain realtime throughput, depending on CPU and concurrent workload.
     /// </summary>
     public int ThreadCount { get; init; }
 

@@ -52,6 +52,7 @@ Environment toggle:
 - `Left` / `Right`: seek -/+ 5s
 - `Home` / `End`: seek start/end
 - `F11`: toggle fullscreen
+- `H`: toggle VideoGL HUD overlay (applies to all mirrored views)
 - `Escape`: close
 
 ## Diagnostics
@@ -64,16 +65,43 @@ Environment toggle:
 - drift (`v-m`, `v-a`) and correction offset (`corr`)
 - per-view diagnostics for all 4 views
 
+Additional sync diagnostics:
+
+- audio hard-sync counters:
+  - `a_hseek` (hard-sync seek attempts)
+  - `a_hsup` (hard-sync seeks suppressed during the post-seek suppression window)
+  - `a_hfail` (hard-sync seek failures)
+- video hard-resync counters:
+  - `v_rseek` (hard-resync attempts)
+  - `v_rok` (hard-resync successes)
+  - `v_rfail` (hard-resync failures)
+  - `v_rsup` (drift-correction ticks suppressed during the post-seek suppression window)
+
+Every ~10 seconds VideoTest also prints a `[Burst10s]` summary line:
+
+- `[Burst10s] ...` with aggregated counter totals and drift ranges.
+
+## Threading override
+
+- `VIDEOTEST_VIDEO_THREADS`
+  - optional explicit decoder thread count override for heavy media.
+
 ## Run commands
 
-```bash
-dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+```fish
+dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
 ```
 
 Run with separate demux sessions:
 
-```bash
-env VIDEOTEST_USE_SHARED_DEMUX=0 dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+```fish
+env VIDEOTEST_USE_SHARED_DEMUX=0 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+```
+
+Run with explicit decoder threads:
+
+```fish
+env VIDEOTEST_VIDEO_THREADS=6 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
 ```
 
 ## Key files

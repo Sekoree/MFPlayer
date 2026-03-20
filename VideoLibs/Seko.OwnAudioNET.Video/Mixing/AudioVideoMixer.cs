@@ -3,6 +3,7 @@ using OwnaudioNET.Events;
 using OwnaudioNET.Interfaces;
 using OwnaudioNET.Mixing;
 using OwnaudioNET.Synchronization;
+using Seko.OwnAudioNET.Video.Diagnostics;
 using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Events;
 using Seko.OwnAudioNET.Video.Sources;
@@ -14,12 +15,25 @@ namespace Seko.OwnAudioNET.Video.Mixing;
 /// </summary>
 public sealed class AudioVideoMixer : IAudioVideoMixer
 {
+    public readonly record struct DiagnosticsSnapshot(
+        long DriftCorrectionSuppressedTickCount,
+        long DriftHardResyncAttemptCount,
+        long DriftHardResyncSuccessCount,
+        long DriftHardResyncFailureCount);
+
     private readonly bool _ownsAudioMixer;
     private readonly bool _ownsVideoMixer;
     private readonly Timer _driftCorrectionTimer;
     private readonly AudioVideoDriftCorrectionConfig _driftCorrectionConfig;
+    private readonly DiagnosticsCounterStore _diagCounters = new();
     private int _driftCorrectionTickActive;
+    private long _driftCorrectionSuppressedUntilMs;
     private bool _disposed;
+
+    private const string DriftSuppressedTickCounter = "drift.suppressedTicks";
+    private const string DriftHardResyncAttemptCounter = "drift.hardResync.attempt";
+    private const string DriftHardResyncSuccessCounter = "drift.hardResync.success";
+    private const string DriftHardResyncFailureCounter = "drift.hardResync.failure";
 
     public AudioVideoMixer(AudioMixer audioMixer, IVideoMixer videoMixer, bool ownsAudioMixer = false, bool ownsVideoMixer = false)
         : this(audioMixer, videoMixer, driftCorrectionConfig: null, ownsAudioMixer, ownsVideoMixer)
@@ -67,6 +81,15 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
     public int VideoSourceCount => VideoMixer.SourceCount;
 
     public int VideoOutputCount => VideoMixer.OutputCount;
+
+    public DiagnosticsSnapshot GetDiagnosticsSnapshot()
+    {
+        return new DiagnosticsSnapshot(
+            _diagCounters.Read(DriftSuppressedTickCounter),
+            _diagCounters.Read(DriftHardResyncAttemptCounter),
+            _diagCounters.Read(DriftHardResyncSuccessCounter),
+            _diagCounters.Read(DriftHardResyncFailureCounter));
+    }
 
     public event EventHandler<AudioErrorEventArgs>? AudioSourceError;
 
@@ -210,32 +233,76 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
     public void Seek(double positionInSeconds)
     {
+        Seek(positionInSeconds, AudioVideoSeekMode.Auto);
+    }
+
+    public void Seek(double positionInSeconds, AudioVideoSeekMode seekMode)
+    {
         ThrowIfDisposed();
         var target = Math.Max(0, positionInSeconds);
+        var current = Position;
+        var safeSeek = ResolveSafeSeek(seekMode, target, current);
+        var wasRunning = IsRunning;
 
-        MasterClock.SeekTo(target);
+        if (safeSeek && wasRunning)
+            Pause();
 
+        try
+        {
+            PerformCoordinatedSeek(target, wasRunning);
+        }
+        finally
+        {
+            if (safeSeek && wasRunning)
+                Start();
+        }
+    }
+
+    private void PerformCoordinatedSeek(double targetTimelineSeconds, bool resumePlayingSources)
+    {
+        MasterClock.SeekTo(targetTimelineSeconds);
+        SeekAudioSources(targetTimelineSeconds, resumePlayingSources);
+        VideoMixer.Seek(targetTimelineSeconds, safeSeek: false);
+        ResetVideoDriftCorrections();
+        SuppressDriftCorrectionForSeekWindow();
+    }
+
+    private void SeekAudioSources(double timelinePositionSeconds, bool resumePlayingSources)
+    {
         foreach (var audioSource in AudioMixer.GetSources())
         {
-            if (audioSource.State != AudioState.EndOfStream)
+            var wasPlaying = audioSource.State == AudioState.Playing;
+            var trackPosition = ResolveAudioTrackPosition(audioSource, timelinePositionSeconds);
+            var clampedTrackPosition = Math.Max(0, trackPosition);
+
+            if (audioSource.Duration > 0 && clampedTrackPosition > audioSource.Duration)
+                clampedTrackPosition = audioSource.Duration;
+
+            if (audioSource.State == AudioState.Stopped)
                 continue;
 
-            if (target >= audioSource.Duration)
+            if (audioSource.Duration > 0 && timelinePositionSeconds >= audioSource.Duration && clampedTrackPosition >= audioSource.Duration)
                 continue;
 
             try
             {
-                audioSource.Seek(target);
-                audioSource.Play();
+                audioSource.Seek(clampedTrackPosition);
+
+                if (resumePlayingSources && wasPlaying)
+                    audioSource.Play();
             }
             catch
             {
                 // Ignore.
             }
         }
+    }
 
-        VideoMixer.Seek(target, safeSeek: false);
-        ResetVideoDriftCorrections();
+    private static double ResolveAudioTrackPosition(IAudioSource audioSource, double timelinePositionSeconds)
+    {
+        return audioSource is FFAudioSource ffAudioSource
+            ? timelinePositionSeconds - ffAudioSource.StartOffset
+            : timelinePositionSeconds;
     }
 
     public void Dispose()
@@ -290,6 +357,26 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
             videoSource.ResetDriftCorrectionOffset();
     }
 
+    private bool ResolveSafeSeek(AudioVideoSeekMode seekMode, double target, double current)
+    {
+        return seekMode switch
+        {
+            AudioVideoSeekMode.Fast => false,
+            AudioVideoSeekMode.Safe => true,
+            _ => target < current - 1e-6
+        };
+    }
+
+    private void SuppressDriftCorrectionForSeekWindow()
+    {
+        var suppressionMs = _driftCorrectionConfig.PostSeekSuppressionMs;
+        if (suppressionMs <= 0)
+            return;
+
+        var nowMs = Environment.TickCount64;
+        Interlocked.Exchange(ref _driftCorrectionSuppressedUntilMs, nowMs + suppressionMs);
+    }
+
     private void DriftCorrectionTick()
     {
         if (_disposed || !IsRunning)
@@ -297,6 +384,13 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
         if (!_driftCorrectionConfig.Enabled)
             return;
+
+        var nowMs = Environment.TickCount64;
+        if (nowMs < Interlocked.Read(ref _driftCorrectionSuppressedUntilMs))
+        {
+            _diagCounters.Increment(DriftSuppressedTickCounter);
+            return;
+        }
 
         if (Interlocked.Exchange(ref _driftCorrectionTickActive, 1) != 0)
             return;
@@ -327,16 +421,20 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
                 if (absoluteDrift >= _driftCorrectionConfig.HardResyncThresholdSeconds)
                 {
                     var targetVideoPosition = Math.Max(0, expectedVideoTimestamp);
+                    _diagCounters.Increment(DriftHardResyncAttemptCounter);
                     try
                     {
                         videoSource.Seek(targetVideoPosition);
+                        _diagCounters.Increment(DriftHardResyncSuccessCounter);
                     }
                     catch
                     {
+                        _diagCounters.Increment(DriftHardResyncFailureCounter);
                         // Ignore.
                     }
 
                     videoSource.ResetDriftCorrectionOffset();
+                    SuppressDriftCorrectionForSeekWindow();
                     continue;
                 }
 

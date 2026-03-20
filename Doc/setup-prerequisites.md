@@ -31,11 +31,11 @@ Examples in this repo also probe common Linux paths (`/lib`, `/usr/lib`, `/usr/l
 
 ## 3) Build commands
 
-```bash
-dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video/Seko.OwnAudioNET.Video.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video.Engine/Seko.OwnAudioNET.Video.Engine.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+```fish
+dotnet build "/home/sekoree/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video/Seko.OwnAudioNET.Video.csproj" -c Release
+dotnet build "/home/sekoree/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video.Engine/Seko.OwnAudioNET.Video.Engine.csproj" -c Release
+dotnet build "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
+dotnet build "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
 ```
 
 ## 4) Runtime toggles used by sample apps
@@ -48,6 +48,10 @@ dotnet build "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj"
   - unset or non-zero enables shared demux
 - `FFMPEG_ROOT`
   - optional FFmpeg root override
+- `AUDIOEX_VIDEO_THREADS`
+  - optional explicit video decoder thread count override for `AudioEx`
+- `VIDEOTEST_VIDEO_THREADS`
+  - optional explicit video decoder thread count override for `VideoTest`
 
 ## 5) Common troubleshooting
 

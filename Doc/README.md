@@ -7,9 +7,9 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 - [`setup-prerequisites.md`](setup-prerequisites.md)
   - What to install, what to build, and environment variables.
 - [`audioex-setup.md`](audioex-setup.md)
-  - How the SDL3 AudioEx test player is wired (playlist, offsets, controls, toggles).
+  - How the SDL3 AudioEx test player is wired (playlist, offsets, controls, counters, burst summaries).
 - [`videotest-setup.md`](videotest-setup.md)
-  - How the Avalonia VideoTest app is wired (4 mirrored views, controls, toggles).
+  - How the Avalonia VideoTest app is wired (4 mirrored views, controls, HUD, counters, burst summaries).
 - [`video-mixer-basics.md`](video-mixer-basics.md)
   - Minimal video-only pipeline with `VideoMixer`.
 - [`audio-video-mixer.md`](audio-video-mixer.md)
@@ -30,4 +30,20 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 
 - `Test/AudioEx/Program.cs`
 - `Test/VideoTest/MainWindow.axaml.cs`
+
+## Diagnostics Counter Legend
+
+Use this legend for the live diagnostics lines in `AudioEx` and `VideoTest`:
+
+- audio hard-sync counters:
+  - `a_hseek`: hard-sync seek attempts
+  - `a_hsup`: hard-sync seeks suppressed during the post-seek suppression window
+  - `a_hfail`: hard-sync seek failures
+- video hard-resync counters:
+  - `v_rseek`: hard-resync attempts
+  - `v_rok`: hard-resync successes
+  - `v_rfail`: hard-resync failures
+  - `v_rsup`: drift-correction ticks suppressed during the post-seek suppression window
+- burst summary:
+  - `[Burst10s]`: aggregated 10-second totals plus drift ranges (`v-m`, `v-a`)
 

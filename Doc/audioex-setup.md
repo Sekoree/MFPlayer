@@ -47,6 +47,11 @@ Environment toggle:
 
 - `AUDIOEX_USE_SHARED_DEMUX=0` -> disable shared demux
 
+Shared demux API now supports both:
+
+- `FFSharedDemuxSession.OpenFile(...)`
+- `FFSharedDemuxSession.OpenStream(stream, leaveOpen: true, ...)`
+
 ## Controls (while SDL window is focused)
 
 - `Space`: play/pause
@@ -65,22 +70,50 @@ AudioEx prints live line stats including:
 - upload metrics (`up`, `upP`, `strF`, `strP`)
 - drift values (`v-m`, `v-a`) and correction (`corr`)
 
+Additional sync diagnostics:
+
+- audio hard-sync counters:
+  - `a_hseek` (hard-sync seek attempts)
+  - `a_hsup` (hard-sync seeks suppressed during the post-seek suppression window)
+  - `a_hfail` (hard-sync seek failures)
+- video hard-resync counters:
+  - `v_rseek` (hard-resync attempts)
+  - `v_rok` (hard-resync successes)
+  - `v_rfail` (hard-resync failures)
+  - `v_rsup` (drift-correction ticks suppressed during the post-seek suppression window)
+
+Every ~10 seconds AudioEx also prints a `[Burst10s]` summary line:
+
+- `[Burst10s] ...` with aggregated counter totals and drift ranges (`v-m`, `v-a`).
+
+## Threading overrides
+
+- `AUDIOEX_VIDEO_THREADS`
+  - optional explicit decoder thread count override.
+  - useful for heavy mezzanine codecs (for example 4K60 ProRes 422/10-bit).
+
 ## Run commands
 
-```bash
-dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
+```fish
+dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
 ```
 
 Playlist run:
 
-```bash
-dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
+```fish
+dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
 ```
 
 Disable shared demux for A/B testing:
 
-```bash
-env AUDIOEX_USE_SHARED_DEMUX=0 dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
+```fish
+env AUDIOEX_USE_SHARED_DEMUX=0 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
+```
+
+Override decoder thread count:
+
+```fish
+env AUDIOEX_VIDEO_THREADS=6 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
 ```
 
 ## Key files
