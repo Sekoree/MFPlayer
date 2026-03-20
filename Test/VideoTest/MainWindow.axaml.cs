@@ -1,10 +1,13 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Threading;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using FFmpeg.AutoGen;
 using Ownaudio.Core;
+using Ownaudio.Native;
 using OwnaudioNET.Mixing;
 using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Avalonia;
@@ -357,7 +360,11 @@ public partial class MainWindow : Window
 
         _started = true;
 
+        var argFile = Program.LaunchArgs.FirstOrDefault();
         var testFile = "/home/sekoree/Videos/shootingstar_0611_1.mov";
+        if (!string.IsNullOrWhiteSpace(argFile) && File.Exists(argFile))
+            testFile = argFile;
+        
         if (string.IsNullOrWhiteSpace(testFile))
         {
             Title = "VideoTest - no demo video found";
@@ -391,7 +398,8 @@ public partial class MainWindow : Window
         var requestedAudioConfig = AudioConfig.Default;
         try
         {
-            _audioEngine = AudioPlaybackEngineFactory.CreateEngine(requestedAudioConfig);
+            _audioEngine = new NativeAudioEngine();
+            _audioEngine.Initialize(requestedAudioConfig);
             var startResult = _audioEngine.Start();
             if (startResult < 0)
                 throw new InvalidOperationException($"Failed to start audio engine. Error code: {startResult}");

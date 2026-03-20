@@ -94,6 +94,27 @@ public sealed class VideoFrame : IDisposable
         return frame;
     }
 
+    /// <summary>
+    /// Creates a pooled RGBA frame and copies external pixel data into it.
+    /// Useful for interop receivers that provide temporary native buffers.
+    /// </summary>
+    public static VideoFrame CreateExternalRgba32(ReadOnlySpan<byte> data, int width, int height, int stride, double ptsSeconds = 0)
+    {
+        if (width <= 0)
+            throw new ArgumentOutOfRangeException(nameof(width));
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+
+        var resolvedStride = stride > 0 ? stride : width * 4;
+        var requiredLength = resolvedStride * height;
+        if (data.Length < requiredLength)
+            throw new ArgumentException("Input RGBA data is smaller than required frame size.", nameof(data));
+
+        var frame = CreatePooledRgba32(requiredLength, width, height, resolvedStride, ptsSeconds);
+        data[..requiredLength].CopyTo(frame.GetPlaneData(0).AsSpan(0, requiredLength));
+        return frame;
+    }
+
     internal static VideoFrame CreatePooledNv12(int yLength, int uvLength, int width, int height, int yStride, int uvStride, double ptsSeconds)
     {
         var plane0 = ArrayPool<byte>.Shared.Rent(Math.Max(1, yLength));

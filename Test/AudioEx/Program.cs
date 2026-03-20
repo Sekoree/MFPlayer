@@ -4,6 +4,7 @@ using OwnaudioNET.Mixing;
 using SDL3;
 using System.Collections.Concurrent;
 using System.Runtime;
+using Ownaudio.Native;
 using Seko.OwnAudioNET.Video;
 using Seko.OwnAudioNET.Video.Clocks;
 using Seko.OwnAudioNET.Video.Decoders;
@@ -346,7 +347,8 @@ internal static class Program
         var decoderThreadCount = GetSafeVideoThreadCount(streamSelections.Select(static selection => selection.VideoStream));
         var requestedAudioConfig = AudioConfig.Default;
 
-        using var audioEngine = AudioPlaybackEngineFactory.CreateEngine(requestedAudioConfig);
+        using var audioEngine = new NativeAudioEngine();
+        audioEngine.Initialize(requestedAudioConfig);
 
         try
         {
