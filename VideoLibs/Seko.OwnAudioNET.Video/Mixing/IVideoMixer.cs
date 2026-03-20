@@ -20,14 +20,15 @@ public interface IVideoMixer : IDisposable
     /// <summary>Current shared timeline position in seconds.</summary>
     double Position { get; }
 
+    /// <summary>Optional external timeline clock used for position reporting/sync diagnostics.</summary>
+    IExternalClock? ExternalClock { get; }
+
     /// <summary><see langword="true"/> when the mixer transport is advancing.</summary>
     bool IsRunning { get; }
 
     /// <summary>Number of registered FFmpeg-backed video sources.</summary>
     int SourceCount { get; }
 
-    /// <summary>Number of registered outputs.</summary>
-    int OutputCount { get; }
 
     /// <summary>Raised when a registered source reports an error.</summary>
     event EventHandler<VideoErrorEventArgs>? SourceError;
@@ -36,18 +37,18 @@ public interface IVideoMixer : IDisposable
     event EventHandler<VideoOutputSourceChangedEventArgs>? OutputSourceChanged;
 
     /// <summary>Adds an FFmpeg-backed source to the shared transport.</summary>
-    bool AddSource(FFVideoSource source);
+    bool AddSource(VideoStreamSource source);
 
     /// <summary>Removes a source from the mixer and detaches any outputs bound to it.</summary>
-    bool RemoveSource(FFVideoSource source);
+    bool RemoveSource(VideoStreamSource source);
 
     /// <summary>Returns a snapshot of all registered sources.</summary>
-    FFVideoSource[] GetSources();
+    VideoStreamSource[] GetSources();
 
     /// <summary>Removes all sources.</summary>
     void ClearSources();
 
-    /// <summary>Adds an output to the mixer.</summary>
+    /// <summary>Adds the primary output to the mixer. Returns <see langword="false"/> when one is already registered.</summary>
     bool AddOutput(IVideoOutput output);
 
     /// <summary>Removes an output from the mixer.</summary>
@@ -60,16 +61,16 @@ public interface IVideoMixer : IDisposable
     void ClearOutputs();
 
     /// <summary>Binds an output to a specific source.</summary>
-    bool BindOutputToSource(IVideoOutput output, FFVideoSource source);
+    bool BindOutputToSource(IVideoOutput output, VideoStreamSource source);
 
     /// <summary>Detaches the currently bound source from an output.</summary>
     bool UnbindOutput(IVideoOutput output);
 
     /// <summary>Returns all outputs currently bound to a source.</summary>
-    IVideoOutput[] GetOutputsForSource(FFVideoSource source);
+    IVideoOutput[] GetOutputsForSource(VideoStreamSource source);
 
     /// <summary>Returns the source currently bound to an output, or <see langword="null"/>.</summary>
-    FFVideoSource? GetSourceForOutput(IVideoOutput output);
+    VideoStreamSource? GetSourceForOutput(IVideoOutput output);
 
     /// <summary>Starts or resumes playback transport.</summary>
     void Start();

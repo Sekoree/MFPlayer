@@ -8,7 +8,7 @@ namespace Seko.OwnAudioNET.Video.Engine;
 public sealed class VideoOutputSourceChangedEventArgs : EventArgs
 {
 	/// <summary>Initializes a new instance describing an output source transition.</summary>
-	public VideoOutputSourceChangedEventArgs(IVideoOutput output, FFVideoSource? oldSource, FFVideoSource? newSource)
+	public VideoOutputSourceChangedEventArgs(IVideoOutput output, VideoStreamSource? oldSource, VideoStreamSource? newSource)
 	{
 		Output = output ?? throw new ArgumentNullException(nameof(output));
 		OldSource = oldSource;
@@ -19,9 +19,9 @@ public sealed class VideoOutputSourceChangedEventArgs : EventArgs
 	public IVideoOutput Output { get; }
 
 	/// <summary>The previously bound source, or <see langword="null"/>.</summary>
-	public FFVideoSource? OldSource { get; }
+	public VideoStreamSource? OldSource { get; }
 
 	/// <summary>The newly bound source, or <see langword="null"/>.</summary>
-	public FFVideoSource? NewSource { get; }
+	public VideoStreamSource? NewSource { get; }
 }
 

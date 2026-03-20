@@ -18,6 +18,7 @@ Sample apps:
 
 - `Test/AudioEx`
 - `Test/VideoTest`
+- `Test/NdiVideoSend`
 
 ## 2) FFmpeg runtime
 
@@ -32,10 +33,11 @@ Examples in this repo also probe common Linux paths (`/lib`, `/usr/lib`, `/usr/l
 ## 3) Build commands
 
 ```fish
-dotnet build "/home/sekoree/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video/Seko.OwnAudioNET.Video.csproj" -c Release
-dotnet build "/home/sekoree/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video.Engine/Seko.OwnAudioNET.Video.Engine.csproj" -c Release
-dotnet build "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
-dotnet build "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video/Seko.OwnAudioNET.Video.csproj" -c Release
+dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video.Engine/Seko.OwnAudioNET.Video.Engine.csproj" -c Release
+dotnet build "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
+dotnet build "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+dotnet build "/home/seko/RiderProjects/MFPlayer/Test/NdiVideoSend/NdiVideoSend.csproj" -c Release
 ```
 
 ## 4) Runtime toggles used by sample apps

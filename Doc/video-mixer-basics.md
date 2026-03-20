@@ -5,9 +5,9 @@ Use `VideoMixer` when you only need video transport/routing and no audio-driven 
 ## Main pieces
 
 - `FFVideoDecoder`: decodes compressed video stream.
-- `FFVideoSource`: clock-aware video source and queueing.
+- `VideoStreamSource`: clock-aware video source and queueing.
 - `VideoTransportEngine`: shared timeline/transport for video sources.
-- `VideoMixer`: source/output registration and binding.
+- `VideoMixer`: source registration and single primary output binding.
 - `IVideoOutput`: output sink (`VideoSDL`, `VideoGL`, etc.).
 
 ## Minimal pipeline
@@ -30,7 +30,7 @@ var decoderOptions = new FFVideoDecoderOptions
 };
 
 using var decoder = new FFVideoDecoder(inputFile, decoderOptions);
-using var videoSource = new FFVideoSource(decoder, ownsDecoder: false);
+using var videoSource = new VideoStreamSource(decoder, ownsDecoder: false);
 
 var transportConfig = new VideoTransportEngineConfig
 {
@@ -65,9 +65,33 @@ videoMixer.RemoveOutput(output);
 videoMixer.RemoveSource(videoSource);
 ```
 
+`VideoMixer` currently accepts one primary output sink per mixer instance. For fan-out to multiple real outputs, use a downstream multiplexer.
+
+## Multi-output fan-out with a multiplex engine
+
+```csharp
+using Seko.OwnAudioNET.Video.Engine;
+
+var outputA = CreateOutputA();
+var outputB = CreateOutputB();
+
+var muxEngine = new MultiplexVideoOutputEngine();
+muxEngine.AddOutput(outputA);
+muxEngine.AddOutput(outputB);
+
+// Adapt engine fan-out to one mixer output sink.
+var muxSink = new VideoOutputEngineSink(muxEngine, ownsEngine: true);
+
+if (!videoMixer.AddOutput(muxSink))
+    throw new InvalidOperationException("Failed to add multiplex sink.");
+
+if (!videoMixer.BindOutputToSource(muxSink, videoSource))
+    throw new InvalidOperationException("Failed to bind source to multiplex sink.");
+```
+
 ## Notes
 
-- `FFVideoSource.StartOffset` shifts source position on the timeline.
+- `VideoStreamSource.StartOffset` shifts source position on the timeline.
 - Use `videoMixer.Seek(seconds, safeSeek: true)` when you want pause/resume-safe seek behavior from the transport layer.
 - For multi-view rendering, use one mixer-bound primary output and mirror in UI/output layer where supported.
 

@@ -18,7 +18,7 @@ public sealed class NdiOutputEngine : INdiOutputEngine
         Config = (config ?? new NdiEngineConfig()).CloneNormalized();
 
         _runtime = new NdiRuntimeScope();
-        _timeline = new NdiTimelineClock(Config.ExternalClockSecondsProvider);
+        _timeline = new NdiTimelineClock(Config.ExternalClock);
         _session = new NdiSenderSession(Config);
 
         VideoOutput = new NdiVideoOutput(_session, _timeline, Config);

@@ -49,6 +49,7 @@ public sealed partial class VideoMixer
             if (_ownsEngine)
                 _engine.Dispose();
 
+
             _disposed = true;
         }
     }

@@ -2,6 +2,26 @@
 
 This folder contains practical setup and usage guides for the video layer in `VideoLibs/*` and its integration with OwnAudio mixers/clocks.
 
+## Recent Changes
+
+- mixer API cleanup:
+  - removed legacy `VideoOutputCount`-style accessors from mixer interfaces.
+  - use `GetVideoOutputs().Length` when a count is needed.
+- single-output mixer model:
+  - `VideoMixer` now enforces one primary output sink per mixer instance.
+  - fan-out is handled downstream via multiplexers.
+- multiplexing support:
+  - added `MultiplexAudioEngine` for one-to-many audio engine send.
+  - added `MultiplexVideoOutputEngine` + `VideoOutputEngineSink` for one-to-many video output routing.
+- NDI receive stack:
+  - added `NdiAudioStreamSource`, `NdiVideoStreamDecoder`, and `NdiExternalTimelineClock`.
+  - added receive tuning presets via `NdiReceiveTuningProfile`.
+- NDI send stack docs:
+  - documented `NdiOutputEngine` usage for direct send, engine routing, and mixer sink routing.
+- source API cleanup:
+  - removed obsolete convenience constructors from `AudioStreamSource` and `VideoStreamSource`.
+  - decoder-first construction is now the canonical path.
+
 ## Guides
 
 - [`setup-prerequisites.md`](setup-prerequisites.md)
@@ -16,6 +36,12 @@ This folder contains practical setup and usage guides for the video layer in `Vi
   - Audio-led A/V playback with `AudioVideoMixer`, drift correction, and a tuning table.
 - [`interop-ownaudio.md`](interop-ownaudio.md)
   - How video classes map to base OwnAudio classes, plus SDL3/Avalonia and no-audio output snippets.
+- [`multiplexers.md`](multiplexers.md)
+  - How to fan out one audio/video stream to multiple engines/outputs, including local+NDI recipes.
+- [`ndi-receive.md`](ndi-receive.md)
+  - NDI receive pipeline (`NdiAudioStreamSource`, `NdiVideoStreamDecoder`, external timeline clock, tuning profiles).
+- [`ndi-send.md`](ndi-send.md)
+  - NDI send pipeline (`NdiOutputEngine`, sink routing, direct audio/video send APIs).
 
 ## Recommended read order
 
@@ -24,12 +50,16 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 3. VideoTest setup
 4. Video mixer basics
 5. Audio/video mixer (audio-led)
-6. OwnAudio interop notes and output snippets
+6. Multiplexer patterns (audio/video fan-out)
+7. NDI receive setup and tuning
+8. NDI send setup and sink usage
+9. OwnAudio interop notes and output snippets
 
 ## Where to look for runnable references
 
 - `Test/AudioEx/Program.cs`
 - `Test/VideoTest/MainWindow.axaml.cs`
+- `Test/NdiVideoSend/Program.cs`
 
 ## Diagnostics Counter Legend
 

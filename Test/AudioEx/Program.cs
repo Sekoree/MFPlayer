@@ -13,7 +13,6 @@ using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.Probing;
 using Seko.OwnAudioNET.Video.SDL3;
 using Seko.OwnAudioNET.Video.Sources;
-using AudioPlaybackEngineFactory = OwnaudioNET.Engine.AudioEngineFactory;
 
 namespace AudioEx;
 
@@ -55,8 +54,8 @@ internal static class Program
 
         public PlaylistMedia(
             string filePath,
-            FFVideoSource videoSource,
-            FFAudioSource audioSource,
+            VideoStreamSource videoSource,
+            AudioStreamSource audioSource,
             FFSharedDemuxSession? sharedDemuxSession,
             double startOffsetSeconds,
             double durationSeconds)
@@ -72,9 +71,9 @@ internal static class Program
 
         public string Label { get; }
 
-        public FFVideoSource VideoSource { get; }
+        public VideoStreamSource VideoSource { get; }
 
-        public FFAudioSource AudioSource { get; }
+        public AudioStreamSource AudioSource { get; }
 
         public FFSharedDemuxSession? SharedDemuxSession { get; }
 
@@ -96,7 +95,7 @@ internal static class Program
         }
     }
 
-    private sealed class Burst10sAccumulator
+    private sealed class BurstTenSecondsAccumulator
     {
         private DateTime _windowStartUtc;
         private long _audioHardSeek;
@@ -111,7 +110,7 @@ internal static class Program
         private double _videoAudioDriftMin = double.PositiveInfinity;
         private double _videoAudioDriftMax = double.NegativeInfinity;
 
-        public Burst10sAccumulator(DateTime windowStartUtc)
+        public BurstTenSecondsAccumulator(DateTime windowStartUtc)
         {
             _windowStartUtc = windowStartUtc;
         }
@@ -253,7 +252,7 @@ internal static class Program
     }
 
     private static SyncTickDeltas ComputeSyncTickDeltas(
-        FFAudioSource.DiagnosticsSnapshot audioDiag,
+        AudioStreamSource.DiagnosticsSnapshot audioDiag,
         AudioVideoMixer.DiagnosticsSnapshot driftDiag,
         long lastAudioHardSyncSeekCount,
         long lastAudioHardSyncSuppressedCount,
@@ -296,9 +295,8 @@ internal static class Program
     {
         GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
-        //var testFile60Fps = "/home/seko/Videos/おねがいダーリン_0611.mov";
-        var testFile60Fps = "/home/sekoree/Videos/おねがいダーリン_0611.mov";
-        var testFile60Fps2 = "/home/sekoree/Videos/shootingstar_0611_1.mov";
+        var testFile60Fps = "/home/seko/Videos/おねがいダーリン_0611.mov";
+        var testFile60Fps2 = "/home/seko/Videos/shootingstar_0611_1.mov";
         var inputFiles = args.Length > 0
             ? args.Where(static path => !string.IsNullOrWhiteSpace(path)).ToArray()
             : [testFile60Fps, testFile60Fps2];
@@ -418,9 +416,9 @@ internal static class Program
                         audioDecoder = new FFAudioDecoder(selection.FilePath, audioConfig.SampleRate, audioConfig.Channels, selection.AudioStream.Index);
                     }
 
-                    var videoSource = new FFVideoSource(
+                    var videoSource = new VideoStreamSource(
                         videoDecoder,
-                        new FFVideoSourceOptions
+                        new VideoStreamSourceOptions
                         {
                             HoldLastFrameOnEndOfStream = true
                         },
@@ -429,7 +427,7 @@ internal static class Program
                         StartOffset = timelineOffsetSeconds
                     };
 
-                    var audioSource = new FFAudioSource(
+                    var audioSource = new AudioStreamSource(
                         audioDecoder,
                         audioConfig,
                         ownsDecoder: true)
@@ -519,6 +517,7 @@ internal static class Program
                         }
                         catch
                         {
+                            // Best-effort prime only; normal playback loop will continue requesting frames.
                         }
                     }
 
@@ -614,7 +613,7 @@ internal static class Program
                     var lastDriftHardResyncSuccessCount = 0L;
                     var lastDriftHardResyncFailureCount = 0L;
                     var lastStatsLogTime = DateTime.UtcNow;
-                    var burstAccumulator = new Burst10sAccumulator(lastStatsLogTime);
+                    var burstAccumulator = new BurstTenSecondsAccumulator(lastStatsLogTime);
                     var playbackTailToleranceSeconds = Math.Max(0.050, negotiatedBufferSize / (double)audioConfig.SampleRate * 2.0);
 
                     bool HasPlaybackFinished()
@@ -823,6 +822,7 @@ internal static class Program
                     }
                     catch
                     {
+                        // Best-effort teardown.
                     }
 
                     try
@@ -831,6 +831,7 @@ internal static class Program
                     }
                     catch
                     {
+                        // Best-effort teardown.
                     }
 
                     item.Dispose();
@@ -847,6 +848,7 @@ internal static class Program
                 }
                 catch
                 {
+                    // Best-effort engine shutdown.
                 }
             }
         }

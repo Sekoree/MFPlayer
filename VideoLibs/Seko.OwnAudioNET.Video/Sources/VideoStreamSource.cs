@@ -16,7 +16,7 @@ namespace Seko.OwnAudioNET.Video.Sources;
 /// and returns the current frame to the caller.
 /// </para>
 /// </summary>
-public sealed class FFVideoSource : BaseVideoSource
+public sealed class VideoStreamSource : BaseVideoSource
 {
     private readonly record struct DecodedFrameEntry(VideoFrame Frame, long SeekEpoch);
     private const double DuplicateRequestWindowSeconds = 0.002;
@@ -30,7 +30,7 @@ public sealed class FFVideoSource : BaseVideoSource
     private readonly Lock _decoderLock = new();
     private readonly IVideoDecoder _videoDecoder;
     private readonly bool _ownsDecoder;
-    private readonly FFVideoSourceOptions _options;
+    private readonly VideoStreamSourceOptions _options;
     private readonly int _queueCapacity;
     private readonly bool _useDedicatedDecodeThread;
 
@@ -59,37 +59,15 @@ public sealed class FFVideoSource : BaseVideoSource
     private double _seekPresentationFloorSeconds = double.NegativeInfinity;
     private const double SeekFrameToleranceFloorSeconds = 0.001;
 
-    /// <summary>Initializes a new instance for the file at <paramref name="filePath"/> with default options.</summary>
-    [Obsolete("Prefer constructing FFVideoSource with an IVideoDecoder instance for explicit decoder ownership.")]
-    public FFVideoSource(string filePath)
-        : this(filePath, new FFVideoSourceOptions())
-    {
-    }
-
-    /// <summary>Initializes a new instance for the file at <paramref name="filePath"/> with the given <see cref="FFVideoSourceOptions"/>.</summary>
-    [Obsolete("Prefer constructing FFVideoSource with an IVideoDecoder instance for explicit decoder ownership.")]
-    public FFVideoSource(string filePath, FFVideoSourceOptions options, int? streamIndex = null)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-        _options = options;
-        _videoDecoder = new FFVideoDecoder(filePath, ResolveDecoderOptions(options.DecoderOptions, streamIndex));
-        _ownsDecoder = true;
-        _queueCapacity = ResolveQueueCapacity(_videoDecoder);
-        _useDedicatedDecodeThread = ResolveUseDedicatedDecodeThread(_videoDecoder);
-        _frameDurationSeconds = ResolveFrameDurationSeconds(_videoDecoder.StreamInfo.FrameRate);
-        _videoDecoder.StreamInfoChanged += OnDecoderStreamInfoChanged;
-        _decodeQueue = new Queue<DecodedFrameEntry>(_queueCapacity);
-        StartDecodeThreadIfNeeded();
-    }
 
     /// <summary>Initializes a new instance for the given decoder with default options.</summary>
-    public FFVideoSource(IVideoDecoder videoDecoder, bool ownsDecoder = false)
-        : this(videoDecoder, new FFVideoSourceOptions(), ownsDecoder)
+    public VideoStreamSource(IVideoDecoder videoDecoder, bool ownsDecoder = false)
+        : this(videoDecoder, new VideoStreamSourceOptions(), ownsDecoder)
     {
     }
 
     /// <summary>Initializes a new instance for the given decoder with the specified options.</summary>
-    public FFVideoSource(IVideoDecoder videoDecoder, FFVideoSourceOptions options, bool ownsDecoder = false)
+    public VideoStreamSource(IVideoDecoder videoDecoder, VideoStreamSourceOptions options, bool ownsDecoder = false)
     {
         ArgumentNullException.ThrowIfNull(videoDecoder);
         _options = options;
@@ -485,24 +463,6 @@ public sealed class FFVideoSource : BaseVideoSource
         return 1.0 / frameRate;
     }
 
-    private static FFVideoDecoderOptions ResolveDecoderOptions(FFVideoDecoderOptions baseOptions, int? streamIndex)
-    {
-        if (!streamIndex.HasValue)
-            return baseOptions;
-
-        return new FFVideoDecoderOptions
-        {
-            PreferredStreamIndex = streamIndex,
-            EnableHardwareDecoding = baseOptions.EnableHardwareDecoding,
-            PreferredHardwareDevice = baseOptions.PreferredHardwareDevice,
-            ThreadCount = baseOptions.ThreadCount,
-            QueueCapacity = baseOptions.QueueCapacity,
-            UseDedicatedDecodeThread = baseOptions.UseDedicatedDecodeThread,
-            PreferredOutputPixelFormats = baseOptions.PreferredOutputPixelFormats,
-            PreferSourcePixelFormatWhenSupported = baseOptions.PreferSourcePixelFormatWhenSupported,
-            PreferLowestConversionCost = baseOptions.PreferLowestConversionCost
-        };
-    }
 
     private static int ResolveQueueCapacity(IVideoDecoder decoder)
     {
@@ -778,7 +738,7 @@ public sealed class FFVideoSource : BaseVideoSource
         _decodeThread = new Thread(DecodeThreadProc)
         {
             IsBackground = true,
-            Name = "FFVideoSource-Decode",
+            Name = "VideoStreamSource-Decode",
             Priority = ThreadPriority.AboveNormal
         };
         _decodeThread.Start();
@@ -1083,3 +1043,4 @@ public sealed class FFVideoSource : BaseVideoSource
         frame?.Dispose();
     }
 }
+

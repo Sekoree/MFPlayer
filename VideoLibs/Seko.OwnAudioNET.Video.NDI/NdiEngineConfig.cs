@@ -1,5 +1,7 @@
 namespace Seko.OwnAudioNET.Video.NDI;
 
+using Seko.OwnAudioNET.Video.Clocks;
+
 /// <summary>
 /// Configuration for outbound NDI sender engines.
 /// </summary>
@@ -18,10 +20,10 @@ public sealed class NdiEngineConfig
     public bool ClockAudio { get; init; } = true;
 
     /// <summary>
-    /// Optional external time provider in seconds. When present and <see cref="UseIncomingVideoTimestamps"/> is false,
+    /// Optional external timeline clock. When present and <see cref="UseIncomingVideoTimestamps"/> is false,
     /// this is used for outbound video timestamps unless audio timeline is already active.
     /// </summary>
-    public Func<double>? ExternalClockSecondsProvider { get; init; }
+    public IExternalClock? ExternalClock { get; init; }
 
     /// <summary>
     /// When true, <see cref="Engine.IVideoOutputEngine.PushFrame"/> master timestamps are used for outbound video.
@@ -49,7 +51,7 @@ public sealed class NdiEngineConfig
             Groups = Groups,
             ClockVideo = ClockVideo,
             ClockAudio = ClockAudio,
-            ExternalClockSecondsProvider = ExternalClockSecondsProvider,
+            ExternalClock = ExternalClock,
             UseIncomingVideoTimestamps = UseIncomingVideoTimestamps,
             AudioSampleRate = AudioSampleRate > 0 ? AudioSampleRate : 48000,
             AudioChannels = AudioChannels > 0 ? AudioChannels : 2,

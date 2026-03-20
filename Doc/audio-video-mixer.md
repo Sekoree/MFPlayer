@@ -2,6 +2,8 @@
 
 Use `AudioVideoMixer` when audio should be the master timeline and video should follow it.
 
+`VideoMixer` is single-output in the current design. For multi-output video fan-out, use `MultiplexVideoOutputEngine` + `VideoOutputEngineSink` behind one mixer output.
+
 ## Main pieces
 
 - OwnAudio side:
@@ -12,7 +14,7 @@ Use `AudioVideoMixer` when audio should be the master timeline and video should 
   - `MasterClockVideoClockAdapter`
   - `VideoTransportEngine` configured with `ClockSyncMode = AudioLed`
   - `VideoMixer`
-  - `FFVideoSource`
+  - `VideoStreamSource`
 - Bridge:
   - `AudioVideoMixer`
 
@@ -38,8 +40,8 @@ using var audioMixer = new AudioMixer(audioEngine, audioConfig.BufferSize);
 using var videoDecoder = new FFVideoDecoder("/path/to/video.mov", new FFVideoDecoderOptions());
 using var audioDecoder = new FFAudioDecoder("/path/to/video.mov", audioConfig.SampleRate, audioConfig.Channels);
 
-using var videoSource = new FFVideoSource(videoDecoder, ownsDecoder: false);
-using var audioSource = new FFAudioSource(audioDecoder, audioConfig, ownsDecoder: false);
+using var videoSource = new VideoStreamSource(videoDecoder, ownsDecoder: false);
+using var audioSource = new AudioStreamSource(audioDecoder, audioConfig, ownsDecoder: false);
 
 var transportConfig = new VideoTransportEngineConfig
 {
@@ -80,6 +82,8 @@ avMixer.Seek(10.0); // default: AudioVideoSeekMode.Auto
 avMixer.Seek(10.0, AudioVideoSeekMode.Safe);
 avMixer.Pause();
 avMixer.Start();
+
+var outputCount = avMixer.GetVideoOutputs().Length;
 ```
 
 ## Seek modes

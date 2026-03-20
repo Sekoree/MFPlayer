@@ -1,20 +1,23 @@
 using System.Diagnostics;
+using Seko.OwnAudioNET.Video.Clocks;
 
 namespace Seko.OwnAudioNET.Video.NDI;
 
 internal sealed class NdiTimelineClock
 {
+    private const double HundredNanosecondsPerSecond = 10_000_000d;
+
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
-    private readonly Func<double>? _externalClockSecondsProvider;
+    private readonly IExternalClock? _externalClock;
 
     private readonly Lock _syncLock = new();
     private int _audioSampleRate;
     private long _audioFramesSent;
     private bool _audioTimelineActive;
 
-    public NdiTimelineClock(Func<double>? externalClockSecondsProvider)
+    public NdiTimelineClock(IExternalClock? externalClock)
     {
-        _externalClockSecondsProvider = externalClockSecondsProvider;
+        _externalClock = externalClock;
     }
 
     public void ResetAudioTimeline(int sampleRate)
@@ -81,7 +84,7 @@ internal sealed class NdiTimelineClock
 
     private double GetRealtimeSeconds()
     {
-        var externalSeconds = _externalClockSecondsProvider?.Invoke();
+        var externalSeconds = _externalClock?.CurrentSeconds;
         return externalSeconds is > 0 ? externalSeconds.Value : _stopwatch.Elapsed.TotalSeconds;
     }
 
@@ -99,7 +102,7 @@ internal sealed class NdiTimelineClock
         if (seconds <= 0 || double.IsNaN(seconds) || double.IsInfinity(seconds))
             return 0;
 
-        return (long)Math.Round(seconds * 10_000_000d);
+        return (long)Math.Round(seconds * HundredNanosecondsPerSecond);
     }
 }
 

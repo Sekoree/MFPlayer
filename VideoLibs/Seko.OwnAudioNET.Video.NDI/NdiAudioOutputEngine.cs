@@ -26,7 +26,14 @@ public sealed class NdiAudioOutputEngine : INdiAudioOutputEngine
 
     public int Channels => _channels;
 
-    public bool IsRunning => _running;
+    public bool IsRunning
+    {
+        get
+        {
+            lock (_syncLock)
+                return _running;
+        }
+    }
 
     public double PositionSeconds => _timeline.CurrentSeconds;
 
@@ -52,10 +59,6 @@ public sealed class NdiAudioOutputEngine : INdiAudioOutputEngine
 
     public bool Send(ReadOnlySpan<float> interleavedSamples)
     {
-        ThrowIfDisposed();
-        if (!_running)
-            return false;
-
         if (interleavedSamples.Length == 0)
             return true;
 
@@ -68,62 +71,69 @@ public sealed class NdiAudioOutputEngine : INdiAudioOutputEngine
 
     public bool Send(ReadOnlySpan<float> interleavedSamples, int frameCount)
     {
-        ThrowIfDisposed();
-        if (!_running)
-            return false;
-
-        if (frameCount <= 0)
-            return true;
-
-        var sampleCount = frameCount * _channels;
-        if (interleavedSamples.Length < sampleCount)
-            return false;
-
-        EnsureScratchCapacity(sampleCount);
-
-        // Deinterleave into planar FLTP layout expected by NDI audio_frame_v3.
-        for (var frame = 0; frame < frameCount; frame++)
+        lock (_syncLock)
         {
-            var srcOffset = frame * _channels;
-            for (var channel = 0; channel < _channels; channel++)
-            {
-                _planarScratch[channel * frameCount + frame] = interleavedSamples[srcOffset + channel];
-            }
-        }
+            ThrowIfDisposed();
+            if (!_running)
+                return false;
 
-        var timecode = _timeline.GetAudioTimecode100nsAndAdvance(frameCount, _sampleRate);
+            if (frameCount <= 0)
+                return true;
 
-        unsafe
-        {
-            fixed (float* pData = _planarScratch)
+            var sampleCount = frameCount * _channels;
+            if (interleavedSamples.Length < sampleCount)
+                return false;
+
+            EnsureScratchCapacity(sampleCount);
+
+            // Deinterleave into planar FLTP layout expected by NDI audio_frame_v3.
+            for (var frame = 0; frame < frameCount; frame++)
             {
-                var frame = new NdiAudioFrameV3
+                var srcOffset = frame * _channels;
+                for (var channel = 0; channel < _channels; channel++)
                 {
-                    SampleRate = _sampleRate,
-                    NoChannels = _channels,
-                    NoSamples = frameCount,
-                    Timecode = timecode,
-                    FourCC = NdiFourCCAudioType.Fltp,
-                    PData = (nint)pData,
-                    ChannelStrideInBytes = frameCount * sizeof(float),
-                    PMetadata = nint.Zero,
-                    Timestamp = 0
-                };
-
-                _session.SendAudio(frame);
+                    _planarScratch[channel * frameCount + frame] = interleavedSamples[srcOffset + channel];
+                }
             }
-        }
 
-        return true;
+            var timecode = _timeline.GetAudioTimecode100nsAndAdvance(frameCount, _sampleRate);
+
+            unsafe
+            {
+                fixed (float* pData = _planarScratch)
+                {
+                    var frame = new NdiAudioFrameV3
+                    {
+                        SampleRate = _sampleRate,
+                        NoChannels = _channels,
+                        NoSamples = frameCount,
+                        Timecode = timecode,
+                        FourCC = NdiFourCCAudioType.Fltp,
+                        PData = (nint)pData,
+                        ChannelStrideInBytes = frameCount * sizeof(float),
+                        PMetadata = nint.Zero,
+                        Timestamp = 0
+                    };
+
+                    _session.SendAudio(frame);
+                }
+            }
+
+            return true;
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
+        lock (_syncLock)
+        {
+            if (_disposed)
+                return;
 
-        _planarScratch = Array.Empty<float>();
-        _disposed = true;
+            _running = false;
+            _planarScratch = Array.Empty<float>();
+            _disposed = true;
+        }
     }
 
     private void EnsureScratchCapacity(int sampleCount)

@@ -6,11 +6,13 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <PublishAot>true</PublishAot>
     </PropertyGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\..\NDI\NdiLib\NdiLib.csproj" />
       <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj" />
+      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.NDI\Seko.OwnAudioNET.Video.NDI.csproj" />
       <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.SDL3\Seko.OwnAudioNET.Video.SDL3.csproj" />
     </ItemGroup>
 

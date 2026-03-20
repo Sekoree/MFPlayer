@@ -14,7 +14,8 @@ Current setup in `Test/AudioEx/Program.cs`:
 - Creates video transport (`VideoTransportEngine`) in audio-led mode
 - Wraps both with `AudioVideoMixer`
 - Enables drift correction via `AudioVideoDriftCorrectionConfig`
-- Creates one `VideoSDL` output and binds it to the active `FFVideoSource`
+- Creates one `VideoSDL` output and binds it to the active `VideoStreamSource`
+- Keeps one mixer-bound output sink (mirroring/fan-out should happen downstream)
 - Supports playlist-style sequential playback by assigning cumulative `StartOffset` values to each audio/video source pair
 
 ## Pipeline architecture
@@ -31,7 +32,7 @@ Per app instance:
    - `AudioVideoMixer`
 4. For each media item:
    - create `FFVideoDecoder` + `FFAudioDecoder`
-   - create `FFVideoSource` + `FFAudioSource`
+   - create `VideoStreamSource` + `AudioStreamSource`
    - assign `StartOffset` on both sources
    - add sources to `AudioVideoMixer`
 5. Bind `VideoSDL` to current active source, start playback, switch source binding as timeline crosses item boundaries
@@ -95,31 +96,31 @@ Every ~10 seconds AudioEx also prints a `[Burst10s]` summary line:
 ## Run commands
 
 ```fish
-dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
+dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
 ```
 
 Playlist run:
 
 ```fish
-dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
+dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
 ```
 
 Disable shared demux for A/B testing:
 
 ```fish
-env AUDIOEX_USE_SHARED_DEMUX=0 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
+env AUDIOEX_USE_SHARED_DEMUX=0 dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
 ```
 
 Override decoder thread count:
 
 ```fish
-env AUDIOEX_VIDEO_THREADS=6 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
+env AUDIOEX_VIDEO_THREADS=6 dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release -- "/path/to/file1.mov" "/path/to/file2.mov"
 ```
 
 ## Key files
 
 - `Test/AudioEx/Program.cs`
 - `VideoLibs/Seko.OwnAudioNET.Video/Mixing/AudioVideoMixer.cs`
-- `VideoLibs/Seko.OwnAudioNET.Video/Sources/FFVideoSource.cs`
+- `VideoLibs/Seko.OwnAudioNET.Video/Sources/VideoStreamSource.cs`
 - `VideoLibs/Seko.OwnAudioNET.Video.SDL3/VideoSDL.cs`
 

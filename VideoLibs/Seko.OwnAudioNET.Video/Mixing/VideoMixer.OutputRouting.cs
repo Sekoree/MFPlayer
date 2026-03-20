@@ -10,6 +10,10 @@ public sealed partial class VideoMixer
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(output);
 
+        // Align with AudioMixer's single-engine model: one primary output sink per mixer.
+        if (_outputs.Count > 0 && !_outputs.ContainsKey(output.Id))
+            return false;
+
         if (!_outputs.TryAdd(output.Id, output))
             return false;
 
@@ -23,6 +27,7 @@ public sealed partial class VideoMixer
         }
 
         ApplyOutputPresentationSyncMode(output);
+
         return true;
     }
 
@@ -35,6 +40,7 @@ public sealed partial class VideoMixer
             return false;
 
         UnbindOutputInternal(registeredOutput, raiseEvent: true);
+
         return true;
     }
 
@@ -52,7 +58,7 @@ public sealed partial class VideoMixer
             RemoveOutput(output);
     }
 
-    public bool BindOutputToSource(IVideoOutput output, FFVideoSource source)
+    public bool BindOutputToSource(IVideoOutput output, VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(output);
@@ -64,7 +70,7 @@ public sealed partial class VideoMixer
         if (!_sources.TryGetValue(source.Id, out var registeredSource))
             return false;
 
-        FFVideoSource? oldSource;
+        VideoStreamSource? oldSource;
         lock (_syncLock)
         {
             oldSource = GetSourceForOutputLocked(output.Id);
@@ -74,18 +80,15 @@ public sealed partial class VideoMixer
 
         ApplyOutputPresentationSyncMode(registeredOutput);
 
-        bool attached;
         try
         {
-            attached = registeredOutput.AttachSource(registeredSource);
+            if (!registeredOutput.AttachSource(registeredSource))
+                return false;
         }
         catch
         {
             return false;
         }
-
-        if (!attached)
-            return false;
 
         lock (_syncLock)
         {
@@ -110,14 +113,14 @@ public sealed partial class VideoMixer
         return UnbindOutputInternal(output, raiseEvent: true);
     }
 
-    public IVideoOutput[] GetOutputsForSource(FFVideoSource source)
+    public IVideoOutput[] GetOutputsForSource(VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
         return GetOutputsForSourceInternal(source);
     }
 
-    public FFVideoSource? GetSourceForOutput(IVideoOutput output)
+    public VideoStreamSource? GetSourceForOutput(IVideoOutput output)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(output);
@@ -126,7 +129,7 @@ public sealed partial class VideoMixer
             return GetSourceForOutputLocked(output.Id);
     }
 
-    private IVideoOutput[] GetOutputsForSourceInternal(FFVideoSource source)
+    private IVideoOutput[] GetOutputsForSourceInternal(VideoStreamSource source)
     {
         lock (_syncLock)
         {
@@ -143,7 +146,7 @@ public sealed partial class VideoMixer
 
     private bool UnbindOutputInternal(IVideoOutput output, bool raiseEvent)
     {
-        FFVideoSource? oldSource;
+        VideoStreamSource? oldSource;
         lock (_syncLock)
             oldSource = GetSourceForOutputLocked(output.Id);
 
@@ -169,7 +172,7 @@ public sealed partial class VideoMixer
         return true;
     }
 
-    private FFVideoSource? GetSourceForOutputLocked(Guid outputId)
+    private VideoStreamSource? GetSourceForOutputLocked(Guid outputId)
     {
         if (!_outputSourceBindings.TryGetValue(outputId, out var sourceId))
             return null;
@@ -211,7 +214,7 @@ public sealed partial class VideoMixer
             syncAwareOutput.PresentationSyncMode = Config.PresentationSyncMode;
     }
 
-    private void TryPushCurrentFrameToOutput(IVideoOutput output, FFVideoSource source)
+    private void TryPushCurrentFrameToOutput(IVideoOutput output, VideoStreamSource source)
     {
         try
         {
@@ -228,7 +231,8 @@ public sealed partial class VideoMixer
         }
     }
 
-    private void RaiseOutputSourceChanged(IVideoOutput output, FFVideoSource? oldSource, FFVideoSource? newSource)
+
+    private void RaiseOutputSourceChanged(IVideoOutput output, VideoStreamSource? oldSource, VideoStreamSource? newSource)
     {
         if (ReferenceEquals(oldSource, newSource))
             return;

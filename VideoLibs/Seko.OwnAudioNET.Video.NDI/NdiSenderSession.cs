@@ -16,28 +16,46 @@ internal sealed class NdiSenderSession : IDisposable
     public void SendVideo(in NdiVideoFrameV2 frame)
     {
         lock (_sendLock)
+        {
+            if (_disposed)
+                return;
+
             _sender.SendVideo(frame);
+        }
     }
 
     public void SendAudio(in NdiAudioFrameV3 frame)
     {
         lock (_sendLock)
+        {
+            if (_disposed)
+                return;
+
             _sender.SendAudio(frame);
+        }
     }
 
     public int GetConnectionCount(uint timeoutMs)
     {
         lock (_sendLock)
+        {
+            if (_disposed)
+                return 0;
+
             return _sender.GetConnectionCount(timeoutMs);
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
+        lock (_sendLock)
+        {
+            if (_disposed)
+                return;
 
-        _sender.Dispose();
-        _disposed = true;
+            _sender.Dispose();
+            _disposed = true;
+        }
     }
 }
 

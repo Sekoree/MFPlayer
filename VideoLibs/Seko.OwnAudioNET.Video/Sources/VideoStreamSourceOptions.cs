@@ -2,8 +2,8 @@ using Seko.OwnAudioNET.Video.Decoders;
 
 namespace Seko.OwnAudioNET.Video.Sources;
 
-/// <summary>Tuning options for <see cref="FFVideoSource"/>.</summary>
-public sealed class FFVideoSourceOptions
+/// <summary>Tuning options for <see cref="VideoStreamSource"/>.</summary>
+public sealed class VideoStreamSourceOptions
 {
     /// <summary>
     /// When <see langword="true"/>, keeps the latest successfully presented frame visible after
@@ -15,3 +15,4 @@ public sealed class FFVideoSourceOptions
     /// <summary>Decoder options forwarded to <see cref="FFVideoDecoder"/> when the source owns the decoder.</summary>
     public FFVideoDecoderOptions DecoderOptions { get; init; } = new();
 }
+

@@ -16,7 +16,7 @@ namespace Seko.OwnAudioNET.Video.Sources;
 /// <see cref="MasterClock"/> for A/V synchronisation.
 /// Intended for source-based mixer pipelines; prefer decoder-first construction for explicit ownership.
 /// </summary>
-public class FFAudioSource : BaseAudioSource, IMasterClockSource
+public class AudioStreamSource : BaseAudioSource, IMasterClockSource
 {
     public readonly record struct DiagnosticsSnapshot(long HardSyncSeekCount, long HardSyncSeekSuppressedCount, long HardSyncSeekFailureCount);
 
@@ -40,46 +40,12 @@ public class FFAudioSource : BaseAudioSource, IMasterClockSource
     private const double HardSyncThresholdSeconds = 0.050;
     private const double HardSyncSuppressionWindowSeconds = 0.350;
 
-    /// <summary>Initializes a new instance that reads from a file.</summary>
-    /// <param name="filePath">Path to the media file.</param>
-    /// <param name="config">Audio engine configuration (sample rate, channels, buffer size).</param>
-    /// <param name="streamIndex">Optional audio stream index to decode.</param>
-    [Obsolete("Prefer constructing FFAudioSource with an FFAudioDecoder instance for explicit decoder ownership.")]
-    public FFAudioSource(string filePath, AudioConfig config, int? streamIndex = null)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-        ArgumentNullException.ThrowIfNull(config);
-
-        _config = config;
-        _audioDecoder = new FFAudioDecoder(filePath, config.SampleRate, config.Channels, streamIndex);
-        _ownsDecoder = true;
-        _streamInfo = _audioDecoder.StreamInfo;
-        _decodeBuffer = new byte[Math.Max(1, config.BufferSize * config.Channels * sizeof(float))];
-    }
-
-    /// <summary>Initializes a new instance that reads from a <see cref="Stream"/>.</summary>
-    /// <param name="stream">Readable input stream.</param>
-    /// <param name="config">Audio engine configuration.</param>
-    /// <param name="leaveOpen">When <see langword="true"/> the stream is not disposed with this instance.</param>
-    /// <param name="streamIndex">Optional audio stream index to decode.</param>
-    [Obsolete("Prefer constructing FFAudioSource with an FFAudioDecoder instance for explicit decoder ownership.")]
-    public FFAudioSource(Stream stream, AudioConfig config, bool leaveOpen = false, int? streamIndex = null)
-    {
-        ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(config);
-
-        _config = config;
-        _audioDecoder = new FFAudioDecoder(stream, config.SampleRate, config.Channels, leaveOpen, streamIndex);
-        _ownsDecoder = true;
-        _streamInfo = _audioDecoder.StreamInfo;
-        _decodeBuffer = new byte[Math.Max(1, config.BufferSize * config.Channels * sizeof(float))];
-    }
 
     /// <summary>Initializes a new instance wrapping a pre-built <see cref="FFAudioDecoder"/>.</summary>
     /// <param name="audioDecoder">Decoder whose output parameters must match <paramref name="config"/>.</param>
     /// <param name="config">Audio engine configuration.</param>
     /// <param name="ownsDecoder">When <see langword="true"/> the decoder is disposed with this instance.</param>
-    public FFAudioSource(FFAudioDecoder audioDecoder, AudioConfig config, bool ownsDecoder = false)
+    public AudioStreamSource(FFAudioDecoder audioDecoder, AudioConfig config, bool ownsDecoder = false)
     {
         ArgumentNullException.ThrowIfNull(audioDecoder);
         ArgumentNullException.ThrowIfNull(config);

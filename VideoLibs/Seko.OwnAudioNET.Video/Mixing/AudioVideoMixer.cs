@@ -3,6 +3,7 @@ using OwnaudioNET.Events;
 using OwnaudioNET.Interfaces;
 using OwnaudioNET.Mixing;
 using OwnaudioNET.Synchronization;
+using Seko.OwnAudioNET.Video.Clocks;
 using Seko.OwnAudioNET.Video.Diagnostics;
 using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Events;
@@ -23,6 +24,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
     private readonly bool _ownsAudioMixer;
     private readonly bool _ownsVideoMixer;
+    private readonly IExternalClock? _externalClock;
     private readonly Timer _driftCorrectionTimer;
     private readonly AudioVideoDriftCorrectionConfig _driftCorrectionConfig;
     private readonly DiagnosticsCounterStore _diagCounters = new();
@@ -36,7 +38,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
     private const string DriftHardResyncFailureCounter = "drift.hardResync.failure";
 
     public AudioVideoMixer(AudioMixer audioMixer, IVideoMixer videoMixer, bool ownsAudioMixer = false, bool ownsVideoMixer = false)
-        : this(audioMixer, videoMixer, driftCorrectionConfig: null, ownsAudioMixer, ownsVideoMixer)
+        : this(audioMixer, videoMixer, driftCorrectionConfig: null, externalClock: null, ownsAudioMixer, ownsVideoMixer)
     {
     }
 
@@ -44,6 +46,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         AudioMixer audioMixer,
         IVideoMixer videoMixer,
         AudioVideoDriftCorrectionConfig? driftCorrectionConfig,
+        IExternalClock? externalClock = null,
         bool ownsAudioMixer = false,
         bool ownsVideoMixer = false)
     {
@@ -51,6 +54,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         VideoMixer = videoMixer ?? throw new ArgumentNullException(nameof(videoMixer));
         _ownsAudioMixer = ownsAudioMixer;
         _ownsVideoMixer = ownsVideoMixer;
+        _externalClock = externalClock ?? videoMixer.ExternalClock;
         _driftCorrectionConfig = (driftCorrectionConfig ?? new AudioVideoDriftCorrectionConfig()).CloneNormalized();
 
         AudioMixer.SourceError += OnAudioSourceError;
@@ -72,7 +76,9 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
     public MasterClock MasterClock => AudioMixer.MasterClock;
 
-    public double Position => MasterClock.CurrentTimestamp;
+    public double Position => _externalClock?.CurrentSeconds ?? MasterClock.CurrentTimestamp;
+
+    public IExternalClock? ExternalClock => _externalClock;
 
     public bool IsRunning => AudioMixer.IsRunning || VideoMixer.IsRunning;
 
@@ -80,7 +86,6 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
     public int VideoSourceCount => VideoMixer.SourceCount;
 
-    public int VideoOutputCount => VideoMixer.OutputCount;
 
     public DiagnosticsSnapshot GetDiagnosticsSnapshot()
     {
@@ -123,21 +128,21 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         AudioMixer.ClearSources();
     }
 
-    public bool AddVideoSource(FFVideoSource source)
+    public bool AddVideoSource(VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
         return VideoMixer.AddSource(source);
     }
 
-    public bool RemoveVideoSource(FFVideoSource source)
+    public bool RemoveVideoSource(VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
         return VideoMixer.RemoveSource(source);
     }
 
-    public FFVideoSource[] GetVideoSources()
+    public VideoStreamSource[] GetVideoSources()
     {
         ThrowIfDisposed();
         return VideoMixer.GetSources();
@@ -175,7 +180,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         VideoMixer.ClearOutputs();
     }
 
-    public bool BindVideoOutputToSource(IVideoOutput output, FFVideoSource source)
+    public bool BindVideoOutputToSource(IVideoOutput output, VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(output);
@@ -190,14 +195,14 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         return VideoMixer.UnbindOutput(output);
     }
 
-    public IVideoOutput[] GetVideoOutputsForSource(FFVideoSource source)
+    public IVideoOutput[] GetVideoOutputsForSource(VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
         return VideoMixer.GetOutputsForSource(source);
     }
 
-    public FFVideoSource? GetVideoSourceForOutput(IVideoOutput output)
+    public VideoStreamSource? GetVideoSourceForOutput(IVideoOutput output)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(output);
@@ -300,7 +305,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
     private static double ResolveAudioTrackPosition(IAudioSource audioSource, double timelinePositionSeconds)
     {
-        return audioSource is FFAudioSource ffAudioSource
+        return audioSource is AudioStreamSource ffAudioSource
             ? timelinePositionSeconds - ffAudioSource.StartOffset
             : timelinePositionSeconds;
     }

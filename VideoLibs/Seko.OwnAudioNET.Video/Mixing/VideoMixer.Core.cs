@@ -7,13 +7,14 @@ using Seko.OwnAudioNET.Video.Sources;
 namespace Seko.OwnAudioNET.Video.Mixing;
 
 /// <summary>
-/// FFmpeg-centric video mixer that combines shared-clock source playback with explicit output routing.
+/// FFmpeg-centric video mixer that combines shared-clock source playback with a single routed output sink.
 /// </summary>
 public sealed partial class VideoMixer : IVideoMixer
 {
     private readonly IVideoTransportEngine _engine;
+    private readonly IExternalClock? _externalClock;
     private readonly bool _ownsEngine;
-    private readonly ConcurrentDictionary<Guid, FFVideoSource> _sources = new();
+    private readonly ConcurrentDictionary<Guid, VideoStreamSource> _sources = new();
     private readonly ConcurrentDictionary<Guid, IVideoOutput> _outputs = new();
     private readonly Lock _syncLock = new();
     private readonly Dictionary<Guid, Guid> _outputSourceBindings = new();
@@ -22,8 +23,14 @@ public sealed partial class VideoMixer : IVideoMixer
 
 
     public VideoMixer(IVideoTransportEngine engine, bool ownsEngine = false)
+        : this(engine, externalClock: null, ownsEngine)
+    {
+    }
+
+    public VideoMixer(IVideoTransportEngine engine, IExternalClock? externalClock, bool ownsEngine = false)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _externalClock = externalClock;
         _ownsEngine = ownsEngine;
         _engine.SourceError += OnEngineSourceError;
     }
@@ -32,13 +39,14 @@ public sealed partial class VideoMixer : IVideoMixer
 
     public IVideoClock Clock => _engine.Clock;
 
-    public double Position => _engine.Position;
+    public double Position => _externalClock?.CurrentSeconds ?? _engine.Position;
+
+    public IExternalClock? ExternalClock => _externalClock;
 
     public bool IsRunning => _engine.IsRunning;
 
     public int SourceCount => _sources.Count;
 
-    public int OutputCount => _outputs.Count;
 
     public event EventHandler<VideoErrorEventArgs>? SourceError;
 

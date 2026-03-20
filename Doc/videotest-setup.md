@@ -12,10 +12,12 @@ Current setup in `Test/VideoTest/MainWindow.axaml.cs`:
 
 - Creates OwnAudio engine + `AudioMixer`
 - Builds audio-led video transport and wraps with `AudioVideoMixer`
-- Creates one `FFVideoSource` and one `FFAudioSource`
+- Creates one `VideoStreamSource` and one `AudioStreamSource`
 - Binds one primary `VideoGL` output to the source
 - Creates 3 additional UI mirrors (`VideoGL.CreateMirror(primary)`)
 - Prints per-second diagnostics in title + console
+
+`VideoMixer` is now single-output by design; VideoTest intentionally binds one primary output and mirrors in UI.
 
 ## Important input note
 
@@ -29,7 +31,7 @@ There is still a console message mentioning arg/env selection, but the current c
 
 1. `MainWindow.OnOpened` probes first video and first audio stream
 2. Creates `FFVideoDecoder` + `FFAudioDecoder`
-3. Creates `FFVideoSource` + `FFAudioSource`
+3. Creates `VideoStreamSource` + `AudioStreamSource`
 4. Builds shared mixer stack:
    - `AudioMixer`
    - `MasterClockVideoClockAdapter`
@@ -89,19 +91,19 @@ Every ~10 seconds VideoTest also prints a `[Burst10s]` summary line:
 ## Run commands
 
 ```fish
-dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
 ```
 
 Run with separate demux sessions:
 
 ```fish
-env VIDEOTEST_USE_SHARED_DEMUX=0 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+env VIDEOTEST_USE_SHARED_DEMUX=0 dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
 ```
 
 Run with explicit decoder threads:
 
 ```fish
-env VIDEOTEST_VIDEO_THREADS=6 dotnet run --project "/home/sekoree/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
+env VIDEOTEST_VIDEO_THREADS=6 dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
 ```
 
 ## Key files

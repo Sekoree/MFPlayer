@@ -17,7 +17,6 @@ using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.Probing;
 using Seko.OwnAudioNET.Video.Sources;
-using AudioPlaybackEngineFactory = OwnaudioNET.Engine.AudioEngineFactory;
 
 namespace VideoTest;
 
@@ -28,8 +27,8 @@ public partial class MainWindow : Window
     private IAudioEngine? _audioEngine;
     private AudioMixer? _audioMixer;
     private IAudioVideoMixer? _playbackMixer;
-    private FFVideoSource? _videoSource;
-    private FFAudioSource? _audioSource;
+    private VideoStreamSource? _videoSource;
+    private AudioStreamSource? _audioSource;
     private FFSharedDemuxSession? _sharedDemuxSession;
     private VideoGL[] _videoViews = [];
     private DispatcherTimer? _videoStatsTimer;
@@ -49,7 +48,7 @@ public partial class MainWindow : Window
     private VideoGL.VideoGlDiagnostics[] _lastVideoGlDiagnosticsPerView = [];
     private readonly Lock _seekLock = new();
 
-    private sealed class Burst10sAccumulator
+    private sealed class BurstTenSecondsAccumulator
     {
         private DateTime _windowStartUtc;
         private long _audioHardSeek;
@@ -64,7 +63,7 @@ public partial class MainWindow : Window
         private double _videoAudioDriftMin = double.PositiveInfinity;
         private double _videoAudioDriftMax = double.NegativeInfinity;
 
-        public Burst10sAccumulator(DateTime windowStartUtc)
+        public BurstTenSecondsAccumulator(DateTime windowStartUtc)
         {
             _windowStartUtc = windowStartUtc;
         }
@@ -168,7 +167,7 @@ public partial class MainWindow : Window
             droppedFrames - lastDroppedFrames);
     }
 
-    private SyncTickDeltas ComputeSyncTickDeltas(FFAudioSource.DiagnosticsSnapshot audioDiag, AudioVideoMixer.DiagnosticsSnapshot driftDiag)
+    private SyncTickDeltas ComputeSyncTickDeltas(AudioStreamSource.DiagnosticsSnapshot audioDiag, AudioVideoMixer.DiagnosticsSnapshot driftDiag)
     {
         return new SyncTickDeltas(
             audioDiag.HardSyncSeekCount - _lastAudioHardSyncSeekCount,
@@ -329,8 +328,9 @@ public partial class MainWindow : Window
             view.EnableHudOverlay = _hudEnabled;
         }
 
-        if (_playbackMixer.VideoOutputCount != 1)
-            throw new InvalidOperationException($"Expected exactly one mixer-bound output for VideoTest mirroring, but found {_playbackMixer.VideoOutputCount}.");
+        var mixerOutputCount = _playbackMixer.GetVideoOutputs().Length;
+        if (mixerOutputCount != 1)
+            throw new InvalidOperationException($"Expected exactly one mixer-bound output for VideoTest mirroring, but found {mixerOutputCount}.");
 
         ConsolePrintLine($"[VideoTest] Routed decoder→engine with 1 primary VideoGL mirrored across {_videoViews.Length} Avalonia views.");
     }
@@ -361,7 +361,7 @@ public partial class MainWindow : Window
         _started = true;
 
         var argFile = Program.LaunchArgs.FirstOrDefault();
-        var testFile = "/home/sekoree/Videos/shootingstar_0611_1.mov";
+        var testFile = "/home/seko/Videos/shootingstar_0611_1.mov";
         if (!string.IsNullOrWhiteSpace(argFile) && File.Exists(argFile))
             testFile = argFile;
         
@@ -450,15 +450,15 @@ public partial class MainWindow : Window
                 audioDecoder = new FFAudioDecoder(testFile, audioConfig.SampleRate, audioConfig.Channels, audioStream.Index);
             }
 
-            _videoSource = new FFVideoSource(
+            _videoSource = new VideoStreamSource(
                 videoDecoder,
-                new FFVideoSourceOptions
+                new VideoStreamSourceOptions
                 {
                     HoldLastFrameOnEndOfStream = true
                 },
                 ownsDecoder: true);
 
-            _audioSource = new FFAudioSource(audioDecoder, audioConfig, ownsDecoder: true);
+            _audioSource = new AudioStreamSource(audioDecoder, audioConfig, ownsDecoder: true);
             _audioMixer = new AudioMixer(_audioEngine, negotiatedBufferSize);
 
             var videoTransportConfig = new VideoTransportEngineConfig
@@ -510,7 +510,7 @@ public partial class MainWindow : Window
 
         _playbackMixer!.Start();
 
-        var burstAccumulator = new Burst10sAccumulator(DateTime.UtcNow);
+        var burstAccumulator = new BurstTenSecondsAccumulator(DateTime.UtcNow);
 
         _videoStatsTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
         {
@@ -608,7 +608,7 @@ public partial class MainWindow : Window
                 view.UpdateHudDiagnostics(_videoSource.QueueDepth, 0, videoMasterDriftMs, _videoSource.IsHardwareDecoding, _videoSource.DroppedFrameCount);
             }
 
-            var engineOutputCount = _playbackMixer.VideoOutputCount;
+            var engineOutputCount = _playbackMixer.GetVideoOutputs().Length;
 
             Title = $"VideoTest - engine 1→{engineOutputCount}, UI x{_videoViews.Length} | {_videoSource.StreamInfo.FrameRate:F1} fps | pres {videoDeltas.Presented} dec {videoDeltas.Decoded} drop {videoDeltas.Dropped} | up {totalUploadFrameDelta} upP {totalUploadPlaneDelta} | strF {totalStridedFrameDelta} ({aggregateStridedFrameRatio:0.0}%) strP {totalStridedPlaneDelta} ({aggregateStridedPlaneRatio:0.0}%) | hw {_videoSource.IsHardwareDecoding} | {fmtInfo} | a_hseek {syncDeltas.HardSeek}/{audioDiag.HardSyncSeekCount} a_hsup {syncDeltas.HardSuppressed}/{audioDiag.HardSyncSeekSuppressedCount} a_hfail {syncDeltas.HardFailure}/{audioDiag.HardSyncSeekFailureCount} | v_rsup {syncDeltas.DriftSuppressed}/{driftDiag.DriftCorrectionSuppressedTickCount} v_rseek {syncDeltas.DriftResyncAttempt}/{driftDiag.DriftHardResyncAttemptCount} v_rok {syncDeltas.DriftResyncSuccess}/{driftDiag.DriftHardResyncSuccessCount} v_rfail {syncDeltas.DriftResyncFailure}/{driftDiag.DriftHardResyncFailureCount} | v-m {videoMasterDriftMs:F1}ms | v-a {videoAudioDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
 
@@ -671,8 +671,9 @@ public partial class MainWindow : Window
             if (_playbackMixer != null && _videoViews.Length > 0)
                 _playbackMixer.RemoveVideoOutput(_videoViews[0]);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[VideoTest] Output detach during cleanup failed: {ex.Message}");
         }
 
         foreach (var view in _videoViews)
@@ -684,8 +685,9 @@ public partial class MainWindow : Window
         {
             _playbackMixer?.Dispose();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[VideoTest] Mixer dispose during cleanup failed: {ex.Message}");
         }
         finally
         {
@@ -709,8 +711,9 @@ public partial class MainWindow : Window
                 if (_audioEngine.OwnAudioEngineStopped() == 0)
                     _audioEngine.Stop();
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"[VideoTest] Audio engine stop during cleanup failed: {ex.Message}");
             }
 
             _audioEngine.Dispose();

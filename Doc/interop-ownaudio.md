@@ -10,12 +10,12 @@ This page explains how the video classes fit into the existing OwnAudio architec
   - adapts OwnAudio `MasterClock` to `IVideoClock` for video transport/source APIs.
 - OwnAudio `AudioMixer`
   - hosts `IAudioSource` instances and drives the master clock.
-- `FFAudioSource`
+- `AudioStreamSource`
   - OwnAudio `BaseAudioSource` implementation backed by FFmpeg decode.
-- `FFVideoSource`
+- `VideoStreamSource`
   - video-side clock-aware source backed by FFmpeg decode queue.
 - `VideoMixer`
-  - registers video sources/outputs and controls shared video transport.
+  - registers video sources and one primary output sink, and controls shared video transport.
 - `AudioVideoMixer`
   - combines `AudioMixer` and `VideoMixer` into one A/V-facing API.
 
@@ -27,7 +27,9 @@ This page explains how the video classes fit into the existing OwnAudio architec
 4. Configure `ClockSyncMode = AudioLed`.
 5. Create `VideoMixer` around that transport.
 6. Create `AudioVideoMixer` to manage both sides together.
-7. Add `FFAudioSource` and `FFVideoSource`, then call `Start()`.
+7. Add `AudioStreamSource` and `VideoStreamSource`, then call `Start()`.
+
+For output fan-out, keep one mixer output and multiplex downstream.
 
 ## Minimal integration skeleton
 
@@ -42,6 +44,17 @@ var videoMixer = new VideoMixer(videoTransport, ownsEngine: true);
 
 var avMixer = new AudioVideoMixer(audioMixer, videoMixer);
 ```
+
+## Fan-out wrappers (audio/video)
+
+- `MultiplexAudioEngine`
+  - wraps multiple `IAudioEngine` instances so one `AudioMixer` send path can target many engines.
+- `MultiplexVideoOutputEngine`
+  - fans out frames to multiple video outputs and/or child video output engines.
+- `VideoOutputEngineSink`
+  - adapts `IVideoOutputEngine` to `IVideoOutput`, so a multiplex video engine can sit behind one `VideoMixer` output.
+
+For end-to-end fan-out wiring examples, see `Doc/multiplexers.md`.
 
 ## Tiny output snippets
 
@@ -152,7 +165,7 @@ if (!string.IsNullOrWhiteSpace(error))
 output.Stop();
 ```
 
-### 2) Video-only transport: `FFVideoSource` + `VideoMixer`
+### 2) Video-only transport: `VideoStreamSource` + `VideoMixer`
 
 Use this when you want seek/pause/start behavior and source/output routing, but still no audio.
 
@@ -164,7 +177,7 @@ using Seko.OwnAudioNET.Video.SDL3;
 using Seko.OwnAudioNET.Video.Sources;
 
 using var decoder = new FFVideoDecoder("/path/to/video.mov", new FFVideoDecoderOptions());
-using var source = new FFVideoSource(decoder, ownsDecoder: false);
+using var source = new VideoStreamSource(decoder, ownsDecoder: false);
 
 var config = new VideoTransportEngineConfig
 {
@@ -198,8 +211,8 @@ For a longer walkthrough of this second approach, see `Doc/video-mixer-basics.md
 ## Synchronization notes
 
 - Keep audio as timeline authority for media with meaningful audio track.
-- `FFAudioSource.AttachToClock(audioMixer.MasterClock)` is required in audio-led flows.
-- `FFVideoSource.StartOffset` can intentionally delay/advance a source on the shared timeline.
+- `AudioStreamSource.AttachToClock(audioMixer.MasterClock)` is required in audio-led flows.
+- `VideoStreamSource.StartOffset` can intentionally delay/advance a source on the shared timeline.
 - `AudioVideoMixer` drift correction performs micro timeline offset adjustments and hard-resync fallback for large drift.
 
 ## Error/event surface
@@ -208,7 +221,7 @@ For a longer walkthrough of this second approach, see `Doc/video-mixer-basics.md
   - `AudioMixer.SourceError`
 - Video side:
   - `VideoMixer.SourceError`
-  - per-source `FFVideoSource.Error`
+  - per-source `VideoStreamSource.Error`
 - Combined in `AudioVideoMixer`:
   - `AudioSourceError`
   - `VideoSourceError`

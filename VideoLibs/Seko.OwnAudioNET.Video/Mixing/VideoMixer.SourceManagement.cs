@@ -4,7 +4,7 @@ namespace Seko.OwnAudioNET.Video.Mixing;
 
 public sealed partial class VideoMixer
 {
-    public bool AddSource(FFVideoSource source)
+    public bool AddSource(VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
@@ -19,7 +19,7 @@ public sealed partial class VideoMixer
         return false;
     }
 
-    public bool RemoveSource(FFVideoSource source)
+    public bool RemoveSource(VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
@@ -34,7 +34,7 @@ public sealed partial class VideoMixer
         return true;
     }
 
-    public FFVideoSource[] GetSources()
+    public VideoStreamSource[] GetSources()
     {
         ThrowIfDisposed();
         return _sources.Values.ToArray();

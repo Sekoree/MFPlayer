@@ -5,6 +5,7 @@ using OwnaudioNET.Synchronization;
 using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Events;
 using Seko.OwnAudioNET.Video.Sources;
+using Seko.OwnAudioNET.Video.Clocks;
 
 namespace Seko.OwnAudioNET.Video.Mixing;
 
@@ -25,6 +26,9 @@ public interface IAudioVideoMixer : IDisposable
     /// <summary>The current synchronized A/V timeline position in seconds.</summary>
     double Position { get; }
 
+    /// <summary>Optional external timeline clock used to drive sync position reporting.</summary>
+    IExternalClock? ExternalClock { get; }
+
     /// <summary><see langword="true"/> when either side of the combined mixer is currently running.</summary>
     bool IsRunning { get; }
 
@@ -34,8 +38,6 @@ public interface IAudioVideoMixer : IDisposable
     /// <summary>Number of video sources currently registered.</summary>
     int VideoSourceCount { get; }
 
-    /// <summary>Number of video outputs currently registered.</summary>
-    int VideoOutputCount { get; }
 
     /// <summary>Raised when a registered audio source reports an error.</summary>
     event EventHandler<AudioErrorEventArgs>? AudioSourceError;
@@ -59,13 +61,13 @@ public interface IAudioVideoMixer : IDisposable
     void ClearAudioSources();
 
     /// <summary>Adds a video source to the combined mixer.</summary>
-    bool AddVideoSource(FFVideoSource source);
+    bool AddVideoSource(VideoStreamSource source);
 
     /// <summary>Removes a video source from the combined mixer.</summary>
-    bool RemoveVideoSource(FFVideoSource source);
+    bool RemoveVideoSource(VideoStreamSource source);
 
     /// <summary>Returns a snapshot of all registered video sources.</summary>
-    FFVideoSource[] GetVideoSources();
+    VideoStreamSource[] GetVideoSources();
 
     /// <summary>Removes all registered video sources.</summary>
     void ClearVideoSources();
@@ -83,16 +85,16 @@ public interface IAudioVideoMixer : IDisposable
     void ClearVideoOutputs();
 
     /// <summary>Binds a video output to a specific video source.</summary>
-    bool BindVideoOutputToSource(IVideoOutput output, FFVideoSource source);
+    bool BindVideoOutputToSource(IVideoOutput output, VideoStreamSource source);
 
     /// <summary>Detaches the current source from a video output.</summary>
     bool UnbindVideoOutput(IVideoOutput output);
 
     /// <summary>Returns all outputs currently bound to a given video source.</summary>
-    IVideoOutput[] GetVideoOutputsForSource(FFVideoSource source);
+    IVideoOutput[] GetVideoOutputsForSource(VideoStreamSource source);
 
     /// <summary>Returns the currently bound video source for an output, or <see langword="null"/>.</summary>
-    FFVideoSource? GetVideoSourceForOutput(IVideoOutput output);
+    VideoStreamSource? GetVideoSourceForOutput(IVideoOutput output);
 
     /// <summary>Starts synchronized audio/video playback.</summary>
     void Start();
