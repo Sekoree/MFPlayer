@@ -1,13 +1,14 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Seko.OwnAudioNET.Video;
+using Seko.OwnAudioNET.Video.Events;
 
 namespace Seko.OwnAudioNET.Video.Engine;
 
 /// <summary>
 /// Output-only engine that accepts pushed frames and forwards them to the selected output sink.
 /// </summary>
-public class VideoEngine : IVideoOutputEngine
+public class OpenGLVideoEngine : IVideoEngine, ISupportsOutputSwitching
 {
     private readonly ConcurrentDictionary<Guid, IVideoOutput> _outputs = new();
     private readonly Lock _syncLock = new();
@@ -16,7 +17,7 @@ public class VideoEngine : IVideoOutputEngine
     private long _nextPushTimestampTicks;
     private bool _disposed;
 
-    public VideoEngine(VideoEngineConfig? config = null)
+    public OpenGLVideoEngine(VideoEngineConfig? config = null)
     {
         Config = (config ?? new VideoEngineConfig()).CloneNormalized();
     }
@@ -31,6 +32,10 @@ public class VideoEngine : IVideoOutputEngine
         => _currentOutputId.HasValue && _outputs.TryGetValue(_currentOutputId.Value, out var output)
             ? output
             : null;
+
+    public event EventHandler<VideoErrorEventArgs>? Error;
+
+    public event EventHandler<VideoOutputChangedEventArgs>? VideoOutputChanged;
 
     public bool AddOutput(IVideoOutput output)
     {
@@ -99,32 +104,45 @@ public class VideoEngine : IVideoOutputEngine
             RemoveOutput(output.Id);
     }
 
-    public bool SetCurrentOutput(IVideoOutput output)
+    public bool SetVideoOutput(IVideoOutput output, VideoOutputSwitchMode mode = VideoOutputSwitchMode.PauseAndSwitch)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(output);
-        return SetCurrentOutput(output.Id);
+        return SetVideoOutput(output.Id, mode);
     }
 
-    public bool SetCurrentOutput(Guid outputId)
+    public bool SetVideoOutput(Guid outputId, VideoOutputSwitchMode mode = VideoOutputSwitchMode.PauseAndSwitch)
     {
         ThrowIfDisposed();
 
         if (!_outputs.ContainsKey(outputId))
             return false;
 
+        IVideoOutput? oldOutput;
         lock (_syncLock)
+        {
+            oldOutput = CurrentOutput;
             _currentOutputId = outputId;
+        }
+
+        VideoOutputChanged?.Invoke(this, new VideoOutputChangedEventArgs(oldOutput, CurrentOutput));
 
         return true;
     }
 
-    public void ClearCurrentOutput()
+    public bool ClearVideoOutput(VideoOutputSwitchMode mode = VideoOutputSwitchMode.PauseAndSwitch)
     {
         ThrowIfDisposed();
 
+        IVideoOutput? oldOutput;
         lock (_syncLock)
+        {
+            oldOutput = CurrentOutput;
             _currentOutputId = null;
+        }
+
+        VideoOutputChanged?.Invoke(this, new VideoOutputChangedEventArgs(oldOutput, null));
+        return true;
     }
 
     public bool PushFrame(VideoFrame frame, double masterTimestamp)
@@ -151,6 +169,7 @@ public class VideoEngine : IVideoOutputEngine
         }
         catch
         {
+            Error?.Invoke(this, new VideoErrorEventArgs("OpenGL engine output rejected frame push.", null));
             return false;
         }
     }
@@ -213,8 +232,9 @@ public class VideoEngine : IVideoOutputEngine
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(VideoEngine));
+            throw new ObjectDisposedException(nameof(OpenGLVideoEngine));
     }
 }
+
 
 

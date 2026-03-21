@@ -2,7 +2,7 @@
 
 Use `AudioVideoMixer` when audio should be the master timeline and video should follow it.
 
-`VideoMixer` is single-output in the current design. For multi-output video fan-out, use `MultiplexVideoOutputEngine` + `VideoOutputEngineSink` behind one mixer output.
+`VideoMixer` is engine-first in the current design. For multi-output video fan-out, attach a `BroadcastVideoEngine` as the mixer render engine.
 
 ## Main pieces
 
@@ -12,7 +12,7 @@ Use `AudioVideoMixer` when audio should be the master timeline and video should 
   - `MasterClock`
 - Video side:
   - `MasterClockVideoClockAdapter`
-  - `VideoTransportEngine` configured with `ClockSyncMode = AudioLed`
+    - `VideoMixer` configured with `ClockSyncMode = AudioLed`
   - `VideoMixer`
   - `VideoStreamSource`
 - Bridge:
@@ -43,15 +43,15 @@ using var audioDecoder = new FFAudioDecoder("/path/to/video.mov", audioConfig.Sa
 using var videoSource = new VideoStreamSource(videoDecoder, ownsDecoder: false);
 using var audioSource = new AudioStreamSource(audioDecoder, audioConfig, ownsDecoder: false);
 
-var transportConfig = new VideoTransportEngineConfig
+var transportConfig = new VideoEngineConfig
 {
-    PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+    PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
 }.CloneNormalized();
-transportConfig.ClockSyncMode = VideoTransportClockSyncMode.AudioLed;
+transportConfig.ClockSyncMode = VideoClockSyncMode.AudioLed;
 
+using var renderEngine = new OpenGLVideoEngine();
 var videoClock = new MasterClockVideoClockAdapter(audioMixer.MasterClock);
-using var transport = new VideoTransportEngine(videoClock, transportConfig, ownsClock: false);
-using var videoMixer = new VideoMixer(transport, ownsEngine: false);
+using var videoMixer = new VideoMixer(renderEngine, videoClock, transportConfig);
 
 var driftConfig = new AudioVideoDriftCorrectionConfig
 {
@@ -73,6 +73,14 @@ if (!avMixer.AddAudioSource(audioSource))
 if (!avMixer.AddVideoSource(videoSource))
     throw new InvalidOperationException("Failed to add video source.");
 
+IVideoOutput output = CreateOutputSomehow();
+if (!renderEngine.AddOutput(output))
+    throw new InvalidOperationException("Failed to add video output.");
+if (renderEngine is ISupportsOutputSwitching switching && !switching.SetVideoOutput(output))
+    throw new InvalidOperationException("Failed to select video output.");
+if (!avMixer.SetActiveVideoSource(videoSource))
+    throw new InvalidOperationException("Failed to set active video source.");
+
 audioSource.Play();
 avMixer.Start();
 
@@ -83,7 +91,6 @@ avMixer.Seek(10.0, AudioVideoSeekMode.Safe);
 avMixer.Pause();
 avMixer.Start();
 
-var outputCount = avMixer.GetVideoOutputs().Length;
 ```
 
 ## Seek modes

@@ -7,10 +7,10 @@ namespace Seko.OwnAudioNET.Video.NDI;
 /// <summary>
 /// Video decoder adapter that pulls RGBA frames from NDI frame-sync.
 /// </summary>
-public sealed class NdiVideoStreamDecoder : IVideoDecoder
+public sealed class NDIVideoStreamDecoder : IVideoDecoder
 {
     private readonly NdiFrameSync _frameSync;
-    private readonly INdiExternalTimelineClock _timelineClock;
+    private readonly INDIExternalTimelineClock _timelineClock;
     private readonly Lock? _frameSyncLock;
 
     private VideoStreamInfo _streamInfo;
@@ -18,7 +18,7 @@ public sealed class NdiVideoStreamDecoder : IVideoDecoder
     private double _frameDurationSeconds;
     private bool _disposed;
 
-    public NdiVideoStreamDecoder(NdiFrameSync frameSync, INdiExternalTimelineClock timelineClock, Lock? frameSyncLock = null)
+    public NDIVideoStreamDecoder(NdiFrameSync frameSync, INDIExternalTimelineClock timelineClock, Lock? frameSyncLock = null)
     {
         _frameSync = frameSync ?? throw new ArgumentNullException(nameof(frameSync));
         _timelineClock = timelineClock ?? throw new ArgumentNullException(nameof(timelineClock));
@@ -194,7 +194,7 @@ public sealed class NdiVideoStreamDecoder : IVideoDecoder
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(NdiVideoStreamDecoder));
+            throw new ObjectDisposedException(nameof(NDIVideoStreamDecoder));
     }
 }
 

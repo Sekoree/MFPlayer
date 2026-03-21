@@ -18,7 +18,7 @@ Sample apps:
 
 - `Test/AudioEx`
 - `Test/VideoTest`
-- `Test/NdiVideoSend`
+- `Test/NdiVideoReceive`
 
 ## 2) FFmpeg runtime
 
@@ -37,7 +37,7 @@ dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video
 dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video.Engine/Seko.OwnAudioNET.Video.Engine.csproj" -c Release
 dotnet build "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
 dotnet build "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/Test/NdiVideoSend/NdiVideoSend.csproj" -c Release
+dotnet build "/home/seko/RiderProjects/MFPlayer/Test/NdiVideoReceive/NdiVideoReceive.csproj" -c Release
 ```
 
 ## 4) Runtime toggles used by sample apps
@@ -62,6 +62,6 @@ dotnet build "/home/seko/RiderProjects/MFPlayer/Test/NdiVideoSend/NdiVideoSend.c
 - FFmpeg load issues:
   - set `FFMPEG_ROOT` and verify shared libraries are present.
 - Clock mismatch symptoms:
-  - prefer `VideoTransportClockSyncMode.AudioLed` for A/V playback.
+  - prefer `VideoClockSyncMode.AudioLed` for A/V playback.
   - review `AudioVideoDriftCorrectionConfig` values if drift correction is too weak/aggressive.
 

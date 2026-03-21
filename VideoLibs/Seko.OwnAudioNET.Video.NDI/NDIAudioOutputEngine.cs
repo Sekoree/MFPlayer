@@ -2,10 +2,10 @@ using NdiLib;
 
 namespace Seko.OwnAudioNET.Video.NDI;
 
-public sealed class NdiAudioOutputEngine : INdiAudioOutputEngine
+public sealed class NDIAudioOutputEngine : INDIAudioOutputEngine
 {
-    private readonly NdiSenderSession _session;
-    private readonly NdiTimelineClock _timeline;
+    private readonly NDISenderSession _session;
+    private readonly NDITimelineClock _timeline;
     private readonly int _sampleRate;
     private readonly int _channels;
     private readonly Lock _syncLock = new();
@@ -14,7 +14,7 @@ public sealed class NdiAudioOutputEngine : INdiAudioOutputEngine
     private bool _running;
     private bool _disposed;
 
-    internal NdiAudioOutputEngine(NdiSenderSession session, NdiTimelineClock timeline, int sampleRate, int channels)
+    internal NDIAudioOutputEngine(NDISenderSession session, NDITimelineClock timeline, int sampleRate, int channels)
     {
         _session = session;
         _timeline = timeline;
@@ -147,7 +147,7 @@ public sealed class NdiAudioOutputEngine : INdiAudioOutputEngine
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(NdiAudioOutputEngine));
+            throw new ObjectDisposedException(nameof(NDIAudioOutputEngine));
     }
 }
 

@@ -8,7 +8,7 @@ namespace Seko.OwnAudioNET.Video.Sources;
 /// Clock-driven video source that decodes frames via an <see cref="IVideoDecoder"/> and presents
 /// them against an attached shared playback clock.
 /// Intended for source-based transport/mixer scenarios; direct decoder-to-output playback should use
-/// <see cref="FFVideoDecoder"/> + <c>VideoEngine.PushFrame</c> instead.
+/// <see cref="FFVideoDecoder"/> + <c>OpenGLVideoEngine.PushFrame</c> instead.
 /// <para>
 /// A dedicated background thread pre-fills a bounded queue of decoded <see cref="VideoFrame"/>
 /// objects. On each call to <see cref="RequestNextFrame"/> (or <see cref="TryGetFrameAtTime"/>) the

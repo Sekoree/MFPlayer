@@ -26,6 +26,7 @@ public partial class MainWindow : Window
 
     private IAudioEngine? _audioEngine;
     private AudioMixer? _audioMixer;
+    private OpenGLVideoEngine? _videoEngine;
     private IAudioVideoMixer? _playbackMixer;
     private VideoStreamSource? _videoSource;
     private AudioStreamSource? _audioSource;
@@ -301,17 +302,23 @@ public partial class MainWindow : Window
         if (_playbackMixer == null || _videoSource == null)
             throw new InvalidOperationException("Playback mixer has not been initialized.");
 
+        if (_videoEngine == null)
+            throw new InvalidOperationException("Video engine has not been initialized.");
+
         var primaryView = new VideoGL
         {
             KeepAspectRatio = true,
-            PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+            PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
         };
 
-        if (!_playbackMixer.AddVideoOutput(primaryView))
-            throw new InvalidOperationException("Failed to add primary VideoGL output to playback mixer.");
+        if (!_videoEngine.AddOutput(primaryView))
+            throw new InvalidOperationException("Failed to add primary VideoGL output to video engine.");
 
-        if (!_playbackMixer.BindVideoOutputToSource(primaryView, _videoSource))
-            throw new InvalidOperationException("Failed to bind primary VideoGL output to video source.");
+        if (_videoEngine is ISupportsOutputSwitching switching && !switching.SetVideoOutput(primaryView))
+            throw new InvalidOperationException("Failed to select primary VideoGL output on video engine.");
+
+        if (!_playbackMixer.SetActiveVideoSource(_videoSource))
+            throw new InvalidOperationException("Failed to set active video source.");
 
         _videoViews =
         [
@@ -324,11 +331,11 @@ public partial class MainWindow : Window
         foreach (var view in _videoViews)
         {
             view.KeepAspectRatio = true;
-            view.PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync;
+            view.PresentationSyncMode = VideoPresentationSyncMode.PreferVSync;
             view.EnableHudOverlay = _hudEnabled;
         }
 
-        var mixerOutputCount = _playbackMixer.GetVideoOutputs().Length;
+        var mixerOutputCount = _videoEngine.OutputCount;
         if (mixerOutputCount != 1)
             throw new InvalidOperationException($"Expected exactly one mixer-bound output for VideoTest mirroring, but found {mixerOutputCount}.");
 
@@ -361,7 +368,7 @@ public partial class MainWindow : Window
         _started = true;
 
         var argFile = Program.LaunchArgs.FirstOrDefault();
-        var testFile = "/home/seko/Videos/shootingstar_0611_1.mov";
+        var testFile = "/home/seko/Videos/おねがいダーリン_0611.mov";
         if (!string.IsNullOrWhiteSpace(argFile) && File.Exists(argFile))
             testFile = argFile;
         
@@ -461,15 +468,15 @@ public partial class MainWindow : Window
             _audioSource = new AudioStreamSource(audioDecoder, audioConfig, ownsDecoder: true);
             _audioMixer = new AudioMixer(_audioEngine, negotiatedBufferSize);
 
-            var videoTransportConfig = new VideoTransportEngineConfig
+            var videoTransportConfig = new VideoEngineConfig
             {
-                PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+                PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
             }.CloneNormalized();
-            videoTransportConfig.ClockSyncMode = VideoTransportClockSyncMode.AudioLed;
+            videoTransportConfig.ClockSyncMode = VideoClockSyncMode.AudioLed;
 
             var videoClock = new MasterClockVideoClockAdapter(_audioMixer.MasterClock);
-            var videoTransport = new VideoTransportEngine(videoClock, videoTransportConfig, ownsClock: false);
-            var videoMixer = new VideoMixer(videoTransport, ownsEngine: true);
+            _videoEngine = new OpenGLVideoEngine();
+            var videoMixer = new VideoMixer(_videoEngine, videoClock, videoTransportConfig);
             var driftCorrectionConfig = new AudioVideoDriftCorrectionConfig
             {
                 Enabled = true
@@ -608,7 +615,7 @@ public partial class MainWindow : Window
                 view.UpdateHudDiagnostics(_videoSource.QueueDepth, 0, videoMasterDriftMs, _videoSource.IsHardwareDecoding, _videoSource.DroppedFrameCount);
             }
 
-            var engineOutputCount = _playbackMixer.GetVideoOutputs().Length;
+            var engineOutputCount = _videoEngine?.OutputCount ?? 0;
 
             Title = $"VideoTest - engine 1→{engineOutputCount}, UI x{_videoViews.Length} | {_videoSource.StreamInfo.FrameRate:F1} fps | pres {videoDeltas.Presented} dec {videoDeltas.Decoded} drop {videoDeltas.Dropped} | up {totalUploadFrameDelta} upP {totalUploadPlaneDelta} | strF {totalStridedFrameDelta} ({aggregateStridedFrameRatio:0.0}%) strP {totalStridedPlaneDelta} ({aggregateStridedPlaneRatio:0.0}%) | hw {_videoSource.IsHardwareDecoding} | {fmtInfo} | a_hseek {syncDeltas.HardSeek}/{audioDiag.HardSyncSeekCount} a_hsup {syncDeltas.HardSuppressed}/{audioDiag.HardSyncSeekSuppressedCount} a_hfail {syncDeltas.HardFailure}/{audioDiag.HardSyncSeekFailureCount} | v_rsup {syncDeltas.DriftSuppressed}/{driftDiag.DriftCorrectionSuppressedTickCount} v_rseek {syncDeltas.DriftResyncAttempt}/{driftDiag.DriftHardResyncAttemptCount} v_rok {syncDeltas.DriftResyncSuccess}/{driftDiag.DriftHardResyncSuccessCount} v_rfail {syncDeltas.DriftResyncFailure}/{driftDiag.DriftHardResyncFailureCount} | v-m {videoMasterDriftMs:F1}ms | v-a {videoAudioDriftMs:F1}ms | corr {correctionOffsetMs:F1}ms";
 
@@ -666,16 +673,6 @@ public partial class MainWindow : Window
         _videoStatsTimer?.Stop();
         _videoStatsTimer = null;
 
-        try
-        {
-            if (_playbackMixer != null && _videoViews.Length > 0)
-                _playbackMixer.RemoveVideoOutput(_videoViews[0]);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[VideoTest] Output detach during cleanup failed: {ex.Message}");
-        }
-
         foreach (var view in _videoViews)
             view.Dispose();
         _videoViews = [];
@@ -703,6 +700,9 @@ public partial class MainWindow : Window
 
         _audioMixer?.Dispose();
         _audioMixer = null;
+
+        _videoEngine?.Dispose();
+        _videoEngine = null;
 
         if (_audioEngine != null)
         {

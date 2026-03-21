@@ -2,7 +2,6 @@ using OwnaudioNET.Events;
 using OwnaudioNET.Interfaces;
 using OwnaudioNET.Mixing;
 using OwnaudioNET.Synchronization;
-using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Events;
 using Seko.OwnAudioNET.Video.Sources;
 using Seko.OwnAudioNET.Video.Clocks;
@@ -45,8 +44,8 @@ public interface IAudioVideoMixer : IDisposable
     /// <summary>Raised when a registered video source reports an error.</summary>
     event EventHandler<VideoErrorEventArgs>? VideoSourceError;
 
-    /// <summary>Raised whenever a video output changes its bound source.</summary>
-    event EventHandler<VideoOutputSourceChangedEventArgs>? VideoOutputSourceChanged;
+    /// <summary>Raised whenever the active video source selection changes.</summary>
+    event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveVideoSourceChanged;
 
     /// <summary>Adds an audio source to the combined mixer.</summary>
     bool AddAudioSource(IAudioSource source);
@@ -72,29 +71,11 @@ public interface IAudioVideoMixer : IDisposable
     /// <summary>Removes all registered video sources.</summary>
     void ClearVideoSources();
 
-    /// <summary>Adds a video output sink.</summary>
-    bool AddVideoOutput(IVideoOutput output);
+    /// <summary>The currently active video source rendered through the video engine, or <see langword="null"/>.</summary>
+    VideoStreamSource? ActiveVideoSource { get; }
 
-    /// <summary>Removes a video output sink.</summary>
-    bool RemoveVideoOutput(IVideoOutput output);
-
-    /// <summary>Returns a snapshot of all registered video outputs.</summary>
-    IVideoOutput[] GetVideoOutputs();
-
-    /// <summary>Removes all registered video outputs.</summary>
-    void ClearVideoOutputs();
-
-    /// <summary>Binds a video output to a specific video source.</summary>
-    bool BindVideoOutputToSource(IVideoOutput output, VideoStreamSource source);
-
-    /// <summary>Detaches the current source from a video output.</summary>
-    bool UnbindVideoOutput(IVideoOutput output);
-
-    /// <summary>Returns all outputs currently bound to a given video source.</summary>
-    IVideoOutput[] GetVideoOutputsForSource(VideoStreamSource source);
-
-    /// <summary>Returns the currently bound video source for an output, or <see langword="null"/>.</summary>
-    VideoStreamSource? GetVideoSourceForOutput(IVideoOutput output);
+    /// <summary>Selects the active video source rendered through the video engine.</summary>
+    bool SetActiveVideoSource(VideoStreamSource source);
 
     /// <summary>Starts synchronized audio/video playback.</summary>
     void Start();

@@ -10,6 +10,7 @@ using Seko.OwnAudioNET.Video.Clocks;
 using Seko.OwnAudioNET.Video.Decoders;
 using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.Mixing;
+using Seko.OwnAudioNET.Video.NDI;
 using Seko.OwnAudioNET.Video.Probing;
 using Seko.OwnAudioNET.Video.SDL3;
 using Seko.OwnAudioNET.Video.Sources;
@@ -295,11 +296,12 @@ internal static class Program
     {
         GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
-        var testFile60Fps = "/home/seko/Videos/おねがいダーリン_0611.mov";
-        var testFile60Fps2 = "/home/seko/Videos/shootingstar_0611_1.mov";
+        var testFile60Fps = "/home/seko/Videos/_MESMERIZER_ (German Version) _ by CALYTRIX (@Reoni @chiyonka_).mp4";
+        var testFile60Fps2 = "/home/seko/Videos/おねがいダーリン_0611.mov";
+        var testFile60Fps3 = "/home/seko/Videos/shootingstar_0611_1.mov";
         var inputFiles = args.Length > 0
             ? args.Where(static path => !string.IsNullOrWhiteSpace(path)).ToArray()
-            : [testFile60Fps, testFile60Fps2];
+            : [testFile60Fps, testFile60Fps2, testFile60Fps3];
 
         if (inputFiles.Length == 0)
         {
@@ -341,6 +343,12 @@ internal static class Program
 
             streamSelections[i] = (file, videoStream, audioStream);
         }
+        
+        var enableNdiOutputs = !string.Equals(
+            Environment.GetEnvironmentVariable("AUDIOEX_ENABLE_NDI"),
+            "0",
+            StringComparison.Ordinal);
+        var ndiOutputs = CreateNdiOutputs(enableNdiOutputs, ResolveNdiSenderNames());
 
         var decoderThreadCount = GetSafeVideoThreadCount(streamSelections.Select(static selection => selection.VideoStream));
         var requestedAudioConfig = AudioConfig.Default;
@@ -371,15 +379,26 @@ internal static class Program
                 StringComparison.Ordinal);
             using var audioMixer = new AudioMixer(audioEngine, negotiatedBufferSize);
 
-            var videoTransportConfig = new VideoTransportEngineConfig
+            var videoTransportConfig = new VideoEngineConfig
             {
-                PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+                PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
             }.CloneNormalized();
-            videoTransportConfig.ClockSyncMode = VideoTransportClockSyncMode.AudioLed;
+            videoTransportConfig.ClockSyncMode = VideoClockSyncMode.AudioLed;
 
             var videoClock = new MasterClockVideoClockAdapter(audioMixer.MasterClock);
-            using var videoTransport = new VideoTransportEngine(videoClock, videoTransportConfig, ownsClock: false);
-            using var videoMixer = new VideoMixer(videoTransport, ownsEngine: false);
+            
+            
+            var videoMultiplexer = new BroadcastVideoEngine(new VideoEngineConfig()
+            {
+                PixelFormatPolicy = VideoEnginePixelFormatPolicy.Auto
+            });
+            foreach (var ndiOutput in ndiOutputs)
+            {
+                if (!videoMultiplexer.AddOutput(ndiOutput.VideoOutput))
+                    ConsolePrintLine($"[NDI] Failed to register output '{ndiOutput.Config.SenderName}' in multiplexer.");
+            }
+            
+            using var videoMixer = new VideoMixer(videoMultiplexer, videoClock, videoTransportConfig);
             var driftCorrectionConfig = new AudioVideoDriftCorrectionConfig
             {
                 Enabled = true
@@ -395,7 +414,10 @@ internal static class Program
                 var timelineOffsetSeconds = 0.0;
                 foreach (var selection in streamSelections)
                 {
-                    var decoderOptions = CreateDemoDecoderOptions(decoderThreadCount, selection.VideoStream.Index);
+                    var decoderOptions = CreateDemoDecoderOptions(
+                        decoderThreadCount,
+                        selection.VideoStream.Index,
+                        forceRgbaOutput: true);
                     FFSharedDemuxSession? sharedDemux = null;
                     FFVideoDecoder videoDecoder;
                     FFAudioDecoder audioDecoder;
@@ -461,6 +483,7 @@ internal static class Program
                     EnableHudOverlay = false,
                     KeepAspectRatio = true
                 };
+                
 
                 try
                 {
@@ -471,12 +494,11 @@ internal static class Program
                     }
 
                     videoRenderer.Start();
-                    if (!playbackMixer.AddVideoOutput(videoRenderer))
-                        throw new InvalidOperationException("Failed to register VideoSDL with the A/V mixer.");
+                    videoMultiplexer.AddOutput(videoRenderer);
 
                     var activeMedia = playlist[0];
-                    if (!playbackMixer.BindVideoOutputToSource(videoRenderer, activeMedia.VideoSource))
-                        throw new InvalidOperationException($"Failed to bind output to source '{activeMedia.Label}'.");
+                    if (!playbackMixer.SetActiveVideoSource(activeMedia.VideoSource))
+                        throw new InvalidOperationException($"Failed to set active source '{activeMedia.Label}'.");
 
                     var inputState = new PlaybackInputState
                     {
@@ -500,8 +522,8 @@ internal static class Program
                         if (ReferenceEquals(activeMedia, nextMedia))
                             return;
 
-                        if (!playbackMixer.BindVideoOutputToSource(videoRenderer, nextMedia.VideoSource))
-                            throw new InvalidOperationException($"Failed to bind output to source '{nextMedia.Label}'.");
+                        if (!playbackMixer.SetActiveVideoSource(nextMedia.VideoSource))
+                            throw new InvalidOperationException($"Failed to set active source '{nextMedia.Label}'.");
 
                         activeMedia = nextMedia;
                     }
@@ -545,6 +567,8 @@ internal static class Program
                     PrimeVisibleSource();
                     UpdateRendererDiagnostics();
                     playbackMixer.Start();
+                    if (ndiOutputs.Count > 0)
+                        Console.WriteLine($"[NDI] Active senders: {string.Join(", ", ndiOutputs.Select(static output => output.Config.SenderName))}");
                     Console.WriteLine($"Audio/video mixer initialised successfully for {playlist.Count} media item(s).");
 
                     var controlActions = new ConcurrentQueue<ControlAction>();
@@ -804,7 +828,6 @@ internal static class Program
                         Thread.Sleep(playbackMixer.IsRunning ? 0 : 10);
                     }
 
-                    playbackMixer.RemoveVideoOutput(videoRenderer);
                     videoRenderer.Stop();
                 }
                 finally
@@ -851,7 +874,84 @@ internal static class Program
                     // Best-effort engine shutdown.
                 }
             }
+
+            foreach (var ndiOutput in ndiOutputs)
+            {
+                try
+                {
+                    ndiOutput.Dispose();
+                }
+                catch
+                {
+                    // Best-effort NDI teardown.
+                }
+            }
         }
+    }
+
+    private static List<NDIVideoEngine> CreateNdiOutputs(bool enabled, IReadOnlyList<string> senderNames)
+    {
+        var outputs = new List<NDIVideoEngine>();
+        if (!enabled)
+            return outputs;
+
+        try
+        {
+            foreach (var senderName in senderNames)
+            {
+                var output = new NDIVideoEngine(new NDIEngineConfig
+                {
+                    SenderName = senderName,
+                    AudioSampleRate = 48000,
+                    AudioChannels = 2,
+                    RgbaSendFormat = NDIVideoRgbaSendFormat.Auto,
+                    UseIncomingVideoTimestamps = false
+                });
+
+                output.Start();
+                outputs.Add(output);
+            }
+
+            if (outputs.Count == 0)
+                ConsolePrintLine("[NDI] Enabled, but no sender names resolved. NDI output is disabled for this run.");
+            else
+                ConsolePrintLine($"[NDI] Started {outputs.Count} sender(s).");
+
+            return outputs;
+        }
+        catch
+        {
+            foreach (var output in outputs)
+            {
+                try
+                {
+                    output.Dispose();
+                }
+                catch
+                {
+                    // Best-effort rollback during startup failure.
+                }
+            }
+
+            throw;
+        }
+    }
+
+    private static string[] ResolveNdiSenderNames()
+    {
+        var raw = Environment.GetEnvironmentVariable("AUDIOEX_NDI_SENDERS");
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            var names = raw
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (names.Length > 0)
+                return names;
+        }
+
+        return ["TestSender", "TestSender2"];
     }
 
     private static int GetSafeVideoThreadCount(IEnumerable<MediaStreamInfoEntry> videoStreams)
@@ -902,7 +1002,7 @@ internal static class Program
         return Math.Clamp(Math.Max(minThreads, suggested), minThreads, 16);
     }
 
-    private static FFVideoDecoderOptions CreateDemoDecoderOptions(int threadCount, int? streamIndex)
+    private static FFVideoDecoderOptions CreateDemoDecoderOptions(int threadCount, int? streamIndex, bool forceRgbaOutput = false)
     {
         return new FFVideoDecoderOptions
         {
@@ -910,17 +1010,19 @@ internal static class Program
             EnableHardwareDecoding = true,
             ThreadCount = threadCount,
             QueueCapacity = 24,
-            PreferredOutputPixelFormats =
-            [
-                VideoPixelFormat.Nv12,
-                VideoPixelFormat.Yuv420p,
-                VideoPixelFormat.P010le,
-                VideoPixelFormat.Yuv420p10le,
-                VideoPixelFormat.Rgba32,
-                VideoPixelFormat.Yuv422p,
-                VideoPixelFormat.Yuv422p10le
-            ],
-            PreferSourcePixelFormatWhenSupported = true,
+            PreferredOutputPixelFormats = forceRgbaOutput
+                ? [VideoPixelFormat.Rgba32]
+                :
+                [
+                    VideoPixelFormat.Nv12,
+                    VideoPixelFormat.Yuv420p,
+                    VideoPixelFormat.P010le,
+                    VideoPixelFormat.Yuv420p10le,
+                    VideoPixelFormat.Rgba32,
+                    VideoPixelFormat.Yuv422p,
+                    VideoPixelFormat.Yuv422p10le
+                ],
+            PreferSourcePixelFormatWhenSupported = !forceRgbaOutput,
             PreferLowestConversionCost = true
         };
     }

@@ -11,11 +11,11 @@ Prerequisite: see `Doc/setup-prerequisites.md` first.
 Current setup in `Test/AudioEx/Program.cs`:
 
 - Creates an OwnAudio engine (`AudioPlaybackEngineFactory.CreateEngine`) and `AudioMixer`
-- Creates video transport (`VideoTransportEngine`) in audio-led mode
+- Configures `VideoMixer` in audio-led mode
 - Wraps both with `AudioVideoMixer`
 - Enables drift correction via `AudioVideoDriftCorrectionConfig`
 - Creates one `VideoSDL` output and binds it to the active `VideoStreamSource`
-- Keeps one mixer-bound output sink (mirroring/fan-out should happen downstream)
+- Keeps one render-engine-selected output (mirroring/fan-out should happen downstream)
 - Supports playlist-style sequential playback by assigning cumulative `StartOffset` values to each audio/video source pair
 
 ## Pipeline architecture
@@ -27,7 +27,7 @@ Per app instance:
 3. Build shared mixer stack:
    - `AudioMixer`
    - `MasterClockVideoClockAdapter`
-   - `VideoTransportEngine` (`ClockSyncMode = AudioLed`)
+   - `VideoMixer` with `ClockSyncMode = AudioLed`
    - `VideoMixer`
    - `AudioVideoMixer`
 4. For each media item:
@@ -35,7 +35,7 @@ Per app instance:
    - create `VideoStreamSource` + `AudioStreamSource`
    - assign `StartOffset` on both sources
    - add sources to `AudioVideoMixer`
-5. Bind `VideoSDL` to current active source, start playback, switch source binding as timeline crosses item boundaries
+5. Select `VideoSDL` on render engine, set active source, start playback, switch active source as timeline crosses item boundaries
 
 ## Shared demux behavior
 

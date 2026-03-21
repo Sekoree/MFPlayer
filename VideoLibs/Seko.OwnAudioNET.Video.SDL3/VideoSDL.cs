@@ -219,7 +219,7 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     private nint _sdlGlContext;
     private bool _sdlOwnsSubsystem;
     private bool _disposed;
-    private int _presentationSyncMode = (int)VideoTransportPresentationSyncMode.PreferVSync;
+    private int _presentationSyncMode = (int)VideoPresentationSyncMode.PreferVSync;
     private int _appliedSwapInterval = int.MinValue;
 
     // ── Render loop state ─────────────────────────────────────────────────────────
@@ -229,9 +229,9 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     private VideoFrame? _latestFrame;
     private bool        _hasFrame;
     private long        _latestFrameVersion;
-            public VideoTransportPresentationSyncMode PresentationSyncMode
+            public VideoPresentationSyncMode PresentationSyncMode
             {
-                get => (VideoTransportPresentationSyncMode)Volatile.Read(ref _presentationSyncMode);
+                get => (VideoPresentationSyncMode)Volatile.Read(ref _presentationSyncMode);
                 set => Volatile.Write(ref _presentationSyncMode, (int)value);
             }
 
@@ -431,7 +431,15 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
         lock (_frameLock)
         {
             previous = _latestFrame;
-            _latestFrame = frame.AddRef();
+            try
+            {
+                _latestFrame = frame.AddRef();
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+
             _hasFrame = true;
             _latestFrameVersion++;
         }
@@ -643,8 +651,17 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
             {
                 if (_hasFrame)
                 {
-                    frame   = _latestFrame?.AddRef();
-                    version = _latestFrameVersion;
+                    try
+                    {
+                        frame = _latestFrame?.AddRef();
+                        version = _latestFrameVersion;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Drop stale frame reference and continue rendering latest valid frame.
+                        _latestFrame = null;
+                        _hasFrame = false;
+                    }
                 }
             }
 
@@ -680,7 +697,7 @@ public sealed partial class VideoSDL : IVideoOutput, IVideoPresentationSyncAware
     {
         // SDL exposes swap interval as an on/off preference, so Prefer/Require both map to a
         // best-effort VSync request while None explicitly disables it.
-        var desiredSwapInterval = PresentationSyncMode == VideoTransportPresentationSyncMode.None ? 0 : 1;
+        var desiredSwapInterval = PresentationSyncMode == VideoPresentationSyncMode.None ? 0 : 1;
         if (desiredSwapInterval == _appliedSwapInterval)
             return;
 

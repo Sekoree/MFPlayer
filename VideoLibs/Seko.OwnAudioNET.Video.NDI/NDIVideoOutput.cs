@@ -8,18 +8,18 @@ namespace Seko.OwnAudioNET.Video.NDI;
 /// <summary>
 /// NDI-backed video sink that plugs into existing <see cref="IVideoOutput"/> routing.
 /// </summary>
-public sealed class NdiVideoOutput : IVideoOutput
+public sealed class NDIVideoOutput : IVideoOutput
 {
-    private readonly NdiSenderSession _session;
-    private readonly NdiTimelineClock _timeline;
-    private readonly NdiEngineConfig _config;
+    private readonly NDISenderSession _session;
+    private readonly NDITimelineClock _timeline;
+    private readonly NDIEngineConfig _config;
     private readonly Lock _syncLock = new();
 
     private byte[]? _bgraScratch;
     private bool _running;
     private bool _disposed;
 
-    internal NdiVideoOutput(NdiSenderSession session, NdiTimelineClock timeline, NdiEngineConfig config)
+    internal NDIVideoOutput(NDISenderSession session, NDITimelineClock timeline, NDIEngineConfig config)
     {
         _session = session;
         _timeline = timeline;
@@ -86,7 +86,7 @@ public sealed class NdiVideoOutput : IVideoOutput
         if (width <= 0 || height <= 0)
             return false;
 
-        var sendAsBgra = _config.RgbaSendFormat == NdiVideoRgbaSendFormat.Bgra;
+        var sendAsBgra = _config.RgbaSendFormat == NDIVideoRgbaSendFormat.Bgra;
         var fourCc = sendAsBgra ? NdiFourCCVideoType.Bgra : NdiFourCCVideoType.Rgba;
 
         if (sendAsBgra)
@@ -183,7 +183,7 @@ public sealed class NdiVideoOutput : IVideoOutput
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(NdiVideoOutput));
+            throw new ObjectDisposedException(nameof(NDIVideoOutput));
     }
 }
 

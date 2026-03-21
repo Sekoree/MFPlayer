@@ -3,7 +3,7 @@ namespace Seko.OwnAudioNET.Video.NDI;
 /// <summary>
 /// Tunables for NDI receive audio capture buffering and pacing.
 /// </summary>
-public sealed class NdiAudioStreamSourceOptions
+public sealed class NDIAudioStreamSourceOptions
 {
     public const int DefaultRingCapacityMultiplier = 8;
     public const double DefaultCaptureHighWatermarkRatio = 0.40;
@@ -26,7 +26,7 @@ public sealed class NdiAudioStreamSourceOptions
     /// <summary>Target capture request size as BufferSize / divisor.</summary>
     public int CaptureFrameTargetDivisor { get; init; } = DefaultCaptureFrameTargetDivisor;
 
-    public NdiAudioStreamSourceOptions CloneNormalized()
+    public NDIAudioStreamSourceOptions CloneNormalized()
     {
         var ringMultiplier = RingCapacityMultiplier > 0 ? RingCapacityMultiplier : DefaultRingCapacityMultiplier;
 
@@ -39,7 +39,7 @@ public sealed class NdiAudioStreamSourceOptions
         var minimumCaptureFrames = Math.Max(1, MinimumCaptureFrames);
         var targetDivisor = Math.Max(1, CaptureFrameTargetDivisor);
 
-        return new NdiAudioStreamSourceOptions
+        return new NDIAudioStreamSourceOptions
         {
             RingCapacityMultiplier = ringMultiplier,
             CaptureHighWatermarkRatio = highWatermark,

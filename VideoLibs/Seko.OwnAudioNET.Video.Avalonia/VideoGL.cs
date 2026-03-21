@@ -48,7 +48,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BlendFuncProc(int sfactor, int dfactor);
 
-    private readonly IVideoOutputEngine? _sinkEngine;
+    private readonly IVideoEngine? _sinkEngine;
     private readonly Lock _frameLock = new();
     private readonly Lock _mirrorLock = new();
     private readonly Action<VideoFrame, double> _mirrorFrameHandler;
@@ -112,7 +112,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
     private long _diagUploadPlaneCount;
     private long _diagStridedUploadPlaneCount;
     private long _diagStridedUploadFrameCount;
-    private int _presentationSyncMode = (int)VideoTransportPresentationSyncMode.PreferVSync;
+    private int _presentationSyncMode = (int)VideoPresentationSyncMode.PreferVSync;
 
     private readonly Lock _hudLock = new();
     private double _renderFps;
@@ -165,9 +165,9 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
 
     public bool IsMirroring => MirrorParent != null;
 
-    public VideoTransportPresentationSyncMode PresentationSyncMode
+    public VideoPresentationSyncMode PresentationSyncMode
     {
-        get => (VideoTransportPresentationSyncMode)Volatile.Read(ref _presentationSyncMode);
+        get => (VideoPresentationSyncMode)Volatile.Read(ref _presentationSyncMode);
         set
         {
             Volatile.Write(ref _presentationSyncMode, (int)value);
@@ -185,7 +185,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         _requestRenderAction = RequestNextFrameRendering;
     }
 
-    public VideoGL(IVideoOutputEngine engine)
+    public VideoGL(IVideoEngine engine)
     {
         _sinkEngine = engine ?? throw new ArgumentNullException(nameof(engine));
         _mirrorFrameHandler = OnMirrorParentFrameReady;
@@ -220,7 +220,15 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         lock (_frameLock)
         {
             previous = _latestFrame;
-            _latestFrame = frame.AddRef();
+            try
+            {
+                _latestFrame = frame.AddRef();
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+
             _hasFrame = true;
             _latestMasterTimestamp = masterTimestamp;
             _hasLatestMasterTimestamp = true;
@@ -376,7 +384,16 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
             if (!_hasFrame || _latestFrame == null)
                 return;
 
-            frame = _latestFrame.AddRef();
+            try
+            {
+                frame = _latestFrame.AddRef();
+            }
+            catch (ObjectDisposedException)
+            {
+                _latestFrame = null;
+                _hasFrame = false;
+                return;
+            }
         }
 
         try
@@ -646,7 +663,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         }
     }
 
-    private void PropagatePresentationSyncModeToMirrors(VideoTransportPresentationSyncMode mode)
+    private void PropagatePresentationSyncModeToMirrors(VideoPresentationSyncMode mode)
     {
         Action<VideoFrame, double>? subscribers;
         lock (_mirrorLock)
@@ -700,7 +717,7 @@ public partial class VideoGL : OpenGlControlBase, IVideoOutput, IVideoPresentati
         // Avalonia presentation remains compositor-driven either way. For transport modes that
         // prefer display synchronization we post at Render priority; otherwise we use Normal
         // priority for a softer clock-driven invalidation path.
-        var priority = PresentationSyncMode == VideoTransportPresentationSyncMode.None
+        var priority = PresentationSyncMode == VideoPresentationSyncMode.None
             ? DispatcherPriority.Normal
             : DispatcherPriority.Render;
 

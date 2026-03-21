@@ -56,7 +56,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NdiLib.Smoke", "NDI\NdiLib.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video.NDI", "VideoLibs\Seko.OwnAudioNET.Video.NDI\Seko.OwnAudioNET.Video.NDI.csproj", "{CCDB3ED3-DEFF-4AE1-84DD-2131D1F5F41C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NdiVideoSend", "Test\NdiVideoSend\NdiVideoSend.csproj", "{5DA56A07-AD4D-4843-A876-FFEA5C2BAC11}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NdiVideoReceive", "Test\NdiVideoReceive\NdiVideoReceive.csproj", "{5DA56A07-AD4D-4843-A876-FFEA5C2BAC11}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

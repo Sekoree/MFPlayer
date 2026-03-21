@@ -9,6 +9,6 @@ public interface IVideoPresentationSyncAwareOutput
     /// <summary>
     /// Best-effort presentation policy requested by the active transport.
     /// </summary>
-    VideoTransportPresentationSyncMode PresentationSyncMode { get; set; }
+    VideoPresentationSyncMode PresentationSyncMode { get; set; }
 }
 

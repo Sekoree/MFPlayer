@@ -6,13 +6,13 @@ Prerequisite: see `Doc/setup-prerequisites.md` first.
 
 ## Main types
 
-- `NdiOutputEngine`
+- `NDIVideoEngine`
   - combined sender with video sink and audio send API.
-- `NdiEngineConfig`
+- `NDIEngineConfig`
   - sender/timeline/audio format options.
-- `NdiVideoOutput`
+- `NDIVideoOutput`
   - `IVideoOutput` sink that can be attached to `VideoEngine` or `VideoMixer` output routing.
-- `INdiAudioOutputEngine`
+- `INDIAudioOutputEngine`
   - span-based interleaved float audio sender.
 
 ## Option 1: direct send API (quickest)
@@ -20,12 +20,12 @@ Prerequisite: see `Doc/setup-prerequisites.md` first.
 ```csharp
 using Seko.OwnAudioNET.Video.NDI;
 
-using var ndi = new NdiOutputEngine(new NdiEngineConfig
+using var ndi = new NDIVideoEngine(new NDIEngineConfig
 {
     SenderName = "MFPlayer Demo",
     AudioSampleRate = 48000,
     AudioChannels = 2,
-    RgbaSendFormat = NdiVideoRgbaSendFormat.Auto,
+    RgbaSendFormat = NDIVideoRgbaSendFormat.Auto,
     UseIncomingVideoTimestamps = false
 });
 
@@ -51,7 +51,7 @@ Use this when you already have a push-based video pipeline and want NDI as an ou
 using Seko.OwnAudioNET.Video.Engine;
 using Seko.OwnAudioNET.Video.NDI;
 
-using var ndi = new NdiOutputEngine(new NdiEngineConfig { SenderName = "MFPlayer Engine" });
+using var ndi = new NDIVideoEngine(new NDIEngineConfig { SenderName = "MFPlayer Engine" });
 ndi.Start();
 
 using var engine = ndi.CreateVideoEngine();
@@ -62,34 +62,40 @@ engine.PushFrame(frame, masterTimestampSeconds);
 
 ## Option 3: use as `IVideoOutput` in mixer routing
 
-`NdiVideoOutput` is exposed via `NdiOutputEngine.VideoOutput`, so it can be mixer-bound like any other output sink.
+`NDIVideoOutput` is exposed via `NDIVideoEngine.VideoOutput` and can be attached to a render engine used by `VideoMixer`.
 
 ```csharp
 using Seko.OwnAudioNET.Video.Mixing;
 using Seko.OwnAudioNET.Video.NDI;
 
-using var ndi = new NdiOutputEngine(new NdiEngineConfig { SenderName = "MFPlayer Mixer" });
+using var ndi = new NDIVideoEngine(new NDIEngineConfig { SenderName = "MFPlayer Mixer" });
 ndi.Start();
 
-// Assume videoMixer + videoSource already exist.
-if (!videoMixer.AddOutput(ndi.VideoOutput))
+// Assume playbackEngine + videoMixer + videoSource already exist.
+using var renderEngine = new OpenGLVideoEngine();
+using var videoMixer = new VideoMixer(playbackEngine, renderEngine);
+
+if (!renderEngine.AddOutput(ndi.VideoOutput))
     throw new InvalidOperationException("Failed to add NDI output sink.");
 
-if (!videoMixer.BindOutputToSource(ndi.VideoOutput, videoSource))
-    throw new InvalidOperationException("Failed to bind NDI output sink.");
+if (renderEngine is ISupportsOutputSwitching switching && !switching.SetVideoOutput(ndi.VideoOutput))
+    throw new InvalidOperationException("Failed to select NDI output sink.");
+
+if (!videoMixer.SetActiveSource(videoSource))
+    throw new InvalidOperationException("Failed to set active video source.");
 ```
 
 ## Timeline and sync notes
 
 - Default behavior uses internal timeline progression from audio/video send path.
-- You can provide external timeline authority via `NdiEngineConfig.ExternalClock`.
+- You can provide external timeline authority via `NDIEngineConfig.ExternalClock`.
 - `UseIncomingVideoTimestamps = true` makes outgoing video timecode follow incoming `masterTimestamp` passed into `PushFrame`/`SendVideoRgba`.
 
 ## Format notes
 
 - `SendVideoRgba` expects RGBA byte layout.
 - If `RgbaSendFormat = Bgra`, conversion is performed before submit.
-- `INdiAudioOutputEngine.Send` expects interleaved `float` PCM.
+- `INDIAudioOutputEngine.Send` expects interleaved `float` PCM.
 
 ## Run a quick smoke sender
 
@@ -99,8 +105,8 @@ dotnet run --project "/home/seko/RiderProjects/MFPlayer/NDI/NdiLib.Smoke/NdiLib.
 
 ## Related files
 
-- `VideoLibs/Seko.OwnAudioNET.Video.NDI/NdiOutputEngine.cs`
-- `VideoLibs/Seko.OwnAudioNET.Video.NDI/NdiEngineConfig.cs`
-- `VideoLibs/Seko.OwnAudioNET.Video.NDI/NdiVideoOutput.cs`
-- `VideoLibs/Seko.OwnAudioNET.Video.NDI/INdiAudioOutputEngine.cs`
+- `VideoLibs/Seko.OwnAudioNET.Video.NDI/NDIVideoEngine.cs`
+- `VideoLibs/Seko.OwnAudioNET.Video.NDI/NDIEngineConfig.cs`
+- `VideoLibs/Seko.OwnAudioNET.Video.NDI/NDIVideoOutput.cs`
+- `VideoLibs/Seko.OwnAudioNET.Video.NDI/INDIAudioOutputEngine.cs`
 

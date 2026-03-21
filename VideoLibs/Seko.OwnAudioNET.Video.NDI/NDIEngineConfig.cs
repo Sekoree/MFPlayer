@@ -5,7 +5,7 @@ using Seko.OwnAudioNET.Video.Clocks;
 /// <summary>
 /// Configuration for outbound NDI sender engines.
 /// </summary>
-public sealed class NdiEngineConfig
+public sealed class NDIEngineConfig
 {
     /// <summary>Advertised NDI sender name (discoverable on the network).</summary>
     public string SenderName { get; init; } = "MFPlayer";
@@ -26,7 +26,7 @@ public sealed class NdiEngineConfig
     public IExternalClock? ExternalClock { get; init; }
 
     /// <summary>
-    /// When true, <see cref="Engine.IVideoOutputEngine.PushFrame"/> master timestamps are used for outbound video.
+    /// When true, <see cref="Engine.IVideoEngine.PushFrame"/> master timestamps are used for outbound video.
     /// When false, the engine prefers audio-master/internal timeline.
     /// </summary>
     public bool UseIncomingVideoTimestamps { get; init; }
@@ -41,11 +41,11 @@ public sealed class NdiEngineConfig
     /// Preferred outbound format for incoming <see cref="VideoPixelFormat.Rgba32"/> frames.
     /// Auto keeps RGBA to avoid conversion.
     /// </summary>
-    public NdiVideoRgbaSendFormat RgbaSendFormat { get; init; } = NdiVideoRgbaSendFormat.Auto;
+    public NDIVideoRgbaSendFormat RgbaSendFormat { get; init; } = NDIVideoRgbaSendFormat.Auto;
 
-    public NdiEngineConfig CloneNormalized()
+    public NDIEngineConfig CloneNormalized()
     {
-        return new NdiEngineConfig
+        return new NDIEngineConfig
         {
             SenderName = string.IsNullOrWhiteSpace(SenderName) ? "MFPlayer" : SenderName,
             Groups = Groups,
@@ -60,7 +60,7 @@ public sealed class NdiEngineConfig
     }
 }
 
-public enum NdiVideoRgbaSendFormat
+public enum NDIVideoRgbaSendFormat
 {
     Auto = 0,
     Rgba = 1,

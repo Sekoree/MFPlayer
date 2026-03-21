@@ -7,18 +7,18 @@ namespace Seko.OwnAudioNET.Video.Engine;
 /// <summary>
 /// Fan-out <see cref="IAudioEngine"/> wrapper that sends the same mixed buffer to multiple engines.
 /// </summary>
-public sealed class MultiplexAudioEngine : IAudioEngine
+public sealed class BroadcastAudioEngine : IAudioEngine
 {
     private readonly IAudioEngine[] _engines;
     private readonly IAudioEngine _primary;
     private bool _disposed;
 
-    public MultiplexAudioEngine(IAudioEngine primary, params IAudioEngine[] additionalEngines)
+    public BroadcastAudioEngine(IAudioEngine primary, params IAudioEngine[] additionalEngines)
         : this(BuildEngineArray(primary, additionalEngines))
     {
     }
 
-    public MultiplexAudioEngine(params IAudioEngine[] engines)
+    public BroadcastAudioEngine(params IAudioEngine[] engines)
     {
         if (engines == null || engines.Length == 0)
             throw new ArgumentException("At least one audio engine is required.", nameof(engines));
@@ -241,7 +241,8 @@ public sealed class MultiplexAudioEngine : IAudioEngine
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(MultiplexAudioEngine));
+            throw new ObjectDisposedException(nameof(BroadcastAudioEngine));
     }
 }
+
 

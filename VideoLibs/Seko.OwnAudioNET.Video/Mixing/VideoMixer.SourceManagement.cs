@@ -12,7 +12,7 @@ public sealed partial class VideoMixer
         if (!_sources.TryAdd(source.Id, source))
             return false;
 
-        if (_engine.AddVideoSource(source))
+        if (_transport.AddVideoSource(source))
             return true;
 
         _sources.TryRemove(source.Id, out _);
@@ -27,10 +27,14 @@ public sealed partial class VideoMixer
         if (!_sources.TryRemove(source.Id, out var registeredSource))
             return false;
 
-        foreach (var output in GetOutputsForSourceInternal(registeredSource))
-            UnbindOutputInternal(output, raiseEvent: true);
+        var wasActive = false;
+        lock (_syncLock)
+            wasActive = _activeSourceId == registeredSource.Id;
 
-        _engine.RemoveVideoSource(registeredSource);
+        if (wasActive)
+            SetActiveSourceInternal(null, raiseEvent: true);
+
+        _transport.RemoveVideoSource(registeredSource);
         return true;
     }
 

@@ -3,7 +3,7 @@ using Seko.OwnAudioNET.Video.Clocks;
 
 namespace Seko.OwnAudioNET.Video.NDI;
 
-internal sealed class NdiTimelineClock
+internal sealed class NDITimelineClock
 {
     private const double HundredNanosecondsPerSecond = 10_000_000d;
 
@@ -15,7 +15,7 @@ internal sealed class NdiTimelineClock
     private long _audioFramesSent;
     private bool _audioTimelineActive;
 
-    public NdiTimelineClock(IExternalClock? externalClock)
+    public NDITimelineClock(IExternalClock? externalClock)
     {
         _externalClock = externalClock;
     }

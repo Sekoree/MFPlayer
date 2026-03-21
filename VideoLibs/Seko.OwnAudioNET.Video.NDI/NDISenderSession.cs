@@ -2,13 +2,13 @@ using NdiLib;
 
 namespace Seko.OwnAudioNET.Video.NDI;
 
-internal sealed class NdiSenderSession : IDisposable
+internal sealed class NDISenderSession : IDisposable
 {
     private readonly NdiSender _sender;
     private readonly Lock _sendLock = new();
     private bool _disposed;
 
-    public NdiSenderSession(NdiEngineConfig config)
+    public NDISenderSession(NDIEngineConfig config)
     {
         _sender = new NdiSender(config.SenderName, config.Groups, config.ClockVideo, config.ClockAudio);
     }

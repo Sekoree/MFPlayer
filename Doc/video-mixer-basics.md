@@ -6,8 +6,8 @@ Use `VideoMixer` when you only need video transport/routing and no audio-driven 
 
 - `FFVideoDecoder`: decodes compressed video stream.
 - `VideoStreamSource`: clock-aware video source and queueing.
-- `VideoTransportEngine`: shared timeline/transport for video sources.
-- `VideoMixer`: source registration and single primary output binding.
+- internal playback engine (managed by `VideoMixer`).
+- `VideoMixer`: source registration and active-source selection.
 - `IVideoOutput`: output sink (`VideoSDL`, `VideoGL`, etc.).
 
 ## Minimal pipeline
@@ -32,25 +32,27 @@ var decoderOptions = new FFVideoDecoderOptions
 using var decoder = new FFVideoDecoder(inputFile, decoderOptions);
 using var videoSource = new VideoStreamSource(decoder, ownsDecoder: false);
 
-var transportConfig = new VideoTransportEngineConfig
+var transportConfig = new VideoEngineConfig
 {
-    ClockSyncMode = VideoTransportClockSyncMode.VideoOnly,
-    PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+    ClockSyncMode = VideoClockSyncMode.VideoOnly,
+    PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
 }.CloneNormalized();
 
-using var engine = new VideoTransportEngine(transportConfig);
-using var videoMixer = new VideoMixer(engine, ownsEngine: false);
+using var renderEngine = new OpenGLVideoEngine();
+using var videoMixer = new VideoMixer(renderEngine, config: transportConfig);
 
 if (!videoMixer.AddSource(videoSource))
     throw new InvalidOperationException("Failed to add video source.");
 
-// Example output is app-specific. Replace with your real output.
 IVideoOutput output = CreateOutputSomehow();
-if (!videoMixer.AddOutput(output))
+if (!renderEngine.AddOutput(output))
     throw new InvalidOperationException("Failed to add video output.");
 
-if (!videoMixer.BindOutputToSource(output, videoSource))
-    throw new InvalidOperationException("Failed to bind output to source.");
+if (renderEngine is ISupportsOutputSwitching switching && !switching.SetVideoOutput(output))
+    throw new InvalidOperationException("Failed to select video output.");
+
+if (!videoMixer.SetActiveSource(videoSource))
+    throw new InvalidOperationException("Failed to set active source.");
 
 videoMixer.Start();
 
@@ -61,13 +63,12 @@ videoMixer.Seek(5.0);
 videoMixer.Start();
 
 // On shutdown
-videoMixer.RemoveOutput(output);
 videoMixer.RemoveSource(videoSource);
 ```
 
-`VideoMixer` currently accepts one primary output sink per mixer instance. For fan-out to multiple real outputs, use a downstream multiplexer.
+`VideoMixer` uses an attached render engine. For fan-out to multiple real outputs, attach a broadcast engine.
 
-## Multi-output fan-out with a multiplex engine
+## Multi-output fan-out with a broadcast engine
 
 ```csharp
 using Seko.OwnAudioNET.Video.Engine;
@@ -75,18 +76,14 @@ using Seko.OwnAudioNET.Video.Engine;
 var outputA = CreateOutputA();
 var outputB = CreateOutputB();
 
-var muxEngine = new MultiplexVideoOutputEngine();
-muxEngine.AddOutput(outputA);
-muxEngine.AddOutput(outputB);
+var renderEngine = new BroadcastVideoEngine();
+renderEngine.AddOutput(outputA);
+renderEngine.AddOutput(outputB);
 
-// Adapt engine fan-out to one mixer output sink.
-var muxSink = new VideoOutputEngineSink(muxEngine, ownsEngine: true);
+using var videoMixer = new VideoMixer(renderEngine, config: transportConfig);
 
-if (!videoMixer.AddOutput(muxSink))
-    throw new InvalidOperationException("Failed to add multiplex sink.");
-
-if (!videoMixer.BindOutputToSource(muxSink, videoSource))
-    throw new InvalidOperationException("Failed to bind source to multiplex sink.");
+if (!videoMixer.SetActiveSource(videoSource))
+    throw new InvalidOperationException("Failed to set active source.");
 ```
 
 ## Notes
@@ -120,7 +117,7 @@ if (!output.Initialize(1280, 720, "VideoOnly", out var glError))
 
 output.Start();
 
-using var engine = new VideoEngine();
+using var engine = new OpenGLVideoEngine();
 if (!engine.AddOutput(output))
     throw new InvalidOperationException("Failed to add output.");
 
@@ -161,7 +158,7 @@ var videoView = new VideoGL
 {
     KeepAspectRatio = true,
     EnableHudOverlay = true,
-    PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+    PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
 };
 
 // In Avalonia, place this control in your UI, for example:

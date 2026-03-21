@@ -11,7 +11,7 @@ namespace Seko.OwnAudioNET.Video.NDI;
 /// Audio source adapter that pulls from NDI frame-sync and exposes it to OwnAudio mixers.
 /// Capture runs on a background thread and feeds a ring buffer so mixer callbacks do not block on network timing.
 /// </summary>
-public sealed class NdiAudioStreamSource : BaseAudioSource, IMasterClockSource
+public sealed class NDIAudioStreamSource : BaseAudioSource, IMasterClockSource
 {
     private const int FloatBitDepth = 32;
     private const int StereoChannels = 2;
@@ -21,8 +21,8 @@ public sealed class NdiAudioStreamSource : BaseAudioSource, IMasterClockSource
     private readonly Lock? _frameSyncLock;
     private readonly AudioConfig _config;
     private readonly AudioStreamInfo _streamInfo;
-    private readonly INdiExternalTimelineClock _timelineClock;
-    private readonly NdiAudioStreamSourceOptions _options;
+    private readonly INDIExternalTimelineClock _timelineClock;
+    private readonly NDIAudioStreamSourceOptions _options;
 
     private readonly Lock _bufferLock = new();
     private readonly Thread _captureThread;
@@ -42,18 +42,18 @@ public sealed class NdiAudioStreamSource : BaseAudioSource, IMasterClockSource
     private long _readRequestCount;
     private long _capturedBlockCount;
 
-    public NdiAudioStreamSource(
+    public NDIAudioStreamSource(
         NdiFrameSync frameSync,
         AudioConfig config,
-        INdiExternalTimelineClock timelineClock,
+        INDIExternalTimelineClock timelineClock,
         Lock? frameSyncLock = null,
-        NdiAudioStreamSourceOptions? options = null)
+        NDIAudioStreamSourceOptions? options = null)
     {
         _frameSync = frameSync ?? throw new ArgumentNullException(nameof(frameSync));
         _frameSyncLock = frameSyncLock;
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _timelineClock = timelineClock ?? throw new ArgumentNullException(nameof(timelineClock));
-        _options = (options ?? new NdiAudioStreamSourceOptions()).CloneNormalized();
+        _options = (options ?? new NDIAudioStreamSourceOptions()).CloneNormalized();
         _streamInfo = new AudioStreamInfo(config.Channels, config.SampleRate, TimeSpan.Zero, bitDepth: FloatBitDepth);
 
         var ringCapacity = Math.Max(1, config.BufferSize * config.Channels * _options.RingCapacityMultiplier);
@@ -63,7 +63,7 @@ public sealed class NdiAudioStreamSource : BaseAudioSource, IMasterClockSource
         _captureThread = new Thread(CaptureLoop)
         {
             IsBackground = true,
-            Name = "NdiAudioStreamSource.Capture",
+            Name = "NDIAudioStreamSource.Capture",
             Priority = ThreadPriority.AboveNormal
         };
         _captureThread.Start();

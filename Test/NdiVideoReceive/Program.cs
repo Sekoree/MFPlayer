@@ -13,7 +13,7 @@ using Seko.OwnAudioNET.Video.Sources;
 if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h"))
 {
     Console.WriteLine("Usage:");
-    Console.WriteLine("  NdiVideoSend [discover-timeout-seconds] [stable|balanced|lowlatency]");
+    Console.WriteLine("  NdiVideoReceive [discover-timeout-seconds] [stable|balanced|lowlatency]");
     Console.WriteLine();
     Console.WriteLine("Receives first discovered NDI source and plays it through AudioVideoMixer + SDL3.");
     Console.WriteLine("Tuning profile defaults to 'balanced'.");
@@ -21,7 +21,7 @@ if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h"))
 }
 
 var discoverTimeoutSeconds = 10;
-var tuningProfile = NdiReceiveTuningProfile.Balanced;
+var tuningProfile = NDIReceiveTuningProfile.Balanced;
 var unknownArgs = new List<string>();
 foreach (var arg in args)
 {
@@ -31,7 +31,7 @@ foreach (var arg in args)
         continue;
     }
 
-    if (Enum.TryParse<NdiReceiveTuningProfile>(arg, ignoreCase: true, out var parsedProfile))
+    if (Enum.TryParse<NDIReceiveTuningProfile>(arg, ignoreCase: true, out var parsedProfile))
     {
         tuningProfile = parsedProfile;
         continue;
@@ -86,9 +86,9 @@ receiver.Connect(selected.Value);
 
 using var frameSync = new NdiFrameSync(receiver);
 var frameSyncLock = new Lock();
-var clockOptions = NdiReceiveTuningPresets.CreateClockOptions(tuningProfile);
-var audioSourceOptions = NdiReceiveTuningPresets.CreateAudioOptions(tuningProfile);
-var timelineClock = new NdiExternalTimelineClock(clockOptions);
+var clockOptions = NDIReceiveTuningPresets.CreateClockOptions(tuningProfile);
+var audioSourceOptions = NDIReceiveTuningPresets.CreateAudioOptions(tuningProfile);
+var timelineClock = new NDIExternalTimelineClock(clockOptions);
 Console.WriteLine($"NDI receive tuning profile: {tuningProfile}");
 
 var requestedAudioConfig = AudioConfig.Default;
@@ -148,15 +148,15 @@ audioConfig = new AudioConfig
 
 using var audioMixer = new AudioMixer(audioEngine, negotiatedBufferSize);
 
-var videoTransportConfig = new VideoTransportEngineConfig
+var videoTransportConfig = new VideoEngineConfig
 {
-    PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync,
-    ClockSyncMode = VideoTransportClockSyncMode.AudioLed
+    PresentationSyncMode = VideoPresentationSyncMode.PreferVSync,
+    ClockSyncMode = VideoClockSyncMode.AudioLed
 }.CloneNormalized();
 
 var videoClock = new MasterClockVideoClockAdapter(audioMixer.MasterClock);
-using var videoTransport = new VideoTransportEngine(videoClock, videoTransportConfig, ownsClock: false);
-using var videoMixer = new VideoMixer(videoTransport, ownsEngine: false);
+using var renderEngine = new OpenGLVideoEngine();
+using var videoMixer = new VideoMixer(renderEngine, videoClock, videoTransportConfig);
 using var playbackMixer = new AudioVideoMixer(
     audioMixer,
     videoMixer,
@@ -164,8 +164,8 @@ using var playbackMixer = new AudioVideoMixer(
     ownsAudioMixer: false,
     ownsVideoMixer: false);
 
-using var ndiAudioSource = new NdiAudioStreamSource(frameSync, audioConfig, timelineClock, frameSyncLock, audioSourceOptions);
-using var ndiVideoDecoder = new NdiVideoStreamDecoder(frameSync, timelineClock, frameSyncLock);
+using var ndiAudioSource = new NDIAudioStreamSource(frameSync, audioConfig, timelineClock, frameSyncLock, audioSourceOptions);
+using var ndiVideoDecoder = new NDIVideoStreamDecoder(frameSync, timelineClock, frameSyncLock);
 using var ndiVideoSource = new VideoStreamSource(
     ndiVideoDecoder,
     new VideoStreamSourceOptions
@@ -209,15 +209,21 @@ output.KeyDown += key =>
     }
 };
 
-if (!playbackMixer.AddVideoOutput(output))
+if (!renderEngine.AddOutput(output))
 {
-    Console.WriteLine("Failed to add SDL output to AudioVideoMixer.");
+    Console.WriteLine("Failed to add SDL output to render engine.");
     return;
 }
 
-if (!playbackMixer.BindVideoOutputToSource(output, ndiVideoSource))
+if (renderEngine is ISupportsOutputSwitching outputSwitching && !outputSwitching.SetVideoOutput(output))
 {
-    Console.WriteLine("Failed to bind SDL output to NDI video source.");
+    Console.WriteLine("Failed to select SDL output on render engine.");
+    return;
+}
+
+if (!playbackMixer.SetActiveVideoSource(ndiVideoSource))
+{
+    Console.WriteLine("Failed to set active NDI video source.");
     return;
 }
 

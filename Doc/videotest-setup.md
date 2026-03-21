@@ -6,18 +6,18 @@ Prerequisite: see `Doc/setup-prerequisites.md` first.
 
 ## What VideoTest does
 
-`VideoTest` is an Avalonia stress test that renders one mixer-bound video output mirrored to 4 UI views.
+`VideoTest` is an Avalonia stress test that renders one engine-selected video output mirrored to 4 UI views.
 
 Current setup in `Test/VideoTest/MainWindow.axaml.cs`:
 
 - Creates OwnAudio engine + `AudioMixer`
-- Builds audio-led video transport and wraps with `AudioVideoMixer`
+- Builds audio-led video mixer pipeline and wraps with `AudioVideoMixer`
 - Creates one `VideoStreamSource` and one `AudioStreamSource`
-- Binds one primary `VideoGL` output to the source
+- Selects one primary `VideoGL` output and active source
 - Creates 3 additional UI mirrors (`VideoGL.CreateMirror(primary)`)
 - Prints per-second diagnostics in title + console
 
-`VideoMixer` is now single-output by design; VideoTest intentionally binds one primary output and mirrors in UI.
+`VideoMixer` now uses active-source selection; VideoTest intentionally selects one primary output and mirrors in UI.
 
 ## Important input note
 
@@ -35,11 +35,11 @@ There is still a console message mentioning arg/env selection, but the current c
 4. Builds shared mixer stack:
    - `AudioMixer`
    - `MasterClockVideoClockAdapter`
-   - `VideoTransportEngine` (`ClockSyncMode = AudioLed`)
+   - `VideoMixer` with `ClockSyncMode = AudioLed`
    - `VideoMixer`
    - `AudioVideoMixer` with `AudioVideoDriftCorrectionConfig`
 5. Adds audio/video sources and starts mixer
-6. Routes one primary `VideoGL` output through mixer, mirrors to 4 controls
+6. Selects one primary `VideoGL` output on render engine, mirrors to 4 controls
 
 ## Shared demux behavior
 

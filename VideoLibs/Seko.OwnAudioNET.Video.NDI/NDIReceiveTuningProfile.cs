@@ -3,7 +3,7 @@ namespace Seko.OwnAudioNET.Video.NDI;
 /// <summary>
 /// Preset trade-offs for live NDI receive playback.
 /// </summary>
-public enum NdiReceiveTuningProfile
+public enum NDIReceiveTuningProfile
 {
     /// <summary>Prioritizes smooth playback and jitter tolerance over lowest latency.</summary>
     Stable = 0,
@@ -15,13 +15,13 @@ public enum NdiReceiveTuningProfile
     LowLatency = 2
 }
 
-public static class NdiReceiveTuningPresets
+public static class NDIReceiveTuningPresets
 {
-    public static NdiAudioStreamSourceOptions CreateAudioOptions(NdiReceiveTuningProfile profile)
+    public static NDIAudioStreamSourceOptions CreateAudioOptions(NDIReceiveTuningProfile profile)
     {
         return profile switch
         {
-            NdiReceiveTuningProfile.Stable => new NdiAudioStreamSourceOptions
+            NDIReceiveTuningProfile.Stable => new NDIAudioStreamSourceOptions
             {
                 RingCapacityMultiplier = 12,
                 CaptureHighWatermarkRatio = 0.60,
@@ -29,7 +29,7 @@ public static class NdiReceiveTuningPresets
                 MinimumCaptureFrames = 96,
                 CaptureFrameTargetDivisor = 2
             },
-            NdiReceiveTuningProfile.LowLatency => new NdiAudioStreamSourceOptions
+            NDIReceiveTuningProfile.LowLatency => new NDIAudioStreamSourceOptions
             {
                 RingCapacityMultiplier = 6,
                 CaptureHighWatermarkRatio = 0.30,
@@ -37,7 +37,7 @@ public static class NdiReceiveTuningPresets
                 MinimumCaptureFrames = 48,
                 CaptureFrameTargetDivisor = 2
             },
-            _ => new NdiAudioStreamSourceOptions
+            _ => new NDIAudioStreamSourceOptions
             {
                 RingCapacityMultiplier = 8,
                 CaptureHighWatermarkRatio = 0.40,
@@ -48,27 +48,33 @@ public static class NdiReceiveTuningPresets
         };
     }
 
-    public static NdiExternalTimelineClockOptions CreateClockOptions(NdiReceiveTuningProfile profile)
+    public static NDIExternalTimelineClockOptions CreateClockOptions(NDIReceiveTuningProfile profile)
     {
         return profile switch
         {
-            NdiReceiveTuningProfile.Stable => new NdiExternalTimelineClockOptions
+            NDIReceiveTuningProfile.Stable => new NDIExternalTimelineClockOptions
             {
                 DefaultFrameDurationSeconds = 1.0 / 30.0,
                 PipelineLatencySmoothingFactor = 0.06,
-                MinVideoAdvanceFrameRatio = 0.20
+                MinVideoAdvanceFrameRatio = 0.20,
+                MaxLatencyCompensationSeconds = 0.40,
+                MaxTimestampJumpSeconds = 0.80
             },
-            NdiReceiveTuningProfile.LowLatency => new NdiExternalTimelineClockOptions
+            NDIReceiveTuningProfile.LowLatency => new NDIExternalTimelineClockOptions
             {
                 DefaultFrameDurationSeconds = 1.0 / 30.0,
                 PipelineLatencySmoothingFactor = 0.20,
-                MinVideoAdvanceFrameRatio = 0.30
+                MinVideoAdvanceFrameRatio = 0.30,
+                MaxLatencyCompensationSeconds = 0.12,
+                MaxTimestampJumpSeconds = 0.30
             },
-            _ => new NdiExternalTimelineClockOptions
+            _ => new NDIExternalTimelineClockOptions
             {
                 DefaultFrameDurationSeconds = 1.0 / 30.0,
                 PipelineLatencySmoothingFactor = 0.10,
-                MinVideoAdvanceFrameRatio = 0.25
+                MinVideoAdvanceFrameRatio = 0.25,
+                MaxLatencyCompensationSeconds = 0.25,
+                MaxTimestampJumpSeconds = 0.50
             }
         };
     }

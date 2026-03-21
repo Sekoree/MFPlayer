@@ -5,13 +5,13 @@ using Seko.OwnAudioNET.Video.Sources;
 namespace Seko.OwnAudioNET.Video.Engine;
 
 /// <summary>
-/// Standalone transport engine for one or more <see cref="IVideoSource"/> instances.
+/// Standalone playback engine for one or more <see cref="IVideoSource"/> instances.
 /// Owns playback clock publication, source attachment, and timeline operations without requiring an audio engine.
 /// </summary>
-public interface IVideoTransportEngine : IDisposable
+internal interface IVideoPlaybackEngine : IDisposable
 {
     /// <summary>Playback configuration used by the engine.</summary>
-    VideoTransportEngineConfig Config { get; }
+    VideoEngineConfig Config { get; }
 
     /// <summary>Clock published to attached video sources.</summary>
     IVideoClock Clock { get; }
@@ -77,5 +77,6 @@ public interface IVideoTransportEngine : IDisposable
     /// </summary>
     void Seek(double positionInSeconds, bool safeSeek);
 }
+
 
 

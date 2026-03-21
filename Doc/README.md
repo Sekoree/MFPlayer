@@ -5,19 +5,19 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 ## Recent Changes
 
 - mixer API cleanup:
-  - removed legacy `VideoOutputCount`-style accessors from mixer interfaces.
-  - use `GetVideoOutputs().Length` when a count is needed.
-- single-output mixer model:
-  - `VideoMixer` now enforces one primary output sink per mixer instance.
-  - fan-out is handled downstream via multiplexers.
+  - removed legacy output-binding methods from mixer interfaces.
+  - use `SetActiveSource(...)` / `SetActiveVideoSource(...)` to select rendered video source.
+- engine-first model:
+  - `VideoMixer` now owns playback internals and uses a render `IVideoEngine`.
+  - fan-out is handled by `BroadcastVideoEngine` as the attached render engine.
 - multiplexing support:
-  - added `MultiplexAudioEngine` for one-to-many audio engine send.
-  - added `MultiplexVideoOutputEngine` + `VideoOutputEngineSink` for one-to-many video output routing.
+  - added `BroadcastAudioEngine` for one-to-many audio engine send.
+  - added `BroadcastVideoEngine` for one-to-many video output routing.
 - NDI receive stack:
-  - added `NdiAudioStreamSource`, `NdiVideoStreamDecoder`, and `NdiExternalTimelineClock`.
-  - added receive tuning presets via `NdiReceiveTuningProfile`.
+  - added `NDIAudioStreamSource`, `NDIVideoStreamDecoder`, and `NDIExternalTimelineClock`.
+  - added receive tuning presets via `NDIReceiveTuningProfile`.
 - NDI send stack docs:
-  - documented `NdiOutputEngine` usage for direct send, engine routing, and mixer sink routing.
+  - documented `NDIVideoEngine` usage for direct send, engine routing, and mixer sink routing.
 - source API cleanup:
   - removed obsolete convenience constructors from `AudioStreamSource` and `VideoStreamSource`.
   - decoder-first construction is now the canonical path.
@@ -39,9 +39,9 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 - [`multiplexers.md`](multiplexers.md)
   - How to fan out one audio/video stream to multiple engines/outputs, including local+NDI recipes.
 - [`ndi-receive.md`](ndi-receive.md)
-  - NDI receive pipeline (`NdiAudioStreamSource`, `NdiVideoStreamDecoder`, external timeline clock, tuning profiles).
+  - NDI receive pipeline (`NDIAudioStreamSource`, `NDIVideoStreamDecoder`, external timeline clock, tuning profiles).
 - [`ndi-send.md`](ndi-send.md)
-  - NDI send pipeline (`NdiOutputEngine`, sink routing, direct audio/video send APIs).
+  - NDI send pipeline (`NDIVideoEngine`, sink routing, direct audio/video send APIs).
 
 ## Recommended read order
 
@@ -59,7 +59,7 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 
 - `Test/AudioEx/Program.cs`
 - `Test/VideoTest/MainWindow.axaml.cs`
-- `Test/NdiVideoSend/Program.cs`
+- `Test/NdiVideoReceive/Program.cs`
 
 ## Diagnostics Counter Legend
 

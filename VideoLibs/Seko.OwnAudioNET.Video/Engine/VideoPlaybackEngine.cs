@@ -11,7 +11,7 @@ namespace Seko.OwnAudioNET.Video.Engine;
 /// Source-driven transport engine backed by a shared <see cref="IVideoClock"/>.
 /// It advances attached video sources on a dedicated timing thread so video-only playback works without an audio engine.
 /// </summary>
-public class VideoTransportEngine : IVideoTransportEngine
+internal sealed class VideoPlaybackEngine : IVideoPlaybackEngine
 {
     private enum ClockDriveMode
     {
@@ -42,14 +42,14 @@ public class VideoTransportEngine : IVideoTransportEngine
     private double _transportBaseTimestampSeconds;
     private long _transportBaseTicks;
 
-    public VideoTransportEngine(VideoTransportEngineConfig? config = null)
+    public VideoPlaybackEngine(VideoEngineConfig? config = null)
         : this(videoClock: null, config: config, ownsClock: true)
     {
     }
 
-    public VideoTransportEngine(IVideoClock? videoClock, VideoTransportEngineConfig? config = null, bool ownsClock = false)
+    public VideoPlaybackEngine(IVideoClock? videoClock, VideoEngineConfig? config = null, bool ownsClock = false)
     {
-        Config = (config ?? new VideoTransportEngineConfig()).CloneNormalized();
+        Config = (config ?? new VideoEngineConfig()).CloneNormalized();
         var hasExternalClock = videoClock != null;
 
         if (videoClock == null)
@@ -81,7 +81,7 @@ public class VideoTransportEngine : IVideoTransportEngine
 
         _clockThread = new Thread(ClockThreadLoop)
         {
-            Name = "VideoTransportEngine.ClockThread",
+            Name = "VideoPlaybackEngine.ClockThread",
             IsBackground = true,
             Priority = ThreadPriority.AboveNormal
         };
@@ -89,14 +89,14 @@ public class VideoTransportEngine : IVideoTransportEngine
 
     public Guid EngineId => _engineId;
 
-    public VideoTransportEngineConfig Config { get; }
+    public VideoEngineConfig Config { get; }
 
     public IVideoClock Clock => _clock;
 
     /// <summary>
     /// Effective clock sync mode after resolving external-clock availability.
     /// </summary>
-    public VideoTransportClockSyncMode EffectiveClockSyncMode { get; }
+    public VideoClockSyncMode EffectiveClockSyncMode { get; }
 
     public double Position => _clock.CurrentTimestamp;
 
@@ -341,7 +341,7 @@ public class VideoTransportEngine : IVideoTransportEngine
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(VideoTransportEngine));
+            throw new ObjectDisposedException(nameof(VideoPlaybackEngine));
     }
 
     private void OnVideoSourceError(object? sender, VideoErrorEventArgs e)
@@ -549,22 +549,25 @@ public class VideoTransportEngine : IVideoTransportEngine
         return Math.Max(0, positionInSeconds);
     }
 
-    private static VideoTransportClockSyncMode ResolveEffectiveClockSyncMode(VideoTransportClockSyncMode configuredMode, bool hasExternalClock)
+    private static VideoClockSyncMode ResolveEffectiveClockSyncMode(VideoClockSyncMode configuredMode, bool hasExternalClock)
     {
         if (!hasExternalClock)
-            return VideoTransportClockSyncMode.VideoOnly;
+            return VideoClockSyncMode.VideoOnly;
 
-        return configuredMode == VideoTransportClockSyncMode.VideoOnly
-            ? VideoTransportClockSyncMode.VideoOnly
-            : VideoTransportClockSyncMode.AudioLed;
+        return configuredMode == VideoClockSyncMode.VideoOnly
+            ? VideoClockSyncMode.VideoOnly
+            : VideoClockSyncMode.AudioLed;
     }
 
-    private static ClockDriveMode ResolveClockDriveMode(VideoTransportClockSyncMode mode)
+    private static ClockDriveMode ResolveClockDriveMode(VideoClockSyncMode mode)
     {
-        return mode == VideoTransportClockSyncMode.VideoOnly
+        return mode == VideoClockSyncMode.VideoOnly
             ? ClockDriveMode.InternalRealtime
             : ClockDriveMode.ExternalClock;
     }
 }
+
+
+
 
 

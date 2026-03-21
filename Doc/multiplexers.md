@@ -2,16 +2,16 @@
 
 This guide explains how to fan out one mixed/rendered stream to multiple destinations.
 
-## Why multiplexers exist
+## Why broadcast engines exist
 
 - `AudioMixer` targets one `IAudioEngine` instance.
-- `VideoMixer` targets one primary `IVideoOutput` sink.
+- `VideoMixer` targets one attached render engine.
 
-When you need one-to-many delivery, use the multiplexer wrappers in `Seko.OwnAudioNET.Video.Engine`.
+When you need one-to-many delivery, use the broadcast wrappers in `Seko.OwnAudioNET.Video.Engine`.
 
-## Audio fan-out: `MultiplexAudioEngine`
+## Audio fan-out: `BroadcastAudioEngine`
 
-`MultiplexAudioEngine` implements `IAudioEngine` and forwards `Send(...)` to multiple engines.
+`BroadcastAudioEngine` implements `IAudioEngine` and forwards `Send(...)` to multiple engines.
 
 ```csharp
 using Ownaudio.Core;
@@ -26,7 +26,7 @@ var config = AudioConfig.Default;
 engineA.Initialize(config);
 engineB.Initialize(config);
 
-using var muxAudioEngine = new MultiplexAudioEngine(engineA, engineB);
+using var muxAudioEngine = new BroadcastAudioEngine(engineA, engineB);
 muxAudioEngine.Start();
 
 using var mixer = new AudioMixer(muxAudioEngine, config.BufferSize);
@@ -38,11 +38,9 @@ Notes:
 - All child engines should use matching sample rate/channels/buffer settings.
 - Device-control methods are forwarded to all engines where appropriate.
 
-## Video fan-out: `MultiplexVideoOutputEngine`
+## Video fan-out: `BroadcastVideoEngine`
 
-`MultiplexVideoOutputEngine` fans out pushed frames to many outputs and/or child output engines.
-
-Because `VideoMixer` expects one `IVideoOutput`, use `VideoOutputEngineSink` as adapter.
+`BroadcastVideoEngine` fans out pushed frames to many outputs and/or child video engines.
 
 ```csharp
 using Seko.OwnAudioNET.Video.Engine;
@@ -51,24 +49,19 @@ using Seko.OwnAudioNET.Video.Mixing;
 var outputA = CreateOutputA();
 var outputB = CreateOutputB();
 
-var muxVideoEngine = new MultiplexVideoOutputEngine();
+var muxVideoEngine = new BroadcastVideoEngine();
 muxVideoEngine.AddOutput(outputA);
 muxVideoEngine.AddOutput(outputB);
 
-using var muxSink = new VideoOutputEngineSink(muxVideoEngine, ownsEngine: true);
-
-// videoMixer is your regular VideoMixer instance.
-if (!videoMixer.AddOutput(muxSink))
-    throw new InvalidOperationException("Failed to add multiplex video sink.");
-
-if (!videoMixer.BindOutputToSource(muxSink, videoSource))
-    throw new InvalidOperationException("Failed to bind source to multiplex sink.");
+using var videoMixer = new VideoMixer(muxVideoEngine, config: transportConfig);
+if (!videoMixer.SetActiveSource(videoSource))
+    throw new InvalidOperationException("Failed to set active source.");
 ```
 
 ## With `AudioVideoMixer`
 
-- Audio: create `AudioMixer` with `MultiplexAudioEngine`.
-- Video: keep one mixer output (`VideoOutputEngineSink`) wrapping `MultiplexVideoOutputEngine`.
+- Audio: create `AudioMixer` with `BroadcastAudioEngine`.
+- Video: attach one `BroadcastVideoEngine` to `VideoMixer`.
 - Then build `AudioVideoMixer` normally.
 
 ## Recipe 1: one source -> two local outputs
@@ -87,17 +80,14 @@ using Seko.OwnAudioNET.Video.Sources;
 var outputA = CreateOutputA();
 var outputB = CreateOutputB();
 
-var muxVideoEngine = new MultiplexVideoOutputEngine();
+var muxVideoEngine = new BroadcastVideoEngine();
 muxVideoEngine.AddOutput(outputA);
 muxVideoEngine.AddOutput(outputB);
 
-using var muxSink = new VideoOutputEngineSink(muxVideoEngine, ownsEngine: true);
+using var videoMixer = new VideoMixer(muxVideoEngine, config: transportConfig);
 
-if (!videoMixer.AddOutput(muxSink))
-    throw new InvalidOperationException("Failed to add multiplex sink to VideoMixer.");
-
-if (!videoMixer.BindOutputToSource(muxSink, videoSource))
-    throw new InvalidOperationException("Failed to bind video source to multiplex sink.");
+if (!videoMixer.SetActiveSource(videoSource))
+    throw new InvalidOperationException("Failed to set active source.");
 
 videoMixer.Start();
 ```
@@ -118,7 +108,7 @@ using Seko.OwnAudioNET.Video.Sources;
 
 var localPreview = CreateLocalPreviewOutput(); // e.g. VideoSDL or VideoGL
 
-using var ndi = new NdiOutputEngine(new NdiEngineConfig
+using var ndi = new NDIVideoEngine(new NDIEngineConfig
 {
     SenderName = "MFPlayer Multiplex",
     AudioSampleRate = 48000,
@@ -126,26 +116,22 @@ using var ndi = new NdiOutputEngine(new NdiEngineConfig
 });
 ndi.Start();
 
-var muxVideoEngine = new MultiplexVideoOutputEngine();
+var muxVideoEngine = new BroadcastVideoEngine();
 muxVideoEngine.AddOutput(localPreview);
 muxVideoEngine.AddOutput(ndi.VideoOutput);
 
-using var muxSink = new VideoOutputEngineSink(muxVideoEngine, ownsEngine: true);
+using var videoMixer = new VideoMixer(muxVideoEngine, config: transportConfig);
 
-if (!videoMixer.AddOutput(muxSink))
-    throw new InvalidOperationException("Failed to add multiplex sink to VideoMixer.");
-
-if (!videoMixer.BindOutputToSource(muxSink, videoSource))
-    throw new InvalidOperationException("Failed to bind video source to multiplex sink.");
+if (!videoMixer.SetActiveSource(videoSource))
+    throw new InvalidOperationException("Failed to set active source.");
 
 videoMixer.Start();
 ```
 
-If audio is part of the same pipeline, combine this with `MultiplexAudioEngine` so one `AudioMixer` can also fan out to multiple audio engines.
+If audio is part of the same pipeline, combine this with `BroadcastAudioEngine` so one `AudioMixer` can also fan out to multiple audio engines.
 
 ## Related files
 
-- `VideoLibs/Seko.OwnAudioNET.Video.Engine/MultiplexAudioEngine.cs`
-- `VideoLibs/Seko.OwnAudioNET.Video.Engine/MultiplexVideoOutputEngine.cs`
-- `VideoLibs/Seko.OwnAudioNET.Video.Engine/VideoOutputEngineSink.cs`
+- `VideoLibs/Seko.OwnAudioNET.Video.Engine/BroadcastAudioEngine.cs`
+- `VideoLibs/Seko.OwnAudioNET.Video.Engine/BroadcastVideoEngine.cs`
 

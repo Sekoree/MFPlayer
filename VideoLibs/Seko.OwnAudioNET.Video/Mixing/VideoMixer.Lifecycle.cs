@@ -5,31 +5,31 @@ public sealed partial class VideoMixer
     public void Start()
     {
         ThrowIfDisposed();
-        _engine.Start();
+        _transport.Start();
     }
 
     public void Pause()
     {
         ThrowIfDisposed();
-        _engine.Pause();
+        _transport.Pause();
     }
 
     public void Stop()
     {
         ThrowIfDisposed();
-        _engine.Stop();
+        _transport.Stop();
     }
 
     public void Seek(double positionInSeconds)
     {
         ThrowIfDisposed();
-        _engine.Seek(positionInSeconds);
+        _transport.Seek(positionInSeconds);
     }
 
     public void Seek(double positionInSeconds, bool safeSeek)
     {
         ThrowIfDisposed();
-        _engine.Seek(positionInSeconds, safeSeek);
+        _transport.Seek(positionInSeconds, safeSeek);
     }
 
     public void Dispose()
@@ -37,18 +37,16 @@ public sealed partial class VideoMixer
         if (_disposed)
             return;
 
-        _engine.SourceError -= OnEngineSourceError;
+        _transport.SourceError -= OnEngineSourceError;
 
         try
         {
-            ClearOutputs();
+            SetActiveSourceInternal(null, raiseEvent: false);
             ClearSources();
         }
         finally
         {
-            if (_ownsEngine)
-                _engine.Dispose();
-
+            _transport.Dispose();
 
             _disposed = true;
         }

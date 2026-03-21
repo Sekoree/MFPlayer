@@ -15,7 +15,7 @@ This page explains how the video classes fit into the existing OwnAudio architec
 - `VideoStreamSource`
   - video-side clock-aware source backed by FFmpeg decode queue.
 - `VideoMixer`
-  - registers video sources and one primary output sink, and controls shared video transport.
+  - registers video sources, selects one active source, and controls shared video playback timing.
 - `AudioVideoMixer`
   - combines `AudioMixer` and `VideoMixer` into one A/V-facing API.
 
@@ -23,36 +23,34 @@ This page explains how the video classes fit into the existing OwnAudio architec
 
 1. Create/start OwnAudio engine.
 2. Create `AudioMixer`.
-3. Create `VideoTransportEngine` using `MasterClockVideoClockAdapter(audioMixer.MasterClock)`.
-4. Configure `ClockSyncMode = AudioLed`.
-5. Create `VideoMixer` around that transport.
+3. Configure `VideoEngineConfig` with `ClockSyncMode = AudioLed`.
+4. Create a render engine (for example `OpenGLVideoEngine`).
+5. Create `VideoMixer` with render engine + optional audio clock adapter.
 6. Create `AudioVideoMixer` to manage both sides together.
 7. Add `AudioStreamSource` and `VideoStreamSource`, then call `Start()`.
 
-For output fan-out, keep one mixer output and multiplex downstream.
+For output fan-out, attach a `BroadcastVideoEngine` as the mixer render engine.
 
 ## Minimal integration skeleton
 
 ```csharp
 var audioMixer = new AudioMixer(audioEngine, bufferSize);
 var videoClock = new MasterClockVideoClockAdapter(audioMixer.MasterClock);
-var videoTransport = new VideoTransportEngine(videoClock, new VideoTransportEngineConfig
+var renderEngine = new OpenGLVideoEngine();
+var videoMixer = new VideoMixer(renderEngine, videoClock, new VideoEngineConfig
 {
-    ClockSyncMode = VideoTransportClockSyncMode.AudioLed
-}, ownsClock: false);
-var videoMixer = new VideoMixer(videoTransport, ownsEngine: true);
+    ClockSyncMode = VideoClockSyncMode.AudioLed
+});
 
 var avMixer = new AudioVideoMixer(audioMixer, videoMixer);
 ```
 
 ## Fan-out wrappers (audio/video)
 
-- `MultiplexAudioEngine`
+- `BroadcastAudioEngine`
   - wraps multiple `IAudioEngine` instances so one `AudioMixer` send path can target many engines.
-- `MultiplexVideoOutputEngine`
+- `BroadcastVideoEngine`
   - fans out frames to multiple video outputs and/or child video output engines.
-- `VideoOutputEngineSink`
-  - adapts `IVideoOutputEngine` to `IVideoOutput`, so a multiplex video engine can sit behind one `VideoMixer` output.
 
 For end-to-end fan-out wiring examples, see `Doc/multiplexers.md`.
 
@@ -76,16 +74,17 @@ if (!sdlOutput.Initialize(1280, 720, "MFPlayer", out var glError))
 
 sdlOutput.Start();
 
-if (!avMixer.AddVideoOutput(sdlOutput))
+if (!renderEngine.AddOutput(sdlOutput))
     throw new InvalidOperationException("Failed to add SDL output.");
-if (!avMixer.BindVideoOutputToSource(sdlOutput, videoSource))
-    throw new InvalidOperationException("Failed to bind SDL output to video source.");
+if (renderEngine is ISupportsOutputSwitching switching && !switching.SetVideoOutput(sdlOutput))
+    throw new InvalidOperationException("Failed to select SDL output.");
+if (!avMixer.SetActiveVideoSource(videoSource))
+    throw new InvalidOperationException("Failed to set active video source.");
 
 avMixer.Start();
 
 // ... run app loop ...
 
-avMixer.RemoveVideoOutput(sdlOutput);
 sdlOutput.Stop();
 sdlOutput.Dispose();
 ```
@@ -98,13 +97,15 @@ using Seko.OwnAudioNET.Video.Avalonia;
 var primaryView = new VideoGL
 {
     KeepAspectRatio = true,
-    PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+    PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
 };
 
-if (!avMixer.AddVideoOutput(primaryView))
+if (!renderEngine.AddOutput(primaryView))
     throw new InvalidOperationException("Failed to add primary VideoGL output.");
-if (!avMixer.BindVideoOutputToSource(primaryView, videoSource))
-    throw new InvalidOperationException("Failed to bind primary VideoGL output.");
+if (renderEngine is ISupportsOutputSwitching switching && !switching.SetVideoOutput(primaryView))
+    throw new InvalidOperationException("Failed to select primary VideoGL output.");
+if (!avMixer.SetActiveVideoSource(videoSource))
+    throw new InvalidOperationException("Failed to set active video source.");
 
 // Optional UI mirrors (same rendered frame fan-out, no extra mixer outputs needed).
 var mirror1 = VideoGL.CreateMirror(primaryView);
@@ -122,7 +123,7 @@ avMixer.Start();
 
 If you do not want audio playback, you can run video-only in two common ways.
 
-### 1) Direct decode loop: `FFVideoDecoder` -> `VideoEngine`
+### 1) Direct decode loop: `FFVideoDecoder` -> `OpenGLVideoEngine`
 
 Use this for the most minimal push model (no transport/mixer timeline).
 
@@ -142,7 +143,7 @@ if (!output.Initialize(1280, 720, "VideoOnly", out var glError))
 
 output.Start();
 
-using var engine = new VideoEngine();
+using var engine = new OpenGLVideoEngine();
 if (!engine.AddOutput(output))
     throw new InvalidOperationException("Failed to add output.");
 
@@ -179,14 +180,14 @@ using Seko.OwnAudioNET.Video.Sources;
 using var decoder = new FFVideoDecoder("/path/to/video.mov", new FFVideoDecoderOptions());
 using var source = new VideoStreamSource(decoder, ownsDecoder: false);
 
-var config = new VideoTransportEngineConfig
+var config = new VideoEngineConfig
 {
-    ClockSyncMode = VideoTransportClockSyncMode.VideoOnly,
-    PresentationSyncMode = VideoTransportPresentationSyncMode.PreferVSync
+    ClockSyncMode = VideoClockSyncMode.VideoOnly,
+    PresentationSyncMode = VideoPresentationSyncMode.PreferVSync
 }.CloneNormalized();
 
-using var transport = new VideoTransportEngine(config);
-using var mixer = new VideoMixer(transport, ownsEngine: false);
+using var render = new OpenGLVideoEngine();
+using var mixer = new VideoMixer(render, config: config);
 using var output = new VideoSDL { KeepAspectRatio = true, EnableHudOverlay = false };
 
 if (!output.Initialize(1280, 720, "VideoOnly", out var glError))
@@ -194,7 +195,13 @@ if (!output.Initialize(1280, 720, "VideoOnly", out var glError))
 
 output.Start();
 
-if (!mixer.AddSource(source) || !mixer.AddOutput(output) || !mixer.BindOutputToSource(output, source))
+if (!mixer.AddSource(source))
+    throw new InvalidOperationException("Failed to add source.");
+if (!render.AddOutput(output))
+    throw new InvalidOperationException("Failed to add output.");
+if (render is ISupportsOutputSwitching switching && !switching.SetVideoOutput(output))
+    throw new InvalidOperationException("Failed to select output.");
+if (!mixer.SetActiveSource(source))
     throw new InvalidOperationException("Failed to wire video-only mixer pipeline.");
 
 mixer.Start();
@@ -225,7 +232,7 @@ For a longer walkthrough of this second approach, see `Doc/video-mixer-basics.md
 - Combined in `AudioVideoMixer`:
   - `AudioSourceError`
   - `VideoSourceError`
-  - `VideoOutputSourceChanged`
+  - `ActiveVideoSourceChanged`
 
 ## Reference implementations in this workspace
 

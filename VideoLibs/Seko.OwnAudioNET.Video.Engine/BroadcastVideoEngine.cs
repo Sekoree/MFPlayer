@@ -1,20 +1,21 @@
 using System.Collections.Concurrent;
+using Seko.OwnAudioNET.Video.Events;
 
 namespace Seko.OwnAudioNET.Video.Engine;
 
 /// <summary>
 /// Fan-out output engine that forwards pushed frames to multiple child engines and direct outputs.
 /// </summary>
-public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
+public sealed class BroadcastVideoEngine : IVideoEngine, ISupportsOutputSwitching
 {
     private readonly ConcurrentDictionary<Guid, IVideoOutput> _outputs = new();
-    private readonly ConcurrentDictionary<Guid, IVideoOutputEngine> _engines = new();
+    private readonly ConcurrentDictionary<Guid, IVideoEngine> _engines = new();
     private readonly Lock _syncLock = new();
 
     private Guid? _currentOutputId;
     private bool _disposed;
 
-    public MultiplexVideoOutputEngine(VideoEngineConfig? config = null)
+    public BroadcastVideoEngine(VideoEngineConfig? config = null)
     {
         Config = (config ?? new VideoEngineConfig()).CloneNormalized();
     }
@@ -32,7 +33,11 @@ public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
             ? output
             : null;
 
-    public bool AddEngine(IVideoOutputEngine engine)
+    public event EventHandler<VideoErrorEventArgs>? Error;
+
+    public event EventHandler<VideoOutputChangedEventArgs>? VideoOutputChanged;
+
+    public bool AddEngine(IVideoEngine engine)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(engine);
@@ -40,7 +45,7 @@ public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
         return _engines.TryAdd(Guid.NewGuid(), engine);
     }
 
-    public bool RemoveEngine(IVideoOutputEngine engine)
+    public bool RemoveEngine(IVideoEngine engine)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(engine);
@@ -56,7 +61,7 @@ public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
         return false;
     }
 
-    public IVideoOutputEngine[] GetEngines()
+    public IVideoEngine[] GetEngines()
     {
         ThrowIfDisposed();
         return _engines.Values.ToArray();
@@ -120,31 +125,45 @@ public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
             _currentOutputId = null;
     }
 
-    public bool SetCurrentOutput(IVideoOutput output)
+    public bool SetVideoOutput(IVideoOutput output, VideoOutputSwitchMode mode = VideoOutputSwitchMode.PauseAndSwitch)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(output);
-        return SetCurrentOutput(output.Id);
+        return SetVideoOutput(output.Id, mode);
     }
 
-    public bool SetCurrentOutput(Guid outputId)
+    public bool SetVideoOutput(Guid outputId, VideoOutputSwitchMode mode = VideoOutputSwitchMode.PauseAndSwitch)
     {
         ThrowIfDisposed();
 
         if (!_outputs.ContainsKey(outputId))
             return false;
 
+        IVideoOutput? oldOutput;
         lock (_syncLock)
+        {
+            oldOutput = CurrentOutput;
             _currentOutputId = outputId;
+        }
+
+        VideoOutputChanged?.Invoke(this, new VideoOutputChangedEventArgs(oldOutput, CurrentOutput));
 
         return true;
     }
 
-    public void ClearCurrentOutput()
+    public bool ClearVideoOutput(VideoOutputSwitchMode mode = VideoOutputSwitchMode.PauseAndSwitch)
     {
         ThrowIfDisposed();
+
+        IVideoOutput? oldOutput;
         lock (_syncLock)
+        {
+            oldOutput = CurrentOutput;
             _currentOutputId = null;
+        }
+
+        VideoOutputChanged?.Invoke(this, new VideoOutputChangedEventArgs(oldOutput, null));
+        return true;
     }
 
     public bool PushFrame(VideoFrame frame, double masterTimestamp)
@@ -158,11 +177,13 @@ public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
         {
             try
             {
-                delivered |= engine.PushFrame(frame, masterTimestamp);
+                using var perTargetFrame = frame.AddRef();
+                delivered |= engine.PushFrame(perTargetFrame, masterTimestamp);
             }
             catch
             {
                 // Best effort fan-out.
+                Error?.Invoke(this, new VideoErrorEventArgs("Broadcast engine failed to push frame to a child engine."));
             }
         }
 
@@ -170,11 +191,13 @@ public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
         {
             try
             {
-                delivered |= output.PushFrame(frame, masterTimestamp);
+                using var perTargetFrame = frame.AddRef();
+                delivered |= output.PushFrame(perTargetFrame, masterTimestamp);
             }
             catch
             {
                 // Best effort fan-out.
+                Error?.Invoke(this, new VideoErrorEventArgs("Broadcast engine failed to push frame to an output."));
             }
         }
 
@@ -194,7 +217,8 @@ public sealed class MultiplexVideoOutputEngine : IVideoOutputEngine
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(MultiplexVideoOutputEngine));
+            throw new ObjectDisposedException(nameof(BroadcastVideoEngine));
     }
 }
+
 

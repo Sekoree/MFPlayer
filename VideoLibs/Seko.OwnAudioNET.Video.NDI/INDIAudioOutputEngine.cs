@@ -4,7 +4,7 @@ namespace Seko.OwnAudioNET.Video.NDI;
 /// Audio send path for outbound NDI.
 /// Similar in spirit to OwnAudio engine send APIs, with a span-based fast path.
 /// </summary>
-public interface INdiAudioOutputEngine : IDisposable
+public interface INDIAudioOutputEngine : IDisposable
 {
     int SampleRate { get; }
 

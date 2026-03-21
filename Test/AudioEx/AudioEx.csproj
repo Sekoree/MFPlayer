@@ -19,6 +19,7 @@
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.NDI\Seko.OwnAudioNET.Video.NDI.csproj" />
       <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.SDL3\Seko.OwnAudioNET.Video.SDL3.csproj" />
       <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj" />
     </ItemGroup>

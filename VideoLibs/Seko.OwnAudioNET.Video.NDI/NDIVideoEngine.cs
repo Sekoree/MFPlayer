@@ -1,37 +1,48 @@
 using NdiLib;
 using Seko.OwnAudioNET.Video.Engine;
+using Seko.OwnAudioNET.Video.Events;
 
 namespace Seko.OwnAudioNET.Video.NDI;
 
 /// <summary>
 /// Combined NDI sender engine exposing both a video sink and an audio send API.
 /// </summary>
-public sealed class NdiOutputEngine : INdiOutputEngine
+public sealed class NDIVideoEngine : INDIVideoEngine
 {
     private readonly NdiRuntimeScope _runtime;
-    private readonly NdiSenderSession _session;
-    private readonly NdiTimelineClock _timeline;
+    private readonly NDISenderSession _session;
+    private readonly NDITimelineClock _timeline;
     private bool _disposed;
 
-    public NdiOutputEngine(NdiEngineConfig? config = null)
+    public NDIVideoEngine(NDIEngineConfig? config = null)
     {
-        Config = (config ?? new NdiEngineConfig()).CloneNormalized();
+        Config = (config ?? new NDIEngineConfig()).CloneNormalized();
 
         _runtime = new NdiRuntimeScope();
-        _timeline = new NdiTimelineClock(Config.ExternalClock);
-        _session = new NdiSenderSession(Config);
+        _timeline = new NDITimelineClock(Config.ExternalClock);
+        _session = new NDISenderSession(Config);
 
-        VideoOutput = new NdiVideoOutput(_session, _timeline, Config);
-        AudioEngine = new NdiAudioOutputEngine(_session, _timeline, Config.AudioSampleRate, Config.AudioChannels);
+        VideoOutput = new NDIVideoOutput(_session, _timeline, Config);
+        AudioEngine = new NDIAudioOutputEngine(_session, _timeline, Config.AudioSampleRate, Config.AudioChannels);
     }
 
-    public NdiEngineConfig Config { get; }
+    public NDIEngineConfig Config { get; }
+
+    VideoEngineConfig IVideoEngine.Config => new VideoEngineConfig();
 
     public bool IsRunning { get; private set; }
 
-    public NdiVideoOutput VideoOutput { get; }
+    public int OutputCount => 1;
 
-    public INdiAudioOutputEngine AudioEngine { get; }
+    public Guid? CurrentOutputId => VideoOutput.Id;
+
+    public IVideoOutput? CurrentOutput => VideoOutput;
+
+    public event EventHandler<VideoErrorEventArgs>? Error;
+
+    public NDIVideoOutput VideoOutput { get; }
+
+    public INDIAudioOutputEngine AudioEngine { get; }
 
     public void Start()
     {
@@ -55,13 +66,60 @@ public sealed class NdiOutputEngine : INdiOutputEngine
         IsRunning = false;
     }
 
-    public VideoEngine CreateVideoEngine(VideoEngineConfig? config = null)
+    public OpenGLVideoEngine CreateVideoEngine(VideoEngineConfig? config = null)
     {
         ThrowIfDisposed();
-        var engine = new VideoEngine(config);
+        var engine = new OpenGLVideoEngine(config);
         engine.AddOutput(VideoOutput);
-        engine.SetCurrentOutput(VideoOutput);
+        engine.SetVideoOutput(VideoOutput);
         return engine;
+    }
+
+    public bool AddOutput(IVideoOutput output)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(output);
+        return ReferenceEquals(output, VideoOutput);
+    }
+
+    public bool RemoveOutput(IVideoOutput output)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(output);
+        return false;
+    }
+
+    public bool RemoveOutput(Guid outputId)
+    {
+        ThrowIfDisposed();
+        return false;
+    }
+
+    public IVideoOutput[] GetOutputs()
+    {
+        ThrowIfDisposed();
+        return [VideoOutput];
+    }
+
+    public void ClearOutputs()
+    {
+        ThrowIfDisposed();
+    }
+
+    public bool PushFrame(VideoFrame frame, double masterTimestamp)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(frame);
+
+        try
+        {
+            return VideoOutput.PushFrame(frame, masterTimestamp);
+        }
+        catch (Exception ex)
+        {
+            Error?.Invoke(this, new VideoErrorEventArgs("NDI engine failed to push frame.", ex));
+            return false;
+        }
     }
 
     public int GetConnectionCount(uint timeoutMs = 0)
@@ -83,14 +141,14 @@ public sealed class NdiOutputEngine : INdiOutputEngine
         if (rgbaData.Length < requiredLength)
             return false;
 
-        var fourCc = Config.RgbaSendFormat == NdiVideoRgbaSendFormat.Bgra
+        var fourCc = Config.RgbaSendFormat == NDIVideoRgbaSendFormat.Bgra
             ? NdiFourCCVideoType.Bgra
             : NdiFourCCVideoType.Rgba;
 
         byte[]? tmp = null;
         ReadOnlySpan<byte> sendSpan = rgbaData.Slice(0, requiredLength);
 
-        if (Config.RgbaSendFormat == NdiVideoRgbaSendFormat.Bgra)
+        if (Config.RgbaSendFormat == NDIVideoRgbaSendFormat.Bgra)
         {
             tmp = new byte[requiredLength];
             for (var i = 0; i + 3 < requiredLength; i += 4)
@@ -150,7 +208,8 @@ public sealed class NdiOutputEngine : INdiOutputEngine
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(NdiOutputEngine));
+            throw new ObjectDisposedException(nameof(NDIVideoEngine));
     }
 }
+
 

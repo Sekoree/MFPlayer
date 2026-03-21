@@ -59,7 +59,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
         AudioMixer.SourceError += OnAudioSourceError;
         VideoMixer.SourceError += OnVideoSourceError;
-        VideoMixer.OutputSourceChanged += OnVideoOutputSourceChanged;
+        VideoMixer.ActiveSourceChanged += OnActiveVideoSourceChanged;
 
         _driftCorrectionTimer = new Timer(
             static state => ((AudioVideoMixer)state!).DriftCorrectionTick(),
@@ -100,7 +100,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
     public event EventHandler<VideoErrorEventArgs>? VideoSourceError;
 
-    public event EventHandler<VideoOutputSourceChangedEventArgs>? VideoOutputSourceChanged;
+    public event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveVideoSourceChanged;
 
     public bool AddAudioSource(IAudioSource source)
     {
@@ -154,59 +154,20 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         VideoMixer.ClearSources();
     }
 
-    public bool AddVideoOutput(IVideoOutput output)
+    public VideoStreamSource? ActiveVideoSource
     {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(output);
-        return VideoMixer.AddOutput(output);
+        get
+        {
+            ThrowIfDisposed();
+            return VideoMixer.ActiveSource;
+        }
     }
 
-    public bool RemoveVideoOutput(IVideoOutput output)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(output);
-        return VideoMixer.RemoveOutput(output);
-    }
-
-    public IVideoOutput[] GetVideoOutputs()
-    {
-        ThrowIfDisposed();
-        return VideoMixer.GetOutputs();
-    }
-
-    public void ClearVideoOutputs()
-    {
-        ThrowIfDisposed();
-        VideoMixer.ClearOutputs();
-    }
-
-    public bool BindVideoOutputToSource(IVideoOutput output, VideoStreamSource source)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(source);
-        return VideoMixer.BindOutputToSource(output, source);
-    }
-
-    public bool UnbindVideoOutput(IVideoOutput output)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(output);
-        return VideoMixer.UnbindOutput(output);
-    }
-
-    public IVideoOutput[] GetVideoOutputsForSource(VideoStreamSource source)
+    public bool SetActiveVideoSource(VideoStreamSource source)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(source);
-        return VideoMixer.GetOutputsForSource(source);
-    }
-
-    public VideoStreamSource? GetVideoSourceForOutput(IVideoOutput output)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(output);
-        return VideoMixer.GetSourceForOutput(output);
+        return VideoMixer.SetActiveSource(source);
     }
 
     public void Start()
@@ -317,7 +278,7 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
 
         AudioMixer.SourceError -= OnAudioSourceError;
         VideoMixer.SourceError -= OnVideoSourceError;
-        VideoMixer.OutputSourceChanged -= OnVideoOutputSourceChanged;
+        VideoMixer.ActiveSourceChanged -= OnActiveVideoSourceChanged;
         _driftCorrectionTimer.Change(Timeout.Infinite, Timeout.Infinite);
         _driftCorrectionTimer.Dispose();
 
@@ -345,9 +306,9 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
         VideoSourceError?.Invoke(sender, e);
     }
 
-    private void OnVideoOutputSourceChanged(object? sender, VideoOutputSourceChangedEventArgs e)
+    private void OnActiveVideoSourceChanged(object? sender, VideoActiveSourceChangedEventArgs e)
     {
-        VideoOutputSourceChanged?.Invoke(this, e);
+        ActiveVideoSourceChanged?.Invoke(this, e);
     }
 
     private void ThrowIfDisposed()
@@ -405,8 +366,8 @@ public sealed class AudioVideoMixer : IAudioVideoMixer
             var masterTimestamp = MasterClock.CurrentTimestamp;
             foreach (var videoSource in VideoMixer.GetSources())
             {
-                // Correct only routed sources.
-                if (VideoMixer.GetOutputsForSource(videoSource).Length == 0)
+                // Correct only active source.
+                if (!ReferenceEquals(VideoMixer.ActiveSource, videoSource))
                     continue;
 
                 if (videoSource.State != VideoPlaybackState.Playing)
