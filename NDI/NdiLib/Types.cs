@@ -47,6 +47,11 @@ public enum NdiFourCCVideoType : uint
 {
     Uyvy = ((uint)'U') | ((uint)'Y' << 8) | ((uint)'V' << 16) | ((uint)'Y' << 24),
     Uyva = ((uint)'U') | ((uint)'Y' << 8) | ((uint)'V' << 16) | ((uint)'A' << 24),
+    P216 = ((uint)'P') | ((uint)'2' << 8) | ((uint)'1' << 16) | ((uint)'6' << 24),
+    Pa16 = ((uint)'P') | ((uint)'A' << 8) | ((uint)'1' << 16) | ((uint)'6' << 24),
+    Yv12 = ((uint)'Y') | ((uint)'V' << 8) | ((uint)'1' << 16) | ((uint)'2' << 24),
+    I420 = ((uint)'I') | ((uint)'4' << 8) | ((uint)'2' << 16) | ((uint)'0' << 24),
+    Nv12 = ((uint)'N') | ((uint)'V' << 8) | ((uint)'1' << 16) | ((uint)'2' << 24),
     Bgra = ((uint)'B') | ((uint)'G' << 8) | ((uint)'R' << 16) | ((uint)'A' << 24),
     Bgrx = ((uint)'B') | ((uint)'G' << 8) | ((uint)'R' << 16) | ((uint)'X' << 24),
     Rgba = ((uint)'R') | ((uint)'G' << 8) | ((uint)'B' << 16) | ((uint)'A' << 24),

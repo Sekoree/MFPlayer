@@ -49,7 +49,7 @@ public sealed class NdiFinder : IDisposable
 
 public sealed class NdiReceiverSettings
 {
-    public NdiRecvColorFormat ColorFormat { get; init; } = NdiRecvColorFormat.UyvyBgra;
+    public NdiRecvColorFormat ColorFormat { get; init; } = NdiRecvColorFormat.Fastest;
     public NdiRecvBandwidth Bandwidth { get; init; } = NdiRecvBandwidth.Highest;
     public bool AllowVideoFields { get; init; } = true;
     public string? ReceiverName { get; init; }

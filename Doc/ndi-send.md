@@ -54,10 +54,35 @@ using Seko.OwnAudioNET.Video.NDI;
 using var ndi = new NDIVideoEngine(new NDIEngineConfig { SenderName = "MFPlayer Engine" });
 ndi.Start();
 
-using var engine = ndi.CreateVideoEngine();
-
 // For each decoded frame:
-engine.PushFrame(frame, masterTimestampSeconds);
+ndi.PushFrame(frame, masterTimestampSeconds);
+```
+
+### Optional: add a transcode adapter before NDI output
+
+Use `VideoTranscodeEngine` when you want outbound constraints (resolution, pixel format, FPS cap)
+without changing decoder output behavior.
+
+```csharp
+using Seko.OwnAudioNET.Video.Engine;
+using Seko.OwnAudioNET.Video.NDI;
+
+using var ndi = new NDIVideoEngine(new NDIEngineConfig { SenderName = "MFPlayer Strict" });
+ndi.Start();
+
+// Strict preset defaults to 1920x1080 @ 60.0 with preserve-aspect resize.
+var transcodeConfig = NDITranscodePresets.CreateStrictSenderPreset();
+
+// Overloads can override resolution and cap FPS (arbitrary positive values allowed).
+// var transcodeConfig = NDITranscodePresets.CreateStrictSenderPreset(1280, 720, NDITranscodePresets.SafeFps30);
+
+using var transcodeEngine = new VideoTranscodeEngine(ndi, transcodeConfig);
+
+// Push decoded frames to the transcode adapter.
+transcodeEngine.PushFrame(frame, masterTimestampSeconds);
+
+var diag = transcodeEngine.GetDiagnosticsSnapshot();
+Console.WriteLine($"CPU fallback used: {diag.UsedCpuFallbackEver}, count={diag.CpuFallbackCount}, last={diag.LastBackendUsed}");
 ```
 
 ## Option 3: use as `IVideoOutput` in mixer routing
@@ -94,8 +119,13 @@ if (!videoMixer.SetActiveSource(videoSource))
 ## Format notes
 
 - `SendVideoRgba` expects RGBA byte layout.
-- If `RgbaSendFormat = Bgra`, conversion is performed before submit.
+- `SendFormat = Auto` negotiates native NDI FourCC from incoming `VideoFrame.PixelFormat`.
+- The NDI adapter now runs in strict mode: no implicit pixel conversion is performed.
+- `SendVideoRgba` requires `SendFormat` to be `Auto` or `Rgba`.
+- Alpha can be dropped when forcing RGB-only targets (`Uyva -> Uyvy`, `Pa16 -> P216`), and emits a one-time warning per stream key.
 - `INDIAudioOutputEngine.Send` expects interleaved `float` PCM.
+- `NDITranscodePresets` exposes safe cap constants:
+  - `23.976`, `24.0`, `25.0`, `29.97`, `30.0`, `50.0`, `59.94`, `60.0`.
 
 ## Run a quick smoke sender
 

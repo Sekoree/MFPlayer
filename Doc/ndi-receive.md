@@ -8,6 +8,7 @@ Prerequisite: see `Doc/setup-prerequisites.md` first.
 
 - `NdiReceiver` + `NdiFrameSync` (`NDI/NdiLib`)
   - discovers/connects and provides frame-sync pull APIs.
+  - receiver defaults to `NdiRecvColorFormat.Fastest` for native low-cost frame formats.
 - `NDIAudioStreamSource`
   - OwnAudio `BaseAudioSource` implementation backed by frame-sync audio pull and ring buffering.
 - `NDIVideoStreamDecoder`
@@ -84,4 +85,10 @@ dotnet run --project "/home/seko/RiderProjects/MFPlayer/Test/NdiVideoReceive/Ndi
 For audio, `BroadcastAudioEngine` provides the equivalent `IAudioEngine` fan-out wrapper.
 
 For outbound sender setup, see `Doc/ndi-send.md`.
+
+## Strict-format note
+
+- `NDIVideoStreamDecoder` now forwards native NDI pixel formats into `VideoFrame`.
+- Unsupported `FourCC` values are rejected (no implicit conversion in the NDI adapter).
+- Use `VideoTranscodeEngine` when you explicitly need format conversion between NDI and render/output paths.
 

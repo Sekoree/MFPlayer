@@ -86,6 +86,34 @@ if (!videoMixer.SetActiveSource(videoSource))
     throw new InvalidOperationException("Failed to set active source.");
 ```
 
+## Optional transcode stage before output
+
+When you need output constraints without touching decoder options, wrap the render engine with
+`VideoTranscodeEngine` and give that adapter to `VideoMixer`.
+
+```csharp
+using Seko.OwnAudioNET.Video.Engine;
+
+using var realRenderEngine = new OpenGLVideoEngine();
+using var transcodeEngine = new VideoTranscodeEngine(realRenderEngine, new VideoTranscodeEngineConfig
+{
+    Backend = VideoTranscodeBackend.Auto,
+    TargetPixelFormat = VideoPixelFormat.Rgba32,
+    TargetWidth = 1280,
+    TargetHeight = 720,
+    ResizeMode = VideoResizeMode.PreserveAspect,
+    MaxOutputFps = 30.0 // cap applies only when source FPS is higher
+});
+
+using var videoMixer = new VideoMixer(transcodeEngine, config: transportConfig);
+
+if (!realRenderEngine.AddOutput(outputA))
+    throw new InvalidOperationException("Failed to add output.");
+
+if (realRenderEngine is ISupportsOutputSwitching switching && !switching.SetVideoOutput(outputA))
+    throw new InvalidOperationException("Failed to select output.");
+```
+
 ## Notes
 
 - `VideoStreamSource.StartOffset` shifts source position on the timeline.

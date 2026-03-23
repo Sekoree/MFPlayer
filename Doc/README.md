@@ -42,6 +42,8 @@ This folder contains practical setup and usage guides for the video layer in `Vi
   - NDI receive pipeline (`NDIAudioStreamSource`, `NDIVideoStreamDecoder`, external timeline clock, tuning profiles).
 - [`ndi-send.md`](ndi-send.md)
   - NDI send pipeline (`NDIVideoEngine`, sink routing, direct audio/video send APIs).
+- [`hard-cut-sweep.md`](hard-cut-sweep.md)
+  - Migration sweep status for legacy `Seko.OwnAudioNET.*` / `OwnAudio` dependency removal.
 
 ## Recommended read order
 
@@ -57,9 +59,12 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 
 ## Where to look for runnable references
 
-- `Test/AudioEx/Program.cs`
-- `Test/VideoTest/MainWindow.axaml.cs`
-- `Test/NdiVideoReceive/Program.cs`
+- `Test/MediaDebug/Program.cs` (new `S.Media.*` migration target; supports playlist and interactive controls)
+- `Archive/Legacy/AudioEx/Program.cs` (archived legacy reference)
+- `Archive/Legacy/VideoTest/MainWindow.axaml.cs` (archived legacy reference)
+- `Archive/Legacy/NdiVideoReceive/Program.cs` (archived legacy reference)
+
+Note: legacy references are archived for migration history and are no longer part of the active solution graph.
 
 ## Diagnostics Counter Legend
 
