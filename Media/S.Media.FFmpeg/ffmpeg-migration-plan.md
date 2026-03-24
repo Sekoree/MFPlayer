@@ -82,7 +82,7 @@ Out of scope:
 | --- | --- | --- | --- |
 | Decoder internals | `Media/S.Media.FFmpeg/Decoders/Internal/*` | Planned | Adapt proven loops/session behavior; no class moves |
 | Source wrappers | `Media/S.Media.FFmpeg/Sources/*` | Planned | Align to `IAudioSource` / `IVideoSource` contracts |
-| Config mapping | `Media/S.Media.FFmpeg/Config/*` | Planned | Keep deterministic validation and clamping |
+| Config mapping | `Media/S.Media.FFmpeg/Config/*` | In Progress | Decode-thread validation and queue/thread normalization are now deterministic |
 | Media item construction | `Media/S.Media.FFmpeg/Media/FFMediaItem.cs` | Planned | Preserve ownership and stream-open semantics |
 | Contract tests | `Media/S.Media.FFmpeg` test matrix | Planned | Validate `2010`, `2014`, ownership, and teardown fence |
 
@@ -114,6 +114,7 @@ Internal-only:
 - Caller buffer/frame ownership is preserved (no retained caller memory).
 - Duration semantics match contract (`double.NaN` for unknown/live).
 - Decode-thread/queue settings apply deterministic clamping and behavior.
+- Heavy-file stress path is opt-in (`SMEDIA_RUN_HEAVY_STRESS=1`) to keep default test runs stable while enabling local 4k60 throughput checks.
 
 ## Ownership and Error Rules
 

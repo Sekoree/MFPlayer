@@ -1,0 +1,530 @@
+using S.Media.Core.Errors;
+using S.Media.Core.Video;
+using S.Media.FFmpeg.Config;
+using S.Media.FFmpeg.Runtime;
+
+namespace S.Media.FFmpeg.Decoders.Internal;
+
+internal sealed class FFSharedDemuxSession : IDisposable
+{
+    private readonly FFSharedDecodeContext _context = new();
+    private readonly FFPacketReader _packetReader = new();
+    private readonly FFAudioDecoder _audioDecoder = new();
+    private readonly FFVideoDecoder _videoDecoder = new();
+    private readonly FFResampler _resampler = new();
+    private readonly FFPixelConverter _pixelConverter = new();
+    private readonly Lock _gate = new();
+    private readonly AutoResetEvent _workerSignal = new(false);
+    private readonly Queue<QueuedAudioChunk> _audioQueue = new();
+    private readonly Queue<QueuedVideoFrame> _videoQueue = new();
+
+    private Thread? _workerThread;
+    private bool _isOpen;
+    private bool _running;
+    private int _audioQueueCapacity;
+    private int _videoQueueCapacity;
+    private bool _disposed;
+
+    public FFStreamDescriptor? AudioStream => _context.AudioStream;
+
+    public FFStreamDescriptor? VideoStream => _context.VideoStream;
+
+    public FFmpegDecodeOptions ResolvedDecodeOptions => _context.ResolvedDecodeOptions;
+
+    public int Open(FFmpegOpenOptions openOptions, FFmpegDecodeOptions decodeOptions)
+    {
+        ArgumentNullException.ThrowIfNull(openOptions);
+        ArgumentNullException.ThrowIfNull(decodeOptions);
+
+        if (decodeOptions.DecodeThreadCount < 0)
+        {
+            return (int)MediaErrorCode.FFmpegInvalidConfig;
+        }
+
+        var normalizedDecodeOptions = decodeOptions.Normalize();
+
+        if (_disposed)
+        {
+            return (int)MediaErrorCode.FFmpegSharedContextDisposed;
+        }
+
+        var validationCode = FFmpegConfigValidator.Validate(openOptions, normalizedDecodeOptions);
+        if (validationCode != MediaResult.Success)
+        {
+            return validationCode;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return (int)MediaErrorCode.FFmpegSharedContextDisposed;
+            }
+
+            if (_isOpen)
+            {
+                _workerSignal.Set();
+                return MediaResult.Success;
+            }
+
+            var openCode = _context.Open(openOptions, normalizedDecodeOptions);
+            if (openCode != MediaResult.Success)
+            {
+                return openCode;
+            }
+
+            _audioQueueCapacity = normalizedDecodeOptions.MaxQueuedPackets;
+            _videoQueueCapacity = normalizedDecodeOptions.MaxQueuedFrames;
+
+            var hasAudio = _context.AudioStream is not null;
+            var hasVideo = _context.VideoStream is not null;
+            var readerInit = _packetReader.Initialize(
+                hasAudio,
+                hasVideo,
+                openOptions,
+                _context.AudioStream?.StreamIndex,
+                _context.VideoStream?.StreamIndex);
+            if (readerInit != MediaResult.Success)
+            {
+                _context.Close();
+                return readerInit;
+            }
+
+            if (_packetReader.TryGetNativeStreamDescriptors(out var nativeAudioStream, out var nativeVideoStream))
+            {
+                _context.ApplyResolvedStreamDescriptors(nativeAudioStream, nativeVideoStream);
+            }
+
+            if (hasAudio)
+            {
+                var audioInit = _audioDecoder.Initialize();
+                if (audioInit != MediaResult.Success)
+                {
+                    _context.Close();
+                    return audioInit;
+                }
+
+                var resampleInit = _resampler.Initialize();
+                if (resampleInit != MediaResult.Success)
+                {
+                    _context.Close();
+                    return resampleInit;
+                }
+            }
+
+            if (hasVideo)
+            {
+                var videoInit = _videoDecoder.Initialize();
+                if (videoInit != MediaResult.Success)
+                {
+                    _context.Close();
+                    return videoInit;
+                }
+
+                var convertInit = _pixelConverter.Initialize();
+                if (convertInit != MediaResult.Success)
+                {
+                    _context.Close();
+                    return convertInit;
+                }
+            }
+
+            _audioQueue.Clear();
+            _videoQueue.Clear();
+
+            _isOpen = true;
+            _running = true;
+            _workerThread = new Thread(WorkerLoop)
+            {
+                IsBackground = true,
+                Name = "S.Media.FFmpeg.SharedDemuxSession",
+            };
+            _workerThread.Start();
+
+            return MediaResult.Success;
+        }
+    }
+
+    public int Close()
+    {
+        Thread? thread;
+
+        lock (_gate)
+        {
+            if (_disposed || !_isOpen)
+            {
+                return _context.Close();
+            }
+
+            _running = false;
+            _isOpen = false;
+            _audioQueue.Clear();
+            _videoQueue.Clear();
+            _workerSignal.Set();
+
+            thread = _workerThread;
+            _workerThread = null;
+        }
+
+        thread?.Join();
+        return _context.Close();
+    }
+
+    public int ReadAudioSamples(Span<float> destination, int requestedFrameCount, int channelCount, out int framesRead)
+    {
+        framesRead = 0;
+
+        if (requestedFrameCount <= 0)
+        {
+            return MediaResult.Success;
+        }
+
+        if (channelCount <= 0)
+        {
+            channelCount = 2;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return (int)MediaErrorCode.FFmpegSharedContextDisposed;
+            }
+
+            if (!_isOpen || _context.AudioStream is null)
+            {
+                return (int)MediaErrorCode.FFmpegReadFailed;
+            }
+
+            if (!TryCreateQueuedAudioChunkLocked(out var chunk))
+            {
+                return (int)MediaErrorCode.FFmpegReadFailed;
+            }
+
+            while (_audioQueue.Count > 0)
+            {
+                var candidate = _audioQueue.Dequeue();
+                if (candidate.Generation == chunk.Generation)
+                {
+                    chunk = candidate;
+                    break;
+                }
+            }
+
+            _workerSignal.Set();
+
+            var writableFrames = destination.Length / channelCount;
+            if (writableFrames <= 0)
+            {
+                return MediaResult.Success;
+            }
+
+            framesRead = Math.Min(requestedFrameCount, Math.Min(chunk.FrameCount, writableFrames));
+            var sampleCount = framesRead * channelCount;
+            destination[..sampleCount].Fill(chunk.SampleValue);
+            return MediaResult.Success;
+        }
+    }
+
+    public int ReadVideoFrame(out FFSessionVideoFrame frame)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                frame = default;
+                return (int)MediaErrorCode.FFmpegSharedContextDisposed;
+            }
+
+            if (!_isOpen || _context.VideoStream is null)
+            {
+                frame = default;
+                return (int)MediaErrorCode.FFmpegReadFailed;
+            }
+
+            if (!TryCreateQueuedVideoFrameLocked(out var queuedFrame))
+            {
+                frame = default;
+                return (int)MediaErrorCode.FFmpegReadFailed;
+            }
+
+            while (_videoQueue.Count > 0)
+            {
+                var candidate = _videoQueue.Dequeue();
+                if (candidate.Generation == queuedFrame.Generation)
+                {
+                    queuedFrame = candidate;
+                    break;
+                }
+            }
+
+            _workerSignal.Set();
+
+            frame = new FFSessionVideoFrame(
+                queuedFrame.FrameIndex,
+                queuedFrame.PresentationTime,
+                queuedFrame.IsKeyFrame,
+                queuedFrame.Width,
+                queuedFrame.Height,
+                queuedFrame.MappedPixelFormat,
+                queuedFrame.NativeTimeBaseNumerator,
+                queuedFrame.NativeTimeBaseDenominator,
+                queuedFrame.NativeFrameRateNumerator,
+                queuedFrame.NativeFrameRateDenominator,
+                queuedFrame.NativePixelFormat);
+            return MediaResult.Success;
+        }
+    }
+
+    public int Seek(double positionSeconds)
+    {
+        if (!double.IsFinite(positionSeconds) || positionSeconds < 0)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return (int)MediaErrorCode.FFmpegSharedContextDisposed;
+            }
+
+            if (!_isOpen)
+            {
+                return (int)MediaErrorCode.FFmpegSeekFailed;
+            }
+
+            var seekCode = _packetReader.Seek(positionSeconds);
+            if (seekCode != MediaResult.Success)
+            {
+                return seekCode;
+            }
+
+            _audioQueue.Clear();
+            _videoQueue.Clear();
+
+            _workerSignal.Set();
+            return MediaResult.Success;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        Close();
+
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
+
+        _workerSignal.Dispose();
+        _packetReader.Dispose();
+        _audioDecoder.Dispose();
+        _videoDecoder.Dispose();
+        _resampler.Dispose();
+        _pixelConverter.Dispose();
+        _context.Dispose();
+    }
+
+    private void WorkerLoop()
+    {
+        while (true)
+        {
+            var waitForSignal = true;
+
+            lock (_gate)
+            {
+                if (_disposed || !_running || !_isOpen)
+                {
+                    return;
+                }
+
+                if (_context.AudioStream is not null && _audioQueue.Count < _audioQueueCapacity)
+                {
+                    if (TryCreateQueuedAudioChunkLocked(out var chunk))
+                    {
+                        _audioQueue.Enqueue(chunk);
+                        waitForSignal = false;
+                    }
+                }
+
+                if (_context.VideoStream is not null && _videoQueue.Count < _videoQueueCapacity)
+                {
+                    if (TryCreateQueuedVideoFrameLocked(out var frame))
+                    {
+                        _videoQueue.Enqueue(frame);
+                        waitForSignal = false;
+                    }
+                }
+            }
+
+            if (waitForSignal)
+            {
+                _workerSignal.WaitOne(5);
+            }
+            else
+            {
+                Thread.Yield();
+            }
+        }
+    }
+
+    private bool TryCreateQueuedAudioChunkLocked(out QueuedAudioChunk chunk)
+    {
+        chunk = default;
+
+        var packetCode = _packetReader.ReadAudioPacket(out var packet);
+        if (packetCode != MediaResult.Success)
+        {
+            return false;
+        }
+
+        var decodeCode = _audioDecoder.Decode(packet, out var decoded);
+        if (decodeCode != MediaResult.Success)
+        {
+            return false;
+        }
+
+        var resampleCode = _resampler.Resample(decoded, out var resampled);
+        if (resampleCode != MediaResult.Success)
+        {
+            return false;
+        }
+
+        chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue);
+        return true;
+    }
+
+    private bool TryCreateQueuedVideoFrameLocked(out QueuedVideoFrame frame)
+    {
+        frame = default;
+
+        var packetCode = _packetReader.ReadVideoPacket(out var packet);
+        if (packetCode != MediaResult.Success)
+        {
+            return false;
+        }
+
+        var decodeCode = _videoDecoder.Decode(packet, out var decoded);
+        if (decodeCode != MediaResult.Success)
+        {
+            return false;
+        }
+
+        var convertCode = _pixelConverter.Convert(decoded, out var converted);
+        if (convertCode != MediaResult.Success)
+        {
+            return false;
+        }
+
+        frame = new QueuedVideoFrame(
+            converted.Generation,
+            converted.FrameIndex,
+            converted.PresentationTime,
+            converted.IsKeyFrame,
+            converted.Width,
+            converted.Height,
+            converted.MappedPixelFormat,
+            converted.NativeTimeBaseNumerator,
+            converted.NativeTimeBaseDenominator,
+            converted.NativeFrameRateNumerator,
+            converted.NativeFrameRateDenominator,
+            converted.NativePixelFormat);
+        return true;
+    }
+
+    private readonly record struct QueuedAudioChunk(long Generation, int FrameCount, float SampleValue);
+
+    private readonly record struct QueuedVideoFrame(
+        long Generation,
+        long FrameIndex,
+        TimeSpan PresentationTime,
+        bool IsKeyFrame,
+        int Width,
+        int Height,
+        VideoPixelFormat MappedPixelFormat,
+        int? NativeTimeBaseNumerator,
+        int? NativeTimeBaseDenominator,
+        int? NativeFrameRateNumerator,
+        int? NativeFrameRateDenominator,
+        int? NativePixelFormat);
+}
+
+internal readonly struct FFSessionVideoFrame
+{
+    public FFSessionVideoFrame(
+        long frameIndex,
+        TimeSpan presentationTime,
+        bool isKeyFrame,
+        int width,
+        int height,
+        VideoPixelFormat pixelFormat,
+        int? nativeTimeBaseNumerator,
+        int? nativeTimeBaseDenominator,
+        int? nativeFrameRateNumerator,
+        int? nativeFrameRateDenominator,
+        int? nativePixelFormat)
+    {
+        FrameIndex = frameIndex;
+        PresentationTime = presentationTime;
+        IsKeyFrame = isKeyFrame;
+        Width = width;
+        Height = height;
+        PixelFormat = pixelFormat;
+        NativeTimeBaseNumerator = nativeTimeBaseNumerator;
+        NativeTimeBaseDenominator = nativeTimeBaseDenominator;
+        NativeFrameRateNumerator = nativeFrameRateNumerator;
+        NativeFrameRateDenominator = nativeFrameRateDenominator;
+        NativePixelFormat = nativePixelFormat;
+    }
+
+    public long FrameIndex { get; }
+
+    public TimeSpan PresentationTime { get; }
+
+    public bool IsKeyFrame { get; }
+
+    public int Width { get; }
+
+    public int Height { get; }
+
+    public VideoPixelFormat PixelFormat { get; }
+
+    public int? NativeTimeBaseNumerator { get; }
+
+    public int? NativeTimeBaseDenominator { get; }
+
+    public int? NativeFrameRateNumerator { get; }
+
+    public int? NativeFrameRateDenominator { get; }
+
+    public int? NativePixelFormat { get; }
+
+    public bool HasNativeTimingMetadata =>
+        NativeTimeBaseNumerator.HasValue || NativeTimeBaseDenominator.HasValue ||
+        NativeFrameRateNumerator.HasValue || NativeFrameRateDenominator.HasValue;
+
+    public bool HasNativePixelMetadata => NativePixelFormat.HasValue;
+
+    public double? TryGetNativeFrameRate()
+    {
+        if (!NativeFrameRateNumerator.HasValue || !NativeFrameRateDenominator.HasValue || NativeFrameRateDenominator.Value <= 0)
+        {
+            return null;
+        }
+
+        return NativeFrameRateNumerator.Value / (double)NativeFrameRateDenominator.Value;
+    }
+}
+

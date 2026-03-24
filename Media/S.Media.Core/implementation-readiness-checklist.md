@@ -37,6 +37,9 @@ Execution sequencing is defined in `Media/S.Media.Core/implementation-execution-
 ### `Media/S.Media.Core`
 
 - [ ] Core contracts are implementation-ready (audio/video/mixer/player/clock interfaces).
+- [ ] Mixer/player clock contract is single-field (`IMediaClock Clock`) with `ClockType` leadership mode (no separate external-clock interface).
+- [ ] Clock-type defaults are explicit and enforced (`AudioMixer=AudioLed`, `VideoMixer=VideoLed`, `AudioVideoMixer=Hybrid`).
+- [ ] Nonsensical mixer/clock-type combinations return `MixerClockTypeInvalid` (`3002`) with no state mutation.
 - [ ] `IAudioSource.SourceId` and `IVideoSource.SourceId` contracts are explicit (implementation-generated, immutable per instance, remove-by-guid canonical key).
 - [ ] `SourceId` uniqueness scope is explicit (process-lifetime uniqueness preferred; no collisions among live/registered sources required).
 - [ ] Duplicate `SourceId` registration behavior is explicit (reject with `MixerSourceIdCollision` `3001`, no registration mutation).

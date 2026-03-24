@@ -27,6 +27,8 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `0` means success for operation return codes.
   - All non-zero values are failures.
   - Shared generic/common concurrency misuse code: `950` (`MediaConcurrentOperationViolation`), used as canonical semantic mapping target and may be surfaced directly by Core/orchestration paths.
+  - FFmpeg invalid config code: `2010` (`FFmpegInvalidConfig`).
+  - FFmpeg invalid audio-map code: `2011` (`FFmpegInvalidAudioChannelMap`).
   - Reserved generic audio subrange: `4200-4299` for backend-agnostic audio contract/runtime errors.
   - Reserved output subrange: `4300-4399` for PortAudio backend errors.
 
@@ -76,6 +78,9 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `int MediaConcurrentOperationViolation { get; } // 950 (shared semantic code for same-instance concurrent operation misuse)`
   - `int MixerDetachStepFailed { get; } // 3000 (remove/clear detach-step failure when no more specific code applies)`
   - `int MixerSourceIdCollision { get; } // 3001 (duplicate source registration by SourceId)`
+  - `int MixerClockTypeInvalid { get; } // 3002 (invalid clock type for mixer kind)`
+  - `int FFmpegInvalidConfig { get; } // 2010 (invalid FFmpeg open/config combination)`
+  - `int FFmpegInvalidAudioChannelMap { get; } // 2011 (explicit map policy without valid explicit map)`
   - `int VideoOutputBackpressureQueueFull { get; } // 4000 (push rejected by configured queue/backpressure policy)`
   - `int VideoOutputBackpressureTimeout { get; } // 4001 (wait-mode push timed out)`
   - `int VideoFrameDisposed { get; } // 4002 (PushFrame called with disposed VideoFrame)`
@@ -107,6 +112,14 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `interface IDynamicMetadata`
 - Planned API:
   - `event EventHandler<MediaMetadataSnapshot>? MetadataUpdated`
+
+### `Media/IMediaPlaybackSourceBinding.cs`
+- `interface IMediaPlaybackSourceBinding`
+- Planned API:
+  - `IReadOnlyList<IAudioSource> PlaybackAudioSources { get; }`
+  - `IReadOnlyList<IVideoSource> PlaybackVideoSources { get; }`
+  - `IVideoSource? InitialActiveVideoSource { get; }`
+  - Optional bridge contract for `IMediaItem` implementations that can provide ready-to-attach mixer sources.
 
 ### `Media/MediaMetadataSnapshot.cs`
 - `sealed record MediaMetadataSnapshot`
@@ -144,10 +157,9 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `int Seek(double positionSeconds)`
   - Seek contract: non-finite/negative targets return `MediaInvalidArgument`; invalid seek performs no state change.
 
-### `Clock/IExternalClock.cs`
-- `interface IExternalClock`
+### `Clock/External Clock Contract`
 - Planned API:
-  - `double CurrentSeconds { get; }`
+  - External clocks implement `IMediaClock` directly.
   - Availability contract: when explicitly configured but unavailable (for example external transport/session loss), operations must fail with `MediaExternalClockUnavailable` and must not silently fall back to `CoreMediaClock`.
 
 ### `Clock/CoreMediaClock.cs`
@@ -300,6 +312,12 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `Bgra32 = 2`
   - `Yuv420P = 3`
   - `Nv12 = 4`
+  - `Yuv422P = 5`
+  - `Yuv422P10Le = 6`
+  - `P010Le = 7`
+  - `Yuv420P10Le = 8`
+  - `Yuv444P = 9`
+  - `Yuv444P10Le = 10`
 
 ### `Video/IPixelFormatData.cs`
 - `interface IPixelFormatData`
@@ -336,6 +354,64 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `int ChromaSubsampleX { get; } // 2`
   - `int ChromaSubsampleY { get; } // 2`
   - Invariants: `Plane0` and `Plane1` required; `Plane2..Plane3` empty; `Plane0Stride >= Width`; `Plane1Stride >= Width`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * ceil(Height/2)`.
+
+### `Video/Yuv422PPixelFormatData.cs`
+- `readonly record struct Yuv422PPixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Yuv422P`
+  - `int ChromaSubsampleX { get; } // 2`
+  - `int ChromaSubsampleY { get; } // 1`
+  - `int BitsPerComponent { get; } // 8`
+  - Invariants: `Plane0..Plane2` required; `Plane0Stride >= Width`; `Plane1Stride >= ceil(Width/2)`; `Plane2Stride >= ceil(Width/2)`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * Height`; `Plane2Length >= Plane2Stride * Height`.
+
+### `Video/Yuv422P10LePixelFormatData.cs`
+- `readonly record struct Yuv422P10LePixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Yuv422P10Le`
+  - `int ChromaSubsampleX { get; } // 2`
+  - `int ChromaSubsampleY { get; } // 1`
+  - `int BitsPerComponent { get; } // 10`
+  - `int ContainerBitsPerComponent { get; } // 16`
+  - Invariants: `Plane0..Plane2` required; samples are `uint16` containers with 10-bit payload; `Plane0Stride >= Width * 2`; `Plane1Stride >= ceil(Width/2) * 2`; `Plane2Stride >= ceil(Width/2) * 2`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * Height`; `Plane2Length >= Plane2Stride * Height`.
+
+### `Video/P010LePixelFormatData.cs`
+- `readonly record struct P010LePixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // P010Le`
+  - `int ChromaSubsampleX { get; } // 2`
+  - `int ChromaSubsampleY { get; } // 2`
+  - `int BitsPerComponent { get; } // 10`
+  - `int ContainerBitsPerComponent { get; } // 16`
+  - Invariants: `Plane0` and `Plane1` required; samples are `uint16` containers with 10-bit payload; `Plane0Stride >= Width * 2`; `Plane1Stride >= Width * 2`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * ceil(Height/2)`.
+
+### `Video/Yuv420P10LePixelFormatData.cs`
+- `readonly record struct Yuv420P10LePixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Yuv420P10Le`
+  - `int ChromaSubsampleX { get; } // 2`
+  - `int ChromaSubsampleY { get; } // 2`
+  - `int BitsPerComponent { get; } // 10`
+  - `int ContainerBitsPerComponent { get; } // 16`
+  - Invariants: `Plane0..Plane2` required; samples are `uint16` containers with 10-bit payload; `Plane0Stride >= Width * 2`; `Plane1Stride >= ceil(Width/2) * 2`; `Plane2Stride >= ceil(Width/2) * 2`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * ceil(Height/2)`; `Plane2Length >= Plane2Stride * ceil(Height/2)`.
+
+### `Video/Yuv444PPixelFormatData.cs`
+- `readonly record struct Yuv444PPixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Yuv444P`
+  - `int ChromaSubsampleX { get; } // 1`
+  - `int ChromaSubsampleY { get; } // 1`
+  - `int BitsPerComponent { get; } // 8`
+  - Invariants: `Plane0..Plane2` required; `Plane0Stride >= Width`; `Plane1Stride >= Width`; `Plane2Stride >= Width`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * Height`; `Plane2Length >= Plane2Stride * Height`.
+
+### `Video/Yuv444P10LePixelFormatData.cs`
+- `readonly record struct Yuv444P10LePixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Yuv444P10Le`
+  - `int ChromaSubsampleX { get; } // 1`
+  - `int ChromaSubsampleY { get; } // 1`
+  - `int BitsPerComponent { get; } // 10`
+  - `int ContainerBitsPerComponent { get; } // 16`
+  - Invariants: `Plane0..Plane2` required; samples are `uint16` containers with 10-bit payload; `Plane0Stride >= Width * 2`; `Plane1Stride >= Width * 2`; `Plane2Stride >= Width * 2`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * Height`; `Plane2Length >= Plane2Stride * Height`.
 
 ### `Video/VideoOutputBackpressureMode.cs`
 - `enum VideoOutputBackpressureMode`
@@ -422,7 +498,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `AudioMixerState State { get; }`
   - `AudioMixerSyncMode SyncMode { get; }`
   - `IMediaClock Clock { get; }`
-  - `IExternalClock? ExternalClock { get; }`
+  - `ClockType ClockType { get; } // default: AudioLed`
   - `double PositionSeconds { get; }`
   - `bool IsRunning { get; }`
   - `int Start()`
@@ -440,12 +516,14 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `MixerSourceDetachOptions SourceDetachOptions { get; }`
   - `int SetSourceStartOffset(IAudioSource source, double startOffsetSeconds)`
   - `int ConfigureSourceDetachOptions(MixerSourceDetachOptions options)`
+  - `int SetClockType(ClockType clockType)`
   - `int SetSyncMode(AudioMixerSyncMode mode)`
   - `event EventHandler<AudioMixerStateChangedEventArgs>? StateChanged`
   - `event EventHandler<AudioSourceErrorEventArgs>? SourceError`
   - `event EventHandler<AudioMixerDropoutEventArgs>? DropoutDetected`
-  - Clock ownership: `Clock` defaults to `CoreMediaClock`; `ExternalClock` is opt-in and nullable.
-  - External clock contract: when `ExternalClock` is configured but unavailable, return `MediaExternalClockUnavailable` with no implicit fallback.
+  - Clock ownership: a single `Clock` field is used.
+  - Clock-type contract: `ClockType.External` requires `Clock` to be an external implementation; unavailable external clock paths return `MediaExternalClockUnavailable`.
+  - Invalid clock-type contract: nonsensical clock type for mixer kind (for example `VideoLed` on `IAudioMixer`) returns `MixerClockTypeInvalid` (`3002`) with no state change.
   - Seek behavior: `Seek(...)` is immediate in current transport state (running/paused/stopped), is not deferred/queued, and returns after the coordinated state update attempt.
   - Source ownership: add/remove/clear are detach-first operations.
   - Detach behavior is policy-driven by `SourceDetachOptions` (default: detach-only, no auto-stop, no auto-dispose).
@@ -494,7 +572,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `VideoMixerState State { get; }`
   - `VideoMixerSyncMode SyncMode { get; }`
   - `IMediaClock Clock { get; }`
-  - `IExternalClock? ExternalClock { get; }`
+  - `ClockType ClockType { get; } // default: VideoLed`
   - `double PositionSeconds { get; }`
   - `bool IsRunning { get; }`
   - `IVideoSource? ActiveSource { get; }`
@@ -512,12 +590,14 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `MixerSourceDetachOptions SourceDetachOptions { get; }`
   - `int SetActiveSource(IVideoSource source)`
   - `int ConfigureSourceDetachOptions(MixerSourceDetachOptions options)`
+  - `int SetClockType(ClockType clockType)`
   - `int SetSyncMode(VideoMixerSyncMode mode)`
   - `event EventHandler<VideoMixerStateChangedEventArgs>? StateChanged`
   - `event EventHandler<VideoSourceErrorEventArgs>? SourceError`
   - `event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveSourceChanged`
-  - Clock ownership: `Clock` defaults to `CoreMediaClock`; `ExternalClock` is opt-in and nullable.
-  - External clock contract: when `ExternalClock` is configured but unavailable, return `MediaExternalClockUnavailable` with no implicit fallback.
+  - Clock ownership: a single `Clock` field is used.
+  - Clock-type contract: `ClockType.External` requires `Clock` to be an external implementation; unavailable external clock paths return `MediaExternalClockUnavailable`.
+  - Invalid clock-type contract: nonsensical clock type for mixer kind (for example `AudioLed` on `IVideoMixer`) returns `MixerClockTypeInvalid` (`3002`) with no state change.
   - Seek behavior: `Seek(...)` is immediate in current transport state (running/paused/stopped), is not deferred/queued, and returns after the coordinated state update attempt.
   - Source ownership: add/remove/clear are detach-first operations.
   - Detach behavior is policy-driven by `SourceDetachOptions` (default: detach-only, no auto-stop, no auto-dispose).
@@ -563,7 +643,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Planned API:
   - `AudioVideoMixerState State { get; }`
   - `IMediaClock Clock { get; }`
-  - `IExternalClock? ExternalClock { get; }`
+  - `ClockType ClockType { get; } // default: Hybrid`
   - `double PositionSeconds { get; }`
   - `bool IsRunning { get; }`
   - `IAudioMixer AudioMixer { get; }`
@@ -583,12 +663,14 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `MixerSourceDetachOptions VideoSourceDetachOptions { get; }`
   - `int ConfigureAudioSourceDetachOptions(MixerSourceDetachOptions options)`
   - `int ConfigureVideoSourceDetachOptions(MixerSourceDetachOptions options)`
+  - `int SetClockType(ClockType clockType)`
   - `int SetActiveVideoSource(IVideoSource source)`
   - `event EventHandler<AudioSourceErrorEventArgs>? AudioSourceError`
   - `event EventHandler<VideoSourceErrorEventArgs>? VideoSourceError`
   - `event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveVideoSourceChanged`
-  - Clock ownership: `Clock` defaults to `CoreMediaClock`; `ExternalClock` is opt-in and nullable.
-  - External clock contract: when `ExternalClock` is configured but unavailable, return `MediaExternalClockUnavailable` with no implicit fallback.
+  - Clock ownership: a single `Clock` field is used.
+  - Clock-type contract: `ClockType.External` requires `Clock` to be an external implementation; unavailable external clock paths return `MediaExternalClockUnavailable`.
+  - Invalid clock-type contract: nonsensical clock type for mixer kind (for example `AudioLed` or `VideoLed` on `IAudioVideoMixer`) returns `MixerClockTypeInvalid` (`3002`) with no state change.
   - Seek behavior: `Seek(...)` is immediate in current transport state (running/paused/stopped), is not deferred/queued, and returns after the coordinated state update attempt.
   - Source ownership: add/remove/clear are detach-first operations for both domains.
   - Detach behavior for audio/video is policy-driven independently (default: detach-only, no auto-stop, no auto-dispose).
@@ -604,6 +686,24 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `Stopped = 0`
   - `Running = 1`
   - `Paused = 2`
+
+### `Mixing/ClockType.cs`
+- Planned API:
+  - `External = 0`
+  - `AudioLed = 1`
+  - `VideoLed = 2`
+  - `Hybrid = 3`
+
+### `Mixing/MixerKind.cs`
+- Planned API:
+  - `Audio = 0`
+  - `Video = 1`
+  - `AudioVideo = 2`
+
+### `Mixing/MixerClockTypeRules.cs`
+- Planned API:
+  - `int Validate(MixerKind mixerKind, ClockType clockType)`
+  - Returns `MixerClockTypeInvalid` (`3002`) for nonsensical combinations.
 
 ### `Mixing/MixerSourceDetachOptions.cs`
 - `sealed record MixerSourceDetachOptions`
@@ -626,6 +726,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 
 ### `Playback/IMediaPlayer.cs`
 - Planned API:
+  - `interface IMediaPlayer : IAudioVideoMixer`
   - `int Play(IMediaItem media)`
   - `int Stop()`
   - `int Pause()`
@@ -656,6 +757,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 ## Initial Generic Mixing Error Code Picks (`3000-3099`)
 - `3000`: `MixerDetachStepFailed`
 - `3001`: `MixerSourceIdCollision`
+- `3002`: `MixerClockTypeInvalid`
 - Return-code precedence: when a detach sub-step has a specific backend/module failure code, return that code; use `MixerDetachStepFailed` (`3000`) only as the generic fallback when no more specific owned code applies.
 
 ## Initial Generic Audio Error Code Picks (`4200-4299`)

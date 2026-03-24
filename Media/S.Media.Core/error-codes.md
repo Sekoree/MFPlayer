@@ -15,12 +15,15 @@ Source of truth for allocation policy and reserved code chunks across `S.Media.*
 ## Reserved Chunks (Implementation Planning)
 
 - `2000-2099`: FFmpeg active initial allocation block
+- FFmpeg fixed pick: `2010` = `FFmpegInvalidConfig` (invalid/nonsensical FFmpeg open/config combination)
+- FFmpeg fixed pick: `2011` = `FFmpegInvalidAudioChannelMap` (explicit route-map policy without valid explicit map)
 - FFmpeg fixed pick: `2014` = `FFmpegConcurrentReadViolation` (single-source concurrent read contract violation)
 - `2100-2199`: FFmpeg runtime/native loading and interop-lifetime reserve
 - `2200-2299`: FFmpeg mapping/resampler/format-conversion reserve
 - `3000-3099`: Core mixing active initial allocation block
 - Core mixing fixed pick: `3000` = `MixerDetachStepFailed` (remove/clear detach-step failure when no more specific code applies)
 - Core mixing fixed pick: `3001` = `MixerSourceIdCollision` (duplicate source registration by `SourceId`)
+- Core mixing fixed pick: `3002` = `MixerClockTypeInvalid` (nonsensical clock type for mixer kind, for example `VideoLed` on `AudioMixer`)
 - `4000-4099`: Core generic video-output/backpressure initial allocation block
 - Core output fixed pick: `4000` = `VideoOutputBackpressureQueueFull` (push rejected due to configured queue/backpressure limit)
 - Core output fixed pick: `4001` = `VideoOutputBackpressureTimeout` (push timed out waiting for configured backpressure policy)
@@ -41,12 +44,15 @@ Source of truth for allocation policy and reserved code chunks across `S.Media.*
 - `OutputRender` -> `4000-4999`
 - `NDI` -> `5000-5199`
 - `FFmpegActive` -> `2000-2099`
+- `FFmpegInvalidConfig` -> `2010`
+- `FFmpegInvalidAudioChannelMap` -> `2011`
 - `FFmpegConcurrentReadViolation` -> `2014`
 - `FFmpegRuntimeReserve` -> `2100-2199`
 - `FFmpegMappingReserve` -> `2200-2299`
 - `MixingActive` -> `3000-3099`
 - `MixerDetachStepFailed` -> `3000`
 - `MixerSourceIdCollision` -> `3001`
+- `MixerClockTypeInvalid` -> `3002`
 - `OutputBackpressureActive` -> `4000-4099`
 - `VideoOutputBackpressureQueueFull` -> `4000`
 - `VideoOutputBackpressureTimeout` -> `4001`
@@ -74,6 +80,7 @@ Source of truth for allocation policy and reserved code chunks across `S.Media.*
 - `MediaConcurrentOperationViolation` (`950`) may be surfaced directly by Core/orchestration paths when no module-specific code is more precise.
 - Detach return-code precedence: when an operation has a specific owned module/backend detach-step failure code, return that specific code; use `MixerDetachStepFailed` (`3000`) only as generic fallback.
 - Source registration rule: duplicate `SourceId` attempts must return `MixerSourceIdCollision` (`3001`) and must not partially mutate registrations.
+- Clock-type rule: invalid mixer/clock-type combinations must return `MixerClockTypeInvalid` (`3002`) with no state mutation.
 - Do not use `MediaSourceReadTimeout` (`4209`) for invalid timeout inputs or non-timeout failures (for example `MediaInvalidArgument`, `MediaSourceNonSeekable`).
 - Use `VideoOutputBackpressureQueueFull` (`4000`) for policy-based immediate queue rejection; use `VideoOutputBackpressureTimeout` (`4001`) only when a configured wait budget expires.
 - Video-output default backpressure policy is `DropOldest`; if Wait mode derives timeout from effective frame duration and cadence is unresolved, configuration is invalid (`MediaInvalidArgument`) unless explicit timeout override is provided.

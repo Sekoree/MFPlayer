@@ -49,8 +49,14 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `sealed record FFAudioSourceOptions`
 - Planned API:
   - `FFAudioChannelMappingPolicy MappingPolicy { get; init; } // default: PreserveSourceLayout`
-  - `FFAudioChannelMap? ExplicitChannelMap { get; init; } // required for ApplyExplicitRouteMap`
+  - `FFAudioChannelMap? ExplicitChannelMap { get; init; } // required when MappingPolicy=ApplyExplicitRouteMap`
   - `int? OutputChannelCountOverride { get; init; }`
+
+### `Config/FFmpegConfigValidator.cs`
+- `static class FFmpegConfigValidator`
+- Planned API:
+  - `int Validate(FFmpegOpenOptions openOptions, FFAudioSourceOptions? audioOptions = null)`
+  - Deterministic invalid-config guard for open/stream/map combinations (`FFmpegInvalidConfig` `2010`, `FFmpegInvalidAudioChannelMap` `2011`).
 
 ### `Runtime/FFSharedDecodeContext.cs`
 - `sealed class FFSharedDecodeContext : IDisposable`
@@ -78,9 +84,13 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `sealed class FFAudioSource : IAudioSource, IDisposable`
 - Planned API:
   - `FFAudioSource(FFMediaItem mediaItem)`
+  - `FFAudioSource(double durationSeconds = double.NaN, bool isSeekable = true)`
+  - `FFAudioSource(AudioStreamInfo streamInfo, double durationSeconds = double.NaN, bool isSeekable = true, FFAudioSourceOptions? options = null)`
+  - `Guid SourceId { get; }`
   - `AudioSourceState State { get; }`
   - `AudioStreamInfo StreamInfo { get; }`
   - `FFAudioSourceOptions Options { get; }`
+  - `bool IsSeekable { get; }`
   - `int Start()`
   - `int Stop()`
   - `int ReadSamples(Span<float> destination, int requestedFrameCount, out int framesRead)`
@@ -93,31 +103,45 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `sealed class FFVideoSource : IVideoSource, IDisposable`
 - Planned API:
   - `FFVideoSource(FFMediaItem mediaItem)`
+  - `FFVideoSource(double durationSeconds = double.NaN, bool isSeekable = true, long? totalFrameCount = null)`
+  - `FFVideoSource(VideoStreamInfo streamInfo, double durationSeconds = double.NaN, bool isSeekable = true, long? totalFrameCount = null)`
+  - `Guid SourceId { get; }`
   - `VideoSourceState State { get; }`
   - `VideoStreamInfo StreamInfo { get; }`
   - `int Start()`
   - `int Stop()`
   - `int ReadFrame(out VideoFrame frame)`
   - `int Seek(double positionSeconds)`
+  - `int SeekToFrame(long frameIndex)`
+  - `int SeekToFrame(long frameIndex, out long currentFrameIndex, out long? totalFrameCount)`
   - `double PositionSeconds { get; }`
   - `double DurationSeconds { get; }`
+  - `long CurrentFrameIndex { get; }`
+  - `long? CurrentDecodeFrameIndex { get; }`
+  - `long? TotalFrameCount { get; }`
+  - `bool IsSeekable { get; }`
 
 ### `Media/FFMediaItem.cs`
-- `sealed class FFMediaItem : IMediaItem, IDynamicMetadata, IDisposable`
+- `sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisposable`
 - Planned API:
   - `FFMediaItem(FFmpegOpenOptions openOptions, FFmpegDecodeOptions? decodeOptions = null, FFAudioSourceOptions? audioOptions = null)`
   - `FFMediaItem(Stream inputStream, bool leaveInputStreamOpen = true, string? inputFormatHint = null, FFmpegDecodeOptions? decodeOptions = null, FFAudioSourceOptions? audioOptions = null)`
-  - `FFMediaItem(Stream inputStream, FFmpegOpenOptions openOptions, FFmpegDecodeOptions? decodeOptions = null, FFAudioSourceOptions? audioOptions = null) // openOptions stream fields must be unset`
+  - `FFMediaItem(Stream inputStream, FFmpegOpenOptions openOptions, FFmpegDecodeOptions? decodeOptions = null, FFAudioSourceOptions? audioOptions = null) // openOptions InputUri/InputStream must be unset`
   - `FFMediaItem(FFAudioSource audioSource)`
   - `FFMediaItem(FFVideoSource videoSource)`
   - `FFMediaItem(FFAudioSource audioSource, FFVideoSource videoSource)`
+  - `FFMediaItem(IReadOnlyList<IAudioSource> playbackAudioSources, IReadOnlyList<IVideoSource> playbackVideoSources, IVideoSource? initialActiveVideoSource = null, bool ownsSources = false)`
   - `FFAudioSource? AudioSource { get; }`
   - `FFVideoSource? VideoSource { get; }`
+  - `FFmpegOpenOptions? ResolvedOpenOptions { get; } // null for source-only constructors`
+  - `FFmpegDecodeOptions? ResolvedDecodeOptions { get; } // null for source-only constructors`
+  - `IReadOnlyList<IAudioSource> PlaybackAudioSources { get; }`
+  - `IReadOnlyList<IVideoSource> PlaybackVideoSources { get; }`
+  - `IVideoSource? InitialActiveVideoSource { get; }`
   - `IReadOnlyList<AudioStreamInfo> AudioStreams { get; }`
   - `IReadOnlyList<VideoStreamInfo> VideoStreams { get; }`
   - `MediaMetadataSnapshot? Metadata { get; }`
   - `bool HasMetadata { get; }`
-  - `event EventHandler<MediaMetadataSnapshot>? MetadataUpdated`
 
 ### `Decoders/Internal`
 - Internal-only implementation blocks using `FFmpeg.AutoGen`:
@@ -140,10 +164,12 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Shared decode context lifetime must be deterministic (`ref-count` + explicit close/dispose ownership rules).
 - Decode threading is configurable; heavy formats may require `DecodeThreadCount > 1` for smooth realtime throughput.
 - Decode thread-count clamping is deterministic: values below `0` return invalid-argument/config failure; values above logical CPU count clamp to logical CPU count.
+- Queue limits are deterministic: `MaxQueuedPackets` and `MaxQueuedFrames` clamp to at least `1`.
 - Input source is mutually exclusive: exactly one of `InputUri` or `InputStream` must be provided.
 - Stream-open ownership is explicit: when `InputStream` is used, disposal honors `LeaveInputStreamOpen`.
+- Stream+options constructor requires `openOptions` without pre-set `InputUri`/`InputStream`; mixed input-source paths fail deterministically with `FFmpegInvalidConfig` (`2010`).
+- `ResolvedOpenOptions` captures the normalized effective open options for diagnostics/tests when item is constructed from open options or stream+options paths.
 - `InputStream` must be readable; invalid stream capability paths return deterministic config/argument failures.
-- `FFMediaItem` stream overloads are convenience wrappers over open-options stream paths and follow the same exclusivity/ownership rules.
 - Timestamp-led timing is default; external clock correction is opt-in via `EnableExternalClockCorrection`.
 - Nonsensical open/config combinations return `FFmpegInvalidConfig` (`2010`) with no partial open side effects.
 - Invalid seek behavior follows Core: non-zero code, no clamp, no state change.
@@ -224,4 +250,5 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Queue saturation behavior: bounded decode queues apply deterministic backpressure behavior (no unbounded growth).
 - Metadata event teardown fence: `FFMediaItem.MetadataUpdated` is not raised after successful `FFMediaItem.Dispose()` completion.
 - Media-item construction paths: constructing `FFAudioSource`/`FFVideoSource` from `FFMediaItem` must preserve deterministic ownership and no-partial-open guarantees.
+- Optional local stress gate for heavy video validation: set `SMEDIA_RUN_HEAVY_STRESS=1` and optionally `SMEDIA_HEAVY_VIDEO_PATH=/path/to/file.mov` before running `S.Media.FFmpeg.Tests`.
 

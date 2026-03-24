@@ -115,6 +115,21 @@ Tracks implementation-impacting decisions that refine (but do not replace) `Medi
   - Wait-mode timeout remains cadence-aware while allowing explicit override when cadence is unresolved.
   - Disposed-frame misuse is observable via stable non-zero return code instead of undefined behavior.
 
+## DEC-2026-03-24-010: Single Clock Field and ClockType-Based Leadership
+
+- Date (UTC): `2026-03-24`
+- Status: `Accepted`
+- Scope: `S.Media.Core` mixer/player clock contracts
+- Decision:
+  - Mixers expose a single `Clock` field (`IMediaClock`) plus `ClockType` leadership mode.
+  - External clocks implement `IMediaClock` directly and are selected via `ClockType.External`.
+  - Supported defaults are mixer-kind-specific: `AudioMixer=AudioLed`, `VideoMixer=VideoLed`, `AudioVideoMixer=Hybrid`.
+  - Nonsensical mixer/clock-type combinations return deterministic code `MixerClockTypeInvalid` (`3002`).
+- Consequences:
+  - No separate `IExternalClock` contract is needed.
+  - Clock leadership is explicit and validated uniformly by mixer kind.
+  - Invalid clock-type requests must not mutate runtime mixer state.
+
 ## Cross-Reference
 
 - `Media/S.Media.Core/PLAN.smedia-architecture.md`

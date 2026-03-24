@@ -172,6 +172,9 @@ This document is the finalized architecture baseline for refactoring the current
   - `AudioMixer`: `AudioLed`
   - `VideoMixer`: `VideoLed`
   - `AudioVideoMixer`: `Hybrid`
+- Mixer clock contract uses one `IMediaClock Clock` plus `ClockType` selector.
+- `ClockType.External` is the external-clock path (external clocks implement `IMediaClock` directly).
+- Nonsensical mixer/clock-type pairs (for example `VideoLed` on `AudioMixer`) must fail with `MixerClockTypeInvalid` (`3002`) and make no state change.
 - Default runtime clock implementation is `CoreMediaClock`.
 - External clock support remains optional and pluggable.
 - External clock correction is opt-in (default: disabled).
@@ -302,6 +305,8 @@ This document is the finalized architecture baseline for refactoring the current
 
 - Primary simple API:
   - `Play(IMediaItem media)` as the default happy path (`Play(Media)` is shorthand wording only).
+- Interface composition:
+  - `IMediaPlayer : IAudioVideoMixer` (friendly mixer surface) with no advanced-routing interfaces on player.
 - Required player properties/events:
   - properties: `State`, `Position`, `Duration`, `CurrentFrame`, `Volume`, `ActiveMedia`
   - collections:
@@ -428,11 +433,11 @@ Use these canonical lines in module `API-outline.md` `Notes` sections to avoid w
 - `Media/S.Media.Core/Errors/AreaExceptions.cs` - area-derived exceptions with contextual detail payloads.
 - `Media/S.Media.Core/Media/IMediaItem.cs` - `IMediaItem` (`AudioStreams`, `VideoStreams`, `Metadata`, `HasMetadata`).
 - `Media/S.Media.Core/Media/IDynamicMetadata.cs` - `IDynamicMetadata` (`MetadataUpdated` with full snapshot payload).
+- `Media/S.Media.Core/Media/IMediaPlaybackSourceBinding.cs` - optional playback-source bridge for media items that provide ready mixer sources.
 - `Media/S.Media.Core/Media/MediaMetadataSnapshot.cs` - `MediaMetadataSnapshot` (`UpdatedAtUtc`, case-sensitive `ReadOnlyDictionary<string, string> AdditionalMetadata`).
 - `Media/S.Media.Core/Media/AudioStreamInfo.cs` - `AudioStreamInfo` (typed basic stream metadata).
 - `Media/S.Media.Core/Media/VideoStreamInfo.cs` - `VideoStreamInfo` (typed basic stream metadata).
 - `Media/S.Media.Core/Clock/IMediaClock.cs` - `IMediaClock`.
-- `Media/S.Media.Core/Clock/IExternalClock.cs` - `IExternalClock` (external clock bridge contract).
 - `Media/S.Media.Core/Clock/CoreMediaClock.cs` - `CoreMediaClock` (default Core clock implementation).
 - `Media/S.Media.Core/Audio/IAudioSource.cs` - `IAudioSource` (start/stop/read/seek contract).
 - `Media/S.Media.Core/Video/IVideoSource.cs` - `IVideoSource` (start/stop/read/seek + frame-seek contract).
@@ -443,6 +448,12 @@ Use these canonical lines in module `API-outline.md` `Notes` sections to avoid w
 - `Media/S.Media.Core/Video/Bgra32PixelFormatData.cs` - `Bgra32PixelFormatData`.
 - `Media/S.Media.Core/Video/Yuv420PPixelFormatData.cs` - `Yuv420PPixelFormatData`.
 - `Media/S.Media.Core/Video/Nv12PixelFormatData.cs` - `Nv12PixelFormatData`.
+- `Media/S.Media.Core/Video/Yuv422PPixelFormatData.cs` - `Yuv422PPixelFormatData`.
+- `Media/S.Media.Core/Video/Yuv422P10LePixelFormatData.cs` - `Yuv422P10LePixelFormatData`.
+- `Media/S.Media.Core/Video/P010LePixelFormatData.cs` - `P010LePixelFormatData`.
+- `Media/S.Media.Core/Video/Yuv420P10LePixelFormatData.cs` - `Yuv420P10LePixelFormatData`.
+- `Media/S.Media.Core/Video/Yuv444PPixelFormatData.cs` - `Yuv444PPixelFormatData`.
+- `Media/S.Media.Core/Video/Yuv444P10LePixelFormatData.cs` - `Yuv444P10LePixelFormatData`.
 - `Media/S.Media.Core/Video/VideoOutputBackpressureMode.cs` - `VideoOutputBackpressureMode`.
 - `Media/S.Media.Core/Video/VideoOutputConfig.cs` - `VideoOutputConfig`.
 - `Media/S.Media.Core/Video/IVideoOutput.cs` - `IVideoOutput` (start/stop/push contract for video sinks).
@@ -457,6 +468,9 @@ Use these canonical lines in module `API-outline.md` `Notes` sections to avoid w
 - `Media/S.Media.Core/Mixing/AudioSourceErrorEventArgs.cs` - `AudioSourceErrorEventArgs`.
 - `Media/S.Media.Core/Mixing/AudioMixerDropoutEventArgs.cs` - `AudioMixerDropoutEventArgs`.
 - `Media/S.Media.Core/Mixing/MixerSourceDetachOptions.cs` - `MixerSourceDetachOptions` (detach/stop/dispose policy for source removal/clear paths).
+- `Media/S.Media.Core/Mixing/ClockType.cs` - `ClockType` (`External`, `AudioLed`, `VideoLed`, `Hybrid`).
+- `Media/S.Media.Core/Mixing/MixerKind.cs` - `MixerKind`.
+- `Media/S.Media.Core/Mixing/MixerClockTypeRules.cs` - `MixerClockTypeRules` (mixer-kind clock-type validation).
 - `Media/S.Media.Core/Mixing/IVideoMixer.cs` - `IVideoMixer` (transport + active-source control + deterministic video sync/seek).
 - `Media/S.Media.Core/Mixing/VideoMixerSyncMode.cs` - `VideoMixerSyncMode`.
 - `Media/S.Media.Core/Mixing/VideoMixerState.cs` - `VideoMixerState`.
