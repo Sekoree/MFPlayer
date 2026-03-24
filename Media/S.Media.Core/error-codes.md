@@ -20,6 +20,11 @@ Source of truth for allocation policy and reserved code chunks across `S.Media.*
 - `2200-2299`: FFmpeg mapping/resampler/format-conversion reserve
 - `3000-3099`: Core mixing active initial allocation block
 - Core mixing fixed pick: `3000` = `MixerDetachStepFailed` (remove/clear detach-step failure when no more specific code applies)
+- Core mixing fixed pick: `3001` = `MixerSourceIdCollision` (duplicate source registration by `SourceId`)
+- `4000-4099`: Core generic video-output/backpressure initial allocation block
+- Core output fixed pick: `4000` = `VideoOutputBackpressureQueueFull` (push rejected due to configured queue/backpressure limit)
+- Core output fixed pick: `4001` = `VideoOutputBackpressureTimeout` (push timed out waiting for configured backpressure policy)
+- Core output fixed pick: `4002` = `VideoFrameDisposed` (push rejected because frame instance was already disposed)
 - `4300-4399`: PortAudio active initial allocation block
 - `4400-4499`: OpenGL clone and render-graph active initial allocation block
 - `5000-5079`: NDI active + near-term reserve block
@@ -41,6 +46,11 @@ Source of truth for allocation policy and reserved code chunks across `S.Media.*
 - `FFmpegMappingReserve` -> `2200-2299`
 - `MixingActive` -> `3000-3099`
 - `MixerDetachStepFailed` -> `3000`
+- `MixerSourceIdCollision` -> `3001`
+- `OutputBackpressureActive` -> `4000-4099`
+- `VideoOutputBackpressureQueueFull` -> `4000`
+- `VideoOutputBackpressureTimeout` -> `4001`
+- `VideoFrameDisposed` -> `4002`
 - `PortAudioActive` -> `4300-4399`
 - `OpenGLActive` -> `4400-4499`
 - `NDIActiveNearTerm` -> `5000-5079`
@@ -63,7 +73,11 @@ Source of truth for allocation policy and reserved code chunks across `S.Media.*
 - Shared semantic classification is centralized in `Media/S.Media.Core/Errors/ErrorCodeRanges.cs` via `ResolveSharedSemantic(int code)`.
 - `MediaConcurrentOperationViolation` (`950`) may be surfaced directly by Core/orchestration paths when no module-specific code is more precise.
 - Detach return-code precedence: when an operation has a specific owned module/backend detach-step failure code, return that specific code; use `MixerDetachStepFailed` (`3000`) only as generic fallback.
+- Source registration rule: duplicate `SourceId` attempts must return `MixerSourceIdCollision` (`3001`) and must not partially mutate registrations.
 - Do not use `MediaSourceReadTimeout` (`4209`) for invalid timeout inputs or non-timeout failures (for example `MediaInvalidArgument`, `MediaSourceNonSeekable`).
+- Use `VideoOutputBackpressureQueueFull` (`4000`) for policy-based immediate queue rejection; use `VideoOutputBackpressureTimeout` (`4001`) only when a configured wait budget expires.
+- Video-output default backpressure policy is `DropOldest`; if Wait mode derives timeout from effective frame duration and cadence is unresolved, configuration is invalid (`MediaInvalidArgument`) unless explicit timeout override is provided.
+- Use `VideoFrameDisposed` (`4002`) when `PushFrame(...)` receives a disposed frame instance.
 - If a value is clamped by policy (for example queue size minimums), do not use an error code for that path.
 - Log payload should include: operation context, backend/native detail (when available), and correlation id.
 - `DebugKeys.MixerDetachSecondaryFailure` is diagnostics-only and should include `operation`, `sourceId`, `step`, `errorCode`, `correlationId`, plus backend/native detail when available.

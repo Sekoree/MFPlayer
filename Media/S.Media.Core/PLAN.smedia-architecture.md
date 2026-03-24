@@ -2,7 +2,7 @@
 
 ## S.Media Refactor Architecture Baseline (Finalized)
 
-This document is the finalized architecture baseline for refactoring the current `Seko.OwnAudioNET.*` stack into a cohesive `S.Media.*` architecture with strict dependency direction, explicit manager/mixer/player APIs, and predictable playback semantics. The design keeps simple usage first (`MediaPlayer.Play(Media)`), preserves advanced scenarios through one controlled feature (multi-output), centralizes diagnostics/errors in Core, and introduces a dedicated FFmpeg decoding layer with audio-only, video-only, and synced A/V paths.
+This document is the finalized architecture baseline for refactoring the current `Seko.OwnAudioNET.*` stack into a cohesive `S.Media.*` architecture with strict dependency direction, explicit manager/mixer/player APIs, and predictable playback semantics. The design keeps simple usage first (`MediaPlayer.Play(IMediaItem media)`; `Play(Media)` is shorthand), preserves advanced scenarios through one controlled feature (multi-output), centralizes diagnostics/errors in Core, and introduces a dedicated FFmpeg decoding layer with audio-only, video-only, and synced A/V paths.
 
 ## Scope and Goals
 
@@ -11,10 +11,11 @@ This document is the finalized architecture baseline for refactoring the current
 - Keep direct `Add*`/`Remove*` methods on manager/mixer/player APIs (no indirect-only routing).
 - Standardize seek and conflict behavior across audio/video/hybrid paths.
 - Centralize debug keys and error code ranges in Core.
-- Perform a hard cut from current `Seko.OwnAudioNET.*` implementations (no compatibility shims/wrappers).
+- Perform a hard cut from current `Seko.OwnAudioNET.*` implementations for final runtime sign-off (no compatibility shims/wrappers).
 - Remove all `Seko.OwnAudioNET.*` projects and move required functionality into the new `S.Media.*` project set.
 - Remove `OwnAudio` as a dependency from the target architecture.
 - Treat this architecture as a clean-cut new start (no migration/compatibility layer planning).
+- During implementation, temporary legacy/new project coexistence in the workspace is allowed for staged migration; final completion requires full legacy removal from solution/runtime paths.
 
 ## Namespace Policy
 
@@ -50,7 +51,6 @@ This document is the finalized architecture baseline for refactoring the current
 - `Media/S.Media.MIDI` (new)
   - Easy-to-use MIDI API layer over `MIDI/PMLib` (PortMidi).
 - App renames:
-  - `Test/AudioEx` -> `Test/MediaDebug`
   - `Test/VideoTest` -> `Test/VideoStress`
 
 ## Per-Project Responsibilities
@@ -132,6 +132,7 @@ This document is the finalized architecture baseline for refactoring the current
   - default behavior is detach-only (no auto-stop, no auto-dispose).
   - optional `StopOnDetach` can stop sources on remove/clear.
   - optional `DisposeOnDetach` can dispose sources on remove/clear when caller delegates ownership.
+  - duplicate source registration by `SourceId` must be rejected deterministically (`MixerSourceIdCollision`, `3001`) with no registration mutation.
   - when multiple detach-step failures occur, return the first deterministic error code and emit diagnostics for secondary failures.
   - `RemoveSource(...)` and `ClearSources()` must use identical detach-step ordering and error-selection rules.
 - Split advanced routing capabilities:
@@ -139,6 +140,9 @@ This document is the finalized architecture baseline for refactoring the current
   - `ISupportsAdvancedVideoRouting` defines APIs for mapping video inputs/sources to mixer outputs.
   - Both interfaces expose direct routing APIs (add/remove/update route operations) and a read-only list of current routes.
 - `MediaPlayer` does not implement advanced routing interfaces by default.
+- Core video-output policy defaults: `VideoOutputBackpressureMode.DropOldest` is default; Wait mode timeout derives from effective frame duration multiplied by configurable frame-time multiplier, with explicit-timeout requirement when cadence is unresolved.
+- Core video outputs require explicit config at start (`Start(VideoOutputConfig)`); no parameterless start path in the target contract.
+- Core keeps a backpressure outcome matrix (DropNewest/DropOldest/Wait plus disposed-input precedence) as the canonical behavior table in `Media/S.Media.Core/API-outline.md`.
 
 ## Media Item and Dynamic Metadata Contracts
 
@@ -228,6 +232,7 @@ This document is the finalized architecture baseline for refactoring the current
   - `2000-2099`: FFmpeg active initial picks
   - `2100-2199`: FFmpeg runtime/native loading reserve
   - `2200-2299`: FFmpeg mapping/resampler reserve
+  - `4000-4099`: Core generic video-output/backpressure initial picks (`4000` queue-full, `4001` wait-timeout, `4002` disposed-frame push)
   - `4300-4399`: PortAudio active initial picks
   - `4400-4499`: OpenGL clone/render active initial picks
   - `5000-5079`: NDI active + near-term reserve
@@ -242,6 +247,7 @@ This document is the finalized architecture baseline for refactoring the current
 - Raw third-party/system exceptions remain unwrapped.
 - When available, preserve backend-native exception detail/messages for maximum diagnostics quality.
 - Logging standard is `Microsoft.Extensions.Logging` across all new projects.
+- Video output push paths are hot paths and remain performance-first: branch-light steady state, no allocation-heavy per-frame checks, and no verbose per-frame logging outside trace/sampled diagnostics.
 - Logging levels are runtime-configurable with precedence:
   - global level first
   - per-area override second
@@ -295,7 +301,7 @@ This document is the finalized architecture baseline for refactoring the current
 ## MediaPlayer Design
 
 - Primary simple API:
-  - `Play(Media)` as the default happy path.
+  - `Play(IMediaItem media)` as the default happy path (`Play(Media)` is shorthand wording only).
 - Required player properties/events:
   - properties: `State`, `Position`, `Duration`, `CurrentFrame`, `Volume`, `ActiveMedia`
   - collections:
@@ -320,7 +326,8 @@ This document is the finalized architecture baseline for refactoring the current
 
 - Architecture decisions in this document are finalized.
 - No additional blocking design decisions are required before implementation.
-- Clean-cut rule is fixed: no compatibility layers, no migration wrappers, no dual-path runtime.
+- Migration policy is fixed: temporary solution-level coexistence is allowed while migrating, but production/runtime sign-off requires removing legacy projects and legacy runtime paths.
+- Clean-cut runtime rule is fixed: no compatibility layers, no migration wrappers, and no dual-path runtime in final architecture.
 
 ## Shared Wording Template (API Outlines)
 
@@ -368,6 +375,8 @@ Use these canonical lines in module `API-outline.md` `Notes` sections to avoid w
   - Phase 1: clock contract assertions (default `CoreMediaClock`, configured external-clock unavailability returns `MediaExternalClockUnavailable`, no implicit fallback).
   - Phase 1: seek execution assertions (seek is immediate/non-queued for running/paused/stopped transports).
   - Phase 1: detach-policy assertions (default detach-only, `StopOnDetach`, `DisposeOnDetach`, remove/clear parity, source-registration-order iteration, deterministic first-error selection, and secondary-failure diagnostics emission).
+  - Phase 1: video-output precedence assertions include both branches: disposed-frame push returns `VideoFrameDisposed` (`4002`) before queue/backpressure outcomes (`4000`/`4001`) when overlapping conditions are true, and non-disposed frame push under the same pressure returns policy outcome (`4000`/`4001`) (not `4002`).
+  - Phase 2: output reentrancy/threading contract assertions for `IVideoOutput` (`PushFrame`/`Stop`/`Dispose` interaction ordering and deterministic error outcomes under contention).
   - Phase 2: runtime loading/interop failure semantics + queue/clamp behavior.
   - Phase 3: A/V sync, external-clock opt-in behavior, and resilience/perf smoke coverage (including NDI live-path `DurationSeconds = double.NaN` assertions).
   - Future timeout-read gate: if any module reintroduces timeout-bounded read APIs, that module must add explicit contract tests asserting `partial-before-deadline = success` and `no-arrival-before-deadline = MediaSourceReadTimeout (4209)`.
@@ -427,6 +436,16 @@ Use these canonical lines in module `API-outline.md` `Notes` sections to avoid w
 - `Media/S.Media.Core/Clock/CoreMediaClock.cs` - `CoreMediaClock` (default Core clock implementation).
 - `Media/S.Media.Core/Audio/IAudioSource.cs` - `IAudioSource` (start/stop/read/seek contract).
 - `Media/S.Media.Core/Video/IVideoSource.cs` - `IVideoSource` (start/stop/read/seek + frame-seek contract).
+- `Media/S.Media.Core/Video/VideoFrame.cs` - `VideoFrame` (caller-owned/disposable decoded frame contract with format/plane metadata).
+- `Media/S.Media.Core/Video/VideoPixelFormat.cs` - `VideoPixelFormat`.
+- `Media/S.Media.Core/Video/IPixelFormatData.cs` - `IPixelFormatData` (format-specific metadata abstraction).
+- `Media/S.Media.Core/Video/Rgba32PixelFormatData.cs` - `Rgba32PixelFormatData`.
+- `Media/S.Media.Core/Video/Bgra32PixelFormatData.cs` - `Bgra32PixelFormatData`.
+- `Media/S.Media.Core/Video/Yuv420PPixelFormatData.cs` - `Yuv420PPixelFormatData`.
+- `Media/S.Media.Core/Video/Nv12PixelFormatData.cs` - `Nv12PixelFormatData`.
+- `Media/S.Media.Core/Video/VideoOutputBackpressureMode.cs` - `VideoOutputBackpressureMode`.
+- `Media/S.Media.Core/Video/VideoOutputConfig.cs` - `VideoOutputConfig`.
+- `Media/S.Media.Core/Video/IVideoOutput.cs` - `IVideoOutput` (start/stop/push contract for video sinks).
 - `Media/S.Media.Core/Routing/AudioRoute.cs` - `AudioRoute`.
 - `Media/S.Media.Core/Routing/VideoRoute.cs` - `VideoRoute`.
 - `Media/S.Media.Core/Routing/ISupportsAdvancedAudioRouting.cs` - `ISupportsAdvancedAudioRouting` (route APIs + read-only current route list).
@@ -449,7 +468,7 @@ Use these canonical lines in module `API-outline.md` `Notes` sections to avoid w
 - `Media/S.Media.Core/Mixing/AudioMixer.cs` - `AudioMixer` (default `AudioLed`).
 - `Media/S.Media.Core/Mixing/VideoMixer.cs` - `VideoMixer` (default `VideoLed`).
 - `Media/S.Media.Core/Mixing/AudioVideoMixer.cs` - `AudioVideoMixer` (default `Hybrid`).
-- `Media/S.Media.Core/Playback/IMediaPlayer.cs` - `IMediaPlayer` (`Play(Media)` + direct typed audio/video output methods).
+- `Media/S.Media.Core/Playback/IMediaPlayer.cs` - `IMediaPlayer` (`Play(IMediaItem media)` + direct typed audio/video output methods; `Play(Media)` shorthand in prose).
 - `Media/S.Media.Core/Playback/MediaPlayer.cs` - `MediaPlayer` (simple orchestration + multi-output support).
 
 ### `Media/S.Media.FFmpeg`

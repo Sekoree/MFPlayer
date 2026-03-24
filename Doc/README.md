@@ -65,7 +65,7 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 
 ## Where to look for runnable references
 
-- `Test/MediaDebug/Program.cs` (new `S.Media.*` migration target; supports playlist and interactive controls)
+- `Test/AudioEx/Program.cs` (current active test-app entrypoint during migration)
 - `Archive/Legacy/AudioEx/Program.cs` (archived legacy reference)
 - `Archive/Legacy/VideoTest/MainWindow.axaml.cs` (archived legacy reference)
 - `Archive/Legacy/NdiVideoReceive/Program.cs` (archived legacy reference)

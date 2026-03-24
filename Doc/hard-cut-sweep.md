@@ -6,7 +6,7 @@ This document tracks the migration sweep for removing active `Seko.OwnAudioNET.*
 
 - `Media/*` implementation code: no direct `Seko.OwnAudioNET.*` or `OwnAudio` references found in `*.cs` / `*.csproj`.
 - `Media/S.Media.Core/PLAN.smedia-architecture.md` intentionally contains migration references to legacy names.
-- `Test/MediaDebug/*`: no direct `Seko.OwnAudioNET.*` or `OwnAudio` references found.
+- `Test/AudioEx/*`: no direct `Seko.OwnAudioNET.*` or `OwnAudio` references found.
 - Legacy-only references are now archived under:
   - `Archive/Legacy/AudioEx/*`
   - `Archive/Legacy/VideoTest/*`
@@ -27,7 +27,7 @@ This document tracks the migration sweep for removing active `Seko.OwnAudioNET.*
 ## Validation Commands
 
 ```fish
-rg -n -g '*.{cs,csproj}' 'Seko\.OwnAudioNET|OwnAudio' Media Test/MediaDebug
+rg -n -g '*.{cs,csproj}' 'Seko\.OwnAudioNET|OwnAudio' Media Test/AudioEx
 rg -n "Seko\.OwnAudioNET|OwnAudio" Archive/Legacy/AudioEx Archive/Legacy/VideoTest Archive/Legacy/NdiVideoReceive
 rg -n "Seko\.OwnAudioNET\.Video" MFPlayer.sln
 rg -n "AudioEx\.csproj|VideoTest\.csproj|NdiVideoReceive\.csproj" MFPlayer.sln

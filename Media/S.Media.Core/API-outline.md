@@ -67,6 +67,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `ErrorCodeAllocationRange FFmpegRuntimeReserve { get; } // 2100-2199`
   - `ErrorCodeAllocationRange FFmpegMappingReserve { get; } // 2200-2299`
   - `ErrorCodeAllocationRange MixingActive { get; } // 3000-3099`
+  - `ErrorCodeAllocationRange OutputBackpressureActive { get; } // 4000-4099`
   - `ErrorCodeAllocationRange PortAudioActive { get; } // 4300-4399`
   - `ErrorCodeAllocationRange OpenGLActive { get; } // 4400-4499`
   - `ErrorCodeAllocationRange NDIActiveNearTerm { get; } // 5000-5079`
@@ -74,6 +75,10 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `ErrorCodeAllocationRange MIDIReserve { get; } // 900-949`
   - `int MediaConcurrentOperationViolation { get; } // 950 (shared semantic code for same-instance concurrent operation misuse)`
   - `int MixerDetachStepFailed { get; } // 3000 (remove/clear detach-step failure when no more specific code applies)`
+  - `int MixerSourceIdCollision { get; } // 3001 (duplicate source registration by SourceId)`
+  - `int VideoOutputBackpressureQueueFull { get; } // 4000 (push rejected by configured queue/backpressure policy)`
+  - `int VideoOutputBackpressureTimeout { get; } // 4001 (wait-mode push timed out)`
+  - `int VideoFrameDisposed { get; } // 4002 (PushFrame called with disposed VideoFrame)`
   - `IReadOnlyList<ErrorCodeAllocationRange> All { get; }`
 
 ### `Errors/MediaException.cs`
@@ -226,6 +231,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 ### `Audio/IAudioSource.cs`
 - `interface IAudioSource : IDisposable`
 - Planned API:
+  - `Guid SourceId { get; }`
   - `AudioSourceState State { get; }`
   - `int Start()`
   - `int Stop()`
@@ -234,10 +240,14 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `double PositionSeconds { get; }`
   - `double DurationSeconds { get; }`
   - `requestedFrameCount <= 0` returns `MediaResult.Success` with `framesRead = 0`.
+  - `SourceId` is implementation-generated, immutable for the instance lifetime, and the canonical key for remove-by-guid mixer operations.
+  - `SourceId` should be unique per process lifetime when feasible; minimum guarantee is no collisions among live/registered source instances.
+  - Duplicate `SourceId` registration in mixer-managed source collections must be rejected with `MixerSourceIdCollision` (`3001`) and no registration mutation.
 
 ### `Video/IVideoSource.cs`
 - `interface IVideoSource : IDisposable`
 - Planned API:
+  - `Guid SourceId { get; }`
   - `VideoSourceState State { get; }`
   - `int Start()`
   - `int Stop()`
@@ -252,9 +262,126 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `long? TotalFrameCount { get; } // null when unknown/live`
   - `bool IsSeekable { get; }`
   - Ownership contract: returned `VideoFrame` is caller-owned and remains valid until caller disposal (including across subsequent reads).
+  - `SourceId` is implementation-generated, immutable for the instance lifetime, and the canonical key for remove-by-guid mixer operations.
+  - `SourceId` should be unique per process lifetime when feasible; minimum guarantee is no collisions among live/registered source instances.
+  - Duplicate `SourceId` registration in mixer-managed source collections must be rejected with `MixerSourceIdCollision` (`3001`) and no registration mutation.
   - Seek contract: non-finite/negative position seeks and negative frame seeks return `MediaInvalidArgument`.
   - Invalid frame seek returns non-zero code with no state change.
   - Non-seekable/live frame seek returns `MediaSourceNonSeekable`.
+
+### `Video/VideoFrame.cs`
+- `sealed class VideoFrame : IDisposable`
+- Planned API:
+  - `int Width { get; }`
+  - `int Height { get; }`
+  - `VideoPixelFormat PixelFormat { get; }`
+  - `IPixelFormatData PixelFormatData { get; }`
+  - `TimeSpan PresentationTime { get; }`
+  - `bool IsKeyFrame { get; }`
+  - `ReadOnlyMemory<byte> Plane0 { get; }`
+  - `ReadOnlyMemory<byte> Plane1 { get; }`
+  - `ReadOnlyMemory<byte> Plane2 { get; }`
+  - `ReadOnlyMemory<byte> Plane3 { get; }`
+  - `int Plane0Stride { get; }`
+  - `int Plane1Stride { get; }`
+  - `int Plane2Stride { get; }`
+  - `int Plane3Stride { get; }`
+  - Ownership contract: caller owns and disposes returned frames; implementations may reuse internal decode buffers but must keep frame contents valid until frame disposal.
+  - `Dispose()` is idempotent; repeated calls are no-op after first successful release.
+  - `Dispose()` is cross-thread safe for multithreaded decode/consume pipelines.
+  - Recommended usage: `using`/`try-finally` disposal is required on all consume paths; use-after-dispose is invalid and must be rejected deterministically.
+  - Dispose/read race contract: cross-thread dispose must be safe; in-flight backend/output operations must fail deterministically (no undefined behavior or memory corruption exposure).
+
+### `Video/VideoPixelFormat.cs`
+- `enum VideoPixelFormat`
+- Planned API:
+  - `Unknown = 0`
+  - `Rgba32 = 1`
+  - `Bgra32 = 2`
+  - `Yuv420P = 3`
+  - `Nv12 = 4`
+
+### `Video/IPixelFormatData.cs`
+- `interface IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; }`
+  - Invariant contract: each implementation defines required planes, minimum strides, and minimum plane lengths for its format.
+
+### `Video/Rgba32PixelFormatData.cs`
+- `readonly record struct Rgba32PixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Rgba32`
+  - `int BytesPerPixel { get; } // 4`
+  - Invariants: `Plane0` required; `Plane1..Plane3` empty; `Plane0Stride >= Width * 4`; `Plane0Length >= Plane0Stride * Height`.
+
+### `Video/Bgra32PixelFormatData.cs`
+- `readonly record struct Bgra32PixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Bgra32`
+  - `int BytesPerPixel { get; } // 4`
+  - Invariants: `Plane0` required; `Plane1..Plane3` empty; `Plane0Stride >= Width * 4`; `Plane0Length >= Plane0Stride * Height`.
+
+### `Video/Yuv420PPixelFormatData.cs`
+- `readonly record struct Yuv420PPixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Yuv420P`
+  - `int ChromaSubsampleX { get; } // 2`
+  - `int ChromaSubsampleY { get; } // 2`
+  - Invariants: `Plane0..Plane2` required; `Plane0Stride >= Width`; `Plane1Stride >= ceil(Width/2)`; `Plane2Stride >= ceil(Width/2)`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * ceil(Height/2)`; `Plane2Length >= Plane2Stride * ceil(Height/2)`.
+
+### `Video/Nv12PixelFormatData.cs`
+- `readonly record struct Nv12PixelFormatData : IPixelFormatData`
+- Planned API:
+  - `VideoPixelFormat Format { get; } // Nv12`
+  - `int ChromaSubsampleX { get; } // 2`
+  - `int ChromaSubsampleY { get; } // 2`
+  - Invariants: `Plane0` and `Plane1` required; `Plane2..Plane3` empty; `Plane0Stride >= Width`; `Plane1Stride >= Width`; `Plane0Length >= Plane0Stride * Height`; `Plane1Length >= Plane1Stride * ceil(Height/2)`.
+
+### `Video/VideoOutputBackpressureMode.cs`
+- `enum VideoOutputBackpressureMode`
+- Planned API:
+  - `DropNewest = 0` // reject new frame immediately when full
+  - `DropOldest = 1` // evict queued frame and accept new frame
+  - `Wait = 2` // block up to timeout budget
+
+### `Video/VideoOutputConfig.cs`
+- `sealed record VideoOutputConfig`
+- Planned API:
+  - `VideoOutputBackpressureMode BackpressureMode { get; init; } // default: DropOldest`
+  - `int QueueCapacity { get; init; }`
+  - `double BackpressureWaitFrameMultiplier { get; init; } // default: 1.0, used when mode is Wait`
+  - `TimeSpan? BackpressureTimeout { get; init; } // optional explicit override for Wait mode`
+  - Wait timeout derivation (when `BackpressureTimeout` is null): `effectiveFrameDuration * BackpressureWaitFrameMultiplier`.
+  - If Wait mode is selected and effective frame duration cannot be resolved, explicit `BackpressureTimeout` is required.
+  - `QueueCapacity` must be `>= 1`; `< 1` returns `MediaInvalidArgument` (`4210`) with no partial start state.
+  - `BackpressureWaitFrameMultiplier` must be `> 0`; `<= 0` returns `MediaInvalidArgument` (`4210`).
+  - Invalid queue/wait config values are rejected (no clamping).
+  - Validation contract: invalid config returns `MediaInvalidArgument` (`4210`) with no partial start state.
+
+### `Video/IVideoOutput.cs`
+- `interface IVideoOutput : IDisposable`
+- Planned API:
+  - `Guid Id { get; }`
+  - `int Start(VideoOutputConfig config)`
+  - `int Stop()`
+  - `int PushFrame(VideoFrame frame)`
+  - `int PushFrame(VideoFrame frame, TimeSpan presentationTime)`
+  - Start contract: config is required at API entry (`Start(VideoOutputConfig)` only); no implicit no-config start path.
+  - Output implementations must not take ownership of caller-owned `VideoFrame` instances.
+  - Backpressure contract is explicit/configurable; default mode is `DropOldest`.
+  - Immediate queue rejection uses `VideoOutputBackpressureQueueFull` (`4000`), timeout expiration in wait mode uses `VideoOutputBackpressureTimeout` (`4001`).
+  - Push of a disposed frame is rejected deterministically with `VideoFrameDisposed` (`4002`).
+  - Validation order is deterministic: disposed-frame checks run before queue/backpressure policy checks (`4002` takes precedence over `4000`/`4001`).
+  - Hot-path policy: `PushFrame(...)` is performance-first (branch-light, zero-allocation steady state, no per-frame heavyweight validation/logging).
+
+### `Video/Backpressure Outcome Matrix`
+
+| Mode | Queue-full behavior | Timeout behavior | Deterministic failure code |
+| --- | --- | --- | --- |
+| `DropNewest` | Reject incoming frame immediately | N/A | `4000` |
+| `DropOldest` | Evict oldest queued frame and accept incoming frame | N/A | `4000` only if replacement cannot be completed deterministically |
+| `Wait` | Wait for available queue slot | Expire wait budget | `4001` on timeout |
+| `Any mode` + disposed input | Disposed-frame validation runs first | N/A | `4002` (takes precedence over mode outcomes) |
 
 ### `Audio/AudioEnums.cs`
 - Planned API:
@@ -325,6 +452,8 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - When `SourceDetachOptions.StopOnDetach=true`, remove/clear stop sources before detach.
   - When `SourceDetachOptions.DisposeOnDetach=true`, remove/clear dispose sources after detach (implies caller has delegated ownership).
   - Error-selection contract: remove/clear iterate sources by registration order; when multiple detach-step failures occur, return the first deterministic non-zero error code and emit diagnostics for secondary failures.
+  - Duplicate registration by `SourceId` is rejected with `MixerSourceIdCollision` (`3001`) and must not mutate source registration state.
+  - `RemoveSource(Guid sourceId)` resolves against `IAudioSource.SourceId`; instance and guid overloads target the same registration and use identical detach/error-selection behavior.
   - Detach return-code precedence: return the most specific owned/module/backend detach-step failure code when available; use `MixerDetachStepFailed` (`3000`) only as fallback.
   - Secondary-failure diagnostics payload for `DebugKeys.MixerDetachSecondaryFailure`: `operation`, `sourceId`, `step`, `errorCode`, `correlationId`, and backend/native detail when available.
   - Parity contract: `RemoveSource(...)` and `ClearSources()` use identical detach-step ordering and error selection rules.
@@ -395,6 +524,8 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - When `SourceDetachOptions.StopOnDetach=true`, remove/clear stop sources before detach.
   - When `SourceDetachOptions.DisposeOnDetach=true`, remove/clear dispose sources after detach (implies caller has delegated ownership).
   - Error-selection contract: remove/clear iterate sources by registration order; when multiple detach-step failures occur, return the first deterministic non-zero error code and emit diagnostics for secondary failures.
+  - Duplicate registration by `SourceId` is rejected with `MixerSourceIdCollision` (`3001`) and must not mutate source registration state.
+  - `RemoveSource(Guid sourceId)` resolves against `IVideoSource.SourceId`; instance and guid overloads target the same registration and use identical detach/error-selection behavior.
   - Detach return-code precedence: return the most specific owned/module/backend detach-step failure code when available; use `MixerDetachStepFailed` (`3000`) only as fallback.
   - Secondary-failure diagnostics payload for `DebugKeys.MixerDetachSecondaryFailure`: `operation`, `sourceId`, `step`, `errorCode`, `correlationId`, and backend/native detail when available.
   - Parity contract: `RemoveSource(...)` and `ClearSources()` use identical detach-step ordering and error selection rules.
@@ -504,6 +635,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `int RemoveVideoOutput(IVideoOutput output)`
   - `IReadOnlyList<IAudioOutput> AudioOutputs { get; }`
   - `IReadOnlyList<IVideoOutput> VideoOutputs { get; }`
+  - `Play(Media)` wording in architecture docs is shorthand for this signature (`Play(IMediaItem media)`).
 
 ### `Playback/MediaPlayer.cs`
 - `sealed class MediaPlayer : IMediaPlayer`
@@ -523,6 +655,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 
 ## Initial Generic Mixing Error Code Picks (`3000-3099`)
 - `3000`: `MixerDetachStepFailed`
+- `3001`: `MixerSourceIdCollision`
 - Return-code precedence: when a detach sub-step has a specific backend/module failure code, return that code; use `MixerDetachStepFailed` (`3000`) only as the generic fallback when no more specific owned code applies.
 
 ## Initial Generic Audio Error Code Picks (`4200-4299`)
@@ -539,4 +672,9 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `4209` reservation note: reserved for future timeout-bounded read paths where no frame/sample arrives before deadline; not used for partial-read success or argument/state validation failures.
 - `4210`: `MediaInvalidArgument`
 - `4211`: `MediaExternalClockUnavailable`
+
+## Initial Generic Output Error Code Picks (`4000-4099`)
+- `4000`: `VideoOutputBackpressureQueueFull`
+- `4001`: `VideoOutputBackpressureTimeout`
+- `4002`: `VideoFrameDisposed`
 
