@@ -44,6 +44,10 @@ This folder contains practical setup and usage guides for the video layer in `Vi
   - NDI send pipeline (`NDIVideoEngine`, sink routing, direct audio/video send APIs).
 - [`hard-cut-sweep.md`](hard-cut-sweep.md)
   - Migration sweep status for legacy `Seko.OwnAudioNET.*` / `OwnAudio` dependency removal.
+- [`Media/S.Media.FFmpeg/ffmpeg-migration-plan.md`](../Media/S.Media.FFmpeg/ffmpeg-migration-plan.md)
+  - Legacy-to-target adaptation plan for FFmpeg decoding internals into `S.Media.FFmpeg` (implementation adaptation only, no class moves).
+- [`Media/S.Media.OpenGL/opengl-migration-plan.md`](../Media/S.Media.OpenGL/opengl-migration-plan.md)
+  - Legacy-to-target migration matrix for moving performant OpenGL runtime and adapter code into `S.Media.OpenGL*`.
 
 ## Recommended read order
 
@@ -56,6 +60,8 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 7. NDI receive setup and tuning
 8. NDI send setup and sink usage
 9. OwnAudio interop notes and output snippets
+10. FFmpeg migration plan (implementation adaptation matrix)
+11. OpenGL migration plan (legacy-to-target implementation matrix)
 
 ## Where to look for runnable references
 

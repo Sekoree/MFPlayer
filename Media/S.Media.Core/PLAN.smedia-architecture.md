@@ -69,6 +69,8 @@ This document is the finalized architecture baseline for refactoring the current
 - `S.Media.PortAudio`
   - Owns real audio engine/output implementation for playback and source-style input using PALib.
   - Runtime/device discovery responsibilities are part of `PortAudioEngine`.
+  - Engine tracks created outputs; device switching is owned by output instances.
+  - Output instances emit device-change events; engine event surface remains lifecycle/discovery-focused.
   - Provides Microsoft logging-based wrappers (no static loggers).
 - `S.Media.OpenGL`
   - Owns core OpenGL video engine/output runtime and HUD data feeding.
@@ -81,6 +83,14 @@ This document is the finalized architecture baseline for refactoring the current
 - `S.Media.MIDI`
   - Owns easy-to-use MIDI device/message APIs.
   - Uses `MIDI/PMLib` (PortMidi) as backend; `S.Media.MIDI` is the friendly wrapper layer.
+  - Default-device APIs are discovery-only (`GetDefaultInput()`/`GetDefaultOutput()`); input/output creation stays explicit.
+  - Supports configurable short-disconnect auto-reconnect policy for input/output handles.
+  - Reconnect policy supports timeout/no-recover behavior with deterministic failure transitions.
+  - Input event payloads include source-device identity and receive timestamps (backend timestamp when available).
+  - Callback delivery is synchronous and serialized per instance in this phase (no callback-dispatch configuration surface).
+  - Message callbacks are no-drop while open; no callback-overflow/drop policy is applied in this phase.
+  - Input/output connection status transitions are exposed via status events and guaranteed for all internally observed transitions.
+  - Failure atomicity is required for `Initialize()`/`Create*()`/`Open()` paths (no partially-open state on failure).
   - Planning note: refactor `MIDI/PMLib` for uppercase `MIDI` naming alignment and `Microsoft.Extensions.Logging` integration (no static loggers).
 - `S.Media.OpenGL.Avalonia` and `S.Media.OpenGL.SDL3`
   - Own adapter/view/output controls only; no decoding or mixer policy logic.
@@ -118,6 +128,12 @@ This document is the finalized architecture baseline for refactoring the current
 - `AudioVideoMixer` implements both `IAudioMixer` and `IVideoMixer`, plus both routing interfaces:
   - `ISupportsAdvancedAudioRouting`
   - `ISupportsAdvancedVideoRouting`
+- Mixer source ownership is detach-first with configurable policy:
+  - default behavior is detach-only (no auto-stop, no auto-dispose).
+  - optional `StopOnDetach` can stop sources on remove/clear.
+  - optional `DisposeOnDetach` can dispose sources on remove/clear when caller delegates ownership.
+  - when multiple detach-step failures occur, return the first deterministic error code and emit diagnostics for secondary failures.
+  - `RemoveSource(...)` and `ClearSources()` must use identical detach-step ordering and error-selection rules.
 - Split advanced routing capabilities:
   - `ISupportsAdvancedAudioRouting` defines APIs for mapping audio inputs/channels to mixer outputs.
   - `ISupportsAdvancedVideoRouting` defines APIs for mapping video inputs/sources to mixer outputs.
@@ -152,9 +168,11 @@ This document is the finalized architecture baseline for refactoring the current
   - `AudioMixer`: `AudioLed`
   - `VideoMixer`: `VideoLed`
   - `AudioVideoMixer`: `Hybrid`
+- Default runtime clock implementation is `CoreMediaClock`.
 - External clock support remains optional and pluggable.
 - External clock correction is opt-in (default: disabled).
 - Primary external clock target: NDI (`S.Media.NDI`).
+- If an external clock is explicitly configured but unavailable (for example NDI/network transport loss), operations must fail with `MediaExternalClockUnavailable` (no implicit fallback to `CoreMediaClock`).
 - If configured clock chain cannot be resolved, fail startup rather than silently switching to a hidden mode.
 - Drift correction is opt-in only (disabled by default).
 - Drift correction values must be configurable in mixer configs.
@@ -170,13 +188,12 @@ This document is the finalized architecture baseline for refactoring the current
   - return non-zero error code
   - make no state change
   - perform no clamping
+- Non-finite/negative seek targets must return `MediaInvalidArgument`.
+- Mixer `Seek(...)` operations apply immediately in the current transport state (running/paused/stopped), are not deferred/queued, and return after coordinated state update attempt.
 - Non-seekable live sources must return shared non-zero code (`MediaSourceNonSeekable`).
-- Timeout-based live reads should return shared non-zero code (`MediaSourceReadTimeout`).
-- Live-read timeout policy is owned in `S.Media.Core` and is optional/config-driven (no mandatory hardcoded default timeout constants).
-- `TimeSpan.Zero` timeout means non-blocking poll behavior.
-- Negative timeout values must return invalid-argument code immediately.
-- Audio timeout reads return success when partial data is available before deadline.
-- Video timeout reads return success only when a new frame is available before deadline.
+- Unknown/unbounded source duration must be exposed as `double.NaN` (`DurationSeconds`) rather than clamped/sentinel finite values.
+- `IVideoSource.CurrentFrameIndex` is the presentation index.
+- Optional decode-side frame index may be exposed for diagnostics (`CurrentDecodeFrameIndex`), nullable when unavailable.
 - This rule applies consistently to player, mixer, and decoder-facing seek entrypoints.
 
 ## Debug Framework in Core
@@ -202,8 +219,11 @@ This document is the finalized architecture baseline for refactoring the current
   - `3000-3999`: mixing/sync/conflict
   - `4000-4999`: output/render
   - `5000-5199`: NDI integration
-- Canonical allocation and reserve policy is tracked in `Doc/error-codes.md`.
+- Canonical allocation and reserve policy is tracked in `Media/S.Media.Core/error-codes.md`.
+- `MediaSourceReadTimeout` (`4209`) is reserved for future timeout-bounded read paths only; canonical semantics are defined in `Media/S.Media.Core/error-codes.md`.
 - Core symbol scaffold for this policy: `Errors/ErrorCodeAllocationRange.cs` + `Errors/MediaErrorAllocations.cs`.
+- Core error classification includes shared-semantic normalization via `Errors/ErrorCodeRanges.cs` (`ResolveSharedSemantic`), so module-local codes can map to canonical semantics (for example `FFmpegConcurrentReadViolation` `2014`, `NDIAudioReadRejected` `5005`, `NDIVideoReadRejected` `5006` -> `MediaConcurrentOperationViolation` `950`).
+- `MediaConcurrentOperationViolation` (`950`) may also be surfaced directly by Core/orchestration paths when no module-specific code is more precise.
 - Reserved chunks (initial):
   - `2000-2099`: FFmpeg active initial picks
   - `2100-2199`: FFmpeg runtime/native loading reserve
@@ -217,7 +237,8 @@ This document is the finalized architecture baseline for refactoring the current
 
 ## Exception and Logging Policy (Finalized)
 
-- Owned failure paths in `S.Media.*` should throw `MediaException` (or area-derived exceptions) with `MediaErrorCode`.
+- Operational failure paths in `S.Media.*` return deterministic int error codes (`0` success, non-zero failure).
+- Throwing `MediaException` (or area-derived exceptions) is reserved for programmer misuse, invariant violations, or unrecoverable construction failures.
 - Raw third-party/system exceptions remain unwrapped.
 - When available, preserve backend-native exception detail/messages for maximum diagnostics quality.
 - Logging standard is `Microsoft.Extensions.Logging` across all new projects.
@@ -232,6 +253,8 @@ This document is the finalized architecture baseline for refactoring the current
 
 - `Stop()` operations are idempotent and return success when already stopped.
 - Backend `Terminate()` operations must auto-stop active inputs/outputs and return success when already terminated.
+- Shared event dispatch is per-instance FIFO; cross-instance ordering is unspecified.
+- Successful `Stop()`/`Close()`/`Terminate()`/`Dispose()` completion is an event-publication fence (no user-visible callbacks after completion).
 
 ## FFmpeg Decoding Project Plan
 
@@ -247,6 +270,23 @@ This document is the finalized architecture baseline for refactoring the current
 - Default stream selection: first usable audio stream + first usable video stream.
 - Provide explicit stream selection through open options.
 - Keep selection ownership in FFmpeg-side source/open options, not Core media-item contracts.
+- FFmpeg native runtime bootstrap is consumer-owned through `FFmpeg.AutoGen` APIs; `S.Media.FFmpeg` does not expose a separate runtime-path options type.
+- Nonsensical open/config combinations must return `FFmpegInvalidConfig` (`2010`) with no partial-open side effects.
+- Unknown/live duration semantics are explicit for FFmpeg sources: `DurationSeconds` returns `double.NaN` when duration is unknown or unbounded/live.
+- FFmpeg single-reader concurrency violations use dedicated code `FFmpegConcurrentReadViolation` (`2014`) from the active FFmpeg allocation pool (`2000-2099`).
+- Shared Core concurrency-misuse semantic is `MediaConcurrentOperationViolation` (`950`, generic/common); module-specific concurrency codes map to this semantic.
+- Invalid FFmpeg option combinations are covered by a maintained invalid-config matrix in `Media/S.Media.FFmpeg/API-outline.md` and validated by deterministic code assertions.
+- Read ownership contract:
+  - caller owns buffers passed to `ReadSamples(...)`; implementations must not retain those references.
+  - caller-owned `AudioFrame` sample memory is call-scoped; implementations must not retain references after method return.
+  - caller owns/disposes `VideoFrame` returned from `ReadFrame(...)`.
+- Efficiency contract:
+  - audio reads are caller-buffer-reuse friendly and must not retain caller-provided buffers.
+  - video reads may reuse internal decode/convert buffers while preserving caller-owned `VideoFrame` lifetime guarantees.
+- Thread-safety contract:
+  - source instances are single-reader (`ReadSamples`/`ReadFrame` are not concurrent-safe on the same instance).
+  - `Start`/`Stop`/`Seek`/`Dispose` are serialized per source/shared context.
+  - shared decode internals keep demux/decode ownership on dedicated worker thread(s) with bounded queues.
 - `FFMediaItem` rules:
   - provide constructor overloads for audio-only, video-only, and combined A/V source inputs.
   - when created with sources, `FFMediaItem` owns and disposes those sources.
@@ -282,15 +322,55 @@ This document is the finalized architecture baseline for refactoring the current
 - No additional blocking design decisions are required before implementation.
 - Clean-cut rule is fixed: no compatibility layers, no migration wrappers, no dual-path runtime.
 
+## Shared Wording Template (API Outlines)
+
+Documentation placement policy:
+- Migration/error planning docs should live in the owning `Media/S.Media.*` project folder (or `Media/S.Media.Core` for shared policy docs), not in generic top-level docs.
+
+| Doc | Canonical location |
+| --- | --- |
+| Shared error allocation policy | `Media/S.Media.Core/error-codes.md` |
+| Implementation readiness checklist | `Media/S.Media.Core/implementation-readiness-checklist.md` |
+| Implementation execution schedule | `Media/S.Media.Core/implementation-execution-schedule.md` |
+| FFmpeg migration plan | `Media/S.Media.FFmpeg/ffmpeg-migration-plan.md` |
+| OpenGL migration plan | `Media/S.Media.OpenGL/opengl-migration-plan.md` |
+
+Migration status legend (for all migration tracker tables):
+
+| Status | Meaning |
+| --- | --- |
+| `Planned` | Scoped and approved; implementation not started |
+| `In Progress` | Actively being implemented/refactored |
+| `Done` | Implemented and validated against contract goals |
+| `Blocked` | Cannot proceed until dependency/decision is resolved |
+
+Use these canonical lines in module `API-outline.md` `Notes` sections to avoid wording drift:
+
+- `Return-code baseline: 0 is success; all non-zero values are failures.`
+- `Idempotency baseline: Stop/Close/Terminate returns MediaResult.Success when already stopped/closed/terminated.`
+- `Failure atomicity baseline: failed lifecycle/remove/detach operations must not leave partially mutated runtime state.`
+- `Detach return-code precedence: return the most specific owned module/backend detach-step failure code when available; use MixerDetachStepFailed (3000) only as fallback.`
+- `Secondary detach failures are diagnostics-only and must not change the operation return code.`
+- `DebugKeys.MixerDetachSecondaryFailure payload fields: operation, sourceId, step, errorCode, correlationId, and backend/native detail when available.`
+- `Callback/event dispatch policy is fixed in this phase; future minimal dispatcher evolution must preserve per-instance ordering and teardown-fence guarantees.`
+
 ## Execution-Time Considerations (Non-Blocking)
 
 - Validation matrix ownership:
   - Define a minimum matrix for Linux and Windows covering audio-only, video-only, synced A/V, and optional external clock (NDI) paths.
   - Keep this as execution planning, not an API design blocker.
+  - Use `Media/S.Media.Core/implementation-readiness-checklist.md` as the pre-implementation go/no-go gate for each module.
+  - Use `Media/S.Media.Core/implementation-execution-schedule.md` as the dependency-ordered module execution plan.
 - Contract-test rollout (phased):
-  - Phase 1: lifecycle/idempotency + timeout/seek semantics + deterministic error-code assertions.
+  - Phase 1: lifecycle/idempotency + seek semantics + deterministic error-code assertions + duration semantics (`DurationSeconds` finite for known media; `double.NaN` for live/unknown).
+  - Phase 1: shared-semantic mapping assertions (`ResolveSharedSemantic`) for module-local codes that normalize to canonical generic/common semantics.
+  - Phase 1: event contract assertions (per-instance ordering, no post-teardown callbacks, and deterministic overflow behavior under bounded queues).
+  - Phase 1: clock contract assertions (default `CoreMediaClock`, configured external-clock unavailability returns `MediaExternalClockUnavailable`, no implicit fallback).
+  - Phase 1: seek execution assertions (seek is immediate/non-queued for running/paused/stopped transports).
+  - Phase 1: detach-policy assertions (default detach-only, `StopOnDetach`, `DisposeOnDetach`, remove/clear parity, source-registration-order iteration, deterministic first-error selection, and secondary-failure diagnostics emission).
   - Phase 2: runtime loading/interop failure semantics + queue/clamp behavior.
-  - Phase 3: A/V sync, external-clock opt-in behavior, and resilience/perf smoke coverage.
+  - Phase 3: A/V sync, external-clock opt-in behavior, and resilience/perf smoke coverage (including NDI live-path `DurationSeconds = double.NaN` assertions).
+  - Future timeout-read gate: if any module reintroduces timeout-bounded read APIs, that module must add explicit contract tests asserting `partial-before-deadline = success` and `no-arrival-before-deadline = MediaSourceReadTimeout (4209)`.
 - Performance acceptance baselines:
   - Agree target telemetry thresholds (startup latency, steady-state drift envelope, frame-drop budget) before FFmpeg and mixer optimization work.
   - Validate drift-correction defaults (`200 ms`, `+/-2%`) against real device buffer behavior during implementation.
@@ -299,7 +379,8 @@ This document is the finalized architecture baseline for refactoring the current
   - Preserve non-static logger injection pattern across `S.Media.PortAudio`, `S.Media.NDI`, and `S.Media.MIDI`.
 - Exception and error-code guidance:
   - Keep third-party/system exceptions unwrapped.
-  - Ensure owned throw paths have an associated `MediaErrorCode`.
+  - Keep operational failures on deterministic int error codes.
+  - Ensure throw paths (misuse/invariant/unrecoverable) have an associated `MediaErrorCode` when owned.
   - Prefer backend-native details in logged exception context.
 - Interop packaging checkpoints:
   - Use system/user-provided native dependencies for FFmpeg, NDI SDK runtime, and SDL3.
@@ -309,42 +390,62 @@ This document is the finalized architecture baseline for refactoring the current
   - Keep native demux/decode ownership on dedicated worker threads.
   - Use bounded queues with deterministic minimum clamp (`>= 1`) instead of unbounded buffering.
   - Enforce deterministic teardown so no native callback/event path publishes after dispose.
+- MIDI callback evolution checkpoint:
+  - Keep current synchronous/no-queue/no-drop callback model in this phase.
+  - If callback latency becomes a verified issue, introduce a minimal dispatcher later without breaking `MessageReceived`/`StatusChanged` contracts, per-instance ordering, or no-post-teardown guarantees.
+- Non-Core callback evolution checkpoint:
+  - Keep current module-level callback/event dispatch behavior fixed in this phase (no new callback-dispatch option surfaces).
+  - If callback latency becomes a verified issue in FFmpeg/NDI/OpenGL/PortAudio adapters, introduce minimal dispatcher mechanics later without breaking event ordering or teardown-fence guarantees.
+- Non-Core callback note template (for module outlines):
+  - Callback/event dispatch policy is fixed in this phase (no module-level callback-dispatch configuration surface).
+  - Future evolution note: if callback latency becomes a verified issue, add a minimal dispatcher later without breaking per-instance event ordering or teardown-fence guarantees.
 - Diagnostics spec handoff:
   - Keep the detailed structured logging/error conventions in `Doc/logging-and-errors.md`.
+  - `DebugKeys.MixerDetachSecondaryFailure` scope: emit only for secondary (non-returned) failures encountered inside one remove/clear detach operation; include `operation`, `sourceId`, `step`, `errorCode`, `correlationId`, and backend/native detail when available.
+  - Detach return-code precedence: return the most specific owned/module/backend detach-step failure code when available; use `MixerDetachStepFailed` (`3000`) only as fallback.
 
 ## Exact Per-Project File List (Planned)
 
 ### `Media/S.Media.Core` (mixers + player live here)
 
-- `Media/S.Media.Core/Diagnostics/DebugKeys.cs` - `DebugKeys` (`frame.presented`, `frame.decoded`, `seek.fail`).
+- `Media/S.Media.Core/Diagnostics/DebugKeys.cs` - `DebugKeys` (`frame.presented`, `frame.decoded`, `seek.fail`, `mixer.detach.secondaryFailure`).
 - `Media/S.Media.Core/Diagnostics/DebugInfo.cs` - `DebugInfo` (typed payload contract).
 - `Media/S.Media.Core/Errors/MediaErrorCode.cs` - `MediaErrorCode` (range-based enum IDs).
 - `Media/S.Media.Core/Errors/MediaResult.cs` - `MediaResult` (`Success = 0` constant).
 - `Media/S.Media.Core/Errors/ErrorCodeRanges.cs` - `ErrorCodeRanges` (`0-999`, `1000-1999`, `2000-2999`, `3000-3999`, `4000-4999`, `5000-5199`).
 - `Media/S.Media.Core/Errors/ErrorCodeAllocationRange.cs` - `ErrorCodeAllocationRange` (named inclusive allocation range contract).
-- `Media/S.Media.Core/Errors/MediaErrorAllocations.cs` - `MediaErrorAllocations` (1:1 symbol mirror of `Doc/error-codes.md` ranges/chunks).
+- `Media/S.Media.Core/Errors/MediaErrorAllocations.cs` - `MediaErrorAllocations` (1:1 symbol mirror of `Media/S.Media.Core/error-codes.md` ranges/chunks).
 - `Media/S.Media.Core/Errors/MediaException.cs` - `MediaException` (base exception with `MediaErrorCode`).
 - `Media/S.Media.Core/Errors/AreaExceptions.cs` - area-derived exceptions with contextual detail payloads.
-- `Media/S.Media.Core/Timeline/FrameIndex.cs` - `FrameIndex` (zero-based frame index value object).
-- `Media/S.Media.Core/Timeline/SeekContracts.cs` - `SeekTarget`, `SeekResult`, `ISeekValidator` (invalid seek => immediate non-zero error code, no clamping, no state change).
-- `Media/S.Media.Core/Timeline/LiveReadTimeoutOptions.cs` - `LiveReadTimeoutOptions` (optional timeout behavior and mode selection).
-- `Media/S.Media.Core/Timeline/LiveReadTimeoutMode.cs` - `LiveReadTimeoutMode` (`Manual`, `ClockLatencyDerived`).
-- `Media/S.Media.Core/Timeline/ClockLatencySnapshot.cs` - `ClockLatencySnapshot` (clock/buffer latency inputs for timeout policy).
-- `Media/S.Media.Core/Timeline/LiveReadTimeoutPolicy.cs` - `LiveReadTimeoutPolicy` (timeout resolution helpers).
 - `Media/S.Media.Core/Media/IMediaItem.cs` - `IMediaItem` (`AudioStreams`, `VideoStreams`, `Metadata`, `HasMetadata`).
 - `Media/S.Media.Core/Media/IDynamicMetadata.cs` - `IDynamicMetadata` (`MetadataUpdated` with full snapshot payload).
 - `Media/S.Media.Core/Media/MediaMetadataSnapshot.cs` - `MediaMetadataSnapshot` (`UpdatedAtUtc`, case-sensitive `ReadOnlyDictionary<string, string> AdditionalMetadata`).
 - `Media/S.Media.Core/Media/AudioStreamInfo.cs` - `AudioStreamInfo` (typed basic stream metadata).
 - `Media/S.Media.Core/Media/VideoStreamInfo.cs` - `VideoStreamInfo` (typed basic stream metadata).
-- `Media/S.Media.Core/Audio/IAudioSource.cs` - `IAudioSource` (start/stop/read/seek contract with timeout overload semantics).
-- `Media/S.Media.Core/Video/IVideoSource.cs` - `IVideoSource` (start/stop/read/seek contract with timeout overload semantics).
+- `Media/S.Media.Core/Clock/IMediaClock.cs` - `IMediaClock`.
+- `Media/S.Media.Core/Clock/IExternalClock.cs` - `IExternalClock` (external clock bridge contract).
+- `Media/S.Media.Core/Clock/CoreMediaClock.cs` - `CoreMediaClock` (default Core clock implementation).
+- `Media/S.Media.Core/Audio/IAudioSource.cs` - `IAudioSource` (start/stop/read/seek contract).
+- `Media/S.Media.Core/Video/IVideoSource.cs` - `IVideoSource` (start/stop/read/seek + frame-seek contract).
 - `Media/S.Media.Core/Routing/AudioRoute.cs` - `AudioRoute`.
 - `Media/S.Media.Core/Routing/VideoRoute.cs` - `VideoRoute`.
 - `Media/S.Media.Core/Routing/ISupportsAdvancedAudioRouting.cs` - `ISupportsAdvancedAudioRouting` (route APIs + read-only current route list).
 - `Media/S.Media.Core/Routing/ISupportsAdvancedVideoRouting.cs` - `ISupportsAdvancedVideoRouting` (route APIs + read-only current route list).
-- `Media/S.Media.Core/Mixing/IAudioMixer.cs` - `IAudioMixer` (`AddSource`, `RemoveSource` direct APIs).
-- `Media/S.Media.Core/Mixing/IVideoMixer.cs` - `IVideoMixer` (`AddSource`, `RemoveSource`, active source control).
-- `Media/S.Media.Core/Mixing/IAudioVideoMixer.cs` - `IAudioVideoMixer` (hybrid sync + deterministic conflict policy).
+- `Media/S.Media.Core/Mixing/IAudioMixer.cs` - `IAudioMixer` (sync-focused transport + source scheduling + deterministic source/dropout events).
+- `Media/S.Media.Core/Mixing/AudioMixerSyncMode.cs` - `AudioMixerSyncMode`.
+- `Media/S.Media.Core/Mixing/AudioMixerState.cs` - `AudioMixerState`.
+- `Media/S.Media.Core/Mixing/AudioMixerStateChangedEventArgs.cs` - `AudioMixerStateChangedEventArgs`.
+- `Media/S.Media.Core/Mixing/AudioSourceErrorEventArgs.cs` - `AudioSourceErrorEventArgs`.
+- `Media/S.Media.Core/Mixing/AudioMixerDropoutEventArgs.cs` - `AudioMixerDropoutEventArgs`.
+- `Media/S.Media.Core/Mixing/MixerSourceDetachOptions.cs` - `MixerSourceDetachOptions` (detach/stop/dispose policy for source removal/clear paths).
+- `Media/S.Media.Core/Mixing/IVideoMixer.cs` - `IVideoMixer` (transport + active-source control + deterministic video sync/seek).
+- `Media/S.Media.Core/Mixing/VideoMixerSyncMode.cs` - `VideoMixerSyncMode`.
+- `Media/S.Media.Core/Mixing/VideoMixerState.cs` - `VideoMixerState`.
+- `Media/S.Media.Core/Mixing/VideoMixerStateChangedEventArgs.cs` - `VideoMixerStateChangedEventArgs`.
+- `Media/S.Media.Core/Mixing/VideoSourceErrorEventArgs.cs` - `VideoSourceErrorEventArgs`.
+- `Media/S.Media.Core/Mixing/VideoActiveSourceChangedEventArgs.cs` - `VideoActiveSourceChangedEventArgs`.
+- `Media/S.Media.Core/Mixing/IAudioVideoMixer.cs` - `IAudioVideoMixer` (coordinated audio/video transport + deterministic combined seek policies).
+- `Media/S.Media.Core/Mixing/AudioVideoMixerState.cs` - `AudioVideoMixerState`.
 - `Media/S.Media.Core/Mixing/AudioMixer.cs` - `AudioMixer` (default `AudioLed`).
 - `Media/S.Media.Core/Mixing/VideoMixer.cs` - `VideoMixer` (default `VideoLed`).
 - `Media/S.Media.Core/Mixing/AudioVideoMixer.cs` - `AudioVideoMixer` (default `Hybrid`).
@@ -353,7 +454,6 @@ This document is the finalized architecture baseline for refactoring the current
 
 ### `Media/S.Media.FFmpeg`
 
-- `Media/S.Media.FFmpeg/Config/FFmpegRuntimeOptions.cs` - `FFmpegRuntimeOptions` (consumer-provided native runtime root path).
 - `Media/S.Media.FFmpeg/Config/FFmpegOpenOptions.cs` - `FFmpegOpenOptions`.
 - `Media/S.Media.FFmpeg/Config/FFmpegDecodeOptions.cs` - `FFmpegDecodeOptions`.
 - `Media/S.Media.FFmpeg/Audio/FFAudioChannelMappingPolicy.cs` - `FFAudioChannelMappingPolicy`.
@@ -401,9 +501,7 @@ This document is the finalized architecture baseline for refactoring the current
 - `Media/S.Media.NDI/Clock/NDIExternalTimelineClock.cs` - `NDIExternalTimelineClock`.
 - `Media/S.Media.NDI/Input/NDIAudioSource.cs` - `NDIAudioSource`.
 - `Media/S.Media.NDI/Input/NDIVideoSource.cs` - `NDIVideoSource`.
-- `Media/S.Media.NDI/Config/NDIReadOptions.cs` - `NDIReadOptions` (live read timeout options binding to Core timeout policy).
 - `Media/S.Media.NDI/Config/NDISourceOptions.cs` - `NDISourceOptions` (per-source policy overrides, including diagnostics tick override; falls back to global limits/options).
-- `Media/S.Media.NDI/Config/NDIReadRequest.cs` - `NDIReadRequest` (per-call timeout/diagnostics pause hints).
 - `Media/S.Media.NDI/Config/NDIOutputOptions.cs` - `NDIOutputOptions` (explicit output capability/startup validation contract).
 - `Media/S.Media.NDI/Output/NDIVideoOutput.cs` - `NDIVideoOutput`.
 - `Media/S.Media.NDI/Config/NDIIntegrationOptions.cs` - `NDIIntegrationOptions`.
@@ -435,11 +533,15 @@ This document is the finalized architecture baseline for refactoring the current
 
 ### `Media/S.Media.MIDI`
 
-- `Media/S.Media.MIDI/MIDIRuntime.cs` - `MIDIRuntime`.
-- `Media/S.Media.MIDI/MIDIDeviceCatalog.cs` - `MIDIDeviceCatalog`.
-- `Media/S.Media.MIDI/MIDIInput.cs` - `MIDIInput` (`IsOpen` state flag for native input-handle lifecycle).
-- `Media/S.Media.MIDI/MIDIOutput.cs` - `MIDIOutput` (`IsOpen` state flag for native output-handle lifecycle).
-- `Media/S.Media.MIDI/MIDIMessageRouter.cs` - `MIDIMessageRouter`.
+- `Media/S.Media.MIDI/Runtime/MIDIEngine.cs` - `MIDIEngine` (runtime + device catalog responsibilities folded into engine).
+- `Media/S.Media.MIDI/Input/MIDIInput.cs` - `MIDIInput` (`IsOpen` state flag for native input-handle lifecycle).
+- `Media/S.Media.MIDI/Output/MIDIOutput.cs` - `MIDIOutput` (`IsOpen` state flag for native output-handle lifecycle).
+- `Media/S.Media.MIDI/Config/MIDIReconnectOptions.cs` - `MIDIReconnectOptions` (configurable short-disconnect recovery policy).
+- `Media/S.Media.MIDI/Config/MIDIReconnectMode.cs` - `MIDIReconnectMode` (`AutoReconnect`/`NoRecover`).
+- `Media/S.Media.MIDI/Events/MIDIMessageEventArgs.cs` - `MIDIMessageEventArgs` (message + source-device + receive timestamp payload).
+- `Media/S.Media.MIDI/Events/MIDIConnectionStatusEventArgs.cs` - `MIDIConnectionStatusEventArgs` (connection status transition payload).
+- `Media/S.Media.MIDI/Types/MIDIConnectionStatus.cs` - `MIDIConnectionStatus`.
+- `Media/S.Media.MIDI/Diagnostics/MIDILogAdapter.cs` - `MIDILogAdapter`.
 
 ## Last Considerations (Non-Blocking)
 
@@ -448,6 +550,6 @@ This document is the finalized architecture baseline for refactoring the current
 - Keep a compact contract test matrix for metadata nullability (`audio-only`, `video-only`, `combined`, and NDI pre-metadata states).
 - Add schema-drift guardrails for `AdditionalMetadata` keys (preserve case-sensitive keys exactly as received, no normalization).
 - Track key architecture changes with a short decision log entry when any non-blocking execution policy is refined during implementation.
-- Keep a compact NDI contract test matrix for lifecycle idempotency, timeout semantics, override precedence, diagnostics tick clamp (`>=16ms`), and output capability validation.
+- Keep a compact NDI contract test matrix for lifecycle idempotency, read/fallback semantics, override precedence, diagnostics tick clamp (`>=16ms`), and output capability validation.
 - No additional unclear non-blocking considerations remain at this stage.
 

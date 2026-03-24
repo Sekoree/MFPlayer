@@ -57,7 +57,9 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 
 ## Notes
 - Keep SDL3-specific rendering concerns contained in this project.
-- Error-code range/chunk ownership is defined by `MediaErrorAllocations` in `Media/S.Media.Core/Errors/MediaErrorAllocations.cs` and tracked in `Doc/error-codes.md`.
+- Migration implementation matrix/source mapping: `Media/S.Media.OpenGL/opengl-migration-plan.md`.
+- Error-code range/chunk ownership is defined by `MediaErrorAllocations` in `Media/S.Media.Core/Errors/MediaErrorAllocations.cs` and tracked in `Media/S.Media.Core/error-codes.md`.
+- For adapter detach/clone operations, propagate specific OpenGL/SDL3 failure codes; use Core fallback `MixerDetachStepFailed` (`3000`) only when no more specific owned code exists in orchestration paths.
 - Clone views should present parent frame generations without duplicating decode/upload work.
 - SDL3 window/context lifecycle changes must destroy child clones deterministically with non-zero error codes.
 - Attach clone operations must fail when the child is already attached to another parent.
@@ -69,6 +71,9 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Handle descriptor must use stable, fixed platform tokens (for example `x11-window`, `wayland-surface`, `win32-hwnd`, `cocoa-nsview`) so hosts can route interop correctly.
 - Safest descriptor contract: return only fixed known tokens; unknown/unsupported descriptor paths return non-zero error code.
 - If embedded parent host is destroyed unexpectedly, return a defined non-zero error code and perform deterministic teardown.
+- Failure atomicity: failed adapter attach/detach/embed lifecycle paths must not partially mutate clone/output registration state.
+- Callback/event dispatch policy is fixed in this phase (no adapter-level callback-dispatch configuration surface).
+- Future evolution note: if callback latency becomes a verified issue, add a minimal dispatcher later without breaking adapter event ordering or teardown-fence guarantees.
 
 ## Initial SDL3 Embedding Error Code Picks (`4460-4479`)
 - `4460`: `SDL3EmbedNotInitialized`
@@ -80,4 +85,12 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `4466`: `SDL3EmbedUnsupportedDescriptor`
 - `4467`: `SDL3EmbedInitializeFailed`
 - `4468`: `SDL3EmbedTeardownFailed`
+
+## SDL3 Contract Test Matrix (Minimum)
+- Embed lifecycle: `InitializeEmbedded(...)` validates handle/descriptor paths deterministically with defined SDL3 embed codes.
+- Handle access contract: handle/descriptor getters are state-bound and fail deterministically outside valid lifetime windows.
+- Clone adapter behavior: attach/detach delegates to OpenGL clone policy and surfaces deterministic clone error codes.
+- Parent-loss behavior: unexpected embedded parent loss returns deterministic non-zero code and triggers deterministic teardown.
+- Failure atomicity: failed attach/detach/embed operations do not partially mutate clone/output registration state.
+- Teardown fence: no adapter-visible callbacks/events after successful `Stop()`/`Dispose()` completion.
 

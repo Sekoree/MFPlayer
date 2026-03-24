@@ -163,7 +163,9 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 
 ## Notes
 - Keep decode/session logic out of this project.
-- Error-code range/chunk ownership is defined by `MediaErrorAllocations` in `Media/S.Media.Core/Errors/MediaErrorAllocations.cs` and tracked in `Doc/error-codes.md`.
+- Migration implementation matrix/source mapping: `Media/S.Media.OpenGL/opengl-migration-plan.md`.
+- Error-code range/chunk ownership is defined by `MediaErrorAllocations` in `Media/S.Media.Core/Errors/MediaErrorAllocations.cs` and tracked in `Media/S.Media.Core/error-codes.md`.
+- For detach/clone operations, OpenGL-specific clone failure codes remain authoritative when available; Core fallback `MixerDetachStepFailed` (`3000`) applies only when no more specific owned code exists in orchestration paths.
 - Clone graph mutation ownership is engine-first (`OpenGLVideoEngine` is canonical for cross-output attach/detach); output-level clone methods are local convenience wrappers that delegate to engine policy.
 - Parent output performs decode/upload path once; clones must not trigger additional decode or upload work.
 - Clone success rule: a clone presents the same committed frame generation as its parent.
@@ -177,6 +179,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Clone graphs must be acyclic; cycle detection is required on attach/create paths.
 - Self-attach is explicitly rejected with a dedicated error code.
 - `DetachClone` on a non-child target returns `OpenGLCloneNotAttached`.
+- Failure atomicity: failed clone attach/detach/remove paths must not partially mutate clone-graph registration state.
 - Effective max clone depth is configurable; attach/create beyond depth limit must fail with a defined error code.
 - Default max clone depth is `4` unless overridden by policy/options.
 - Pixel-format compatibility is performance-first by default (`RequireCompatibleFastPath`); incompatible parent/child formats fail with a defined error code.
@@ -184,6 +187,8 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - In-frame HUD should be clone-independent by default (`OpenGLHUDCloneMode.Independent`).
 - Diagnostics/surface metadata refresh is on-change (new committed frame generation, clone graph changes, resize, pixel-format change, HUD state change).
 - Disposal order is deterministic: stop ingress -> detach clone graph -> stop render loop -> release GL/HUD resources on owning context -> unregister output/engine links -> clear diagnostics state.
+- Callback/event dispatch policy is fixed in this phase (no module-level callback-dispatch configuration surface).
+- Future evolution note: if callback latency becomes a verified issue, add a minimal dispatcher later without breaking diagnostics/clone-graph event ordering or teardown-fence guarantees.
 
 ## Initial OpenGL Clone Error Code Picks (`4400-4499`)
 - `4400`: `OpenGLCloneParentNotFound`
@@ -201,3 +206,12 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `4412`: `OpenGLCloneMaxDepthExceeded`
 - `4413`: `OpenGLClonePixelFormatIncompatible`
 - `4414`: `OpenGLCloneParentNotInitialized`
+
+## OpenGL Contract Test Matrix (Minimum)
+- Lifecycle idempotency: repeated `Stop()` returns `MediaResult.Success` for already-stopped outputs/engine paths.
+- Clone graph safety: self-attach, cycle creation, and already-attached child paths fail deterministically with defined OpenGL clone codes.
+- Detach semantics: detach on non-child returns `OpenGLCloneNotAttached`; failed detach/attach paths do not partially mutate clone-graph registration state.
+- Running attach behavior: attach-while-running respects `AttachPauseBudgetFrames` policy and continues best-effort with warning when budget is exceeded.
+- Generation parity: parent and clones present identical committed frame generation for successful clone-present paths.
+- Teardown fence: no clone/diagnostics events are emitted after successful stop/dispose completion.
+
