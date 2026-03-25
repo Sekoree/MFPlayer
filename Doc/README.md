@@ -24,6 +24,30 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 
 ## Guides
 
+- [`project-implementation-stages.md`](project-implementation-stages.md)
+  - Snapshot table for every project in `MFPlayer.sln` and its current implementation stage.
+- [`project-status-notes.md`](project-status-notes.md)
+  - Per-project stage notes plus consolidated migration considerations.
+- [`refactor-considerations-log.md`](refactor-considerations-log.md)
+  - Consolidated log of contract decisions and migration considerations agreed during the `S.Media.*` refactor.
+
+### Folder Status Files
+
+- [`Audio/PROJECT-STATUS.md`](../Audio/PROJECT-STATUS.md)
+- [`Media/PROJECT-STATUS.md`](../Media/PROJECT-STATUS.md)
+- [`Media/S.Media.Core/PROJECT-STATUS.md`](../Media/S.Media.Core/PROJECT-STATUS.md)
+- [`Media/S.Media.FFmpeg/PROJECT-STATUS.md`](../Media/S.Media.FFmpeg/PROJECT-STATUS.md)
+- [`Media/S.Media.PortAudio/PROJECT-STATUS.md`](../Media/S.Media.PortAudio/PROJECT-STATUS.md)
+- [`Media/S.Media.MIDI/PROJECT-STATUS.md`](../Media/S.Media.MIDI/PROJECT-STATUS.md)
+- [`Media/S.Media.NDI/PROJECT-STATUS.md`](../Media/S.Media.NDI/PROJECT-STATUS.md)
+- [`Media/S.Media.OpenGL/PROJECT-STATUS.md`](../Media/S.Media.OpenGL/PROJECT-STATUS.md)
+- [`Media/S.Media.OpenGL.Avalonia/PROJECT-STATUS.md`](../Media/S.Media.OpenGL.Avalonia/PROJECT-STATUS.md)
+- [`Media/S.Media.OpenGL.SDL3/PROJECT-STATUS.md`](../Media/S.Media.OpenGL.SDL3/PROJECT-STATUS.md)
+- [`NDI/PROJECT-STATUS.md`](../NDI/PROJECT-STATUS.md)
+- [`OSC/PROJECT-STATUS.md`](../OSC/PROJECT-STATUS.md)
+- [`Test/PROJECT-STATUS.md`](../Test/PROJECT-STATUS.md)
+- [`VideoLibs/PROJECT-STATUS.md`](../VideoLibs/PROJECT-STATUS.md)
+
 - [`setup-prerequisites.md`](setup-prerequisites.md)
   - What to install, what to build, and environment variables.
 - [`audioex-setup.md`](audioex-setup.md)
@@ -52,16 +76,19 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 ## Recommended read order
 
 1. Setup and prerequisites
-2. AudioEx setup
-3. VideoTest setup
-4. Video mixer basics
-5. Audio/video mixer (audio-led)
-6. Multiplexer patterns (audio/video fan-out)
-7. NDI receive setup and tuning
-8. NDI send setup and sink usage
-9. OwnAudio interop notes and output snippets
-10. FFmpeg migration plan (implementation adaptation matrix)
-11. OpenGL migration plan (legacy-to-target implementation matrix)
+2. Project implementation stages snapshot
+3. Project status notes
+4. Refactor considerations log
+5. AudioEx setup
+6. VideoTest setup
+7. Video mixer basics
+8. Audio/video mixer (audio-led)
+9. Multiplexer patterns (audio/video fan-out)
+10. NDI receive setup and tuning
+11. NDI send setup and sink usage
+12. OwnAudio interop notes and output snippets
+13. FFmpeg migration plan (implementation adaptation matrix)
+14. OpenGL migration plan (legacy-to-target implementation matrix)
 
 ## Where to look for runnable references
 

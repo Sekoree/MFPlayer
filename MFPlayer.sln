@@ -17,12 +17,18 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PMLib", "PMLib\PMLib.csproj", "{BFF82F62-49BB-4B0E-9237-45249A41E235}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}"
+	ProjectSection(SolutionItems) = preProject
+		Test\PROJECT-STATUS.md = Test\PROJECT-STATUS.md
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioEx", "Test\AudioEx\AudioEx.csproj", "{B33BF85C-5F4A-4DB2-BFA2-A62CF1ACBEBC}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoTest", "Test\VideoTest\VideoTest.csproj", "{136BC955-3AB3-42D8-8E46-C8680F94B4E7}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "VideoLibs", "VideoLibs", "{47F53610-2510-4EC0-BF22-554B68334224}"
+	ProjectSection(SolutionItems) = preProject
+		VideoLibs\PROJECT-STATUS.md = VideoLibs\PROJECT-STATUS.md
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seko.OwnAudioNET.Video", "VideoLibs\Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj", "{FA7F6707-61E4-4EF8-9BA2-75CF5E3A0CA7}"
 EndProject
@@ -46,9 +52,15 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB
 		Doc\ndi-receive.md = Doc\ndi-receive.md
 		Doc\ndi-send.md = Doc\ndi-send.md
 		Doc\multiplexers.md = Doc\multiplexers.md
+		Doc\project-implementation-stages.md = Doc\project-implementation-stages.md
+		Doc\refactor-considerations-log.md = Doc\refactor-considerations-log.md
+		Doc\project-status-notes.md = Doc\project-status-notes.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"
+	ProjectSection(SolutionItems) = preProject
+		NDI\PROJECT-STATUS.md = NDI\PROJECT-STATUS.md
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NdiLib", "NDI\NdiLib\NdiLib.csproj", "{364EB31E-C31B-4874-AA82-5524BA8D06B9}"
 EndProject
@@ -61,11 +73,18 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Media", "Media", "{776AE86F-6A81-4B69-A48A-88A9293EB425}"
 	ProjectSection(SolutionItems) = preProject
 		Media\IMPLEMENTATION-STATUS.md = Media\IMPLEMENTATION-STATUS.md
+		Media\PROJECT-STATUS.md = Media\PROJECT-STATUS.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Audio", "Audio", "{486A1187-8515-43B7-8075-1DFC7B95B987}"
+	ProjectSection(SolutionItems) = preProject
+		Audio\PROJECT-STATUS.md = Audio\PROJECT-STATUS.md
+	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "OSC", "OSC", "{36B710DB-96D4-4B92-90BD-54636B2D48E1}"
+	ProjectSection(SolutionItems) = preProject
+		OSC\PROJECT-STATUS.md = OSC\PROJECT-STATUS.md
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OSCLib", "OSC\OSCLib\OSCLib.csproj", "{76DE0424-A676-4797-BE13-FF716C70296C}"
 EndProject
@@ -106,6 +125,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.OpenGL.Tests", "Media\S.Media.OpenGL.Tests\S.Media.OpenGL.Tests.csproj", "{59C8405D-FC74-4713-BD8E-9653CFDEE971}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.NDI.Tests", "Media\S.Media.NDI.Tests\S.Media.NDI.Tests.csproj", "{C754F34D-D72F-457D-9AC3-2D97C4D5A231}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FirstAudioPlayback.Smoke", "Test\FirstAudioPlayback.Smoke\FirstAudioPlayback.Smoke.csproj", "{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -513,6 +534,18 @@ Global
 		{C754F34D-D72F-457D-9AC3-2D97C4D5A231}.Release|x64.Build.0 = Release|Any CPU
 		{C754F34D-D72F-457D-9AC3-2D97C4D5A231}.Release|x86.ActiveCfg = Release|Any CPU
 		{C754F34D-D72F-457D-9AC3-2D97C4D5A231}.Release|x86.Build.0 = Release|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Debug|x64.Build.0 = Debug|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Debug|x86.Build.0 = Debug|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Release|x64.ActiveCfg = Release|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Release|x64.Build.0 = Release|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Release|x86.ActiveCfg = Release|Any CPU
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -549,6 +582,7 @@ Global
 		{CDCD3BC3-1828-455E-95B3-0821EC9F7325} = {776AE86F-6A81-4B69-A48A-88A9293EB425}
 		{59C8405D-FC74-4713-BD8E-9653CFDEE971} = {776AE86F-6A81-4B69-A48A-88A9293EB425}
 		{C754F34D-D72F-457D-9AC3-2D97C4D5A231} = {776AE86F-6A81-4B69-A48A-88A9293EB425}
+		{9846A5EE-4EC7-44CD-B88F-BDAF9665EA90} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {83CB65B8-011F-4ED7-BCD3-A6CFA935EF7E}

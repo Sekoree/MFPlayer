@@ -63,6 +63,11 @@ public sealed class OpenGLVideoEngine : IDisposable
 
     public int RemoveOutput(IVideoOutput output)
     {
+        if (output is null)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
+        }
+
         return RemoveOutput(output.Id);
     }
 
@@ -167,6 +172,11 @@ public sealed class OpenGLVideoEngine : IDisposable
     {
         lock (_gate)
         {
+            if (_disposed)
+            {
+                return (int)MediaErrorCode.OpenGLCloneParentDisposed;
+            }
+
             if (!_outputs.ContainsKey(outputId))
             {
                 return (int)MediaErrorCode.OpenGLCloneParentNotFound;
@@ -227,7 +237,7 @@ public sealed class OpenGLVideoEngine : IDisposable
             return add;
         }
 
-        var attach = AttachCloneOutput(parentOutputId, clone.Id);
+        var attach = AttachCloneOutputCore(parentOutputId, clone.Id, options);
         if (attach != MediaResult.Success)
         {
             _ = RemoveOutput(clone.Id);
@@ -239,6 +249,11 @@ public sealed class OpenGLVideoEngine : IDisposable
     }
 
     public int AttachCloneOutput(Guid parentOutputId, Guid cloneOutputId)
+    {
+        return AttachCloneOutputCore(parentOutputId, cloneOutputId, options: null);
+    }
+
+    private int AttachCloneOutputCore(Guid parentOutputId, Guid cloneOutputId, OpenGLCloneOptions? options)
     {
         OpenGLVideoOutput parent;
         OpenGLVideoOutput child;
@@ -265,9 +280,9 @@ public sealed class OpenGLVideoEngine : IDisposable
                 return (int)MediaErrorCode.OpenGLCloneSelfAttachRejected;
             }
 
-            if (!parent.IsRunning)
+            if (!PolicyOptions.AllowAttachWhileRunning && parent.IsRunning)
             {
-                return (int)MediaErrorCode.OpenGLCloneParentNotInitialized;
+                return (int)MediaErrorCode.OpenGLCloneAttachFailed;
             }
 
             if (_childToParent.ContainsKey(cloneOutputId))
@@ -280,14 +295,16 @@ public sealed class OpenGLVideoEngine : IDisposable
                 return (int)MediaErrorCode.OpenGLCloneCycleDetected;
             }
 
-            var depthLimit = PolicyOptions.MaxCloneDepth;
+            var depthLimit = options?.MaxCloneDepth is > 0 ? options.MaxCloneDepth.Value : PolicyOptions.MaxCloneDepth;
             var targetDepth = ComputeDepth(parentOutputId) + 1;
             if (targetDepth > depthLimit)
             {
                 return (int)MediaErrorCode.OpenGLCloneMaxDepthExceeded;
             }
 
-            if (parent.Surface.PixelFormat != VideoPixelFormat.Unknown &&
+            var pixelPolicy = options?.PixelFormatPolicy ?? PolicyOptions.DefaultPixelFormatPolicy;
+            if (pixelPolicy == OpenGLClonePixelFormatPolicy.RequireCompatibleFastPath &&
+                parent.Surface.PixelFormat != VideoPixelFormat.Unknown &&
                 child.Surface.PixelFormat != VideoPixelFormat.Unknown &&
                 parent.Surface.PixelFormat != child.Surface.PixelFormat)
             {

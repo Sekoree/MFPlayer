@@ -95,6 +95,7 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
     {
         OpenGLSurfaceMetadata surface;
         bool shouldRender;
+        bool keepPumping;
 
         lock (_gate)
         {
@@ -105,6 +106,7 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
 
             surface = _output.Surface;
             shouldRender = surface.LastPresentedFrameGeneration != _lastRenderedGeneration || EnableHudOverlay;
+            keepPumping = _output.IsRunning;
 
             if (shouldRender)
             {
@@ -123,6 +125,11 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
         if (EnableHudOverlay)
         {
             _ = HudOverlay.BuildOverlayTextSnapshot();
+        }
+
+        if (keepPumping)
+        {
+            QueueRenderRequest();
         }
     }
 

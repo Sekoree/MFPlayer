@@ -18,6 +18,12 @@ public interface IAudioEngine : IDisposable
 
     IReadOnlyList<AudioDeviceInfo> GetInputDevices();
 
+    IReadOnlyList<AudioHostApiInfo> GetHostApis();
+
+    AudioDeviceInfo? GetDefaultOutputDevice();
+
+    AudioDeviceInfo? GetDefaultInputDevice();
+
     int CreateOutput(AudioDeviceId deviceId, out IAudioOutput? output);
 
     int CreateOutputByName(string deviceName, out IAudioOutput? output);

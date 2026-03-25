@@ -31,6 +31,26 @@ public sealed class SDL3AdapterTests
     }
 
     [Fact]
+    public void Initialize_RejectsUnsupportedDescriptorToken()
+    {
+        using var view = new SDL3VideoView();
+
+        var code = view.Initialize(new SDL3VideoViewOptions { PreferredDescriptor = "unknown-descriptor" });
+
+        Assert.Equal((int)MediaErrorCode.SDL3EmbedUnsupportedDescriptor, code);
+    }
+
+    [Fact]
+    public void Initialize_NormalizesDescriptorTokenCase()
+    {
+        using var view = new SDL3VideoView();
+
+        Assert.Equal(MediaResult.Success, view.Initialize(new SDL3VideoViewOptions { PreferredDescriptor = "X11-Window" }));
+        Assert.Equal(MediaResult.Success, view.TryGetPlatformHandleDescriptor(out var descriptor));
+        Assert.Equal("x11-window", descriptor);
+    }
+
+    [Fact]
     public void PushAudio_FailsWhenAudioDisabled()
     {
         using var view = new SDL3VideoView();
@@ -40,7 +60,7 @@ public sealed class SDL3AdapterTests
         var frame = new AudioFrame(new ReadOnlyMemory<float>(new float[4]), 2, 2, AudioFrameLayout.Interleaved, 48000, TimeSpan.Zero);
         var code = view.PushAudio(frame, TimeSpan.Zero);
 
-        Assert.Equal((int)MediaErrorCode.NDIOutputAudioStreamDisabled, code);
+        Assert.Equal((int)MediaErrorCode.MediaInvalidArgument, code);
     }
 
     [Fact]
@@ -54,6 +74,9 @@ public sealed class SDL3AdapterTests
         var code = view.PushFrame(frame, TimeSpan.Zero);
 
         Assert.Equal((int)MediaErrorCode.SDL3EmbedParentLost, code);
+        Assert.Equal((int)MediaErrorCode.SDL3EmbedParentLost, view.Start(new VideoOutputConfig()));
+        Assert.Equal((int)MediaErrorCode.SDL3EmbedHandleUnavailable, view.TryGetPlatformWindowHandle(out _));
+        Assert.Equal((int)MediaErrorCode.SDL3EmbedDescriptorUnavailable, view.TryGetPlatformHandleDescriptor(out _));
     }
 
     [Fact]

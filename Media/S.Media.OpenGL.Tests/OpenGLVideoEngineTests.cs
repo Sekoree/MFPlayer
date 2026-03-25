@@ -43,7 +43,7 @@ public sealed class OpenGLVideoEngineTests
     }
 
     [Fact]
-    public void AttachCloneOutput_Failure_IsAtomic_WhenParentNotRunning()
+    public void AttachCloneOutput_AllowsStoppedParent_ByDefault()
     {
         using var engine = new OpenGLVideoEngine();
         using var parent = new OpenGLVideoOutput();
@@ -54,7 +54,25 @@ public sealed class OpenGLVideoEngineTests
 
         var code = engine.AttachCloneOutput(parent.Id, child.Id);
 
-        Assert.Equal((int)MediaErrorCode.OpenGLCloneParentNotInitialized, code);
+        Assert.Equal(MediaResult.Success, code);
+        Assert.Equal(parent.Id, child.CloneParentOutputId);
+        Assert.Contains(child.Id, parent.CloneOutputIds);
+    }
+
+    [Fact]
+    public void AttachCloneOutput_Fails_WhenAttachWhileRunningIsDisallowed()
+    {
+        using var engine = new OpenGLVideoEngine(new OpenGLClonePolicyOptions { AllowAttachWhileRunning = false });
+        using var parent = new OpenGLVideoOutput();
+        using var child = new OpenGLVideoOutput();
+
+        Assert.Equal(MediaResult.Success, engine.AddOutput(parent));
+        Assert.Equal(MediaResult.Success, engine.AddOutput(child));
+        Assert.Equal(MediaResult.Success, parent.Start(new VideoOutputConfig()));
+
+        var code = engine.AttachCloneOutput(parent.Id, child.Id);
+
+        Assert.Equal((int)MediaErrorCode.OpenGLCloneAttachFailed, code);
         Assert.Null(child.CloneParentOutputId);
         Assert.DoesNotContain(child.Id, parent.CloneOutputIds);
     }

@@ -94,11 +94,12 @@ internal sealed class FFResampler : IDisposable
                 return false;
             }
 
-            var shapedFrameCount = _nativeBackend.TryGetOutSamples(decoded.FrameCount, out var outSamples)
-                ? Math.Max(1, outSamples)
-                : decoded.FrameCount;
-
             var resolvedSamples = ResolveSamples(decoded);
+            var resolvedChannelCount = Math.Max(1, decoded.NativeChannelCount.GetValueOrDefault(1));
+            var payloadFrameCount = Math.Max(1, resolvedSamples.Length / resolvedChannelCount);
+            var shapedFrameCount = _nativeBackend.TryGetOutSamples(decoded.FrameCount, out var outSamples)
+                ? Math.Max(1, Math.Min(outSamples, payloadFrameCount))
+                : payloadFrameCount;
 
             result = new FFAudioResampleResult(
                 decoded.Generation,

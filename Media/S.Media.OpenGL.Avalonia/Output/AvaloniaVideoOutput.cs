@@ -1,23 +1,30 @@
 using S.Media.Core.Errors;
 using S.Media.Core.Video;
+using S.Media.OpenGL.Output;
 
 namespace S.Media.OpenGL.Avalonia.Output;
 
 public sealed class AvaloniaVideoOutput : IVideoOutput
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<Guid, AvaloniaVideoOutput> _clones = [];
     private readonly OpenGLVideoOutput _output;
+    private readonly OpenGLVideoEngine _engine;
     private bool _disposed;
 
-    internal AvaloniaVideoOutput(OpenGLVideoOutput output, bool isClone, Guid? parentId)
+    internal AvaloniaVideoOutput(OpenGLVideoOutput output, OpenGLVideoEngine engine, bool isClone)
     {
         _output = output;
+        _engine = engine;
         IsClone = isClone;
-        CloneParentOutputId = parentId;
+
+        var add = _engine.AddOutput(_output);
+        if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
+        {
+            throw new InvalidOperationException($"Failed to register output in OpenGL engine. Code={add}.");
+        }
     }
 
-    public AvaloniaVideoOutput() : this(new OpenGLVideoOutput(), isClone: false, parentId: null)
+    public AvaloniaVideoOutput() : this(new OpenGLVideoOutput(), new OpenGLVideoEngine(), isClone: false)
     {
     }
 
@@ -25,7 +32,7 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
 
     public bool IsClone { get; }
 
-    public Guid? CloneParentOutputId { get; private set; }
+    public Guid? CloneParentOutputId => _output.CloneParentOutputId;
 
     public OpenGLVideoOutput Output => _output;
 
@@ -48,8 +55,13 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
                 return (int)MediaErrorCode.OpenGLCloneParentDisposed;
             }
 
-            cloneOutput = new AvaloniaVideoOutput(new OpenGLVideoOutput(), isClone: true, parentId: Id);
-            _clones[cloneOutput.Id] = cloneOutput;
+            var create = _engine.CreateCloneOutput(Id, ToOpenGlCloneOptions(options), out var cloneBaseOutput);
+            if (create != MediaResult.Success || cloneBaseOutput is not OpenGLVideoOutput glClone)
+            {
+                return create != MediaResult.Success ? create : (int)MediaErrorCode.OpenGLCloneCreationFailed;
+            }
+
+            cloneOutput = new AvaloniaVideoOutput(glClone, _engine, isClone: true);
             return MediaResult.Success;
         }
     }
@@ -68,24 +80,13 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
                 return (int)MediaErrorCode.OpenGLCloneParentDisposed;
             }
 
-            if (cloneOutput.Id == Id)
+            var add = _engine.AddOutput(cloneOutput.Output);
+            if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
             {
-                return (int)MediaErrorCode.OpenGLCloneSelfAttachRejected;
+                return add;
             }
 
-            if (cloneOutput.CloneParentOutputId.HasValue && cloneOutput.CloneParentOutputId.Value != Id)
-            {
-                return (int)MediaErrorCode.OpenGLCloneChildAlreadyAttached;
-            }
-
-            if (_clones.ContainsKey(cloneOutput.Id))
-            {
-                return (int)MediaErrorCode.OpenGLCloneAlreadyAttached;
-            }
-
-            cloneOutput.CloneParentOutputId = Id;
-            _clones[cloneOutput.Id] = cloneOutput;
-            return MediaResult.Success;
+            return _engine.AttachCloneOutput(Id, cloneOutput.Id);
         }
     }
 
@@ -98,12 +99,12 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
                 return MediaResult.Success;
             }
 
-            if (!_clones.Remove(cloneOutputId, out var cloneOutput))
+            var detach = _engine.DetachCloneOutput(Id, cloneOutputId);
+            if (detach != MediaResult.Success)
             {
-                return (int)MediaErrorCode.OpenGLCloneNotAttached;
+                return detach;
             }
 
-            cloneOutput.CloneParentOutputId = null;
             return MediaResult.Success;
         }
     }
@@ -118,15 +119,26 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
             }
 
             _disposed = true;
-            foreach (var clone in _clones.Values)
-            {
-                clone.CloneParentOutputId = null;
-            }
+        }
 
-            _clones.Clear();
+        _ = _engine.RemoveOutput(Id);
+        if (!IsClone)
+        {
+            _engine.Dispose();
         }
 
         _output.Dispose();
+    }
+
+    private static OpenGLCloneOptions ToOpenGlCloneOptions(in AvaloniaCloneOptions options)
+    {
+        return new OpenGLCloneOptions
+        {
+            Mode = options.CloneMode,
+            AutoResizeToParent = options.AutoTrackParentSize,
+            HudMode = options.HudMode,
+            MaxCloneDepth = options.MaxCloneDepth,
+        };
     }
 }
 

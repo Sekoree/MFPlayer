@@ -39,7 +39,16 @@ internal sealed class FFPixelConverter : IDisposable
             return (int)MediaErrorCode.FFmpegPixelConversionFailed;
         }
 
-        var mappedFormat = FFNativeFormatMapper.MapPixelFormat(decoded.NativePixelFormat);
+        var mappedFormat = FFNativeFormatMapper.ResolvePreferredPixelFormat(
+            decoded.NativePixelFormat,
+            decoded.Width,
+            decoded.Height,
+            decoded.Plane0,
+            decoded.Plane0Stride,
+            decoded.Plane1,
+            decoded.Plane1Stride,
+            decoded.Plane2,
+            decoded.Plane2Stride);
         if (ShouldPreserveNativeMultiPlane(decoded, mappedFormat))
         {
             result = new FFVideoConvertResult(
@@ -148,7 +157,15 @@ internal sealed class FFPixelConverter : IDisposable
                 return false;
             }
 
-            if (!_nativeBackend.TryExecuteScale(out var plane0, out var plane0Stride))
+            if (!_nativeBackend.TryExecuteScale(
+                    decoded.Plane0,
+                    decoded.Plane0Stride,
+                    decoded.Plane1,
+                    decoded.Plane1Stride,
+                    decoded.Plane2,
+                    decoded.Plane2Stride,
+                    out var plane0,
+                    out var plane0Stride))
             {
                 _nativeConvertEnabled = false;
                 return false;
@@ -301,7 +318,15 @@ internal unsafe sealed class FFNativePixelConverterBackend : IDisposable
         return true;
     }
 
-    public bool TryExecuteScale(out ReadOnlyMemory<byte> plane0, out int plane0Stride)
+    public bool TryExecuteScale(
+        ReadOnlyMemory<byte> sourcePlane0,
+        int sourcePlane0Stride,
+        ReadOnlyMemory<byte> sourcePlane1,
+        int sourcePlane1Stride,
+        ReadOnlyMemory<byte> sourcePlane2,
+        int sourcePlane2Stride,
+        out ReadOnlyMemory<byte> plane0,
+        out int plane0Stride)
     {
         plane0 = default;
         plane0Stride = 0;
@@ -313,21 +338,27 @@ internal unsafe sealed class FFNativePixelConverterBackend : IDisposable
 
         var sourceLinesize = new int[4];
         var targetLinesize = new int[4];
-        sourceLinesize[0] = _width * 4;
+        sourceLinesize[0] = sourcePlane0Stride > 0 ? sourcePlane0Stride : _width * 4;
+        sourceLinesize[1] = sourcePlane1Stride > 0 ? sourcePlane1Stride : 0;
+        sourceLinesize[2] = sourcePlane2Stride > 0 ? sourcePlane2Stride : 0;
         targetLinesize[0] = _width * 4;
         plane0Stride = targetLinesize[0];
 
-        var sourceBuffer = new byte[Math.Max(1, sourceLinesize[0] * _height)];
+        var sourceBuffer0 = sourcePlane0.IsEmpty ? Array.Empty<byte>() : sourcePlane0.ToArray();
+        var sourceBuffer1 = sourcePlane1.IsEmpty ? Array.Empty<byte>() : sourcePlane1.ToArray();
+        var sourceBuffer2 = sourcePlane2.IsEmpty ? Array.Empty<byte>() : sourcePlane2.ToArray();
         var targetBuffer = new byte[Math.Max(1, targetLinesize[0] * _height)];
 
-        fixed (byte* srcPtr = sourceBuffer)
+        fixed (byte* srcPtr0 = sourceBuffer0)
+        fixed (byte* srcPtr1 = sourceBuffer1)
+        fixed (byte* srcPtr2 = sourceBuffer2)
         fixed (byte* dstPtr = targetBuffer)
         {
             var sourceData = new byte*[4];
             var targetData = new byte*[4];
-            sourceData[0] = srcPtr;
-            sourceData[1] = null;
-            sourceData[2] = null;
+            sourceData[0] = sourceBuffer0.Length > 0 ? srcPtr0 : null;
+            sourceData[1] = sourceBuffer1.Length > 0 ? srcPtr1 : null;
+            sourceData[2] = sourceBuffer2.Length > 0 ? srcPtr2 : null;
             sourceData[3] = null;
             targetData[0] = dstPtr;
             targetData[1] = null;

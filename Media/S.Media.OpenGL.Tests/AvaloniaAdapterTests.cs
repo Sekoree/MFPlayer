@@ -38,8 +38,10 @@ public sealed class AvaloniaAdapterTests
         using var child = new AvaloniaVideoOutput();
 
         Assert.Equal(MediaResult.Success, parent.AttachClone(child, new AvaloniaCloneOptions()));
-        Assert.Equal((int)MediaErrorCode.OpenGLCloneAlreadyAttached, parent.AttachClone(child, new AvaloniaCloneOptions()));
+        Assert.Equal(parent.Id, child.CloneParentOutputId);
+        Assert.Equal((int)MediaErrorCode.OpenGLCloneChildAlreadyAttached, parent.AttachClone(child, new AvaloniaCloneOptions()));
         Assert.Equal(MediaResult.Success, parent.DetachClone(child.Id));
+        Assert.Null(child.CloneParentOutputId);
         Assert.Equal((int)MediaErrorCode.OpenGLCloneNotAttached, parent.DetachClone(child.Id));
     }
 

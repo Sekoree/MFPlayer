@@ -29,6 +29,10 @@ public sealed class NDIEngine : IDisposable
 
 	public int Initialize(NDIIntegrationOptions integrationOptions, NDILimitsOptions limitsOptions, NDIDiagnosticsOptions diagnosticsOptions)
 	{
+		ArgumentNullException.ThrowIfNull(integrationOptions);
+		ArgumentNullException.ThrowIfNull(limitsOptions);
+		ArgumentNullException.ThrowIfNull(diagnosticsOptions);
+
 		var diagnosticsThreadToJoin = default(Thread);
 
 		lock (_gate)
@@ -51,7 +55,16 @@ public sealed class NDIEngine : IDisposable
 
 		diagnosticsThreadToJoin?.Join(TimeSpan.FromSeconds(1));
 
-		return TryStartDiagnosticsThread();
+		var startCode = TryStartDiagnosticsThread();
+		if (startCode != MediaResult.Success)
+		{
+			lock (_gate)
+			{
+				IsInitialized = false;
+			}
+		}
+
+		return startCode;
 	}
 
 	public int Terminate()

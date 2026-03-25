@@ -144,7 +144,16 @@ public sealed class FFVideoSource : IVideoSource
                 }
 
                 var mappedFormat = sessionFrame.PixelFormat == VideoPixelFormat.Unknown
-                    ? FFNativeFormatMapper.MapPixelFormat(sessionFrame.NativePixelFormat)
+                    ? FFNativeFormatMapper.ResolvePreferredPixelFormat(
+                        sessionFrame.NativePixelFormat,
+                        sessionFrame.Width,
+                        sessionFrame.Height,
+                        sessionFrame.Plane0,
+                        sessionFrame.Plane0Stride,
+                        sessionFrame.Plane1,
+                        sessionFrame.Plane1Stride,
+                        sessionFrame.Plane2,
+                        sessionFrame.Plane2Stride)
                     : sessionFrame.PixelFormat;
                 if (mappedFormat == VideoPixelFormat.Unknown)
                 {

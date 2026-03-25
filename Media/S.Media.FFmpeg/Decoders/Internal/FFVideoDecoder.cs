@@ -303,7 +303,12 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
                 return true;
             }
 
-            return receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN);
+            if (receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+            {
+                return false;
+            }
+
+            return false;
         }
         finally
         {

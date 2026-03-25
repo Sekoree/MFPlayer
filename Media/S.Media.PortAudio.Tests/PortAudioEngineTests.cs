@@ -53,6 +53,47 @@ public sealed class PortAudioEngineTests
     }
 
     [Fact]
+    public void GetDefaultDevices_ReturnsDeterministicValues_AfterInitialize()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var defaultOutput = engine.GetDefaultOutputDevice();
+        var defaultInput = engine.GetDefaultInputDevice();
+
+        Assert.NotNull(defaultOutput);
+        Assert.NotNull(defaultInput);
+        Assert.Contains(engine.GetOutputDevices(), device => device.Id == defaultOutput.Value.Id);
+        Assert.Contains(engine.GetInputDevices(), device => device.Id == defaultInput.Value.Id);
+    }
+
+    [Fact]
+    public void Initialize_ReturnsInvalidConfig_WhenPreferredHostApiIsUnknown()
+    {
+        using var engine = new PortAudioEngine();
+
+        var code = engine.Initialize(new AudioEngineConfig { PreferredHostApi = "definitely-not-a-real-host-api" });
+
+        Assert.Equal((int)MediaErrorCode.PortAudioInvalidConfig, code);
+    }
+
+    [Fact]
+    public void CreateOutputByIndex_MinusOne_UsesDefaultOutputDevice()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var defaultOutput = engine.GetDefaultOutputDevice();
+        Assert.NotNull(defaultOutput);
+
+        var code = engine.CreateOutputByIndex(-1, out var output);
+
+        Assert.Equal(MediaResult.Success, code);
+        Assert.NotNull(output);
+        Assert.Equal(defaultOutput.Value.Id, output!.Device.Id);
+    }
+
+    [Fact]
     public void StateChanged_IsRaisedInOrder_ForInitializeStartStopTerminate()
     {
         using var engine = new PortAudioEngine();

@@ -174,7 +174,7 @@ public sealed class NDIEngineAndOptionsTests
 
         using var badFrame = CreateVideoFrame();
         badFrame.Dispose();
-        Assert.Equal((int)MediaErrorCode.NDIOutputPushVideoFailed, output.PushFrame(badFrame));
+        Assert.Equal((int)MediaErrorCode.VideoFrameDisposed, output.PushFrame(badFrame));
 
         var audioFrame = new AudioFrame(
             Samples: new ReadOnlyMemory<float>(new float[8]),

@@ -40,10 +40,28 @@ internal sealed class FFAudioDecoder : IDisposable
             return (int)MediaErrorCode.FFmpegAudioDecodeFailed;
         }
 
-        if (_nativeDecodeEnabled && TryDecodeNative(packet, out var nativeResult))
+        var hasNativePacket = packet.NativeCodecId is not null && packet.NativePacketData is { Length: > 0 };
+        if (_nativeDecodeEnabled && hasNativePacket)
         {
-            result = nativeResult;
-            return MediaResult.Success;
+            if (TryDecodeNative(packet, out var nativeResult, out var needMoreInput))
+            {
+                result = nativeResult;
+                return MediaResult.Success;
+            }
+
+            if (needMoreInput)
+            {
+                // Native decoder consumed packet but has no frame yet; caller should feed more packets.
+                result = new FFAudioDecodeResult(
+                    packet.Generation,
+                    packet.PresentationTime,
+                    FrameCount: 0,
+                    packet.SampleValue,
+                    Samples: ReadOnlyMemory<float>.Empty,
+                    NativeTimeBaseNumerator: packet.NativeTimeBaseNumerator,
+                    NativeTimeBaseDenominator: packet.NativeTimeBaseDenominator);
+                return MediaResult.Success;
+            }
         }
 
         var fallbackChannelCount = packet.NativeStreamIndex is not null ? 2 : 2;
@@ -63,9 +81,10 @@ internal sealed class FFAudioDecoder : IDisposable
         _nativeBackend = null;
     }
 
-    private bool TryDecodeNative(FFPacket packet, out FFAudioDecodeResult result)
+    private bool TryDecodeNative(FFPacket packet, out FFAudioDecodeResult result, out bool needMoreInput)
     {
         result = default;
+        needMoreInput = false;
 
         if (packet.NativeCodecId is null || packet.NativePacketData is null || packet.NativePacketData.Length == 0)
         {
@@ -88,9 +107,14 @@ internal sealed class FFAudioDecoder : IDisposable
                     out var nativeSampleRate,
                     out var nativeChannelCount,
                     out var nativeSampleFormat,
-                    out var nativeSamples))
+                    out var nativeSamples,
+                    out needMoreInput))
             {
-                _nativeDecodeEnabled = false;
+                if (!needMoreInput)
+                {
+                    _nativeDecodeEnabled = false;
+                }
+
                 return false;
             }
 
@@ -206,13 +230,15 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
         out int sampleRate,
         out int channelCount,
         out int sampleFormat,
-        out ReadOnlyMemory<float> samples)
+        out ReadOnlyMemory<float> samples,
+        out bool needMoreInput)
     {
         frameCount = 0;
         sampleRate = 0;
         channelCount = 0;
         sampleFormat = 0;
         samples = default;
+        needMoreInput = false;
 
         if (_disposed || _codecContext is null || _frame is null)
         {
@@ -244,15 +270,30 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
             if (receiveCode == 0)
             {
                 frameCount = _frame->nb_samples;
-                sampleRate = _frame->sample_rate;
-                channelCount = _frame->ch_layout.nb_channels;
+                sampleRate = _frame->sample_rate > 0
+                    ? _frame->sample_rate
+                    : _codecContext->sample_rate;
+                channelCount = _frame->ch_layout.nb_channels > 0
+                    ? _frame->ch_layout.nb_channels
+                    : _codecContext->ch_layout.nb_channels;
+                if (channelCount <= 0)
+                {
+                    channelCount = 2;
+                }
+
                 sampleFormat = _frame->format;
                 samples = ExtractSamples(_frame, frameCount, channelCount, sampleFormat);
                 ffmpeg.av_frame_unref(_frame);
                 return true;
             }
 
-            return receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN);
+            if (receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+            {
+                needMoreInput = true;
+                return false;
+            }
+
+            return false;
         }
         finally
         {

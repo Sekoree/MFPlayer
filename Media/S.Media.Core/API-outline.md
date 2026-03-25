@@ -194,7 +194,16 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `int FramesPerBuffer { get; init; }`
   - `AudioSampleFormat SampleFormat { get; init; }`
   - `AudioDeviceId? PreferredOutputDevice { get; init; }`
+  - `string? PreferredHostApi { get; init; }`
   - `bool FailOnDeviceLoss { get; init; }`
+
+### `Audio/AudioHostApiInfo.cs`
+- `readonly record struct AudioHostApiInfo`
+- Planned API:
+  - `string Id { get; }`
+  - `string Name { get; }`
+  - `bool IsDefault { get; }`
+  - `int DeviceCount { get; }`
 
 ### `Audio/Channel Mapping Contract`
 - Planned API shape (no dedicated route-map type in this phase):
@@ -217,6 +226,9 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `int Stop()`
   - `IReadOnlyList<AudioDeviceInfo> GetOutputDevices()`
   - `IReadOnlyList<AudioDeviceInfo> GetInputDevices()`
+  - `IReadOnlyList<AudioHostApiInfo> GetHostApis()`
+  - `AudioDeviceInfo? GetDefaultOutputDevice()`
+  - `AudioDeviceInfo? GetDefaultInputDevice()`
   - `int CreateOutput(AudioDeviceId deviceId, out IAudioOutput? output)`
   - `int CreateOutputByName(string deviceName, out IAudioOutput? output)`
   - `int CreateOutputByIndex(int deviceIndex, out IAudioOutput? output)`

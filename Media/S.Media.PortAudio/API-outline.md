@@ -33,6 +33,9 @@ This module is a concrete backend for Core audio engine contracts, with an OwnAu
   - `int Terminate()`
   - `IReadOnlyList<AudioDeviceInfo> GetOutputDevices()`
   - `IReadOnlyList<AudioDeviceInfo> GetInputDevices()`
+  - `IReadOnlyList<AudioHostApiInfo> GetHostApis()`
+  - `AudioDeviceInfo? GetDefaultOutputDevice()`
+  - `AudioDeviceInfo? GetDefaultInputDevice()`
   - `int CreateOutput(AudioDeviceId deviceId, out IAudioOutput? output)`
   - `int CreateOutputByName(string deviceName, out IAudioOutput? output)`
   - `int CreateOutputByIndex(int deviceIndex, out IAudioOutput? output)`
@@ -85,7 +88,12 @@ This module is a concrete backend for Core audio engine contracts, with an OwnAu
 - Hot-path logging is trace-only for per-frame operations; higher levels use aggregated/sampled reporting.
 - Contracts like `IAudioEngine`, `AudioEngineConfig`, `AudioFrame`, and dense channel-map push semantics are owned by `S.Media.Core`.
 - Device-selection APIs intentionally mirror OwnAudio-style flows (`Get*Devices`, `Set*DeviceByName`, `Set*DeviceByIndex`) while keeping typed device-id support.
+- `AudioEngineConfig.PreferredHostApi` optionally filters device discovery/selection by backend host API (for example `alsa`, `jack`, `wasapi`, `coreaudio`).
+- Linux convenience alias: `PreferredHostApi` accepts `pulse` / `pulseaudio` and resolves through ALSA-backed PortAudio discovery while preferring `pulse`/`default` endpoints for default-output selection.
+- Unknown/unsupported `PreferredHostApi` is invalid config (`PortAudioInvalidConfig`) and initialization fails with no partial mutation.
 - Engine owns discovery/lifecycle and created-output tracking; output instances own device switching APIs.
+- `CreateOutputByIndex(-1)` means discovered default output, not index `0`.
+- `PortAudioOutput.PushFrame(...)` is blocking by contract: transient backpressure retries until accepted or a fatal state/error occurs.
 - On failure, include backend-native detail where available (`PaError`, host error text, operation context, correlation id).
 - `PortAudioRuntime` and `PortAudioDeviceCatalog` responsibilities are intentionally folded into `PortAudioEngine`.
 - `PortAudioOutput` represents a concrete device-bound output endpoint created by `PortAudioEngine`.

@@ -6,11 +6,14 @@ using S.Media.OpenGL.Output;
 
 namespace S.Media.OpenGL.SDL3;
 
-public sealed class SDL3VideoView : IVideoOutput, IDisposable
+public sealed class SDL3VideoView : IVideoOutput
 {
+    private static long _nextSyntheticHandle = 1;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, SDL3VideoView> _clones = [];
-    private readonly OpenGLVideoOutput _output = new();
+    private readonly OpenGLVideoOutput _output;
+    private readonly OpenGLVideoEngine _engine;
     private readonly SDL3HudRenderer _hudRenderer = new();
     private readonly SDL3ShaderPipeline _shaderPipeline = new();
     private bool _disposed;
@@ -23,6 +26,23 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
     private nint _platformHandle;
     private string _platformDescriptor = string.Empty;
 
+    public SDL3VideoView() : this(new OpenGLVideoOutput(), new OpenGLVideoEngine(), isClone: false)
+    {
+    }
+
+    private SDL3VideoView(OpenGLVideoOutput output, OpenGLVideoEngine engine, bool isClone)
+    {
+        _output = output;
+        _engine = engine;
+        IsClone = isClone;
+
+        var add = _engine.AddOutput(_output);
+        if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
+        {
+            throw new InvalidOperationException($"Failed to register SDL3 output in OpenGL engine. Code={add}.");
+        }
+    }
+
     public Guid Id => _output.Id;
 
     public bool EnableHudOverlay { get; set; }
@@ -31,7 +51,7 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
 
     public bool IsClone { get; private set; }
 
-    public Guid? CloneParentOutputId { get; private set; }
+    public Guid? CloneParentOutputId => _output.CloneParentOutputId;
 
     public int Initialize(SDL3VideoViewOptions options)
     {
@@ -53,10 +73,12 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
             _parentLost = false;
             _lastPresentedGeneration = -1;
             _hudDirty = true;
-            _platformHandle = new nint(Id.GetHashCode());
-            _platformDescriptor = string.IsNullOrWhiteSpace(options.PreferredDescriptor)
-                ? "x11-window"
-                : options.PreferredDescriptor;
+            _platformHandle = AllocateSyntheticHandle();
+            _platformDescriptor = NormalizeDescriptor(options.PreferredDescriptor);
+            if (string.IsNullOrEmpty(_platformDescriptor))
+            {
+                return (int)MediaErrorCode.SDL3EmbedUnsupportedDescriptor;
+            }
 
             return MediaResult.Success;
         }
@@ -97,14 +119,14 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
     {
         lock (_gate)
         {
-            if (!_initialized)
-            {
-                return (int)MediaErrorCode.SDL3EmbedNotInitialized;
-            }
-
             if (_parentLost)
             {
                 return (int)MediaErrorCode.SDL3EmbedParentLost;
+            }
+
+            if (!_initialized)
+            {
+                return (int)MediaErrorCode.SDL3EmbedNotInitialized;
             }
 
             if (!_pipelineReady)
@@ -141,14 +163,14 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
     {
         lock (_gate)
         {
-            if (!_initialized)
-            {
-                return (int)MediaErrorCode.SDL3EmbedNotInitialized;
-            }
-
             if (_parentLost)
             {
                 return (int)MediaErrorCode.SDL3EmbedParentLost;
+            }
+
+            if (!_initialized)
+            {
+                return (int)MediaErrorCode.SDL3EmbedNotInitialized;
             }
 
             var push = _output.PushFrame(frame, presentationTime);
@@ -200,7 +222,7 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
     {
         _ = frame;
         _ = presentationTime;
-        return (int)MediaErrorCode.NDIOutputAudioStreamDisabled;
+        return (int)MediaErrorCode.MediaInvalidArgument;
     }
 
     public int UpdateHud(DebugInfo debugInfo)
@@ -231,6 +253,11 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
                 return (int)MediaErrorCode.SDL3EmbedNotInitialized;
             }
 
+            if (_parentLost)
+            {
+                return (int)MediaErrorCode.SDL3EmbedParentLost;
+            }
+
             return MediaResult.Success;
         }
     }
@@ -255,6 +282,12 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
                 return (int)MediaErrorCode.SDL3EmbedHandleUnavailable;
             }
 
+            if (_parentLost)
+            {
+                handle = nint.Zero;
+                return (int)MediaErrorCode.SDL3EmbedParentLost;
+            }
+
             handle = _platformHandle;
             return MediaResult.Success;
         }
@@ -268,6 +301,12 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
             {
                 descriptor = string.Empty;
                 return (int)MediaErrorCode.SDL3EmbedDescriptorUnavailable;
+            }
+
+            if (_parentLost)
+            {
+                descriptor = string.Empty;
+                return (int)MediaErrorCode.SDL3EmbedParentLost;
             }
 
             if (string.IsNullOrWhiteSpace(_platformDescriptor))
@@ -292,19 +331,22 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
                 return (int)MediaErrorCode.OpenGLCloneParentDisposed;
             }
 
-            cloneView = new SDL3VideoView
+            var create = _engine.CreateCloneOutput(Id, ToOpenGlCloneOptions(options), out var cloneBaseOutput);
+            if (create != MediaResult.Success || cloneBaseOutput is not OpenGLVideoOutput glClone)
             {
-                IsClone = true,
-                CloneParentOutputId = Id,
-            };
+                return create != MediaResult.Success ? create : (int)MediaErrorCode.OpenGLCloneCreationFailed;
+            }
 
-            var init = _embedded
+            cloneView = new SDL3VideoView(glClone, _engine, isClone: true);
+            var cloneInit = _embedded
                 ? cloneView.InitializeEmbedded(_platformHandle, 1, 1)
-                : cloneView.Initialize(new SDL3VideoViewOptions());
-            if (init != MediaResult.Success)
+                : cloneView.Initialize(new SDL3VideoViewOptions { PreferredDescriptor = _platformDescriptor });
+            if (cloneInit != MediaResult.Success)
             {
+                _ = _engine.RemoveOutput(cloneView.Id);
+                cloneView.Dispose();
                 cloneView = null;
-                return init;
+                return cloneInit;
             }
 
             _clones[cloneView.Id] = cloneView;
@@ -312,7 +354,7 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
         }
     }
 
-    public int AttachClone(SDL3VideoView cloneView, in SDL3CloneOptions options)
+    public int AttachClone(SDL3VideoView? cloneView, in SDL3CloneOptions options)
     {
         if (cloneView is null)
         {
@@ -326,17 +368,18 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
                 return (int)MediaErrorCode.OpenGLCloneSelfAttachRejected;
             }
 
-            if (cloneView.CloneParentOutputId.HasValue && cloneView.CloneParentOutputId.Value != Id)
+            var add = _engine.AddOutput(cloneView._output);
+            if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
             {
-                return (int)MediaErrorCode.OpenGLCloneChildAlreadyAttached;
+                return add;
             }
 
-            if (_clones.ContainsKey(cloneView.Id))
+            var attach = _engine.AttachCloneOutput(Id, cloneView.Id);
+            if (attach != MediaResult.Success)
             {
-                return (int)MediaErrorCode.OpenGLCloneAlreadyAttached;
+                return attach;
             }
 
-            cloneView.CloneParentOutputId = Id;
             cloneView.IsClone = true;
             _clones[cloneView.Id] = cloneView;
             return MediaResult.Success;
@@ -347,24 +390,37 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
     {
         lock (_gate)
         {
-            if (!_clones.Remove(cloneViewId, out var clone))
+            var detach = _engine.DetachCloneOutput(Id, cloneViewId);
+            if (detach != MediaResult.Success)
             {
-                return (int)MediaErrorCode.OpenGLCloneNotAttached;
+                return detach;
             }
 
-            clone.CloneParentOutputId = null;
+            _clones.Remove(cloneViewId, out _);
+
             return MediaResult.Success;
         }
     }
 
     public void SimulateEmbeddedParentLost()
     {
+        SDL3VideoView[] clonesToDispose;
+
         lock (_gate)
         {
             if (_embedded)
             {
-                _parentLost = true;
+                clonesToDispose = ApplyParentLossTeardownLocked();
             }
+            else
+            {
+                clonesToDispose = [];
+            }
+        }
+
+        foreach (var clone in clonesToDispose)
+        {
+            clone.Dispose();
         }
     }
 
@@ -378,10 +434,6 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
             }
 
             _disposed = true;
-            foreach (var clone in _clones.Values)
-            {
-                clone.CloneParentOutputId = null;
-            }
 
             _clones.Clear();
             _platformHandle = nint.Zero;
@@ -393,7 +445,78 @@ public sealed class SDL3VideoView : IVideoOutput, IDisposable
         }
 
         _shaderPipeline.Dispose();
+        _ = _engine.RemoveOutput(Id);
+        if (!IsClone)
+        {
+            _engine.Dispose();
+        }
+
         _output.Dispose();
+    }
+
+    private static OpenGLCloneOptions ToOpenGlCloneOptions(in SDL3CloneOptions options)
+    {
+        return new OpenGLCloneOptions
+        {
+            Mode = options.CloneMode,
+            AutoResizeToParent = options.AutoTrackParentSize,
+            HudMode = options.HudMode,
+            MaxCloneDepth = options.MaxCloneDepth,
+        };
+    }
+
+    private static string NormalizeDescriptor(string? descriptor)
+    {
+        if (string.IsNullOrWhiteSpace(descriptor))
+        {
+            return ResolveDefaultDescriptor();
+        }
+
+        var normalized = descriptor.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "x11-window" => "x11-window",
+            "wayland-surface" => "wayland-surface",
+            "win32-hwnd" => "win32-hwnd",
+            "cocoa-nsview" => "cocoa-nsview",
+            _ => string.Empty,
+        };
+    }
+
+    private static string ResolveDefaultDescriptor()
+    {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
+        {
+            return "wayland-surface";
+        }
+
+        return "x11-window";
+    }
+
+    private static nint AllocateSyntheticHandle()
+    {
+        var handle = Interlocked.Increment(ref _nextSyntheticHandle);
+        return new nint(handle == 0 ? 1 : handle);
+    }
+
+    private SDL3VideoView[] ApplyParentLossTeardownLocked()
+    {
+        if (_parentLost)
+        {
+            return [];
+        }
+
+        _parentLost = true;
+        _initialized = false;
+        _pipelineReady = false;
+        _platformHandle = nint.Zero;
+        _platformDescriptor = string.Empty;
+        _lastPresentedGeneration = -1;
+        _hudDirty = false;
+
+        var clones = _clones.Values.ToArray();
+        _clones.Clear();
+        return clones;
     }
 }
 

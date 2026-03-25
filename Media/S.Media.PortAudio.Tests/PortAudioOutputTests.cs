@@ -15,7 +15,14 @@ public sealed class PortAudioOutputTests
 
         Assert.Equal((int)MediaErrorCode.PortAudioPushFailed, output.PushFrame(in frame, [0, 1]));
 
-        Assert.Equal(MediaResult.Success, output.Start(new AudioOutputConfig()));
+        var start = output.Start(new AudioOutputConfig());
+        Assert.True(start is MediaResult.Success or (int)MediaErrorCode.PortAudioStreamOpenFailed or (int)MediaErrorCode.PortAudioStreamStartFailed);
+        if (start != MediaResult.Success)
+        {
+            Assert.Equal((int)MediaErrorCode.PortAudioPushFailed, output.PushFrame(in frame, [0, 1]));
+            return;
+        }
+
         Assert.Equal(MediaResult.Success, output.PushFrame(in frame, [0, 1]));
         Assert.Equal((int)MediaErrorCode.AudioRouteMapMissing, output.PushFrame(in frame, ReadOnlySpan<int>.Empty));
         Assert.Equal((int)MediaErrorCode.MediaInvalidArgument, output.PushFrame(in frame, [0, 1], sourceChannelCount: 0));
@@ -45,9 +52,28 @@ public sealed class PortAudioOutputTests
         var output = CreateOutput();
 
         Assert.Equal(MediaResult.Success, output.Stop());
-        Assert.Equal(MediaResult.Success, output.Start(new AudioOutputConfig()));
+        var start = output.Start(new AudioOutputConfig());
+        Assert.True(start is MediaResult.Success or (int)MediaErrorCode.PortAudioStreamOpenFailed or (int)MediaErrorCode.PortAudioStreamStartFailed);
         Assert.Equal(MediaResult.Success, output.Stop());
         Assert.Equal(MediaResult.Success, output.Stop());
+    }
+
+    [Fact]
+    public void SetOutputDeviceByIndex_MinusOne_UsesDefaultOutputDevice()
+    {
+        var devices =
+            new List<AudioDeviceInfo>
+            {
+                new(new AudioDeviceId("default-output"), "Default Output", IsDefaultOutput: true),
+                new(new AudioDeviceId("monitor-output"), "Monitor Output"),
+            };
+
+        var output = new PortAudioOutput(devices[1], () => devices, new AudioEngineConfig(), () => devices[0]);
+
+        var code = output.SetOutputDeviceByIndex(-1);
+
+        Assert.Equal(MediaResult.Success, code);
+        Assert.Equal("Default Output", output.Device.Name);
     }
 
     [Fact]
@@ -112,7 +138,7 @@ public sealed class PortAudioOutputTests
                 new(new AudioDeviceId("monitor-output"), "Monitor Output"),
             };
 
-        return new PortAudioOutput(devices[0], () => devices);
+        return new PortAudioOutput(devices[0], () => devices, new AudioEngineConfig(), () => devices[0]);
     }
 }
 

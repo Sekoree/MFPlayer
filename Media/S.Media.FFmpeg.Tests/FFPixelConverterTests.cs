@@ -34,7 +34,7 @@ public sealed class FFPixelConverterTests
         Assert.False(converted.IsKeyFrame);
         Assert.Equal(2, converted.Width);
         Assert.Equal(2, converted.Height);
-        Assert.Equal(VideoPixelFormat.Unknown, converted.MappedPixelFormat);
+        Assert.Equal(VideoPixelFormat.Rgba32, converted.MappedPixelFormat);
     }
 
     [Fact]

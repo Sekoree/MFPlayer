@@ -10,6 +10,8 @@ public sealed record AudioEngineConfig
 
     public AudioDeviceId? PreferredOutputDevice { get; init; }
 
+    public string? PreferredHostApi { get; init; }
+
     public bool FailOnDeviceLoss { get; init; }
 }
 

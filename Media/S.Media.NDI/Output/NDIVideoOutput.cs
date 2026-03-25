@@ -109,18 +109,25 @@ public sealed class NDIVideoOutput : IVideoOutput
     public int PushFrame(VideoFrame frame, TimeSpan presentationTime)
     {
         var started = Stopwatch.GetTimestamp();
+        var frameValidation = frame.ValidateForPush();
 
         lock (_gate)
         {
-            if (!_running)
+            if (_disposed)
             {
                 _videoPushFailures++;
                 _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
                 return (int)MediaErrorCode.NDIOutputPushVideoFailed;
             }
 
-            var frameValidation = frame.ValidateForPush();
             if (frameValidation != MediaResult.Success)
+            {
+                _videoPushFailures++;
+                _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                return frameValidation;
+            }
+
+            if (!_running)
             {
                 _videoPushFailures++;
                 _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
@@ -139,6 +146,13 @@ public sealed class NDIVideoOutput : IVideoOutput
 
         lock (_gate)
         {
+            if (_disposed)
+            {
+                _audioPushFailures++;
+                _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                return (int)MediaErrorCode.NDIOutputPushAudioFailed;
+            }
+
             if (!Options.EnableAudio)
             {
                 _audioPushFailures++;

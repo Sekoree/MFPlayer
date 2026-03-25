@@ -10,16 +10,28 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 {
     private readonly Lock _gate = new();
     private readonly Func<IReadOnlyList<AudioDeviceInfo>> _deviceProvider;
+    private readonly Func<AudioDeviceInfo?> _defaultOutputProvider;
+    private readonly AudioEngineConfig _config;
     private nint _stream;
-    private int _nativeSampleRate = 48_000;
-    private int _nativeChannelCount = 2;
+    private int _nativeSampleRate;
+    private int _nativeChannelCount;
+    private int _nativeFramesPerBuffer;
     private bool _nativeStreaming;
     private bool _disposed;
 
-    public PortAudioOutput(AudioDeviceInfo device, Func<IReadOnlyList<AudioDeviceInfo>> deviceProvider)
+    public PortAudioOutput(
+        AudioDeviceInfo device,
+        Func<IReadOnlyList<AudioDeviceInfo>> deviceProvider,
+        AudioEngineConfig config,
+        Func<AudioDeviceInfo?>? defaultOutputProvider = null)
     {
         Device = device;
         _deviceProvider = deviceProvider;
+        _config = config;
+        _defaultOutputProvider = defaultOutputProvider ?? (() => null);
+        _nativeSampleRate = Math.Max(1, config.SampleRate);
+        _nativeChannelCount = Math.Max(1, config.OutputChannelCount);
+        _nativeFramesPerBuffer = Math.Max(1, config.FramesPerBuffer);
     }
 
     public AudioOutputState State { get; private set; } = AudioOutputState.Stopped;
@@ -37,8 +49,19 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                 return (int)MediaErrorCode.PortAudioStreamStartFailed;
             }
 
+            if (State == AudioOutputState.Running && _nativeStreaming && _stream != nint.Zero)
+            {
+                return MediaResult.Success;
+            }
+
+            var startCode = TryStartNativeStream();
+            if (startCode != MediaResult.Success)
+            {
+                State = AudioOutputState.Stopped;
+                return startCode;
+            }
+
             State = AudioOutputState.Running;
-            TryStartNativeStream();
             return MediaResult.Success;
         }
     }
@@ -93,6 +116,17 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
     public int SetOutputDeviceByIndex(int deviceIndex)
     {
+        if (deviceIndex == -1)
+        {
+            var defaultOutput = _defaultOutputProvider();
+            if (!defaultOutput.HasValue)
+            {
+                return (int)MediaErrorCode.PortAudioDeviceNotFound;
+            }
+
+            return ApplyDeviceChange(defaultOutput.Value);
+        }
+
         var devices = _deviceProvider();
         if (deviceIndex < 0 || deviceIndex >= devices.Count)
         {
@@ -127,7 +161,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
         if (!_nativeStreaming || _stream == nint.Zero)
         {
-            return MediaResult.Success;
+            return (int)MediaErrorCode.PortAudioStreamStartFailed;
         }
 
         return TryWriteNativeFrame(frame, sourceChannelByOutputIndex, sourceChannelCount);
@@ -172,29 +206,34 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         return MediaResult.Success;
     }
 
-    private void TryStartNativeStream()
+    private int TryStartNativeStream()
     {
         if (_nativeStreaming)
         {
-            return;
+            return MediaResult.Success;
         }
 
         try
         {
-            var open = Native.Pa_OpenDefaultStream(
-                out _stream,
-                numInputChannels: 0,
-                numOutputChannels: _nativeChannelCount,
-                sampleFormat: PaSampleFormat.paFloat32,
-                sampleRate: _nativeSampleRate,
-                framesPerBuffer: 256,
-                streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
-                userData: nint.Zero);
+            var open = TryOpenSelectedDeviceStream();
+            if (open != PaError.paNoError)
+            {
+                open = Native.Pa_OpenDefaultStream(
+                    out _stream,
+                    numInputChannels: 0,
+                    numOutputChannels: _nativeChannelCount,
+                    sampleFormat: PaSampleFormat.paFloat32,
+                    sampleRate: _nativeSampleRate,
+                    framesPerBuffer: (nuint)_nativeFramesPerBuffer,
+                    streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
+                    userData: nint.Zero);
+            }
 
             if (open != PaError.paNoError)
             {
                 _stream = nint.Zero;
-                return;
+                _nativeStreaming = false;
+                return (int)MediaErrorCode.PortAudioStreamOpenFailed;
             }
 
             var start = Native.Pa_StartStream(_stream);
@@ -202,26 +241,83 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             {
                 Native.Pa_CloseStream(_stream);
                 _stream = nint.Zero;
-                return;
+                _nativeStreaming = false;
+                return (int)MediaErrorCode.PortAudioStreamStartFailed;
             }
 
             _nativeStreaming = true;
+            return MediaResult.Success;
         }
         catch (DllNotFoundException)
         {
             _stream = nint.Zero;
             _nativeStreaming = false;
+            return (int)MediaErrorCode.PortAudioStreamOpenFailed;
         }
         catch (EntryPointNotFoundException)
         {
             _stream = nint.Zero;
             _nativeStreaming = false;
+            return (int)MediaErrorCode.PortAudioStreamOpenFailed;
         }
         catch (TypeInitializationException)
         {
             _stream = nint.Zero;
             _nativeStreaming = false;
+            return (int)MediaErrorCode.PortAudioStreamOpenFailed;
         }
+    }
+
+    private PaError TryOpenSelectedDeviceStream()
+    {
+        _stream = nint.Zero;
+
+        if (!TryResolvePortAudioDeviceIndex(Device.Id, out var deviceIndex))
+        {
+            return PaError.paInvalidDevice;
+        }
+
+        var deviceInfo = Native.Pa_GetDeviceInfo(deviceIndex);
+        if (!deviceInfo.HasValue || deviceInfo.Value.maxOutputChannels <= 0)
+        {
+            return PaError.paInvalidDevice;
+        }
+
+        _nativeChannelCount = Math.Clamp(_nativeChannelCount, 1, Math.Max(1, deviceInfo.Value.maxOutputChannels));
+
+        var outputParams = new PaStreamParameters
+        {
+            device = deviceIndex,
+            channelCount = _nativeChannelCount,
+            sampleFormat = PaSampleFormat.paFloat32,
+            suggestedLatency = deviceInfo.Value.defaultHighOutputLatency > 0
+                ? deviceInfo.Value.defaultHighOutputLatency
+                : deviceInfo.Value.defaultLowOutputLatency,
+            hostApiSpecificStreamInfo = nint.Zero,
+        };
+
+        return Native.Pa_OpenStream(
+            out _stream,
+            inputParameters: null,
+            outputParameters: outputParams,
+            sampleRate: _nativeSampleRate,
+            framesPerBuffer: (nuint)_nativeFramesPerBuffer,
+            streamFlags: PaStreamFlags.paNoFlag,
+            streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
+            userData: nint.Zero);
+    }
+
+    private static bool TryResolvePortAudioDeviceIndex(AudioDeviceId id, out int deviceIndex)
+    {
+        deviceIndex = -1;
+        const string prefix = "pa:";
+        var value = id.Value;
+        if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return int.TryParse(value[prefix.Length..], out deviceIndex) && deviceIndex >= 0;
     }
 
     private int TryWriteNativeFrame(in AudioFrame frame, ReadOnlySpan<int> routeMap, int sourceChannelCount)
@@ -261,28 +357,43 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
             fixed (float* ptr = rented)
             {
-                var write = Native.Pa_WriteStream(_stream, (nint)ptr, (nuint)frame.FrameCount);
-                if (write == PaError.paNoError)
+                var framesRemaining = frame.FrameCount;
+                var frameOffset = 0;
+
+                while (framesRemaining > 0)
                 {
-                    return MediaResult.Success;
+                    if (_disposed || State != AudioOutputState.Running || _stream == nint.Zero)
+                    {
+                        return (int)MediaErrorCode.PortAudioPushFailed;
+                    }
+
+                    var writableFrames = Math.Min(framesRemaining, Math.Max(1, _nativeFramesPerBuffer));
+                    var sampleOffset = frameOffset * _nativeChannelCount;
+                    var writePtr = ptr + sampleOffset;
+                    var write = Native.Pa_WriteStream(_stream, (nint)writePtr, (nuint)writableFrames);
+                    if (write == PaError.paNoError)
+                    {
+                        frameOffset += writableFrames;
+                        framesRemaining -= writableFrames;
+                        continue;
+                    }
+
+                    if (write == PaError.paTimedOut || write == PaError.paOutputUnderflowed)
+                    {
+                        // Keep blocking semantics: retry transient backpressure until the chunk is accepted.
+                        Native.Pa_Sleep(1);
+                        continue;
+                    }
+
+                    if (write == PaError.paUnanticipatedHostError)
+                    {
+                        return (int)MediaErrorCode.PortAudioHostError;
+                    }
+
+                    return (int)MediaErrorCode.PortAudioPushFailed;
                 }
 
-                if (write == PaError.paOutputUnderflowed)
-                {
-                    return (int)MediaErrorCode.PortAudioUnderflow;
-                }
-
-                if (write == PaError.paTimedOut)
-                {
-                    return (int)MediaErrorCode.MediaSourceReadTimeout;
-                }
-
-                if (write == PaError.paUnanticipatedHostError)
-                {
-                    return (int)MediaErrorCode.PortAudioHostError;
-                }
-
-                return (int)MediaErrorCode.PortAudioPushFailed;
+                return MediaResult.Success;
             }
         }
         finally
