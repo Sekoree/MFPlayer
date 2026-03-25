@@ -30,6 +30,10 @@ public sealed class FFResamplerTests
         Assert.Equal(TimeSpan.FromSeconds(1.25), converted.PresentationTime);
         Assert.Equal(256, converted.FrameCount);
         Assert.Equal(0.75f, converted.SampleValue);
+        Assert.Equal(256, converted.Samples.Length);
+        Assert.Null(converted.NativeTimeBaseNumerator);
+        Assert.Null(converted.NativeTimeBaseDenominator);
+        Assert.Null(converted.NativeSampleFormat);
     }
 
     [Fact]
@@ -71,12 +75,14 @@ public sealed class FFResamplerTests
 
         Assert.Equal(MediaResult.Success, resampler.Resample(decoded, out var first));
 
-        decoded = decoded with
-        {
-            FrameCount = 512,
-            NativeSampleRate = 96_000,
-            NativeChannelCount = 1,
-        };
+        decoded = new FFAudioDecodeResult(
+            Generation: 7,
+            PresentationTime: TimeSpan.FromSeconds(0.5),
+            FrameCount: 512,
+            SampleValue: 0.4f,
+            NativeSampleRate: 96_000,
+            NativeChannelCount: 1,
+            NativeSampleFormat: 1);
 
         Assert.Equal(128, first.FrameCount);
         Assert.Equal(48_000, first.NativeSampleRate);

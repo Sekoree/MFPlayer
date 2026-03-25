@@ -36,6 +36,7 @@ public sealed class FFDecoderInternalsTests
         Assert.Equal(MediaResult.Success, decoder.Initialize());
         Assert.Equal(MediaResult.Success, decoder.Decode(new FFPacket(0, 0, TimeSpan.Zero, true, 0.5f), out var decoded));
         Assert.Equal(256, decoded.FrameCount);
+        Assert.True(decoded.Samples.Length > 0);
     }
 
     [Fact]
@@ -54,6 +55,8 @@ public sealed class FFDecoderInternalsTests
         Assert.False(decoded.IsKeyFrame);
         Assert.Equal(2, decoded.Width);
         Assert.Equal(2, decoded.Height);
+        Assert.True(decoded.Plane0.Length > 0);
+        Assert.True(decoded.Plane0Stride > 0);
     }
 
     [Fact]

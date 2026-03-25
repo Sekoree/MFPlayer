@@ -74,11 +74,10 @@ public sealed class FFPixelConverterTests
             Height: 360,
             NativePixelFormat: 26);
 
-        FFVideoConvertResult first;
-        Assert.Equal(MediaResult.Success, converter.Convert(decoded, out first));
+        var first = ConvertOrThrow(converter, decoded);
         Assert.Equal(3, first.FrameIndex);
 
-        decoded = decoded with
+        var mutated = decoded with
         {
             Width = 1920,
             Height = 1080,
@@ -86,12 +85,51 @@ public sealed class FFPixelConverterTests
             NativePixelFormat = int.MaxValue,
         };
 
+        Assert.Equal(1920, mutated.Width);
+        Assert.Equal(1080, mutated.Height);
+
         Assert.Equal(640, first.Width);
         Assert.Equal(360, first.Height);
         Assert.Null(first.NativeTimeBaseNumerator);
         Assert.Null(first.NativeTimeBaseDenominator);
         Assert.Null(first.NativeFrameRateNumerator);
         Assert.Null(first.NativeFrameRateDenominator);
+    }
+
+    [Fact]
+    public void Convert_Fallback_PreservesSecondaryPlanePayloads()
+    {
+        using var converter = new FFPixelConverter();
+        Assert.Equal(MediaResult.Success, converter.Initialize());
+
+        var decoded = new FFVideoDecodeResult(
+            Generation: 1,
+            FrameIndex: 2,
+            PresentationTime: TimeSpan.FromSeconds(0.2),
+            IsKeyFrame: true,
+            Width: 4,
+            Height: 4,
+            Plane0: new byte[16],
+            Plane0Stride: 4,
+            Plane1: new byte[4],
+            Plane1Stride: 2,
+            Plane2: new byte[4],
+            Plane2Stride: 2);
+
+        var code = converter.Convert(decoded, out var converted);
+
+        Assert.Equal(MediaResult.Success, code);
+        Assert.Equal(4, converted.Plane1.Length);
+        Assert.Equal(2, converted.Plane1Stride);
+        Assert.Equal(4, converted.Plane2.Length);
+        Assert.Equal(2, converted.Plane2Stride);
+    }
+
+    private static FFVideoConvertResult ConvertOrThrow(FFPixelConverter converter, FFVideoDecodeResult decoded)
+    {
+        var code = converter.Convert(decoded, out var converted);
+        Assert.Equal(MediaResult.Success, code);
+        return converted;
     }
 }
 

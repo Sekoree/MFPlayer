@@ -53,7 +53,9 @@ internal sealed class FFVideoDecoder : IDisposable
             packet.PresentationTime,
             packet.IsKeyFrame,
             PlaceholderVideoWidth,
-            PlaceholderVideoHeight);
+            PlaceholderVideoHeight,
+            CreateSyntheticPlane0Payload(PlaceholderVideoWidth, PlaceholderVideoHeight, seed: (byte)(packet.Sequence % 251)),
+            PlaceholderVideoWidth * 4);
         return MediaResult.Success;
     }
 
@@ -88,7 +90,13 @@ internal sealed class FFVideoDecoder : IDisposable
                     out var width,
                     out var height,
                     out var keyFrameFromDecoder,
-                    out var nativePixelFormat))
+                    out var nativePixelFormat,
+                    out var plane0,
+                    out var plane0Stride,
+                    out var plane1,
+                    out var plane1Stride,
+                    out var plane2,
+                    out var plane2Stride))
             {
                 _nativeDecodeEnabled = false;
                 return false;
@@ -101,6 +109,12 @@ internal sealed class FFVideoDecoder : IDisposable
                 keyFrameFromDecoder || packet.IsKeyFrame,
                 Math.Max(1, width),
                 Math.Max(1, height),
+                plane0,
+                plane0Stride,
+                plane1,
+                plane1Stride,
+                plane2,
+                plane2Stride,
                 NativeTimeBaseNumerator: packet.NativeTimeBaseNumerator,
                 NativeTimeBaseDenominator: packet.NativeTimeBaseDenominator,
                 NativeFrameRateNumerator: packet.NativeFrameRateNumerator,
@@ -128,6 +142,13 @@ internal sealed class FFVideoDecoder : IDisposable
             _nativeDecodeEnabled = false;
             return false;
         }
+    }
+
+    private static byte[] CreateSyntheticPlane0Payload(int width, int height, byte seed)
+    {
+        var payload = new byte[Math.Max(1, width * height * 4)];
+        payload.AsSpan().Fill(seed);
+        return payload;
     }
 }
 
@@ -198,12 +219,24 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
         out int width,
         out int height,
         out bool isKeyFrame,
-        out int pixelFormat)
+        out int pixelFormat,
+        out ReadOnlyMemory<byte> plane0,
+        out int plane0Stride,
+        out ReadOnlyMemory<byte> plane1,
+        out int plane1Stride,
+        out ReadOnlyMemory<byte> plane2,
+        out int plane2Stride)
     {
         width = 0;
         height = 0;
         isKeyFrame = false;
         pixelFormat = 0;
+        plane0 = default;
+        plane0Stride = 0;
+        plane1 = default;
+        plane1Stride = 0;
+        plane2 = default;
+        plane2Stride = 0;
 
         if (_disposed || _codecContext is null || _frame is null)
         {
@@ -238,6 +271,34 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
                 height = _frame->height;
                 isKeyFrame = (_frame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
                 pixelFormat = _frame->format;
+                plane0Stride = Math.Max(1, Math.Abs(_frame->linesize[0]));
+                var copySize = Math.Max(1, plane0Stride * Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 0)));
+                var copied = new byte[copySize];
+                if (_frame->data[0] is not null)
+                {
+                    Marshal.Copy((IntPtr)_frame->data[0], copied, 0, copySize);
+                }
+
+                plane0 = copied;
+
+                if (_frame->data[1] is not null)
+                {
+                    plane1Stride = Math.Max(1, Math.Abs(_frame->linesize[1]));
+                    var plane1Height = Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 1));
+                    var plane1Bytes = new byte[Math.Max(1, plane1Stride * plane1Height)];
+                    Marshal.Copy((IntPtr)_frame->data[1], plane1Bytes, 0, plane1Bytes.Length);
+                    plane1 = plane1Bytes;
+                }
+
+                if (_frame->data[2] is not null)
+                {
+                    plane2Stride = Math.Max(1, Math.Abs(_frame->linesize[2]));
+                    var plane2Height = Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 2));
+                    var plane2Bytes = new byte[Math.Max(1, plane2Stride * plane2Height)];
+                    Marshal.Copy((IntPtr)_frame->data[2], plane2Bytes, 0, plane2Bytes.Length);
+                    plane2 = plane2Bytes;
+                }
+
                 ffmpeg.av_frame_unref(_frame);
                 return true;
             }
@@ -279,6 +340,24 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
 
         _codecId = null;
     }
+
+    private static int GetPlaneHeight(AVPixelFormat format, int height, int planeIndex)
+    {
+        var safeHeight = Math.Max(1, height);
+        if (planeIndex == 0)
+        {
+            return safeHeight;
+        }
+
+        return format switch
+        {
+            AVPixelFormat.AV_PIX_FMT_YUV420P => safeHeight / 2,
+            AVPixelFormat.AV_PIX_FMT_YUV420P10LE => safeHeight / 2,
+            AVPixelFormat.AV_PIX_FMT_NV12 => safeHeight / 2,
+            AVPixelFormat.AV_PIX_FMT_P010LE => safeHeight / 2,
+            _ => safeHeight,
+        };
+    }
 }
 
 internal readonly record struct FFVideoDecodeResult(
@@ -288,6 +367,12 @@ internal readonly record struct FFVideoDecodeResult(
     bool IsKeyFrame,
     int Width,
     int Height,
+    ReadOnlyMemory<byte> Plane0 = default,
+    int Plane0Stride = 0,
+    ReadOnlyMemory<byte> Plane1 = default,
+    int Plane1Stride = 0,
+    ReadOnlyMemory<byte> Plane2 = default,
+    int Plane2Stride = 0,
     int? NativeTimeBaseNumerator = null,
     int? NativeTimeBaseDenominator = null,
     int? NativeFrameRateNumerator = null,

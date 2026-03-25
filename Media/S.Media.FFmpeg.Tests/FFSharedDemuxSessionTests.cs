@@ -59,6 +59,8 @@ public sealed class FFSharedDemuxSessionTests
         Assert.Equal(MediaResult.Success, session.ReadVideoFrame(out var postSeek));
         Assert.Equal(60, postSeek.FrameIndex);
         Assert.Equal(TimeSpan.FromSeconds(2), postSeek.PresentationTime);
+        Assert.True(postSeek.Plane0.Length > 0);
+        Assert.True(postSeek.Plane0Stride > 0);
     }
 }
 

@@ -153,6 +153,17 @@ public sealed class FFVideoSource : IVideoSource
 
                 var pixelFormatData = CreatePixelFormatData(mappedFormat);
                 var plane0Stride = ComputePlane0Stride(mappedFormat, Math.Max(1, sessionFrame.Width));
+                var plane0 = sessionFrame.Plane0;
+                var resolvedStride = sessionFrame.Plane0Stride > 0 ? sessionFrame.Plane0Stride : plane0Stride;
+                if (plane0.IsEmpty)
+                {
+                    plane0 = new byte[Math.Max(1, resolvedStride * Math.Max(1, sessionFrame.Height))];
+                }
+
+                var plane1 = sessionFrame.Plane1;
+                var plane1Stride = Math.Max(0, sessionFrame.Plane1Stride);
+                var plane2 = sessionFrame.Plane2;
+                var plane2Stride = Math.Max(0, sessionFrame.Plane2Stride);
 
                 frame = new VideoFrame(
                     width: Math.Max(1, sessionFrame.Width),
@@ -161,8 +172,12 @@ public sealed class FFVideoSource : IVideoSource
                     pixelFormatData: pixelFormatData,
                     presentationTime: sessionFrame.PresentationTime,
                     isKeyFrame: sessionFrame.IsKeyFrame,
-                    plane0: new byte[Math.Max(1, plane0Stride * Math.Max(1, sessionFrame.Height))],
-                    plane0Stride: plane0Stride);
+                    plane0: plane0,
+                    plane0Stride: resolvedStride,
+                    plane1: plane1,
+                    plane1Stride: plane1Stride,
+                    plane2: plane2,
+                    plane2Stride: plane2Stride);
 
                 _positionSeconds = sessionFrame.PresentationTime.TotalSeconds;
                 _currentFrameIndex = sessionFrame.FrameIndex + 1;

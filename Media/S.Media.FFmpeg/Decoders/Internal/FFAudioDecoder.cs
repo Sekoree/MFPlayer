@@ -46,7 +46,13 @@ internal sealed class FFAudioDecoder : IDisposable
             return MediaResult.Success;
         }
 
-        result = new FFAudioDecodeResult(packet.Generation, packet.PresentationTime, PlaceholderAudioFramesPerChunk, packet.SampleValue);
+        var fallbackChannelCount = packet.NativeStreamIndex is not null ? 2 : 2;
+        result = new FFAudioDecodeResult(
+            packet.Generation,
+            packet.PresentationTime,
+            PlaceholderAudioFramesPerChunk,
+            packet.SampleValue,
+            CreateSyntheticAudioPayload(PlaceholderAudioFramesPerChunk, fallbackChannelCount, packet.SampleValue));
         return MediaResult.Success;
     }
 
@@ -81,7 +87,8 @@ internal sealed class FFAudioDecoder : IDisposable
                     out var nativeFrameCount,
                     out var nativeSampleRate,
                     out var nativeChannelCount,
-                    out var nativeSampleFormat))
+                    out var nativeSampleFormat,
+                    out var nativeSamples))
             {
                 _nativeDecodeEnabled = false;
                 return false;
@@ -92,6 +99,7 @@ internal sealed class FFAudioDecoder : IDisposable
                 packet.PresentationTime,
                 Math.Max(1, nativeFrameCount),
                 packet.SampleValue,
+                nativeSamples,
                 NativeTimeBaseNumerator: packet.NativeTimeBaseNumerator,
                 NativeTimeBaseDenominator: packet.NativeTimeBaseDenominator,
                 NativeSampleRate: nativeSampleRate,
@@ -119,6 +127,14 @@ internal sealed class FFAudioDecoder : IDisposable
             _nativeDecodeEnabled = false;
             return false;
         }
+    }
+
+    private static float[] CreateSyntheticAudioPayload(int frameCount, int channelCount, float sampleValue)
+    {
+        var total = Math.Max(1, frameCount) * Math.Max(1, channelCount);
+        var payload = new float[total];
+        payload.AsSpan().Fill(sampleValue);
+        return payload;
     }
 }
 
@@ -189,12 +205,14 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
         out int frameCount,
         out int sampleRate,
         out int channelCount,
-        out int sampleFormat)
+        out int sampleFormat,
+        out ReadOnlyMemory<float> samples)
     {
         frameCount = 0;
         sampleRate = 0;
         channelCount = 0;
         sampleFormat = 0;
+        samples = default;
 
         if (_disposed || _codecContext is null || _frame is null)
         {
@@ -229,6 +247,7 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
                 sampleRate = _frame->sample_rate;
                 channelCount = _frame->ch_layout.nb_channels;
                 sampleFormat = _frame->format;
+                samples = ExtractSamples(_frame, frameCount, channelCount, sampleFormat);
                 ffmpeg.av_frame_unref(_frame);
                 return true;
             }
@@ -270,16 +289,113 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
 
         _codecId = null;
     }
+
+    private static ReadOnlyMemory<float> ExtractSamples(AVFrame* frame, int frameCount, int channelCount, int sampleFormat)
+    {
+        var sampleCount = Math.Max(1, frameCount) * Math.Max(1, channelCount);
+        var output = new float[sampleCount];
+        var format = (AVSampleFormat)sampleFormat;
+
+        if (frame->extended_data is null)
+        {
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_FLT)
+        {
+            var ptr = (IntPtr)frame->extended_data[0];
+            Marshal.Copy(ptr, output, 0, Math.Min(sampleCount, output.Length));
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_FLTP)
+        {
+            for (var ch = 0; ch < channelCount; ch++)
+            {
+                var plane = new float[Math.Max(1, frameCount)];
+                Marshal.Copy((IntPtr)frame->extended_data[ch], plane, 0, Math.Max(1, frameCount));
+                for (var i = 0; i < frameCount; i++)
+                {
+                    output[(i * channelCount) + ch] = plane[i];
+                }
+            }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_S16)
+        {
+            var tmp = new short[sampleCount];
+            Marshal.Copy((IntPtr)frame->extended_data[0], tmp, 0, tmp.Length);
+            for (var i = 0; i < tmp.Length; i++)
+            {
+                output[i] = tmp[i] / 32768f;
+            }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_S16P)
+        {
+            for (var ch = 0; ch < channelCount; ch++)
+            {
+                var plane = new short[Math.Max(1, frameCount)];
+                Marshal.Copy((IntPtr)frame->extended_data[ch], plane, 0, Math.Max(1, frameCount));
+                for (var i = 0; i < frameCount; i++)
+                {
+                    output[(i * channelCount) + ch] = plane[i] / 32768f;
+                }
+            }
+        }
+
+        return output;
+    }
 }
 
-internal readonly record struct FFAudioDecodeResult(
-    long Generation,
-    TimeSpan PresentationTime,
-    int FrameCount,
-    float SampleValue,
-    int? NativeTimeBaseNumerator = null,
-    int? NativeTimeBaseDenominator = null,
-    int? NativeSampleRate = null,
-    int? NativeChannelCount = null,
-    int? NativeSampleFormat = null);
+internal readonly struct FFAudioDecodeResult
+{
+    public FFAudioDecodeResult(
+        long Generation,
+        TimeSpan PresentationTime,
+        int FrameCount,
+        float SampleValue,
+        ReadOnlyMemory<float> Samples = default,
+        int? NativeTimeBaseNumerator = null,
+        int? NativeTimeBaseDenominator = null,
+        int? NativeSampleRate = null,
+        int? NativeChannelCount = null,
+        int? NativeSampleFormat = null)
+    {
+        this.Generation = Generation;
+        this.PresentationTime = PresentationTime;
+        this.FrameCount = FrameCount;
+        this.SampleValue = SampleValue;
+        this.Samples = Samples;
+        this.NativeTimeBaseNumerator = NativeTimeBaseNumerator;
+        this.NativeTimeBaseDenominator = NativeTimeBaseDenominator;
+        this.NativeSampleRate = NativeSampleRate;
+        this.NativeChannelCount = NativeChannelCount;
+        this.NativeSampleFormat = NativeSampleFormat;
+    }
+
+    public long Generation { get; }
+
+    public TimeSpan PresentationTime { get; }
+
+    public int FrameCount { get; }
+
+    public float SampleValue { get; }
+
+    public ReadOnlyMemory<float> Samples { get; }
+
+    public int? NativeTimeBaseNumerator { get; }
+
+    public int? NativeTimeBaseDenominator { get; }
+
+    public int? NativeSampleRate { get; }
+
+    public int? NativeChannelCount { get; }
+
+    public int? NativeSampleFormat { get; }
+}
 

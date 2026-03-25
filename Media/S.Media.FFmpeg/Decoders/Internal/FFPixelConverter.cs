@@ -53,6 +53,12 @@ internal sealed class FFPixelConverter : IDisposable
             decoded.IsKeyFrame,
             decoded.Width,
             decoded.Height,
+            decoded.Plane0,
+            decoded.Plane0Stride,
+            decoded.Plane1,
+            decoded.Plane1Stride,
+            decoded.Plane2,
+            decoded.Plane2Stride,
             decoded.NativeTimeBaseNumerator,
             decoded.NativeTimeBaseDenominator,
             decoded.NativeFrameRateNumerator,
@@ -91,7 +97,7 @@ internal sealed class FFPixelConverter : IDisposable
                 return false;
             }
 
-            if (!_nativeBackend.TryExecuteScale())
+            if (!_nativeBackend.TryExecuteScale(out var plane0, out var plane0Stride))
             {
                 _nativeConvertEnabled = false;
                 return false;
@@ -104,6 +110,12 @@ internal sealed class FFPixelConverter : IDisposable
                 decoded.IsKeyFrame,
                 decoded.Width,
                 decoded.Height,
+                plane0,
+                plane0Stride,
+                default,
+                0,
+                default,
+                0,
                 decoded.NativeTimeBaseNumerator,
                 decoded.NativeTimeBaseDenominator,
                 decoded.NativeFrameRateNumerator,
@@ -189,8 +201,11 @@ internal unsafe sealed class FFNativePixelConverterBackend : IDisposable
         return true;
     }
 
-    public bool TryExecuteScale()
+    public bool TryExecuteScale(out ReadOnlyMemory<byte> plane0, out int plane0Stride)
     {
+        plane0 = default;
+        plane0Stride = 0;
+
         if (_disposed || _context is null)
         {
             return false;
@@ -200,6 +215,7 @@ internal unsafe sealed class FFNativePixelConverterBackend : IDisposable
         var targetLinesize = new int[4];
         sourceLinesize[0] = _width * 4;
         targetLinesize[0] = _width * 4;
+        plane0Stride = targetLinesize[0];
 
         var sourceBuffer = new byte[Math.Max(1, sourceLinesize[0] * _height)];
         var targetBuffer = new byte[Math.Max(1, targetLinesize[0] * _height)];
@@ -219,7 +235,13 @@ internal unsafe sealed class FFNativePixelConverterBackend : IDisposable
             targetData[3] = null;
 
             var result = ffmpeg.sws_scale(_context, sourceData, sourceLinesize, 0, _height, targetData, targetLinesize);
-            return result >= 0;
+            if (result < 0)
+            {
+                return false;
+            }
+
+            plane0 = targetBuffer;
+            return true;
         }
     }
 
@@ -255,6 +277,12 @@ internal readonly struct FFVideoConvertResult
         bool isKeyFrame,
         int width,
         int height,
+        ReadOnlyMemory<byte> plane0 = default,
+        int plane0Stride = 0,
+        ReadOnlyMemory<byte> plane1 = default,
+        int plane1Stride = 0,
+        ReadOnlyMemory<byte> plane2 = default,
+        int plane2Stride = 0,
         int? nativeTimeBaseNumerator = null,
         int? nativeTimeBaseDenominator = null,
         int? nativeFrameRateNumerator = null,
@@ -268,6 +296,12 @@ internal readonly struct FFVideoConvertResult
         IsKeyFrame = isKeyFrame;
         Width = width;
         Height = height;
+        Plane0 = plane0;
+        Plane0Stride = plane0Stride;
+        Plane1 = plane1;
+        Plane1Stride = plane1Stride;
+        Plane2 = plane2;
+        Plane2Stride = plane2Stride;
         NativeTimeBaseNumerator = nativeTimeBaseNumerator;
         NativeTimeBaseDenominator = nativeTimeBaseDenominator;
         NativeFrameRateNumerator = nativeFrameRateNumerator;
@@ -287,6 +321,18 @@ internal readonly struct FFVideoConvertResult
     public int Width { get; }
 
     public int Height { get; }
+
+    public ReadOnlyMemory<byte> Plane0 { get; }
+
+    public int Plane0Stride { get; }
+
+    public ReadOnlyMemory<byte> Plane1 { get; }
+
+    public int Plane1Stride { get; }
+
+    public ReadOnlyMemory<byte> Plane2 { get; }
+
+    public int Plane2Stride { get; }
 
     public int? NativeTimeBaseNumerator { get; }
 

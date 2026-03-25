@@ -73,6 +73,8 @@ public sealed class FFVideoSourceTests
 
         Assert.Equal(MediaResult.Success, code);
         Assert.Equal(1, source.CurrentFrameIndex);
+        Assert.True(frame.Plane0.Length > 0);
+        Assert.True(frame.Plane0Stride > 0);
         frame.Dispose();
     }
 

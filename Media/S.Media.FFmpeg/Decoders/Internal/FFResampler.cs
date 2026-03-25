@@ -43,12 +43,15 @@ internal sealed class FFResampler : IDisposable
             return MediaResult.Success;
         }
 
+        var resolvedSamples = ResolveSamples(decoded);
+
         // Placeholder phase keeps sample shape unchanged while preserving deterministic metadata.
         result = new FFAudioResampleResult(
             decoded.Generation,
             decoded.PresentationTime,
             decoded.FrameCount,
             decoded.SampleValue,
+            resolvedSamples,
             decoded.NativeTimeBaseNumerator,
             decoded.NativeTimeBaseDenominator,
             decoded.NativeSampleRate,
@@ -95,11 +98,14 @@ internal sealed class FFResampler : IDisposable
                 ? Math.Max(1, outSamples)
                 : decoded.FrameCount;
 
+            var resolvedSamples = ResolveSamples(decoded);
+
             result = new FFAudioResampleResult(
                 decoded.Generation,
                 decoded.PresentationTime,
                 shapedFrameCount,
                 decoded.SampleValue,
+                resolvedSamples,
                 decoded.NativeTimeBaseNumerator,
                 decoded.NativeTimeBaseDenominator,
                 decoded.NativeSampleRate,
@@ -127,6 +133,20 @@ internal sealed class FFResampler : IDisposable
             _nativeResampleEnabled = false;
             return false;
         }
+    }
+
+    private static ReadOnlyMemory<float> ResolveSamples(FFAudioDecodeResult decoded)
+    {
+        if (!decoded.Samples.IsEmpty)
+        {
+            return decoded.Samples;
+        }
+
+        var channelCount = Math.Max(1, decoded.NativeChannelCount.GetValueOrDefault(1));
+        var sampleCount = Math.Max(1, decoded.FrameCount) * channelCount;
+        var generated = new float[sampleCount];
+        generated.AsSpan().Fill(decoded.SampleValue);
+        return generated;
     }
 }
 
@@ -247,6 +267,7 @@ internal readonly struct FFAudioResampleResult
         TimeSpan presentationTime,
         int frameCount,
         float sampleValue,
+        ReadOnlyMemory<float> samples = default,
         int? nativeTimeBaseNumerator = null,
         int? nativeTimeBaseDenominator = null,
         int? nativeSampleRate = null,
@@ -257,6 +278,7 @@ internal readonly struct FFAudioResampleResult
         PresentationTime = presentationTime;
         FrameCount = frameCount;
         SampleValue = sampleValue;
+        Samples = samples;
         NativeTimeBaseNumerator = nativeTimeBaseNumerator;
         NativeTimeBaseDenominator = nativeTimeBaseDenominator;
         NativeSampleRate = nativeSampleRate;
@@ -271,6 +293,8 @@ internal readonly struct FFAudioResampleResult
     public int FrameCount { get; }
 
     public float SampleValue { get; }
+
+    public ReadOnlyMemory<float> Samples { get; }
 
     public int? NativeTimeBaseNumerator { get; }
 

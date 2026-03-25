@@ -221,7 +221,18 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
             framesRead = Math.Min(requestedFrameCount, Math.Min(chunk.FrameCount, writableFrames));
             var sampleCount = framesRead * channelCount;
-            destination[..sampleCount].Fill(chunk.SampleValue);
+            var sourceSamples = chunk.Samples.Span;
+            var copyCount = Math.Min(sampleCount, sourceSamples.Length);
+            if (copyCount > 0)
+            {
+                sourceSamples[..copyCount].CopyTo(destination[..copyCount]);
+            }
+
+            if (copyCount < sampleCount)
+            {
+                destination[copyCount..sampleCount].Fill(chunk.SampleValue);
+            }
+
             return MediaResult.Success;
         }
     }
@@ -266,6 +277,12 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 queuedFrame.IsKeyFrame,
                 queuedFrame.Width,
                 queuedFrame.Height,
+                queuedFrame.Plane0,
+                queuedFrame.Plane0Stride,
+                queuedFrame.Plane1,
+                queuedFrame.Plane1Stride,
+                queuedFrame.Plane2,
+                queuedFrame.Plane2Stride,
                 queuedFrame.MappedPixelFormat,
                 queuedFrame.NativeTimeBaseNumerator,
                 queuedFrame.NativeTimeBaseDenominator,
@@ -402,7 +419,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
             return false;
         }
 
-        chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue);
+        chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue, resampled.Samples);
         return true;
     }
 
@@ -435,6 +452,12 @@ internal sealed class FFSharedDemuxSession : IDisposable
             converted.IsKeyFrame,
             converted.Width,
             converted.Height,
+            converted.Plane0,
+            converted.Plane0Stride,
+            converted.Plane1,
+            converted.Plane1Stride,
+            converted.Plane2,
+            converted.Plane2Stride,
             converted.MappedPixelFormat,
             converted.NativeTimeBaseNumerator,
             converted.NativeTimeBaseDenominator,
@@ -444,7 +467,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
         return true;
     }
 
-    private readonly record struct QueuedAudioChunk(long Generation, int FrameCount, float SampleValue);
+    private readonly record struct QueuedAudioChunk(long Generation, int FrameCount, float SampleValue, ReadOnlyMemory<float> Samples);
 
     private readonly record struct QueuedVideoFrame(
         long Generation,
@@ -453,6 +476,12 @@ internal sealed class FFSharedDemuxSession : IDisposable
         bool IsKeyFrame,
         int Width,
         int Height,
+        ReadOnlyMemory<byte> Plane0,
+        int Plane0Stride,
+        ReadOnlyMemory<byte> Plane1,
+        int Plane1Stride,
+        ReadOnlyMemory<byte> Plane2,
+        int Plane2Stride,
         VideoPixelFormat MappedPixelFormat,
         int? NativeTimeBaseNumerator,
         int? NativeTimeBaseDenominator,
@@ -469,6 +498,12 @@ internal readonly struct FFSessionVideoFrame
         bool isKeyFrame,
         int width,
         int height,
+        ReadOnlyMemory<byte> plane0,
+        int plane0Stride,
+        ReadOnlyMemory<byte> plane1,
+        int plane1Stride,
+        ReadOnlyMemory<byte> plane2,
+        int plane2Stride,
         VideoPixelFormat pixelFormat,
         int? nativeTimeBaseNumerator,
         int? nativeTimeBaseDenominator,
@@ -481,6 +516,12 @@ internal readonly struct FFSessionVideoFrame
         IsKeyFrame = isKeyFrame;
         Width = width;
         Height = height;
+        Plane0 = plane0;
+        Plane0Stride = plane0Stride;
+        Plane1 = plane1;
+        Plane1Stride = plane1Stride;
+        Plane2 = plane2;
+        Plane2Stride = plane2Stride;
         PixelFormat = pixelFormat;
         NativeTimeBaseNumerator = nativeTimeBaseNumerator;
         NativeTimeBaseDenominator = nativeTimeBaseDenominator;
@@ -498,6 +539,18 @@ internal readonly struct FFSessionVideoFrame
     public int Width { get; }
 
     public int Height { get; }
+
+    public ReadOnlyMemory<byte> Plane0 { get; }
+
+    public int Plane0Stride { get; }
+
+    public ReadOnlyMemory<byte> Plane1 { get; }
+
+    public int Plane1Stride { get; }
+
+    public ReadOnlyMemory<byte> Plane2 { get; }
+
+    public int Plane2Stride { get; }
 
     public VideoPixelFormat PixelFormat { get; }
 

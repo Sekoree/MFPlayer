@@ -98,6 +98,11 @@ public sealed class FFAudioSourceTests
         Assert.True(framesRead > 0);
         Assert.True(source.PositionSeconds > 0d);
 
+        var second = new float[256 * 2];
+        Assert.Equal(MediaResult.Success, source.ReadSamples(second, 256, out var secondFramesRead));
+        Assert.True(secondFramesRead > 0);
+        Assert.Contains(second, sample => sample > 0f);
+
         item.Dispose();
     }
 
