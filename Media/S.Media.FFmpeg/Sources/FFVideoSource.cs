@@ -11,6 +11,7 @@ public sealed class FFVideoSource : IVideoSource
 {
     private readonly Lock _gate = new();
     private readonly FFSharedDemuxSession? _sharedDemuxSession;
+    private int _readInProgress;
     private bool _disposed;
     private double _positionSeconds;
     private double? _observedNativeFrameRate;
@@ -23,9 +24,9 @@ public sealed class FFVideoSource : IVideoSource
 
     public FFVideoSource(FFMediaItem mediaItem)
         : this(
-            mediaItem.VideoStreams.FirstOrDefault(),
-            durationSeconds: double.NaN,
-            isSeekable: true,
+            ResolveVideoStreamInfo(mediaItem),
+            durationSeconds: ResolveDurationSeconds(ResolveVideoStreamInfo(mediaItem).Duration),
+            isSeekable: mediaItem.VideoSource?.IsSeekable ?? mediaItem.AudioSource?.IsSeekable ?? true,
             totalFrameCount: null,
             sharedDemuxSession: mediaItem.SharedDemuxSession)
     {
@@ -117,6 +118,14 @@ public sealed class FFVideoSource : IVideoSource
 
     public int ReadFrame(out VideoFrame frame)
     {
+        if (Interlocked.CompareExchange(ref _readInProgress, 1, 0) != 0)
+        {
+            frame = null!;
+            return (int)MediaErrorCode.FFmpegConcurrentReadViolation;
+        }
+
+        try
+        {
         if (_sharedDemuxSession is not null)
         {
             var code = _sharedDemuxSession.ReadVideoFrame(out var sessionFrame);
@@ -205,6 +214,12 @@ public sealed class FFVideoSource : IVideoSource
 
             _currentFrameIndex++;
             return MediaResult.Success;
+        }
+
+        }
+        finally
+        {
+            Volatile.Write(ref _readInProgress, 0);
         }
     }
 
@@ -344,6 +359,28 @@ public sealed class FFVideoSource : IVideoSource
             VideoPixelFormat.Yuv444P10Le => safeWidth * 2,
             _ => safeWidth * 4,
         };
+    }
+
+    private static VideoStreamInfo ResolveVideoStreamInfo(FFMediaItem mediaItem)
+    {
+        ArgumentNullException.ThrowIfNull(mediaItem);
+
+        if (mediaItem.VideoStreams.Count == 0)
+        {
+            throw new DecodingException(MediaErrorCode.FFmpegInvalidConfig, "FFMediaItem does not contain a video stream.");
+        }
+
+        return mediaItem.VideoStreams[0];
+    }
+
+    private static double ResolveDurationSeconds(TimeSpan? duration)
+    {
+        if (!duration.HasValue)
+        {
+            return double.NaN;
+        }
+
+        return duration.Value.TotalSeconds >= 0 ? duration.Value.TotalSeconds : double.NaN;
     }
 }
 

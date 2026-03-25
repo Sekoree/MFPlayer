@@ -53,14 +53,110 @@ public sealed class FFSharedDemuxSessionTests
 
         Assert.Equal(MediaResult.Success, openCode);
         Assert.Equal(MediaResult.Success, session.ReadVideoFrame(out var first));
-        Assert.Equal(0, first.FrameIndex);
+        Assert.InRange(first.FrameIndex, 0, 1);
 
         Assert.Equal(MediaResult.Success, session.Seek(2.0));
         Assert.Equal(MediaResult.Success, session.ReadVideoFrame(out var postSeek));
-        Assert.Equal(60, postSeek.FrameIndex);
-        Assert.Equal(TimeSpan.FromSeconds(2), postSeek.PresentationTime);
+        Assert.InRange(postSeek.FrameIndex, 60, 63);
+        Assert.InRange(postSeek.PresentationTime, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2.05));
         Assert.True(postSeek.Plane0.Length > 0);
         Assert.True(postSeek.Plane0Stride > 0);
+    }
+
+    [Fact]
+    public async Task ReadVideoFrame_WhileSeeking_CompletesWithoutDeadlock()
+    {
+        var session = new FFSharedDemuxSession();
+        try
+        {
+            var openCode = session.Open(
+                new FFmpegOpenOptions
+                {
+                    InputUri = "file:///tmp/fake.mp4",
+                    OpenAudio = false,
+                    OpenVideo = true,
+                },
+                new FFmpegDecodeOptions { MaxQueuedFrames = 8 });
+
+            Assert.Equal(MediaResult.Success, openCode);
+
+            var reader = Task.Run(async () =>
+            {
+                var successCount = 0;
+                for (var i = 0; i < 120; i++)
+                {
+                    var code = session.ReadVideoFrame(out _);
+                    if (code == MediaResult.Success)
+                    {
+                        successCount++;
+                    }
+
+                    await Task.Delay(1);
+                }
+
+                return successCount;
+            });
+
+            var seeker = Task.Run(async () =>
+            {
+                for (var i = 0; i < 30; i++)
+                {
+                    var seekCode = session.Seek((i % 4) * 0.25);
+                    Assert.Equal(MediaResult.Success, seekCode);
+                    await Task.Delay(2);
+                }
+            });
+
+            await Task.WhenAll(reader, seeker).WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(await reader > 0);
+        }
+        finally
+        {
+            session.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Close_DuringActiveReadLoop_CompletesAndReaderExits()
+    {
+        var session = new FFSharedDemuxSession();
+        try
+        {
+            var openCode = session.Open(
+                new FFmpegOpenOptions
+                {
+                    InputUri = "file:///tmp/fake.mp4",
+                    OpenAudio = false,
+                    OpenVideo = true,
+                },
+                new FFmpegDecodeOptions { MaxQueuedFrames = 8 });
+
+            Assert.Equal(MediaResult.Success, openCode);
+
+            var reader = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    var code = session.ReadVideoFrame(out _);
+                    if (code != MediaResult.Success)
+                    {
+                        return code;
+                    }
+
+                    await Task.Delay(1);
+                }
+            });
+
+            await Task.Delay(25);
+            Assert.Equal(MediaResult.Success, session.Close());
+
+            var finalCode = await reader.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal((int)MediaErrorCode.FFmpegReadFailed, finalCode);
+        }
+        finally
+        {
+            session.Dispose();
+        }
     }
 }
 

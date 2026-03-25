@@ -22,7 +22,7 @@ internal sealed class HeavyFfmpegFactAttribute : FactAttribute
 
 internal static class HeavyFfmpegTestConfig
 {
-    private const string DefaultHeavyVideoPath = "/home/seko/Videos/shootingstar_0611_1.mov";
+    private const string DefaultHeavyVideoPath = "/home/sekoree/Videos/shootingstar_0611_1.mov";
 
     public static string ResolveVideoPath()
     {

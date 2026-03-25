@@ -5,7 +5,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 ## Planned Files, Types, and API Shape
 
 ### `Controls/AvaloniaOpenGLHostControl.cs`
-- `sealed class AvaloniaOpenGLHostControl : OpenGLControlBase`
+- `sealed class AvaloniaOpenGLHostControl : OpenGlControlBase`
 - Planned API:
   - `AvaloniaOpenGLHostControl(OpenGLVideoOutput output)`
   - `OpenGLVideoOutput Output { get; }`
@@ -49,8 +49,10 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Migration implementation matrix/source mapping: `Media/S.Media.OpenGL/opengl-migration-plan.md`.
 - Error-code range/chunk ownership is defined by `MediaErrorAllocations` in `Media/S.Media.Core/Errors/MediaErrorAllocations.cs` and tracked in `Media/S.Media.Core/error-codes.md`.
 - For adapter detach/clone operations, propagate specific OpenGL clone failure codes; use Core fallback `MixerDetachStepFailed` (`3000`) only when no more specific owned code exists in orchestration paths.
-- `OpenGLControlBase` is a required dependency for the canonical Avalonia host path.
+- `OpenGlControlBase` is a required dependency for the canonical Avalonia host path.
 - Dependency policy: base `Avalonia` NuGet package only for this adapter surface.
+- Host lifecycle should mirror legacy `VideoGL` control flow (`OnOpenGlInit` / `OnOpenGlRender` / `OnOpenGlDeinit`) while keeping adapter responsibilities UI-only.
+- HUD adapter direction should stay aligned with the proven legacy `VideoGL.HUD` formatting/layout approach.
 - Clone controls/outputs must reflect the parent surface and frame generation without duplicating decode/upload work.
 - Parent output ownership remains in `S.Media.OpenGL`; Avalonia adapters project UI lifecycle onto that output.
 - Parent disposal destroys all clone controls/outputs derived from that parent output.

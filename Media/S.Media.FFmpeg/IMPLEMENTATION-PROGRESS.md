@@ -33,6 +33,16 @@ This note summarizes implementation progress completed so far in `Media/S.Media.
   - high values clamp to logical CPU count
   - queue limits clamp to at least 1
 - Stream/open option validation has deterministic failure behavior.
+- Validator coverage expanded for additional invalid-config matrix cases:
+  - negative stream indices
+  - URI + stream-only option contradictions (`InputFormatHint`, `LeaveInputStreamOpen=false`)
+
+### 2.5) Concurrency and Locking Contract Alignment
+
+- `FFSharedDemuxSession` no longer performs packet/decode/convert work under the shared state lock.
+- Decode pipeline work is serialized via dedicated pipeline lock while queue/state transitions remain under the state lock.
+- Source-level same-instance concurrent read rejection is enforced:
+  - audio/video read APIs now return `FFmpegConcurrentReadViolation` (`2014`) on concurrent read attempts.
 
 ### 3) Native Demux Attempt with Safe Fallback
 
@@ -65,6 +75,31 @@ This note summarizes implementation progress completed so far in `Media/S.Media.
 
 - Shared decode context supports native descriptor override after open.
 - Native demux stream descriptors can replace placeholder stream descriptors when available.
+- Shared demux session now emits descriptor-refresh snapshots on open/seek for metadata synchronization.
+
+### 8) Media Item Semantics Alignment
+
+- `FFMediaItem` now propagates effective seekability to created sources (`InputStream.CanSeek` aware).
+- Known stream durations now flow to `DurationSeconds`; unknown/unbounded remains `double.NaN`.
+- Baseline metadata snapshot support is now active:
+  - `FFMediaItem` implements `IDynamicMetadata`
+  - metadata is initialized from open/source context and stream descriptors
+  - metadata publication respects teardown-fence behavior after dispose.
+- Dynamic metadata refresh path is now wired from shared-session descriptor refresh events into `FFMediaItem` metadata snapshots.
+- Duplicate metadata snapshots (same key/value content) are suppressed to avoid redundant callback churn.
+
+### 9) Plane-Aware Conversion Policy
+
+- `FFPixelConverter` now applies an explicit plane-aware policy:
+  - mapped multi-plane native formats (`YUV*`, `NV12`, `P010`) preserve native plane payloads when required planes are present
+  - RGBA conversion is no longer forced for these cases in the placeholder/native-attempt bridge path
+- Additional deterministic tests now assert YUV420/NV12 multi-plane preservation behavior.
+
+### 9.5) Incomplete Multi-Plane Normalization Guard
+
+- `FFPixelConverter` now normalizes incomplete mapped multi-plane payloads to `Rgba32` fallback shape.
+- Incomplete `YUV420P` / `NV12` / `P010` mapped payloads no longer leak as invalid multi-plane frame contracts.
+- Fallback `Rgba32` output now enforces deterministic plane layout (`Plane0` + stride, no secondary planes).
 
 ## Test Coverage Status
 
@@ -76,6 +111,15 @@ Implemented tests now cover:
 - decoder internals (native-attempt fallback behavior)
 - resampler and pixel-converter fallback + metadata snapshot behavior
 - source-level session-fed read/seek behavior
+- source-level concurrent-read rejection (`2014`)
+- shared-session contention paths (`Read` vs `Seek`, `Read` vs `Close`) without deadlock
+- metadata baseline + teardown-fence behavior
+- dynamic metadata refresh callback behavior
+- duplicate metadata snapshot suppression behavior
+- explicit plane-aware multi-plane conversion preservation behavior
+- incomplete multi-plane mapped payload normalization to deterministic `Rgba32` fallback shape
+- FFmpeg->PortAudio baseline push-path integration behavior
+- heavy metadata seek-churn cadence guard (opt-in heavy path)
 - heavy opt-in integration scaffolds
 
 ## Latest Verified Test Results
@@ -83,10 +127,10 @@ Implemented tests now cover:
 Most recent verified runs:
 
 - `dotnet test Media/S.Media.FFmpeg.Tests/S.Media.FFmpeg.Tests.csproj --no-restore`
-  - total: 70
-  - succeeded: 67
+  - total: 95
+  - succeeded: 91
   - failed: 0
-  - skipped: 3 (heavy tests, when not opted in)
+  - skipped: 4 (heavy tests, when not opted in)
 
 - `RUN_HEAVY_FFMPEG_TESTS=1 dotnet test Media/S.Media.FFmpeg.Tests/S.Media.FFmpeg.Tests.csproj --no-restore --filter FullyQualifiedName~Heavy`
   - total: 3
@@ -96,8 +140,7 @@ Most recent verified runs:
 
 ## Remaining Work (High-Level)
 
-- finalize plane-aware native conversion output policy for non-RGBA native formats
 - continue enriching true multi-plane behavior in frame materialization where needed
-- add additional payload-content assertions for multi-plane native scenarios
-- begin tightening toward production native data flow (less synthetic payload use in successful native paths)
-
+- add deeper payload-content assertions for native multi-plane scenarios (not only shape/stride)
+- tighten production native data flow (reduce synthetic payload use on successful native decode/convert paths)
+- expand heavy-asset validation for descriptor refresh cadence and metadata update ordering under seek churn

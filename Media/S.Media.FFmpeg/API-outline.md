@@ -242,7 +242,11 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 | Both stream types disabled | `false` | `false` | `null` | `null` | `PreserveSourceLayout` | `FFmpegInvalidConfig` (`2010`) |
 | Audio disabled with explicit audio index | `false` | `true` | `0` | `null` | `PreserveSourceLayout` | `FFmpegInvalidConfig` (`2010`) |
 | Video disabled with explicit video index | `true` | `false` | `null` | `0` | `PreserveSourceLayout` | `FFmpegInvalidConfig` (`2010`) |
+| Negative audio stream index | `true` | `true` | `-1` | `null` | `PreserveSourceLayout` | `FFmpegInvalidConfig` (`2010`) |
+| Negative video stream index | `true` | `true` | `null` | `-1` | `PreserveSourceLayout` | `FFmpegInvalidConfig` (`2010`) |
 | Explicit route-map policy without map | `true` | `false` | `null` | `null` | `ApplyExplicitRouteMap` + `ExplicitChannelMap = null` | `FFmpegInvalidAudioChannelMap` (`2011`) |
+| URI input with stream-only format hint | `true` | `true` | `null` | `null` | `PreserveSourceLayout` + `InputUri` with `InputFormatHint` | `FFmpegInvalidConfig` (`2010`) |
+| URI input with stream-only leave-open override | `true` | `true` | `null` | `null` | `PreserveSourceLayout` + `InputUri` with `LeaveInputStreamOpen = false` | `FFmpegInvalidConfig` (`2010`) |
 | Nonsensical mixed open/config combo | any | any | any | any | contradictory option combination | `FFmpegInvalidConfig` (`2010`) |
 
 - Ownership checks: frame/sample read APIs do not retain caller buffers and enforce caller-owned `VideoFrame` disposal.

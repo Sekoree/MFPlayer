@@ -62,6 +62,7 @@ This module is a concrete backend for Core audio engine contracts, with an OwnAu
 - Every push carries an explicit dense output-indexed source-channel map; there is no static engine route-map state.
 - Default caller strategy in higher layers should favor mono/separated channels until final output mapping.
 - Mapping validation is strict and deterministic: invalid map returns non-zero error code, with no partial push.
+- `PushFrame(...)` call-shape/map validation follows Core generic-audio precedence (`4200`, `4201`, `4203`, `4210`); `PortAudioRouteMapInvalid` (`4308`) is reserved for backend/runtime mapping faults.
 - One-to-many fan-out is supported directly by repeated source indices in the per-push map.
 - `-1` map entries render silence on the corresponding output channel.
 - Interleaved multi-channel input is supported; source channels can be mapped to any output channels (including reordering and sparse mapping).

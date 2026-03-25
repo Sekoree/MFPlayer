@@ -10,14 +10,18 @@ using S.Media.FFmpeg.Sources;
 
 namespace S.Media.FFmpeg.Media;
 
-public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisposable
+public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDynamicMetadata, IDisposable
 {
+    private readonly Lock _metadataGate = new();
     private readonly bool _ownsSources;
     private readonly Stream? _ownedInputStream;
     private readonly bool _leaveOwnedInputStreamOpen;
     private readonly IReadOnlyList<IAudioSource> _playbackAudioSources;
     private readonly IReadOnlyList<IVideoSource> _playbackVideoSources;
     private readonly FFSharedDemuxSession? _sharedDemuxSession;
+    private MediaMetadataSnapshot? _metadata;
+    private string? _metadataSignature;
+    private bool _disposed;
 
     public FFMediaItem(FFmpegOpenOptions openOptions, FFmpegDecodeOptions? decodeOptions = null, FFAudioSourceOptions? audioOptions = null)
         : this(openOptions, decodeOptions, audioOptions, ownedInputStream: null, leaveOwnedInputStreamOpen: true)
@@ -83,9 +87,11 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
         if (openOptions.UseSharedDecodeContext)
         {
             sharedDemuxSession = new FFSharedDemuxSession();
+            sharedDemuxSession.StreamDescriptorsRefreshed += OnStreamDescriptorsRefreshed;
             var openCode = sharedDemuxSession.Open(openOptions, effectiveDecodeOptions);
             if (openCode != MediaResult.Success)
             {
+                sharedDemuxSession.StreamDescriptorsRefreshed -= OnStreamDescriptorsRefreshed;
                 sharedDemuxSession.Dispose();
                 throw new DecodingException((MediaErrorCode)openCode, "Failed to open shared FFmpeg demux session.");
             }
@@ -96,14 +102,24 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
         if (openOptions.OpenAudio)
         {
             var audioInfo = CreateAudioStreamInfo(sharedDemuxSession?.AudioStream);
-            AudioSource = new FFAudioSource(audioInfo, durationSeconds: double.NaN, isSeekable: true, audioOptions, sharedDemuxSession);
+            AudioSource = new FFAudioSource(
+                audioInfo,
+                durationSeconds: ResolveDurationSeconds(audioInfo.Duration),
+                isSeekable: ResolveIsSeekable(openOptions),
+                audioOptions,
+                sharedDemuxSession);
             playbackAudio.Add(AudioSource);
         }
 
         if (openOptions.OpenVideo)
         {
             var videoInfo = CreateVideoStreamInfo(sharedDemuxSession?.VideoStream);
-            VideoSource = new FFVideoSource(videoInfo, durationSeconds: double.NaN, isSeekable: true, totalFrameCount: null, sharedDemuxSession);
+            VideoSource = new FFVideoSource(
+                videoInfo,
+                durationSeconds: ResolveDurationSeconds(videoInfo.Duration),
+                isSeekable: ResolveIsSeekable(openOptions),
+                totalFrameCount: null,
+                sharedDemuxSession);
             playbackVideo.Add(VideoSource);
         }
 
@@ -120,6 +136,7 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
         _sharedDemuxSession = sharedDemuxSession;
         AudioStreams = playbackAudio.OfType<FFAudioSource>().Select(s => s.StreamInfo).ToList();
         VideoStreams = playbackVideo.OfType<FFVideoSource>().Select(s => s.StreamInfo).ToList();
+        SetMetadata(BuildInitialMetadata(openOptions, AudioStreams, VideoStreams, ResolveIsSeekable(openOptions)));
     }
 
     public FFMediaItem(FFAudioSource audioSource)
@@ -159,6 +176,13 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
         VideoSource = playbackVideoSources.OfType<FFVideoSource>().FirstOrDefault();
         AudioStreams = playbackAudioSources.OfType<FFAudioSource>().Select(s => s.StreamInfo).ToList();
         VideoStreams = playbackVideoSources.OfType<FFVideoSource>().Select(s => s.StreamInfo).ToList();
+        SetMetadata(BuildInitialMetadata(
+            openOptions: null,
+            AudioStreams,
+            VideoStreams,
+            isSeekable: playbackAudioSources.OfType<FFAudioSource>().FirstOrDefault()?.IsSeekable
+                ?? playbackVideoSources.OfType<FFVideoSource>().FirstOrDefault()?.IsSeekable
+                ?? true));
     }
 
     public FFAudioSource? AudioSource { get; }
@@ -175,9 +199,11 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
 
     public IReadOnlyList<VideoStreamInfo> VideoStreams { get; }
 
-    public MediaMetadataSnapshot? Metadata => null;
+    public MediaMetadataSnapshot? Metadata => _metadata;
 
-    public bool HasMetadata => false;
+    public bool HasMetadata => _metadata is not null;
+
+    public event EventHandler<MediaMetadataSnapshot>? MetadataUpdated;
 
     public IReadOnlyList<IAudioSource> PlaybackAudioSources { get; }
 
@@ -187,6 +213,17 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
 
     public void Dispose()
     {
+        lock (_metadataGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            MetadataUpdated = null;
+        }
+
         if (!_ownsSources)
         {
             DisposeOwnedInputStreamIfNeeded();
@@ -201,6 +238,11 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
         foreach (var source in _playbackVideoSources)
         {
             source.Dispose();
+        }
+
+        if (_sharedDemuxSession is not null)
+        {
+            _sharedDemuxSession.StreamDescriptorsRefreshed -= OnStreamDescriptorsRefreshed;
         }
 
         _sharedDemuxSession?.Dispose();
@@ -229,6 +271,121 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisp
         }
 
         _ownedInputStream.Dispose();
+    }
+
+    private void SetMetadata(MediaMetadataSnapshot? metadata)
+    {
+        EventHandler<MediaMetadataSnapshot>? handler;
+        var signature = ComputeMetadataSignature(metadata);
+
+        lock (_metadataGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (string.Equals(_metadataSignature, signature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _metadataSignature = signature;
+            _metadata = metadata;
+            handler = metadata is null ? null : MetadataUpdated;
+        }
+
+        if (metadata is not null)
+        {
+            handler?.Invoke(this, metadata);
+        }
+    }
+
+    private static double ResolveDurationSeconds(TimeSpan? duration)
+    {
+        if (!duration.HasValue)
+        {
+            return double.NaN;
+        }
+
+        return duration.Value.TotalSeconds >= 0 ? duration.Value.TotalSeconds : double.NaN;
+    }
+
+    private static bool ResolveIsSeekable(FFmpegOpenOptions openOptions)
+    {
+        return openOptions.InputStream?.CanSeek ?? true;
+    }
+
+    private static MediaMetadataSnapshot? BuildInitialMetadata(
+        FFmpegOpenOptions? openOptions,
+        IReadOnlyList<AudioStreamInfo> audioStreams,
+        IReadOnlyList<VideoStreamInfo> videoStreams,
+        bool isSeekable)
+    {
+        var entries = new Dictionary<string, string>
+        {
+            ["stream.audio.count"] = audioStreams.Count.ToString(),
+            ["stream.video.count"] = videoStreams.Count.ToString(),
+            ["media.seekable"] = isSeekable ? "true" : "false",
+        };
+
+        var firstAudioCodec = audioStreams.FirstOrDefault().Codec;
+        if (!string.IsNullOrWhiteSpace(firstAudioCodec))
+        {
+            entries["stream.audio.codec"] = firstAudioCodec;
+        }
+
+        var firstVideoCodec = videoStreams.FirstOrDefault().Codec;
+        if (!string.IsNullOrWhiteSpace(firstVideoCodec))
+        {
+            entries["stream.video.codec"] = firstVideoCodec;
+        }
+
+        if (openOptions is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(openOptions.InputUri))
+            {
+                entries["open.inputUri"] = openOptions.InputUri!;
+            }
+
+            if (!string.IsNullOrWhiteSpace(openOptions.InputFormatHint))
+            {
+                entries["open.inputFormatHint"] = openOptions.InputFormatHint!;
+            }
+        }
+
+        return entries.Count == 0
+            ? null
+            : new MediaMetadataSnapshot
+            {
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                AdditionalMetadata = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(entries),
+            };
+    }
+
+    private static string? ComputeMetadataSignature(MediaMetadataSnapshot? metadata)
+    {
+        if (metadata is null)
+        {
+            return null;
+        }
+
+        var ordered = metadata.AdditionalMetadata.OrderBy(kvp => kvp.Key, StringComparer.Ordinal);
+        return string.Join("|", ordered.Select(kvp => $"{kvp.Key}={kvp.Value}"));
+    }
+
+    private void OnStreamDescriptorsRefreshed(object? sender, FFStreamDescriptorSnapshot snapshot)
+    {
+        var openOptions = ResolvedOpenOptions;
+        var seekable = openOptions is null || ResolveIsSeekable(openOptions);
+        var audioStreams = snapshot.AudioStream is null
+            ? Array.Empty<AudioStreamInfo>()
+            : [CreateAudioStreamInfo(snapshot.AudioStream)];
+        var videoStreams = snapshot.VideoStream is null
+            ? Array.Empty<VideoStreamInfo>()
+            : [CreateVideoStreamInfo(snapshot.VideoStream)];
+
+        SetMetadata(BuildInitialMetadata(openOptions, audioStreams, videoStreams, seekable));
     }
 
     private static AudioStreamInfo CreateAudioStreamInfo(FFStreamDescriptor? descriptor)

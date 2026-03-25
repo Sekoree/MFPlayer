@@ -11,6 +11,7 @@ public sealed class FFAudioSource : IAudioSource
 {
     private readonly Lock _gate = new();
     private readonly FFSharedDemuxSession? _sharedDemuxSession;
+    private int _readInProgress;
     private bool _disposed;
     private double _positionSeconds;
 
@@ -21,9 +22,9 @@ public sealed class FFAudioSource : IAudioSource
 
     public FFAudioSource(FFMediaItem mediaItem)
         : this(
-            mediaItem.AudioStreams.FirstOrDefault(),
-            durationSeconds: double.NaN,
-            isSeekable: true,
+            ResolveAudioStreamInfo(mediaItem),
+            durationSeconds: ResolveDurationSeconds(ResolveAudioStreamInfo(mediaItem).Duration),
+            isSeekable: mediaItem.AudioSource?.IsSeekable ?? mediaItem.VideoSource?.IsSeekable ?? true,
             options: null,
             sharedDemuxSession: mediaItem.SharedDemuxSession)
     {
@@ -98,32 +99,44 @@ public sealed class FFAudioSource : IAudioSource
     {
         framesRead = 0;
 
-        if (_disposed)
+        if (Interlocked.CompareExchange(ref _readInProgress, 1, 0) != 0)
         {
-            return (int)MediaErrorCode.MediaInvalidArgument;
+            return (int)MediaErrorCode.FFmpegConcurrentReadViolation;
         }
 
-        if (requestedFrameCount <= 0)
+        try
         {
-            return MediaResult.Success;
-        }
-
-        if (_sharedDemuxSession is not null)
-        {
-            var channelCount = StreamInfo.ChannelCount.GetValueOrDefault(2);
-            var readCode = _sharedDemuxSession.ReadAudioSamples(destination, requestedFrameCount, channelCount, out framesRead);
-            if (readCode == MediaResult.Success && framesRead > 0)
+            if (_disposed)
             {
-                lock (_gate)
-                {
-                    _positionSeconds += (double)framesRead / Math.Max(1, StreamInfo.SampleRate.GetValueOrDefault(48_000));
-                }
+                return (int)MediaErrorCode.MediaInvalidArgument;
             }
 
-            return readCode;
-        }
+            if (requestedFrameCount <= 0)
+            {
+                return MediaResult.Success;
+            }
 
-        return MediaResult.Success;
+            if (_sharedDemuxSession is not null)
+            {
+                var channelCount = StreamInfo.ChannelCount.GetValueOrDefault(2);
+                var readCode = _sharedDemuxSession.ReadAudioSamples(destination, requestedFrameCount, channelCount, out framesRead);
+                if (readCode == MediaResult.Success && framesRead > 0)
+                {
+                    lock (_gate)
+                    {
+                        _positionSeconds += (double)framesRead / Math.Max(1, StreamInfo.SampleRate.GetValueOrDefault(48_000));
+                    }
+                }
+
+                return readCode;
+            }
+
+            return MediaResult.Success;
+        }
+        finally
+        {
+            Volatile.Write(ref _readInProgress, 0);
+        }
     }
 
     public int Seek(double positionSeconds)
@@ -203,6 +216,28 @@ public sealed class FFAudioSource : IAudioSource
 
         map = FFAudioChannelMap.Identity(channelCount);
         return MediaResult.Success;
+    }
+
+    private static AudioStreamInfo ResolveAudioStreamInfo(FFMediaItem mediaItem)
+    {
+        ArgumentNullException.ThrowIfNull(mediaItem);
+
+        if (mediaItem.AudioStreams.Count == 0)
+        {
+            throw new DecodingException(MediaErrorCode.FFmpegInvalidConfig, "FFMediaItem does not contain an audio stream.");
+        }
+
+        return mediaItem.AudioStreams[0];
+    }
+
+    private static double ResolveDurationSeconds(TimeSpan? duration)
+    {
+        if (!duration.HasValue)
+        {
+            return double.NaN;
+        }
+
+        return duration.Value.TotalSeconds >= 0 ? duration.Value.TotalSeconds : double.NaN;
     }
 }
 

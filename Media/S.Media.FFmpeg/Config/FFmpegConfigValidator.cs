@@ -33,7 +33,17 @@ public static class FFmpegConfigValidator
             return (int)MediaErrorCode.FFmpegInvalidConfig;
         }
 
+        if (openOptions.AudioStreamIndex is < 0)
+        {
+            return (int)MediaErrorCode.FFmpegInvalidConfig;
+        }
+
         if (!openOptions.OpenVideo && openOptions.VideoStreamIndex.HasValue)
+        {
+            return (int)MediaErrorCode.FFmpegInvalidConfig;
+        }
+
+        if (openOptions.VideoStreamIndex is < 0)
         {
             return (int)MediaErrorCode.FFmpegInvalidConfig;
         }
@@ -47,6 +57,16 @@ public static class FFmpegConfigValidator
         }
 
         if (hasStream && openOptions.InputStream is not { CanRead: true })
+        {
+            return (int)MediaErrorCode.FFmpegInvalidConfig;
+        }
+
+        if (hasUri && !string.IsNullOrWhiteSpace(openOptions.InputFormatHint))
+        {
+            return (int)MediaErrorCode.FFmpegInvalidConfig;
+        }
+
+        if (hasUri && !openOptions.LeaveInputStreamOpen)
         {
             return (int)MediaErrorCode.FFmpegInvalidConfig;
         }

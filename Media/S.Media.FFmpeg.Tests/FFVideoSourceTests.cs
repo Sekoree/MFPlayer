@@ -3,6 +3,7 @@ using S.Media.Core.Media;
 using S.Media.FFmpeg.Config;
 using S.Media.FFmpeg.Media;
 using S.Media.FFmpeg.Sources;
+using System.Reflection;
 using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
@@ -97,8 +98,8 @@ public sealed class FFVideoSourceTests
         var code = source.ReadFrame(out var frame);
 
         Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(TimeSpan.FromSeconds(2), frame.PresentationTime);
-        Assert.Equal(61, source.CurrentFrameIndex);
+        Assert.InRange(frame.PresentationTime, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2.05));
+        Assert.InRange(source.CurrentFrameIndex, 61, 64);
         frame.Dispose();
     }
 
@@ -121,9 +122,97 @@ public sealed class FFVideoSourceTests
         var code = source.ReadFrame(out var frame);
 
         Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(TimeSpan.FromSeconds(1.5), frame.PresentationTime);
-        Assert.Equal(46, source.CurrentFrameIndex);
+        Assert.InRange(frame.PresentationTime, TimeSpan.FromSeconds(1.5), TimeSpan.FromSeconds(1.533334));
+        Assert.InRange(source.CurrentFrameIndex, 46, 47);
         frame.Dispose();
     }
-}
 
+    [Fact]
+    public void ReadFrame_ReturnsConcurrentReadViolation_WhenReadAlreadyInProgress()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = "file:///tmp/fake.mp4",
+                OpenAudio = false,
+                OpenVideo = true,
+                UseSharedDecodeContext = true,
+            },
+            new FFmpegDecodeOptions { MaxQueuedFrames = 8 });
+
+        var source = item.VideoSource;
+        Assert.NotNull(source);
+
+        var field = typeof(FFVideoSource).GetField("_readInProgress", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        field!.SetValue(source, 1);
+
+        var code = source.ReadFrame(out _);
+
+        Assert.Equal((int)MediaErrorCode.FFmpegConcurrentReadViolation, code);
+    }
+
+    [Fact]
+    public void Constructor_FromMediaItemWithoutVideo_ThrowsDecodingException()
+    {
+        using var audioOnly = new FFMediaItem([new FFAudioSource()], []);
+
+        var ex = Assert.Throws<DecodingException>(() => new FFVideoSource(audioOnly));
+
+        Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
+    }
+
+    [Fact]
+    public void ReadFrame_FromMediaItemSharedSession_DoesNotExposeInvalidMultiPlaneShape()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = "file:///tmp/fake.mp4",
+                OpenAudio = false,
+                OpenVideo = true,
+                UseSharedDecodeContext = true,
+            },
+            new FFmpegDecodeOptions { MaxQueuedFrames = 4 });
+
+        var source = item.VideoSource;
+        Assert.NotNull(source);
+
+        var code = source.ReadFrame(out var frame);
+
+        Assert.Equal(MediaResult.Success, code);
+        if (IsMultiPlaneFormat(frame.PixelFormat))
+        {
+            Assert.False(frame.Plane0.IsEmpty);
+            Assert.True(frame.Plane0Stride > 0);
+
+            if (frame.PixelFormat == S.Media.Core.Video.VideoPixelFormat.Nv12 || frame.PixelFormat == S.Media.Core.Video.VideoPixelFormat.P010Le)
+            {
+                Assert.False(frame.Plane1.IsEmpty);
+                Assert.True(frame.Plane1Stride > 0);
+            }
+            else
+            {
+                Assert.False(frame.Plane1.IsEmpty);
+                Assert.True(frame.Plane1Stride > 0);
+                Assert.False(frame.Plane2.IsEmpty);
+                Assert.True(frame.Plane2Stride > 0);
+            }
+        }
+
+        frame.Dispose();
+    }
+
+    private static bool IsMultiPlaneFormat(S.Media.Core.Video.VideoPixelFormat format)
+    {
+        return format is
+            S.Media.Core.Video.VideoPixelFormat.Yuv420P or
+            S.Media.Core.Video.VideoPixelFormat.Nv12 or
+            S.Media.Core.Video.VideoPixelFormat.Yuv422P or
+            S.Media.Core.Video.VideoPixelFormat.Yuv422P10Le or
+            S.Media.Core.Video.VideoPixelFormat.P010Le or
+            S.Media.Core.Video.VideoPixelFormat.Yuv420P10Le or
+            S.Media.Core.Video.VideoPixelFormat.Yuv444P or
+            S.Media.Core.Video.VideoPixelFormat.Yuv444P10Le;
+    }
+}

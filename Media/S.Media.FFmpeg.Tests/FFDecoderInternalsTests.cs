@@ -137,5 +137,36 @@ public sealed class FFDecoderInternalsTests
         Assert.Equal(2, decoded.Height);
         Assert.False(decoder.IsNativeDecodeEnabled);
     }
+
+    [Fact]
+    public void VideoDecoder_PlaceholderPayload_UsesSequenceSeededContent()
+    {
+        using var decoder = new FFVideoDecoder();
+        Assert.Equal(MediaResult.Success, decoder.Initialize());
+
+        var firstPacket = new FFPacket(
+            Generation: 0,
+            Sequence: 5,
+            PresentationTime: TimeSpan.Zero,
+            IsKeyFrame: true,
+            SampleValue: 0f);
+        var secondPacket = new FFPacket(
+            Generation: 0,
+            Sequence: 6,
+            PresentationTime: TimeSpan.FromSeconds(1d / 30d),
+            IsKeyFrame: false,
+            SampleValue: 0f);
+
+        Assert.Equal(MediaResult.Success, decoder.Decode(firstPacket, out var firstDecoded));
+        Assert.Equal(MediaResult.Success, decoder.Decode(secondPacket, out var secondDecoded));
+
+        var firstSpan = firstDecoded.Plane0.Span;
+        var secondSpan = secondDecoded.Plane0.Span;
+
+        Assert.True(firstSpan.Length > 0);
+        Assert.True(secondSpan.Length > 0);
+        Assert.True(firstSpan.ToArray().All(b => b == 5));
+        Assert.True(secondSpan.ToArray().All(b => b == 6));
+    }
 }
 

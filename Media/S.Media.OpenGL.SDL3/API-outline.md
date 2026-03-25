@@ -74,6 +74,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Failure atomicity: failed adapter attach/detach/embed lifecycle paths must not partially mutate clone/output registration state.
 - Callback/event dispatch policy is fixed in this phase (no adapter-level callback-dispatch configuration surface).
 - Future evolution note: if callback latency becomes a verified issue, add a minimal dispatcher later without breaking adapter event ordering or teardown-fence guarantees.
+- HUD renderer direction stays aligned with proven legacy `VideoSDL.HUD` text formatting/layout behavior in this phase.
 
 ## Initial SDL3 Embedding Error Code Picks (`4460-4479`)
 - `4460`: `SDL3EmbedNotInitialized`

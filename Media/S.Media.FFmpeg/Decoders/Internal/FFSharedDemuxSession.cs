@@ -7,6 +7,7 @@ namespace S.Media.FFmpeg.Decoders.Internal;
 
 internal sealed class FFSharedDemuxSession : IDisposable
 {
+    private readonly Lock _pipelineGate = new();
     private readonly FFSharedDecodeContext _context = new();
     private readonly FFPacketReader _packetReader = new();
     private readonly FFAudioDecoder _audioDecoder = new();
@@ -24,6 +25,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
     private int _audioQueueCapacity;
     private int _videoQueueCapacity;
     private bool _disposed;
+
+    internal event EventHandler<FFStreamDescriptorSnapshot>? StreamDescriptorsRefreshed;
 
     public FFStreamDescriptor? AudioStream => _context.AudioStream;
 
@@ -53,6 +56,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
         {
             return validationCode;
         }
+
+        var publishDescriptors = false;
 
         lock (_gate)
         {
@@ -92,7 +97,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
             if (_packetReader.TryGetNativeStreamDescriptors(out var nativeAudioStream, out var nativeVideoStream))
             {
-                _context.ApplyResolvedStreamDescriptors(nativeAudioStream, nativeVideoStream);
+                publishDescriptors = _context.ApplyResolvedStreamDescriptors(nativeAudioStream, nativeVideoStream);
             }
 
             if (hasAudio)
@@ -141,8 +146,15 @@ internal sealed class FFSharedDemuxSession : IDisposable
             };
             _workerThread.Start();
 
-            return MediaResult.Success;
+            publishDescriptors = publishDescriptors || _context.AudioStream is not null || _context.VideoStream is not null;
         }
+
+        if (publishDescriptors)
+        {
+            PublishStreamDescriptors();
+        }
+
+        return MediaResult.Success;
     }
 
     public int Close()
@@ -184,6 +196,9 @@ internal sealed class FFSharedDemuxSession : IDisposable
             channelCount = 2;
         }
 
+        QueuedAudioChunk chunk;
+        var hasChunk = false;
+
         lock (_gate)
         {
             if (_disposed)
@@ -196,49 +211,60 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 return (int)MediaErrorCode.FFmpegReadFailed;
             }
 
-            if (!TryCreateQueuedAudioChunkLocked(out var chunk))
+            if (_audioQueue.Count > 0)
+            {
+                chunk = _audioQueue.Dequeue();
+                hasChunk = true;
+            }
+            else
+            {
+                chunk = default;
+            }
+        }
+
+        if (!hasChunk && !TryCreateQueuedAudioChunk(out chunk))
+        {
+            return (int)MediaErrorCode.FFmpegReadFailed;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed || !_isOpen || _context.AudioStream is null)
             {
                 return (int)MediaErrorCode.FFmpegReadFailed;
             }
 
-            while (_audioQueue.Count > 0)
-            {
-                var candidate = _audioQueue.Dequeue();
-                if (candidate.Generation == chunk.Generation)
-                {
-                    chunk = candidate;
-                    break;
-                }
-            }
-
             _workerSignal.Set();
+        }
 
-            var writableFrames = destination.Length / channelCount;
-            if (writableFrames <= 0)
-            {
-                return MediaResult.Success;
-            }
-
-            framesRead = Math.Min(requestedFrameCount, Math.Min(chunk.FrameCount, writableFrames));
-            var sampleCount = framesRead * channelCount;
-            var sourceSamples = chunk.Samples.Span;
-            var copyCount = Math.Min(sampleCount, sourceSamples.Length);
-            if (copyCount > 0)
-            {
-                sourceSamples[..copyCount].CopyTo(destination[..copyCount]);
-            }
-
-            if (copyCount < sampleCount)
-            {
-                destination[copyCount..sampleCount].Fill(chunk.SampleValue);
-            }
-
+        var writableFrames = destination.Length / channelCount;
+        if (writableFrames <= 0)
+        {
             return MediaResult.Success;
         }
+
+        framesRead = Math.Min(requestedFrameCount, Math.Min(chunk.FrameCount, writableFrames));
+        var sampleCount = framesRead * channelCount;
+        var sourceSamples = chunk.Samples.Span;
+        var copyCount = Math.Min(sampleCount, sourceSamples.Length);
+        if (copyCount > 0)
+        {
+            sourceSamples[..copyCount].CopyTo(destination[..copyCount]);
+        }
+
+        if (copyCount < sampleCount)
+        {
+            destination[copyCount..sampleCount].Fill(chunk.SampleValue);
+        }
+
+        return MediaResult.Success;
     }
 
     public int ReadVideoFrame(out FFSessionVideoFrame frame)
     {
+        QueuedVideoFrame queuedFrame;
+        var hasFrame = false;
+
         lock (_gate)
         {
             if (_disposed)
@@ -253,44 +279,53 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 return (int)MediaErrorCode.FFmpegReadFailed;
             }
 
-            if (!TryCreateQueuedVideoFrameLocked(out var queuedFrame))
+            if (_videoQueue.Count > 0)
+            {
+                queuedFrame = _videoQueue.Dequeue();
+                hasFrame = true;
+            }
+            else
+            {
+                queuedFrame = default;
+            }
+        }
+
+        if (!hasFrame && !TryCreateQueuedVideoFrame(out queuedFrame))
+        {
+            frame = default;
+            return (int)MediaErrorCode.FFmpegReadFailed;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed || !_isOpen || _context.VideoStream is null)
             {
                 frame = default;
                 return (int)MediaErrorCode.FFmpegReadFailed;
             }
 
-            while (_videoQueue.Count > 0)
-            {
-                var candidate = _videoQueue.Dequeue();
-                if (candidate.Generation == queuedFrame.Generation)
-                {
-                    queuedFrame = candidate;
-                    break;
-                }
-            }
-
             _workerSignal.Set();
-
-            frame = new FFSessionVideoFrame(
-                queuedFrame.FrameIndex,
-                queuedFrame.PresentationTime,
-                queuedFrame.IsKeyFrame,
-                queuedFrame.Width,
-                queuedFrame.Height,
-                queuedFrame.Plane0,
-                queuedFrame.Plane0Stride,
-                queuedFrame.Plane1,
-                queuedFrame.Plane1Stride,
-                queuedFrame.Plane2,
-                queuedFrame.Plane2Stride,
-                queuedFrame.MappedPixelFormat,
-                queuedFrame.NativeTimeBaseNumerator,
-                queuedFrame.NativeTimeBaseDenominator,
-                queuedFrame.NativeFrameRateNumerator,
-                queuedFrame.NativeFrameRateDenominator,
-                queuedFrame.NativePixelFormat);
-            return MediaResult.Success;
         }
+
+        frame = new FFSessionVideoFrame(
+            queuedFrame.FrameIndex,
+            queuedFrame.PresentationTime,
+            queuedFrame.IsKeyFrame,
+            queuedFrame.Width,
+            queuedFrame.Height,
+            queuedFrame.Plane0,
+            queuedFrame.Plane0Stride,
+            queuedFrame.Plane1,
+            queuedFrame.Plane1Stride,
+            queuedFrame.Plane2,
+            queuedFrame.Plane2Stride,
+            queuedFrame.MappedPixelFormat,
+            queuedFrame.NativeTimeBaseNumerator,
+            queuedFrame.NativeTimeBaseDenominator,
+            queuedFrame.NativeFrameRateNumerator,
+            queuedFrame.NativeFrameRateDenominator,
+            queuedFrame.NativePixelFormat);
+        return MediaResult.Success;
     }
 
     public int Seek(double positionSeconds)
@@ -300,16 +335,21 @@ internal sealed class FFSharedDemuxSession : IDisposable
             return (int)MediaErrorCode.MediaInvalidArgument;
         }
 
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return (int)MediaErrorCode.FFmpegSharedContextDisposed;
-            }
+        var publishDescriptors = false;
 
-            if (!_isOpen)
+        lock (_pipelineGate)
+        {
+            lock (_gate)
             {
-                return (int)MediaErrorCode.FFmpegSeekFailed;
+                if (_disposed)
+                {
+                    return (int)MediaErrorCode.FFmpegSharedContextDisposed;
+                }
+
+                if (!_isOpen)
+                {
+                    return (int)MediaErrorCode.FFmpegSeekFailed;
+                }
             }
 
             var seekCode = _packetReader.Seek(positionSeconds);
@@ -318,12 +358,27 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 return seekCode;
             }
 
-            _audioQueue.Clear();
-            _videoQueue.Clear();
+            lock (_gate)
+            {
+                if (_disposed || !_isOpen)
+                {
+                    return (int)MediaErrorCode.FFmpegSeekFailed;
+                }
 
-            _workerSignal.Set();
-            return MediaResult.Success;
+                _audioQueue.Clear();
+                _videoQueue.Clear();
+
+                publishDescriptors = _context.AudioStream is not null || _context.VideoStream is not null;
+                _workerSignal.Set();
+            }
         }
+
+        if (publishDescriptors)
+        {
+            PublishStreamDescriptors();
+        }
+
+        return MediaResult.Success;
     }
 
     public void Dispose()
@@ -358,7 +413,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
     {
         while (true)
         {
-            var waitForSignal = true;
+            var requestAudio = false;
+            var requestVideo = false;
 
             lock (_gate)
             {
@@ -367,104 +423,120 @@ internal sealed class FFSharedDemuxSession : IDisposable
                     return;
                 }
 
-                if (_context.AudioStream is not null && _audioQueue.Count < _audioQueueCapacity)
-                {
-                    if (TryCreateQueuedAudioChunkLocked(out var chunk))
-                    {
-                        _audioQueue.Enqueue(chunk);
-                        waitForSignal = false;
-                    }
-                }
+                requestAudio = _context.AudioStream is not null && _audioQueue.Count < _audioQueueCapacity;
+                requestVideo = _context.VideoStream is not null && _videoQueue.Count < _videoQueueCapacity;
+            }
 
-                if (_context.VideoStream is not null && _videoQueue.Count < _videoQueueCapacity)
+            var produced = false;
+
+            if (requestAudio && TryCreateQueuedAudioChunk(out var audioChunk))
+            {
+                lock (_gate)
                 {
-                    if (TryCreateQueuedVideoFrameLocked(out var frame))
+                    if (!_disposed && _running && _isOpen && _audioQueue.Count < _audioQueueCapacity)
                     {
-                        _videoQueue.Enqueue(frame);
-                        waitForSignal = false;
+                        _audioQueue.Enqueue(audioChunk);
+                        produced = true;
                     }
                 }
             }
 
-            if (waitForSignal)
+            if (requestVideo && TryCreateQueuedVideoFrame(out var videoFrame))
+            {
+                lock (_gate)
+                {
+                    if (!_disposed && _running && _isOpen && _videoQueue.Count < _videoQueueCapacity)
+                    {
+                        _videoQueue.Enqueue(videoFrame);
+                        produced = true;
+                    }
+                }
+            }
+
+            if (!produced)
             {
                 _workerSignal.WaitOne(5);
+                continue;
             }
-            else
+
+            Thread.Yield();
+        }
+    }
+
+    private bool TryCreateQueuedAudioChunk(out QueuedAudioChunk chunk)
+    {
+        lock (_pipelineGate)
+        {
+            chunk = default;
+
+            var packetCode = _packetReader.ReadAudioPacket(out var packet);
+            if (packetCode != MediaResult.Success)
             {
-                Thread.Yield();
+                return false;
             }
+
+            var decodeCode = _audioDecoder.Decode(packet, out var decoded);
+            if (decodeCode != MediaResult.Success)
+            {
+                return false;
+            }
+
+            var resampleCode = _resampler.Resample(decoded, out var resampled);
+            if (resampleCode != MediaResult.Success)
+            {
+                return false;
+            }
+
+            chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue, resampled.Samples);
+            return true;
         }
     }
 
-    private bool TryCreateQueuedAudioChunkLocked(out QueuedAudioChunk chunk)
+    private bool TryCreateQueuedVideoFrame(out QueuedVideoFrame frame)
     {
-        chunk = default;
-
-        var packetCode = _packetReader.ReadAudioPacket(out var packet);
-        if (packetCode != MediaResult.Success)
+        lock (_pipelineGate)
         {
-            return false;
+            frame = default;
+
+            var packetCode = _packetReader.ReadVideoPacket(out var packet);
+            if (packetCode != MediaResult.Success)
+            {
+                return false;
+            }
+
+            var decodeCode = _videoDecoder.Decode(packet, out var decoded);
+            if (decodeCode != MediaResult.Success)
+            {
+                return false;
+            }
+
+            var convertCode = _pixelConverter.Convert(decoded, out var converted);
+            if (convertCode != MediaResult.Success)
+            {
+                return false;
+            }
+
+            frame = new QueuedVideoFrame(
+                converted.Generation,
+                converted.FrameIndex,
+                converted.PresentationTime,
+                converted.IsKeyFrame,
+                converted.Width,
+                converted.Height,
+                converted.Plane0,
+                converted.Plane0Stride,
+                converted.Plane1,
+                converted.Plane1Stride,
+                converted.Plane2,
+                converted.Plane2Stride,
+                converted.MappedPixelFormat,
+                converted.NativeTimeBaseNumerator,
+                converted.NativeTimeBaseDenominator,
+                converted.NativeFrameRateNumerator,
+                converted.NativeFrameRateDenominator,
+                converted.NativePixelFormat);
+            return true;
         }
-
-        var decodeCode = _audioDecoder.Decode(packet, out var decoded);
-        if (decodeCode != MediaResult.Success)
-        {
-            return false;
-        }
-
-        var resampleCode = _resampler.Resample(decoded, out var resampled);
-        if (resampleCode != MediaResult.Success)
-        {
-            return false;
-        }
-
-        chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue, resampled.Samples);
-        return true;
-    }
-
-    private bool TryCreateQueuedVideoFrameLocked(out QueuedVideoFrame frame)
-    {
-        frame = default;
-
-        var packetCode = _packetReader.ReadVideoPacket(out var packet);
-        if (packetCode != MediaResult.Success)
-        {
-            return false;
-        }
-
-        var decodeCode = _videoDecoder.Decode(packet, out var decoded);
-        if (decodeCode != MediaResult.Success)
-        {
-            return false;
-        }
-
-        var convertCode = _pixelConverter.Convert(decoded, out var converted);
-        if (convertCode != MediaResult.Success)
-        {
-            return false;
-        }
-
-        frame = new QueuedVideoFrame(
-            converted.Generation,
-            converted.FrameIndex,
-            converted.PresentationTime,
-            converted.IsKeyFrame,
-            converted.Width,
-            converted.Height,
-            converted.Plane0,
-            converted.Plane0Stride,
-            converted.Plane1,
-            converted.Plane1Stride,
-            converted.Plane2,
-            converted.Plane2Stride,
-            converted.MappedPixelFormat,
-            converted.NativeTimeBaseNumerator,
-            converted.NativeTimeBaseDenominator,
-            converted.NativeFrameRateNumerator,
-            converted.NativeFrameRateDenominator,
-            converted.NativePixelFormat);
-        return true;
     }
 
     private readonly record struct QueuedAudioChunk(long Generation, int FrameCount, float SampleValue, ReadOnlyMemory<float> Samples);
@@ -488,7 +560,28 @@ internal sealed class FFSharedDemuxSession : IDisposable
         int? NativeFrameRateNumerator,
         int? NativeFrameRateDenominator,
         int? NativePixelFormat);
+
+    private void PublishStreamDescriptors()
+    {
+        FFStreamDescriptor? audio;
+        FFStreamDescriptor? video;
+
+        lock (_gate)
+        {
+            if (_disposed || !_isOpen)
+            {
+                return;
+            }
+
+            audio = _context.AudioStream;
+            video = _context.VideoStream;
+        }
+
+        StreamDescriptorsRefreshed?.Invoke(this, new FFStreamDescriptorSnapshot(audio, video));
+    }
 }
+
+internal readonly record struct FFStreamDescriptorSnapshot(FFStreamDescriptor? AudioStream, FFStreamDescriptor? VideoStream);
 
 internal readonly struct FFSessionVideoFrame
 {

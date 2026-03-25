@@ -104,7 +104,9 @@ This document is the finalized architecture baseline for refactoring the current
 - `S.Media.NDI` -> depends on `S.Media.Core`, and optionally `S.Media.OpenGL` for output interop.
 - `S.Media.MIDI` -> depends on `S.Media.Core` and `MIDI/PMLib` backend only.
 - `S.Media.OpenGL.Avalonia` and `S.Media.OpenGL.SDL3` -> depend on `S.Media.Core` + project-specific UI libs + `S.Media.OpenGL`.
-- `S.Media.OpenGL.Avalonia` canonical host path requires `OpenGLControlBase`.
+- `S.Media.OpenGL.Avalonia` canonical host path requires `OpenGlControlBase`.
+- Avalonia host lifecycle should mirror legacy `VideoGL` control flow (`OnOpenGlInit` / `OnOpenGlRender` / `OnOpenGlDeinit`) while remaining adapter/UI-only.
+- Avalonia/SDL3 HUD adapters should preserve legacy-style token ordering/abbreviation semantics in this phase (`VideoGL.HUD` / `VideoSDL.HUD`).
 - `S.Media.OpenGL.Avalonia` uses base `Avalonia` NuGet package only.
 - Test apps depend on high-level surfaces, not lower internals when avoidable.
 - New modules must not depend on legacy `Seko.OwnAudioNET.*` or `OwnAudio` runtime components.

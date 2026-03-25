@@ -24,6 +24,8 @@ public static class ErrorCodeRanges
         {
             (int)MediaErrorCode.FFmpegConcurrentReadViolation => (int)MediaErrorCode.MediaConcurrentOperationViolation,
             (int)MediaErrorCode.MIDIConcurrentOperationRejected => (int)MediaErrorCode.MediaConcurrentOperationViolation,
+            (int)MediaErrorCode.NDIAudioReadRejected => (int)MediaErrorCode.MediaConcurrentOperationViolation,
+            (int)MediaErrorCode.NDIVideoReadRejected => (int)MediaErrorCode.MediaConcurrentOperationViolation,
             _ => code,
         };
     }

@@ -8,7 +8,7 @@ Source references:
 - `Media/S.Media.Core/error-codes.md`
 
 Metadata:
-- Last updated: `2026-03-24`
+- Last updated: `2026-03-25`
 - Status legend source: `Media/S.Media.Core/PLAN.smedia-architecture.md` (`Shared Wording Template` section)
 
 ## Scope
@@ -84,9 +84,9 @@ Out of scope:
 
 | Area | Target path | Status | Notes |
 | --- | --- | --- | --- |
-| Core OpenGL runtime | `Media/S.Media.OpenGL/*` | Planned | Adapt proven upload/clone internals; no class moves |
-| Avalonia adapter | `Media/S.Media.OpenGL.Avalonia/*` | Planned | Keep adapter UI-only with shared core runtime |
-| SDL3 adapter | `Media/S.Media.OpenGL.SDL3/*` | Planned | Preserve threaded render and embedding behavior |
+| Core OpenGL runtime | `Media/S.Media.OpenGL/*` | In Progress | Contract-first runtime + diagnostics/clone wiring in place |
+| Avalonia adapter | `Media/S.Media.OpenGL.Avalonia/*` | In Progress | `OpenGlControlBase` host path + output/clone/HUD contract adapters implemented |
+| SDL3 adapter | `Media/S.Media.OpenGL.SDL3/*` | In Progress | View/embed/clone/shader/HUD contracts implemented with legacy HUD-parity direction |
 | Clone error contracts | `Media/S.Media.OpenGL/API-outline.md` | Planned | Keep specific OpenGL codes; fallback policy unchanged |
 | Validation gates | `Media/S.Media.OpenGL*` test matrix | Planned | Focus on clone graph determinism and perf parity |
 | `VideoLibs/Seko.OwnAudioNET.Video.SDL3/VideoSDL.Packing.cs` | `Media/S.Media.OpenGL` internals | Internalize | Share core packing logic |

@@ -103,5 +103,61 @@ public sealed class FFmpegConfigValidatorTests
 
         Assert.Equal(MediaResult.Success, result);
     }
+
+    [Fact]
+    public void Validate_ReturnsInvalidConfig_ForNegativeAudioStreamIndex()
+    {
+        var options = new FFmpegOpenOptions
+        {
+            InputUri = "file:///tmp/fake.mp4",
+            AudioStreamIndex = -1,
+        };
+
+        var result = FFmpegConfigValidator.Validate(options);
+
+        Assert.Equal((int)MediaErrorCode.FFmpegInvalidConfig, result);
+    }
+
+    [Fact]
+    public void Validate_ReturnsInvalidConfig_ForNegativeVideoStreamIndex()
+    {
+        var options = new FFmpegOpenOptions
+        {
+            InputUri = "file:///tmp/fake.mp4",
+            VideoStreamIndex = -1,
+        };
+
+        var result = FFmpegConfigValidator.Validate(options);
+
+        Assert.Equal((int)MediaErrorCode.FFmpegInvalidConfig, result);
+    }
+
+    [Fact]
+    public void Validate_ReturnsInvalidConfig_WhenInputFormatHintIsSetForUri()
+    {
+        var options = new FFmpegOpenOptions
+        {
+            InputUri = "file:///tmp/fake.mp4",
+            InputFormatHint = "mp4",
+        };
+
+        var result = FFmpegConfigValidator.Validate(options);
+
+        Assert.Equal((int)MediaErrorCode.FFmpegInvalidConfig, result);
+    }
+
+    [Fact]
+    public void Validate_ReturnsInvalidConfig_WhenLeaveInputStreamOpenIsFalseForUri()
+    {
+        var options = new FFmpegOpenOptions
+        {
+            InputUri = "file:///tmp/fake.mp4",
+            LeaveInputStreamOpen = false,
+        };
+
+        var result = FFmpegConfigValidator.Validate(options);
+
+        Assert.Equal((int)MediaErrorCode.FFmpegInvalidConfig, result);
+    }
 }
 

@@ -4,6 +4,7 @@ using S.Media.FFmpeg.Audio;
 using S.Media.FFmpeg.Config;
 using S.Media.FFmpeg.Media;
 using S.Media.FFmpeg.Sources;
+using System.Reflection;
 using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
@@ -131,6 +132,42 @@ public sealed class FFAudioSourceTests
         Assert.Equal(MediaResult.Success, source.ReadSamples(buffer, 256, out var framesRead));
         Assert.True(framesRead > 0);
         Assert.True(source.PositionSeconds > 1.0);
+    }
+
+    [Fact]
+    public void ReadSamples_ReturnsConcurrentReadViolation_WhenReadAlreadyInProgress()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = "file:///tmp/fake.mp4",
+                OpenAudio = true,
+                OpenVideo = false,
+                UseSharedDecodeContext = true,
+            },
+            new FFmpegDecodeOptions { MaxQueuedPackets = 8 });
+
+        var source = item.AudioSource;
+        Assert.NotNull(source);
+
+        var field = typeof(FFAudioSource).GetField("_readInProgress", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        field!.SetValue(source, 1);
+
+        var buffer = new float[64 * 2];
+        var code = source.ReadSamples(buffer, 64, out _);
+
+        Assert.Equal((int)MediaErrorCode.FFmpegConcurrentReadViolation, code);
+    }
+
+    [Fact]
+    public void Constructor_FromMediaItemWithoutAudio_ThrowsDecodingException()
+    {
+        using var videoOnly = new FFMediaItem([], [new FFVideoSource()]);
+
+        var ex = Assert.Throws<DecodingException>(() => new FFAudioSource(videoOnly));
+
+        Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }
 }
 

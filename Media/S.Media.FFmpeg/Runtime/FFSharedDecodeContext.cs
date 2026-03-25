@@ -93,25 +93,31 @@ public sealed class FFSharedDecodeContext : IDisposable
         }
     }
 
-    internal void ApplyResolvedStreamDescriptors(FFStreamDescriptor? audioStream, FFStreamDescriptor? videoStream)
+    internal bool ApplyResolvedStreamDescriptors(FFStreamDescriptor? audioStream, FFStreamDescriptor? videoStream)
     {
+        var changed = false;
+
         lock (_gate)
         {
             if (_disposed || !IsOpen)
             {
-                return;
+                return false;
             }
 
             if (audioStream is not null)
             {
+                changed |= AudioStream != audioStream;
                 AudioStream = audioStream;
             }
 
             if (videoStream is not null)
             {
+                changed |= VideoStream != videoStream;
                 VideoStream = videoStream;
             }
         }
+
+        return changed;
     }
 
     public void Dispose()

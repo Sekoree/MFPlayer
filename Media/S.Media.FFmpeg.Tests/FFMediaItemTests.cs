@@ -1,9 +1,11 @@
 using S.Media.FFmpeg.Media;
 using S.Media.FFmpeg.Sources;
 using S.Media.FFmpeg.Config;
+using S.Media.FFmpeg.Runtime;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.Core.Video;
+using System.Reflection;
 using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
@@ -228,6 +230,180 @@ public sealed class FFMediaItemTests
         item.Dispose();
     }
 
+    [Fact]
+    public void StreamCtor_PropagatesNonSeekableInput_ToCreatedSources()
+    {
+        using var stream = new NonSeekableReadableMemoryStream([1, 2, 3, 4]);
+        using var item = new FFMediaItem(
+            stream,
+            new FFmpegOpenOptions
+            {
+                OpenAudio = true,
+                OpenVideo = false,
+                UseSharedDecodeContext = true,
+                LeaveInputStreamOpen = true,
+            });
+
+        Assert.NotNull(item.AudioSource);
+        Assert.False(item.AudioSource!.IsSeekable);
+        Assert.Equal((int)MediaErrorCode.MediaSourceNonSeekable, item.AudioSource.Seek(0.25));
+    }
+
+    [Fact]
+    public void OpenOptionsConstructor_PopulatesBaselineMetadataSnapshot()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = "file:///tmp/fake.mp4",
+                OpenAudio = true,
+                OpenVideo = true,
+                UseSharedDecodeContext = true,
+            });
+
+        Assert.True(item.HasMetadata);
+        Assert.NotNull(item.Metadata);
+        Assert.Equal("1", item.Metadata!.AdditionalMetadata["stream.audio.count"]);
+        Assert.Equal("1", item.Metadata.AdditionalMetadata["stream.video.count"]);
+        Assert.Equal("true", item.Metadata.AdditionalMetadata["media.seekable"]);
+        Assert.Equal("file:///tmp/fake.mp4", item.Metadata.AdditionalMetadata["open.inputUri"]);
+    }
+
+    [Fact]
+    public void MetadataUpdated_IsNotRaisedAfterDisposeCompletion()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = "file:///tmp/fake.mp4",
+                OpenAudio = true,
+                OpenVideo = false,
+            });
+
+        var setMetadata = typeof(FFMediaItem).GetMethod("SetMetadata", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(setMetadata);
+
+        var eventCount = 0;
+        item.MetadataUpdated += (_, _) => eventCount++;
+
+        var beforeDispose = new S.Media.Core.Media.MediaMetadataSnapshot
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            AdditionalMetadata = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+                new Dictionary<string, string> { ["phase"] = "before" }),
+        };
+
+        setMetadata!.Invoke(item, [beforeDispose]);
+        Assert.Equal(1, eventCount);
+
+        item.Dispose();
+
+        var afterDispose = new S.Media.Core.Media.MediaMetadataSnapshot
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            AdditionalMetadata = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+                new Dictionary<string, string> { ["phase"] = "after" }),
+        };
+
+        setMetadata.Invoke(item, [afterDispose]);
+        Assert.Equal(1, eventCount);
+    }
+
+    [Fact]
+    public void MetadataUpdated_DoesNotRaiseForEquivalentSnapshotContent()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = "file:///tmp/fake.mp4",
+                OpenAudio = true,
+                OpenVideo = false,
+            });
+
+        var setMetadata = typeof(FFMediaItem).GetMethod("SetMetadata", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(setMetadata);
+
+        var eventCount = 0;
+        item.MetadataUpdated += (_, _) => eventCount++;
+
+        var snapshotA = new S.Media.Core.Media.MediaMetadataSnapshot
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            AdditionalMetadata = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+                new Dictionary<string, string> { ["same"] = "value" }),
+        };
+
+        var snapshotB = new S.Media.Core.Media.MediaMetadataSnapshot
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow.AddSeconds(1),
+            AdditionalMetadata = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+                new Dictionary<string, string> { ["same"] = "value" }),
+        };
+
+        setMetadata!.Invoke(item, [snapshotA]);
+        setMetadata.Invoke(item, [snapshotB]);
+
+        Assert.Equal(1, eventCount);
+    }
+
+    [Fact]
+    public void SharedSessionDescriptorRefresh_UpdatesMetadataAndRaisesEvent()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = "file:///tmp/fake.mp4",
+                OpenAudio = true,
+                OpenVideo = true,
+                UseSharedDecodeContext = true,
+            });
+
+        var eventCount = 0;
+        item.MetadataUpdated += (_, _) => eventCount++;
+
+        var sessionProperty = typeof(FFMediaItem).GetProperty("SharedDemuxSession", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(sessionProperty);
+
+        var session = sessionProperty!.GetValue(item);
+        Assert.NotNull(session);
+
+        var eventField = session!.GetType().GetField("StreamDescriptorsRefreshed", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(eventField);
+
+        var delegateValue = eventField!.GetValue(session) as MulticastDelegate;
+        Assert.NotNull(delegateValue);
+
+        var snapshotType = session.GetType().Assembly.GetType("S.Media.FFmpeg.Decoders.Internal.FFStreamDescriptorSnapshot");
+        Assert.NotNull(snapshotType);
+
+        var refreshedAudio = new FFStreamDescriptor
+        {
+            StreamIndex = 2,
+            CodecName = "aac",
+            SampleRate = 44_100,
+            ChannelCount = 2,
+        };
+
+        var refreshedVideo = new FFStreamDescriptor
+        {
+            StreamIndex = 3,
+            CodecName = "h264",
+            Width = 1920,
+            Height = 1080,
+            FrameRate = 60,
+        };
+
+        var snapshot = Activator.CreateInstance(snapshotType!, [refreshedAudio, refreshedVideo]);
+        Assert.NotNull(snapshot);
+
+        delegateValue!.DynamicInvoke(session, snapshot);
+
+        Assert.Equal(1, eventCount);
+        Assert.NotNull(item.Metadata);
+        Assert.Equal("aac", item.Metadata!.AdditionalMetadata["stream.audio.codec"]);
+        Assert.Equal("h264", item.Metadata.AdditionalMetadata["stream.video.codec"]);
+    }
+
     [HeavyFfmpegFact]
     public void OpenOptionsConstructor_HeavyFile_CanExposeNativeResolvedStreamMetadata()
     {
@@ -248,6 +424,36 @@ public sealed class FFMediaItemTests
         Assert.True(item.VideoSource.StreamInfo.Height.GetValueOrDefault(0) >= 2);
     }
 
+    [HeavyFfmpegFact]
+    public void MetadataUpdated_HeavySeekChurn_IsMonotonic_AndAvoidsDuplicateSpam()
+    {
+        using var item = new FFMediaItem(
+            new FFmpegOpenOptions
+            {
+                InputUri = new Uri(HeavyFfmpegTestConfig.ResolveVideoPath()).AbsoluteUri,
+                OpenAudio = true,
+                OpenVideo = true,
+                UseSharedDecodeContext = true,
+            });
+
+        var updates = new List<DateTimeOffset>();
+        item.MetadataUpdated += (_, snapshot) => updates.Add(snapshot.UpdatedAtUtc);
+
+        for (var i = 0; i < 8; i++)
+        {
+            Assert.Equal(MediaResult.Success, item.VideoSource!.Seek(i * 0.1));
+            Assert.Equal(MediaResult.Success, item.AudioSource!.Seek(i * 0.1));
+        }
+
+        for (var i = 1; i < updates.Count; i++)
+        {
+            Assert.True(updates[i] >= updates[i - 1]);
+        }
+
+        // Descriptor-only refresh updates are de-duplicated; we expect at most a single update after subscription.
+        Assert.True(updates.Count <= 1);
+    }
+
     private sealed class TrackingMemoryStream : MemoryStream
     {
         public bool Disposed { get; private set; }
@@ -262,6 +468,16 @@ public sealed class FFMediaItemTests
     private sealed class NonReadableMemoryStream : MemoryStream
     {
         public override bool CanRead => false;
+    }
+
+    private sealed class NonSeekableReadableMemoryStream : MemoryStream
+    {
+        public NonSeekableReadableMemoryStream(byte[] buffer)
+            : base(buffer)
+        {
+        }
+
+        public override bool CanSeek => false;
     }
 
     private sealed class TrackableAudioSource : IAudioSource
