@@ -134,6 +134,8 @@ public sealed class NDIEngine : IDisposable
 				QueueOverflowPolicyOverride = normalized.ResolveQueueOverflowPolicy(_limitsOptions),
 				VideoFallbackModeOverride = normalized.ResolveVideoFallbackMode(_limitsOptions),
 				DiagnosticsTickIntervalOverride = normalized.ResolveDiagnosticsTick(_diagnosticsOptions),
+				VideoJitterBufferFramesOverride = normalized.ResolveVideoJitterBufferFrames(_limitsOptions),
+				AudioJitterBufferMsOverride = normalized.ResolveAudioJitterBufferMs(_limitsOptions),
 			};
 
 			var item = new NDIMediaItem(receiver, _integrationOptions);
@@ -171,6 +173,8 @@ public sealed class NDIEngine : IDisposable
 				QueueOverflowPolicyOverride = normalized.ResolveQueueOverflowPolicy(_limitsOptions),
 				VideoFallbackModeOverride = normalized.ResolveVideoFallbackMode(_limitsOptions),
 				DiagnosticsTickIntervalOverride = normalized.ResolveDiagnosticsTick(_diagnosticsOptions),
+				VideoJitterBufferFramesOverride = normalized.ResolveVideoJitterBufferFrames(_limitsOptions),
+				AudioJitterBufferMsOverride = normalized.ResolveAudioJitterBufferMs(_limitsOptions),
 			};
 
 			var item = new NDIMediaItem(receiver, _integrationOptions);
@@ -353,6 +357,12 @@ public sealed class NDIEngine : IDisposable
 		long videoCaptured = 0;
 		long videoDropped = 0;
 		long repeatedFrames = 0;
+		long fallbackFrames = 0;
+		var queueDepth = 0;
+		var jitterBufferFrames = 0;
+		var incomingPixelFormat = "none";
+		var outputPixelFormat = "none";
+		var conversionPath = "none";
 		double maxVideoReadMs = 0;
 		long videoPushSuccesses = 0;
 		long videoPushFailures = 0;
@@ -365,6 +375,23 @@ public sealed class NDIEngine : IDisposable
 			videoCaptured += diagnostics.FramesCaptured;
 			videoDropped += diagnostics.FramesDropped;
 			repeatedFrames += diagnostics.RepeatedTimestampFramesPresented;
+			fallbackFrames += diagnostics.FallbackFramesPresented;
+			queueDepth = Math.Max(queueDepth, diagnostics.QueueDepth);
+			jitterBufferFrames = Math.Max(jitterBufferFrames, diagnostics.JitterBufferFrames);
+			if (!string.Equals(diagnostics.IncomingPixelFormat, "none", StringComparison.OrdinalIgnoreCase))
+			{
+				incomingPixelFormat = diagnostics.IncomingPixelFormat;
+			}
+
+			if (!string.Equals(diagnostics.OutputPixelFormat, "none", StringComparison.OrdinalIgnoreCase))
+			{
+				outputPixelFormat = diagnostics.OutputPixelFormat;
+			}
+
+			if (!string.Equals(diagnostics.ConversionPath, "none", StringComparison.OrdinalIgnoreCase))
+			{
+				conversionPath = diagnostics.ConversionPath;
+			}
 			maxVideoReadMs = Math.Max(maxVideoReadMs, diagnostics.LastReadMs);
 		}
 
@@ -384,7 +411,13 @@ public sealed class NDIEngine : IDisposable
 				FramesCaptured: videoCaptured,
 				FramesDropped: videoDropped,
 				RepeatedTimestampFramesPresented: repeatedFrames,
+				FallbackFramesPresented: fallbackFrames,
 				LastReadMs: maxVideoReadMs,
+				JitterBufferFrames: jitterBufferFrames,
+				QueueDepth: queueDepth,
+				IncomingPixelFormat: incomingPixelFormat,
+				OutputPixelFormat: outputPixelFormat,
+				ConversionPath: conversionPath,
 				VideoPushSuccesses: videoPushSuccesses,
 				VideoPushFailures: videoPushFailures,
 				AudioPushSuccesses: audioPushSuccesses,

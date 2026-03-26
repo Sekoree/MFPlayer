@@ -87,8 +87,8 @@ Out of scope:
 | Core OpenGL runtime | `Media/S.Media.OpenGL/*` | In Progress | Contract-first runtime + diagnostics/clone wiring in place |
 | Avalonia adapter | `Media/S.Media.OpenGL.Avalonia/*` | In Progress | `OpenGlControlBase` host path + output/clone/HUD contract adapters implemented |
 | SDL3 adapter | `Media/S.Media.OpenGL.SDL3/*` | In Progress | View/embed/clone/shader/HUD contracts implemented with legacy HUD-parity direction |
-| Clone error contracts | `Media/S.Media.OpenGL/API-outline.md` | Planned | Keep specific OpenGL codes; fallback policy unchanged |
-| Validation gates | `Media/S.Media.OpenGL*` test matrix | Planned | Focus on clone graph determinism and perf parity |
+| Clone error contracts | `Media/S.Media.OpenGL/API-outline.md` | In Progress | Specific clone/lifecycle error contracts are implemented; parity hardening continues |
+| Validation gates | `Media/S.Media.OpenGL*` test matrix | In Progress | Core clone/adapter/error-code tests are active; deeper perf parity checks continue |
 | `VideoLibs/Seko.OwnAudioNET.Video.SDL3/VideoSDL.Packing.cs` | `Media/S.Media.OpenGL` internals | Internalize | Share core packing logic |
 | `VideoLibs/Seko.OwnAudioNET.Video.SDL3/VideoSDL.HUD.cs` | `Media/S.Media.OpenGL.SDL3/SDL3HudRenderer.cs` | Refactor | Keep adapter-local HUD rendering |
 

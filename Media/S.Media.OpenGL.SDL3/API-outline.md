@@ -17,6 +17,8 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `string GetPlatformHandleDescriptor()`
   - `int TryGetPlatformWindowHandle(out nint handle)`
   - `int TryGetPlatformHandleDescriptor(out string descriptor)`
+  - `int TryGetWindowFlags(out SDL.WindowFlags windowFlags)`
+  - `int ShowAndBringToFront()`
   - `Guid Id { get; }`
   - `bool IsClone { get; }`
   - `Guid? CloneParentOutputId { get; }`
@@ -29,6 +31,17 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - Planned API:
   - `int Update(DebugInfo debugInfo)`
   - `int Render()`
+
+### `SDL3VideoViewOptions.cs`
+- `sealed record SDL3VideoViewOptions`
+- Planned API:
+  - `int Width { get; init; }`
+  - `int Height { get; init; }`
+  - `string PreferredDescriptor { get; init; }`
+  - `string WindowTitle { get; init; }`
+  - `SDL.WindowFlags WindowFlags { get; init; }`
+  - `bool ShowOnInitialize { get; init; }`
+  - `bool BringToFrontOnShow { get; init; }`
 
 ### `SDL3ShaderPipeline.cs`
 - `sealed class SDL3ShaderPipeline : IDisposable`

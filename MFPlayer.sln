@@ -23,7 +23,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{4FC3071A-F
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioEx", "Test\AudioEx\AudioEx.csproj", "{B33BF85C-5F4A-4DB2-BFA2-A62CF1ACBEBC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoTest", "Test\VideoTest\VideoTest.csproj", "{136BC955-3AB3-42D8-8E46-C8680F94B4E7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoStress", "Test\VideoStress\VideoStress.csproj", "{136BC955-3AB3-42D8-8E46-C8680F94B4E7}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "VideoLibs", "VideoLibs", "{47F53610-2510-4EC0-BF22-554B68334224}"
 	ProjectSection(SolutionItems) = preProject
@@ -55,6 +55,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB
 		Doc\project-implementation-stages.md = Doc\project-implementation-stages.md
 		Doc\refactor-considerations-log.md = Doc\refactor-considerations-log.md
 		Doc\project-status-notes.md = Doc\project-status-notes.md
+		Doc\refactor-remaining-checklist.md = Doc\refactor-remaining-checklist.md
+		Doc\ndi-dropped-frame-remediation-plan.md = Doc\ndi-dropped-frame-remediation-plan.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"

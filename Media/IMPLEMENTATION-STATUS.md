@@ -1,6 +1,6 @@
 # S.Media Implementation Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 This snapshot summarizes the current implementation state across `S.Media.*` projects.
 
@@ -22,7 +22,7 @@ This snapshot summarizes the current implementation state across `S.Media.*` pro
 Most recent full-run command:
 
 ```fish
-cd /home/seko/RiderProjects/MFPlayer
+cd /home/sekoree/RiderProjects/MFPlayer
 dotnet test MFPlayer.sln --logger "console;verbosity=minimal" | cat
 ```
 
@@ -46,4 +46,3 @@ Latest observed results from that one-command run:
 - `S.Media.PortAudio` host-api selection now accepts Linux `pulse`/`pulseaudio` aliases and keeps `CreateOutputByIndex(-1)` bound to discovered default output semantics.
 - Recent lifecycle cleanup aligns OpenGL/NDI engine/output disposed-state guards and failure-atomic initialization behavior with current PortAudio-style deterministic contracts.
 - Repo-wide per-project stage tracking lives in `Doc/project-implementation-stages.md`; consolidated migration decisions live in `Doc/refactor-considerations-log.md`.
-

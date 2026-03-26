@@ -3,6 +3,7 @@ using S.Media.Core.Diagnostics;
 using S.Media.Core.Errors;
 using S.Media.Core.Video;
 using S.Media.OpenGL.SDL3;
+using SDL3;
 using Xunit;
 
 namespace S.Media.OpenGL.Tests;
@@ -48,6 +49,35 @@ public sealed class SDL3AdapterTests
         Assert.Equal(MediaResult.Success, view.Initialize(new SDL3VideoViewOptions { PreferredDescriptor = "X11-Window" }));
         Assert.Equal(MediaResult.Success, view.TryGetPlatformHandleDescriptor(out var descriptor));
         Assert.Equal("x11-window", descriptor);
+    }
+
+    [Fact]
+    public void Initialize_AppliesConfiguredWindowFlags()
+    {
+        using var view = new SDL3VideoView();
+
+        var init = view.Initialize(new SDL3VideoViewOptions
+        {
+            WindowFlags = SDL.WindowFlags.OpenGL | SDL.WindowFlags.Hidden,
+        });
+
+        Assert.Equal(MediaResult.Success, init);
+        Assert.Equal(MediaResult.Success, view.TryGetWindowFlags(out var flags));
+        Assert.Equal(SDL.WindowFlags.OpenGL | SDL.WindowFlags.Hidden, flags);
+    }
+
+    [Fact]
+    public void ShowAndBringToFront_IsStateBound()
+    {
+        using var standaloneView = new SDL3VideoView();
+        Assert.Equal((int)MediaErrorCode.SDL3EmbedNotInitialized, standaloneView.ShowAndBringToFront());
+        Assert.Equal(MediaResult.Success, standaloneView.Initialize(new SDL3VideoViewOptions()));
+        Assert.Equal(MediaResult.Success, standaloneView.ShowAndBringToFront());
+
+        using var embeddedView = new SDL3VideoView();
+        Assert.Equal(MediaResult.Success, embeddedView.InitializeEmbedded(new nint(123), width: 10, height: 10));
+        embeddedView.SimulateEmbeddedParentLost();
+        Assert.Equal((int)MediaErrorCode.SDL3EmbedParentLost, embeddedView.ShowAndBringToFront());
     }
 
     [Fact]

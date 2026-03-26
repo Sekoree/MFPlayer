@@ -11,10 +11,9 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\NDI\NdiLib\NdiLib.csproj" />
-      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video\Seko.OwnAudioNET.Video.csproj" />
-      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.NDI\Seko.OwnAudioNET.Video.NDI.csproj" />
-      <ProjectReference Include="..\..\VideoLibs\Seko.OwnAudioNET.Video.SDL3\Seko.OwnAudioNET.Video.SDL3.csproj" />
+      <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
+      <ProjectReference Include="..\..\Media\S.Media.NDI\S.Media.NDI.csproj" />
+      <ProjectReference Include="..\..\Media\S.Media.OpenGL.SDL3\S.Media.OpenGL.SDL3.csproj" />
     </ItemGroup>
 
 </Project>
-

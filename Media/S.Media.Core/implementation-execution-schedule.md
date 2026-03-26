@@ -141,12 +141,12 @@ Use one row per module implementation wave.
 
 | Module | Milestone | Owner | Entry gate date | Exit gate date | Status (`Planned/In Progress/Done/Blocked`) | Active blocker |
 | --- | --- | --- | --- | --- | --- | --- |
-| `S.Media.Core` | M0-M1 | `...` | `...` | `...` | `Planned` | `...` |
-| `S.Media.PortAudio` | M2 | `...` | `...` | `...` | `Planned` | `...` |
-| `S.Media.FFmpeg` | M2 | `...` | `...` | `...` | `Planned` | `...` |
-| `S.Media.MIDI` | M2 | `...` | `...` | `...` | `Planned` | `...` |
-| `S.Media.OpenGL` | M3 | `...` | `...` | `...` | `Planned` | `...` |
-| `S.Media.OpenGL.Avalonia` | M4 | `...` | `...` | `...` | `Planned` | `...` |
-| `S.Media.OpenGL.SDL3` | M4 | `...` | `...` | `...` | `Planned` | `...` |
-| `S.Media.NDI` | M5 | `...` | `...` | `...` | `Planned` | `...` |
+| `S.Media.Core` | M0-M1 | `...` | `...` | `...` | `In Progress` | `Backlog checklist still needs explicit gate check-off pass` |
+| `S.Media.PortAudio` | M2 | `...` | `...` | `...` | `In Progress` | `Cross-module harness migration still ongoing` |
+| `S.Media.FFmpeg` | M2 | `...` | `...` | `...` | `In Progress` | `Heavy-path/perf parity tuning remains` |
+| `S.Media.MIDI` | M2 | `...` | `...` | `...` | `In Progress` | `No hard blocker currently tracked` |
+| `S.Media.OpenGL` | M3 | `...` | `...` | `...` | `In Progress` | `Remaining perf parity validation gates` |
+| `S.Media.OpenGL.Avalonia` | M4 | `...` | `...` | `...` | `In Progress` | `Legacy harness parity still being ported` |
+| `S.Media.OpenGL.SDL3` | M4 | `...` | `...` | `...` | `In Progress` | `Legacy harness parity still being ported` |
+| `S.Media.NDI` | M5 | `...` | `...` | `...` | `In Progress` | `Legacy harness parity + broader integration pass pending` |
 

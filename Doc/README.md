@@ -64,6 +64,8 @@ This folder contains practical setup and usage guides for the video layer in `Vi
   - How to fan out one audio/video stream to multiple engines/outputs, including local+NDI recipes.
 - [`ndi-receive.md`](ndi-receive.md)
   - NDI receive pipeline (`NDIAudioStreamSource`, `NDIVideoStreamDecoder`, external timeline clock, tuning profiles).
+- [`ndi-dropped-frame-remediation-plan.md`](ndi-dropped-frame-remediation-plan.md)
+  - Findings and phased remediation plan for dropped frames in the `S.Media.NDI` receive pipeline.
 - [`ndi-send.md`](ndi-send.md)
   - NDI send pipeline (`NDIVideoEngine`, sink routing, direct audio/video send APIs).
 - [`hard-cut-sweep.md`](hard-cut-sweep.md)
@@ -85,10 +87,11 @@ This folder contains practical setup and usage guides for the video layer in `Vi
 8. Audio/video mixer (audio-led)
 9. Multiplexer patterns (audio/video fan-out)
 10. NDI receive setup and tuning
-11. NDI send setup and sink usage
-12. OwnAudio interop notes and output snippets
-13. FFmpeg migration plan (implementation adaptation matrix)
-14. OpenGL migration plan (legacy-to-target implementation matrix)
+11. NDI dropped-frame findings and remediation plan
+12. NDI send setup and sink usage
+13. OwnAudio interop notes and output snippets
+14. FFmpeg migration plan (implementation adaptation matrix)
+15. OpenGL migration plan (legacy-to-target implementation matrix)
 
 ## Where to look for runnable references
 
@@ -114,4 +117,3 @@ Use this legend for the live diagnostics lines in `AudioEx` and `VideoTest`:
   - `v_rsup`: drift-correction ticks suppressed during the post-seek suppression window
 - burst summary:
   - `[Burst10s]`: aggregated 10-second totals plus drift ranges (`v-m`, `v-a`)
-

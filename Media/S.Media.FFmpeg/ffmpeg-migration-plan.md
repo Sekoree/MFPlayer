@@ -80,11 +80,11 @@ Out of scope:
 
 | Area | Target path | Status | Notes |
 | --- | --- | --- | --- |
-| Decoder internals | `Media/S.Media.FFmpeg/Decoders/Internal/*` | Planned | Adapt proven loops/session behavior; no class moves |
-| Source wrappers | `Media/S.Media.FFmpeg/Sources/*` | Planned | Align to `IAudioSource` / `IVideoSource` contracts |
-| Config mapping | `Media/S.Media.FFmpeg/Config/*` | In Progress | Decode-thread validation and queue/thread normalization are now deterministic |
-| Media item construction | `Media/S.Media.FFmpeg/Media/FFMediaItem.cs` | Planned | Preserve ownership and stream-open semantics |
-| Contract tests | `Media/S.Media.FFmpeg` test matrix | Planned | Validate `2010`, `2014`, ownership, and teardown fence |
+| Decoder internals | `Media/S.Media.FFmpeg/Decoders/Internal/*` | In Progress | Shared session + native-attempt decode/fallback path implemented and actively tested |
+| Source wrappers | `Media/S.Media.FFmpeg/Sources/*` | In Progress | `FFAudioSource`/`FFVideoSource` contracts are active, including concurrent-read rejection |
+| Config mapping | `Media/S.Media.FFmpeg/Config/*` | In Progress | Decode-thread validation and queue/thread normalization are deterministic |
+| Media item construction | `Media/S.Media.FFmpeg/Media/FFMediaItem.cs` | In Progress | Metadata/seekability/duration semantics implemented; further heavy-path tuning ongoing |
+| Contract tests | `Media/S.Media.FFmpeg` test matrix | In Progress | Deterministic invalid-config/concurrency/ownership paths covered; heavy paths remain opt-in |
 
 ## Public vs Internal Split
 

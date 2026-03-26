@@ -2,35 +2,27 @@
 
 This document tracks the migration sweep for removing active `Seko.OwnAudioNET.*` and `OwnAudio` usage.
 
-## Baseline Snapshot (2026-03-22)
+## Baseline Snapshot (2026-03-26)
 
 - `Media/*` implementation code: no direct `Seko.OwnAudioNET.*` or `OwnAudio` references found in `*.cs` / `*.csproj`.
 - `Media/S.Media.Core/PLAN.smedia-architecture.md` intentionally contains migration references to legacy names.
-- `Test/AudioEx/*`: no direct `Seko.OwnAudioNET.*` or `OwnAudio` references found.
-- Legacy-only references are now archived under:
-  - `Archive/Legacy/AudioEx/*`
-  - `Archive/Legacy/VideoTest/*`
-  - `Archive/Legacy/NdiVideoReceive/*`
-  - `Archive/Legacy/Seko.OwnAudioNET.*/*`
-- `MFPlayer.sln`: legacy `VideoLibs/Seko.OwnAudioNET.*` and legacy test app projects removed from active solution graph.
+- Legacy project references are still intentionally present in selected harnesses and solution entries during side-by-side migration.
+- `MFPlayer.sln` currently includes both legacy `VideoLibs/Seko.OwnAudioNET.*` projects and new `S.Media.*` projects.
 
 ## Outstanding Hard-Cut Actions
 
-1. Source-tree archival completed via `Tools/hard-cut-archive.sh`.
-2. Keep legacy projects out of `MFPlayer.sln` (completed in this baseline; prevent reintroduction).
-3. Rename remaining setup docs:
+1. Port remaining legacy harnesses (`AudioEx`, `NdiVideoReceive`, `VideoTest`) to `S.Media.*` runtime surfaces.
+2. Keep `VideoStress` as canonical Avalonia stress harness and complete parity port from `VideoTest`.
+3. Remove legacy `VideoLibs/Seko.OwnAudioNET.*` projects from `MFPlayer.sln` once parity gates pass.
+4. Remove legacy package usage from active harnesses and central package props after cutover.
+5. Rename remaining setup docs when harness cutover completes:
    - `Doc/audioex-setup.md` -> `Doc/mediadebug-setup.md`
    - `Doc/videotest-setup.md` -> `Doc/videostress-setup.md`
-4. Update docs index/read order to remove transition-era legacy entries after cutover validation.
-5. Use `Tools/hard-cut-archive.sh` for staged, reversible source-tree archival when ready.
 
 ## Validation Commands
 
 ```fish
-rg -n -g '*.{cs,csproj}' 'Seko\.OwnAudioNET|OwnAudio' Media Test/AudioEx
-rg -n "Seko\.OwnAudioNET|OwnAudio" Archive/Legacy/AudioEx Archive/Legacy/VideoTest Archive/Legacy/NdiVideoReceive
+rg -n -g '*.{cs,csproj}' 'Seko\.OwnAudioNET|OwnAudio' Media Test
 rg -n "Seko\.OwnAudioNET\.Video" MFPlayer.sln
 rg -n "AudioEx\.csproj|VideoTest\.csproj|NdiVideoReceive\.csproj" MFPlayer.sln
-bash Tools/hard-cut-archive.sh
 ```
-

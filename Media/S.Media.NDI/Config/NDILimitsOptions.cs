@@ -8,6 +8,10 @@ public sealed record NDILimitsOptions
 
     public int MaxPendingVideoFrames { get; init; } = 8;
 
+    public int VideoJitterBufferFrames { get; init; } = 3;
+
+    public int AudioJitterBufferMs { get; init; } = 80;
+
     public NDIQueueOverflowPolicy QueueOverflowPolicy { get; init; } = NDIQueueOverflowPolicy.DropOldest;
 
     public NDIVideoFallbackMode VideoFallbackMode { get; init; } = NDIVideoFallbackMode.NoFrame;
@@ -19,6 +23,8 @@ public sealed record NDILimitsOptions
             MaxChildrenPerParent = Math.Max(1, MaxChildrenPerParent),
             MaxPendingAudioFrames = Math.Max(1, MaxPendingAudioFrames),
             MaxPendingVideoFrames = Math.Max(1, MaxPendingVideoFrames),
+            VideoJitterBufferFrames = Math.Max(1, VideoJitterBufferFrames),
+            AudioJitterBufferMs = Math.Max(1, AudioJitterBufferMs),
         };
     }
 }

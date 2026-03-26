@@ -57,6 +57,8 @@ public sealed class NDIEngineAndOptionsTests
         {
             QueueOverflowPolicy = NDIQueueOverflowPolicy.DropOldest,
             VideoFallbackMode = NDIVideoFallbackMode.NoFrame,
+            VideoJitterBufferFrames = 4,
+            AudioJitterBufferMs = 90,
         }.Normalize();
 
         var diagnostics = new NDIDiagnosticsOptions
@@ -69,11 +71,15 @@ public sealed class NDIEngineAndOptionsTests
             QueueOverflowPolicyOverride = NDIQueueOverflowPolicy.RejectIncoming,
             VideoFallbackModeOverride = NDIVideoFallbackMode.PresentLastFrameOnRepeatedTimestamp,
             DiagnosticsTickIntervalOverride = TimeSpan.FromMilliseconds(1),
+            VideoJitterBufferFramesOverride = 6,
+            AudioJitterBufferMsOverride = 120,
         }.Normalize();
 
         Assert.Equal(NDIQueueOverflowPolicy.RejectIncoming, options.ResolveQueueOverflowPolicy(limits));
         Assert.Equal(NDIVideoFallbackMode.PresentLastFrameOnRepeatedTimestamp, options.ResolveVideoFallbackMode(limits));
         Assert.Equal(TimeSpan.FromMilliseconds(16), options.ResolveDiagnosticsTick(diagnostics));
+        Assert.Equal(6, options.ResolveVideoJitterBufferFrames(limits));
+        Assert.Equal(120, options.ResolveAudioJitterBufferMs(limits));
     }
 
     [Fact]

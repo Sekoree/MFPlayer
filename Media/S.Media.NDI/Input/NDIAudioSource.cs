@@ -1,5 +1,5 @@
-using System.Threading;
 using System.Diagnostics;
+using System.Buffers;
 using NdiLib;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
@@ -11,10 +11,16 @@ namespace S.Media.NDI.Input;
 
 public sealed class NDIAudioSource : IAudioSource
 {
+    private const uint CaptureTimeoutMs = 8;
+
     private readonly Lock _gate = new();
     private readonly int _sampleRate;
     private readonly int _channelCount;
     private readonly NdiReceiver? _receiver;
+    private float[] _audioRing;
+    private int _ringReadIndex;
+    private int _ringWriteIndex;
+    private int _ringSampleCount;
     private int _readInProgress;
     private bool _disposed;
     private long _framesCaptured;
@@ -31,6 +37,10 @@ public sealed class NDIAudioSource : IAudioSource
         var stream = mediaItem.AudioStreams.FirstOrDefault();
         _sampleRate = stream.SampleRate ?? 48_000;
         _channelCount = Math.Max(1, stream.ChannelCount ?? 2);
+        var audioJitterBufferMs = Math.Max(1, sourceOptions.AudioJitterBufferMsOverride ?? 80);
+        var targetFrames = Math.Max(64, (int)Math.Round(_sampleRate * (audioJitterBufferMs / 1000.0)));
+        var capacityFrames = Math.Max(targetFrames * 4, _sampleRate * 2);
+        _audioRing = new float[capacityFrames * _channelCount];
     }
 
     public Guid SourceId { get; }
@@ -121,15 +131,15 @@ public sealed class NDIAudioSource : IAudioSource
             }
 
             var framesWritable = destination.Length / _channelCount;
-            var effectiveRequest = requestedFrameCount;
+            var framesToWrite = Math.Max(0, Math.Min(requestedFrameCount, framesWritable));
             if (_receiver is not null)
             {
                 try
                 {
-                    using var capture = _receiver.CaptureScoped(timeoutMs: 0);
+                    using var capture = _receiver.CaptureScoped(timeoutMs: CaptureTimeoutMs);
                     if (capture.FrameType == NdiFrameType.Audio && capture.Audio.NoSamples > 0)
                     {
-                        effectiveRequest = Math.Min(effectiveRequest, capture.Audio.NoSamples);
+                        EnqueueCapturedAudio(capture.Audio);
                     }
                 }
                 catch
@@ -138,8 +148,14 @@ public sealed class NDIAudioSource : IAudioSource
                 }
             }
 
-            framesRead = Math.Max(0, Math.Min(effectiveRequest, framesWritable));
-            destination[..(framesRead * _channelCount)].Clear();
+            var samplesRequested = framesToWrite * _channelCount;
+            var samplesCopied = DequeueSamples(destination[..samplesRequested]);
+            if (samplesCopied < samplesRequested)
+            {
+                destination.Slice(samplesCopied, samplesRequested - samplesCopied).Clear();
+            }
+
+            framesRead = samplesCopied / _channelCount;
 
             lock (_gate)
             {
@@ -181,6 +197,153 @@ public sealed class NDIAudioSource : IAudioSource
             _disposed = true;
             State = AudioSourceState.Stopped;
         }
+    }
+
+    private unsafe void EnqueueCapturedAudio(in NdiAudioFrameV3 frame)
+    {
+        var noChannels = Math.Max(1, frame.NoChannels);
+        var noSamples = Math.Max(0, frame.NoSamples);
+        if (noSamples == 0 || frame.PData == nint.Zero)
+        {
+            return;
+        }
+
+        var channelStrideBytes = frame.ChannelStrideInBytes > 0
+            ? frame.ChannelStrideInBytes
+            : noSamples * sizeof(float);
+
+        var sampleCount = noSamples * _channelCount;
+        var rented = ArrayPool<float>.Shared.Rent(sampleCount);
+        var interleaved = rented.AsSpan(0, sampleCount);
+        var basePtr = (byte*)frame.PData;
+        try
+        {
+            for (var s = 0; s < noSamples; s++)
+            {
+                for (var c = 0; c < _channelCount; c++)
+                {
+                    if (c < noChannels)
+                    {
+                        var channelPtr = (float*)(basePtr + (c * channelStrideBytes));
+                        interleaved[(s * _channelCount) + c] = channelPtr[s];
+                    }
+                    else
+                    {
+                        interleaved[(s * _channelCount) + c] = 0f;
+                    }
+                }
+            }
+
+            lock (_gate)
+            {
+                EnsureRingCapacityLocked(sampleCount);
+                WriteToRingLocked(interleaved);
+            }
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(rented);
+        }
+    }
+
+    private int DequeueSamples(Span<float> destination)
+    {
+        if (destination.IsEmpty)
+        {
+            return 0;
+        }
+
+        lock (_gate)
+        {
+            var toCopy = Math.Min(destination.Length, _ringSampleCount);
+            if (toCopy == 0)
+            {
+                return 0;
+            }
+
+            var firstChunk = Math.Min(toCopy, _audioRing.Length - _ringReadIndex);
+            _audioRing.AsSpan(_ringReadIndex, firstChunk).CopyTo(destination[..firstChunk]);
+            var copied = firstChunk;
+            _ringReadIndex = (_ringReadIndex + firstChunk) % _audioRing.Length;
+
+            var remaining = toCopy - firstChunk;
+            if (remaining > 0)
+            {
+                _audioRing.AsSpan(_ringReadIndex, remaining).CopyTo(destination.Slice(copied, remaining));
+                _ringReadIndex = (_ringReadIndex + remaining) % _audioRing.Length;
+                copied += remaining;
+            }
+
+            _ringSampleCount -= copied;
+            return copied;
+        }
+    }
+
+    private void EnsureRingCapacityLocked(int incomingSamples)
+    {
+        if (incomingSamples <= 0)
+        {
+            return;
+        }
+
+        if (incomingSamples <= _audioRing.Length)
+        {
+            return;
+        }
+
+        var newCapacity = _audioRing.Length;
+        while (newCapacity < incomingSamples)
+        {
+            newCapacity *= 2;
+        }
+
+        var replacement = new float[newCapacity];
+        if (_ringSampleCount > 0)
+        {
+            var firstChunk = Math.Min(_ringSampleCount, _audioRing.Length - _ringReadIndex);
+            _audioRing.AsSpan(_ringReadIndex, firstChunk).CopyTo(replacement);
+            var remaining = _ringSampleCount - firstChunk;
+            if (remaining > 0)
+            {
+                _audioRing.AsSpan(0, remaining).CopyTo(replacement.AsSpan(firstChunk));
+            }
+        }
+
+        _audioRing = replacement;
+        _ringReadIndex = 0;
+        _ringWriteIndex = _ringSampleCount;
+    }
+
+    private void WriteToRingLocked(ReadOnlySpan<float> interleaved)
+    {
+        var needed = interleaved.Length;
+        if (needed == 0)
+        {
+            return;
+        }
+
+        while (_ringSampleCount + needed > _audioRing.Length)
+        {
+            var drop = Math.Min(_channelCount, _ringSampleCount);
+            _ringReadIndex = (_ringReadIndex + drop) % _audioRing.Length;
+            _ringSampleCount -= drop;
+            if (drop >= _channelCount)
+            {
+                _framesDropped++;
+            }
+        }
+
+        var firstChunk = Math.Min(needed, _audioRing.Length - _ringWriteIndex);
+        interleaved[..firstChunk].CopyTo(_audioRing.AsSpan(_ringWriteIndex, firstChunk));
+        _ringWriteIndex = (_ringWriteIndex + firstChunk) % _audioRing.Length;
+        var remaining = needed - firstChunk;
+        if (remaining > 0)
+        {
+            interleaved[firstChunk..].CopyTo(_audioRing.AsSpan(_ringWriteIndex, remaining));
+            _ringWriteIndex = (_ringWriteIndex + remaining) % _audioRing.Length;
+        }
+
+        _ringSampleCount += needed;
     }
 }
 

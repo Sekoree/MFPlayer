@@ -1,6 +1,6 @@
 # Project Status Notes
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 This document gives per-project stage notes plus the key migration considerations applied across the repo.
 
@@ -73,12 +73,14 @@ This document gives per-project stage notes plus the key migration consideration
 
 - `Test/FirstAudioPlayback.Smoke/FirstAudioPlayback.Smoke.csproj` - `Validation`
   - Direct decoder -> output path used for first-audio bring-up.
-- `Test/AudioEx/AudioEx.csproj` - `Validation`
-  - Full A/V stress scenario harness.
-- `Test/NdiVideoReceive/NdiVideoReceive.csproj` - `Validation`
-  - NDI receive scenario harness.
-- `Test/VideoTest/VideoTest.csproj` - `Validation`
-  - Video rendering scenario harness.
+- `Test/AudioEx/AudioEx.csproj` - `In Progress`
+  - Migrated to `S.Media.FFmpeg` + `S.Media.PortAudio` for decode/output stress path; A/V parity follow-up remains.
+- `Test/NdiVideoReceive/NdiVideoReceive.csproj` - `In Progress`
+  - Migrated to `S.Media.NDI` discovery/source-read smoke path; rendering/output parity follow-up remains.
+- `Test/VideoStress/VideoStress.csproj` - `In Progress`
+  - Canonical Avalonia stress harness path on `S.Media.*` references.
+- `Test/VideoTest/VideoTest.csproj` - `Legacy-Migration`
+  - Legacy Avalonia harness kept in-tree as migration reference while `VideoStress` is ported.
 
 ### Legacy Migration References
 

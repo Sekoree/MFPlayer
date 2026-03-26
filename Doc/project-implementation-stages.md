@@ -1,6 +1,6 @@
 # Project Implementation Stages
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 This page tracks the current implementation stage for each project in `MFPlayer.sln`.
 
@@ -61,9 +61,10 @@ This page tracks the current implementation stage for each project in `MFPlayer.
 | Project | Stage | Notes |
 | --- | --- | --- |
 | `Test/FirstAudioPlayback.Smoke/FirstAudioPlayback.Smoke.csproj` | Validation | Direct decoder -> output smoke runner; current first-audio bring-up harness. |
-| `Test/AudioEx/AudioEx.csproj` | Validation | Full A/V stress harness and diagnostics surface. |
-| `Test/NdiVideoReceive/NdiVideoReceive.csproj` | Validation | NDI receive scenario harness. |
-| `Test/VideoTest/VideoTest.csproj` | Validation | Video pipeline/manual UI validation harness. |
+| `Test/AudioEx/AudioEx.csproj` | In Progress | Migrated to `S.Media.FFmpeg` + `S.Media.PortAudio`; broader A/V parity still in progress. |
+| `Test/NdiVideoReceive/NdiVideoReceive.csproj` | In Progress | Migrated to `S.Media.NDI` discovery/source-read smoke path; output/render parity still in progress. |
+| `Test/VideoStress/VideoStress.csproj` | In Progress | Canonical Avalonia stress harness on `S.Media.*` references; runtime porting in progress. |
+| `Test/VideoTest/VideoTest.csproj` | Legacy-Migration | Legacy Avalonia harness retained as behavior/reference source during port. |
 
 ## Legacy VideoLibs (migration source)
 

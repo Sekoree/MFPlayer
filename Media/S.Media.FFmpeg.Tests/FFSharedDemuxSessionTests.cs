@@ -53,7 +53,8 @@ public sealed class FFSharedDemuxSessionTests
 
         Assert.Equal(MediaResult.Success, openCode);
         Assert.Equal(MediaResult.Success, session.ReadVideoFrame(out var first));
-        Assert.InRange(first.FrameIndex, 0, 1);
+        // Worker prefetch can advance a small number of frames before first consumer read.
+        Assert.InRange(first.FrameIndex, 0, 3);
 
         Assert.Equal(MediaResult.Success, session.Seek(2.0));
         Assert.Equal(MediaResult.Success, session.ReadVideoFrame(out var postSeek));

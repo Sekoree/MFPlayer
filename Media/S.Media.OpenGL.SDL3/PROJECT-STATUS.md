@@ -1,6 +1,6 @@
 # S.Media.OpenGL.SDL3 Project Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Scope
 
@@ -17,6 +17,8 @@ Last updated: 2026-03-25
 - SDL3 embed/view path and adapter flow are implemented.
 - Clone behavior delegates to `S.Media.OpenGL` engine policy.
 - Embed lifecycle error contracts are implemented and tested.
+- Standalone SDL windows now honor configurable `WindowFlags` and title options.
+- Standalone preview can explicitly show/raise via `ShowAndBringToFront()`.
 
 ## Current Considerations
 

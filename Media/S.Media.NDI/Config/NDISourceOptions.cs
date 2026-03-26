@@ -11,6 +11,10 @@ public sealed record NDISourceOptions
 
     public TimeSpan? DiagnosticsTickIntervalOverride { get; init; }
 
+    public int? VideoJitterBufferFramesOverride { get; init; }
+
+    public int? AudioJitterBufferMsOverride { get; init; }
+
     public int Validate()
     {
         if (QueueOverflowPolicyOverride.HasValue && !Enum.IsDefined(QueueOverflowPolicyOverride.Value))
@@ -26,6 +30,16 @@ public sealed record NDISourceOptions
         if (DiagnosticsTickIntervalOverride.HasValue && DiagnosticsTickIntervalOverride.Value < TimeSpan.Zero)
         {
             return (int)MediaErrorCode.NDIInvalidDiagnosticsTickOverride;
+        }
+
+        if (VideoJitterBufferFramesOverride.HasValue && VideoJitterBufferFramesOverride.Value <= 0)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
+        }
+
+        if (AudioJitterBufferMsOverride.HasValue && AudioJitterBufferMsOverride.Value <= 0)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
         }
 
         return MediaResult.Success;
@@ -53,6 +67,12 @@ public sealed record NDISourceOptions
         return this with
         {
             DiagnosticsTickIntervalOverride = tick,
+            VideoJitterBufferFramesOverride = VideoJitterBufferFramesOverride.HasValue
+                ? Math.Max(1, VideoJitterBufferFramesOverride.Value)
+                : null,
+            AudioJitterBufferMsOverride = AudioJitterBufferMsOverride.HasValue
+                ? Math.Max(1, AudioJitterBufferMsOverride.Value)
+                : null,
         };
     }
 
@@ -76,6 +96,16 @@ public sealed record NDISourceOptions
         }
 
         return candidate;
+    }
+
+    public int ResolveVideoJitterBufferFrames(NDILimitsOptions limits)
+    {
+        return VideoJitterBufferFramesOverride ?? limits.VideoJitterBufferFrames;
+    }
+
+    public int ResolveAudioJitterBufferMs(NDILimitsOptions limits)
+    {
+        return AudioJitterBufferMsOverride ?? limits.AudioJitterBufferMs;
     }
 }
 
