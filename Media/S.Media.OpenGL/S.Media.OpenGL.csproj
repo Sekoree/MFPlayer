@@ -8,8 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="S.Media.OpenGL.Tests" />
+    <InternalsVisibleTo Include="S.Media.OpenGL.Avalonia" />
+    <InternalsVisibleTo Include="S.Media.OpenGL.SDL3" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
   </ItemGroup>
 
 </Project>
-

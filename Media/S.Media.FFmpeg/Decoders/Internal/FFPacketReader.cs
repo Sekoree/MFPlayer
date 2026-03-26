@@ -8,9 +8,6 @@ namespace S.Media.FFmpeg.Decoders.Internal;
 
 internal sealed class FFPacketReader : IDisposable
 {
-    private const int PlaceholderAudioFramesPerChunk = 256;
-    private const int PlaceholderAudioSampleRate = 48_000;
-    private const double PlaceholderVideoFps = 30d;
 
     private bool _disposed;
     private bool _initialized;
@@ -93,8 +90,8 @@ internal sealed class FFPacketReader : IDisposable
 
         _nextAudioPresentationTime = TimeSpan.FromSeconds(positionSeconds);
         _nextVideoPresentationTime = TimeSpan.FromSeconds(positionSeconds);
-        _nextAudioPacketIndex = (long)Math.Floor(positionSeconds * PlaceholderAudioSampleRate / PlaceholderAudioFramesPerChunk);
-        _nextVideoPacketIndex = (long)Math.Floor(positionSeconds * PlaceholderVideoFps);
+        _nextAudioPacketIndex = 0;
+        _nextVideoPacketIndex = 0;
         return MediaResult.Success;
     }
 
@@ -145,11 +142,7 @@ internal sealed class FFPacketReader : IDisposable
             return MediaResult.Success;
         }
 
-        var sampleValue = (float)((_nextAudioPacketIndex % 16) / 16d);
-        packet = new FFPacket(_generation, _nextAudioPacketIndex, _nextAudioPresentationTime, IsKeyFrame: true, sampleValue);
-        _nextAudioPacketIndex++;
-        _nextAudioPresentationTime += TimeSpan.FromSeconds((double)PlaceholderAudioFramesPerChunk / PlaceholderAudioSampleRate);
-        return MediaResult.Success;
+        return (int)MediaErrorCode.FFmpegReadFailed;
     }
 
     public int ReadVideoPacket(out FFPacket packet)
@@ -198,15 +191,7 @@ internal sealed class FFPacketReader : IDisposable
             return MediaResult.Success;
         }
 
-        packet = new FFPacket(
-            _generation,
-            _nextVideoPacketIndex,
-            _nextVideoPresentationTime,
-            IsKeyFrame: _nextVideoPacketIndex % 30 == 0,
-            SampleValue: 0f);
-        _nextVideoPacketIndex++;
-        _nextVideoPresentationTime += TimeSpan.FromSeconds(1d / PlaceholderVideoFps);
-        return MediaResult.Success;
+        return (int)MediaErrorCode.FFmpegReadFailed;
     }
 
     public int ReadNextPacket()

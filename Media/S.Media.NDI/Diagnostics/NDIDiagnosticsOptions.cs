@@ -6,9 +6,9 @@ public sealed record NDIDiagnosticsOptions
 
     public TimeSpan DiagnosticsTickInterval { get; init; } = TimeSpan.FromMilliseconds(100);
 
-    public TimeSpan MaxReadPauseForDiagnostics { get; init; } = TimeSpan.FromMilliseconds(10);
+    internal TimeSpan MaxReadPauseForDiagnostics { get; init; } = TimeSpan.FromMilliseconds(10);
 
-    public bool PublishSnapshotsOnRequestOnly { get; init; }
+    internal bool PublishSnapshotsOnRequestOnly { get; init; }
 
     public NDIDiagnosticsOptions Normalize()
     {

@@ -1,6 +1,6 @@
 # S.Media.PortAudio Project Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Scope
 
@@ -18,6 +18,8 @@ Last updated: 2026-03-25
 - `CreateOutputByIndex(-1)` uses discovered default output semantics.
 - Output push path uses blocking semantics for transient backpressure.
 - Host API selection supports Linux pulse aliases (`pulse`, `pulseaudio`) via normalized discovery behavior.
+- Initialize-time host API behavior is explicit: no preferred API -> default host API scope; preferred API -> strict filtered scope.
+- Output and input device discovery lists are normalized so discovered defaults are ordered first when present.
 
 ## Current Considerations
 

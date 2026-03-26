@@ -951,8 +951,7 @@ public sealed class SDL3VideoView : IVideoOutput
 
     private int RenderRgbaFrameLocked(VideoFrame frame)
     {
-        var contiguous = GetPackedRgbaBytes(frame, out var uploadFormat);
-        if (contiguous is null)
+        if (!TryGetPackedRgbaBytes(frame, out var contiguous, out var uploadFormat))
         {
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
@@ -1032,7 +1031,7 @@ public sealed class SDL3VideoView : IVideoOutput
         return MediaResult.Success;
     }
 
-    private void UploadTexture(ref TextureUploadState state, int textureId, int width, int height, int internalFormat, int format, int type, byte[] data)
+    private void UploadTexture(ref TextureUploadState state, int textureId, int width, int height, int internalFormat, int format, int type, ReadOnlySpan<byte> data)
     {
         _glBindTexture!(0x0DE1, textureId);
         _glPixelStoreI!(0x0CF5, 1); // GL_UNPACK_ALIGNMENT
@@ -1069,17 +1068,24 @@ public sealed class SDL3VideoView : IVideoOutput
         }
     }
 
-    private byte[]? GetPackedRgbaBytes(VideoFrame frame, out int glFormat)
+    private bool TryGetPackedRgbaBytes(VideoFrame frame, out ReadOnlySpan<byte> packed, out int glFormat)
     {
         glFormat = frame.PixelFormat == VideoPixelFormat.Bgra32 ? 0x80E1 : 0x1908; // GL_BGRA / GL_RGBA
+        packed = default;
 
         var requiredStride = frame.Width * 4;
-        if (frame.Plane0Stride == requiredStride)
+        var requiredLength = checked(requiredStride * frame.Height);
+        if (frame.Plane0.Length < requiredLength)
         {
-            return frame.Plane0.ToArray();
+            return false;
         }
 
-        var requiredLength = requiredStride * frame.Height;
+        if (frame.Plane0Stride == requiredStride)
+        {
+            packed = frame.Plane0.Span.Slice(0, requiredLength);
+            return true;
+        }
+
         if (_packedRgbaScratch is null || _packedRgbaScratch.Length < requiredLength)
         {
             _packedRgbaScratch = new byte[requiredLength];
@@ -1093,7 +1099,8 @@ public sealed class SDL3VideoView : IVideoOutput
             source.Slice(srcOffset, requiredStride).CopyTo(_packedRgbaScratch.AsSpan(dstOffset, requiredStride));
         }
 
-        return _packedRgbaScratch;
+        packed = _packedRgbaScratch.AsSpan(0, requiredLength);
+        return true;
     }
 
     private byte[]? PackPlane(ReadOnlyMemory<byte> plane, int stride, int rowBytes, int height, ref byte[]? scratch)

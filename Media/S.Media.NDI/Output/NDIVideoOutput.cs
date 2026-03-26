@@ -36,23 +36,13 @@ public sealed class NDIVideoOutput : IVideoOutput
 
     public NDIOutputOptions Options { get; }
 
-    public NDIVideoDiagnostics Diagnostics
+    public NDIVideoOutputDebugInfo Diagnostics
     {
         get
         {
             lock (_gate)
             {
-                return new NDIVideoDiagnostics(
-                    FramesCaptured: 0,
-                    FramesDropped: 0,
-                    RepeatedTimestampFramesPresented: 0,
-                    FallbackFramesPresented: 0,
-                    LastReadMs: 0,
-                    JitterBufferFrames: 0,
-                    QueueDepth: 0,
-                    IncomingPixelFormat: "none",
-                    OutputPixelFormat: "none",
-                    ConversionPath: "none",
+                return new NDIVideoOutputDebugInfo(
                     VideoPushSuccesses: _videoPushSuccesses,
                     VideoPushFailures: _videoPushFailures,
                     AudioPushSuccesses: _audioPushSuccesses,

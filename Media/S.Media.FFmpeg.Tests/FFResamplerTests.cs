@@ -17,27 +17,19 @@ public sealed class FFResamplerTests
     }
 
     [Fact]
-    public void Resample_PreservesDeterministicMetadata()
+    public void Resample_WithoutNativeFields_ReturnsError()
     {
         using var resampler = new FFResampler();
         Assert.Equal(MediaResult.Success, resampler.Initialize());
 
         var decoded = new FFAudioDecodeResult(4, TimeSpan.FromSeconds(1.25), 256, 0.75f);
-        var code = resampler.Resample(decoded, out var converted);
+        var code = resampler.Resample(decoded, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(4, converted.Generation);
-        Assert.Equal(TimeSpan.FromSeconds(1.25), converted.PresentationTime);
-        Assert.Equal(256, converted.FrameCount);
-        Assert.Equal(0.75f, converted.SampleValue);
-        Assert.Equal(256, converted.Samples.Length);
-        Assert.Null(converted.NativeTimeBaseNumerator);
-        Assert.Null(converted.NativeTimeBaseDenominator);
-        Assert.Null(converted.NativeSampleFormat);
+        Assert.Equal((int)MediaErrorCode.FFmpegResampleFailed, code);
     }
 
     [Fact]
-    public void Resample_InvalidNativeFormat_FallsBackAndDisablesNativePath()
+    public void Resample_InvalidNativeFormat_ReturnsErrorAndDisablesNativePath()
     {
         using var resampler = new FFResampler();
         Assert.Equal(MediaResult.Success, resampler.Initialize());
@@ -51,15 +43,14 @@ public sealed class FFResamplerTests
             NativeChannelCount: 2,
             NativeSampleFormat: int.MaxValue);
 
-        var code = resampler.Resample(decoded, out var resampled);
+        var code = resampler.Resample(decoded, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(256, resampled.FrameCount);
+        Assert.Equal((int)MediaErrorCode.FFmpegResampleFailed, code);
         Assert.False(resampler.IsNativeResampleEnabled);
     }
 
     [Fact]
-    public void Resample_ResultMetadata_IsSnapshotAndUnaffectedBySourceReassignment()
+    public void Resample_WithNativeFields_WithoutNativeLibs_ReturnsError()
     {
         using var resampler = new FFResampler();
         Assert.Equal(MediaResult.Success, resampler.Initialize());
@@ -73,20 +64,10 @@ public sealed class FFResamplerTests
             NativeChannelCount: 2,
             NativeSampleFormat: 1);
 
-        Assert.Equal(MediaResult.Success, resampler.Resample(decoded, out var first));
+        var code = resampler.Resample(decoded, out _);
 
-        decoded = new FFAudioDecodeResult(
-            Generation: 7,
-            PresentationTime: TimeSpan.FromSeconds(0.5),
-            FrameCount: 512,
-            SampleValue: 0.4f,
-            NativeSampleRate: 96_000,
-            NativeChannelCount: 1,
-            NativeSampleFormat: 1);
-
-        Assert.Equal(128, first.FrameCount);
-        Assert.Equal(48_000, first.NativeSampleRate);
-        Assert.Equal(2, first.NativeChannelCount);
+        // Without native FFmpeg libraries, resample fails
+        Assert.Equal((int)MediaErrorCode.FFmpegResampleFailed, code);
     }
 }
 

@@ -1,10 +1,14 @@
 using NdiLib;
+using S.Media.Core.Audio;
 using S.Media.Core.Errors;
+using S.Media.Core.Mixing;
 using S.Media.Core.Video;
+using S.Media.NDI.Clock;
 using S.Media.NDI.Config;
 using S.Media.NDI.Diagnostics;
 using S.Media.NDI.Runtime;
 using S.Media.OpenGL.SDL3;
+using S.Media.PortAudio.Engine;
 using SDL3;
 
 namespace NdiVideoReceive;
@@ -22,6 +26,11 @@ internal static class Program
 
         try
         {
+            if (options.ListHostApis || options.ListAudioDevices)
+            {
+                return ListAudioRuntime(options);
+            }
+
             using var runtime = new NdiRuntimeScope();
             Console.WriteLine($"NDI runtime version: {NdiRuntime.Version}");
 
@@ -73,9 +82,9 @@ internal static class Program
             var createAudio = engine.CreateAudioSource(receiver, new NDISourceOptions(), out var audioSource);
             var createVideo = engine.CreateVideoSource(receiver, new NDISourceOptions
             {
-                VideoFallbackModeOverride = NDIVideoFallbackMode.PresentLastFrameUntilTimeout,
-                VideoJitterBufferFramesOverride = options.VideoJitterFrames,
-                AudioJitterBufferMsOverride = options.AudioJitterMs,
+                VideoFallbackMode = NDIVideoFallbackMode.PresentLastFrameUntilTimeout,
+                VideoJitterBufferFrames = options.VideoJitterFrames,
+                AudioJitterBufferMs = options.AudioJitterMs,
             }, out var videoSource);
             if (createAudio != MediaResult.Success || audioSource is null)
             {
@@ -89,26 +98,85 @@ internal static class Program
                 return 6;
             }
 
-            var audioStart = audioSource.Start();
-            var videoStart = videoSource.Start();
-            if (audioStart != MediaResult.Success || videoStart != MediaResult.Success)
+            var timelineClock = new NDIExternalTimelineClock();
+            var avMixer = new AudioVideoMixer(timelineClock, ClockType.External);
+
+            var setSyncMode = avMixer.SetSyncMode(options.SyncMode);
+            if (setSyncMode != MediaResult.Success)
             {
-                Console.WriteLine($"Start failed: audio={audioStart}, video={videoStart}");
+                Console.WriteLine($"Mixer sync mode apply failed: {setSyncMode}");
                 return 7;
             }
 
-            var audioBuffer = new float[1024 * 2];
-            var audioRead = audioSource.ReadSamples(audioBuffer, 1024, out var framesRead);
-            var videoRead = videoSource.ReadFrame(out var frame);
+            var addMixerAudio = avMixer.AddAudioSource(audioSource);
+            var addMixerVideo = avMixer.AddVideoSource(videoSource);
+            var setActiveVideo = avMixer.SetActiveVideoSource(videoSource);
+            if (addMixerAudio != MediaResult.Success ||
+                addMixerVideo != MediaResult.Success ||
+                setActiveVideo != MediaResult.Success)
+            {
+                Console.WriteLine(
+                    $"Mixer attach failed: avAudio={addMixerAudio}, avVideo={addMixerVideo}, activeVideo={setActiveVideo}");
+                return 7;
+            }
+
+            var mixerStart = avMixer.Start();
+            if (mixerStart != MediaResult.Success)
+            {
+                Console.WriteLine($"Mixer start failed: av={mixerStart}");
+                return 7;
+            }
+
+            using var audioEngine = new PortAudioEngine();
+            var audioEngineInit = audioEngine.Initialize(new AudioEngineConfig
+            {
+                PreferredHostApi = string.IsNullOrWhiteSpace(options.HostApi) ? null : options.HostApi,
+                FramesPerBuffer = Math.Max(64, options.AudioReadFrames),
+                SampleRate = options.AudioSampleRate,
+                OutputChannelCount = Math.Max(1, options.OutputChannels),
+            });
+            if (audioEngineInit != MediaResult.Success)
+            {
+                Console.WriteLine($"PortAudio engine init failed: {audioEngineInit}");
+                return 9;
+            }
+
+            var hostApis = audioEngine.GetHostApis();
+            if (hostApis.Count > 0)
+            {
+                Console.WriteLine("Audio host APIs: " + string.Join(", ", hostApis.Select(api => api.IsDefault ? $"{api.Id}*" : api.Id)));
+            }
+
+            var audioOutputs = audioEngine.GetOutputDevices();
+            if (audioOutputs.Count == 0)
+            {
+                Console.WriteLine("No audio output devices available from PortAudioEngine.");
+                return 9;
+            }
+
+            var createOutputCode = audioEngine.CreateOutputByIndex(options.AudioDeviceIndex, out var audioOutput);
+            if (createOutputCode != MediaResult.Success || audioOutput is null)
+            {
+                Console.WriteLine($"CreateOutputByIndex failed: {createOutputCode}");
+                return 9;
+            }
+
+            var outputStartCode = audioOutput.Start(new AudioOutputConfig());
+            if (outputStartCode != MediaResult.Success)
+            {
+                Console.WriteLine($"Audio output start failed: {outputStartCode}");
+                return 9;
+            }
+
+            Console.WriteLine($"Audio output: {audioOutput.Device.Name} ({audioOutput.Device.Id.Value}, hostApi={audioOutput.Device.HostApi})");
 
             var view = new SDL3VideoView();
-            VideoFrame? pendingVideoFrame = null;
             try
             {
                 var viewInit = view.Initialize(new SDL3VideoViewOptions
                 {
-                    Width = videoRead == MediaResult.Success ? frame.Width : 1280,
-                    Height = videoRead == MediaResult.Success ? frame.Height : 720,
+                    Width = 1280,
+                    Height = 720,
                     WindowTitle = $"NdiVideoReceive - {selected.Value.Name}",
                     WindowFlags = SDL.WindowFlags.Resizable,
                     ShowOnInitialize = true,
@@ -122,10 +190,10 @@ internal static class Program
                     return 8;
                 }
 
-                var startCode = view.Start(new VideoOutputConfig());
-                if (startCode != MediaResult.Success)
+                var viewStart = view.Start(new VideoOutputConfig());
+                if (viewStart != MediaResult.Success)
                 {
-                    Console.WriteLine($"SDL3 view start failed: {startCode}");
+                    Console.WriteLine($"SDL3 view start failed: {viewStart}");
                     return 8;
                 }
 
@@ -135,9 +203,26 @@ internal static class Program
                     Console.WriteLine($"SDL3 view show/focus failed: {showCode}");
                 }
 
-                if (videoRead == MediaResult.Success)
+                var sourceChannels = Math.Max(1, options.OutputChannels);
+                var routeMap = BuildStereoRouteMap(sourceChannels);
+                var mixerConfig = new AudioVideoMixerConfig
                 {
-                    pendingVideoFrame = frame;
+                    AudioReadFrames = Math.Max(240, options.AudioReadFrames),
+                    SourceChannelCount = sourceChannels,
+                    OutputSampleRate = options.AudioSampleRate,
+                    RouteMap = routeMap,
+                    VideoQueueCapacity = Math.Max(2, options.VideoJitterFrames),
+                    PresentOnCallerThread = true,
+                };
+
+                avMixer.AddAudioOutput(audioOutput);
+                avMixer.AddVideoOutput(view);
+
+                var playbackStart = avMixer.StartPlayback(mixerConfig);
+                if (playbackStart != MediaResult.Success)
+                {
+                    Console.WriteLine($"Mixer playback start failed: {playbackStart}");
+                    return 7;
                 }
 
                 var cancel = new CancellationTokenSource();
@@ -151,134 +236,59 @@ internal static class Program
                     ? DateTime.UtcNow.AddSeconds(options.PreviewSeconds)
                     : DateTime.MaxValue;
 
-                var pushed = 0L;
-                var pushFailures = 0L;
-                var noFrames = 0L;
-                var lateDrops = 0L;
                 var lastStatus = DateTime.UtcNow;
-                var syncBuffer = new float[Math.Max(1, options.AudioReadFrames) * 2];
-
                 Console.WriteLine($"Preview running. Press Ctrl+C to stop (previewSeconds={options.PreviewSeconds}).");
                 while (!cancel.IsCancellationRequested && DateTime.UtcNow < previewUntil)
                 {
-                    var audioCode = audioSource.ReadSamples(syncBuffer, options.AudioReadFrames, out var syncFramesRead);
-                    if (audioCode != MediaResult.Success)
-                    {
-                        Thread.Sleep(5);
-                        continue;
-                    }
-
-                    if (pendingVideoFrame is null)
-                    {
-                        var code = videoSource.ReadFrame(out var videoFrame);
-                        if (code != MediaResult.Success)
-                        {
-                            if (code == (int)MediaErrorCode.NDIVideoFallbackUnavailable)
-                            {
-                                noFrames++;
-                                Thread.Sleep(8);
-                            }
-                            else
-                            {
-                                pushFailures++;
-                                Thread.Sleep(5);
-                            }
-
-                            continue;
-                        }
-
-                        pendingVideoFrame = videoFrame;
-                    }
-
-                    if (pendingVideoFrame is null)
-                    {
-                        continue;
-                    }
-
-                    if (!options.DisableAvSync)
-                    {
-                        var audioMasterSeconds = audioSource.PositionSeconds;
-                        var videoSeconds = pendingVideoFrame.PresentationTime.TotalSeconds;
-                        var earlyThreshold = options.VideoEarlyHoldMs / 1000.0;
-                        var lateThreshold = options.VideoLateDropMs / 1000.0;
-
-                        if (videoSeconds > audioMasterSeconds + earlyThreshold)
-                        {
-                            Thread.Sleep(2);
-                            continue;
-                        }
-
-                        if (videoSeconds < audioMasterSeconds - lateThreshold)
-                        {
-                            pendingVideoFrame.Dispose();
-                            pendingVideoFrame = null;
-                            lateDrops++;
-                            continue;
-                        }
-                    }
-
-                    try
-                    {
-                        var push = view.PushFrame(pendingVideoFrame, pendingVideoFrame.PresentationTime);
-                        if (push == MediaResult.Success)
-                        {
-                            pushed++;
-                        }
-                        else
-                        {
-                            pushFailures++;
-                        }
-                    }
-                    finally
-                    {
-                        pendingVideoFrame.Dispose();
-                        pendingVideoFrame = null;
-                    }
+                    var tickDelay = avMixer.TickVideoPresentation();
 
                     if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
                     {
+                        var snapshot = avMixer.GetDebugInfo();
                         var videoDiagnostics = videoSource.Diagnostics;
-                        Console.WriteLine(
-                            $"Preview stats: pushed={pushed}, pushFail={pushFailures}, noFrame={noFrames}, lateDrop={lateDrops}, audioRead={syncFramesRead}, sourceFrame={videoSource.CurrentFrameIndex}, " +
-                            $"queue={videoDiagnostics.QueueDepth}/{videoDiagnostics.JitterBufferFrames}, " +
-                            $"inFmt={videoDiagnostics.IncomingPixelFormat}, outFmt={videoDiagnostics.OutputPixelFormat}, conv={videoDiagnostics.ConversionPath}, " +
-                            $"fallback={videoDiagnostics.FallbackFramesPresented}");
+                        if (snapshot.HasValue)
+                        {
+                            var s = snapshot.Value;
+                            Console.WriteLine(
+                                $"Preview stats: pushed={s.VideoPushed}, pushFail={s.VideoPushFailures}, noFrame={s.VideoNoFrame}, lateDrop={s.VideoLateDrops}, trimDrop={s.VideoQueueTrimDrops}, qDepth={s.VideoQueueDepth}, " +
+                                $"coalesceDrop={s.VideoCoalescedDrops}, " +
+                                $"audioPushFail={s.AudioPushFailures}, audioReadFail={s.AudioReadFailures}, audioEmptyRead={s.AudioEmptyReads}, audioFrames={s.AudioPushedFrames}, " +
+                                $"syncMode={options.SyncMode}, driftMs={s.DriftMs:F1}, corrSignalMs={s.CorrectionSignalMs:F1}, corrStepMs={s.CorrectionStepMs:F2}, corrOffsetMs={s.CorrectionOffsetMs:F1}, corrResync={s.CorrectionResyncCount}, leadMs={s.LeadMinMs:F1}/{s.LeadAvgMs:F1}/{s.LeadMaxMs:F1}, sourceFrame={videoSource.CurrentFrameIndex}, " +
+                                $"queue={videoDiagnostics.QueueDepth}/{videoDiagnostics.JitterBufferFrames}, " +
+                                $"inFmt={videoDiagnostics.IncomingPixelFormat}, outFmt={videoDiagnostics.OutputPixelFormat}, conv={videoDiagnostics.ConversionPath}, " +
+                                $"fallback={videoDiagnostics.FallbackFramesPresented}");
+                        }
+
                         lastStatus = DateTime.UtcNow;
                     }
 
-                    Thread.Sleep(16);
+                    var sleepMs = Math.Max(1, (int)Math.Ceiling(tickDelay.TotalMilliseconds));
+                    Thread.Sleep(sleepMs);
                 }
+
+                _ = avMixer.StopPlayback();
             }
             finally
             {
-                if (videoRead == MediaResult.Success)
-                {
-                    if (!ReferenceEquals(frame, pendingVideoFrame))
-                    {
-                        frame.Dispose();
-                    }
-                }
-
-                pendingVideoFrame?.Dispose();
+                _ = audioOutput.Stop();
+                audioOutput.Dispose();
 
                 _ = view.Stop();
                 view.Dispose();
             }
 
-            var diagnosticsCode = engine.GetDiagnosticsSnapshot(out var snapshot);
+            var diagnosticsCode = engine.GetDiagnosticsSnapshot(out var snapshotAfterRun);
             var diagnosticsSemantic = diagnosticsCode == MediaResult.Success
                 ? "ok"
                 : ErrorCodeRanges.ResolveSharedSemantic(diagnosticsCode).ToString();
 
-            Console.WriteLine($"Audio read: code={audioRead}, frames={framesRead}");
-            Console.WriteLine($"Video read: code={videoRead}");
             Console.WriteLine($"Diagnostics: code={diagnosticsCode}, semantic={diagnosticsSemantic}");
-            Console.WriteLine($"Engine diagnostics: audioCaptured={snapshot.Audio.FramesCaptured}, videoCaptured={snapshot.Video.FramesCaptured}");
+            Console.WriteLine($"Engine diagnostics: audioCaptured={snapshotAfterRun.Audio.FramesCaptured}, videoCaptured={snapshotAfterRun.VideoSource.FramesCaptured}");
 
-            audioSource.Stop();
-            videoSource.Stop();
-            engine.Terminate();
-
+            _ = avMixer.Stop();
+            _ = audioEngine.Stop();
+            _ = audioEngine.Terminate();
+            _ = engine.Terminate();
             return 0;
         }
         catch (Exception ex)
@@ -286,6 +296,60 @@ internal static class Program
             Console.Error.WriteLine($"Unhandled exception: {ex.Message}");
             return 10;
         }
+    }
+
+    private static int ListAudioRuntime(Options options)
+    {
+        using var audioEngine = new PortAudioEngine();
+        var init = audioEngine.Initialize(new AudioEngineConfig
+        {
+            PreferredHostApi = string.IsNullOrWhiteSpace(options.HostApi) ? null : options.HostApi,
+        });
+        if (init != MediaResult.Success)
+        {
+            Console.WriteLine($"PortAudio engine init failed: {init}");
+            return 11;
+        }
+
+        if (options.ListHostApis)
+        {
+            Console.WriteLine("Host APIs:");
+            var hostApis = audioEngine.GetHostApis();
+            for (var i = 0; i < hostApis.Count; i++)
+            {
+                var marker = hostApis[i].IsDefault ? "*" : " ";
+                Console.WriteLine($"  {marker} {hostApis[i].Id} ({hostApis[i].Name})");
+            }
+        }
+
+        if (options.ListAudioDevices)
+        {
+            Console.WriteLine("Output devices (default first):");
+            var outputs = audioEngine.GetOutputDevices();
+            var defaultOutput = audioEngine.GetDefaultOutputDevice();
+            for (var i = 0; i < outputs.Count; i++)
+            {
+                var isDefault = defaultOutput.HasValue && outputs[i].Id == defaultOutput.Value.Id;
+                Console.WriteLine($"  {(isDefault ? "*" : " ")} [{i}] {outputs[i].Name} ({outputs[i].HostApi}, {outputs[i].Id.Value})");
+            }
+
+            Console.WriteLine("Input devices (default first):");
+            var inputs = audioEngine.GetInputDevices();
+            var defaultInput = audioEngine.GetDefaultInputDevice();
+            for (var i = 0; i < inputs.Count; i++)
+            {
+                var isDefault = defaultInput.HasValue && inputs[i].Id == defaultInput.Value.Id;
+                Console.WriteLine($"  {(isDefault ? "*" : " ")} [{i}] {inputs[i].Name} ({inputs[i].HostApi}, {inputs[i].Id.Value})");
+            }
+        }
+
+        _ = audioEngine.Terminate();
+        return 0;
+    }
+
+    private static int[] BuildStereoRouteMap(int sourceChannelCount)
+    {
+        return sourceChannelCount <= 1 ? [0, 0] : [0, 1];
     }
 
     private static NdiDiscoveredSource[] DiscoverSources(NdiFinder finder, int discoverySeconds)
@@ -335,7 +399,7 @@ internal static class Program
 
         public int DiscoverySeconds { get; private set; } = 10;
 
-        public int PreviewSeconds { get; private set; } = 10;
+        public int PreviewSeconds { get; private set; } = 10000;
 
         public string? SourceName { get; private set; }
 
@@ -347,11 +411,20 @@ internal static class Program
 
         public int AudioReadFrames { get; private set; } = 480;
 
-        public int VideoLateDropMs { get; private set; } = 45;
+        public int AudioSampleRate { get; private set; } = 48_000;
 
-        public int VideoEarlyHoldMs { get; private set; } = 15;
+        public int OutputChannels { get; private set; } = 2;
 
-        public bool DisableAvSync { get; private set; }
+        public int AudioDeviceIndex { get; private set; } = -1;
+
+        public AudioVideoSyncMode SyncMode { get; private set; } = AudioVideoSyncMode.Stable;
+
+
+        public string? HostApi { get; private set; }
+
+        public bool ListHostApis { get; private set; }
+
+        public bool ListAudioDevices { get; private set; }
 
         public static Options Parse(string[] args)
         {
@@ -394,16 +467,31 @@ internal static class Program
                         options.AudioReadFrames = readFrames;
                         i++;
                         break;
-                    case "--video-late-drop-ms" when int.TryParse(value, out var lateMs) && lateMs >= 0:
-                        options.VideoLateDropMs = lateMs;
+                    case "--audio-sample-rate" when int.TryParse(value, out var sampleRate) && sampleRate > 0:
+                        options.AudioSampleRate = sampleRate;
                         i++;
                         break;
-                    case "--video-early-hold-ms" when int.TryParse(value, out var earlyMs) && earlyMs >= 0:
-                        options.VideoEarlyHoldMs = earlyMs;
+                    case "--audio-output-channels" when int.TryParse(value, out var outputChannels) && outputChannels > 0:
+                        options.OutputChannels = outputChannels;
                         i++;
                         break;
-                    case "--avsync-off":
-                        options.DisableAvSync = true;
+                    case "--audio-device-index" when int.TryParse(value, out var audioDeviceIndex):
+                        options.AudioDeviceIndex = audioDeviceIndex;
+                        i++;
+                        break;
+                    case "--sync-mode":
+                        options.SyncMode = ParseSyncMode(value, options.SyncMode);
+                        i++;
+                        break;
+                    case "--host-api":
+                        options.HostApi = value;
+                        i++;
+                        break;
+                    case "--list-host-apis":
+                        options.ListHostApis = true;
+                        break;
+                    case "--list-audio-devices":
+                        options.ListAudioDevices = true;
                         break;
                     case "--stretch":
                         options.StretchToFill = true;
@@ -412,6 +500,19 @@ internal static class Program
             }
 
             return options;
+        }
+
+        private static AudioVideoSyncMode ParseSyncMode(string raw, AudioVideoSyncMode fallback)
+        {
+            return raw?.Trim().ToLowerInvariant() switch
+            {
+                "stable" => AudioVideoSyncMode.Stable,
+                "hybrid" => AudioVideoSyncMode.Hybrid,
+                "strict" => AudioVideoSyncMode.StrictAv,
+                "strictav" => AudioVideoSyncMode.StrictAv,
+                "strict-av" => AudioVideoSyncMode.StrictAv,
+                _ => fallback,
+            };
         }
 
         public static void PrintUsage()
@@ -427,10 +528,14 @@ internal static class Program
             Console.WriteLine("  --preview-seconds <int>    Preview loop duration (0 = run until Ctrl+C, default: 10)");
             Console.WriteLine("  --video-jitter-frames <n>  Video jitter buffer depth in frames (default: 3)");
             Console.WriteLine("  --audio-jitter-ms <n>      Audio jitter target in milliseconds (default: 80)");
-            Console.WriteLine("  --audio-read-frames <n>    Audio frames per sync read (default: 480)");
-            Console.WriteLine("  --video-late-drop-ms <n>   Drop video if later than this behind audio (default: 45)");
-            Console.WriteLine("  --video-early-hold-ms <n>  Hold video if this far ahead of audio (default: 15)");
-            Console.WriteLine("  --avsync-off               Disable audio-led A/V sync gating");
+            Console.WriteLine("  --audio-read-frames <n>    Audio frames per read/push batch (default: 480)");
+            Console.WriteLine("  --audio-sample-rate <n>    Audio output sample rate (default: 48000)");
+            Console.WriteLine("  --audio-output-channels <n> Audio output channel count (default: 2)");
+            Console.WriteLine("  --audio-device-index <n>   PortAudio output index (-1 = default, default: -1)");
+            Console.WriteLine("  --sync-mode <mode>         Video sync mode: stable|hybrid|strict (default: stable)");
+            Console.WriteLine("  --host-api <id>            Restrict PortAudio discovery to one host API");
+            Console.WriteLine("  --list-host-apis           List PortAudio host APIs and exit");
+            Console.WriteLine("  --list-audio-devices       List PortAudio input/output devices and exit");
             Console.WriteLine("  --stretch                  Disable aspect-ratio preservation (fill window)");
         }
     }

@@ -15,6 +15,7 @@ public sealed class NDIEngine : IDisposable
 	private readonly List<NDIAudioSource> _audioSources = [];
 	private readonly List<NDIVideoSource> _videoSources = [];
 	private readonly List<NDIVideoOutput> _outputs = [];
+	private readonly Dictionary<NdiReceiver, NdiCaptureCoordinator> _captureCoordinators = new();
 	private Thread? _diagnosticsThread;
 	private bool _diagnosticsRunning;
 	private bool _disposed;
@@ -104,6 +105,7 @@ public sealed class NDIEngine : IDisposable
 			_audioSources.Clear();
 			_videoSources.Clear();
 			_outputs.Clear();
+			_captureCoordinators.Clear();
 			IsInitialized = false;
 		}
 
@@ -129,16 +131,10 @@ public sealed class NDIEngine : IDisposable
 				return optionsValidation;
 			}
 
-			var effective = normalized with
-			{
-				QueueOverflowPolicyOverride = normalized.ResolveQueueOverflowPolicy(_limitsOptions),
-				VideoFallbackModeOverride = normalized.ResolveVideoFallbackMode(_limitsOptions),
-				DiagnosticsTickIntervalOverride = normalized.ResolveDiagnosticsTick(_diagnosticsOptions),
-				VideoJitterBufferFramesOverride = normalized.ResolveVideoJitterBufferFrames(_limitsOptions),
-				AudioJitterBufferMsOverride = normalized.ResolveAudioJitterBufferMs(_limitsOptions),
-			};
+			var effective = normalized;
 
-			var item = new NDIMediaItem(receiver, _integrationOptions);
+			var coordinator = GetOrCreateCaptureCoordinatorLocked(receiver);
+			var item = new NDIMediaItem(receiver, _integrationOptions, coordinator);
 			var code = item.CreateAudioSource(effective, out source);
 			if (code != MediaResult.Success || source is null)
 			{
@@ -168,16 +164,10 @@ public sealed class NDIEngine : IDisposable
 				return optionsValidation;
 			}
 
-			var effective = normalized with
-			{
-				QueueOverflowPolicyOverride = normalized.ResolveQueueOverflowPolicy(_limitsOptions),
-				VideoFallbackModeOverride = normalized.ResolveVideoFallbackMode(_limitsOptions),
-				DiagnosticsTickIntervalOverride = normalized.ResolveDiagnosticsTick(_diagnosticsOptions),
-				VideoJitterBufferFramesOverride = normalized.ResolveVideoJitterBufferFrames(_limitsOptions),
-				AudioJitterBufferMsOverride = normalized.ResolveAudioJitterBufferMs(_limitsOptions),
-			};
+			var effective = normalized;
 
-			var item = new NDIMediaItem(receiver, _integrationOptions);
+			var coordinator = GetOrCreateCaptureCoordinatorLocked(receiver);
+			var item = new NDIMediaItem(receiver, _integrationOptions, coordinator);
 			var code = item.CreateVideoSource(effective, out source);
 			if (code != MediaResult.Success || source is null)
 			{
@@ -407,7 +397,7 @@ public sealed class NDIEngine : IDisposable
 
 		return new NDIEngineDiagnostics(
 			Audio: new NDIAudioDiagnostics(FramesCaptured: audioCaptured, FramesDropped: audioDropped, LastReadMs: maxAudioReadMs),
-			Video: new NDIVideoDiagnostics(
+			VideoSource: new NDIVideoSourceDebugInfo(
 				FramesCaptured: videoCaptured,
 				FramesDropped: videoDropped,
 				RepeatedTimestampFramesPresented: repeatedFrames,
@@ -417,7 +407,8 @@ public sealed class NDIEngine : IDisposable
 				QueueDepth: queueDepth,
 				IncomingPixelFormat: incomingPixelFormat,
 				OutputPixelFormat: outputPixelFormat,
-				ConversionPath: conversionPath,
+				ConversionPath: conversionPath),
+			VideoOutput: new NDIVideoOutputDebugInfo(
 				VideoPushSuccesses: videoPushSuccesses,
 				VideoPushFailures: videoPushFailures,
 				AudioPushSuccesses: audioPushSuccesses,
@@ -425,6 +416,18 @@ public sealed class NDIEngine : IDisposable
 				LastPushMs: maxOutputPushMs),
 			ClockDriftMs: _diagnosticsOptions.DiagnosticsTickInterval.TotalMilliseconds / _limitsOptions.MaxPendingVideoFrames,
 			CapturedAtUtc: DateTimeOffset.UtcNow);
+	}
+
+	private NdiCaptureCoordinator GetOrCreateCaptureCoordinatorLocked(NdiReceiver receiver)
+	{
+		if (_captureCoordinators.TryGetValue(receiver, out var existing))
+		{
+			return existing;
+		}
+
+		var created = new NdiCaptureCoordinator(receiver);
+		_captureCoordinators[receiver] = created;
+		return created;
 	}
 }
 

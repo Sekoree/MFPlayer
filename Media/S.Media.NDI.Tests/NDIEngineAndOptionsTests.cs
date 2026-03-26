@@ -68,18 +68,18 @@ public sealed class NDIEngineAndOptionsTests
 
         var options = new NDISourceOptions
         {
-            QueueOverflowPolicyOverride = NDIQueueOverflowPolicy.RejectIncoming,
-            VideoFallbackModeOverride = NDIVideoFallbackMode.PresentLastFrameOnRepeatedTimestamp,
-            DiagnosticsTickIntervalOverride = TimeSpan.FromMilliseconds(1),
-            VideoJitterBufferFramesOverride = 6,
-            AudioJitterBufferMsOverride = 120,
+            QueueOverflowPolicy = NDIQueueOverflowPolicy.RejectIncoming,
+            VideoFallbackMode = NDIVideoFallbackMode.PresentLastFrameOnRepeatedTimestamp,
+            DiagnosticsTickInterval = TimeSpan.FromMilliseconds(1),
+            VideoJitterBufferFrames = 6,
+            AudioJitterBufferMs = 120,
         }.Normalize();
 
-        Assert.Equal(NDIQueueOverflowPolicy.RejectIncoming, options.ResolveQueueOverflowPolicy(limits));
-        Assert.Equal(NDIVideoFallbackMode.PresentLastFrameOnRepeatedTimestamp, options.ResolveVideoFallbackMode(limits));
-        Assert.Equal(TimeSpan.FromMilliseconds(16), options.ResolveDiagnosticsTick(diagnostics));
-        Assert.Equal(6, options.ResolveVideoJitterBufferFrames(limits));
-        Assert.Equal(120, options.ResolveAudioJitterBufferMs(limits));
+        Assert.Equal(NDIQueueOverflowPolicy.RejectIncoming, options.QueueOverflowPolicy);
+        Assert.Equal(NDIVideoFallbackMode.PresentLastFrameOnRepeatedTimestamp, options.VideoFallbackMode);
+        Assert.Equal(TimeSpan.FromMilliseconds(16), options.DiagnosticsTickInterval);
+        Assert.Equal(6, options.VideoJitterBufferFrames);
+        Assert.Equal(120, options.AudioJitterBufferMs);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public sealed class NDIEngineAndOptionsTests
     {
         var options = new NDISourceOptions
         {
-            DiagnosticsTickIntervalOverride = TimeSpan.FromMilliseconds(-1),
+            DiagnosticsTickInterval = TimeSpan.FromMilliseconds(-1),
         };
 
         Assert.Equal((int)MediaErrorCode.NDIInvalidDiagnosticsTickOverride, options.Validate());
@@ -195,11 +195,11 @@ public sealed class NDIEngineAndOptionsTests
         Assert.Equal((int)MediaErrorCode.NDIOutputPushAudioFailed, output.PushAudio(audioFrame, TimeSpan.Zero));
 
         Assert.Equal(MediaResult.Success, engine.GetDiagnosticsSnapshot(out var snapshot));
-        Assert.True(snapshot.Video.VideoPushSuccesses >= 1);
-        Assert.True(snapshot.Video.VideoPushFailures >= 1);
-        Assert.True(snapshot.Video.AudioPushSuccesses >= 1);
-        Assert.True(snapshot.Video.AudioPushFailures >= 1);
-        Assert.True(snapshot.Video.LastPushMs >= 0);
+        Assert.True(snapshot.VideoOutput.VideoPushSuccesses >= 1);
+        Assert.True(snapshot.VideoOutput.VideoPushFailures >= 1);
+        Assert.True(snapshot.VideoOutput.AudioPushSuccesses >= 1);
+        Assert.True(snapshot.VideoOutput.AudioPushFailures >= 1);
+        Assert.True(snapshot.VideoOutput.LastPushMs >= 0);
     }
 
     [Fact]

@@ -8,22 +8,17 @@ namespace S.Media.FFmpeg.Tests;
 public sealed class FFDecoderInternalsTests
 {
     [Fact]
-    public void PacketReader_Seek_ResetsGenerationAndTimeline()
+    public void PacketReader_Seek_ResetsGeneration()
     {
         using var reader = new FFPacketReader();
         Assert.Equal(MediaResult.Success, reader.Initialize(hasAudio: true, hasVideo: true));
 
-        Assert.Equal(MediaResult.Success, reader.ReadVideoPacket(out var beforeSeek));
-        Assert.Equal(0, beforeSeek.Generation);
-        Assert.Equal(0, beforeSeek.Sequence);
-        Assert.Equal(TimeSpan.Zero, beforeSeek.PresentationTime);
+        // Without native demux, reads now fail
+        var readCode = reader.ReadVideoPacket(out _);
+        Assert.Equal((int)MediaErrorCode.FFmpegReadFailed, readCode);
 
+        // Seek itself should still succeed
         Assert.Equal(MediaResult.Success, reader.Seek(2.0));
-        Assert.Equal(MediaResult.Success, reader.ReadVideoPacket(out var afterSeek));
-
-        Assert.Equal(1, afterSeek.Generation);
-        Assert.Equal(60, afterSeek.Sequence);
-        Assert.Equal(TimeSpan.FromSeconds(2), afterSeek.PresentationTime);
     }
 
     [Fact]
@@ -34,33 +29,28 @@ public sealed class FFDecoderInternalsTests
 
         Assert.Equal((int)MediaErrorCode.FFmpegAudioDecodeFailed, decodeCode);
         Assert.Equal(MediaResult.Success, decoder.Initialize());
-        Assert.Equal(MediaResult.Success, decoder.Decode(new FFPacket(0, 0, TimeSpan.Zero, true, 0.5f), out var decoded));
-        Assert.Equal(256, decoded.FrameCount);
-        Assert.True(decoded.Samples.Length > 0);
+
+        // Without native codec data, decode now fails
+        var plainDecodeCode = decoder.Decode(new FFPacket(0, 0, TimeSpan.Zero, true, 0.5f), out _);
+        Assert.Equal((int)MediaErrorCode.FFmpegAudioDecodeFailed, plainDecodeCode);
     }
 
     [Fact]
-    public void VideoDecoder_MapsPacketMetadata_ToDecodedFrame()
+    public void VideoDecoder_RequiresInitialize()
     {
         using var decoder = new FFVideoDecoder();
+        var decodeCode = decoder.Decode(new FFPacket(0, 0, TimeSpan.Zero, true, 0f), out _);
+
+        Assert.Equal((int)MediaErrorCode.FFmpegVideoDecodeFailed, decodeCode);
         Assert.Equal(MediaResult.Success, decoder.Initialize());
 
-        var packet = new FFPacket(3, 42, TimeSpan.FromSeconds(1.4), IsKeyFrame: false, SampleValue: 0f);
-        var code = decoder.Decode(packet, out var decoded);
-
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(3, decoded.Generation);
-        Assert.Equal(42, decoded.FrameIndex);
-        Assert.Equal(TimeSpan.FromSeconds(1.4), decoded.PresentationTime);
-        Assert.False(decoded.IsKeyFrame);
-        Assert.Equal(2, decoded.Width);
-        Assert.Equal(2, decoded.Height);
-        Assert.True(decoded.Plane0.Length > 0);
-        Assert.True(decoded.Plane0Stride > 0);
+        // Without native codec data, decode now fails
+        var plainDecodeCode = decoder.Decode(new FFPacket(0, 0, TimeSpan.Zero, true, 0f), out _);
+        Assert.Equal((int)MediaErrorCode.FFmpegVideoDecodeFailed, plainDecodeCode);
     }
 
     [Fact]
-    public void PacketReader_NonexistentFileUri_FallsBackToPlaceholderPipeline()
+    public void PacketReader_NonexistentFileUri_ReturnsReadFailed()
     {
         using var reader = new FFPacketReader();
         var initCode = reader.Initialize(
@@ -72,9 +62,10 @@ public sealed class FFDecoderInternalsTests
 
         Assert.Equal(MediaResult.Success, initCode);
         Assert.False(reader.IsNativeDemuxActive);
-        Assert.Equal(MediaResult.Success, reader.ReadAudioPacket(out var packet));
-        Assert.Equal(0, packet.Sequence);
-        Assert.Equal(TimeSpan.Zero, packet.PresentationTime);
+
+        // Without native demux, reading returns an error
+        var readCode = reader.ReadAudioPacket(out _);
+        Assert.Equal((int)MediaErrorCode.FFmpegReadFailed, readCode);
     }
 
     [HeavyFfmpegFact]
@@ -94,7 +85,7 @@ public sealed class FFDecoderInternalsTests
     }
 
     [Fact]
-    public void AudioDecoder_InvalidNativeCodec_FallsBackAndDisablesNativePath()
+    public void AudioDecoder_InvalidNativeCodec_ReturnsError()
     {
         using var decoder = new FFAudioDecoder();
         Assert.Equal(MediaResult.Success, decoder.Initialize());
@@ -108,15 +99,14 @@ public sealed class FFDecoderInternalsTests
             NativePacketData: [1, 2, 3],
             NativeCodecId: int.MaxValue);
 
-        var code = decoder.Decode(packet, out var decoded);
+        var code = decoder.Decode(packet, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(256, decoded.FrameCount);
+        Assert.Equal((int)MediaErrorCode.FFmpegAudioDecodeFailed, code);
         Assert.False(decoder.IsNativeDecodeEnabled);
     }
 
     [Fact]
-    public void VideoDecoder_InvalidNativeCodec_FallsBackAndDisablesNativePath()
+    public void VideoDecoder_InvalidNativeCodec_ReturnsError()
     {
         using var decoder = new FFVideoDecoder();
         Assert.Equal(MediaResult.Success, decoder.Initialize());
@@ -130,43 +120,9 @@ public sealed class FFDecoderInternalsTests
             NativePacketData: [9],
             NativeCodecId: int.MaxValue);
 
-        var code = decoder.Decode(packet, out var decoded);
+        var code = decoder.Decode(packet, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(2, decoded.Width);
-        Assert.Equal(2, decoded.Height);
+        Assert.Equal((int)MediaErrorCode.FFmpegVideoDecodeFailed, code);
         Assert.False(decoder.IsNativeDecodeEnabled);
     }
-
-    [Fact]
-    public void VideoDecoder_PlaceholderPayload_UsesSequenceSeededContent()
-    {
-        using var decoder = new FFVideoDecoder();
-        Assert.Equal(MediaResult.Success, decoder.Initialize());
-
-        var firstPacket = new FFPacket(
-            Generation: 0,
-            Sequence: 5,
-            PresentationTime: TimeSpan.Zero,
-            IsKeyFrame: true,
-            SampleValue: 0f);
-        var secondPacket = new FFPacket(
-            Generation: 0,
-            Sequence: 6,
-            PresentationTime: TimeSpan.FromSeconds(1d / 30d),
-            IsKeyFrame: false,
-            SampleValue: 0f);
-
-        Assert.Equal(MediaResult.Success, decoder.Decode(firstPacket, out var firstDecoded));
-        Assert.Equal(MediaResult.Success, decoder.Decode(secondPacket, out var secondDecoded));
-
-        var firstSpan = firstDecoded.Plane0.Span;
-        var secondSpan = secondDecoded.Plane0.Span;
-
-        Assert.True(firstSpan.Length > 0);
-        Assert.True(secondSpan.Length > 0);
-        Assert.True(firstSpan.ToArray().All(b => b == 5));
-        Assert.True(secondSpan.ToArray().All(b => b == 6));
-    }
 }
-

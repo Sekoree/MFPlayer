@@ -184,17 +184,19 @@ public sealed class MediaPlayerCompositionTests
 
         public ClockType ClockType => ClockType.Hybrid;
 
+        public AudioVideoSyncMode SyncMode => AudioVideoSyncMode.Hybrid;
+
         public double PositionSeconds => 0;
 
         public bool IsRunning => false;
 
-        public IAudioMixer AudioMixer => throw new NotSupportedException();
-
-        public IVideoMixer VideoMixer => throw new NotSupportedException();
-
         public IReadOnlyList<IAudioSource> AudioSources => [];
 
         public IReadOnlyList<IVideoSource> VideoSources => [];
+
+        public IReadOnlyList<IAudioOutput> AudioOutputs => [];
+
+        public IReadOnlyList<IVideoOutput> VideoOutputs => [];
 
         public MixerSourceDetachOptions AudioSourceDetachOptions => new();
 
@@ -262,11 +264,21 @@ public sealed class MediaPlayerCompositionTests
 
         public int SetClockType(ClockType clockType) => MixerClockTypeRules.Validate(MixerKind.AudioVideo, clockType);
 
+        public int SetSyncMode(AudioVideoSyncMode syncMode) => 0;
+
         public int SetActiveVideoSource(IVideoSource source)
         {
             SetActiveVideoSourceCalls++;
             return SetActiveVideoSourceReturnCode;
         }
+
+        public int AddAudioOutput(IAudioOutput output) => 0;
+
+        public int RemoveAudioOutput(IAudioOutput output) => 0;
+
+        public int AddVideoOutput(IVideoOutput output) => 0;
+
+        public int RemoveVideoOutput(IVideoOutput output) => 0;
     }
 }
 

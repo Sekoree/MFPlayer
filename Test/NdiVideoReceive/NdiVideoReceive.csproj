@@ -14,6 +14,7 @@
       <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
       <ProjectReference Include="..\..\Media\S.Media.NDI\S.Media.NDI.csproj" />
       <ProjectReference Include="..\..\Media\S.Media.OpenGL.SDL3\S.Media.OpenGL.SDL3.csproj" />
+      <ProjectReference Include="..\..\Media\S.Media.PortAudio\S.Media.PortAudio.csproj" />
     </ItemGroup>
 
 </Project>

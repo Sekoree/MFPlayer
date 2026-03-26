@@ -15,6 +15,8 @@ Last updated: 2026-03-26
 ## Implemented Highlights
 
 - SDL3 embed/view path and adapter flow are implemented.
+- `SDL3ShaderPipeline` implements full GL rendering for embedded use-case: shader compilation, VAO/VBO/texture management, upload (RGBA/BGRA + all YUV formats including 10-bit), and draw — matching the standalone rendering path.
+- All 11 `VideoPixelFormat` values supported (RGBA32, BGRA32, NV12, YUV420P/422P/444P, P010LE, YUV420P10LE/422P10LE/444P10LE).
 - Clone behavior delegates to `S.Media.OpenGL` engine policy.
 - Embed lifecycle error contracts are implemented and tested.
 - Standalone SDL windows now honor configurable `WindowFlags` and title options.

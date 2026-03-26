@@ -173,9 +173,21 @@ public sealed class PortAudioEngine : IAudioEngine
         }
     }
 
-    public IReadOnlyList<AudioDeviceInfo> GetOutputDevices() => _outputDevices;
+    public IReadOnlyList<AudioDeviceInfo> GetOutputDevices()
+    {
+        lock (_gate)
+        {
+            return _outputDevices.ToArray();
+        }
+    }
 
-    public IReadOnlyList<AudioDeviceInfo> GetInputDevices() => _inputDevices;
+    public IReadOnlyList<AudioDeviceInfo> GetInputDevices()
+    {
+        lock (_gate)
+        {
+            return _inputDevices.ToArray();
+        }
+    }
 
     public IReadOnlyList<AudioHostApiInfo> GetHostApis()
     {
@@ -413,7 +425,7 @@ public sealed class PortAudioEngine : IAudioEngine
         }
 
         var selectedHostApis = string.IsNullOrWhiteSpace(preferredHostApi)
-            ? discoveredHostApis
+            ? SelectDefaultHostApis(discoveredHostApis, defaultHostApiIndex)
             : discoveredHostApis
                 .Where(host =>
                     string.Equals(host.Info.Id, preferredHostApi, StringComparison.OrdinalIgnoreCase) ||
@@ -469,6 +481,9 @@ public sealed class PortAudioEngine : IAudioEngine
         {
             return false;
         }
+
+        PromoteDefaultFirst(discoveredOutputs, static device => device.IsDefaultOutput);
+        PromoteDefaultFirst(discoveredInputs, static device => device.IsDefaultInput);
 
         if (discoveredOutputs.Count > 0)
         {
@@ -529,6 +544,56 @@ public sealed class PortAudioEngine : IAudioEngine
         }
 
         return null;
+    }
+
+    private static List<(int Index, AudioHostApiInfo Info, int DefaultInputLocalIndex, int DefaultOutputLocalIndex)> SelectDefaultHostApis(
+        List<(int Index, AudioHostApiInfo Info, int DefaultInputLocalIndex, int DefaultOutputLocalIndex)> discoveredHostApis,
+        int defaultHostApiIndex)
+    {
+        var selected = discoveredHostApis
+            .Where(host => host.Index == defaultHostApiIndex)
+            .ToList();
+        if (selected.Count > 0)
+        {
+            return selected;
+        }
+
+        selected = discoveredHostApis
+            .Where(host => host.Info.IsDefault)
+            .ToList();
+        if (selected.Count > 0)
+        {
+            return selected;
+        }
+
+        return [discoveredHostApis[0]];
+    }
+
+    private static void PromoteDefaultFirst(List<AudioDeviceInfo> devices, Func<AudioDeviceInfo, bool> isDefault)
+    {
+        if (devices.Count <= 1)
+        {
+            return;
+        }
+
+        var defaultIndex = -1;
+        for (var i = 0; i < devices.Count; i++)
+        {
+            if (isDefault(devices[i]))
+            {
+                defaultIndex = i;
+                break;
+            }
+        }
+
+        if (defaultIndex <= 0)
+        {
+            return;
+        }
+
+        var defaultDevice = devices[defaultIndex];
+        devices.RemoveAt(defaultIndex);
+        devices.Insert(0, defaultDevice);
     }
 
     private static string? NormalizePreferredHostApi(string? preferredHostApi)

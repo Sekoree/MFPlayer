@@ -29,7 +29,7 @@ public sealed class OpenGLDiagnosticsContractsTests
         eventsHub.DiagnosticsUpdated += (_, _) => raised++;
         eventsHub.Dispose();
 
-        eventsHub.PublishDiagnosticsUpdated(Guid.NewGuid(), new OpenGLOutputDiagnostics(1, 0, 0, 0.1, 0.2, OpenGLSurfaceMetadata.Empty));
+        eventsHub.PublishDiagnosticsUpdated(Guid.NewGuid(), new OpenGLOutputDebugInfo(1, 0, 0, 0.1, 0.2, OpenGLSurfaceMetadata.Empty));
 
         Assert.Equal(0, raised);
     }
@@ -85,7 +85,7 @@ public sealed class OpenGLDiagnosticsContractsTests
         using var frame = CreateFrame();
         frame.Dispose();
 
-        OpenGLOutputDiagnostics? observed = null;
+        OpenGLOutputDebugInfo? observed = null;
         engine.Diagnostics.DiagnosticsUpdated += (_, e) =>
         {
             if (e.OutputId == output.Id)

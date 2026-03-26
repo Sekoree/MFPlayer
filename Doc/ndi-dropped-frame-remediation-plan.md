@@ -2,6 +2,8 @@
 
 This document captures observed dropped-frame risks in the current `S.Media.NDI` receive path and a concrete plan to fix them.
 
+Last updated: 2026-03-26
+
 Scope:
 
 - `Media/S.Media.NDI/*` receive pipeline (`NDIAudioSource`, `NDIVideoSource`, `NDIEngine`)
@@ -55,6 +57,28 @@ Scope:
 
 ## Remediation Plan (Phased)
 
+## Progress Update (implemented)
+
+- Shared-capture contention mitigation is now in place through `Media/S.Media.NDI/Input/NdiCaptureCoordinator.cs`.
+  - `NDIAudioSource` and `NDIVideoSource` now consume staged managed packets instead of both calling `NdiReceiver.CaptureScoped(...)` independently.
+- Video jitter dequeue behavior now primes once and then dequeues while frames are available.
+- `NDIQueueOverflowPolicy.DropNewest` now has distinct runtime behavior (drop incoming frame, keep queue contents).
+- Fallback cache now reuses a retained buffer instead of allocating a new `byte[]` every frame.
+- `NDIVideoSource` timeline progression is now timestamp-led (relative to first received timestamp) instead of fixed `CurrentFrameIndex / 60.0`.
+- `Test/NdiVideoReceive` pacing replaced fixed 16ms sleep with deadline-based pacing and shorter backoff sleeps on transient no-frame states.
+- `SDL3VideoView` RGBA upload path removed per-frame `ToArray` allocation on contiguous planes.
+
+Observed soak delta (`Test/NdiVideoReceive`, ~10s local run):
+
+- Before: `pushed=253`, `noFrame=39`, `fallback=196`.
+- After: `pushed=546`, `noFrame=2`, `fallback=0`.
+
+## Architecture Alignment Note
+
+- Coordinator ownership is now explicit in `NDIEngine` for engine-created sources (per-receiver coordinator reuse).
+- `NDIMediaItem` still supports non-engine creation paths and will instantiate a local coordinator when none is supplied.
+- Follow-up cleanup can move coordinator type placement from `Input/*` to a dedicated runtime namespace if desired.
+
 ## Phase 0 - Instrumentation first (short, low risk)
 
 Goal: measure real bottlenecks before changing behavior.
@@ -101,6 +125,11 @@ Acceptance:
 - Under steady input, no starvation due to one stream draining the other.
 - `NDIVideoFallbackUnavailable` incidence materially reduced.
 
+Status:
+
+- Implemented: single-capture coordinator behavior with explicit engine ownership for engine-created sources.
+- Remaining: optional namespace/lifecycle polish for non-engine construction paths.
+
 ## Phase 2 - Jitter buffer and overflow semantics cleanup
 
 Goal: improve continuity during bursts while preserving low-latency options.
@@ -119,6 +148,11 @@ Acceptance:
 - Fewer fallback events during short jitter spikes.
 - Option behavior matches enum names and tests.
 
+Status:
+
+- Implemented in runtime path (`prime once`, true `DropNewest`).
+- Missing: targeted contract tests to lock behavior.
+
 ## Phase 3 - Allocation and copy-path optimization
 
 Goal: reduce GC and copy overhead in hot paths.
@@ -134,6 +168,11 @@ Acceptance:
 - Lower allocation rate and fewer gen-2 pauses during preview.
 - Stable frame pacing under sustained 1080p60 runs.
 
+Status:
+
+- Partially implemented (fallback-buffer reuse + SDL RGBA upload allocation removal).
+- Remaining: broader lock-scope/copy-path profiling and additional scratch reuse in other paths.
+
 ## Phase 4 - Timeline and pacing correctness
 
 Goal: reduce policy-caused late drops.
@@ -148,6 +187,11 @@ Acceptance:
 
 - Lower `lateDrop` counts at equivalent latency settings.
 - Better audio/video drift stability across sources with different frame rates.
+
+Status:
+
+- Partially implemented (timestamp-led relative video timeline + harness pacing updates).
+- Remaining: engine-level clock drift reporting upgrades and longer soak validation.
 
 ## Verification and Benchmark Plan
 

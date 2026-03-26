@@ -208,7 +208,7 @@ public sealed class FFMediaItemTests
     }
 
     [Fact]
-    public void OpenOptionsConstructor_WiresSessionBackedSources_WithDeterministicPlaceholderMetadata()
+    public void OpenOptionsConstructor_WiresSessionBackedSources_WithDefaultMetadata()
     {
         var item = new FFMediaItem(
             new FFmpegOpenOptions
@@ -221,6 +221,7 @@ public sealed class FFMediaItemTests
 
         Assert.NotNull(item.AudioSource);
         Assert.NotNull(item.VideoSource);
+        // Default stream info when native descriptors are not yet available
         Assert.Equal("pcm_f32le", item.AudioSource!.StreamInfo.Codec);
         Assert.Equal(48_000, item.AudioSource.StreamInfo.SampleRate);
         Assert.Equal("placeholder_rgba", item.VideoSource!.StreamInfo.Codec);
@@ -452,6 +453,89 @@ public sealed class FFMediaItemTests
 
         // Descriptor-only refresh updates are de-duplicated; we expect at most a single update after subscription.
         Assert.True(updates.Count <= 1);
+    }
+
+    // ── Convenience factory tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void Open_Uri_CreatesMediaItem_WithAudioAndVideo()
+    {
+        using var item = FFMediaItem.Open("file:///tmp/fake.mp4");
+
+        Assert.NotNull(item.AudioSource);
+        Assert.NotNull(item.VideoSource);
+        Assert.NotNull(item.ResolvedOpenOptions);
+        Assert.Equal("file:///tmp/fake.mp4", item.ResolvedOpenOptions!.InputUri);
+        Assert.True(item.ResolvedOpenOptions.OpenAudio);
+        Assert.True(item.ResolvedOpenOptions.OpenVideo);
+        Assert.True(item.ResolvedOpenOptions.UseSharedDecodeContext);
+    }
+
+    [Fact]
+    public void Open_Uri_ThrowsForNullOrWhitespace()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => FFMediaItem.Open((string)null!));
+        Assert.ThrowsAny<ArgumentException>(() => FFMediaItem.Open(""));
+        Assert.ThrowsAny<ArgumentException>(() => FFMediaItem.Open("   "));
+    }
+
+    [Fact]
+    public void Open_Stream_CreatesMediaItem()
+    {
+        using var stream = new MemoryStream([1, 2, 3]);
+        using var item = FFMediaItem.Open(stream);
+
+        Assert.NotNull(item.ResolvedOpenOptions);
+        Assert.Same(stream, item.ResolvedOpenOptions!.InputStream);
+    }
+
+    [Fact]
+    public void Open_Stream_ThrowsForNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => FFMediaItem.Open((Stream)null!));
+    }
+
+    [Fact]
+    public void TryOpen_Uri_ReturnsTrueForValidUri()
+    {
+        var result = FFMediaItem.TryOpen("file:///tmp/fake.mp4", out var item);
+
+        Assert.True(result);
+        Assert.NotNull(item);
+        Assert.NotNull(item!.AudioSource);
+        Assert.NotNull(item.VideoSource);
+        item.Dispose();
+    }
+
+    [Fact]
+    public void TryOpen_Uri_ReturnsFalseForNullOrWhitespace()
+    {
+        Assert.False(FFMediaItem.TryOpen((string)null!, out var item1));
+        Assert.Null(item1);
+
+        Assert.False(FFMediaItem.TryOpen("", out var item2));
+        Assert.Null(item2);
+
+        Assert.False(FFMediaItem.TryOpen("   ", out var item3));
+        Assert.Null(item3);
+    }
+
+    [Fact]
+    public void TryOpen_Stream_ReturnsTrueForValidStream()
+    {
+        using var stream = new MemoryStream([1, 2, 3]);
+        var result = FFMediaItem.TryOpen(stream, out var item);
+
+        Assert.True(result);
+        Assert.NotNull(item);
+        item!.Dispose();
+    }
+
+    [Fact]
+    public void TryOpen_Stream_ReturnsFalseForNull()
+    {
+        Assert.False(FFMediaItem.TryOpen((Stream?)null, out var item));
+        Assert.Null(item);
     }
 
     private sealed class TrackingMemoryStream : MemoryStream

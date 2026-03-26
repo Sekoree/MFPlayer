@@ -12,13 +12,11 @@ public interface IAudioVideoMixer
 
     ClockType ClockType { get; }
 
+    AudioVideoSyncMode SyncMode { get; }
+
     double PositionSeconds { get; }
 
     bool IsRunning { get; }
-
-    IAudioMixer AudioMixer { get; }
-
-    IVideoMixer VideoMixer { get; }
 
     int Start();
 
@@ -52,7 +50,21 @@ public interface IAudioVideoMixer
 
     int SetClockType(ClockType clockType);
 
+    int SetSyncMode(AudioVideoSyncMode syncMode);
+
     int SetActiveVideoSource(IVideoSource source);
+
+    int AddAudioOutput(IAudioOutput output);
+
+    int RemoveAudioOutput(IAudioOutput output);
+
+    int AddVideoOutput(IVideoOutput output);
+
+    int RemoveVideoOutput(IVideoOutput output);
+
+    IReadOnlyList<IAudioOutput> AudioOutputs { get; }
+
+    IReadOnlyList<IVideoOutput> VideoOutputs { get; }
 
     event EventHandler<AudioSourceErrorEventArgs>? AudioSourceError;
 
@@ -60,4 +72,3 @@ public interface IAudioVideoMixer
 
     event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveVideoSourceChanged;
 }
-

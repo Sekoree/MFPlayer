@@ -1,6 +1,6 @@
 # Media Project Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Scope
 
@@ -18,12 +18,14 @@ Last updated: 2026-03-25
 
 - Core + backend modules: In Progress
 - Module test suites: Validation
+- API Simplification: Complete (SIMPLIFICATION-PLAN.md Steps 1-7 all done)
 
 ## Notes
 
 - Contract-first migration is active across all `S.Media.*` modules.
 - Deterministic error semantics, lifecycle idempotency, and precedence behavior are being kept aligned.
 - Module-level status remains summarized in `Media/IMPLEMENTATION-STATUS.md`.
+- The 7-step simplification plan (internalize drift, remove orphans, real events, fix Avalonia GL, remove placeholders, flatten configs, convenience factories + SDL3 pipeline) is complete.
 
 ## Related Docs
 

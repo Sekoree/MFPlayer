@@ -68,6 +68,31 @@ public sealed class PortAudioEngineTests
     }
 
     [Fact]
+    public void GetOutputDevices_DefaultOutputIsAlwaysFirst_WhenDefaultExists()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var outputs = engine.GetOutputDevices();
+        var defaultOutput = engine.GetDefaultOutputDevice();
+
+        Assert.NotEmpty(outputs);
+        Assert.NotNull(defaultOutput);
+        Assert.Equal(defaultOutput.Value.Id, outputs[0].Id);
+    }
+
+    [Fact]
+    public void Initialize_WithoutPreferredHostApi_UsesDefaultHostApiSelection()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var hostApis = engine.GetHostApis();
+        Assert.NotEmpty(hostApis);
+        Assert.Contains(hostApis, api => api.IsDefault);
+    }
+
+    [Fact]
     public void Initialize_ReturnsInvalidConfig_WhenPreferredHostApiIsUnknown()
     {
         using var engine = new PortAudioEngine();

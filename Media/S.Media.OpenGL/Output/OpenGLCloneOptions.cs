@@ -4,11 +4,11 @@ public sealed record OpenGLCloneOptions
 {
     public OpenGLCloneMode Mode { get; init; } = OpenGLCloneMode.SharedTexture;
 
-    public bool AutoResizeToParent { get; init; } = true;
+    internal bool AutoResizeToParent { get; init; } = true;
 
-    public bool ShareParentColorPipeline { get; init; } = true;
+    internal bool ShareParentColorPipeline { get; init; } = true;
 
-    public bool FailIfContextSharingUnavailable { get; init; } = true;
+    internal bool FailIfContextSharingUnavailable { get; init; } = true;
 
     public OpenGLHUDCloneMode HudMode { get; init; } = OpenGLHUDCloneMode.Independent;
 

@@ -185,6 +185,72 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
                 ?? true));
     }
 
+    /// <summary>
+    /// Opens a media item from a URI, returning both audio and video sources via shared decode context.
+    /// Throws <see cref="DecodingException"/> on failure.
+    /// </summary>
+    public static FFMediaItem Open(string uri)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(uri);
+        return new FFMediaItem(new FFmpegOpenOptions { InputUri = uri });
+    }
+
+    /// <summary>
+    /// Opens a media item from a <see cref="Stream"/>, returning both audio and video sources via shared decode context.
+    /// Throws <see cref="DecodingException"/> on failure.
+    /// </summary>
+    public static FFMediaItem Open(Stream stream, bool leaveOpen = true)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return new FFMediaItem(stream, leaveOpen);
+    }
+
+    /// <summary>
+    /// Attempts to open a media item from a URI without throwing.
+    /// Returns <c>true</c> on success; <paramref name="item"/> is <c>null</c> on failure.
+    /// </summary>
+    public static bool TryOpen(string uri, out FFMediaItem? item)
+    {
+        item = null;
+        if (string.IsNullOrWhiteSpace(uri))
+        {
+            return false;
+        }
+
+        try
+        {
+            item = Open(uri);
+            return true;
+        }
+        catch (DecodingException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to open a media item from a <see cref="Stream"/> without throwing.
+    /// Returns <c>true</c> on success; <paramref name="item"/> is <c>null</c> on failure.
+    /// </summary>
+    public static bool TryOpen(Stream? stream, out FFMediaItem? item, bool leaveOpen = true)
+    {
+        item = null;
+        if (stream is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            item = Open(stream, leaveOpen);
+            return true;
+        }
+        catch (DecodingException)
+        {
+            return false;
+        }
+    }
+
     public FFAudioSource? AudioSource { get; }
 
     public FFVideoSource? VideoSource { get; }

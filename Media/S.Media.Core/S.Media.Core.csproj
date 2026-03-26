@@ -6,4 +6,8 @@
         <Nullable>enable</Nullable>
     </PropertyGroup>
 
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Core.Tests" />
+    </ItemGroup>
+
 </Project>

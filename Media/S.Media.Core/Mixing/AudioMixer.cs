@@ -79,18 +79,18 @@ public sealed class AudioMixer : IAudioMixer
 
     public event EventHandler<AudioMixerStateChangedEventArgs>? StateChanged;
 
-    // Reserved for implementation-phase detailed source failure reporting.
-    public event EventHandler<AudioSourceErrorEventArgs>? SourceError
+    public event EventHandler<AudioSourceErrorEventArgs>? SourceError;
+
+    public event EventHandler<AudioMixerDropoutEventArgs>? DropoutDetected;
+
+    internal void RaiseSourceError(Guid sourceId, int errorCode, string? message)
     {
-        add { }
-        remove { }
+        SourceError?.Invoke(this, new AudioSourceErrorEventArgs(sourceId, errorCode, message));
     }
 
-    // Reserved for implementation-phase dropout reporting.
-    public event EventHandler<AudioMixerDropoutEventArgs>? DropoutDetected
+    internal void RaiseDropoutDetected(Guid sourceId, int framesRequested, int framesReceived, double mixerPositionSeconds)
     {
-        add { }
-        remove { }
+        DropoutDetected?.Invoke(this, new AudioMixerDropoutEventArgs(sourceId, framesRequested, framesReceived, mixerPositionSeconds));
     }
 
     public int Start()

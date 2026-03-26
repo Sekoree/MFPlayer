@@ -1,4 +1,5 @@
 using NdiLib;
+using System.Buffers;
 using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.NDI.Media;
@@ -56,15 +57,15 @@ public sealed class NDISourceAndMediaItemTests
     }
 
     [Fact]
-    public void CreateSources_WithOptions_PropagatesEffectiveOverrides()
+    public void CreateSources_WithOptions_PropagatesEffectiveValues()
     {
         var item = new NDIMediaItem(new NdiDiscoveredSource("test-source", null));
         var options = new S.Media.NDI.Config.NDISourceOptions
         {
-            QueueOverflowPolicyOverride = S.Media.NDI.Config.NDIQueueOverflowPolicy.RejectIncoming,
-            DiagnosticsTickIntervalOverride = TimeSpan.FromMilliseconds(24),
-            VideoJitterBufferFramesOverride = 5,
-            AudioJitterBufferMsOverride = 100,
+            QueueOverflowPolicy = S.Media.NDI.Config.NDIQueueOverflowPolicy.RejectIncoming,
+            DiagnosticsTickInterval = TimeSpan.FromMilliseconds(24),
+            VideoJitterBufferFrames = 5,
+            AudioJitterBufferMs = 100,
         }.Normalize();
 
         Assert.Equal(MediaResult.Success, item.CreateAudioSource(options, out var audio));
@@ -72,12 +73,12 @@ public sealed class NDISourceAndMediaItemTests
 
         Assert.NotNull(audio);
         Assert.NotNull(video);
-        Assert.Equal(S.Media.NDI.Config.NDIQueueOverflowPolicy.RejectIncoming, audio!.SourceOptions.QueueOverflowPolicyOverride);
-        Assert.Equal(S.Media.NDI.Config.NDIQueueOverflowPolicy.RejectIncoming, video!.SourceOptions.QueueOverflowPolicyOverride);
-        Assert.Equal(TimeSpan.FromMilliseconds(24), audio.SourceOptions.DiagnosticsTickIntervalOverride);
-        Assert.Equal(TimeSpan.FromMilliseconds(24), video.SourceOptions.DiagnosticsTickIntervalOverride);
-        Assert.Equal(5, video.SourceOptions.VideoJitterBufferFramesOverride);
-        Assert.Equal(100, audio.SourceOptions.AudioJitterBufferMsOverride);
+        Assert.Equal(S.Media.NDI.Config.NDIQueueOverflowPolicy.RejectIncoming, audio!.SourceOptions.QueueOverflowPolicy);
+        Assert.Equal(S.Media.NDI.Config.NDIQueueOverflowPolicy.RejectIncoming, video!.SourceOptions.QueueOverflowPolicy);
+        Assert.Equal(TimeSpan.FromMilliseconds(24), audio.SourceOptions.DiagnosticsTickInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(24), video.SourceOptions.DiagnosticsTickInterval);
+        Assert.Equal(5, video.SourceOptions.VideoJitterBufferFrames);
+        Assert.Equal(100, audio.SourceOptions.AudioJitterBufferMs);
     }
 
     [Fact]
@@ -147,6 +148,80 @@ public sealed class NDISourceAndMediaItemTests
         Assert.True(diagnostics.FramesDropped >= 1);
         Assert.True(diagnostics.LastReadMs >= 0);
     }
+
+    [Fact]
+    public void VideoSource_JitterBuffer_PrimesOnceThenDequeuesAtAnyDepth()
+    {
+        var item = new NDIMediaItem(new NdiDiscoveredSource("test-source", null));
+        var options = new S.Media.NDI.Config.NDISourceOptions
+        {
+            VideoJitterBufferFrames = 3,
+        };
+
+        Assert.Equal(MediaResult.Success, item.CreateVideoSource(options, out var video));
+        Assert.NotNull(video);
+
+        EnqueueTestVideoFrame(video!, 11);
+        EnqueueTestVideoFrame(video, 22);
+
+        Assert.False(TryDequeueBufferedFrame(video, out _));
+
+        EnqueueTestVideoFrame(video, 33);
+        Assert.True(TryDequeueBufferedFrame(video, out _));
+        Assert.True(TryDequeueBufferedFrame(video, out _));
+
+        video.Dispose();
+    }
+
+    [Fact]
+    public void VideoSource_OverflowPolicy_DropNewestDiffersFromDropOldest()
+    {
+        var newestItem = new NDIMediaItem(new NdiDiscoveredSource("test-source", null));
+        Assert.Equal(
+            MediaResult.Success,
+            newestItem.CreateVideoSource(new S.Media.NDI.Config.NDISourceOptions
+            {
+                QueueOverflowPolicy = S.Media.NDI.Config.NDIQueueOverflowPolicy.DropNewest,
+                VideoJitterBufferFrames = 3,
+            }, out var dropNewestSource));
+
+        Assert.NotNull(dropNewestSource);
+
+        var oldestItem = new NDIMediaItem(new NdiDiscoveredSource("test-source", null));
+        Assert.Equal(
+            MediaResult.Success,
+            oldestItem.CreateVideoSource(new S.Media.NDI.Config.NDISourceOptions
+            {
+                QueueOverflowPolicy = S.Media.NDI.Config.NDIQueueOverflowPolicy.DropOldest,
+                VideoJitterBufferFrames = 3,
+            }, out var dropOldestSource));
+
+        Assert.NotNull(dropOldestSource);
+
+        var queueCapacity = 9; // maxQueueDepth for jitter=3
+
+        for (var i = 1; i <= queueCapacity; i++)
+        {
+            EnqueueTestVideoFrame(dropNewestSource!, (byte)i);
+            EnqueueTestVideoFrame(dropOldestSource!, (byte)i);
+        }
+
+        EnqueueTestVideoFrame(dropNewestSource!, 100);
+        EnqueueTestVideoFrame(dropOldestSource!, 100);
+
+        var newestFront = PeekBufferedFrameMarker(dropNewestSource!);
+        var oldestFront = PeekBufferedFrameMarker(dropOldestSource!);
+
+        Assert.Equal(1, newestFront);
+        Assert.Equal(2, oldestFront);
+
+        Assert.Equal(queueCapacity, GetJitterQueueCount(dropNewestSource!));
+        Assert.Equal(queueCapacity, GetJitterQueueCount(dropOldestSource!));
+
+        dropNewestSource!.Dispose();
+        dropOldestSource!.Dispose();
+    }
+
     private static void PrimeAudioRing(object audioSource, float[] interleavedSamples)
     {
         var type = audioSource.GetType();
@@ -163,6 +238,55 @@ public sealed class NDISourceAndMediaItemTests
         interleavedSamples.CopyTo(ring, 0);
         writeField!.SetValue(audioSource, interleavedSamples.Length);
         countField!.SetValue(audioSource, interleavedSamples.Length);
+    }
+
+    private static void EnqueueTestVideoFrame(object videoSource, byte marker)
+    {
+        var enqueueMethod = videoSource.GetType().GetMethod("EnqueueCapturedFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(enqueueMethod);
+
+        var buffer = ArrayPool<byte>.Shared.Rent(4);
+        buffer[0] = marker;
+        buffer[1] = (byte)(marker + 1);
+        buffer[2] = (byte)(marker + 2);
+        buffer[3] = (byte)(marker + 3);
+        _ = enqueueMethod!.Invoke(videoSource, [buffer, 4, 1, 1, 0L, "test", S.Media.Core.Video.VideoPixelFormat.Rgba32, "test", DateTime.UtcNow]);
+    }
+
+    private static bool TryDequeueBufferedFrame(object videoSource, out object? frame)
+    {
+        var dequeueMethod = videoSource.GetType().GetMethod("TryDequeueBufferedFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(dequeueMethod);
+
+        var args = new object?[] { null };
+        var result = (bool)dequeueMethod!.Invoke(videoSource, args)!;
+        frame = args[0];
+        return result;
+    }
+
+    private static int GetJitterQueueCount(object videoSource)
+    {
+        var queueField = videoSource.GetType().GetField("_videoJitterQueue", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(queueField);
+        var queue = queueField!.GetValue(videoSource)!;
+        var countProperty = queue.GetType().GetProperty("Count");
+        Assert.NotNull(countProperty);
+        return (int)countProperty!.GetValue(queue)!;
+    }
+
+    private static byte PeekBufferedFrameMarker(object videoSource)
+    {
+        var queueField = videoSource.GetType().GetField("_videoJitterQueue", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(queueField);
+        var queue = queueField!.GetValue(videoSource)!;
+        var peekMethod = queue.GetType().GetMethod("Peek");
+        Assert.NotNull(peekMethod);
+        var front = peekMethod!.Invoke(queue, null)!;
+
+        var rgbaProperty = front.GetType().GetProperty("Rgba");
+        Assert.NotNull(rgbaProperty);
+        var rgba = (byte[])rgbaProperty!.GetValue(front)!;
+        return rgba[0];
     }
 }
 

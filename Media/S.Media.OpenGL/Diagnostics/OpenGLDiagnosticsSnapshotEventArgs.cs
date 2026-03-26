@@ -2,7 +2,7 @@ namespace S.Media.OpenGL.Diagnostics;
 
 public sealed class OpenGLDiagnosticsSnapshotEventArgs : EventArgs
 {
-    public OpenGLDiagnosticsSnapshotEventArgs(Guid outputId, OpenGLOutputDiagnostics snapshot)
+    public OpenGLDiagnosticsSnapshotEventArgs(Guid outputId, OpenGLOutputDebugInfo snapshot)
     {
         OutputId = outputId;
         Snapshot = snapshot;
@@ -10,6 +10,6 @@ public sealed class OpenGLDiagnosticsSnapshotEventArgs : EventArgs
 
     public Guid OutputId { get; }
 
-    public OpenGLOutputDiagnostics Snapshot { get; }
+    public OpenGLOutputDebugInfo Snapshot { get; }
 }
 

@@ -62,7 +62,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     public int Start(VideoOutputConfig config)
     {
         OpenGLDiagnosticsEvents? diagnostics;
-        OpenGLOutputDiagnostics snapshot;
+        OpenGLOutputDebugInfo snapshot;
 
         lock (_gate)
         {
@@ -97,7 +97,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     public int Stop()
     {
         OpenGLDiagnosticsEvents? diagnostics;
-        OpenGLOutputDiagnostics snapshot;
+        OpenGLOutputDebugInfo snapshot;
 
         lock (_gate)
         {
@@ -124,7 +124,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     {
         OpenGLDiagnosticsEvents? diagnostics;
         OpenGLSurfaceMetadata surface;
-        OpenGLOutputDiagnostics snapshot;
+        OpenGLOutputDebugInfo snapshot;
         int resultCode;
 
         lock (_gate)
@@ -225,7 +225,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     internal void PresentClonedFrame(OpenGLSurfaceMetadata parentSurface)
     {
         OpenGLDiagnosticsEvents? diagnostics;
-        OpenGLOutputDiagnostics snapshot;
+        OpenGLOutputDebugInfo snapshot;
 
         lock (_gate)
         {
@@ -245,9 +245,9 @@ public sealed class OpenGLVideoOutput : IVideoOutput
         diagnostics?.PublishDiagnosticsUpdated(Id, snapshot);
     }
 
-    private OpenGLOutputDiagnostics BuildDiagnosticsSnapshotLocked()
+    private OpenGLOutputDebugInfo BuildDiagnosticsSnapshotLocked()
     {
-        return new OpenGLOutputDiagnostics(
+        return new OpenGLOutputDebugInfo(
             FramesPresented: _framesPresented,
             FramesDropped: _framesDropped,
             FramesCloned: _framesCloned,

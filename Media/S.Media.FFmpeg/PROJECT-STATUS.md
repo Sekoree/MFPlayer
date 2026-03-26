@@ -1,6 +1,6 @@
 # S.Media.FFmpeg Project Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Scope
 
@@ -15,7 +15,8 @@ Last updated: 2026-03-25
 ## Implemented Highlights
 
 - Shared demux session path (`FFSharedDemuxSession`) is active.
-- Decode/resample/convert pipeline is implemented with native-attempt and deterministic fallback behavior.
+- Decode/resample/convert pipeline is implemented with native-attempt and deterministic error-code behavior (placeholders removed).
+- Convenience factories: `FFMediaItem.Open(uri)`, `FFMediaItem.Open(stream)`, `FFMediaItem.TryOpen(uri)`, `FFMediaItem.TryOpen(stream)`.
 - Heavy-path tests exist and remain opt-in for default sweeps.
 
 ## Current Considerations

@@ -1,6 +1,6 @@
 # S.Media.OpenGL.Avalonia Project Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Scope
 
@@ -14,7 +14,9 @@ Last updated: 2026-03-25
 
 ## Implemented Highlights
 
-- Avalonia host control and adapter integration are implemented.
+- `AvaloniaGLRenderer` internal class with full GL rendering pipeline: dual-profile GLSL shaders (OpenGL 3.3 core + ES 3.0), all 11 `VideoPixelFormat` values including 10-bit formats via GL_R16/GL_RG16 textures.
+- Uses `glTexSubImage2D` for fast in-place texture updates when dimensions don't change.
+- Wired into `AvaloniaOpenGLHostControl.OnOpenGlInit/OnOpenGlRender/OnOpenGlDeinit` lifecycle.
 - Clone behaviors delegate to `S.Media.OpenGL` engine policy rather than local policy duplication.
 - HUD and diagnostics projection paths are present.
 

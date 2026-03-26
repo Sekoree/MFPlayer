@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="S.Media.NDI.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
     <ProjectReference Include="..\S.Media.OpenGL\S.Media.OpenGL.csproj" />
     <ProjectReference Include="..\..\NDI\NdiLib\NdiLib.csproj" />

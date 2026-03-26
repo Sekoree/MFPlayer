@@ -12,14 +12,14 @@ Canonical Avalonia stress harness for the ongoing migration to `S.Media.*`.
 ## Quick Run
 
 ```fish
-cd /home/sekoree/RiderProjects/MFPlayer
+cd /home/seko/RiderProjects/MFPlayer
 dotnet run --project Test/VideoStress/VideoStress.csproj -- /path/to/media.mp4
 ```
 
 ## Build
 
 ```fish
-cd /home/sekoree/RiderProjects/MFPlayer
+cd /home/seko/RiderProjects/MFPlayer
 dotnet build Test/VideoStress/VideoStress.csproj --no-restore
 ```
 

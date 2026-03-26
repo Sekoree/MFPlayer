@@ -1,25 +1,17 @@
-using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
-using S.Media.Core.Video;
 
 namespace S.Media.Core.Playback;
 
+/// <summary>
+/// Simplified media player interface. Extends <see cref="IAudioVideoMixer"/> with
+/// a convenient <see cref="Play"/> method for one-call media playback.
+/// Output management (AddAudioOutput, AddVideoOutput, etc.) is inherited from IAudioVideoMixer.
+/// </summary>
 public interface IMediaPlayer : IAudioVideoMixer
 {
+    /// <summary>
+    /// Attaches the media item's sources to the mixer and starts playback.
+    /// </summary>
     int Play(IMediaItem media);
-
-
-    int AddAudioOutput(IAudioOutput output);
-
-    int RemoveAudioOutput(IAudioOutput output);
-
-    int AddVideoOutput(IVideoOutput output);
-
-    int RemoveVideoOutput(IVideoOutput output);
-
-    IReadOnlyList<IAudioOutput> AudioOutputs { get; }
-
-    IReadOnlyList<IVideoOutput> VideoOutputs { get; }
 }
-

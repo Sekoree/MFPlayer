@@ -6,8 +6,6 @@ namespace S.Media.FFmpeg.Decoders.Internal;
 
 internal sealed class FFVideoDecoder : IDisposable
 {
-    private const int PlaceholderVideoWidth = 2;
-    private const int PlaceholderVideoHeight = 2;
 
     private bool _disposed;
     private bool _initialized;
@@ -47,16 +45,7 @@ internal sealed class FFVideoDecoder : IDisposable
             return MediaResult.Success;
         }
 
-        result = new FFVideoDecodeResult(
-            packet.Generation,
-            packet.Sequence,
-            packet.PresentationTime,
-            packet.IsKeyFrame,
-            PlaceholderVideoWidth,
-            PlaceholderVideoHeight,
-            CreateSyntheticPlane0Payload(PlaceholderVideoWidth, PlaceholderVideoHeight, seed: (byte)(packet.Sequence % 251)),
-            PlaceholderVideoWidth * 4);
-        return MediaResult.Success;
+        return (int)MediaErrorCode.FFmpegVideoDecodeFailed;
     }
 
     public void Dispose()
@@ -142,13 +131,6 @@ internal sealed class FFVideoDecoder : IDisposable
             _nativeDecodeEnabled = false;
             return false;
         }
-    }
-
-    private static byte[] CreateSyntheticPlane0Payload(int width, int height, byte seed)
-    {
-        var payload = new byte[Math.Max(1, width * height * 4)];
-        payload.AsSpan().Fill(seed);
-        return payload;
     }
 }
 

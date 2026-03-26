@@ -6,7 +6,6 @@ public sealed class NDIIntegrationOptions
 
     public bool UseIncomingVideoTimestamps { get; init; } = true;
 
-    public bool EnableExternalClockCorrection { get; init; }
 
     public NDIVideoSendFormat SendFormat { get; init; } = NDIVideoSendFormat.Program;
 

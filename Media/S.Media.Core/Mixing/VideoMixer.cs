@@ -90,11 +90,11 @@ public sealed class VideoMixer : IVideoMixer
 
     public event EventHandler<VideoMixerStateChangedEventArgs>? StateChanged;
 
-    // Reserved for implementation-phase detailed source failure reporting.
-    public event EventHandler<VideoSourceErrorEventArgs>? SourceError
+    public event EventHandler<VideoSourceErrorEventArgs>? SourceError;
+
+    internal void RaiseSourceError(Guid sourceId, int errorCode, string? message)
     {
-        add { }
-        remove { }
+        SourceError?.Invoke(this, new VideoSourceErrorEventArgs(sourceId, errorCode, message));
     }
 
     public event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveSourceChanged;

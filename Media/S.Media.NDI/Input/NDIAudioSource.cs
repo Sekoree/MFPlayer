@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Buffers;
-using NdiLib;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.NDI.Config;
@@ -16,7 +15,7 @@ public sealed class NDIAudioSource : IAudioSource
     private readonly Lock _gate = new();
     private readonly int _sampleRate;
     private readonly int _channelCount;
-    private readonly NdiReceiver? _receiver;
+    private readonly NdiCaptureCoordinator? _captureCoordinator;
     private float[] _audioRing;
     private int _ringReadIndex;
     private int _ringWriteIndex;
@@ -28,16 +27,21 @@ public sealed class NDIAudioSource : IAudioSource
     private double _lastReadMs;
 
     public NDIAudioSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions)
+        : this(mediaItem, sourceOptions, captureCoordinator: null)
+    {
+    }
+
+    internal NDIAudioSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, NdiCaptureCoordinator? captureCoordinator)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
         SourceId = Guid.NewGuid();
         SourceOptions = sourceOptions;
-        _receiver = mediaItem.Receiver;
+        _captureCoordinator = captureCoordinator ?? (mediaItem.Receiver is null ? null : new NdiCaptureCoordinator(mediaItem.Receiver));
 
         var stream = mediaItem.AudioStreams.FirstOrDefault();
         _sampleRate = stream.SampleRate ?? 48_000;
         _channelCount = Math.Max(1, stream.ChannelCount ?? 2);
-        var audioJitterBufferMs = Math.Max(1, sourceOptions.AudioJitterBufferMsOverride ?? 80);
+        var audioJitterBufferMs = Math.Max(1, sourceOptions.AudioJitterBufferMs);
         var targetFrames = Math.Max(64, (int)Math.Round(_sampleRate * (audioJitterBufferMs / 1000.0)));
         var capacityFrames = Math.Max(targetFrames * 4, _sampleRate * 2);
         _audioRing = new float[capacityFrames * _channelCount];
@@ -132,19 +136,18 @@ public sealed class NDIAudioSource : IAudioSource
 
             var framesWritable = destination.Length / _channelCount;
             var framesToWrite = Math.Max(0, Math.Min(requestedFrameCount, framesWritable));
-            if (_receiver is not null)
+            if (_captureCoordinator is not null && _captureCoordinator.TryReadAudio(CaptureTimeoutMs, out var capture))
             {
                 try
                 {
-                    using var capture = _receiver.CaptureScoped(timeoutMs: CaptureTimeoutMs);
-                    if (capture.FrameType == NdiFrameType.Audio && capture.Audio.NoSamples > 0)
-                    {
-                        EnqueueCapturedAudio(capture.Audio);
-                    }
+                    EnqueueCapturedAudio(capture);
                 }
-                catch
+                finally
                 {
-                    // Receiver capture is best-effort in this contract-first phase.
+                    if (capture.IsPooled)
+                    {
+                        ArrayPool<float>.Shared.Return(capture.InterleavedSamples);
+                    }
                 }
             }
 
@@ -199,50 +202,51 @@ public sealed class NDIAudioSource : IAudioSource
         }
     }
 
-    private unsafe void EnqueueCapturedAudio(in NdiAudioFrameV3 frame)
+    private void EnqueueCapturedAudio(in CapturedAudioBlock frame)
     {
-        var noChannels = Math.Max(1, frame.NoChannels);
-        var noSamples = Math.Max(0, frame.NoSamples);
-        if (noSamples == 0 || frame.PData == nint.Zero)
+        var sourceChannels = Math.Max(1, frame.Channels);
+        var frameCount = Math.Max(0, frame.Frames);
+        if (frameCount == 0 || frame.SampleCount <= 0)
         {
             return;
         }
 
-        var channelStrideBytes = frame.ChannelStrideInBytes > 0
-            ? frame.ChannelStrideInBytes
-            : noSamples * sizeof(float);
+        if (_channelCount == sourceChannels)
+        {
+            lock (_gate)
+            {
+                EnsureRingCapacityLocked(frame.SampleCount);
+                WriteToRingLocked(frame.InterleavedSamples.AsSpan(0, frame.SampleCount));
+            }
 
-        var sampleCount = noSamples * _channelCount;
-        var rented = ArrayPool<float>.Shared.Rent(sampleCount);
-        var interleaved = rented.AsSpan(0, sampleCount);
-        var basePtr = (byte*)frame.PData;
+            return;
+        }
+
+        var convertedSampleCount = frameCount * _channelCount;
+        var converted = ArrayPool<float>.Shared.Rent(convertedSampleCount);
         try
         {
-            for (var s = 0; s < noSamples; s++)
+            var source = frame.InterleavedSamples.AsSpan(0, frame.SampleCount);
+            var destination = converted.AsSpan(0, convertedSampleCount);
+            for (var sample = 0; sample < frameCount; sample++)
             {
-                for (var c = 0; c < _channelCount; c++)
+                for (var channel = 0; channel < _channelCount; channel++)
                 {
-                    if (c < noChannels)
-                    {
-                        var channelPtr = (float*)(basePtr + (c * channelStrideBytes));
-                        interleaved[(s * _channelCount) + c] = channelPtr[s];
-                    }
-                    else
-                    {
-                        interleaved[(s * _channelCount) + c] = 0f;
-                    }
+                    destination[(sample * _channelCount) + channel] = channel < sourceChannels
+                        ? source[(sample * sourceChannels) + channel]
+                        : 0f;
                 }
             }
 
             lock (_gate)
             {
-                EnsureRingCapacityLocked(sampleCount);
-                WriteToRingLocked(interleaved);
+                EnsureRingCapacityLocked(convertedSampleCount);
+                WriteToRingLocked(destination);
             }
         }
         finally
         {
-            ArrayPool<float>.Shared.Return(rented);
+            ArrayPool<float>.Shared.Return(converted);
         }
     }
 

@@ -5,39 +5,39 @@ namespace S.Media.NDI.Config;
 
 public sealed record NDISourceOptions
 {
-    public NDIQueueOverflowPolicy? QueueOverflowPolicyOverride { get; init; }
+    public NDIQueueOverflowPolicy QueueOverflowPolicy { get; init; } = NDIQueueOverflowPolicy.DropOldest;
 
-    public NDIVideoFallbackMode? VideoFallbackModeOverride { get; init; }
+    public NDIVideoFallbackMode VideoFallbackMode { get; init; } = NDIVideoFallbackMode.NoFrame;
 
-    public TimeSpan? DiagnosticsTickIntervalOverride { get; init; }
+    public TimeSpan DiagnosticsTickInterval { get; init; } = TimeSpan.FromMilliseconds(100);
 
-    public int? VideoJitterBufferFramesOverride { get; init; }
+    public int VideoJitterBufferFrames { get; init; } = 4;
 
-    public int? AudioJitterBufferMsOverride { get; init; }
+    public int AudioJitterBufferMs { get; init; } = 90;
 
     public int Validate()
     {
-        if (QueueOverflowPolicyOverride.HasValue && !Enum.IsDefined(QueueOverflowPolicyOverride.Value))
+        if (!Enum.IsDefined(QueueOverflowPolicy))
         {
             return (int)MediaErrorCode.NDIInvalidQueueOverflowPolicyOverride;
         }
 
-        if (VideoFallbackModeOverride.HasValue && !Enum.IsDefined(VideoFallbackModeOverride.Value))
+        if (!Enum.IsDefined(VideoFallbackMode))
         {
             return (int)MediaErrorCode.NDIInvalidVideoFallbackOverride;
         }
 
-        if (DiagnosticsTickIntervalOverride.HasValue && DiagnosticsTickIntervalOverride.Value < TimeSpan.Zero)
+        if (DiagnosticsTickInterval < TimeSpan.Zero)
         {
             return (int)MediaErrorCode.NDIInvalidDiagnosticsTickOverride;
         }
 
-        if (VideoJitterBufferFramesOverride.HasValue && VideoJitterBufferFramesOverride.Value <= 0)
+        if (VideoJitterBufferFrames <= 0)
         {
             return (int)MediaErrorCode.MediaInvalidArgument;
         }
 
-        if (AudioJitterBufferMsOverride.HasValue && AudioJitterBufferMsOverride.Value <= 0)
+        if (AudioJitterBufferMs <= 0)
         {
             return (int)MediaErrorCode.MediaInvalidArgument;
         }
@@ -47,65 +47,23 @@ public sealed record NDISourceOptions
 
     public NDISourceOptions Normalize()
     {
-        var tick = DiagnosticsTickIntervalOverride;
-        if (tick.HasValue)
+        var tick = DiagnosticsTickInterval;
+        if (tick < TimeSpan.Zero)
         {
-            var value = tick.Value;
-            if (value < TimeSpan.Zero)
-            {
-                value = TimeSpan.Zero;
-            }
+            tick = TimeSpan.Zero;
+        }
 
-            if (value < TimeSpan.FromMilliseconds(16))
-            {
-                value = TimeSpan.FromMilliseconds(16);
-            }
-
-            tick = value;
+        if (tick < TimeSpan.FromMilliseconds(16))
+        {
+            tick = TimeSpan.FromMilliseconds(16);
         }
 
         return this with
         {
-            DiagnosticsTickIntervalOverride = tick,
-            VideoJitterBufferFramesOverride = VideoJitterBufferFramesOverride.HasValue
-                ? Math.Max(1, VideoJitterBufferFramesOverride.Value)
-                : null,
-            AudioJitterBufferMsOverride = AudioJitterBufferMsOverride.HasValue
-                ? Math.Max(1, AudioJitterBufferMsOverride.Value)
-                : null,
+            DiagnosticsTickInterval = tick,
+            VideoJitterBufferFrames = Math.Max(1, VideoJitterBufferFrames),
+            AudioJitterBufferMs = Math.Max(1, AudioJitterBufferMs),
         };
-    }
-
-    public NDIQueueOverflowPolicy ResolveQueueOverflowPolicy(NDILimitsOptions limits)
-    {
-        return QueueOverflowPolicyOverride ?? limits.QueueOverflowPolicy;
-    }
-
-    public NDIVideoFallbackMode ResolveVideoFallbackMode(NDILimitsOptions limits)
-    {
-        return VideoFallbackModeOverride ?? limits.VideoFallbackMode;
-    }
-
-    public TimeSpan ResolveDiagnosticsTick(NDIDiagnosticsOptions diagnosticsOptions)
-    {
-        var baseline = diagnosticsOptions.Normalize().DiagnosticsTickInterval;
-        var candidate = DiagnosticsTickIntervalOverride ?? baseline;
-        if (candidate < TimeSpan.FromMilliseconds(16))
-        {
-            return TimeSpan.FromMilliseconds(16);
-        }
-
-        return candidate;
-    }
-
-    public int ResolveVideoJitterBufferFrames(NDILimitsOptions limits)
-    {
-        return VideoJitterBufferFramesOverride ?? limits.VideoJitterBufferFrames;
-    }
-
-    public int ResolveAudioJitterBufferMs(NDILimitsOptions limits)
-    {
-        return AudioJitterBufferMsOverride ?? limits.AudioJitterBufferMs;
     }
 }
 

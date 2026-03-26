@@ -1,8 +1,10 @@
+using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
 using S.Media.Core.Errors;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Video;
 using S.Media.OpenGL.Avalonia.Diagnostics;
 using S.Media.OpenGL.Output;
 
@@ -12,14 +14,18 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
 {
     private readonly Lock _gate = new();
     private OpenGLVideoOutput _output;
+    private readonly AvaloniaGLRenderer _renderer = new();
     private bool _glInitialized;
     private long _lastRenderedGeneration = -1;
     private int _renderRequestQueued;
+    private VideoFrame? _lastFrame;
 
     public AvaloniaOpenGLHostControl(OpenGLVideoOutput output)
     {
         _output = output ?? throw new ArgumentNullException(nameof(output));
     }
+
+    public bool KeepAspectRatio { get; set; } = true;
 
     public bool EnableHudOverlay { get; set; }
 
@@ -79,9 +85,24 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
         return MediaResult.Success;
     }
 
+    /// <summary>
+    /// Push a video frame for rendering. The control will present it on the next render cycle.
+    /// </summary>
+    public void PushFrame(VideoFrame frame)
+    {
+        lock (_gate)
+        {
+            _lastFrame = frame;
+        }
+
+        QueueRenderRequest();
+    }
+
     protected override void OnOpenGlInit(GlInterface gl)
     {
         base.OnOpenGlInit(gl);
+        _renderer.Initialize(gl);
+
         lock (_gate)
         {
             _glInitialized = true;
@@ -96,30 +117,40 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
         OpenGLSurfaceMetadata surface;
         bool shouldRender;
         bool keepPumping;
+        VideoFrame? frame;
 
         lock (_gate)
         {
-            if (!_glInitialized)
+            if (!_glInitialized || !_renderer.IsReady)
             {
                 return;
             }
 
             surface = _output.Surface;
-            shouldRender = surface.LastPresentedFrameGeneration != _lastRenderedGeneration || EnableHudOverlay;
+            shouldRender = surface.LastPresentedFrameGeneration != _lastRenderedGeneration
+                           || _lastFrame != null
+                           || EnableHudOverlay;
             keepPumping = _output.IsRunning;
+            frame = _lastFrame;
 
             if (shouldRender)
             {
                 _lastRenderedGeneration = surface.LastPresentedFrameGeneration;
             }
-
-            _ = fb;
-            _ = gl;
         }
 
         if (!shouldRender)
         {
             return;
+        }
+
+        if (frame != null)
+        {
+            var scaling = VisualRoot?.RenderScaling ?? 1.0;
+            var pixelWidth = Math.Max(1, (int)(Bounds.Width * scaling));
+            var pixelHeight = Math.Max(1, (int)(Bounds.Height * scaling));
+
+            _renderer.RenderFrame(gl, fb, frame, pixelWidth, pixelHeight, KeepAspectRatio);
         }
 
         if (EnableHudOverlay)
@@ -135,10 +166,13 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
 
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
+        _renderer.Deinitialize(gl);
+
         lock (_gate)
         {
             _glInitialized = false;
             _lastRenderedGeneration = -1;
+            _lastFrame = null;
         }
 
         base.OnOpenGlDeinit(gl);

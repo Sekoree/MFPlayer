@@ -11,8 +11,6 @@ namespace S.Media.Core.Playback;
 public sealed class MediaPlayer : IMediaPlayer
 {
     private readonly IAudioVideoMixer _mixer;
-    private readonly List<IAudioOutput> _audioOutputs = [];
-    private readonly List<IVideoOutput> _videoOutputs = [];
     private readonly List<IAudioSource> _attachedAudioSources = [];
     private readonly List<IVideoSource> _attachedVideoSources = [];
     private IMediaItem? _activeMedia;
@@ -29,13 +27,11 @@ public sealed class MediaPlayer : IMediaPlayer
 
     public ClockType ClockType => _mixer.ClockType;
 
+    public AudioVideoSyncMode SyncMode => _mixer.SyncMode;
+
     public double PositionSeconds => _mixer.PositionSeconds;
 
     public bool IsRunning => _mixer.IsRunning;
-
-    public IAudioMixer AudioMixer => _mixer.AudioMixer;
-
-    public IVideoMixer VideoMixer => _mixer.VideoMixer;
 
     public IReadOnlyList<IAudioSource> AudioSources => _mixer.AudioSources;
 
@@ -63,27 +59,9 @@ public sealed class MediaPlayer : IMediaPlayer
         remove => _mixer.ActiveVideoSourceChanged -= value;
     }
 
-    public IReadOnlyList<IAudioOutput> AudioOutputs
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<IAudioOutput>([.. _audioOutputs]);
-            }
-        }
-    }
+    public IReadOnlyList<IAudioOutput> AudioOutputs => _mixer.AudioOutputs;
 
-    public IReadOnlyList<IVideoOutput> VideoOutputs
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<IVideoOutput>([.. _videoOutputs]);
-            }
-        }
-    }
+    public IReadOnlyList<IVideoOutput> VideoOutputs => _mixer.VideoOutputs;
 
     public int Play(IMediaItem media)
     {
@@ -138,61 +116,17 @@ public sealed class MediaPlayer : IMediaPlayer
 
     public int SetClockType(ClockType clockType) => _mixer.SetClockType(clockType);
 
+    public int SetSyncMode(AudioVideoSyncMode syncMode) => _mixer.SetSyncMode(syncMode);
+
     public int SetActiveVideoSource(IVideoSource source) => _mixer.SetActiveVideoSource(source);
 
-    public int AddAudioOutput(IAudioOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
+    public int AddAudioOutput(IAudioOutput output) => _mixer.AddAudioOutput(output);
 
-        lock (_gate)
-        {
-            if (_audioOutputs.Contains(output))
-            {
-                return MediaResult.Success;
-            }
+    public int RemoveAudioOutput(IAudioOutput output) => _mixer.RemoveAudioOutput(output);
 
-            _audioOutputs.Add(output);
-            return MediaResult.Success;
-        }
-    }
+    public int AddVideoOutput(IVideoOutput output) => _mixer.AddVideoOutput(output);
 
-    public int RemoveAudioOutput(IAudioOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        lock (_gate)
-        {
-            _audioOutputs.Remove(output);
-            return MediaResult.Success;
-        }
-    }
-
-    public int AddVideoOutput(IVideoOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        lock (_gate)
-        {
-            if (_videoOutputs.Contains(output))
-            {
-                return MediaResult.Success;
-            }
-
-            _videoOutputs.Add(output);
-            return MediaResult.Success;
-        }
-    }
-
-    public int RemoveVideoOutput(IVideoOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        lock (_gate)
-        {
-            _videoOutputs.Remove(output);
-            return MediaResult.Success;
-        }
-    }
+    public int RemoveVideoOutput(IVideoOutput output) => _mixer.RemoveVideoOutput(output);
 
     private int DetachCurrentMediaSources()
     {

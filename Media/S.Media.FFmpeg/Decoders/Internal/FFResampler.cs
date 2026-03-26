@@ -43,21 +43,7 @@ internal sealed class FFResampler : IDisposable
             return MediaResult.Success;
         }
 
-        var resolvedSamples = ResolveSamples(decoded);
-
-        // Placeholder phase keeps sample shape unchanged while preserving deterministic metadata.
-        result = new FFAudioResampleResult(
-            decoded.Generation,
-            decoded.PresentationTime,
-            decoded.FrameCount,
-            decoded.SampleValue,
-            resolvedSamples,
-            decoded.NativeTimeBaseNumerator,
-            decoded.NativeTimeBaseDenominator,
-            decoded.NativeSampleRate,
-            decoded.NativeChannelCount,
-            decoded.NativeSampleFormat);
-        return MediaResult.Success;
+        return (int)MediaErrorCode.FFmpegResampleFailed;
     }
 
     public void Dispose()

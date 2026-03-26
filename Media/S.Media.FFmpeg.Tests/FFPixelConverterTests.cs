@@ -19,26 +19,19 @@ public sealed class FFPixelConverterTests
     }
 
     [Fact]
-    public void Convert_PreservesDeterministicMetadata()
+    public void Convert_WithoutNativeData_ReturnsError()
     {
         using var converter = new FFPixelConverter();
         Assert.Equal(MediaResult.Success, converter.Initialize());
 
         var decoded = new FFVideoDecodeResult(3, 12, TimeSpan.FromSeconds(0.4), IsKeyFrame: false, Width: 2, Height: 2);
-        var code = converter.Convert(decoded, out var converted);
+        var code = converter.Convert(decoded, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(3, converted.Generation);
-        Assert.Equal(12, converted.FrameIndex);
-        Assert.Equal(TimeSpan.FromSeconds(0.4), converted.PresentationTime);
-        Assert.False(converted.IsKeyFrame);
-        Assert.Equal(2, converted.Width);
-        Assert.Equal(2, converted.Height);
-        Assert.Equal(VideoPixelFormat.Rgba32, converted.MappedPixelFormat);
+        Assert.Equal((int)MediaErrorCode.FFmpegPixelConversionFailed, code);
     }
 
     [Fact]
-    public void Convert_InvalidNativePixelFormat_FallsBackAndDisablesNativePath()
+    public void Convert_InvalidNativePixelFormat_ReturnsError()
     {
         using var converter = new FFPixelConverter();
         Assert.Equal(MediaResult.Success, converter.Initialize());
@@ -52,16 +45,14 @@ public sealed class FFPixelConverterTests
             Height: 2,
             NativePixelFormat: int.MaxValue);
 
-        var code = converter.Convert(decoded, out var converted);
+        var code = converter.Convert(decoded, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(9, converted.FrameIndex);
-        Assert.Equal(int.MaxValue, converted.NativePixelFormat);
+        Assert.Equal((int)MediaErrorCode.FFmpegPixelConversionFailed, code);
         Assert.False(converter.IsNativeConvertEnabled);
     }
 
     [Fact]
-    public void Convert_ResultMetadata_IsSnapshotAndUnaffectedBySourceReassignment()
+    public void Convert_UnknownNativePixelFormat_ReturnsConversionFailed()
     {
         using var converter = new FFPixelConverter();
         Assert.Equal(MediaResult.Success, converter.Initialize());
@@ -75,34 +66,19 @@ public sealed class FFPixelConverterTests
             Height: 360,
             NativePixelFormat: 26);
 
-        var first = ConvertOrThrow(converter, decoded);
-        Assert.Equal(3, first.FrameIndex);
+        var code = converter.Convert(decoded, out _);
 
-        var mutated = decoded with
-        {
-            Width = 1920,
-            Height = 1080,
-            FrameIndex = 33,
-            NativePixelFormat = int.MaxValue,
-        };
-
-        Assert.Equal(1920, mutated.Width);
-        Assert.Equal(1080, mutated.Height);
-
-        Assert.Equal(640, first.Width);
-        Assert.Equal(360, first.Height);
-        Assert.Null(first.NativeTimeBaseNumerator);
-        Assert.Null(first.NativeTimeBaseDenominator);
-        Assert.Null(first.NativeFrameRateNumerator);
-        Assert.Null(first.NativeFrameRateDenominator);
+        // Without native FFmpeg libraries, conversion fails
+        Assert.Equal((int)MediaErrorCode.FFmpegPixelConversionFailed, code);
     }
 
     [Fact]
-    public void Convert_Fallback_PreservesSecondaryPlanePayloads()
+    public void Convert_WithoutNativePixelFormat_InfersFormatFromPlaneShape()
     {
         using var converter = new FFPixelConverter();
         Assert.Equal(MediaResult.Success, converter.Initialize());
 
+        // 3 planes matching YUV420P layout — mapper infers format from plane dimensions
         var decoded = new FFVideoDecodeResult(
             Generation: 1,
             FrameIndex: 2,
@@ -120,10 +96,7 @@ public sealed class FFPixelConverterTests
         var code = converter.Convert(decoded, out var converted);
 
         Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(4, converted.Plane1.Length);
-        Assert.Equal(2, converted.Plane1Stride);
-        Assert.Equal(4, converted.Plane2.Length);
-        Assert.Equal(2, converted.Plane2Stride);
+        Assert.Equal(VideoPixelFormat.Yuv420P, converted.MappedPixelFormat);
     }
 
     [Fact]
@@ -201,11 +174,13 @@ public sealed class FFPixelConverterTests
     }
 
     [Fact]
-    public void Convert_PlaneAwarePolicy_IncompleteYuv420Payload_NormalizesToRgbaFallback()
+    public void Convert_PlaneAwarePolicy_IncompleteYuv420Payload_ReturnsConversionFailed()
     {
         using var converter = new FFPixelConverter();
         Assert.Equal(MediaResult.Success, converter.Initialize());
 
+        // YUV420P requires Plane2, but it's missing — can't passthrough.
+        // Without native FFmpeg sws_scale, RGBA fallback also fails.
         var decoded = new FFVideoDecodeResult(
             Generation: 10,
             FrameIndex: 6,
@@ -221,22 +196,19 @@ public sealed class FFPixelConverterTests
             Plane2Stride: 0,
             NativePixelFormat: (int)AVPixelFormat.AV_PIX_FMT_YUV420P);
 
-        var code = converter.Convert(decoded, out var converted);
+        var code = converter.Convert(decoded, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(VideoPixelFormat.Rgba32, converted.MappedPixelFormat);
-        Assert.True(converted.Plane0Stride >= 16);
-        Assert.True(converted.Plane0.Length >= 64);
-        Assert.Equal(0, converted.Plane1.Length);
-        Assert.Equal(0, converted.Plane2.Length);
+        Assert.Equal((int)MediaErrorCode.FFmpegPixelConversionFailed, code);
     }
 
     [Fact]
-    public void Convert_PlaneAwarePolicy_IncompleteNv12Payload_NormalizesToRgbaFallback()
+    public void Convert_PlaneAwarePolicy_IncompleteNv12Payload_ReturnsConversionFailed()
     {
         using var converter = new FFPixelConverter();
         Assert.Equal(MediaResult.Success, converter.Initialize());
 
+        // NV12 requires Plane1, but it's missing — can't passthrough.
+        // Without native FFmpeg sws_scale, RGBA fallback also fails.
         var decoded = new FFVideoDecodeResult(
             Generation: 11,
             FrameIndex: 7,
@@ -252,22 +224,19 @@ public sealed class FFPixelConverterTests
             Plane2Stride: 0,
             NativePixelFormat: (int)AVPixelFormat.AV_PIX_FMT_NV12);
 
-        var code = converter.Convert(decoded, out var converted);
+        var code = converter.Convert(decoded, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(VideoPixelFormat.Rgba32, converted.MappedPixelFormat);
-        Assert.True(converted.Plane0Stride >= 16);
-        Assert.True(converted.Plane0.Length >= 64);
-        Assert.Equal(0, converted.Plane1.Length);
-        Assert.Equal(0, converted.Plane2.Length);
+        Assert.Equal((int)MediaErrorCode.FFmpegPixelConversionFailed, code);
     }
 
     [Fact]
-    public void Convert_PlaneAwarePolicy_IncompleteP010Payload_NormalizesToRgbaFallback()
+    public void Convert_PlaneAwarePolicy_IncompleteP010Payload_ReturnsConversionFailed()
     {
         using var converter = new FFPixelConverter();
         Assert.Equal(MediaResult.Success, converter.Initialize());
 
+        // P010LE requires Plane1, but it's missing — can't passthrough.
+        // Without native FFmpeg sws_scale, RGBA fallback also fails.
         var decoded = new FFVideoDecodeResult(
             Generation: 12,
             FrameIndex: 8,
@@ -283,20 +252,9 @@ public sealed class FFPixelConverterTests
             Plane2Stride: 0,
             NativePixelFormat: (int)AVPixelFormat.AV_PIX_FMT_P010LE);
 
-        var code = converter.Convert(decoded, out var converted);
+        var code = converter.Convert(decoded, out _);
 
-        Assert.Equal(MediaResult.Success, code);
-        Assert.Equal(VideoPixelFormat.Rgba32, converted.MappedPixelFormat);
-        Assert.True(converted.Plane0Stride >= 16);
-        Assert.True(converted.Plane0.Length >= 64);
-        Assert.Equal(0, converted.Plane1.Length);
-        Assert.Equal(0, converted.Plane2.Length);
+        Assert.Equal((int)MediaErrorCode.FFmpegPixelConversionFailed, code);
     }
 
-    private static FFVideoConvertResult ConvertOrThrow(FFPixelConverter converter, FFVideoDecodeResult decoded)
-    {
-        var code = converter.Convert(decoded, out var converted);
-        Assert.Equal(MediaResult.Success, code);
-        return converted;
-    }
 }

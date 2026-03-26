@@ -79,53 +79,7 @@ internal sealed class FFPixelConverter : IDisposable
             return MediaResult.Success;
         }
 
-        var fallbackMappedFormat = ResolveFallbackMappedFormat(decoded, mappedFormat);
-        var plane0 = decoded.Plane0;
-        var plane0Stride = decoded.Plane0Stride;
-        var plane1 = decoded.Plane1;
-        var plane1Stride = decoded.Plane1Stride;
-        var plane2 = decoded.Plane2;
-        var plane2Stride = decoded.Plane2Stride;
-
-        if (fallbackMappedFormat == VideoPixelFormat.Rgba32 && mappedFormat != VideoPixelFormat.Rgba32)
-        {
-            var safeWidth = Math.Max(1, decoded.Width);
-            var safeHeight = Math.Max(1, decoded.Height);
-            var requiredStride = safeWidth * 4;
-            var requiredBytes = requiredStride * safeHeight;
-            if (plane0.IsEmpty || plane0Stride < requiredStride || plane0.Length < requiredBytes)
-            {
-                plane0 = new byte[Math.Max(1, requiredBytes)];
-            }
-
-            plane0Stride = Math.Max(requiredStride, plane0Stride);
-            plane1 = default;
-            plane1Stride = 0;
-            plane2 = default;
-            plane2Stride = 0;
-        }
-
-        // Placeholder phase keeps geometry/timing unchanged while preserving deterministic metadata.
-        result = new FFVideoConvertResult(
-            decoded.Generation,
-            decoded.FrameIndex,
-            decoded.PresentationTime,
-            decoded.IsKeyFrame,
-            decoded.Width,
-            decoded.Height,
-            plane0,
-            plane0Stride,
-            plane1,
-            plane1Stride,
-            plane2,
-            plane2Stride,
-            decoded.NativeTimeBaseNumerator,
-            decoded.NativeTimeBaseDenominator,
-            decoded.NativeFrameRateNumerator,
-            decoded.NativeFrameRateDenominator,
-            decoded.NativePixelFormat,
-            fallbackMappedFormat);
-        return MediaResult.Success;
+        return (int)MediaErrorCode.FFmpegPixelConversionFailed;
     }
 
     public void Dispose()
@@ -224,15 +178,6 @@ internal sealed class FFPixelConverter : IDisposable
         return HasRequiredPlanes(decoded, mappedFormat);
     }
 
-    private static VideoPixelFormat ResolveFallbackMappedFormat(FFVideoDecodeResult decoded, VideoPixelFormat mappedFormat)
-    {
-        if (!IsMultiPlaneMappedFormat(mappedFormat))
-        {
-            return mappedFormat;
-        }
-
-        return HasRequiredPlanes(decoded, mappedFormat) ? mappedFormat : VideoPixelFormat.Rgba32;
-    }
 
     private static bool HasRequiredPlanes(FFVideoDecodeResult decoded, VideoPixelFormat mappedFormat)
     {

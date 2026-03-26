@@ -48,7 +48,7 @@ public sealed class FFSharedDecodeContextTests
     }
 
     [Fact]
-    public void ApplyResolvedStreamDescriptors_OverridesPlaceholderDescriptors_WhenOpen()
+    public void ApplyResolvedStreamDescriptors_OverridesInitialDescriptors_WhenOpen()
     {
         var context = new FFSharedDecodeContext();
         var openCode = context.Open(new FFmpegOpenOptions { InputUri = "file:///tmp/fake.mp4" }, new FFmpegDecodeOptions());

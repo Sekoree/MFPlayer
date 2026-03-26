@@ -6,7 +6,6 @@ namespace S.Media.FFmpeg.Decoders.Internal;
 
 internal sealed class FFAudioDecoder : IDisposable
 {
-    private const int PlaceholderAudioFramesPerChunk = 256;
 
     private bool _disposed;
     private bool _initialized;
@@ -64,14 +63,7 @@ internal sealed class FFAudioDecoder : IDisposable
             }
         }
 
-        var fallbackChannelCount = packet.NativeStreamIndex is not null ? 2 : 2;
-        result = new FFAudioDecodeResult(
-            packet.Generation,
-            packet.PresentationTime,
-            PlaceholderAudioFramesPerChunk,
-            packet.SampleValue,
-            CreateSyntheticAudioPayload(PlaceholderAudioFramesPerChunk, fallbackChannelCount, packet.SampleValue));
-        return MediaResult.Success;
+        return (int)MediaErrorCode.FFmpegAudioDecodeFailed;
     }
 
     public void Dispose()
@@ -151,14 +143,6 @@ internal sealed class FFAudioDecoder : IDisposable
             _nativeDecodeEnabled = false;
             return false;
         }
-    }
-
-    private static float[] CreateSyntheticAudioPayload(int frameCount, int channelCount, float sampleValue)
-    {
-        var total = Math.Max(1, frameCount) * Math.Max(1, channelCount);
-        var payload = new float[total];
-        payload.AsSpan().Fill(sampleValue);
-        return payload;
     }
 }
 

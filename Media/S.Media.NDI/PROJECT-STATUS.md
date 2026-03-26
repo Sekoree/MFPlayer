@@ -1,6 +1,6 @@
 # S.Media.NDI Project Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Scope
 
@@ -18,12 +18,19 @@ Last updated: 2026-03-25
 - Diagnostics aggregation and runtime snapshot flow are active.
 - Option normalization/precedence paths are implemented and tested.
 - Recent lifecycle cleanup includes failure-atomic init behavior for diagnostics thread startup.
+- Receive path now uses a shared capture coordinator with explicit per-receiver ownership in `NDIEngine` to reduce audio/video receiver-pull contention.
+- Video receive queue behavior now supports one-time priming and post-prime dequeue on available frames.
+- `DropNewest` overflow behavior is now distinct from `DropOldest`.
+- Receive fallback/cache and SDL upload path include allocation reductions for hot-path stability.
+- Video source timing uses timestamp-led relative progression instead of fixed 60fps progression.
 
 ## Current Considerations
 
 - Preserve push validation precedence and deterministic disposed-state behavior.
 - Keep diagnostics behavior stable under lifecycle transitions.
 - Continue contract parity checks with legacy migration references.
+- Keep coordinator lifecycle behavior consistent between engine-created and direct media-item creation paths.
+- Add focused tests for overflow behavior distinctions and jitter priming transitions.
 
 ## Related Docs
 
