@@ -270,4 +270,3 @@ public static unsafe partial class Native
     [LibraryImport(LibraryName, EntryPoint = "Pa_Sleep")] private static partial void Pa_Sleep_Import(nint msec);
     public static void Pa_Sleep(nint msec) => Pa_Sleep_Import(msec);
 }
-

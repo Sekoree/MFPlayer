@@ -18,7 +18,7 @@ namespace PMLib.MessageTypes;
 /// update arrives as two separate <see cref="ControlChange"/> instances (one coarse, one fine).
 /// Use <see cref="FromCoarseFine"/> to combine them into a single high-resolution value.
 /// </remarks>
-public readonly struct ControlChange : IMidiMessage
+public readonly struct ControlChange : IMIDIMessage
 {
     /// <summary>MIDI channel, 0–15.</summary>
     public byte Channel { get; }
@@ -42,7 +42,7 @@ public readonly struct ControlChange : IMidiMessage
     /// </summary>
     public bool IsHighResolution { get; }
 
-    public MidiMessageType MessageType => MidiMessageType.ControlChange;
+    public MIDIMessageType MessageType => MIDIMessageType.ControlChange;
 
     /// <summary>Constructs a standard 7-bit Control Change message.</summary>
     public ControlChange(byte channel, byte controller, byte value)
@@ -98,4 +98,3 @@ public readonly struct ControlChange : IMidiMessage
             PmEvent.CreateMessage(statusByte, Controller, (byte)(Value & 0x7F)));
     }
 }
-

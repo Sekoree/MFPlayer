@@ -12,4 +12,3 @@ public readonly record struct AudioStreamInfo
 
     public TimeSpan? Duration { get; init; }
 }
-

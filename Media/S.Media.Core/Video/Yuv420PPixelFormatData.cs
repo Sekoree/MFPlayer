@@ -8,4 +8,3 @@ public readonly record struct Yuv420PPixelFormatData : IPixelFormatData
 
     public int ChromaSubsampleY => 2;
 }
-

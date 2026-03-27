@@ -1,4 +1,4 @@
-using NdiLib;
+using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
@@ -31,10 +31,10 @@ internal static class Program
 
         try
         {
-            using var runtime = new NdiRuntimeScope();
-            Console.WriteLine($"NDI runtime version: {NdiRuntime.Version}");
+            using var runtime = new NDIRuntimeScope();
+            Console.WriteLine($"NDI runtime version: {NDIRuntime.Version}");
 
-            using var finder = new NdiFinder();
+            using var finder = new NDIFinder();
             var sources = DiscoverSources(finder, discoverySec);
             if (sources.Length == 0)
             {
@@ -57,7 +57,7 @@ internal static class Program
 
             Console.WriteLine($"Connecting to: {selected.Value.Name}");
 
-            using var receiver = new NdiReceiver(new NdiReceiverSettings
+            using var receiver = new NDIReceiver(new NDIReceiverSettings
             {
                 ColorFormat = NdiRecvColorFormat.RgbxRgba,
                 Bandwidth = NdiRecvBandwidth.Highest,
@@ -104,7 +104,7 @@ internal static class Program
 
             // AV Mixer
             var mixer = new AudioVideoMixer();
-            _ = mixer.SetSyncMode(AudioVideoSyncMode.Stable);
+            _ = mixer.SetSyncMode(AudioVideoSyncMode.Realtime);
             _ = mixer.AddAudioSource(audioSource);
             _ = mixer.AddVideoSource(videoSource);
             _ = mixer.SetActiveVideoSource(videoSource);
@@ -169,7 +169,7 @@ internal static class Program
         }
     }
 
-    private static NdiDiscoveredSource[] DiscoverSources(NdiFinder finder, int discoverySec)
+    private static NdiDiscoveredSource[] DiscoverSources(NDIFinder finder, int discoverySec)
     {
         var until = DateTime.UtcNow.AddSeconds(Math.Max(1, discoverySec));
         while (DateTime.UtcNow < until)
@@ -211,4 +211,3 @@ internal static class Program
         Console.WriteLine("  --device-index <n>         Audio output device index (-1 = default)");
     }
 }
-

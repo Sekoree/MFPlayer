@@ -13,4 +13,3 @@ public class MediaException : Exception
 
     public string? CorrelationId { get; }
 }
-

@@ -90,4 +90,3 @@ if (mode == "send")
 }
 
 Console.WriteLine($"Unknown mode '{mode}'.");
-

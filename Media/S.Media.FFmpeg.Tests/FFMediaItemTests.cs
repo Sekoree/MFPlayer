@@ -221,12 +221,12 @@ public sealed class FFMediaItemTests
 
         Assert.NotNull(item.AudioSource);
         Assert.NotNull(item.VideoSource);
-        // Default stream info when native descriptors are not yet available
-        Assert.Equal("pcm_f32le", item.AudioSource!.StreamInfo.Codec);
-        Assert.Equal(48_000, item.AudioSource.StreamInfo.SampleRate);
-        Assert.Equal("placeholder_rgba", item.VideoSource!.StreamInfo.Codec);
-        Assert.Equal(2, item.VideoSource.StreamInfo.Width);
-        Assert.Equal(2, item.VideoSource.StreamInfo.Height);
+        // Default stream info when native descriptors are not yet available (no placeholders)
+        Assert.Null(item.AudioSource!.StreamInfo.Codec);
+        Assert.Null(item.AudioSource.StreamInfo.SampleRate);
+        Assert.Null(item.VideoSource!.StreamInfo.Codec);
+        Assert.Null(item.VideoSource.StreamInfo.Width);
+        Assert.Null(item.VideoSource.StreamInfo.Height);
 
         item.Dispose();
     }
@@ -604,4 +604,3 @@ public sealed class FFMediaItemTests
         public void Dispose() => Disposed = true;
     }
 }
-

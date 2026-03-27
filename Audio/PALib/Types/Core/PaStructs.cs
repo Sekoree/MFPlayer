@@ -81,4 +81,3 @@ public struct PaStreamInfo
     public double outputLatency;
     public double sampleRate;
 }
-

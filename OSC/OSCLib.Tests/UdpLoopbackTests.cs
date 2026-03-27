@@ -37,4 +37,3 @@ public class UdpLoopbackTests
         Assert.Equal(123, context.Message.Arguments.Single().AsInt32());
     }
 }
-

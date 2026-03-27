@@ -31,4 +31,3 @@ public static class PALibLogging
     public static string BufferMeta(nint ptr, long elementCount, int elementSize, string direction)
         => $"{direction} ptr={PtrMeta(ptr)} elementCount={elementCount} elementSize={elementSize}";
 }
-

@@ -14,4 +14,3 @@ public sealed record AvaloniaCloneOptions
 
     public int? MaxCloneDepth { get; init; }
 }
-

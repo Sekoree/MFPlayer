@@ -1,5 +1,5 @@
 using S.Media.Core.Audio;
-using S.Media.Core.Clock;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
 using S.Media.Core.Playback;
@@ -13,23 +13,21 @@ namespace S.Media.Core.Tests;
 public sealed class MediaPlayerCompositionTests
 {
     [Fact]
-    public void Play_DelegatesToMixerStart()
+    public void Play_StartsPlayback()
     {
-        var mixer = new FakeMixer();
-        var player = new MediaPlayer(mixer);
+        var player = new MediaPlayer();
         var media = new FakeMediaItem();
 
         var result = player.Play(media);
 
-        Assert.Equal(1, mixer.StartCalls);
         Assert.Equal(0, result);
+        Assert.Equal(AudioVideoMixerState.Running, player.State);
     }
 
     [Fact]
-    public void Play_BoundMedia_AttachesSources_ThenStarts()
+    public void Play_BoundMedia_AttachesSources_ThenStartsPlayback()
     {
-        var mixer = new FakeMixer();
-        var player = new MediaPlayer(mixer);
+        var player = new MediaPlayer();
         var audio = new FakeAudioSource();
         var video = new FakeVideoSource();
         var media = new FakeBoundMediaItem(audio, video, video);
@@ -37,44 +35,44 @@ public sealed class MediaPlayerCompositionTests
         var result = player.Play(media);
 
         Assert.Equal(0, result);
-        Assert.Equal(1, mixer.AddAudioSourceCalls);
-        Assert.Equal(1, mixer.AddVideoSourceCalls);
-        Assert.Equal(1, mixer.SetActiveVideoSourceCalls);
-        Assert.Equal(1, mixer.StartCalls);
+        Assert.Single(player.AudioSources);
+        Assert.Equal(audio.SourceId, player.AudioSources[0].SourceId);
+        Assert.Single(player.VideoSources);
+        Assert.Equal(video.SourceId, player.VideoSources[0].SourceId);
+        Assert.Equal(AudioVideoMixerState.Running, player.State);
     }
 
     [Fact]
     public void Play_BoundMedia_RollsBack_WhenVideoAttachFails()
     {
-        var mixer = new FakeMixer { AddVideoSourceReturnCode = 222 };
-        var player = new MediaPlayer(mixer);
+        var player = new MediaPlayer();
         var audio = new FakeAudioSource();
         var video = new FakeVideoSource();
+
+        // Pre-register the video source to trigger a SourceIdCollision on Play
+        player.AddVideoSource(video);
+
         var media = new FakeBoundMediaItem(audio, video, null);
 
         var result = player.Play(media);
 
-        Assert.Equal(222, result);
-        Assert.Equal(1, mixer.AddAudioSourceCalls);
-        Assert.Equal(1, mixer.AddVideoSourceCalls);
-        Assert.Equal(1, mixer.RemoveAudioSourceCalls);
-        Assert.Equal(0, mixer.StartCalls);
+        Assert.Equal((int)MediaErrorCode.MixerSourceIdCollision, result);
+        // Audio source should have been rolled back
+        Assert.DoesNotContain(player.AudioSources, s => s.SourceId == audio.SourceId);
     }
 
     [Fact]
-    public void Play_FFMediaItem_AttachesRealBinding_ThenStarts()
+    public void Play_FFMediaItem_AttachesRealBinding_ThenStartsPlayback()
     {
-        var mixer = new FakeMixer();
-        var player = new MediaPlayer(mixer);
+        var player = new MediaPlayer();
         var media = new FFMediaItem(new FFAudioSource(), new FFVideoSource());
 
         var result = player.Play(media);
 
         Assert.Equal(0, result);
-        Assert.Equal(1, mixer.AddAudioSourceCalls);
-        Assert.Equal(1, mixer.AddVideoSourceCalls);
-        Assert.Equal(1, mixer.SetActiveVideoSourceCalls);
-        Assert.Equal(1, mixer.StartCalls);
+        Assert.Single(player.AudioSources);
+        Assert.Single(player.VideoSources);
+        Assert.Equal(AudioVideoMixerState.Running, player.State);
     }
 
     private sealed class FakeMediaItem : IMediaItem
@@ -164,121 +162,4 @@ public sealed class MediaPlayerCompositionTests
         public bool IsSeekable => true;
         public void Dispose() { }
     }
-
-    private sealed class FakeMixer : IAudioVideoMixer
-    {
-        public int StartCalls { get; private set; }
-        public int AddAudioSourceCalls { get; private set; }
-        public int RemoveAudioSourceCalls { get; private set; }
-        public int AddVideoSourceCalls { get; private set; }
-        public int RemoveVideoSourceCalls { get; private set; }
-        public int SetActiveVideoSourceCalls { get; private set; }
-
-        public int AddAudioSourceReturnCode { get; set; }
-        public int AddVideoSourceReturnCode { get; set; }
-        public int SetActiveVideoSourceReturnCode { get; set; }
-
-        public AudioVideoMixerState State => AudioVideoMixerState.Stopped;
-
-        public IMediaClock Clock { get; } = new CoreMediaClock();
-
-        public ClockType ClockType => ClockType.Hybrid;
-
-        public AudioVideoSyncMode SyncMode => AudioVideoSyncMode.Hybrid;
-
-        public double PositionSeconds => 0;
-
-        public bool IsRunning => false;
-
-        public IReadOnlyList<IAudioSource> AudioSources => [];
-
-        public IReadOnlyList<IVideoSource> VideoSources => [];
-
-        public IReadOnlyList<IAudioOutput> AudioOutputs => [];
-
-        public IReadOnlyList<IVideoOutput> VideoOutputs => [];
-
-        public MixerSourceDetachOptions AudioSourceDetachOptions => new();
-
-        public MixerSourceDetachOptions VideoSourceDetachOptions => new();
-
-        public event EventHandler<AudioSourceErrorEventArgs>? AudioSourceError
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler<VideoSourceErrorEventArgs>? VideoSourceError
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveVideoSourceChanged
-        {
-            add { }
-            remove { }
-        }
-
-        public int Start()
-        {
-            StartCalls++;
-            return 0;
-        }
-
-        public int Pause() => 0;
-
-        public int Resume() => 0;
-
-        public int Stop() => 0;
-
-        public int Seek(double positionSeconds) => 0;
-
-        public int AddAudioSource(IAudioSource source)
-        {
-            AddAudioSourceCalls++;
-            return AddAudioSourceReturnCode;
-        }
-
-        public int RemoveAudioSource(IAudioSource source)
-        {
-            RemoveAudioSourceCalls++;
-            return 0;
-        }
-
-        public int AddVideoSource(IVideoSource source)
-        {
-            AddVideoSourceCalls++;
-            return AddVideoSourceReturnCode;
-        }
-
-        public int RemoveVideoSource(IVideoSource source)
-        {
-            RemoveVideoSourceCalls++;
-            return 0;
-        }
-
-        public int ConfigureAudioSourceDetachOptions(MixerSourceDetachOptions options) => 0;
-
-        public int ConfigureVideoSourceDetachOptions(MixerSourceDetachOptions options) => 0;
-
-        public int SetClockType(ClockType clockType) => MixerClockTypeRules.Validate(MixerKind.AudioVideo, clockType);
-
-        public int SetSyncMode(AudioVideoSyncMode syncMode) => 0;
-
-        public int SetActiveVideoSource(IVideoSource source)
-        {
-            SetActiveVideoSourceCalls++;
-            return SetActiveVideoSourceReturnCode;
-        }
-
-        public int AddAudioOutput(IAudioOutput output) => 0;
-
-        public int RemoveAudioOutput(IAudioOutput output) => 0;
-
-        public int AddVideoOutput(IVideoOutput output) => 0;
-
-        public int RemoveVideoOutput(IVideoOutput output) => 0;
-    }
 }
-

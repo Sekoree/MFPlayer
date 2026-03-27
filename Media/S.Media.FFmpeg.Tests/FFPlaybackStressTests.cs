@@ -45,4 +45,3 @@ public sealed class FFPlaybackStressTests
         Assert.Equal(MediaResult.Success, source.Stop());
     }
 }
-

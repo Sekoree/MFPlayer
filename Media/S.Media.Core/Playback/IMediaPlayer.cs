@@ -11,7 +11,14 @@ namespace S.Media.Core.Playback;
 public interface IMediaPlayer : IAudioVideoMixer
 {
     /// <summary>
-    /// Attaches the media item's sources to the mixer and starts playback.
+    /// Consumer-facing playback config. When set, <see cref="Play"/> will use this config
+    /// to start the playback pump threads automatically.
+    /// </summary>
+    AudioVideoMixerConfig? PlaybackConfig { get; set; }
+
+    /// <summary>
+    /// Attaches the media item's sources to the mixer and starts playback,
+    /// including pump threads via <see cref="IAudioVideoMixer.StartPlayback"/>.
     /// </summary>
     int Play(IMediaItem media);
 }

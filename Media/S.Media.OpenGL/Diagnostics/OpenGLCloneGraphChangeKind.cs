@@ -6,4 +6,3 @@ public enum OpenGLCloneGraphChangeKind
     Detached = 1,
     Destroyed = 2,
 }
-

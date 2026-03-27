@@ -1,24 +1,34 @@
 # Setup and Prerequisites
 
-This project uses FFmpeg-backed decoding with video output adapters and OwnAudio for audio transport/mixing.
+This project uses FFmpeg-backed decoding, PortAudio for audio transport, and OpenGL (via SDL3 or Avalonia) for video output.
 
 ## 1) Required projects
 
 Core libraries:
 
-- `VideoLibs/Seko.OwnAudioNET.Video`
-- `VideoLibs/Seko.OwnAudioNET.Video.Engine`
+- `Media/S.Media.Core` — interfaces, error codes, mixer, clock, player
+- `Media/S.Media.FFmpeg` — FFmpeg-backed media decoding
+- `Media/S.Media.PortAudio` — PortAudio audio engine and output
+- `Media/S.Media.OpenGL` — OpenGL video output engine
 
-Output libraries (pick one or both):
+Output adapters (pick one or both):
 
-- `VideoLibs/Seko.OwnAudioNET.Video.SDL3`
-- `VideoLibs/Seko.OwnAudioNET.Video.Avalonia`
+- `Media/S.Media.OpenGL.SDL3` — SDL3 standalone video window
+- `Media/S.Media.OpenGL.Avalonia` — Avalonia embedded GL control
+
+Native wrappers:
+
+- `Audio/PALib` — PortAudio P/Invoke bindings
+- `NDI/NDILib` — NDI SDK P/Invoke bindings
+- `MIDI/PMLib` — PortMidi P/Invoke bindings
 
 Sample apps:
 
-- `Test/AudioEx`
-- `Test/VideoTest`
-- `Test/NdiVideoReceive`
+- `Test/SimpleAudioTest`
+- `Test/SimpleVideoTest`
+- `Test/MediaPlayerTest`
+- `Test/AVMixerTest`
+- `Test/NDIVideoReceive`
 
 ## 2) FFmpeg runtime
 
@@ -33,27 +43,26 @@ Examples in this repo also probe common Linux paths (`/lib`, `/usr/lib`, `/usr/l
 ## 3) Build commands
 
 ```fish
-dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video/Seko.OwnAudioNET.Video.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/VideoLibs/Seko.OwnAudioNET.Video.Engine/Seko.OwnAudioNET.Video.Engine.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/Test/AudioEx/AudioEx.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/Test/VideoTest/VideoTest.csproj" -c Release
-dotnet build "/home/seko/RiderProjects/MFPlayer/Test/NdiVideoReceive/NdiVideoReceive.csproj" -c Release
+dotnet build MFPlayer.sln -c Release
+```
+
+Or build individual test apps:
+
+```fish
+dotnet build Test/SimpleAudioTest/SimpleAudioTest.csproj -c Release
+dotnet build Test/MediaPlayerTest/MediaPlayerTest.csproj -c Release
+dotnet build Test/NDIVideoReceive/NDIVideoReceive.csproj -c Release
 ```
 
 ## 4) Runtime toggles used by sample apps
 
+- `SMEDIA_TEST_INPUT`
+  - Path to a media file used by test apps (also accepted via `--input <path>`)
+- `FFMPEG_ROOT`
+  - optional FFmpeg root override
 - `AUDIOEX_USE_SHARED_DEMUX`
   - `0` disables shared demux in `AudioEx`
   - unset or non-zero enables shared demux
-- `VIDEOTEST_USE_SHARED_DEMUX`
-  - `0` disables shared demux in `VideoTest`
-  - unset or non-zero enables shared demux
-- `FFMPEG_ROOT`
-  - optional FFmpeg root override
-- `AUDIOEX_VIDEO_THREADS`
-  - optional explicit video decoder thread count override for `AudioEx`
-- `VIDEOTEST_VIDEO_THREADS`
-  - optional explicit video decoder thread count override for `VideoTest`
 
 ## 5) Common troubleshooting
 
@@ -62,6 +71,5 @@ dotnet build "/home/seko/RiderProjects/MFPlayer/Test/NdiVideoReceive/NdiVideoRec
 - FFmpeg load issues:
   - set `FFMPEG_ROOT` and verify shared libraries are present.
 - Clock mismatch symptoms:
-  - prefer `VideoClockSyncMode.AudioLed` for A/V playback.
-  - review `AudioVideoDriftCorrectionConfig` values if drift correction is too weak/aggressive.
-
+  - use `AudioVideoSyncMode.Synced` (default) for A/V playback.
+  - drift correction is handled automatically by the mixer.

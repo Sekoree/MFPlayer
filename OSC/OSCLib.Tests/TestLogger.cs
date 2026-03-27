@@ -28,4 +28,3 @@ internal sealed class TestLogger<T> : ILogger<T>
 
     internal readonly record struct LogEntry(LogLevel Level, string Message, Exception? Exception);
 }
-

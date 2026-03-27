@@ -14,4 +14,3 @@ public sealed record AudioEngineConfig
 
     public bool FailOnDeviceLoss { get; init; }
 }
-

@@ -55,4 +55,3 @@ public static class PortAudioLibraryResolver
         return PortAudioLibraryNames.LinuxCandidates;
     }
 }
-

@@ -6,4 +6,3 @@ public enum VideoOutputBackpressureMode
     DropOldest = 1,
     Wait = 2,
 }
-

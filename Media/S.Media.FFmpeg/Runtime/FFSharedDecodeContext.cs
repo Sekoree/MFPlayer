@@ -46,9 +46,6 @@ public sealed class FFSharedDecodeContext : IDisposable
                 ? new FFStreamDescriptor
                 {
                     StreamIndex = openOptions.AudioStreamIndex ?? 0,
-                    CodecName = "pcm_f32le",
-                    SampleRate = 48_000,
-                    ChannelCount = 2,
                 }
                 : null;
 
@@ -56,10 +53,6 @@ public sealed class FFSharedDecodeContext : IDisposable
                 ? new FFStreamDescriptor
                 {
                     StreamIndex = openOptions.VideoStreamIndex ?? 0,
-                    CodecName = "placeholder_rgba",
-                    Width = 2,
-                    Height = 2,
-                    FrameRate = 30d,
                 }
                 : null;
 
@@ -120,6 +113,19 @@ public sealed class FFSharedDecodeContext : IDisposable
         return changed;
     }
 
+    internal void ClearStream(bool audio)
+    {
+        lock (_gate)
+        {
+            if (_disposed || !IsOpen) return;
+
+            if (audio)
+                AudioStream = null;
+            else
+                VideoStream = null;
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)
@@ -138,4 +144,3 @@ public sealed class FFSharedDecodeContext : IDisposable
         }
     }
 }
-

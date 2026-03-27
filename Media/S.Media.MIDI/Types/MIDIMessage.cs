@@ -29,4 +29,3 @@ public readonly record struct MIDIMessage(
             Data2: data2);
     }
 }
-

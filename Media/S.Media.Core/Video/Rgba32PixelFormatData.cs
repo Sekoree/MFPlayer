@@ -6,4 +6,3 @@ public readonly record struct Rgba32PixelFormatData : IPixelFormatData
 
     public int BytesPerPixel => 4;
 }
-

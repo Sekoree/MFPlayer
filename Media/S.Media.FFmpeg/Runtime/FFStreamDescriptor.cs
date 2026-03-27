@@ -18,4 +18,3 @@ public readonly record struct FFStreamDescriptor
 
     public double? FrameRate { get; init; }
 }
-

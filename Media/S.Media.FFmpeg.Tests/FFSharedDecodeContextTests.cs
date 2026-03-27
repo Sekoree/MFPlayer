@@ -68,4 +68,3 @@ public sealed class FFSharedDecodeContextTests
         Assert.Equal(1080, context.VideoStream.Value.Height);
     }
 }
-

@@ -14,16 +14,13 @@ public sealed class AudioVideoMixerClockTypeTests
         Assert.Equal(ClockType.Hybrid, mixer.ClockType);
     }
 
-    [Theory]
-    [InlineData(ClockType.AudioLed)]
-    [InlineData(ClockType.VideoLed)]
-    public void SetClockType_ReturnsInvalid_ForSingleDomainTypesOnAudioVideoMixer(ClockType clockType)
+    [Fact]
+    public void SetClockType_ReturnsInvalid_ForUnknownClockType()
     {
         var mixer = new AudioVideoMixer();
 
-        var result = mixer.SetClockType(clockType);
+        var result = mixer.SetClockType((ClockType)99);
 
         Assert.Equal((int)MediaErrorCode.MixerClockTypeInvalid, result);
     }
 }
-

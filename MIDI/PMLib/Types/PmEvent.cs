@@ -38,4 +38,3 @@ public struct PmEvent
     /// <summary>Extracts the second data byte (e.g. velocity or controller value).</summary>
     public static byte GetData2(uint message) => (byte)((message >> 16) & 0xFF);
 }
-

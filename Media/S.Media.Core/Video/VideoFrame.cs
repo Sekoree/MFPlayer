@@ -232,4 +232,3 @@ public sealed class VideoFrame : IDisposable
         _releaseAction?.Invoke(this);
     }
 }
-

@@ -22,4 +22,3 @@ public sealed record FFmpegOpenOptions
 
     public bool EnableExternalClockCorrection { get; init; }
 }
-

@@ -15,4 +15,3 @@ public sealed class OpenGLCloneGraphChangedEventArgs : EventArgs
 
     public OpenGLCloneGraphChangeKind ChangeKind { get; }
 }
-

@@ -5,4 +5,3 @@ public readonly record struct AudioHostApiInfo(
     string Name,
     bool IsDefault,
     int DeviceCount);
-

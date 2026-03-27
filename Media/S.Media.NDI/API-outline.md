@@ -10,8 +10,8 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `int Initialize(NDIIntegrationOptions integrationOptions, NDILimitsOptions limitsOptions, NDIDiagnosticsOptions diagnosticsOptions)`
   - `int Terminate()`
   - `bool IsInitialized { get; }`
-  - `int CreateAudioSource(NdiReceiver receiver, in NDISourceOptions sourceOptions, out NDIAudioSource? source)`
-  - `int CreateVideoSource(NdiReceiver receiver, in NDISourceOptions sourceOptions, out NDIVideoSource? source)`
+  - `int CreateAudioSource(NDIReceiver receiver, in NDISourceOptions sourceOptions, out NDIAudioSource? source)`
+  - `int CreateVideoSource(NDIReceiver receiver, in NDISourceOptions sourceOptions, out NDIVideoSource? source)`
   - `int CreateOutput(string outputName, in NDIOutputOptions outputOptions, out NDIVideoOutput? output)`
   - `int GetDiagnosticsSnapshot(out NDIEngineDiagnostics snapshot)`
 
@@ -137,7 +137,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `sealed class NDIMediaItem : IMediaItem, IDynamicMetadata`
 - Planned API:
   - `NDIMediaItem(NdiDiscoveredSource source, NDIIntegrationOptions? options = null)`
-  - `NDIMediaItem(NdiReceiver receiver, NDIIntegrationOptions? options = null)`
+  - `NDIMediaItem(NDIReceiver receiver, NDIIntegrationOptions? options = null)`
   - `int CreateAudioSource(out NDIAudioSource? source)`
   - `int CreateVideoSource(out NDIVideoSource? source)`
   - `IReadOnlyList<AudioStreamInfo> AudioStreams { get; }`
@@ -175,7 +175,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 - `NDIVideoOutput.Start()` returns `NDIOutputAudioStreamDisabled` when `RequireAudioPathOnStart` is enabled and the target sender path is video-only.
 - External clock correction is opt-in through `EnableExternalClockCorrection`; timestamp-led behavior remains default.
 - External clock unavailability (for example network/session loss in NDI clock path) must return `MediaExternalClockUnavailable` with no implicit fallback when external clock mode is explicitly configured.
-- NDI-specific public types (`NdiDiscoveredSource`, `NdiReceiver`, `NDIVideoSendFormat`) are defined in the NDI integration layer and should not leak legacy `Seko.OwnAudioNET.*` types.
+- NDI-specific public types (`NdiDiscoveredSource`, `NDIReceiver`, `NDIVideoSendFormat`) are defined in the NDI integration layer and should not leak legacy `Seko.OwnAudioNET.*` types.
 - Failure atomicity: failed start/stop/terminate and output-push lifecycle operations must not leave partially-open source/output runtime state.
 
 ## Initial NDI Error Code Picks (`5000-5199`)

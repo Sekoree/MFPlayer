@@ -67,31 +67,25 @@ internal static class Program
             if (viewInit != MediaResult.Success) { Console.Error.WriteLine($"SDL3 init failed: {viewInit}"); return 4; }
             if (view.Start(new VideoOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("SDL3 start failed."); return 4; }
 
-            // MediaPlayer via AudioVideoMixer
-            var mixer = new AudioVideoMixer();
-            var player = new MediaPlayer(mixer);
+            // MediaPlayer (inherits AudioVideoMixer directly)
+            var player = new MediaPlayer();
             player.AddAudioOutput(audioOutput);
             player.AddVideoOutput(view);
 
             var channels = Math.Max(1, media.AudioSource?.StreamInfo.ChannelCount.GetValueOrDefault(2) ?? 2);
             var routeMap = channels <= 1 ? new[] { 0, 0 } : new[] { 0, 1 };
 
-            var playCode = player.Play(media);
-            if (playCode != MediaResult.Success)
-            {
-                Console.Error.WriteLine($"Play failed: {playCode}");
-                return 5;
-            }
-
-            var startPlayback = mixer.StartPlayback(new AudioVideoMixerConfig
+            player.PlaybackConfig = new AudioVideoMixerConfig
             {
                 SourceChannelCount = channels,
                 RouteMap = routeMap,
                 PresentOnCallerThread = true,
-            });
-            if (startPlayback != MediaResult.Success)
+            };
+
+            var playCode = player.Play(media);
+            if (playCode != MediaResult.Success)
             {
-                Console.Error.WriteLine($"StartPlayback failed: {startPlayback}");
+                Console.Error.WriteLine($"Play failed: {playCode}");
                 return 5;
             }
 
@@ -104,16 +98,16 @@ internal static class Program
 
             while (!cancel.IsCancellationRequested && DateTime.UtcNow < deadline)
             {
-                var tickDelay = mixer.TickVideoPresentation();
+                var tickDelay = player.TickVideoPresentation();
 
                 if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
                 {
-                    var info = mixer.GetDebugInfo();
+                    var info = player.GetDebugInfo();
                     if (info.HasValue)
                     {
                         var d = info.Value;
                         Console.WriteLine(
-                            $"pos={mixer.PositionSeconds:0.###}s | vPushed={d.VideoPushed} vDrop={d.VideoLateDrops} " +
+                            $"pos={player.PositionSeconds:0.###}s | vPushed={d.VideoPushed} vDrop={d.VideoLateDrops} " +
                             $"aFrames={d.AudioPushedFrames} aFail={d.AudioPushFailures} drift={d.DriftMs:F1}ms");
                     }
                     lastStatus = DateTime.UtcNow;
@@ -123,7 +117,7 @@ internal static class Program
                 Thread.Sleep(sleepMs);
             }
 
-            _ = mixer.StopPlayback();
+            _ = player.StopPlayback();
             _ = player.Stop();
             audioOutput.Stop();
             audioOutput.Dispose();
@@ -166,4 +160,3 @@ internal static class Program
         Console.WriteLine("  --seconds <n>          Playback duration (default: 30)");
     }
 }
-

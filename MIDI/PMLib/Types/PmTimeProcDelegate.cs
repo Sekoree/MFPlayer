@@ -11,4 +11,3 @@ namespace PMLib.Types;
 /// </summary>
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int PmTimeProcDelegate(nint timeInfo);
-

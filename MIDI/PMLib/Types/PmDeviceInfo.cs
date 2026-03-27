@@ -32,4 +32,3 @@ public struct PmDeviceInfo
     /// <summary>Human-readable device name, e.g. <c>"USB MidiSport 1x1"</c>.</summary>
     public readonly string? Name => Marshal.PtrToStringUTF8(_name);
 }
-

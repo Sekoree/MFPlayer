@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\NDI\NdiLib\NdiLib.csproj" />
+    <ProjectReference Include="..\..\NDI\NDILib\NDILib.csproj" />
     <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
     <ProjectReference Include="..\..\Media\S.Media.NDI\S.Media.NDI.csproj" />
     <ProjectReference Include="..\..\Media\S.Media.PortAudio\S.Media.PortAudio.csproj" />

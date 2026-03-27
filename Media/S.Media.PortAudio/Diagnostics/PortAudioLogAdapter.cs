@@ -32,4 +32,3 @@ public sealed class PortAudioLogAdapter
         _logger.LogError(exception, "{Message}", message);
     }
 }
-

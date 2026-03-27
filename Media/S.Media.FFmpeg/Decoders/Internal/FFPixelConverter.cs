@@ -428,4 +428,3 @@ internal readonly struct FFVideoConvertResult
 
     public bool HasNativePixelMetadata => NativePixelFormat.HasValue;
 }
-

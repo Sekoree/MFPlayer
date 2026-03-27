@@ -239,4 +239,3 @@ public sealed class NDIEngineAndOptionsTests
             plane0Stride: 8);
     }
 }
-

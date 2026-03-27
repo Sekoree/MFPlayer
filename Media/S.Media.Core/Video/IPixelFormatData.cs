@@ -4,4 +4,3 @@ public interface IPixelFormatData
 {
     VideoPixelFormat Format { get; }
 }
-

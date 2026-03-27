@@ -4,7 +4,7 @@ using PMLib.Types;
 namespace PMLib.MessageTypes;
 
 /// <summary>MIDI Note Off message (status <c>0x8n</c>).</summary>
-public readonly struct NoteOff : IMidiMessage
+public readonly struct NoteOff : IMIDIMessage
 {
     /// <summary>MIDI channel, 0–15.</summary>
     public byte Channel { get; }
@@ -13,7 +13,7 @@ public readonly struct NoteOff : IMidiMessage
     /// <summary>Release velocity, 0–127 (many devices ignore this).</summary>
     public byte Velocity { get; }
 
-    public MidiMessageType MessageType => MidiMessageType.NoteOff;
+    public MIDIMessageType MessageType => MIDIMessageType.NoteOff;
 
     public NoteOff(byte channel, byte note, byte velocity = 0)
     {
@@ -26,4 +26,3 @@ public readonly struct NoteOff : IMidiMessage
         => Native.Pm_WriteShort(stream, timestamp,
             PmEvent.CreateMessage((byte)(0x80 | (Channel & 0x0F)), Note, Velocity));
 }
-

@@ -30,4 +30,3 @@ public sealed record NDIDiagnosticsOptions
         };
     }
 }
-

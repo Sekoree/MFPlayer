@@ -15,4 +15,3 @@ public sealed class AudioSourceErrorEventArgs : EventArgs
 
     public string? Message { get; }
 }
-

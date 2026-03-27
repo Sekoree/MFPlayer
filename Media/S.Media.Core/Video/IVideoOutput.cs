@@ -12,4 +12,3 @@ public interface IVideoOutput : IDisposable
 
     int PushFrame(VideoFrame frame, TimeSpan presentationTime);
 }
-

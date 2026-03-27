@@ -12,4 +12,3 @@ public static class PaErrorHelpers
     public static string GetLastHostErrorTextSafe()
         => Native.Pa_GetLastHostErrorInfo()?.ErrorText ?? string.Empty;
 }
-

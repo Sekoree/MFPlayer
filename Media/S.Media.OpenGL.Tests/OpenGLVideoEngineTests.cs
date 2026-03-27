@@ -152,4 +152,3 @@ public sealed class OpenGLVideoEngineTests
             plane0Stride: 8);
     }
 }
-

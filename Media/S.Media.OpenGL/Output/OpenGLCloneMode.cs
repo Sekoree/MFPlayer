@@ -6,4 +6,3 @@ public enum OpenGLCloneMode
     SharedFboBlit = 1,
     CopyFallback = 2,
 }
-

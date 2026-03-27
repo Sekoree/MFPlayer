@@ -30,4 +30,3 @@ public interface IVideoSource : IDisposable
 
     bool IsSeekable { get; }
 }
-

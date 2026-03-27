@@ -8,7 +8,7 @@ namespace PMLib.MessageTypes;
 /// The value is inherently 14-bit: <c>-8192</c> (full down) to <c>+8191</c> (full up),
 /// with <c>0</c> as the centre / no-bend position.
 /// </summary>
-public readonly struct PitchBend : IMidiMessage
+public readonly struct PitchBend : IMIDIMessage
 {
     /// <summary>MIDI channel, 0–15.</summary>
     public byte Channel { get; }
@@ -24,7 +24,7 @@ public readonly struct PitchBend : IMidiMessage
     /// </summary>
     public int RawValue => Math.Clamp(Value + 8192, 0, 16383);
 
-    public MidiMessageType MessageType => MidiMessageType.PitchBend;
+    public MIDIMessageType MessageType => MIDIMessageType.PitchBend;
 
     public PitchBend(byte channel, int value)
     {
@@ -41,4 +41,3 @@ public readonly struct PitchBend : IMidiMessage
             PmEvent.CreateMessage((byte)(0xE0 | (Channel & 0x0F)), lsb, msb));
     }
 }
-

@@ -287,4 +287,3 @@ public sealed class MIDIEngine : IDisposable
         return null;
     }
 }
-

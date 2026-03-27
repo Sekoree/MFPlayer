@@ -7,7 +7,7 @@ namespace PMLib.MessageTypes;
 /// MIDI Polyphonic (per-note) Aftertouch message (status <c>0xAn</c>).
 /// Reports the pressure applied to a specific key after it is pressed.
 /// </summary>
-public readonly struct PolyphonicAftertouch : IMidiMessage
+public readonly struct PolyphonicAftertouch : IMIDIMessage
 {
     /// <summary>MIDI channel, 0–15.</summary>
     public byte Channel { get; }
@@ -16,7 +16,7 @@ public readonly struct PolyphonicAftertouch : IMidiMessage
     /// <summary>Pressure amount, 0–127.</summary>
     public byte Pressure { get; }
 
-    public MidiMessageType MessageType => MidiMessageType.PolyphonicAftertouch;
+    public MIDIMessageType MessageType => MIDIMessageType.PolyphonicAftertouch;
 
     public PolyphonicAftertouch(byte channel, byte note, byte pressure)
     {
@@ -29,4 +29,3 @@ public readonly struct PolyphonicAftertouch : IMidiMessage
         => Native.Pm_WriteShort(stream, timestamp,
             PmEvent.CreateMessage((byte)(0xA0 | (Channel & 0x0F)), Note, Pressure));
 }
-

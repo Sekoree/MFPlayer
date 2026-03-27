@@ -165,4 +165,3 @@ public sealed class SDL3HudRenderer
             .Replace("→", "/", StringComparison.Ordinal);
     }
 }
-

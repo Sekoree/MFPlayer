@@ -58,25 +58,20 @@ internal static class Program
                 return 3;
             }
 
-            if (source1.Start() != MediaResult.Success) { Console.Error.WriteLine("Source1 start failed."); return 3; }
-            if (source2.Start() != MediaResult.Success) { Console.Error.WriteLine("Source2 start failed."); return 3; }
-
             var source1Duration = source1.DurationSeconds;
             var offset2 = double.IsFinite(source1Duration) && source1Duration > 0 ? source1Duration : 10;
 
             Console.WriteLine($"Source1 duration: {source1Duration:0.###}s → Source2 offset: {offset2:0.###}s");
 
-            var mixer = new AudioMixer();
-            var add1 = mixer.AddSource(source1, 0);
-            var add2 = mixer.AddSource(source2, offset2);
+            // Use AudioVideoMixer (audio-only, no video sources/outputs)
+            using var mixer = new AudioVideoMixer();
+            var add1 = mixer.AddAudioSource(source1, 0);
+            var add2 = mixer.AddAudioSource(source2, offset2);
             if (add1 != MediaResult.Success || add2 != MediaResult.Success)
             {
                 Console.Error.WriteLine($"Mixer add failed: s1={add1}, s2={add2}");
                 return 5;
             }
-
-            var mixerStart = mixer.Start();
-            if (mixerStart != MediaResult.Success) { Console.Error.WriteLine($"Mixer start failed: {mixerStart}"); return 5; }
 
             using var engine = new PortAudioEngine();
             var init = engine.Initialize(new AudioEngineConfig
@@ -90,62 +85,53 @@ internal static class Program
             if (createOut != MediaResult.Success || output is null) { Console.Error.WriteLine($"Create output failed: {createOut}"); return 4; }
             if (output.Start(new AudioOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("Output start failed."); return 4; }
 
+            mixer.AddAudioOutput(output);
+
             Console.WriteLine($"Output device: {output.Device.Name}");
-            Console.WriteLine($"Playing ~{seconds:0.#}s via AudioMixer (2 sources with offset). Ctrl+C to stop.");
+            Console.WriteLine($"Playing ~{seconds:0.#}s via AudioVideoMixer (2 audio sources with offset). Ctrl+C to stop.");
 
             var channels = Math.Max(1, source1.StreamInfo.ChannelCount.GetValueOrDefault(2));
             var sampleRate = Math.Max(1, source1.StreamInfo.SampleRate.GetValueOrDefault(48_000));
             var routeMap = channels <= 1 ? new[] { 0, 0 } : new[] { 0, 1 };
-            var buffer = new float[1024 * channels];
+
+            var startPlayback = mixer.StartPlayback(new AudioVideoMixerConfig
+            {
+                SourceChannelCount = channels,
+                OutputSampleRate = sampleRate,
+                RouteMap = routeMap,
+            });
+            if (startPlayback != MediaResult.Success)
+            {
+                Console.Error.WriteLine($"StartPlayback failed: {startPlayback}");
+                return 5;
+            }
+
             var deadline = DateTime.UtcNow.AddSeconds(seconds);
             var lastStatus = DateTime.UtcNow;
 
             var cancel = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
 
-            // Read from whichever source the mixer clock position indicates
             while (!cancel.IsCancellationRequested && DateTime.UtcNow < deadline)
             {
-                var clockPos = mixer.PositionSeconds;
-                var activeSource = clockPos < offset2 ? source1 : source2;
-
-                var read = activeSource.ReadSamples(buffer, 1024, out var framesRead);
-                if (read != MediaResult.Success || framesRead <= 0)
-                {
-                    // If source1 ended, switch to source2
-                    if (ReferenceEquals(activeSource, source1) && clockPos < offset2)
-                    {
-                        // Advance clock past offset
-                        _ = mixer.Seek(offset2);
-                        continue;
-                    }
-                    break;
-                }
-
-                var frame = new AudioFrame(
-                    Samples: buffer,
-                    FrameCount: framesRead,
-                    SourceChannelCount: channels,
-                    Layout: AudioFrameLayout.Interleaved,
-                    SampleRate: sampleRate,
-                    PresentationTime: TimeSpan.FromSeconds(activeSource.PositionSeconds));
-
-                var push = output.PushFrame(in frame, routeMap, channels);
-                if (push != MediaResult.Success) break;
-
                 if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
                 {
-                    var srcName = ReferenceEquals(activeSource, source1) ? "Source1" : "Source2";
-                    Console.WriteLine($"active={srcName} mixerPos={clockPos:0.###}s srcPos={activeSource.PositionSeconds:0.###}s");
+                    var info = mixer.GetDebugInfo();
+                    if (info.HasValue)
+                    {
+                        var d = info.Value;
+                        Console.WriteLine(
+                            $"pos={mixer.PositionSeconds:0.###}s aFrames={d.AudioPushedFrames} aFail={d.AudioPushFailures} aEmpty={d.AudioEmptyReads}");
+                    }
                     lastStatus = DateTime.UtcNow;
                 }
+
+                Thread.Sleep(100);
             }
 
+            _ = mixer.StopPlayback();
             output.Stop();
             output.Dispose();
-            _ = mixer.Stop();
-            source1.Stop();
-            source2.Stop();
             engine.Stop();
 
             Console.WriteLine("Done.");
@@ -174,7 +160,7 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("AudioMixerTest — play 2 audio files sequentially via AudioMixer offset");
+        Console.WriteLine("AudioMixerTest — play 2 audio files via AudioVideoMixer with start offsets");
         Console.WriteLine("Usage: AudioMixerTest --input <file1> [--input2 <file2>] [options]");
         Console.WriteLine();
         Console.WriteLine("Options:");
@@ -185,4 +171,3 @@ internal static class Program
         Console.WriteLine("  --seconds <n>          Total playback duration (default: 30)");
     }
 }
-

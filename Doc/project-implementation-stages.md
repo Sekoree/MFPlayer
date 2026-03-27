@@ -50,8 +50,8 @@ This page tracks the current implementation stage for each project in `MFPlayer.
 | Project | Stage | Notes |
 | --- | --- | --- |
 | `PMLib/PMLib.csproj` | Implemented | MIDI base interop/support library used during migration. |
-| `NDI/NdiLib/NdiLib.csproj` | Implemented | NDI native interop layer used by `S.Media.NDI`. |
-| `NDI/NdiLib.Smoke/NdiLib.Smoke.csproj` | Validation | Manual NDI binding/runtime checks. |
+| `NDI/NDILib/NDILib.csproj` | Implemented | NDI native interop layer used by `S.Media.NDI`. |
+| `NDI/NDILib.Smoke/NDILib.Smoke.csproj` | Validation | Manual NDI binding/runtime checks. |
 | `OSC/OSCLib/OSCLib.csproj` | Implemented | OSC library is functional and tested. |
 | `OSC/OSCLib.Tests/OSCLib.Tests.csproj` | Validation | Automated OSC tests. |
 | `OSC/OSCLib.Smoke/OSCLib.Smoke.csproj` | Validation | Manual OSC smoke checks. |
@@ -62,22 +62,14 @@ This page tracks the current implementation stage for each project in `MFPlayer.
 | --- | --- | --- |
 | `Test/FirstAudioPlayback.Smoke/FirstAudioPlayback.Smoke.csproj` | Validation | Direct decoder -> output smoke runner; current first-audio bring-up harness. |
 | `Test/AudioEx/AudioEx.csproj` | In Progress | Migrated to `S.Media.FFmpeg` + `S.Media.PortAudio`; broader A/V parity still in progress. |
-| `Test/NdiVideoReceive/NdiVideoReceive.csproj` | In Progress | Migrated to `S.Media.NDI` discovery/source-read smoke path; output/render parity still in progress. |
+| `Test/NDIVideoReceive/NDIVideoReceive.csproj` | In Progress | Migrated to `S.Media.NDI` discovery/source-read smoke path; output/render parity still in progress. |
 | `Test/VideoStress/VideoStress.csproj` | In Progress | Canonical Avalonia stress harness on `S.Media.*` references; runtime porting in progress. |
-| `Test/VideoTest/VideoTest.csproj` | Legacy-Migration | Legacy Avalonia harness retained as behavior/reference source during port. |
 
-## Legacy VideoLibs (migration source)
+## Legacy VideoLibs
 
-| Project | Stage | Notes |
-| --- | --- | --- |
-| `VideoLibs/Seko.OwnAudioNET.Video/Seko.OwnAudioNET.Video.csproj` | Legacy-Migration | Legacy implementation kept as adaptation reference. |
-| `VideoLibs/Seko.OwnAudioNET.Video.Engine/Seko.OwnAudioNET.Video.Engine.csproj` | Legacy-Migration | Source reference for migration to `S.Media.*`. |
-| `VideoLibs/Seko.OwnAudioNET.Video.NDI/Seko.OwnAudioNET.Video.NDI.csproj` | Legacy-Migration | Source reference for NDI behavior parity. |
-| `VideoLibs/Seko.OwnAudioNET.Video.Avalonia/Seko.OwnAudioNET.Video.Avalonia.csproj` | Legacy-Migration | Source reference for Avalonia adapter behavior. |
-| `VideoLibs/Seko.OwnAudioNET.Video.SDL3/Seko.OwnAudioNET.Video.SDL3.csproj` | Legacy-Migration | Source reference for SDL3 adapter behavior. |
+Removed. The `VideoLibs/Seko.OwnAudioNET.*` projects have been fully migrated to `S.Media.*` and removed from the solution and filesystem. The original source remains available in `Reference/OwnAudio/` for historical reference.
 
 ## Notes
 
 - This is a practical stage snapshot, not a strict release-readiness gate.
 - `Media/IMPLEMENTATION-STATUS.md` remains the compact execution/status snapshot.
-- Legacy and reference projects remain intentionally visible until migration completion and cleanup.

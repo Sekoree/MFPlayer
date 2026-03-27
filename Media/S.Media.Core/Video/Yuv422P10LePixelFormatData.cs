@@ -12,4 +12,3 @@ public readonly record struct Yuv422P10LePixelFormatData : IPixelFormatData
 
     public int ContainerBitsPerComponent => 16;
 }
-

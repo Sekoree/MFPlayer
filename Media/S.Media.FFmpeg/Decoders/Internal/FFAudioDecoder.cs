@@ -371,6 +371,89 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
                     output[(i * channelCount) + ch] = plane[i] / 32768f;
                 }
             }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_S32)
+        {
+            var tmp = new int[sampleCount];
+            Marshal.Copy((IntPtr)frame->extended_data[0], tmp, 0, tmp.Length);
+            for (var i = 0; i < tmp.Length; i++)
+            {
+                output[i] = tmp[i] / 2147483648f;
+            }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_S32P)
+        {
+            for (var ch = 0; ch < channelCount; ch++)
+            {
+                var plane = new int[Math.Max(1, frameCount)];
+                Marshal.Copy((IntPtr)frame->extended_data[ch], plane, 0, Math.Max(1, frameCount));
+                for (var i = 0; i < frameCount; i++)
+                {
+                    output[(i * channelCount) + ch] = plane[i] / 2147483648f;
+                }
+            }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_DBL)
+        {
+            var tmp = new double[sampleCount];
+            Marshal.Copy((IntPtr)frame->extended_data[0], tmp, 0, tmp.Length);
+            for (var i = 0; i < tmp.Length; i++)
+            {
+                output[i] = (float)tmp[i];
+            }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_DBLP)
+        {
+            for (var ch = 0; ch < channelCount; ch++)
+            {
+                var plane = new double[Math.Max(1, frameCount)];
+                Marshal.Copy((IntPtr)frame->extended_data[ch], plane, 0, Math.Max(1, frameCount));
+                for (var i = 0; i < frameCount; i++)
+                {
+                    output[(i * channelCount) + ch] = (float)plane[i];
+                }
+            }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_U8)
+        {
+            var tmp = new byte[sampleCount];
+            Marshal.Copy((IntPtr)frame->extended_data[0], tmp, 0, tmp.Length);
+            for (var i = 0; i < tmp.Length; i++)
+            {
+                output[i] = (tmp[i] - 128) / 128f;
+            }
+
+            return output;
+        }
+
+        if (format == AVSampleFormat.AV_SAMPLE_FMT_U8P)
+        {
+            for (var ch = 0; ch < channelCount; ch++)
+            {
+                var plane = new byte[Math.Max(1, frameCount)];
+                Marshal.Copy((IntPtr)frame->extended_data[ch], plane, 0, Math.Max(1, frameCount));
+                for (var i = 0; i < frameCount; i++)
+                {
+                    output[(i * channelCount) + ch] = (plane[i] - 128) / 128f;
+                }
+            }
+
+            return output;
         }
 
         return output;
@@ -423,4 +506,3 @@ internal readonly struct FFAudioDecodeResult
 
     public int? NativeSampleFormat { get; }
 }
-

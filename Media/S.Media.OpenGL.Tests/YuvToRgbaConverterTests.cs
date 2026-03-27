@@ -91,4 +91,3 @@ public sealed class YuvToRgbaConverterTests
         Assert.Equal((int)MediaErrorCode.OpenGLClonePixelFormatIncompatible, code);
     }
 }
-

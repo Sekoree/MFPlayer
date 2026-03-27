@@ -14,4 +14,3 @@ public interface IMediaClock
 
     int Seek(double positionSeconds);
 }
-

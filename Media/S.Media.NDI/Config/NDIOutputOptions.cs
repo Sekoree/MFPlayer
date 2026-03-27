@@ -29,4 +29,3 @@ public sealed record NDIOutputOptions
         return MediaResult.Success;
     }
 }
-

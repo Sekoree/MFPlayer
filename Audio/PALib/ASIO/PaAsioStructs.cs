@@ -17,4 +17,3 @@ public struct PaAsioStreamInfo
     public nuint flags;
     public nint channelSelectors;
 }
-

@@ -37,6 +37,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB
 		Doc\refactor-remaining-checklist.md = Doc\refactor-remaining-checklist.md
 		Doc\ndi-dropped-frame-remediation-plan.md = Doc\ndi-dropped-frame-remediation-plan.md
 		Doc\hard-cut-sweep.md = Doc\hard-cut-sweep.md
+		Doc\REFACTOR-2026-03-27.md = Doc\REFACTOR-2026-03-27.md
+		Doc\ADVANCED-ROUTING-PLAN-2026-03-27.md = Doc\ADVANCED-ROUTING-PLAN-2026-03-27.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"
@@ -44,11 +46,11 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB7
 		NDI\PROJECT-STATUS.md = NDI\PROJECT-STATUS.md
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NdiLib", "NDI\NdiLib\NdiLib.csproj", "{364EB31E-C31B-4874-AA82-5524BA8D06B9}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDILib", "NDI\NDILib\NDILib.csproj", "{364EB31E-C31B-4874-AA82-5524BA8D06B9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NdiLib.Smoke", "NDI\NdiLib.Smoke\NdiLib.Smoke.csproj", "{D536C0F8-B114-4F10-8D9F-152D9DA49742}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDILib.Smoke", "NDI\NDILib.Smoke\NDILib.Smoke.csproj", "{D536C0F8-B114-4F10-8D9F-152D9DA49742}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NdiVideoReceive", "Test\NdiVideoReceive\NdiVideoReceive.csproj", "{5DA56A07-AD4D-4843-A876-FFEA5C2BAC11}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDIVideoReceive", "Test\NDIVideoReceive\NDIVideoReceive.csproj", "{5DA56A07-AD4D-4843-A876-FFEA5C2BAC11}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Media", "Media", "{776AE86F-6A81-4B69-A48A-88A9293EB425}"
 	ProjectSection(SolutionItems) = preProject

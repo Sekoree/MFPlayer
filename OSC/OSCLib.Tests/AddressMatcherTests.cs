@@ -19,4 +19,3 @@ public class AddressMatcherTests
         Assert.Equal(expected, OSCAddressMatcher.IsMatch(pattern, address));
     }
 }
-

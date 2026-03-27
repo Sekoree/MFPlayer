@@ -34,4 +34,3 @@ public struct PaWinMmeStreamInfo
     public nuint deviceCount;
     public PaWinWaveFormatChannelMask channelMask;
 }
-

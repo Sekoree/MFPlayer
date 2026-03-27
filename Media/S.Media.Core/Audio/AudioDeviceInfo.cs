@@ -6,4 +6,3 @@ public readonly record struct AudioDeviceInfo(
 	string? HostApi = null,
 	bool IsDefaultInput = false,
 	bool IsDefaultOutput = false);
-

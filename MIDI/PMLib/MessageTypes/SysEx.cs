@@ -10,7 +10,7 @@ namespace PMLib.MessageTypes;
 /// <see cref="Data"/> must contain the full, well-formed SysEx byte sequence including
 /// the opening <c>0xF0</c> and the closing EOX <c>0xF7</c>.
 /// </remarks>
-public readonly struct SysEx : IMidiMessage
+public readonly struct SysEx : IMIDIMessage
 {
     /// <summary>
     /// The full SysEx byte array, including the <c>0xF0</c> start byte and the
@@ -18,7 +18,7 @@ public readonly struct SysEx : IMidiMessage
     /// </summary>
     public byte[] Data { get; }
 
-    public MidiMessageType MessageType => MidiMessageType.SysEx;
+    public MIDIMessageType MessageType => MIDIMessageType.SysEx;
 
     /// <param name="data">
     /// Full SysEx bytes, starting with <c>0xF0</c> and ending with <c>0xF7</c>.
@@ -28,4 +28,3 @@ public readonly struct SysEx : IMidiMessage
     public PmError WriteTo(nint stream, int timestamp)
         => Native.Pm_WriteSysEx(stream, timestamp, Data);
 }
-

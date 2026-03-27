@@ -160,4 +160,3 @@ public sealed class FFmpegConfigValidatorTests
         Assert.Equal((int)MediaErrorCode.FFmpegInvalidConfig, result);
     }
 }
-

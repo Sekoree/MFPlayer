@@ -8,12 +8,12 @@ namespace PMLib.MessageTypes;
 /// The position is a 14-bit count of MIDI beats (each beat = 6 MIDI clocks) since the
 /// start of the song, ranging from 0 to 16383.
 /// </summary>
-public readonly struct SongPosition : IMidiMessage
+public readonly struct SongPosition : IMIDIMessage
 {
     /// <summary>Beat position, 0–16383 (6 MIDI clocks per beat).</summary>
     public ushort Beats { get; }
 
-    public MidiMessageType MessageType => MidiMessageType.SongPosition;
+    public MIDIMessageType MessageType => MIDIMessageType.SongPosition;
 
     public SongPosition(ushort beats) => Beats = (ushort)(beats & 0x3FFF);
 
@@ -25,4 +25,3 @@ public readonly struct SongPosition : IMidiMessage
             PmEvent.CreateMessage(0xF2, lsb, msb));
     }
 }
-

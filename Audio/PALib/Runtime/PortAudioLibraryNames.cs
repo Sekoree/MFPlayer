@@ -8,4 +8,3 @@ public static class PortAudioLibraryNames
     public static readonly string[] MacCandidates = ["portaudio", "libportaudio.dylib"];
     public static readonly string[] WindowsCandidates = ["portaudio", "portaudio.dll"];
 }
-

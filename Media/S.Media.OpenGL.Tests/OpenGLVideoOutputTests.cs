@@ -39,4 +39,3 @@ public sealed class OpenGLVideoOutputTests
             plane0Stride: 8);
     }
 }
-

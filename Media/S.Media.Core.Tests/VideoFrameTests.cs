@@ -81,4 +81,3 @@ public sealed class VideoFrameTests
                 plane1Stride: 0));
     }
 }
-

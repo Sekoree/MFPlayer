@@ -20,4 +20,3 @@ internal static class Program
             .WithInterFont()
             .LogToTrace();
 }
-

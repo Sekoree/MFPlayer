@@ -286,7 +286,24 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
                 ? ResolveStreamIndex(formatContext, AVMediaType.AVMEDIA_TYPE_VIDEO, videoStreamIndex)
                 : -1;
 
-            if ((hasAudio && resolvedAudioStreamIndex < 0) || (hasVideo && resolvedVideoStreamIndex < 0))
+            // Exclude attached-picture streams (e.g. album art in FLAC/MP3).
+            // These are single-frame "video" streams that would cause the video reader
+            // to drain the entire format context looking for more packets, discarding
+            // all audio packets in the process and reaching premature EOF.
+            if (resolvedVideoStreamIndex >= 0)
+            {
+                var videoStream = formatContext->streams[resolvedVideoStreamIndex];
+                if ((videoStream->disposition & ffmpeg.AV_DISPOSITION_ATTACHED_PIC) != 0)
+                {
+                    resolvedVideoStreamIndex = -1;
+                }
+            }
+
+            // Fail only when none of the requested streams are found.
+            // Audio-only files (e.g. FLAC) legitimately have no video stream.
+            var foundAudio = hasAudio && resolvedAudioStreamIndex >= 0;
+            var foundVideo = hasVideo && resolvedVideoStreamIndex >= 0;
+            if (!foundAudio && !foundVideo)
             {
                 ffmpeg.avformat_close_input(&formatContext);
                 return false;
@@ -495,6 +512,7 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
 
         if (_disposed || _formatContext is null || _packet is null || streamIndex < 0)
         {
+            Console.Error.WriteLine($"[TRACE-PKT] TryReadPacketForStream: guard fail disposed={_disposed} fmtCtx={(nint)_formatContext} pkt={(nint)_packet} streamIdx={streamIndex}");
             return false;
         }
 
@@ -503,6 +521,7 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
             var readCode = ffmpeg.av_read_frame(_formatContext, _packet);
             if (readCode < 0)
             {
+                Console.Error.WriteLine($"[TRACE-PKT] av_read_frame returned {readCode} (0x{readCode:X8}) for streamIdx={streamIndex}");
                 return false;
             }
 
@@ -636,4 +655,3 @@ internal readonly record struct FFPacket(
     int? NativeTimeBaseDenominator = null,
     int? NativeFrameRateNumerator = null,
     int? NativeFrameRateDenominator = null);
-

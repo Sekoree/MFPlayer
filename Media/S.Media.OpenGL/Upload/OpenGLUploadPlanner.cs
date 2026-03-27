@@ -49,4 +49,3 @@ public sealed class OpenGLUploadPlanner
         return pixelFormat != VideoPixelFormat.Unknown;
     }
 }
-

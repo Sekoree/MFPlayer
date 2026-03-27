@@ -8,15 +8,15 @@ Scope:
 
 - `Media/S.Media.NDI/*` receive pipeline (`NDIAudioSource`, `NDIVideoSource`, `NDIEngine`)
 - `Test/NdiVideoReceive/Program.cs` preview harness behavior
-- Relevant NDI wrappers in `NDI/NdiLib/NdiWrappers.cs`
+- Relevant NDI wrappers in `NDI/NDILib/NDIWrappers.cs`
 
 ## Current-State Findings
 
 ## 1) Shared receiver is consumed independently by audio and video readers (highest risk)
 
-- Audio path calls `NdiReceiver.CaptureScoped(...)` in `Media/S.Media.NDI/Input/NDIAudioSource.cs` (`ReadSamples`).
-- Video path calls `NdiReceiver.CaptureScoped(...)` in `Media/S.Media.NDI/Input/NDIVideoSource.cs` (`ReadFrame`).
-- `CaptureScoped` frees whichever frame type it gets when disposed (`NDI/NdiLib/NdiWrappers.cs`), so one consumer can pull and discard frames intended for the other.
+- Audio path calls `NDIReceiver.CaptureScoped(...)` in `Media/S.Media.NDI/Input/NDIAudioSource.cs` (`ReadSamples`).
+- Video path calls `NDIReceiver.CaptureScoped(...)` in `Media/S.Media.NDI/Input/NDIVideoSource.cs` (`ReadFrame`).
+- `CaptureScoped` frees whichever frame type it gets when disposed (`NDI/NDILib/NDIWrappers.cs`), so one consumer can pull and discard frames intended for the other.
 - Effect: avoidable no-frame cases, bursty underruns, and frame starvation under load.
 
 ## 2) End-to-end pacing can miss frame budget
@@ -59,8 +59,8 @@ Scope:
 
 ## Progress Update (implemented)
 
-- Shared-capture contention mitigation is now in place through `Media/S.Media.NDI/Input/NdiCaptureCoordinator.cs`.
-  - `NDIAudioSource` and `NDIVideoSource` now consume staged managed packets instead of both calling `NdiReceiver.CaptureScoped(...)` independently.
+- Shared-capture contention mitigation is now in place through `Media/S.Media.NDI/Input/NDICaptureCoordinator.cs`.
+  - `NDIAudioSource` and `NDIVideoSource` now consume staged managed packets instead of both calling `NDIReceiver.CaptureScoped(...)` independently.
 - Video jitter dequeue behavior now primes once and then dequeues while frames are available.
 - `NDIQueueOverflowPolicy.DropNewest` now has distinct runtime behavior (drop incoming frame, keep queue contents).
 - Fallback cache now reuses a retained buffer instead of allocating a new `byte[]` every frame.
@@ -111,8 +111,8 @@ Goal: prevent cross-stream frame consumption loss.
 Changes:
 
 - Move to single ingest owner per receiver:
-  - Option A: dedicated ingest worker using `NdiReceiver.CaptureScoped`, demux to audio/video queues.
-  - Option B: adopt `NdiFrameSync` for receive pull and keep shared lock around frame-sync calls.
+  - Option A: dedicated ingest worker using `NDIReceiver.CaptureScoped`, demux to audio/video queues.
+  - Option B: adopt `NDIFrameSync` for receive pull and keep shared lock around frame-sync calls.
 - `NDIAudioSource` and `NDIVideoSource` become queue/ring consumers, not direct receiver pollers.
 
 Deliverables:

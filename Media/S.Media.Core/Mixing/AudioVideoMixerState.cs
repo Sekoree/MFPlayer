@@ -6,4 +6,3 @@ public enum AudioVideoMixerState
     Running = 1,
     Paused = 2,
 }
-

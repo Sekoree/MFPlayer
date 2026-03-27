@@ -16,9 +16,6 @@
     <PackageVersion Include="Avalonia.Android" Version="11.3.12" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.0.0" />
-    <PackageVersion Include="ManagedBass" Version="4.0.2" />
-    <PackageVersion Include="ManagedBass.Mix" Version="4.0.2" />
-    <PackageVersion Include="OwnAudioSharp.Basic" Version="2.6.1" />
     <PackageVersion Include="SDL3-CS" Version="3.4.2" />
     <PackageVersion Include="SDL3-CS.Native" Version="3.3.7" />
     <PackageVersion Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />

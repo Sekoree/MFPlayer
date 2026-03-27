@@ -32,4 +32,3 @@ public sealed class MIDILogAdapter
         _logger.LogError(exception, "{Message}", message);
     }
 }
-

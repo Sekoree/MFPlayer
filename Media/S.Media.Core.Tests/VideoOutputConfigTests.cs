@@ -58,4 +58,3 @@ public sealed class VideoOutputConfigTests
         Assert.Equal(MediaResult.Success, result);
     }
 }
-

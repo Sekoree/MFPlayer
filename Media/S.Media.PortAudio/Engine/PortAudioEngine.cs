@@ -631,4 +631,3 @@ public sealed class PortAudioEngine : IAudioEngine
         };
     }
 }
-

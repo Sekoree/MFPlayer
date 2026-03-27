@@ -6,4 +6,3 @@ public sealed record MixerSourceDetachOptions
 
     public bool DisposeOnDetach { get; init; }
 }
-

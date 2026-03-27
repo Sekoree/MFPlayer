@@ -54,4 +54,3 @@ public sealed class PortAudioInputTests
         Assert.Equal(MediaResult.Success, input.Stop());
     }
 }
-

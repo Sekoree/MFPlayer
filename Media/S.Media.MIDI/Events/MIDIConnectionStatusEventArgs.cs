@@ -20,4 +20,3 @@ public sealed class MIDIConnectionStatusEventArgs : EventArgs
 
     public int? ErrorCode { get; }
 }
-

@@ -22,8 +22,8 @@ public static class OSCArgs
 
     public static OSCArgument Color(uint rgba) => OSCArgument.RgbaColor(rgba);
 
-    public static OSCArgument Midi(byte portId, byte status, byte data1, byte data2)
-        => OSCArgument.Midi(new OSCMidiMessage(portId, status, data1, data2));
+    public static OSCArgument MIDI(byte portId, byte status, byte data1, byte data2)
+        => OSCArgument.MIDI(new OSCMIDIMessage(portId, status, data1, data2));
 
     public static OSCArgument True() => OSCArgument.True();
 
@@ -38,4 +38,3 @@ public static class OSCArgs
     public static OSCArgument Unknown(char tag, ReadOnlyMemory<byte> rawData)
         => OSCArgument.Unknown(tag, rawData);
 }
-

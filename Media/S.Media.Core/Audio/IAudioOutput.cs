@@ -2,6 +2,8 @@ namespace S.Media.Core.Audio;
 
 public interface IAudioOutput : IDisposable
 {
+    Guid Id { get; }
+
     AudioOutputState State { get; }
 
     AudioDeviceInfo Device { get; }
@@ -22,4 +24,3 @@ public interface IAudioOutput : IDisposable
 
     int PushFrame(in AudioFrame frame, ReadOnlySpan<int> sourceChannelByOutputIndex, int sourceChannelCount);
 }
-

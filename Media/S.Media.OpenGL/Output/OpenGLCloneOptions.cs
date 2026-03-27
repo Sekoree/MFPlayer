@@ -16,4 +16,3 @@ public sealed record OpenGLCloneOptions
 
     public OpenGLClonePixelFormatPolicy PixelFormatPolicy { get; init; } = OpenGLClonePixelFormatPolicy.RequireCompatibleFastPath;
 }
-

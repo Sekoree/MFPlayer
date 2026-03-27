@@ -101,6 +101,23 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 publishDescriptors = _context.ApplyResolvedStreamDescriptors(nativeAudioStream, nativeVideoStream);
             }
 
+            // After native stream resolution, clear streams that don't actually exist
+            // (e.g. OpenVideo=true on an audio-only file like FLAC).
+            if (_packetReader.IsNativeDemuxActive)
+            {
+                if (hasAudio && nativeAudioStream is null)
+                {
+                    hasAudio = false;
+                    _context.ClearStream(audio: true);
+                }
+
+                if (hasVideo && nativeVideoStream is null)
+                {
+                    hasVideo = false;
+                    _context.ClearStream(audio: false);
+                }
+            }
+
             if (hasAudio)
             {
                 var audioInit = _audioDecoder.Initialize();
@@ -497,23 +514,27 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 var packetCode = _packetReader.ReadAudioPacket(out var packet);
                 if (packetCode != MediaResult.Success)
                 {
+                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: ReadAudioPacket failed code={packetCode} attempt={attempt}");
                     return false;
                 }
 
                 var decodeCode = _audioDecoder.Decode(packet, out var decoded);
                 if (decodeCode != MediaResult.Success)
                 {
+                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: Decode failed code={decodeCode} attempt={attempt}");
                     return false;
                 }
 
                 if (decoded.FrameCount <= 0)
                 {
+                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: decoded.FrameCount={decoded.FrameCount} attempt={attempt}, retrying...");
                     continue;
                 }
 
                 var resampleCode = _resampler.Resample(decoded, out var resampled);
                 if (resampleCode != MediaResult.Success)
                 {
+                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: Resample failed code={resampleCode} attempt={attempt}");
                     return false;
                 }
 
@@ -711,4 +732,3 @@ internal readonly struct FFSessionVideoFrame
         return NativeFrameRateNumerator.Value / (double)NativeFrameRateDenominator.Value;
     }
 }
-

@@ -5,4 +5,3 @@ public enum OpenGLClonePixelFormatPolicy
     RequireCompatibleFastPath = 0,
     AllowGpuConversion = 1,
 }
-

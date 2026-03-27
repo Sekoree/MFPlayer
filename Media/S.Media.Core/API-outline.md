@@ -239,6 +239,7 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
 ### `Audio/IAudioOutput.cs`
 - `interface IAudioOutput : IDisposable`
 - Planned API:
+  - `Guid Id { get; }`
   - `AudioOutputState State { get; }`
   - `AudioDeviceInfo Device { get; }`
   - `int Start(AudioOutputConfig config)`
@@ -706,16 +707,32 @@ Source of truth: `Media/S.Media.Core/PLAN.smedia-architecture.md`.
   - `VideoLed = 2`
   - `Hybrid = 3`
 
-### `Mixing/MixerKind.cs`
-- Planned API:
-  - `Audio = 0`
-  - `Video = 1`
-  - `AudioVideo = 2`
-
 ### `Mixing/MixerClockTypeRules.cs`
 - Planned API:
-  - `int Validate(MixerKind mixerKind, ClockType clockType)`
-  - Returns `MixerClockTypeInvalid` (`3002`) for nonsensical combinations.
+  - `int ValidateClockType(ClockType clockType)`
+  - Returns `MixerClockTypeInvalid` (`3002`) for unsupported clock types.
+  - Note: `MixerKind` enum was removed — it had a single member and was unused.
+
+### `Mixing/ISupportsAdvancedRouting.cs`
+- `interface ISupportsAdvancedRouting`
+- Implemented by `AudioVideoMixer`, **not** by `MediaPlayer`.
+- Planned API:
+  - `IReadOnlyList<AudioRoutingRule> AudioRoutingRules { get; }`
+  - `IReadOnlyList<VideoRoutingRule> VideoRoutingRules { get; }`
+  - `int AddAudioRoutingRule(AudioRoutingRule rule)`
+  - `int RemoveAudioRoutingRule(AudioRoutingRule rule)`
+  - `int ClearAudioRoutingRules()`
+  - `int AddVideoRoutingRule(VideoRoutingRule rule)`
+  - `int RemoveVideoRoutingRule(VideoRoutingRule rule)`
+  - `int ClearVideoRoutingRules()`
+
+### `Mixing/AudioRoutingRule.cs`
+- `readonly record struct AudioRoutingRule(Guid SourceId, int SourceChannel, Guid OutputId, int OutputChannel, float Gain = 1.0f)`
+- Routes a specific source channel to a specific output channel with per-route gain.
+
+### `Mixing/VideoRoutingRule.cs`
+- `readonly record struct VideoRoutingRule(Guid SourceId, Guid OutputId)`
+- Routes a specific video source to a specific video output.
 
 ### `Mixing/MixerSourceDetachOptions.cs`
 - `sealed record MixerSourceDetachOptions`

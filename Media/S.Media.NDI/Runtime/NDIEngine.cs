@@ -1,4 +1,4 @@
-using NdiLib;
+using NDILib;
 using S.Media.Core.Errors;
 using S.Media.NDI.Config;
 using S.Media.NDI.Diagnostics;
@@ -15,7 +15,7 @@ public sealed class NDIEngine : IDisposable
 	private readonly List<NDIAudioSource> _audioSources = [];
 	private readonly List<NDIVideoSource> _videoSources = [];
 	private readonly List<NDIVideoOutput> _outputs = [];
-	private readonly Dictionary<NdiReceiver, NdiCaptureCoordinator> _captureCoordinators = new();
+	private readonly Dictionary<NDIReceiver, NDICaptureCoordinator> _captureCoordinators = new();
 	private Thread? _diagnosticsThread;
 	private bool _diagnosticsRunning;
 	private bool _disposed;
@@ -113,7 +113,7 @@ public sealed class NDIEngine : IDisposable
 		return MediaResult.Success;
 	}
 
-	public int CreateAudioSource(NdiReceiver receiver, in NDISourceOptions sourceOptions, out NDIAudioSource? source)
+	public int CreateAudioSource(NDIReceiver receiver, in NDISourceOptions sourceOptions, out NDIAudioSource? source)
 	{
 		source = null;
 
@@ -146,7 +146,7 @@ public sealed class NDIEngine : IDisposable
 		}
 	}
 
-	public int CreateVideoSource(NdiReceiver receiver, in NDISourceOptions sourceOptions, out NDIVideoSource? source)
+	public int CreateVideoSource(NDIReceiver receiver, in NDISourceOptions sourceOptions, out NDIVideoSource? source)
 	{
 		source = null;
 
@@ -418,16 +418,15 @@ public sealed class NDIEngine : IDisposable
 			CapturedAtUtc: DateTimeOffset.UtcNow);
 	}
 
-	private NdiCaptureCoordinator GetOrCreateCaptureCoordinatorLocked(NdiReceiver receiver)
+	private NDICaptureCoordinator GetOrCreateCaptureCoordinatorLocked(NDIReceiver receiver)
 	{
 		if (_captureCoordinators.TryGetValue(receiver, out var existing))
 		{
 			return existing;
 		}
 
-		var created = new NdiCaptureCoordinator(receiver);
+		var created = new NDICaptureCoordinator(receiver);
 		_captureCoordinators[receiver] = created;
 		return created;
 	}
 }
-

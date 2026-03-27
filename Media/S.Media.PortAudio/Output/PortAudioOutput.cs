@@ -25,6 +25,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         AudioEngineConfig config,
         Func<AudioDeviceInfo?>? defaultOutputProvider = null)
     {
+        Id = Guid.NewGuid();
         Device = device;
         _deviceProvider = deviceProvider;
         _config = config;
@@ -33,6 +34,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         _nativeChannelCount = Math.Max(1, config.OutputChannelCount);
         _nativeFramesPerBuffer = Math.Max(1, config.FramesPerBuffer);
     }
+
+    public Guid Id { get; }
 
     public AudioOutputState State { get; private set; } = AudioOutputState.Stopped;
 
@@ -426,4 +429,3 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         }
     }
 }
-

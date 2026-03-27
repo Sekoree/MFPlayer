@@ -402,4 +402,3 @@ public sealed class OpenGLVideoEngine : IDisposable
         return depth;
     }
 }
-

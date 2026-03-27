@@ -9,4 +9,3 @@ public readonly record struct OpenGLOutputDebugInfo(
     double LastUploadMs,
     double LastPresentMs,
     OpenGLSurfaceMetadata Surface);
-

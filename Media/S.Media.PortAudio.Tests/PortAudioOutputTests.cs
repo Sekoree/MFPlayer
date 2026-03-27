@@ -141,4 +141,3 @@ public sealed class PortAudioOutputTests
         return new PortAudioOutput(devices[0], () => devices, new AudioEngineConfig(), () => devices[0]);
     }
 }
-

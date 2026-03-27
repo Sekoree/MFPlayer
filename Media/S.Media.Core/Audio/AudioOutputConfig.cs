@@ -5,4 +5,3 @@ namespace S.Media.Core.Audio;
 /// placeholder for future audio output settings (e.g., sample rate, buffer size, channel layout).
 /// </summary>
 public sealed record AudioOutputConfig;
-

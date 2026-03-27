@@ -1,4 +1,4 @@
-using NdiLib;
+using NDILib;
 using System.Buffers;
 using S.Media.Core.Errors;
 using S.Media.Core.Media;
@@ -289,4 +289,3 @@ public sealed class NDISourceAndMediaItemTests
         return rgba[0];
     }
 }
-

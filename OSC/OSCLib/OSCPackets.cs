@@ -106,4 +106,3 @@ public sealed class OSCBundle
     /// </summary>
     public IReadOnlyList<OSCPacket> Elements { get; }
 }
-

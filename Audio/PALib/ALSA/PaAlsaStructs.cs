@@ -13,4 +13,3 @@ public struct PaAlsaStreamInfo
 
     public readonly string? DeviceString => Marshal.PtrToStringUTF8(deviceString);
 }
-

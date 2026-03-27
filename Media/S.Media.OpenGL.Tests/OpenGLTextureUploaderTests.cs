@@ -60,4 +60,3 @@ public sealed class OpenGLTextureUploaderTests
         return new VideoFrame(2, 2, VideoPixelFormat.Rgba32, new Rgba32PixelFormatData(), TimeSpan.Zero, true, rgba, 8);
     }
 }
-

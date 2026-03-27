@@ -22,9 +22,8 @@ All accept `--input <path>` or env `SMEDIA_TEST_INPUT`. See `Test/TEST-APPS-PLAN
 
 - `Test/AudioEx/AudioEx.csproj`
 - `Test/FirstAudioPlayback.Smoke/FirstAudioPlayback.Smoke.csproj`
-- `Test/NdiVideoReceive/NdiVideoReceive.csproj`
+- `Test/NDIVideoReceive/NDIVideoReceive.csproj`
 - `Test/VideoStress/VideoStress.csproj`
-- `Test/VideoTest/VideoTest.csproj` (legacy harness kept as migration reference)
 
 ## Current Stage
 
@@ -32,9 +31,8 @@ All accept `--input <path>` or env `SMEDIA_TEST_INPUT`. See `Test/TEST-APPS-PLAN
 
 - `AudioEx`: In Progress
 - `FirstAudioPlayback.Smoke`: Validation
-- `NdiVideoReceive`: In Progress
+- `NDIVideoReceive`: In Progress
 - `VideoStress`: In Progress
-- `VideoTest`: Legacy-Migration
 
 ## Notes
 
@@ -43,8 +41,7 @@ All accept `--input <path>` or env `SMEDIA_TEST_INPUT`. See `Test/TEST-APPS-PLAN
 - `FirstAudioPlayback.Smoke` is the active first-audio bring-up harness (direct decoder -> output).
 - `VideoStress` is now the canonical Avalonia video stress harness path and references `S.Media.*` modules.
 - `AudioEx` now uses `S.Media.FFmpeg` + `S.Media.PortAudio` for direct audio decode/output stress loops.
-- `NdiVideoReceive` now uses `S.Media.NDI` for discovery + source read smoke validation.
-- `VideoTest` remains in-tree as legacy migration reference until runtime feature parity is ported.
+- `NDIVideoReceive` now uses `S.Media.NDI` for discovery + source read smoke validation.
 - These projects are intentionally practical and may evolve quickly with backend changes.
 
 ## Related Docs
@@ -52,5 +49,4 @@ All accept `--input <path>` or env `SMEDIA_TEST_INPUT`. See `Test/TEST-APPS-PLAN
 - `Test/TEST-APPS-PLAN.md` — full plan for the 9 new test apps
 - `Test/FirstAudioPlayback.Smoke/README.md`
 - `Doc/audioex-setup.md`
-- `Doc/videotest-setup.md`
 - `Doc/project-implementation-stages.md`

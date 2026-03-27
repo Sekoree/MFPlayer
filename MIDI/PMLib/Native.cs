@@ -332,4 +332,3 @@ public static partial class Native
     [LibraryImport(LibraryName)]
     public static partial PmError Pm_SetOverflow(nint queue);
 }
-

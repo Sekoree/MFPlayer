@@ -18,4 +18,3 @@ public interface IAudioSource : IDisposable
 
     double DurationSeconds { get; }
 }
-

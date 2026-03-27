@@ -1,5 +1,5 @@
 using System.Collections.ObjectModel;
-using NdiLib;
+using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.Core.Media;
@@ -23,16 +23,16 @@ public sealed class NDIMediaItem : IMediaItem, IDynamicMetadata, IMediaPlaybackS
     }
 
 
-    public NDIMediaItem(NdiReceiver receiver, NDIIntegrationOptions? options = null)
+    public NDIMediaItem(NDIReceiver receiver, NDIIntegrationOptions? options = null)
     {
         Receiver = receiver ?? throw new ArgumentNullException(nameof(receiver));
         Options = options ?? new NDIIntegrationOptions();
-        CaptureCoordinator = new NdiCaptureCoordinator(receiver);
+        CaptureCoordinator = new NDICaptureCoordinator(receiver);
         AudioStreams = [new AudioStreamInfo { Codec = "NDI", SampleRate = 48_000, ChannelCount = 2 }];
         VideoStreams = [new VideoStreamInfo { Codec = "NDI", Width = 1920, Height = 1080, FrameRate = 60 }];
     }
 
-    internal NDIMediaItem(NdiReceiver receiver, NDIIntegrationOptions? options, NdiCaptureCoordinator captureCoordinator)
+    internal NDIMediaItem(NDIReceiver receiver, NDIIntegrationOptions? options, NDICaptureCoordinator captureCoordinator)
         : this(receiver, options)
     {
         CaptureCoordinator = captureCoordinator;
@@ -40,9 +40,9 @@ public sealed class NDIMediaItem : IMediaItem, IDynamicMetadata, IMediaPlaybackS
 
     public NdiDiscoveredSource? Source { get; }
 
-    public NdiReceiver? Receiver { get; }
+    public NDIReceiver? Receiver { get; }
 
-    internal NdiCaptureCoordinator? CaptureCoordinator { get; }
+    internal NDICaptureCoordinator? CaptureCoordinator { get; }
 
     public NDIIntegrationOptions Options { get; }
 
@@ -98,4 +98,3 @@ public sealed class NDIMediaItem : IMediaItem, IDynamicMetadata, IMediaPlaybackS
         MetadataUpdated?.Invoke(this, snapshot);
     }
 }
-

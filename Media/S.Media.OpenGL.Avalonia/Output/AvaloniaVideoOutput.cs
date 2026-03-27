@@ -141,4 +141,3 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
         };
     }
 }
-

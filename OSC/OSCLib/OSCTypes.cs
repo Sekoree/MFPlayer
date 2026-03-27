@@ -17,7 +17,7 @@ public enum OSCArgumentType
     Symbol,
     Char,
     RgbaColor,
-    Midi,
+    MIDI,
     True,
     False,
     Nil,
@@ -61,12 +61,12 @@ public readonly record struct OSCTimeTag(ulong Value)
 /// <summary>
 /// Packed 4-byte MIDI payload carried by OSC tag <c>m</c>.
 /// </summary>
-public readonly record struct OSCMidiMessage(byte PortId, byte Status, byte Data1, byte Data2)
+public readonly record struct OSCMIDIMessage(byte PortId, byte Status, byte Data1, byte Data2)
 {
     public uint ToUInt32()
         => (uint)((PortId << 24) | (Status << 16) | (Data1 << 8) | Data2);
 
-    public static OSCMidiMessage FromUInt32(uint value)
+    public static OSCMIDIMessage FromUInt32(uint value)
         => new(
             (byte)((value >> 24) & 0xFF),
             (byte)((value >> 16) & 0xFF),
@@ -132,8 +132,8 @@ public readonly struct OSCArgument
     public static OSCArgument RgbaColor(uint value)
         => new(OSCArgumentType.RgbaColor, unchecked((int)value), default, default, null);
 
-    public static OSCArgument Midi(OSCMidiMessage value)
-        => new(OSCArgumentType.Midi, unchecked((int)value.ToUInt32()), default, default, null);
+    public static OSCArgument MIDI(OSCMIDIMessage value)
+        => new(OSCArgumentType.MIDI, unchecked((int)value.ToUInt32()), default, default, null);
 
     public static OSCArgument True() => new(OSCArgumentType.True, default, default, default, null);
 
@@ -170,7 +170,7 @@ public readonly struct OSCArgument
 
     public uint AsRgbaColor() => Type == OSCArgumentType.RgbaColor ? unchecked((uint)_int32) : ThrowType<uint>(OSCArgumentType.RgbaColor);
 
-    public OSCMidiMessage AsMidi() => Type == OSCArgumentType.Midi ? OSCMidiMessage.FromUInt32(unchecked((uint)_int32)) : ThrowType<OSCMidiMessage>(OSCArgumentType.Midi);
+    public OSCMIDIMessage AsMIDI() => Type == OSCArgumentType.MIDI ? OSCMIDIMessage.FromUInt32(unchecked((uint)_int32)) : ThrowType<OSCMIDIMessage>(OSCArgumentType.MIDI);
 
     public IReadOnlyList<OSCArgument> AsArray() => Type == OSCArgumentType.Array ? (IReadOnlyList<OSCArgument>)_reference! : ThrowType<IReadOnlyList<OSCArgument>>(OSCArgumentType.Array);
 
@@ -205,4 +205,3 @@ public sealed class RentedBuffer : IDisposable
         ArrayPool<byte>.Shared.Return(buffer);
     }
 }
-

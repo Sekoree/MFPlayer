@@ -30,6 +30,10 @@ public interface IAudioVideoMixer
 
     int AddAudioSource(IAudioSource source);
 
+    int AddAudioSource(IAudioSource source, double startOffsetSeconds);
+
+    int SetAudioSourceStartOffset(IAudioSource source, double startOffsetSeconds);
+
     int RemoveAudioSource(IAudioSource source);
 
     int AddVideoSource(IVideoSource source);
@@ -65,6 +69,16 @@ public interface IAudioVideoMixer
     IReadOnlyList<IAudioOutput> AudioOutputs { get; }
 
     IReadOnlyList<IVideoOutput> VideoOutputs { get; }
+
+    int StartPlayback(AudioVideoMixerConfig config);
+
+    int StopPlayback();
+
+    TimeSpan TickVideoPresentation();
+
+    AudioVideoMixerDebugInfo? GetDebugInfo();
+
+    event EventHandler<AudioVideoMixerStateChangedEventArgs>? StateChanged;
 
     event EventHandler<AudioSourceErrorEventArgs>? AudioSourceError;
 

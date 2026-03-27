@@ -5,4 +5,3 @@ public enum VideoSourceState
     Stopped = 0,
     Running = 1,
 }
-

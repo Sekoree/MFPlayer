@@ -7,4 +7,3 @@ public readonly record struct UploadPlan(
     VideoPixelFormat PixelFormat,
     OpenGLCloneMode PreferredPath,
     bool RequiresGpuConversion);
-

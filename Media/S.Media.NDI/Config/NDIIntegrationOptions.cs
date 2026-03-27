@@ -11,4 +11,3 @@ public sealed class NDIIntegrationOptions
 
     public bool RequireAudioPathOnStart { get; init; }
 }
-

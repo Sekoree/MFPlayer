@@ -4,7 +4,7 @@ using PMLib.Types;
 namespace PMLib.MessageTypes;
 
 /// <summary>MIDI Note On message (status <c>0x9n</c>).</summary>
-public readonly struct NoteOn : IMidiMessage
+public readonly struct NoteOn : IMIDIMessage
 {
     /// <summary>MIDI channel, 0–15.</summary>
     public byte Channel { get; }
@@ -13,7 +13,7 @@ public readonly struct NoteOn : IMidiMessage
     /// <summary>Velocity, 1–127. A velocity of 0 is conventionally treated as Note Off.</summary>
     public byte Velocity { get; }
 
-    public MidiMessageType MessageType => MidiMessageType.NoteOn;
+    public MIDIMessageType MessageType => MIDIMessageType.NoteOn;
 
     public NoteOn(byte channel, byte note, byte velocity)
     {

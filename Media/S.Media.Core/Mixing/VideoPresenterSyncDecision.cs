@@ -7,4 +7,3 @@ internal readonly record struct VideoPresenterSyncDecision(
     TimeSpan Delay,
     int LateDrops,
     int CoalescedDrops);
-

@@ -6,4 +6,3 @@ public sealed record AudioInputConfig
 
     public int ChannelCount { get; init; } = 2;
 }
-

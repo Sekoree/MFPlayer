@@ -20,4 +20,3 @@ public sealed record SDL3VideoViewOptions
 
     public bool PreserveAspectRatio { get; init; } = true;
 }
-

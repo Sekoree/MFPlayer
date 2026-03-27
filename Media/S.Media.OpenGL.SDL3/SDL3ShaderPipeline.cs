@@ -794,4 +794,3 @@ public sealed class SDL3ShaderPipeline : IDisposable
         public int Type;
     }
 }
-

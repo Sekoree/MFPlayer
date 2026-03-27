@@ -458,12 +458,7 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
     {
         if (descriptor is null)
         {
-            return new AudioStreamInfo
-            {
-                Codec = "pcm_f32le",
-                SampleRate = 48_000,
-                ChannelCount = 2,
-            };
+            return new AudioStreamInfo();
         }
 
         return new AudioStreamInfo
@@ -479,13 +474,7 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
     {
         if (descriptor is null)
         {
-            return new VideoStreamInfo
-            {
-                Codec = "placeholder_rgba",
-                Width = 2,
-                Height = 2,
-                FrameRate = 30d,
-            };
+            return new VideoStreamInfo();
         }
 
         return new VideoStreamInfo
@@ -498,4 +487,3 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
         };
     }
 }
-

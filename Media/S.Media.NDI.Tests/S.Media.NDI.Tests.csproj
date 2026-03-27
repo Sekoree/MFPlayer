@@ -16,7 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
     <ProjectReference Include="..\S.Media.NDI\S.Media.NDI.csproj" />
-    <ProjectReference Include="..\..\NDI\NdiLib\NdiLib.csproj" />
+    <ProjectReference Include="..\..\NDI\NDILib\NDILib.csproj" />
   </ItemGroup>
 
 </Project>

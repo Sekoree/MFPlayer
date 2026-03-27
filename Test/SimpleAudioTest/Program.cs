@@ -1,3 +1,4 @@
+using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.FFmpeg.Media;
@@ -9,6 +10,11 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        //test: /home/sekoree/Music/EC - Still Waiting.flac
+
+        ffmpeg.RootPath = "/lib";
+        DynamicallyLoadedBindings.Initialize();
+        
         var input = GetArg(args, "--input") ?? Environment.GetEnvironmentVariable("SMEDIA_TEST_INPUT");
         var hostApi = GetArg(args, "--host-api");
         var deviceIndex = int.TryParse(GetArg(args, "--device-index"), out var di) ? di : -1;
@@ -41,6 +47,8 @@ internal static class Program
         }
 
         Console.WriteLine($"Input: {uri}");
+
+        //DiagnosticHelper.RunDiagnostics(uri);
 
         try
         {
@@ -92,7 +100,11 @@ internal static class Program
             while (totalPushed < targetFrames && !cancel.IsCancellationRequested)
             {
                 var read = source.ReadSamples(buffer, 1024, out var framesRead);
-                if (read != MediaResult.Success || framesRead <= 0) break;
+                if (read != MediaResult.Success || framesRead <= 0)
+                {
+                    Console.Error.WriteLine($"ReadSamples exit: result={read}, framesRead={framesRead}, totalPushed={totalPushed}");
+                    break;
+                }
 
                 var frame = new AudioFrame(
                     Samples: buffer,
@@ -181,4 +193,3 @@ internal static class Program
         Console.WriteLine("  --list-host-apis       List host APIs and exit");
     }
 }
-

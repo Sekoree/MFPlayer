@@ -11,7 +11,7 @@ public enum PmFilter : int
     /// <summary>Filter system-exclusive messages (0xF0).</summary>
     Sysex              = 1 << 0x00,
     /// <summary>Filter MIDI Time Code messages (0xF1).</summary>
-    MidiTimeCode       = 1 << 0x01,
+    MIDITimeCode       = 1 << 0x01,
     /// <summary>Filter Song Position messages (0xF2).</summary>
     SongPosition       = 1 << 0x02,
     /// <summary>Filter Song Select messages (0xF3).</summary>
@@ -49,6 +49,5 @@ public enum PmFilter : int
     /// <summary>Filter both channel and polyphonic aftertouch.</summary>
     Aftertouch         = ChannelAftertouch | PolyAftertouch,
     /// <summary>Filter all System Common messages (MTC, Song Position, Song Select, Tune Request).</summary>
-    SystemCommon       = MidiTimeCode | SongPosition | SongSelect | Tune,
+    SystemCommon       = MIDITimeCode | SongPosition | SongSelect | Tune,
 }
-

@@ -4,4 +4,3 @@ public readonly record struct NDIAudioDiagnostics(
     long FramesCaptured,
     long FramesDropped,
     double LastReadMs);
-

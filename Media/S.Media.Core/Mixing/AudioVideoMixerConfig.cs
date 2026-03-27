@@ -1,7 +1,7 @@
 namespace S.Media.Core.Mixing;
 
 /// <summary>
-/// Consumer-facing configuration for the audio/video mixer runtime.
+/// Consumer-facing configuration for the audio/video mixer.
 /// Drift correction and sync policy internals are managed automatically.
 /// </summary>
 public sealed class AudioVideoMixerConfig
@@ -29,15 +29,4 @@ public sealed class AudioVideoMixerConfig
     /// When false, presentation runs on a background thread.
     /// </summary>
     public bool PresentOnCallerThread { get; set; }
-
-    internal AudioVideoMixerRuntimeOptions ToRuntimeOptions() => new()
-    {
-        AudioReadFrames = AudioReadFrames,
-        SourceChannelCount = SourceChannelCount,
-        OutputSampleRate = OutputSampleRate,
-        RouteMap = RouteMap,
-        VideoQueueCapacity = VideoQueueCapacity,
-        PresentOnCallerThread = PresentOnCallerThread,
-    };
 }
-

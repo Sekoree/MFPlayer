@@ -471,8 +471,10 @@ Use these canonical lines in module `API-outline.md` `Notes` sections to avoid w
 - `Media/S.Media.Core/Mixing/AudioMixerDropoutEventArgs.cs` - `AudioMixerDropoutEventArgs`.
 - `Media/S.Media.Core/Mixing/MixerSourceDetachOptions.cs` - `MixerSourceDetachOptions` (detach/stop/dispose policy for source removal/clear paths).
 - `Media/S.Media.Core/Mixing/ClockType.cs` - `ClockType` (`External`, `AudioLed`, `VideoLed`, `Hybrid`).
-- `Media/S.Media.Core/Mixing/MixerKind.cs` - `MixerKind`.
-- `Media/S.Media.Core/Mixing/MixerClockTypeRules.cs` - `MixerClockTypeRules` (mixer-kind clock-type validation).
+- `Media/S.Media.Core/Mixing/MixerClockTypeRules.cs` - `MixerClockTypeRules` (clock-type validation; `MixerKind` removed).
+- `Media/S.Media.Core/Mixing/ISupportsAdvancedRouting.cs` - `ISupportsAdvancedRouting` (per-source/per-channel routing; implemented by `AudioVideoMixer`, not `MediaPlayer`).
+- `Media/S.Media.Core/Mixing/AudioRoutingRule.cs` - `AudioRoutingRule` (source channel → output channel with gain).
+- `Media/S.Media.Core/Mixing/VideoRoutingRule.cs` - `VideoRoutingRule` (video source → video output).
 - `Media/S.Media.Core/Mixing/IVideoMixer.cs` - `IVideoMixer` (transport + active-source control + deterministic video sync/seek).
 - `Media/S.Media.Core/Mixing/VideoMixerSyncMode.cs` - `VideoMixerSyncMode`.
 - `Media/S.Media.Core/Mixing/VideoMixerState.cs` - `VideoMixerState`.

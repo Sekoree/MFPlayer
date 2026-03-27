@@ -22,8 +22,7 @@ public sealed class MediaPlayerPortAudioIntegrationTests
             },
             new FFmpegDecodeOptions { MaxQueuedPackets = 8 });
 
-        var mixer = new AudioVideoMixer();
-        var player = new MediaPlayer(mixer);
+        var player = new MediaPlayer();
 
         Assert.Equal(MediaResult.Success, player.Play(media));
         Assert.Single(player.AudioSources);
@@ -49,8 +48,7 @@ public sealed class MediaPlayerPortAudioIntegrationTests
             },
             new FFmpegDecodeOptions { MaxQueuedPackets = 8 });
 
-        var mixer = new AudioVideoMixer();
-        var player = new MediaPlayer(mixer);
+        var player = new MediaPlayer();
 
         Assert.Equal(MediaResult.Success, player.Play(media));
         Assert.Single(player.AudioSources);
@@ -66,4 +64,3 @@ public sealed class MediaPlayerPortAudioIntegrationTests
         Assert.Equal(firstCode, secondCode);
     }
 }
-

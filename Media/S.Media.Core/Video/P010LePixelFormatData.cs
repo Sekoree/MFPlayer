@@ -12,4 +12,3 @@ public readonly record struct P010LePixelFormatData : IPixelFormatData
 
     public int ContainerBitsPerComponent => 16;
 }
-

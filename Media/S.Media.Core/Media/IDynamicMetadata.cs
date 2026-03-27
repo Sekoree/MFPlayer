@@ -4,4 +4,3 @@ public interface IDynamicMetadata
 {
     event EventHandler<MediaMetadataSnapshot>? MetadataUpdated;
 }
-

@@ -12,4 +12,3 @@ public sealed class AudioEngineStateChangedEventArgs : EventArgs
 
     public AudioEngineState CurrentState { get; }
 }
-

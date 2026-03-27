@@ -365,4 +365,3 @@ internal readonly record struct FFVideoDecodeResult(
     int? NativeFrameRateNumerator = null,
     int? NativeFrameRateDenominator = null,
     int? NativePixelFormat = null);
-

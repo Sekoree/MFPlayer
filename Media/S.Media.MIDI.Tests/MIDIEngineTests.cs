@@ -108,4 +108,3 @@ public sealed class MIDIEngineTests
         Assert.True(output.ReconnectOptions.ReconnectTimeout >= TimeSpan.Zero);
     }
 }
-

@@ -187,4 +187,3 @@ public class RuntimeOptionsTests
         return predicate(server);
     }
 }
-

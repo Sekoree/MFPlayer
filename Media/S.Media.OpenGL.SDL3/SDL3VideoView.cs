@@ -1598,4 +1598,3 @@ public sealed class SDL3VideoView : IVideoOutput
         public int Type;
     }
 }
-

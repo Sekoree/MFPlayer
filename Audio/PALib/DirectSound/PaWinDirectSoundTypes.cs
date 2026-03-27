@@ -20,4 +20,3 @@ public struct PaWinDirectSoundStreamInfo
     public nuint framesPerBuffer;
     public PaWinWaveFormatChannelMask channelMask;
 }
-

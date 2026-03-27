@@ -17,7 +17,7 @@ internal static class Program
         var seconds = double.TryParse(GetArg(args, "--seconds"), out var s) && s > 0 ? s : 30;
         var hostApi = GetArg(args, "--host-api");
         var deviceIndex = int.TryParse(GetArg(args, "--device-index"), out var di) ? di : -1;
-        var syncModeStr = GetArg(args, "--sync-mode") ?? "stable";
+        var syncModeStr = GetArg(args, "--sync-mode") ?? "realtime";
 
         if (args.Contains("--help") || args.Contains("-h"))
         {
@@ -163,9 +163,8 @@ internal static class Program
 
     private static AudioVideoSyncMode ParseSyncMode(string raw) => raw.Trim().ToLowerInvariant() switch
     {
-        "hybrid" => AudioVideoSyncMode.Hybrid,
-        "strict" or "strictav" or "strict-av" => AudioVideoSyncMode.StrictAv,
-        _ => AudioVideoSyncMode.Stable,
+        "synced" or "sync" or "hybrid" or "strict" or "strictav" or "strict-av" => AudioVideoSyncMode.Synced,
+        _ => AudioVideoSyncMode.Realtime,
     };
 
     private static string? ResolveUri(string input)
@@ -192,7 +191,6 @@ internal static class Program
         Console.WriteLine("  --host-api <id>        Preferred PortAudio host API");
         Console.WriteLine("  --device-index <n>     Audio output device index (-1 = default)");
         Console.WriteLine("  --seconds <n>          Playback duration (default: 30)");
-        Console.WriteLine("  --sync-mode <mode>     Sync mode: stable|hybrid|strict (default: stable)");
+        Console.WriteLine("  --sync-mode <mode>     Sync mode: realtime|synced (default: realtime)");
     }
 }
-

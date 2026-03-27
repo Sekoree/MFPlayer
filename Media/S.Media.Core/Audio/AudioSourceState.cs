@@ -5,4 +5,3 @@ public enum AudioSourceState
     Stopped = 0,
     Running = 1,
 }
-

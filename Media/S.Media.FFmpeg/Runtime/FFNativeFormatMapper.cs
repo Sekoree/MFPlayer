@@ -113,4 +113,3 @@ internal static class FFNativeFormatMapper
         return VideoPixelFormat.Rgba32;
     }
 }
-

@@ -34,4 +34,3 @@ public interface IAudioEngine : IDisposable
 
     event EventHandler<AudioEngineStateChangedEventArgs>? StateChanged;
 }
-

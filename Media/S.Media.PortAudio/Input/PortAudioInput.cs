@@ -260,4 +260,3 @@ public sealed unsafe class PortAudioInput : IAudioSource
         }
     }
 }
-

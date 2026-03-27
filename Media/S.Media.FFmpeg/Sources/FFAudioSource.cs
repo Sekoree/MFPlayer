@@ -240,4 +240,3 @@ public sealed class FFAudioSource : IAudioSource
         return duration.Value.TotalSeconds >= 0 ? duration.Value.TotalSeconds : double.NaN;
     }
 }
-

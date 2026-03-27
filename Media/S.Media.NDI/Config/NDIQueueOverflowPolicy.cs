@@ -6,4 +6,3 @@ public enum NDIQueueOverflowPolicy
     DropNewest = 1,
     RejectIncoming = 2,
 }
-

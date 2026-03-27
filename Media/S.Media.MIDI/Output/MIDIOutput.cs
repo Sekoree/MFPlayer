@@ -268,4 +268,3 @@ public sealed class MIDIOutput : IDisposable
         return false;
     }
 }
-

@@ -4,17 +4,17 @@ Last updated: 2026-03-25
 
 ## Scope
 
-- `NDI/NdiLib/NdiLib.csproj`
-- `NDI/NdiLib.Smoke/NdiLib.Smoke.csproj`
+- `NDI/NDILib/NDILib.csproj`
+- `NDI/NDILib.Smoke/NDILib.Smoke.csproj`
 
 ## Current Stage
 
-- `NdiLib`: Implemented
-- `NdiLib.Smoke`: Validation
+- `NDILib`: Implemented
+- `NDILib.Smoke`: Validation
 
 ## Notes
 
-- `NdiLib` is the native interop base used by `Media/S.Media.NDI`.
+- `NDILib` is the native interop base used by `Media/S.Media.NDI`.
 - Smoke project remains the manual runtime sanity check for NDI bindings.
 
 ## Related Docs

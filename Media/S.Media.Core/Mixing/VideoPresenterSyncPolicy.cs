@@ -22,7 +22,8 @@ internal static class VideoPresenterSyncPolicy
             return new VideoPresenterSyncDecision(null, delay, 0, 0);
         }
 
-        if (syncMode == AudioVideoSyncMode.Stable)
+        // Realtime: always present the freshest frame, coalesce older ones.
+        if (syncMode == AudioVideoSyncMode.Realtime)
         {
             var selected = queuedVideoFrames.Dequeue();
             var coalescedDrops = 0;
@@ -43,15 +44,18 @@ internal static class VideoPresenterSyncPolicy
             return new VideoPresenterSyncDecision(selected, delay, 0, coalescedDrops);
         }
 
+        // Synced: clock-aligned presentation.
         var earlyTolerance = options.FrameEarlyTolerance < TimeSpan.Zero
             ? TimeSpan.Zero
             : options.FrameEarlyTolerance;
+        var maxWait = options.MaxWait <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(2) : options.MaxWait;
 
         while (queuedVideoFrames.Count > 0)
         {
             var lateDrops = 0;
             var candidate = queuedVideoFrames.Peek();
             var frameLead = candidate.PresentationTime - TimeSpan.FromSeconds(clockSeconds);
+
             if (frameLead < -staleThreshold)
             {
                 _ = queuedVideoFrames.Dequeue();
@@ -81,10 +85,8 @@ internal static class VideoPresenterSyncPolicy
                 frameLead = candidate.PresentationTime - TimeSpan.FromSeconds(clockSeconds);
                 if (frameLead > earlyTolerance)
                 {
-                    var lateWait = syncMode == AudioVideoSyncMode.StrictAv
-                        ? (options.StrictMaxWait <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(3) : options.StrictMaxWait)
-                        : (options.HybridMaxWait <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(2) : options.HybridMaxWait);
-                    var lateDelay = TimeSpan.FromMilliseconds(Math.Clamp(frameLead.TotalMilliseconds, delay.TotalMilliseconds, lateWait.TotalMilliseconds));
+                    var lateDelay = TimeSpan.FromMilliseconds(
+                        Math.Clamp(frameLead.TotalMilliseconds, delay.TotalMilliseconds, maxWait.TotalMilliseconds));
                     return new VideoPresenterSyncDecision(null, lateDelay, lateDrops, 0);
                 }
 
@@ -109,10 +111,8 @@ internal static class VideoPresenterSyncPolicy
 
             if (frameLead > earlyTolerance)
             {
-                var maxWait = syncMode == AudioVideoSyncMode.StrictAv
-                    ? (options.StrictMaxWait <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(3) : options.StrictMaxWait)
-                    : (options.HybridMaxWait <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(2) : options.HybridMaxWait);
-                var targetDelay = TimeSpan.FromMilliseconds(Math.Clamp(frameLead.TotalMilliseconds, delay.TotalMilliseconds, maxWait.TotalMilliseconds));
+                var targetDelay = TimeSpan.FromMilliseconds(
+                    Math.Clamp(frameLead.TotalMilliseconds, delay.TotalMilliseconds, maxWait.TotalMilliseconds));
                 return new VideoPresenterSyncDecision(null, targetDelay, 0, 0);
             }
 
@@ -138,4 +138,3 @@ internal static class VideoPresenterSyncPolicy
         return new VideoPresenterSyncDecision(null, delay, 0, 0);
     }
 }
-

@@ -12,4 +12,3 @@ public sealed class OpenGLDiagnosticsSnapshotEventArgs : EventArgs
 
     public OpenGLOutputDebugInfo Snapshot { get; }
 }
-

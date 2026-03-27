@@ -100,4 +100,3 @@ public sealed class NDIExternalTimelineClock : IMediaClock
         return baseSeconds;
     }
 }
-

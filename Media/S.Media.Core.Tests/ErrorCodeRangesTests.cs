@@ -33,4 +33,3 @@ public sealed class ErrorCodeRangesTests
         Assert.Equal(code, ErrorCodeRanges.ResolveSharedSemantic(code));
     }
 }
-

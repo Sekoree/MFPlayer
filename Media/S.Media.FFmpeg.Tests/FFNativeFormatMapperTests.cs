@@ -57,4 +57,3 @@ public sealed class FFNativeFormatMapperTests
         Assert.Equal(VideoPixelFormat.Rgba32, format);
     }
 }
-

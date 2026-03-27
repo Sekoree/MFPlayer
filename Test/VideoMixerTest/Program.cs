@@ -56,20 +56,18 @@ internal static class Program
                 return 3;
             }
 
-            if (source1.Start() != MediaResult.Success) { Console.Error.WriteLine("Source1 start failed."); return 3; }
-            if (source2.Start() != MediaResult.Success) { Console.Error.WriteLine("Source2 start failed."); return 3; }
-
-            var mixer = new VideoMixer();
-            var add1 = mixer.AddSource(source1);
-            var add2 = mixer.AddSource(source2);
+            // Use AudioVideoMixer (video-only, no audio sources/outputs)
+            using var mixer = new AudioVideoMixer();
+            _ = mixer.SetSyncMode(AudioVideoSyncMode.Realtime);
+            var add1 = mixer.AddVideoSource(source1);
+            var add2 = mixer.AddVideoSource(source2);
             if (add1 != MediaResult.Success || add2 != MediaResult.Success)
             {
                 Console.Error.WriteLine($"Mixer add failed: s1={add1}, s2={add2}");
                 return 5;
             }
 
-            _ = mixer.SetActiveSource(source1);
-            _ = mixer.Start();
+            _ = mixer.SetActiveVideoSource(source1);
 
             using var view = new SDL3VideoView();
             var viewInit = view.Initialize(new SDL3VideoViewOptions
@@ -82,73 +80,64 @@ internal static class Program
             if (viewInit != MediaResult.Success) { Console.Error.WriteLine($"SDL3 init failed: {viewInit}"); return 4; }
             if (view.Start(new VideoOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("SDL3 start failed."); return 4; }
 
-            Console.WriteLine($"Playing ~{seconds:0.#}s via VideoMixer (2 sources). Ctrl+C to stop.");
+            mixer.AddVideoOutput(view);
 
-            var fps = source1.StreamInfo.FrameRate.GetValueOrDefault(30);
-            var delayMs = fps > 0 ? Math.Clamp((int)Math.Round(1000.0 / fps), 1, 33) : 16;
-            var deadline = DateTime.UtcNow.AddSeconds(seconds);
-            var lastStatus = DateTime.UtcNow;
-            var pushed = 0L;
-            var switchedToSource2 = false;
+            Console.WriteLine($"Playing ~{seconds:0.#}s via AudioVideoMixer (2 video sources). Ctrl+C to stop.");
+
+            var startPlayback = mixer.StartPlayback(new AudioVideoMixerConfig
+            {
+                PresentOnCallerThread = true,
+            });
+            if (startPlayback != MediaResult.Success)
+            {
+                Console.Error.WriteLine($"StartPlayback failed: {startPlayback}");
+                return 5;
+            }
 
             var source1Duration = source1.DurationSeconds;
             var switchAt = double.IsFinite(source1Duration) && source1Duration > 0 ? source1Duration : seconds / 2;
+
+            var deadline = DateTime.UtcNow.AddSeconds(seconds);
+            var lastStatus = DateTime.UtcNow;
+            var switchedToSource2 = false;
 
             var cancel = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
 
             while (!cancel.IsCancellationRequested && DateTime.UtcNow < deadline)
             {
-                var activeSource = switchedToSource2 ? source2 : source1;
-                var read = activeSource.ReadFrame(out var frame);
-
-                if (read != MediaResult.Success)
-                {
-                    if (!switchedToSource2)
-                    {
-                        Console.WriteLine($"Source1 ended (code={read}), switching to Source2.");
-                        switchedToSource2 = true;
-                        _ = mixer.SetActiveSource(source2);
-                        continue;
-                    }
-                    Console.WriteLine($"Source2 ended (code={read}).");
-                    break;
-                }
-
-                try
-                {
-                    _ = view.PushFrame(frame, frame.PresentationTime);
-                    pushed++;
-                }
-                finally
-                {
-                    frame.Dispose();
-                }
+                var tickDelay = mixer.TickVideoPresentation();
 
                 // Switch when source1 position passes its duration
                 if (!switchedToSource2 && source1.PositionSeconds >= switchAt)
                 {
                     Console.WriteLine($"Source1 reached {switchAt:0.###}s, switching to Source2.");
                     switchedToSource2 = true;
-                    _ = mixer.SetActiveSource(source2);
+                    _ = mixer.SetActiveVideoSource(source2);
                 }
 
                 if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
                 {
+                    var info = mixer.GetDebugInfo();
                     var name = switchedToSource2 ? "Source2" : "Source1";
-                    Console.WriteLine($"active={name} pos={activeSource.PositionSeconds:0.###}s frame={activeSource.CurrentFrameIndex} pushed={pushed}");
+                    var activeSource = switchedToSource2 ? source2 : source1;
+                    if (info.HasValue)
+                    {
+                        var d = info.Value;
+                        Console.WriteLine(
+                            $"active={name} pos={activeSource.PositionSeconds:0.###}s vPushed={d.VideoPushed} vDrop={d.VideoLateDrops}");
+                    }
                     lastStatus = DateTime.UtcNow;
                 }
 
-                Thread.Sleep(delayMs);
+                var sleepMs = Math.Max(1, (int)Math.Ceiling(tickDelay.TotalMilliseconds));
+                Thread.Sleep(sleepMs);
             }
 
+            _ = mixer.StopPlayback();
             _ = view.Stop();
-            _ = mixer.Stop();
-            _ = source1.Stop();
-            _ = source2.Stop();
 
-            Console.WriteLine($"Done. Pushed={pushed} frames.");
+            Console.WriteLine("Done.");
             return 0;
         }
         catch (Exception ex)
@@ -174,7 +163,7 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("VideoMixerTest — play 2 video files sequentially via VideoMixer");
+        Console.WriteLine("VideoMixerTest — play 2 video files via AudioVideoMixer with source switching");
         Console.WriteLine("Usage: VideoMixerTest --input <file1> [--input2 <file2>] [options]");
         Console.WriteLine();
         Console.WriteLine("Options:");
@@ -183,4 +172,3 @@ internal static class Program
         Console.WriteLine("  --seconds <n>     Total playback duration (default: 30)");
     }
 }
-

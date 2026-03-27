@@ -10,4 +10,3 @@ public readonly record struct Yuv444PPixelFormatData : IPixelFormatData
 
     public int BitsPerComponent => 8;
 }
-

@@ -7,31 +7,21 @@ namespace S.Media.Core.Tests;
 public sealed class MixerClockTypeRulesTests
 {
     [Theory]
-    [InlineData(MixerKind.Audio, ClockType.AudioLed)]
-    [InlineData(MixerKind.Video, ClockType.VideoLed)]
-    [InlineData(MixerKind.AudioVideo, ClockType.Hybrid)]
-    [InlineData(MixerKind.Audio, ClockType.External)]
-    [InlineData(MixerKind.Video, ClockType.External)]
-    [InlineData(MixerKind.AudioVideo, ClockType.External)]
-    public void Validate_ReturnsSuccess_ForSupportedClockTypes(MixerKind mixerKind, ClockType clockType)
+    [InlineData(ClockType.Hybrid)]
+    [InlineData(ClockType.External)]
+    public void ValidateClockType_ReturnsSuccess_ForSupportedClockTypes(ClockType clockType)
     {
-        var result = MixerClockTypeRules.Validate(mixerKind, clockType);
+        var result = MixerClockTypeRules.ValidateClockType(clockType);
 
         Assert.Equal(MediaResult.Success, result);
     }
 
     [Theory]
-    [InlineData(MixerKind.Audio, ClockType.VideoLed)]
-    [InlineData(MixerKind.Audio, ClockType.Hybrid)]
-    [InlineData(MixerKind.Video, ClockType.AudioLed)]
-    [InlineData(MixerKind.Video, ClockType.Hybrid)]
-    [InlineData(MixerKind.AudioVideo, ClockType.AudioLed)]
-    [InlineData(MixerKind.AudioVideo, ClockType.VideoLed)]
-    public void Validate_ReturnsMixerClockTypeInvalid_ForNonsensicalConfigs(MixerKind mixerKind, ClockType clockType)
+    [InlineData((ClockType)99)]
+    public void ValidateClockType_ReturnsMixerClockTypeInvalid_ForUnknownClockType(ClockType clockType)
     {
-        var result = MixerClockTypeRules.Validate(mixerKind, clockType);
+        var result = MixerClockTypeRules.ValidateClockType(clockType);
 
         Assert.Equal((int)MediaErrorCode.MixerClockTypeInvalid, result);
     }
 }
-

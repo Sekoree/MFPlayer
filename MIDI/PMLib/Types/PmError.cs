@@ -33,4 +33,3 @@ public enum PmError : int
     /// <summary>Output attempted after the USB device was removed.</summary>
     DeviceRemoved = -9988,
 }
-

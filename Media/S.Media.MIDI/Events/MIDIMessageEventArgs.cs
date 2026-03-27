@@ -20,4 +20,3 @@ public sealed class MIDIMessageEventArgs : EventArgs
 
     public long? BackendTimestamp { get; }
 }
-

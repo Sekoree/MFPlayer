@@ -68,4 +68,3 @@ public sealed class OpenGLUploadPlannerTests
             1);
     }
 }
-

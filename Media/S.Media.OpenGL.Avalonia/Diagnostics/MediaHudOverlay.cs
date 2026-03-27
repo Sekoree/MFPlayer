@@ -175,4 +175,3 @@ public sealed class MediaHudOverlay
 			.Replace("→", "/", StringComparison.Ordinal);
 	}
 }
-

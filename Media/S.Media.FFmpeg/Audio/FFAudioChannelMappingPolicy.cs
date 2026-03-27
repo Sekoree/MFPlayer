@@ -7,4 +7,3 @@ public enum FFAudioChannelMappingPolicy
     DownmixToStereo = 2,
     DownmixToMono = 3,
 }
-

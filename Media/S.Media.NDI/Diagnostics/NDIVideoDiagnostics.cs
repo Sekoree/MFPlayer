@@ -18,4 +18,3 @@ public readonly record struct NDIVideoOutputDebugInfo(
     long AudioPushSuccesses,
     long AudioPushFailures,
     double LastPushMs);
-

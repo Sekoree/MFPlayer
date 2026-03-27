@@ -9,4 +9,3 @@ public sealed record MediaMetadataSnapshot
     public ReadOnlyDictionary<string, string> AdditionalMetadata { get; init; } =
         new(new Dictionary<string, string>());
 }
-

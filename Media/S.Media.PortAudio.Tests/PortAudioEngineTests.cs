@@ -183,4 +183,3 @@ public sealed class PortAudioEngineTests
         Assert.Equal(AudioEngineState.Terminated, engine.State);
     }
 }
-

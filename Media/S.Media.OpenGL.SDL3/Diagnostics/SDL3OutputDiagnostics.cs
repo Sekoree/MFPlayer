@@ -8,4 +8,3 @@ public readonly record struct SDL3OutputDebugInfo(
     long FramesDropped,
     double LastPresentMs,
     OpenGLSurfaceMetadata Surface);
-

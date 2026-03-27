@@ -23,4 +23,3 @@ public sealed record MIDIReconnectOptions
         };
     }
 }
-

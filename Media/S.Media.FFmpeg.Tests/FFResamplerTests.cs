@@ -70,4 +70,3 @@ public sealed class FFResamplerTests
         Assert.Equal((int)MediaErrorCode.FFmpegResampleFailed, code);
     }
 }
-

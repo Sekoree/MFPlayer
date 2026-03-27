@@ -58,9 +58,9 @@ This document gives per-project stage notes plus the key migration consideration
 
 - `PMLib/PMLib.csproj` - `Implemented`
   - MIDI support/interoperability layer.
-- `NDI/NdiLib/NdiLib.csproj` - `Implemented`
+- `NDI/NDILib/NDILib.csproj` - `Implemented`
   - NDI interop layer used by `S.Media.NDI`.
-- `NDI/NdiLib.Smoke/NdiLib.Smoke.csproj` - `Validation`
+- `NDI/NDILib.Smoke/NDILib.Smoke.csproj` - `Validation`
   - NDI runtime smoke checks.
 - `OSC/OSCLib/OSCLib.csproj` - `Implemented`
   - OSC library functionality is active.
@@ -75,11 +75,10 @@ This document gives per-project stage notes plus the key migration consideration
   - Direct decoder -> output path used for first-audio bring-up.
 - `Test/AudioEx/AudioEx.csproj` - `In Progress`
   - Migrated to `S.Media.FFmpeg` + `S.Media.PortAudio` for decode/output stress path; A/V parity follow-up remains.
-- `Test/NdiVideoReceive/NdiVideoReceive.csproj` - `In Progress`
+- `Test/NDIVideoReceive/NDIVideoReceive.csproj` - `In Progress`
   - Migrated to `S.Media.NDI` discovery/source-read smoke path; rendering/output parity follow-up remains.
 - `Test/VideoStress/VideoStress.csproj` - `In Progress`
   - Canonical Avalonia stress harness path on `S.Media.*` references.
-- `Test/VideoTest/VideoTest.csproj` - `Legacy-Migration`
   - Legacy Avalonia harness kept in-tree as migration reference while `VideoStress` is ported.
 
 ### Legacy Migration References

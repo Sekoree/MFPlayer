@@ -14,4 +14,3 @@ public enum VideoPixelFormat
     Yuv444P = 9,
     Yuv444P10Le = 10,
 }
-

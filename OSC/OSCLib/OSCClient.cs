@@ -76,4 +76,3 @@ public sealed class OSCClient : IOSCClient
         return new IPEndPoint(address, port);
     }
 }
-

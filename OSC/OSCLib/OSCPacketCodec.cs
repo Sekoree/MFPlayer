@@ -109,7 +109,7 @@ public static class OSCPacketCodec
             'S' => OSCArgument.Symbol(reader.ReadPaddedAsciiString()),
             'c' => OSCArgument.Char((char)reader.ReadInt32BigEndian()),
             'r' => OSCArgument.RgbaColor(reader.ReadUInt32BigEndian()),
-            'm' => OSCArgument.Midi(OSCMidiMessage.FromUInt32(reader.ReadUInt32BigEndian())),
+            'm' => OSCArgument.MIDI(OSCMIDIMessage.FromUInt32(reader.ReadUInt32BigEndian())),
             'T' => OSCArgument.True(),
             'F' => OSCArgument.False(),
             'N' => OSCArgument.Nil(),
@@ -264,8 +264,8 @@ public static class OSCPacketCodec
             case OSCArgumentType.RgbaColor:
                 writer.WriteUInt32BigEndian(argument.AsRgbaColor());
                 break;
-            case OSCArgumentType.Midi:
-                writer.WriteUInt32BigEndian(argument.AsMidi().ToUInt32());
+            case OSCArgumentType.MIDI:
+                writer.WriteUInt32BigEndian(argument.AsMIDI().ToUInt32());
                 break;
             case OSCArgumentType.True:
             case OSCArgumentType.False:
@@ -328,7 +328,7 @@ public static class OSCPacketCodec
             case OSCArgumentType.RgbaColor:
                 sb.Append('r');
                 break;
-            case OSCArgumentType.Midi:
+            case OSCArgumentType.MIDI:
                 sb.Append('m');
                 break;
             case OSCArgumentType.True:
@@ -378,7 +378,7 @@ public static class OSCPacketCodec
     {
         return argument.Type switch
         {
-            OSCArgumentType.Int32 or OSCArgumentType.Float32 or OSCArgumentType.Char or OSCArgumentType.RgbaColor or OSCArgumentType.Midi => 4,
+            OSCArgumentType.Int32 or OSCArgumentType.Float32 or OSCArgumentType.Char or OSCArgumentType.RgbaColor or OSCArgumentType.MIDI => 4,
             OSCArgumentType.Int64 or OSCArgumentType.TimeTag or OSCArgumentType.Double64 => 8,
             OSCArgumentType.String or OSCArgumentType.Symbol => PaddedStringByteCount(argument.AsString()),
             OSCArgumentType.Blob => 4 + Pad4(argument.AsBlob().Length),
@@ -602,4 +602,3 @@ public static class OSCPacketCodec
         }
     }
 }
-

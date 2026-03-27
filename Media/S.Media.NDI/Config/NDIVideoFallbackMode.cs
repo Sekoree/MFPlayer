@@ -6,4 +6,3 @@ public enum NDIVideoFallbackMode
     PresentLastFrameOnRepeatedTimestamp = 1,
     PresentLastFrameUntilTimeout = 2,
 }
-

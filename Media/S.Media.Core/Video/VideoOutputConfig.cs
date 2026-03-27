@@ -34,4 +34,3 @@ public sealed record VideoOutputConfig
         return MediaResult.Success;
     }
 }
-

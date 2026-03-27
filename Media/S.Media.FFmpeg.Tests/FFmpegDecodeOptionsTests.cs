@@ -51,4 +51,3 @@ public sealed class FFmpegDecodeOptionsTests
         Assert.Equal(0, normalized.DecodeThreadCount);
     }
 }
-

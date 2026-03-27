@@ -77,4 +77,3 @@ public sealed class OpenGLDiagnosticsEvents : IDisposable
         }
     }
 }
-

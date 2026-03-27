@@ -4,4 +4,3 @@ public static class MediaResult
 {
     public const int Success = 0;
 }
-

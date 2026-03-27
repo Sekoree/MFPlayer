@@ -292,4 +292,3 @@ public sealed class MIDIInput : IDisposable
         StatusChanged?.Invoke(this, new MIDIConnectionStatusEventArgs(status, Device, DateTimeOffset.UtcNow, errorCode));
     }
 }
-

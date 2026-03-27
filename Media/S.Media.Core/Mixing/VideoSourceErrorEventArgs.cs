@@ -15,4 +15,3 @@ public sealed class VideoSourceErrorEventArgs : EventArgs
 
     public string? Message { get; }
 }
-

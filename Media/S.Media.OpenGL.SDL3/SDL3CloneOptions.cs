@@ -14,4 +14,3 @@ public sealed record SDL3CloneOptions
 
     public int? MaxCloneDepth { get; init; }
 }
-

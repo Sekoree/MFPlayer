@@ -290,4 +290,3 @@ public sealed class OpenGLVideoOutput : IVideoOutput
             LastPresentedFrameGeneration: generation);
     }
 }
-

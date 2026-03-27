@@ -6,4 +6,3 @@ public readonly record struct NDIEngineDiagnostics(
     NDIVideoOutputDebugInfo VideoOutput,
     double ClockDriftMs,
     DateTimeOffset CapturedAtUtc);
-

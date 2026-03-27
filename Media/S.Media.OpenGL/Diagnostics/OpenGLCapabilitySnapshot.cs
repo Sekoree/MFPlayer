@@ -5,4 +5,3 @@ public readonly record struct OpenGLCapabilitySnapshot(
     bool SupportsFboBlit,
     int MaxTextureSize,
     bool SupportsPersistentMappedBuffers);
-

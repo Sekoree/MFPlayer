@@ -155,4 +155,3 @@ public sealed class YuvToRgbaConverter
         return value > 255 ? 255 : value;
     }
 }
-

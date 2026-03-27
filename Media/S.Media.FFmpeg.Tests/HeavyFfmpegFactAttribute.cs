@@ -43,4 +43,3 @@ internal static class HeavyFfmpegTestConfig
                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 }
-

@@ -27,4 +27,3 @@ public sealed class FFAudioChannelMapTests
         Assert.False(string.IsNullOrWhiteSpace(message));
     }
 }
-

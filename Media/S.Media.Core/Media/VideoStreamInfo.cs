@@ -14,4 +14,3 @@ public readonly record struct VideoStreamInfo
 
     public TimeSpan? Duration { get; init; }
 }
-

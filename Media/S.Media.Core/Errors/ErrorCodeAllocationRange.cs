@@ -4,4 +4,3 @@ public readonly record struct ErrorCodeAllocationRange(int Start, int End, strin
 {
     public bool Contains(int code) => code >= Start && code <= End;
 }
-

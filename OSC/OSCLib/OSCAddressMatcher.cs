@@ -134,4 +134,3 @@ public static class OSCAddressMatcher
     private static string[] Split(string input)
         => input.Split('/', StringSplitOptions.None)[1..];
 }
-

@@ -6,4 +6,3 @@ public readonly record struct MIDIDeviceInfo(
     bool IsInput,
     bool IsOutput,
     bool IsNative = true);
-

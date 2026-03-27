@@ -1,6 +1,6 @@
 # S.Media Implementation Status
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
 
 This snapshot summarizes the current implementation state across `S.Media.*` projects.
 
@@ -8,7 +8,7 @@ This snapshot summarizes the current implementation state across `S.Media.*` pro
 
 | Module | Status | Notes |
 | --- | --- | --- |
-| `S.Media.Core` | In Progress | Core contracts, mixers/player surfaces, debug/error allocation policy, and shared semantic mapping are in place and actively used by module tests. |
+| `S.Media.Core` | In Progress | Core contracts, mixers/player surfaces, debug/error allocation policy, shared semantic mapping, and advanced routing (`ISupportsAdvancedRouting`, `AudioRoutingRule`, `VideoRoutingRule`) are in place. `MixerKind` removed; `MixerClockTypeRules` simplified. `IAudioOutput` now has `Guid Id` for routing target identity. |
 | `S.Media.FFmpeg` | In Progress | Source/media-item/shared-session pipeline implemented; placeholder fallbacks removed; convenience factories (`Open`/`TryOpen`) added; heavy test paths remain opt-in. |
 | `S.Media.PortAudio` | In Progress | Engine/input/output slices are implemented with lifecycle/idempotency/integration tests passing. |
 | `S.Media.MIDI` | In Progress | Engine/input/output/reconnect/status events implemented with deterministic lifecycle and validation contracts. |

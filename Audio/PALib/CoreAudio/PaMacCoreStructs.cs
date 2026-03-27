@@ -28,4 +28,3 @@ public struct PaMacCoreStreamInfo
     public nint channelMap;
     public nuint channelMapSize;
 }
-

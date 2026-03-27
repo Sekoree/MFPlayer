@@ -9,4 +9,3 @@ public enum MIDIConnectionStatus
     Reconnecting = 4,
     ReconnectFailed = 5,
 }
-

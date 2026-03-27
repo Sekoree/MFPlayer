@@ -83,4 +83,3 @@ public static class PMUtil
     /// </example>
     public static int ChannelMask(int channel) => 1 << channel;
 }
-

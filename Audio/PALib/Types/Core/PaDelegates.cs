@@ -7,4 +7,3 @@ public static class PaConstants
     public const int paFormatIsSupported = 0;
     public const ulong paFramesPerBufferUnspecified = 0;
 }
-

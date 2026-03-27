@@ -22,4 +22,3 @@ public readonly record struct OpenGLSurfaceMetadata(
         PlaneStrides: Array.Empty<int>(),
         LastPresentedFrameGeneration: 0);
 }
-

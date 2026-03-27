@@ -63,10 +63,6 @@ internal static class Program
             }
 
             Console.WriteLine($"Audio stream: codec={source.StreamInfo.Codec ?? "<null>"}, sampleRate={source.StreamInfo.SampleRate?.ToString() ?? "<null>"}, channels={source.StreamInfo.ChannelCount?.ToString() ?? "<null>"}");
-            if (string.Equals(source.StreamInfo.Codec, "pcm_f32le", StringComparison.OrdinalIgnoreCase))
-            {
-                Console.Error.WriteLine("WARNING: FFmpeg appears to be in placeholder fallback mode (codec=pcm_f32le placeholder). This usually means FFmpeg native runtime binding is not active for this process.");
-            }
 
             var sourceStart = source.Start();
             if (sourceStart != MediaResult.Success)
@@ -454,4 +450,3 @@ internal static class Program
 
     private readonly record struct PlaybackStats(int TotalFramesRead, int TotalFramesPushed, int PushFailures, int Underflows);
 }
-

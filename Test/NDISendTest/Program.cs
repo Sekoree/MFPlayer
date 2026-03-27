@@ -1,4 +1,4 @@
-using NdiLib;
+using NDILib;
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
 using S.Media.Core.Video;
@@ -38,8 +38,8 @@ internal static class Program
 
         try
         {
-            using var runtime = new NdiRuntimeScope();
-            Console.WriteLine($"NDI runtime version: {NdiRuntime.Version}");
+            using var runtime = new NDIRuntimeScope();
+            Console.WriteLine($"NDI runtime version: {NDIRuntime.Version}");
 
             using var media = FFMediaItem.Open(uri);
 
@@ -151,4 +151,3 @@ internal static class Program
         Console.WriteLine("  --seconds <n>            Send duration (default: 60)");
     }
 }
-

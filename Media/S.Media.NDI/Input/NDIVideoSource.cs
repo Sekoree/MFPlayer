@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Buffers;
-using NdiLib;
+using NDILib;
 using S.Media.Core.Errors;
 using S.Media.Core.Video;
 using S.Media.NDI.Config;
@@ -15,7 +15,7 @@ public sealed class NDIVideoSource : IVideoSource
     private static readonly TimeSpan FallbackTimeout = TimeSpan.FromMilliseconds(250);
 
     private readonly Lock _gate = new();
-    private readonly NdiCaptureCoordinator? _captureCoordinator;
+    private readonly NDICaptureCoordinator? _captureCoordinator;
     private int _readInProgress;
     private bool _disposed;
     private long _framesCaptured;
@@ -47,12 +47,12 @@ public sealed class NDIVideoSource : IVideoSource
     {
     }
 
-    internal NDIVideoSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, NdiCaptureCoordinator? captureCoordinator)
+    internal NDIVideoSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, NDICaptureCoordinator? captureCoordinator)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
         SourceId = Guid.NewGuid();
         SourceOptions = sourceOptions;
-        _captureCoordinator = captureCoordinator ?? (mediaItem.Receiver is null ? null : new NdiCaptureCoordinator(mediaItem.Receiver));
+        _captureCoordinator = captureCoordinator ?? (mediaItem.Receiver is null ? null : new NDICaptureCoordinator(mediaItem.Receiver));
         _videoFallbackMode = sourceOptions.VideoFallbackMode;
         _queueOverflowPolicy = sourceOptions.QueueOverflowPolicy;
         _videoJitterBufferFrames = Math.Max(1, sourceOptions.VideoJitterBufferFrames);
@@ -622,4 +622,3 @@ public sealed class NDIVideoSource : IVideoSource
         VideoPixelFormat OutputPixelFormat,
         string ConversionPath);
 }
-

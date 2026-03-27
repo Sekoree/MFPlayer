@@ -392,4 +392,3 @@ public sealed class FFVideoSource : IVideoSource
         return duration.Value.TotalSeconds >= 0 ? duration.Value.TotalSeconds : double.NaN;
     }
 }
-

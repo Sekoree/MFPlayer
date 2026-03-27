@@ -12,4 +12,3 @@ public interface IMediaPlaybackSourceBinding
 
     IVideoSource? InitialActiveVideoSource { get; }
 }
-

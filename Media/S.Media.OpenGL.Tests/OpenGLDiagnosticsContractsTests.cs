@@ -136,4 +136,3 @@ public sealed class OpenGLDiagnosticsContractsTests
             plane0Stride: 8);
     }
 }
-

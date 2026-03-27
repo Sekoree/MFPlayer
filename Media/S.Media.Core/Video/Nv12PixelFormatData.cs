@@ -8,4 +8,3 @@ public readonly record struct Nv12PixelFormatData : IPixelFormatData
 
     public int ChromaSubsampleY => 2;
 }
-

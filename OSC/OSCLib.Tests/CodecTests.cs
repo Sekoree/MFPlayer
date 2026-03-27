@@ -21,7 +21,7 @@ public class CodecTests
                 OSCArgs.Symbol("sym"),
                 OSCArgs.Char('A'),
                 OSCArgs.Color(0xFF00FF00),
-                OSCArgs.Midi(1, 0x90, 60, 100),
+                OSCArgs.MIDI(1, 0x90, 60, 100),
                 OSCArgs.True(),
                 OSCArgs.False(),
                 OSCArgs.Nil(),
@@ -82,4 +82,3 @@ public class CodecTests
         Assert.Equal("DEADBEEF", Convert.ToHexString(unknown.RawData.Span));
     }
 }
-

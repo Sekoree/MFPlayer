@@ -7,4 +7,3 @@ public readonly record struct AvaloniaOutputDebugInfo(
     long FramesCloned,
     bool IsCloneActive,
     OpenGLSurfaceMetadata Surface);
-

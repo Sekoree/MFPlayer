@@ -128,14 +128,14 @@ Heavy/light selection is up to the user at runtime.
 
 **Goal**: Discover NDI source → play via `AudioVideoMixer` + SDL3.
 
-**Pipeline**: `NdiFinder.WaitForSources` → `NdiReceiver.Connect` → `NDIEngine.CreateAudioSource/CreateVideoSource` → `AudioVideoMixer` → add PortAudio + SDL3 outputs → `StartPlayback` + tick loop.
+**Pipeline**: `NDIFinder.WaitForSources` → `NDIReceiver.Connect` → `NDIEngine.CreateAudioSource/CreateVideoSource` → `AudioVideoMixer` → add PortAudio + SDL3 outputs → `StartPlayback` + tick loop.
 
 **Features**:
 - `--list-sources` to discover and exit
 - `--source-name <contains>` to pick a source
 - Prints debug + NDI diagnostics per second
 
-**Dependencies**: S.Media.Core, S.Media.NDI, S.Media.PortAudio, S.Media.OpenGL.SDL3, NdiLib
+**Dependencies**: S.Media.Core, S.Media.NDI, S.Media.PortAudio, S.Media.OpenGL.SDL3, NDILib
 
 ---
 
@@ -150,7 +150,7 @@ Heavy/light selection is up to the user at runtime.
 - Prints push success/failure stats per second
 - Ctrl+C to stop
 
-**Dependencies**: S.Media.Core, S.Media.FFmpeg, S.Media.NDI, NdiLib
+**Dependencies**: S.Media.Core, S.Media.FFmpeg, S.Media.NDI, NDILib
 
 ---
 

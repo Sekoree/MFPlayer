@@ -119,4 +119,3 @@ public sealed class MIDIInputOutputTests
         Assert.False(input.IsOpen);
     }
 }
-

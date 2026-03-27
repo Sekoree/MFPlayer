@@ -7,7 +7,7 @@ namespace S.Media.Core.Tests;
 public sealed class VideoPresenterSyncPolicyTests
 {
     [Fact]
-    public void StableMode_SelectsNewestFrame_AndReportsCoalescedDrops()
+    public void RealtimeMode_SelectsNewestFrame_AndReportsCoalescedDrops()
     {
         var options = VideoPresenterSyncPolicyOptions.Default;
         using var queue = BuildQueue([
@@ -15,7 +15,7 @@ public sealed class VideoPresenterSyncPolicyTests
             TimeSpan.FromMilliseconds(20),
             TimeSpan.FromMilliseconds(30)], out var releaseCounter);
 
-        var decision = VideoPresenterSyncPolicy.SelectNextFrame(queue, AudioVideoSyncMode.Stable, 0.02, options);
+        var decision = VideoPresenterSyncPolicy.SelectNextFrame(queue, AudioVideoSyncMode.Realtime, 0.02, options);
 
         Assert.NotNull(decision.Frame);
         Assert.Equal(TimeSpan.FromMilliseconds(30), decision.Frame!.PresentationTime);
@@ -25,27 +25,27 @@ public sealed class VideoPresenterSyncPolicyTests
     }
 
     [Fact]
-    public void StrictMode_WaitsWhenFrameIsEarly()
+    public void SyncedMode_WaitsWhenFrameIsEarly()
     {
         var options = VideoPresenterSyncPolicyOptions.Default;
         using var queue = BuildQueue([TimeSpan.FromMilliseconds(40)], out _);
 
-        var decision = VideoPresenterSyncPolicy.SelectNextFrame(queue, AudioVideoSyncMode.StrictAv, 0.0, options);
+        var decision = VideoPresenterSyncPolicy.SelectNextFrame(queue, AudioVideoSyncMode.Synced, 0.0, options);
 
         Assert.Null(decision.Frame);
         Assert.True(decision.Delay >= options.MinDelay);
-        Assert.True(decision.Delay <= options.StrictMaxWait);
+        Assert.True(decision.Delay <= options.MaxWait);
     }
 
     [Fact]
-    public void HybridMode_DropsStaleThenSelectsUsableFrame()
+    public void SyncedMode_DropsStaleThenSelectsUsableFrame()
     {
         var options = VideoPresenterSyncPolicyOptions.Default;
         using var queue = BuildQueue([
             TimeSpan.FromMilliseconds(-300),
             TimeSpan.FromMilliseconds(1)], out var releaseCounter);
 
-        var decision = VideoPresenterSyncPolicy.SelectNextFrame(queue, AudioVideoSyncMode.Hybrid, 0.0, options);
+        var decision = VideoPresenterSyncPolicy.SelectNextFrame(queue, AudioVideoSyncMode.Synced, 0.0, options);
 
         Assert.NotNull(decision.Frame);
         Assert.Equal(TimeSpan.FromMilliseconds(1), decision.Frame!.PresentationTime);
@@ -106,4 +106,3 @@ public sealed class VideoPresenterSyncPolicyTests
         public int Value;
     }
 }
-

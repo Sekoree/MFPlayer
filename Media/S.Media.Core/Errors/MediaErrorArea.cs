@@ -10,4 +10,3 @@ public enum MediaErrorArea
     OutputRender = 5,
     NDI = 6,
 }
-

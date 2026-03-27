@@ -603,4 +603,3 @@ internal sealed class AvaloniaGLRenderer : IDisposable
         return ((surfaceW - w) / 2, (surfaceH - h) / 2, w, h);
     }
 }
-
