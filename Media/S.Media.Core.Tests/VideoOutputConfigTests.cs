@@ -57,4 +57,32 @@ public sealed class VideoOutputConfigTests
 
         Assert.Equal(MediaResult.Success, result);
     }
+
+    [Fact]
+    public void Validate_ReturnsInvalidArgument_WhenMaxFpsModeHasNoValidFps()
+    {
+        var config = new VideoOutputConfig
+        {
+            PresentationMode = VideoOutputPresentationMode.MaxFps,
+            MaxFps = null,
+        };
+
+        var result = config.Validate(hasEffectiveFrameDuration: true);
+
+        Assert.Equal((int)MediaErrorCode.MediaInvalidArgument, result);
+    }
+
+    [Fact]
+    public void Validate_ReturnsSuccess_WhenMaxFpsModeHasValidFps()
+    {
+        var config = new VideoOutputConfig
+        {
+            PresentationMode = VideoOutputPresentationMode.MaxFps,
+            MaxFps = 60,
+        };
+
+        var result = config.Validate(hasEffectiveFrameDuration: true);
+
+        Assert.Equal(MediaResult.Success, result);
+    }
 }

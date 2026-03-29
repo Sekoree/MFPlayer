@@ -8,6 +8,15 @@ public static class OSCPacketCodec
 {
     private static readonly Encoding Ascii = Encoding.ASCII;
 
+    // -----------------------------------------------------------------------
+    // Public API
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Attempts to decode a raw OSC datagram.
+    /// Only expected decode failures (<see cref="FormatException"/>, <see cref="ArgumentException"/>)
+    /// are caught; catastrophic exceptions propagate normally.
+    /// </summary>
     public static bool TryDecode(
         ReadOnlySpan<byte> packetBytes,
         OSCDecodeOptions options,
@@ -17,43 +26,73 @@ public static class OSCPacketCodec
         try
         {
             var reader = new OSCSpanReader(packetBytes);
-            packet = DecodePacket(ref reader, options);
+            packet = DecodePacket(ref reader, options, bundleDepth: 0, parentTimeTag: null);
             if (!reader.IsEnd)
                 throw new FormatException("Packet contains trailing bytes.");
 
             error = null;
             return true;
         }
-        catch (Exception ex)
+        catch (FormatException ex)
         {
             packet = null;
             error = ex.Message;
             return false;
         }
+        catch (ArgumentException ex)
+        {
+            packet = null;
+            error = ex.Message;
+            return false;
+        }
+        // All other exceptions (OutOfMemoryException, StackOverflowException, etc.) propagate.
     }
 
+    /// <summary>
+    /// Encodes an OSC packet into a rented <see cref="ArrayPool{T}"/> buffer.
+    /// The caller must dispose the returned <see cref="RentedBuffer"/> to return it to the pool.
+    /// </summary>
     public static RentedBuffer EncodeToRented(OSCPacket packet)
     {
         var writer = new OSCBufferWriter(Math.Max(256, EstimatePacketSize(packet)));
-        WritePacket(ref writer, packet);
-        return writer.Detach();
+        try
+        {
+            WritePacket(ref writer, packet);
+            return writer.Detach();
+        }
+        catch
+        {
+            writer.ReturnToPool();
+            throw;
+        }
     }
 
-    private static OSCPacket DecodePacket(ref OSCSpanReader reader, OSCDecodeOptions options)
+    // -----------------------------------------------------------------------
+    // Decode
+    // -----------------------------------------------------------------------
+
+    private static OSCPacket DecodePacket(
+        ref OSCSpanReader reader,
+        OSCDecodeOptions options,
+        int bundleDepth,
+        OSCTimeTag? parentTimeTag)
     {
         if (reader.Remaining < 4)
             throw new FormatException("Packet is too small.");
 
         return reader.PeekByte() == (byte)'#'
-            ? OSCPacket.FromBundle(DecodeBundle(ref reader, options))
+            ? OSCPacket.FromBundle(DecodeBundle(ref reader, options, bundleDepth, parentTimeTag))
             : OSCPacket.FromMessage(DecodeMessage(ref reader, options));
     }
 
     private static OSCMessage DecodeMessage(ref OSCSpanReader reader, OSCDecodeOptions options)
     {
-        var address = reader.ReadPaddedAsciiString();
+        var address = reader.ReadPaddedAsciiString(options.StrictMode);
         if (string.IsNullOrWhiteSpace(address) || address[0] != '/')
             throw new FormatException("Message address is invalid.");
+
+        if (options.StrictMode && !OSCMessage.IsValidAddress(address))
+            throw new FormatException($"OSC address '{address}' contains characters reserved for address patterns.");
 
         if (reader.IsEnd)
         {
@@ -72,7 +111,7 @@ public static class OSCPacketCodec
             return new OSCMessage(address);
         }
 
-        var typeTagString = reader.ReadPaddedAsciiString();
+        var typeTagString = reader.ReadPaddedAsciiString(options.StrictMode);
         if (typeTagString.Length == 0 || typeTagString[0] != ',')
             throw new FormatException("Type tag string must start with ','.");
 
@@ -101,12 +140,12 @@ public static class OSCPacketCodec
         {
             'i' => OSCArgument.Int32(reader.ReadInt32BigEndian()),
             'f' => OSCArgument.Float32(reader.ReadFloat32BigEndian()),
-            's' => OSCArgument.String(reader.ReadPaddedAsciiString()),
+            's' => OSCArgument.String(reader.ReadPaddedAsciiString(options.StrictMode)),
             'b' => OSCArgument.Blob(reader.ReadBlobPadded()),
             'h' => OSCArgument.Int64(reader.ReadInt64BigEndian()),
             't' => OSCArgument.TimeTag(new OSCTimeTag(reader.ReadUInt64BigEndian())),
             'd' => OSCArgument.Double64(reader.ReadDouble64BigEndian()),
-            'S' => OSCArgument.Symbol(reader.ReadPaddedAsciiString()),
+            'S' => OSCArgument.Symbol(reader.ReadPaddedAsciiString(options.StrictMode)),
             'c' => OSCArgument.Char((char)reader.ReadInt32BigEndian()),
             'r' => OSCArgument.RgbaColor(reader.ReadUInt32BigEndian()),
             'm' => OSCArgument.MIDI(OSCMIDIMessage.FromUInt32(reader.ReadUInt32BigEndian())),
@@ -116,7 +155,7 @@ public static class OSCPacketCodec
             'I' => OSCArgument.Impulse(),
             '[' => ReadArray(ref reader, options, allTags, ref tagIndex, arrayDepth + 1),
             ']' => throw new FormatException("Unexpected array terminator tag ']'."),
-            _ => ReadUnknown(tag, ref reader, options, allTags, tagIndex)
+            _ => ReadUnknown(tag, ref reader, options, allTags)
         };
     }
 
@@ -147,8 +186,7 @@ public static class OSCPacketCodec
         char tag,
         ref OSCSpanReader reader,
         OSCDecodeOptions options,
-        ReadOnlySpan<char> allTags,
-        int tagIndex)
+        ReadOnlySpan<char> allTags)
     {
         if (options.StrictMode)
             throw new FormatException($"Unknown OSC type tag '{tag}'.");
@@ -172,13 +210,27 @@ public static class OSCPacketCodec
             : OSCArgument.Nil();
     }
 
-    private static OSCBundle DecodeBundle(ref OSCSpanReader reader, OSCDecodeOptions options)
+    private static OSCBundle DecodeBundle(
+        ref OSCSpanReader reader,
+        OSCDecodeOptions options,
+        int bundleDepth,
+        OSCTimeTag? parentTimeTag)
     {
-        var marker = reader.ReadPaddedAsciiString();
+        if (bundleDepth > options.MaxBundleDepth)
+            throw new FormatException(
+                $"Maximum OSC bundle nesting depth {options.MaxBundleDepth} exceeded.");
+
+        var marker = reader.ReadPaddedAsciiString(options.StrictMode);
         if (!string.Equals(marker, "#bundle", StringComparison.Ordinal))
             throw new FormatException("Bundle marker '#bundle' is missing.");
 
         var timeTag = new OSCTimeTag(reader.ReadUInt64BigEndian());
+
+        // OSC 1.0: inner bundle timetag must be >= outer bundle timetag (strict mode only).
+        if (options.StrictMode && parentTimeTag is { } parent && timeTag.Value < parent.Value)
+            throw new FormatException(
+                $"Nested bundle timetag ({timeTag.Value}) precedes enclosing bundle timetag ({parent.Value}).");
+
         var elements = new List<OSCPacket>();
 
         while (!reader.IsEnd)
@@ -189,13 +241,17 @@ public static class OSCPacketCodec
 
             var slice = reader.ReadRaw(elementSize);
             var nestedReader = new OSCSpanReader(slice);
-            elements.Add(DecodePacket(ref nestedReader, options));
+            elements.Add(DecodePacket(ref nestedReader, options, bundleDepth + 1, timeTag));
             if (!nestedReader.IsEnd)
                 throw new FormatException("Bundle element has trailing bytes.");
         }
 
         return new OSCBundle(timeTag, elements);
     }
+
+    // -----------------------------------------------------------------------
+    // Encode
+    // -----------------------------------------------------------------------
 
     private static void WritePacket(ref OSCBufferWriter writer, OSCPacket packet)
     {
@@ -226,9 +282,14 @@ public static class OSCPacketCodec
 
         foreach (var element in bundle.Elements)
         {
-            using var rented = EncodeToRented(element);
-            writer.WriteInt32BigEndian(rented.Length);
-            writer.WriteRaw(rented.Memory.Span);
+            // Reserve 4 bytes for element size, write element, then back-patch the size.
+            // This avoids allocating a separate RentedBuffer per nested element.
+            var sizeOffset = writer.CurrentOffset;
+            writer.WriteInt32BigEndian(0);      // size placeholder
+            var startOffset = writer.CurrentOffset;
+            WritePacket(ref writer, element);
+            var elementSize = writer.CurrentOffset - startOffset;
+            writer.PatchInt32BigEndian(sizeOffset, elementSize);
         }
     }
 
@@ -298,51 +359,21 @@ public static class OSCPacketCodec
     {
         switch (argument.Type)
         {
-            case OSCArgumentType.Int32:
-                sb.Append('i');
-                break;
-            case OSCArgumentType.Float32:
-                sb.Append('f');
-                break;
-            case OSCArgumentType.String:
-                sb.Append('s');
-                break;
-            case OSCArgumentType.Blob:
-                sb.Append('b');
-                break;
-            case OSCArgumentType.Int64:
-                sb.Append('h');
-                break;
-            case OSCArgumentType.TimeTag:
-                sb.Append('t');
-                break;
-            case OSCArgumentType.Double64:
-                sb.Append('d');
-                break;
-            case OSCArgumentType.Symbol:
-                sb.Append('S');
-                break;
-            case OSCArgumentType.Char:
-                sb.Append('c');
-                break;
-            case OSCArgumentType.RgbaColor:
-                sb.Append('r');
-                break;
-            case OSCArgumentType.MIDI:
-                sb.Append('m');
-                break;
-            case OSCArgumentType.True:
-                sb.Append('T');
-                break;
-            case OSCArgumentType.False:
-                sb.Append('F');
-                break;
-            case OSCArgumentType.Nil:
-                sb.Append('N');
-                break;
-            case OSCArgumentType.Impulse:
-                sb.Append('I');
-                break;
+            case OSCArgumentType.Int32:    sb.Append('i'); break;
+            case OSCArgumentType.Float32:  sb.Append('f'); break;
+            case OSCArgumentType.String:   sb.Append('s'); break;
+            case OSCArgumentType.Blob:     sb.Append('b'); break;
+            case OSCArgumentType.Int64:    sb.Append('h'); break;
+            case OSCArgumentType.TimeTag:  sb.Append('t'); break;
+            case OSCArgumentType.Double64: sb.Append('d'); break;
+            case OSCArgumentType.Symbol:   sb.Append('S'); break;
+            case OSCArgumentType.Char:     sb.Append('c'); break;
+            case OSCArgumentType.RgbaColor: sb.Append('r'); break;
+            case OSCArgumentType.MIDI:     sb.Append('m'); break;
+            case OSCArgumentType.True:     sb.Append('T'); break;
+            case OSCArgumentType.False:    sb.Append('F'); break;
+            case OSCArgumentType.Nil:      sb.Append('N'); break;
+            case OSCArgumentType.Impulse:  sb.Append('I'); break;
             case OSCArgumentType.Array:
                 sb.Append('[');
                 foreach (var nested in argument.AsArray())
@@ -357,6 +388,10 @@ public static class OSCPacketCodec
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Size estimation
+    // -----------------------------------------------------------------------
+
     private static int EstimatePacketSize(OSCPacket packet)
     {
         if (packet.Kind == OSCPacketKind.Message)
@@ -368,7 +403,7 @@ public static class OSCPacketCodec
             return size;
         }
 
-        var bundleSize = 16; // #bundle + timetag
+        var bundleSize = 16; // #bundle (8) + timetag (8)
         foreach (var element in packet.Bundle!.Elements)
             bundleSize += 4 + EstimatePacketSize(element);
         return bundleSize;
@@ -378,11 +413,13 @@ public static class OSCPacketCodec
     {
         return argument.Type switch
         {
-            OSCArgumentType.Int32 or OSCArgumentType.Float32 or OSCArgumentType.Char or OSCArgumentType.RgbaColor or OSCArgumentType.MIDI => 4,
+            OSCArgumentType.Int32 or OSCArgumentType.Float32
+                or OSCArgumentType.Char or OSCArgumentType.RgbaColor or OSCArgumentType.MIDI => 4,
             OSCArgumentType.Int64 or OSCArgumentType.TimeTag or OSCArgumentType.Double64 => 8,
             OSCArgumentType.String or OSCArgumentType.Symbol => PaddedStringByteCount(argument.AsString()),
             OSCArgumentType.Blob => 4 + Pad4(argument.AsBlob().Length),
-            OSCArgumentType.True or OSCArgumentType.False or OSCArgumentType.Nil or OSCArgumentType.Impulse => 0,
+            OSCArgumentType.True or OSCArgumentType.False
+                or OSCArgumentType.Nil or OSCArgumentType.Impulse => 0,
             OSCArgumentType.Array => argument.AsArray().Sum(EstimateArgumentSize),
             OSCArgumentType.Unknown => argument.AsUnknown().RawData.Length,
             _ => 0
@@ -396,6 +433,10 @@ public static class OSCPacketCodec
     }
 
     private static int Pad4(int value) => (value + 3) & ~3;
+
+    // -----------------------------------------------------------------------
+    // OSCSpanReader
+    // -----------------------------------------------------------------------
 
     private ref struct OSCSpanReader
     {
@@ -455,7 +496,12 @@ public static class OSCPacketCodec
             return BitConverter.Int64BitsToDouble(raw);
         }
 
-        public string ReadPaddedAsciiString()
+        /// <summary>
+        /// Reads a null-terminated, 4-byte-padded ASCII string.
+        /// When <paramref name="strictAscii"/> is <see langword="true"/>, any byte ≥ 0x80
+        /// causes a <see cref="FormatException"/> per the OSC 1.0 spec.
+        /// </summary>
+        public string ReadPaddedAsciiString(bool strictAscii = false)
         {
             var start = _offset;
             while (_offset < _span.Length && _span[_offset] != 0)
@@ -464,8 +510,19 @@ public static class OSCPacketCodec
             if (_offset >= _span.Length)
                 throw new FormatException("Unterminated OSC string.");
 
-            var value = Ascii.GetString(_span[start.._offset]);
-            _offset++; // NUL
+            var raw = _span[start.._offset];
+
+            if (strictAscii)
+            {
+                foreach (var b in raw)
+                {
+                    if (b > 0x7F)
+                        throw new FormatException($"OSC string contains non-ASCII byte 0x{b:X2}.");
+                }
+            }
+
+            var value = Ascii.GetString(raw);
+            _offset++; // NUL terminator
 
             while ((_offset & 3) != 0)
             {
@@ -502,6 +559,10 @@ public static class OSCPacketCodec
         }
     }
 
+    // -----------------------------------------------------------------------
+    // OSCBufferWriter
+    // -----------------------------------------------------------------------
+
     private ref struct OSCBufferWriter
     {
         private byte[] _buffer;
@@ -512,6 +573,9 @@ public static class OSCPacketCodec
             _buffer = ArrayPool<byte>.Shared.Rent(initialCapacity);
             _offset = 0;
         }
+
+        /// <summary>Current write position (used for back-patching bundle element sizes).</summary>
+        public int CurrentOffset => _offset;
 
         public void WriteInt32BigEndian(int value)
         {
@@ -580,6 +644,17 @@ public static class OSCPacketCodec
             _offset += value.Length;
         }
 
+        /// <summary>
+        /// Overwrites a previously reserved 4-byte slot at <paramref name="offset"/> with
+        /// <paramref name="value"/> in big-endian order. Used to back-patch bundle element sizes.
+        /// </summary>
+        public void PatchInt32BigEndian(int offset, int value)
+            => BinaryPrimitives.WriteInt32BigEndian(_buffer.AsSpan(offset, 4), value);
+
+        /// <summary>
+        /// Detaches the internal buffer and returns it as a <see cref="RentedBuffer"/>.
+        /// The caller is responsible for disposing the returned buffer to return it to the pool.
+        /// </summary>
         public RentedBuffer Detach()
         {
             var detached = _buffer;
@@ -587,6 +662,19 @@ public static class OSCPacketCodec
             _buffer = Array.Empty<byte>();
             _offset = 0;
             return new RentedBuffer(detached, length);
+        }
+
+        /// <summary>
+        /// Returns the internal buffer to <see cref="ArrayPool{T}.Shared"/> without exposing it
+        /// as a <see cref="RentedBuffer"/>. Call this in exception-handling paths to prevent leaks.
+        /// </summary>
+        public void ReturnToPool()
+        {
+            var buf = _buffer;
+            _buffer = Array.Empty<byte>();
+            _offset = 0;
+            if (buf.Length > 0)
+                ArrayPool<byte>.Shared.Return(buf);
         }
 
         private void EnsureCapacity(int additional)

@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Logging;
 using PMLib.MessageTypes;
+using PMLib.Runtime;
 using PMLib.Types;
 
 namespace PMLib.Devices;
@@ -29,13 +31,33 @@ public class MIDIOutputDevice : MIDIDevice
 
     /// <summary>Opens the output stream.</summary>
     public override PmError Open()
-        => Native.Pm_OpenOutput(
+    {
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("MIDIOutputDevice.Open() (deviceId={DeviceId}, name={Name}, bufferSize={BufferSize}, latency={Latency})",
+                DeviceId, Name, BufferSize, Latency);
+
+        var err = Native.Pm_OpenOutput(
             out Stream, DeviceId,
             outputSysDepInfo: nint.Zero,
             bufferSize: BufferSize,
             timeProc: nint.Zero,
             timeInfo: nint.Zero,
             latency: Latency);
+
+        if (err != PmError.NoError)
+            Logger.LogWarning("MIDIOutputDevice.Open() failed: {Error} (deviceId={DeviceId}, name={Name})",
+                err, DeviceId, Name);
+
+        return err;
+    }
+
+    public override PmError Close()
+    {
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("MIDIOutputDevice.Close() (deviceId={DeviceId}, name={Name})", DeviceId, Name);
+
+        return base.Close();
+    }
 
     // ── Writing ───────────────────────────────────────────────────────────────
 
@@ -87,4 +109,11 @@ public class MIDIOutputDevice : MIDIDevice
     /// immediately after.
     /// </summary>
     public PmError Abort() => IsOpen ? Native.Pm_Abort(Stream) : PmError.BadPtr;
+
+    /// <summary>
+    /// Re-synchronises the stream to the time procedure.
+    /// Call this before sending the first non-zero-timestamp message after
+    /// the time source starts advancing.
+    /// </summary>
+    public PmError Synchronize() => IsOpen ? Native.Pm_Synchronize(Stream) : PmError.BadPtr;
 }

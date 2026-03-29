@@ -54,7 +54,9 @@ public sealed class NDIMediaItem : IMediaItem, IDynamicMetadata, IMediaPlaybackS
 
     public bool HasMetadata => Metadata is not null;
 
-    public event EventHandler<MediaMetadataSnapshot>? MetadataUpdated;
+    public event EventHandler<MediaMetadataSnapshot>? MetadataChanged;
+
+    public MediaMetadataSnapshot? GetMetadata() => Metadata;
 
     public IReadOnlyList<IAudioSource> PlaybackAudioSources => _playbackAudioSources.ToArray();
 
@@ -95,6 +97,6 @@ public sealed class NDIMediaItem : IMediaItem, IDynamicMetadata, IMediaPlaybackS
         };
 
         Metadata = snapshot;
-        MetadataUpdated?.Invoke(this, snapshot);
+        MetadataChanged?.Invoke(this, snapshot);
     }
 }

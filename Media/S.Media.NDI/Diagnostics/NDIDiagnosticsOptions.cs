@@ -10,6 +10,11 @@ public sealed record NDIDiagnosticsOptions
 
     internal bool PublishSnapshotsOnRequestOnly { get; init; }
 
+    /// <summary>
+    /// Default diagnostics configuration. Equivalent to the parameterless constructor.
+    /// </summary>
+    public static NDIDiagnosticsOptions Default => new();
+
     public NDIDiagnosticsOptions Normalize()
     {
         var tick = DiagnosticsTickInterval;

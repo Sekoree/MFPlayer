@@ -65,6 +65,9 @@ public sealed class OSCPacket
 /// </summary>
 public sealed class OSCMessage
 {
+    private static readonly System.Buffers.SearchValues<char> ForbiddenAddressChars =
+        System.Buffers.SearchValues.Create(" #*,?[]{}");
+
     public OSCMessage(string address, IReadOnlyList<OSCArgument>? arguments = null)
     {
         if (string.IsNullOrWhiteSpace(address) || address[0] != '/')
@@ -83,6 +86,26 @@ public sealed class OSCMessage
     /// Ordered argument list that matches the type tag sequence.
     /// </summary>
     public IReadOnlyList<OSCArgument> Arguments { get; }
+
+    /// <summary>
+    /// Returns <see langword="true"/> if <paramref name="address"/> is a valid OSC address.
+    /// A valid address starts with <c>/</c> and no path component contains the characters
+    /// <c>space # * , ? [ ] { }</c> — the characters reserved for OSC address patterns.
+    /// </summary>
+    public static bool IsValidAddress(string address)
+    {
+        if (string.IsNullOrEmpty(address) || address[0] != '/')
+            return false;
+
+        var span = address.AsSpan(1);
+        foreach (var component in span.Split('/'))
+        {
+            if (span[component].ContainsAny(ForbiddenAddressChars))
+                return false;
+        }
+
+        return true;
+    }
 }
 
 /// <summary>

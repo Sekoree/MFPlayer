@@ -12,16 +12,21 @@ namespace S.Media.Core.Tests;
 
 public sealed class MediaPlayerCompositionTests
 {
+    /// <summary>
+    /// §4.2 fix: a plain <see cref="IMediaItem"/> that does not implement
+    /// <see cref="IMediaPlaybackSourceBinding"/> must be rejected — starting the pump
+    /// threads with no sources attached produces silent, empty playback with no error.
+    /// </summary>
     [Fact]
-    public void Play_StartsPlayback()
+    public void Play_PlainMediaItem_ReturnsInvalidArgument_AndDoesNotStartMixer()
     {
         var player = new MediaPlayer();
         var media = new FakeMediaItem();
 
         var result = player.Play(media);
 
-        Assert.Equal(0, result);
-        Assert.Equal(AudioVideoMixerState.Running, player.State);
+        Assert.Equal((int)MediaErrorCode.MediaInvalidArgument, result);
+        Assert.Equal(AVMixerState.Stopped, player.State);
     }
 
     [Fact]
@@ -36,10 +41,10 @@ public sealed class MediaPlayerCompositionTests
 
         Assert.Equal(0, result);
         Assert.Single(player.AudioSources);
-        Assert.Equal(audio.SourceId, player.AudioSources[0].SourceId);
+        Assert.Equal(audio.Id, player.AudioSources[0].Id);
         Assert.Single(player.VideoSources);
-        Assert.Equal(video.SourceId, player.VideoSources[0].SourceId);
-        Assert.Equal(AudioVideoMixerState.Running, player.State);
+        Assert.Equal(video.Id, player.VideoSources[0].Id);
+        Assert.Equal(AVMixerState.Running, player.State);
     }
 
     [Fact]
@@ -58,7 +63,7 @@ public sealed class MediaPlayerCompositionTests
 
         Assert.Equal((int)MediaErrorCode.MixerSourceIdCollision, result);
         // Audio source should have been rolled back
-        Assert.DoesNotContain(player.AudioSources, s => s.SourceId == audio.SourceId);
+        Assert.DoesNotContain(player.AudioSources, s => s.Id == audio.Id);
     }
 
     [Fact]
@@ -72,7 +77,7 @@ public sealed class MediaPlayerCompositionTests
         Assert.Equal(0, result);
         Assert.Single(player.AudioSources);
         Assert.Single(player.VideoSources);
-        Assert.Equal(AudioVideoMixerState.Running, player.State);
+        Assert.Equal(AVMixerState.Running, player.State);
     }
 
     private sealed class FakeMediaItem : IMediaItem
@@ -112,8 +117,11 @@ public sealed class MediaPlayerCompositionTests
 
     private sealed class FakeAudioSource : IAudioSource
     {
-        public Guid SourceId { get; } = Guid.NewGuid();
+        public Guid Id { get; } = Guid.NewGuid();
         public AudioSourceState State => AudioSourceState.Stopped;
+        public AudioStreamInfo StreamInfo => default;
+        public float Volume { get; set; } = 1.0f;
+        public long? TotalSampleCount => null;
         public int Start() => 0;
         public int Stop() => 0;
         public int ReadSamples(Span<float> destination, int requestedFrameCount, out int framesRead)
@@ -129,8 +137,9 @@ public sealed class MediaPlayerCompositionTests
 
     private sealed class FakeVideoSource : IVideoSource
     {
-        public Guid SourceId { get; } = Guid.NewGuid();
+        public Guid Id { get; } = Guid.NewGuid();
         public VideoSourceState State => VideoSourceState.Stopped;
+        public VideoStreamInfo StreamInfo => default;
         public int Start() => 0;
         public int Stop() => 0;
         public int ReadFrame(out VideoFrame frame)
@@ -148,12 +157,6 @@ public sealed class MediaPlayerCompositionTests
         }
         public int Seek(double positionSeconds) => 0;
         public int SeekToFrame(long frameIndex) => 0;
-        public int SeekToFrame(long frameIndex, out long currentFrameIndex, out long? totalFrameCount)
-        {
-            currentFrameIndex = 0;
-            totalFrameCount = 0;
-            return 0;
-        }
         public double PositionSeconds => 0;
         public double DurationSeconds => 0;
         public long CurrentFrameIndex => 0;

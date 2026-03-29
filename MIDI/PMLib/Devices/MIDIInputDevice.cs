@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Logging;
 using PMLib.MessageTypes;
+using PMLib.Runtime;
 using PMLib.Types;
 
 namespace PMLib.Devices;
@@ -54,6 +56,10 @@ public class MIDIInputDevice : MIDIDevice
     /// </summary>
     public override PmError Open()
     {
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("MIDIInputDevice.Open() (deviceId={DeviceId}, name={Name}, bufferSize={BufferSize})",
+                DeviceId, Name, BufferSize);
+
         var err = Native.Pm_OpenInput(
             out Stream, DeviceId,
             inputSysDepInfo: nint.Zero,
@@ -61,7 +67,12 @@ public class MIDIInputDevice : MIDIDevice
             timeProc: nint.Zero,
             timeInfo: nint.Zero);
 
-        if (err != PmError.NoError) return err;
+        if (err != PmError.NoError)
+        {
+            Logger.LogWarning("MIDIInputDevice.Open() failed: {Error} (deviceId={DeviceId}, name={Name})",
+                err, DeviceId, Name);
+            return err;
+        }
 
         _polling    = true;
         _pollThread = new Thread(PollLoop)
@@ -78,11 +89,36 @@ public class MIDIInputDevice : MIDIDevice
     /// </summary>
     public override PmError Close()
     {
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("MIDIInputDevice.Close() (deviceId={DeviceId}, name={Name})", DeviceId, Name);
+
         _polling = false;
         _pollThread?.Join(TimeSpan.FromSeconds(2));
         _pollThread  = null;
         _sysExBuffer = null;
         return base.Close();
+    }
+
+    // ── Stream configuration ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Sets message-type filters on this open input stream.
+    /// Filtered message types are silently discarded.
+    /// </summary>
+    public PmError SetFilter(PmFilter filters)
+    {
+        if (!IsOpen) return PmError.BadPtr;
+        return Native.Pm_SetFilter(Stream, filters);
+    }
+
+    /// <summary>
+    /// Sets a 16-bit channel mask. Use <see cref="PMUtil.ChannelMask"/> to build the mask.
+    /// Only messages on channels whose bit is set are received.
+    /// </summary>
+    public PmError SetChannelMask(int mask)
+    {
+        if (!IsOpen) return PmError.BadPtr;
+        return Native.Pm_SetChannelMask(Stream, mask);
     }
 
     // ── Polling ───────────────────────────────────────────────────────────────
@@ -99,6 +135,10 @@ public class MIDIInputDevice : MIDIDevice
             {
                 for (int i = 0; i < count; i++)
                     ProcessEvent(buffer[i]);
+            }
+            else if (count == (int)PmError.BufferOverflow)
+            {
+                Logger.LogWarning("MIDIInputDevice buffer overflow (deviceId={DeviceId}, name={Name})", DeviceId, Name);
             }
 
             Thread.Sleep(PollIntervalMs);

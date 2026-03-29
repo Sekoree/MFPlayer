@@ -17,14 +17,6 @@ public static class PMLibLogging
 
     public static ILogger GetLogger(string category) => _factory.CreateLogger(category);
 
-    public static void TraceCall(ILogger logger, string method, params (string Name, object? Value)[] args)
-    {
-        if (!logger.IsEnabled(LogLevel.Trace))
-            return;
-
-        var formatted = string.Join(", ", args.Select(a => $"{a.Name}={a.Value}"));
-        logger.LogTrace("{Method}({Args})", method, formatted);
-    }
 
     public static string PtrMeta(nint ptr) => ptr == nint.Zero ? "0x0" : $"0x{ptr:X}";
 }

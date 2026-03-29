@@ -220,9 +220,16 @@ internal sealed class FFPacketReader : IDisposable
 
 internal unsafe sealed class FFNativeFileDemux : IDisposable
 {
+    private const int MaxBufferedPackets = 64;
+
     private AVFormatContext* _formatContext;
     private AVPacket* _packet;
     private bool _disposed;
+
+    // Cross-stream packet buffers: when reading for one stream, packets
+    // for the other stream are buffered here instead of being discarded.
+    private readonly Queue<BufferedNativePacket> _audioBuffer = new();
+    private readonly Queue<BufferedNativePacket> _videoBuffer = new();
 
     private FFNativeFileDemux(AVFormatContext* formatContext, AVPacket* packet, int audioStreamIndex, int videoStreamIndex)
     {
@@ -401,6 +408,9 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
             ffmpeg.av_packet_unref(_packet);
         }
 
+        _audioBuffer.Clear();
+        _videoBuffer.Clear();
+
         return true;
     }
 
@@ -512,8 +522,27 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
 
         if (_disposed || _formatContext is null || _packet is null || streamIndex < 0)
         {
-            Console.Error.WriteLine($"[TRACE-PKT] TryReadPacketForStream: guard fail disposed={_disposed} fmtCtx={(nint)_formatContext} pkt={(nint)_packet} streamIdx={streamIndex}");
             return false;
+        }
+
+        // Check the cross-stream buffer first — a previous read for the other
+        // stream may have already buffered a packet for this stream.
+        var buffer = GetBufferForStream(streamIndex);
+        if (buffer is not null && buffer.Count > 0)
+        {
+            var buffered = buffer.Dequeue();
+            presentationTime = buffered.PresentationTime;
+            isKeyFrame = buffered.IsKeyFrame;
+            resolvedStreamIndex = buffered.StreamIndex;
+            codecId = buffered.CodecId;
+            nativePacketData = buffered.Data;
+            packetFlags = buffered.Flags;
+            codecParametersPtr = buffered.CodecParametersPtr;
+            timeBaseNumerator = buffered.TimeBaseNumerator;
+            timeBaseDenominator = buffered.TimeBaseDenominator;
+            frameRateNumerator = buffered.FrameRateNumerator;
+            frameRateDenominator = buffered.FrameRateDenominator;
+            return true;
         }
 
         while (true)
@@ -521,44 +550,93 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
             var readCode = ffmpeg.av_read_frame(_formatContext, _packet);
             if (readCode < 0)
             {
-                Console.Error.WriteLine($"[TRACE-PKT] av_read_frame returned {readCode} (0x{readCode:X8}) for streamIdx={streamIndex}");
                 return false;
             }
 
-            if (_packet->stream_index != streamIndex)
+            if (_packet->stream_index == streamIndex)
             {
+                // Packet is for the requested stream — extract and return.
+                ExtractPacket(streamIndex, out presentationTime, out isKeyFrame,
+                    out resolvedStreamIndex, out codecId, out nativePacketData,
+                    out packetFlags, out codecParametersPtr,
+                    out timeBaseNumerator, out timeBaseDenominator,
+                    out frameRateNumerator, out frameRateDenominator);
                 ffmpeg.av_packet_unref(_packet);
-                continue;
+                return true;
             }
 
-            var stream = _formatContext->streams[streamIndex];
-            var rawPts = _packet->pts != ffmpeg.AV_NOPTS_VALUE ? _packet->pts : _packet->dts;
-            var ptsSeconds = rawPts == ffmpeg.AV_NOPTS_VALUE ? 0d : rawPts * ffmpeg.av_q2d(stream->time_base);
-
-            if (!double.IsFinite(ptsSeconds) || ptsSeconds < 0)
+            // Packet is for a different known stream — buffer it instead of discarding.
+            var otherBuffer = GetBufferForStream(_packet->stream_index);
+            if (otherBuffer is not null)
             {
-                ptsSeconds = 0;
-            }
+                var otherStreamIndex = _packet->stream_index;
+                ExtractPacket(otherStreamIndex, out var bPts, out var bKey,
+                    out _, out var bCodecId, out var bData,
+                    out var bFlags, out var bCodecParams,
+                    out var bTbNum, out var bTbDen,
+                    out var bFrNum, out var bFrDen);
 
-            presentationTime = TimeSpan.FromSeconds(ptsSeconds);
-            isKeyFrame = (_packet->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
-            resolvedStreamIndex = streamIndex;
-            codecId = (int)stream->codecpar->codec_id;
-            packetFlags = _packet->flags;
-            codecParametersPtr = (nint)stream->codecpar;
-            timeBaseNumerator = stream->time_base.num;
-            timeBaseDenominator = stream->time_base.den;
-            frameRateNumerator = stream->avg_frame_rate.num;
-            frameRateDenominator = stream->avg_frame_rate.den;
-            if (_packet->size > 0 && _packet->data is not null)
-            {
-                nativePacketData = new byte[_packet->size];
-                Marshal.Copy((IntPtr)_packet->data, nativePacketData, 0, _packet->size);
+                if (otherBuffer.Count < MaxBufferedPackets)
+                {
+                    otherBuffer.Enqueue(new BufferedNativePacket(
+                        bPts, bKey, otherStreamIndex, bCodecId, bData, bFlags,
+                        bCodecParams, bTbNum, bTbDen, bFrNum, bFrDen));
+                }
             }
 
             ffmpeg.av_packet_unref(_packet);
-            return true;
         }
+    }
+
+    private void ExtractPacket(
+        int streamIndex,
+        out TimeSpan presentationTime,
+        out bool isKeyFrame,
+        out int resolvedStreamIndex,
+        out int codecId,
+        out byte[]? nativePacketData,
+        out int packetFlags,
+        out nint codecParametersPtr,
+        out int timeBaseNumerator,
+        out int timeBaseDenominator,
+        out int frameRateNumerator,
+        out int frameRateDenominator)
+    {
+        var stream = _formatContext->streams[streamIndex];
+        var rawPts = _packet->pts != ffmpeg.AV_NOPTS_VALUE ? _packet->pts : _packet->dts;
+        var ptsSeconds = rawPts == ffmpeg.AV_NOPTS_VALUE ? 0d : rawPts * ffmpeg.av_q2d(stream->time_base);
+
+        if (!double.IsFinite(ptsSeconds) || ptsSeconds < 0)
+        {
+            ptsSeconds = 0;
+        }
+
+        presentationTime = TimeSpan.FromSeconds(ptsSeconds);
+        isKeyFrame = (_packet->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
+        resolvedStreamIndex = streamIndex;
+        codecId = (int)stream->codecpar->codec_id;
+        packetFlags = _packet->flags;
+        codecParametersPtr = (nint)stream->codecpar;
+        timeBaseNumerator = stream->time_base.num;
+        timeBaseDenominator = stream->time_base.den;
+        frameRateNumerator = stream->avg_frame_rate.num;
+        frameRateDenominator = stream->avg_frame_rate.den;
+        if (_packet->size > 0 && _packet->data is not null)
+        {
+            nativePacketData = new byte[_packet->size];
+            Marshal.Copy((IntPtr)_packet->data, nativePacketData, 0, _packet->size);
+        }
+        else
+        {
+            nativePacketData = null;
+        }
+    }
+
+    private Queue<BufferedNativePacket>? GetBufferForStream(int streamIndex)
+    {
+        if (streamIndex == AudioStreamIndex) return _audioBuffer;
+        if (streamIndex == VideoStreamIndex) return _videoBuffer;
+        return null;
     }
 
     private static int ResolveStreamIndex(AVFormatContext* formatContext, AVMediaType streamType, int? preferredStreamIndex)
@@ -655,3 +733,16 @@ internal readonly record struct FFPacket(
     int? NativeTimeBaseDenominator = null,
     int? NativeFrameRateNumerator = null,
     int? NativeFrameRateDenominator = null);
+
+internal readonly record struct BufferedNativePacket(
+    TimeSpan PresentationTime,
+    bool IsKeyFrame,
+    int StreamIndex,
+    int CodecId,
+    byte[]? Data,
+    int Flags,
+    nint CodecParametersPtr,
+    int TimeBaseNumerator,
+    int TimeBaseDenominator,
+    int FrameRateNumerator,
+    int FrameRateDenominator);

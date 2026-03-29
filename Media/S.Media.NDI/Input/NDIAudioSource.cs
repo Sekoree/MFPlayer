@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Buffers;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
+using S.Media.Core.Media;
 using S.Media.NDI.Config;
 using S.Media.NDI.Diagnostics;
 using S.Media.NDI.Media;
@@ -34,7 +35,7 @@ public sealed class NDIAudioSource : IAudioSource
     internal NDIAudioSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, NDICaptureCoordinator? captureCoordinator)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
-        SourceId = Guid.NewGuid();
+        Id = Guid.NewGuid();
         SourceOptions = sourceOptions;
         _captureCoordinator = captureCoordinator ?? (mediaItem.Receiver is null ? null : new NDICaptureCoordinator(mediaItem.Receiver));
 
@@ -47,11 +48,23 @@ public sealed class NDIAudioSource : IAudioSource
         _audioRing = new float[capacityFrames * _channelCount];
     }
 
-    public Guid SourceId { get; }
+    public Guid Id { get; }
 
     public NDISourceOptions SourceOptions { get; }
 
     public AudioSourceState State { get; private set; }
+
+    /// <inheritdoc/>
+    public float Volume { get; set; } = 1.0f;
+
+    /// <inheritdoc/>
+    public long? TotalSampleCount => null; // live source — no known duration
+
+    public AudioStreamInfo StreamInfo => new()
+    {
+        SampleRate = _sampleRate,
+        ChannelCount = _channelCount,
+    };
 
     public double PositionSeconds { get; private set; }
 
@@ -107,7 +120,8 @@ public sealed class NDIAudioSource : IAudioSource
                 _framesDropped++;
             }
 
-            return (int)MediaErrorCode.NDIAudioReadRejected;
+            // §5.4: source is stopped — not a concurrent-read violation.
+            return (int)MediaErrorCode.MediaSourceNotRunning;
         }
 
         if (Interlocked.CompareExchange(ref _readInProgress, 1, 0) != 0)
@@ -117,6 +131,7 @@ public sealed class NDIAudioSource : IAudioSource
                 _framesDropped++;
             }
 
+            // Genuine concurrent-read attempt.
             return (int)MediaErrorCode.NDIAudioReadRejected;
         }
 

@@ -1,5 +1,6 @@
 using NDILib;
 using S.Media.Core.Audio;
+using S.Media.Core.Clock;
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
 using S.Media.Core.Video;
@@ -31,10 +32,14 @@ internal static class Program
                 return ListAudioRuntime(options);
             }
 
-            using var runtime = new NDIRuntimeScope();
+            var rErr = NDIRuntime.Create(out var runtimeInst);
+            if (rErr != 0) { Console.Error.WriteLine($"NDI init failed: {rErr}"); return 1; }
+            using var _runtime = runtimeInst!;
             Console.WriteLine($"NDI runtime version: {NDIRuntime.Version}");
 
-            using var finder = new NDIFinder();
+            var fErr = NDIFinder.Create(out var finderInst);
+            if (fErr != 0) { Console.Error.WriteLine($"NDI finder create failed: {fErr}"); return 2; }
+            using var finder = finderInst!;
             var sources = DiscoverSources(finder, options.DiscoverySeconds);
             if (sources.Length == 0)
             {
@@ -62,13 +67,15 @@ internal static class Program
 
             Console.WriteLine($"Connecting to: {selected.Value.Name}");
 
-            using var receiver = new NDIReceiver(new NDIReceiverSettings
+            var recvErr = NDIReceiver.Create(out var receiverInst, new NDIReceiverSettings
             {
                 ColorFormat = NdiRecvColorFormat.RgbxRgba,
                 Bandwidth = NdiRecvBandwidth.Highest,
                 AllowVideoFields = false,
                 ReceiverName = "MFPlayer NDIVideoReceive",
             });
+            if (recvErr != 0) { Console.Error.WriteLine($"NDI receiver create failed: {recvErr}"); return 7; }
+            using var receiver = receiverInst!;
             receiver.Connect(selected.Value);
 
             using var engine = new NDIEngine();
@@ -99,14 +106,7 @@ internal static class Program
             }
 
             var timelineClock = new NDIExternalTimelineClock();
-            var avMixer = new AudioVideoMixer(timelineClock, ClockType.External);
-
-            var setSyncMode = avMixer.SetSyncMode(options.SyncMode);
-            if (setSyncMode != MediaResult.Success)
-            {
-                Console.WriteLine($"Mixer sync mode apply failed: {setSyncMode}");
-                return 7;
-            }
+            var avMixer = new AVMixer(timelineClock, ClockType.External);
 
             var addMixerAudio = avMixer.AddAudioSource(audioSource);
             var addMixerVideo = avMixer.AddVideoSource(videoSource);
@@ -120,12 +120,6 @@ internal static class Program
                 return 7;
             }
 
-            var mixerStart = avMixer.Start();
-            if (mixerStart != MediaResult.Success)
-            {
-                Console.WriteLine($"Mixer start failed: av={mixerStart}");
-                return 7;
-            }
 
             using var audioEngine = new PortAudioEngine();
             var audioEngineInit = audioEngine.Initialize(new AudioEngineConfig
@@ -205,14 +199,14 @@ internal static class Program
 
                 var sourceChannels = Math.Max(1, options.OutputChannels);
                 var routeMap = BuildStereoRouteMap(sourceChannels);
-                var mixerConfig = new AudioVideoMixerConfig
+                var mixerConfig = new AVMixerConfig
                 {
+                    SyncMode = options.SyncMode,
                     AudioReadFrames = Math.Max(240, options.AudioReadFrames),
                     SourceChannelCount = sourceChannels,
                     OutputSampleRate = options.AudioSampleRate,
                     RouteMap = routeMap,
-                    VideoQueueCapacity = Math.Max(2, options.VideoJitterFrames),
-                    PresentOnCallerThread = true,
+                    VideoDecodeQueueCapacity = Math.Max(2, options.VideoJitterFrames),
                 };
 
                 avMixer.AddAudioOutput(audioOutput);
@@ -240,30 +234,33 @@ internal static class Program
                 Console.WriteLine($"Preview running. Press Ctrl+C to stop (previewSeconds={options.PreviewSeconds}).");
                 while (!cancel.IsCancellationRequested && DateTime.UtcNow < previewUntil)
                 {
-                    var tickDelay = avMixer.TickVideoPresentation();
-
                     if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
                     {
                         var snapshot = avMixer.GetDebugInfo();
+                        var outputStats = avMixer.GetVideoOutputDiagnostics();
                         var videoDiagnostics = videoSource.Diagnostics;
                         if (snapshot.HasValue)
                         {
                             var s = snapshot.Value;
+                            var outSummary = outputStats.Count == 0
+                                ? "none"
+                                : string.Join(" | ", outputStats.Select(o =>
+                                    $"{o.OutputId.ToString()[..8]} q={o.QueueDepth}/{Math.Max(1, o.QueueCapacity)} drop={o.EnqueueDrops + o.StaleDrops} fail={o.PushFailures}"));
                             Console.WriteLine(
                                 $"Preview stats: pushed={s.VideoPushed}, pushFail={s.VideoPushFailures}, noFrame={s.VideoNoFrame}, lateDrop={s.VideoLateDrops}, trimDrop={s.VideoQueueTrimDrops}, qDepth={s.VideoQueueDepth}, " +
+                                $"workerQ={s.VideoWorkerQueueDepth}, workerQMax={s.VideoWorkerMaxQueueDepth}, workerDrop={s.VideoWorkerEnqueueDrops + s.VideoWorkerStaleDrops}, workerFail={s.VideoWorkerPushFailures}, " +
                                 $"coalesceDrop={s.VideoCoalescedDrops}, " +
                                 $"audioPushFail={s.AudioPushFailures}, audioReadFail={s.AudioReadFailures}, audioEmptyRead={s.AudioEmptyReads}, audioFrames={s.AudioPushedFrames}, " +
-                                $"syncMode={options.SyncMode}, driftMs={s.DriftMs:F1}, corrSignalMs={s.CorrectionSignalMs:F1}, corrStepMs={s.CorrectionStepMs:F2}, corrOffsetMs={s.CorrectionOffsetMs:F1}, corrResync={s.CorrectionResyncCount}, leadMs={s.LeadMinMs:F1}/{s.LeadAvgMs:F1}/{s.LeadMaxMs:F1}, sourceFrame={videoSource.CurrentFrameIndex}, " +
+                                $"syncMode={options.SyncMode}, sourceFrame={videoSource.CurrentFrameIndex}, " +
                                 $"queue={videoDiagnostics.QueueDepth}/{videoDiagnostics.JitterBufferFrames}, " +
                                 $"inFmt={videoDiagnostics.IncomingPixelFormat}, outFmt={videoDiagnostics.OutputPixelFormat}, conv={videoDiagnostics.ConversionPath}, " +
-                                $"fallback={videoDiagnostics.FallbackFramesPresented}");
+                                $"fallback={videoDiagnostics.FallbackFramesPresented}, out={outSummary}");
                         }
 
                         lastStatus = DateTime.UtcNow;
                     }
 
-                    var sleepMs = Math.Max(1, (int)Math.Ceiling(tickDelay.TotalMilliseconds));
-                    Thread.Sleep(sleepMs);
+                    Thread.Sleep(10);
                 }
 
                 _ = avMixer.StopPlayback();
@@ -285,7 +282,7 @@ internal static class Program
             Console.WriteLine($"Diagnostics: code={diagnosticsCode}, semantic={diagnosticsSemantic}");
             Console.WriteLine($"Engine diagnostics: audioCaptured={snapshotAfterRun.Audio.FramesCaptured}, videoCaptured={snapshotAfterRun.VideoSource.FramesCaptured}");
 
-            _ = avMixer.Stop();
+            _ = avMixer.StopPlayback();
             _ = audioEngine.Stop();
             _ = audioEngine.Terminate();
             _ = engine.Terminate();
@@ -417,7 +414,7 @@ internal static class Program
 
         public int AudioDeviceIndex { get; private set; } = -1;
 
-        public AudioVideoSyncMode SyncMode { get; private set; } = AudioVideoSyncMode.Realtime;
+        public AVSyncMode SyncMode { get; private set; } = AVSyncMode.Realtime;
 
 
         public string? HostApi { get; private set; }
@@ -502,12 +499,12 @@ internal static class Program
             return options;
         }
 
-        private static AudioVideoSyncMode ParseSyncMode(string raw, AudioVideoSyncMode fallback)
+        private static AVSyncMode ParseSyncMode(string raw, AVSyncMode fallback)
         {
             return raw?.Trim().ToLowerInvariant() switch
             {
-                "realtime" or "stable" => AudioVideoSyncMode.Realtime,
-                "synced" or "sync" or "hybrid" or "strict" or "strictav" or "strict-av" => AudioVideoSyncMode.Synced,
+                "realtime" or "stable" => AVSyncMode.Realtime,
+                "synced" or "sync" or "hybrid" or "strict" or "strictav" or "strict-av" => AVSyncMode.Synced,
                 _ => fallback,
             };
         }

@@ -57,13 +57,10 @@ public sealed class MIDIInput : IDisposable
                 return MediaResult.Success;
             }
 
-            var open = Native.Pm_OpenInput(
+            var open = PMUtil.OpenInput(
                 out _stream,
                 Device.DeviceId,
-                inputSysDepInfo: nint.Zero,
-                bufferSize: 256,
-                timeProc: nint.Zero,
-                timeInfo: nint.Zero);
+                bufferSize: 256);
 
             var openCode = MIDIPortMidiErrorMapper.MapOpenInput(open);
             if (openCode != MediaResult.Success)
@@ -110,7 +107,7 @@ public sealed class MIDIInput : IDisposable
         var closeCode = MediaResult.Success;
         if (_nativeEnabled && stream != nint.Zero)
         {
-            closeCode = MIDIPortMidiErrorMapper.MapCloseInput(Native.Pm_Close(stream));
+            closeCode = MIDIPortMidiErrorMapper.MapCloseInput(PMUtil.Close(stream));
         }
 
         PublishStatus(MIDIConnectionStatus.Closed, closeCode == MediaResult.Success ? null : closeCode);
@@ -156,7 +153,7 @@ public sealed class MIDIInput : IDisposable
                 return;
             }
 
-            var count = Native.Pm_Read(stream, buffer, buffer.Length);
+            var count = PMUtil.Read(stream, buffer, buffer.Length);
             if (count > 0)
             {
                 for (var i = 0; i < count; i++)
@@ -202,7 +199,7 @@ public sealed class MIDIInput : IDisposable
 
         if (_nativeEnabled && stream != nint.Zero)
         {
-            _ = MIDIPortMidiErrorMapper.MapCloseInput(Native.Pm_Close(stream));
+            _ = MIDIPortMidiErrorMapper.MapCloseInput(PMUtil.Close(stream));
         }
 
         PublishStatus(MIDIConnectionStatus.Disconnected, errorCode);
@@ -240,13 +237,10 @@ public sealed class MIDIInput : IDisposable
                 }
             }
 
-            var open = Native.Pm_OpenInput(
+            var open = PMUtil.OpenInput(
                 out var stream,
                 Device.DeviceId,
-                inputSysDepInfo: nint.Zero,
-                bufferSize: 256,
-                timeProc: nint.Zero,
-                timeInfo: nint.Zero);
+                bufferSize: 256);
 
             reconnectCode = MIDIPortMidiErrorMapper.MapOpenInput(open);
             if (reconnectCode == MediaResult.Success)
@@ -255,7 +249,7 @@ public sealed class MIDIInput : IDisposable
                 {
                     if (_disposed)
                     {
-                        _ = MIDIPortMidiErrorMapper.MapCloseInput(Native.Pm_Close(stream));
+                        _ = MIDIPortMidiErrorMapper.MapCloseInput(PMUtil.Close(stream));
                         reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
                         return false;
                     }

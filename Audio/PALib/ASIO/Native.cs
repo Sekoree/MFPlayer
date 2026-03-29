@@ -5,7 +5,7 @@ using PALib.Types.Core;
 
 namespace PALib.ASIO;
 
-public static partial class Native
+internal static partial class Native
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
     private static readonly ILogger Logger = PALibLogging.GetLogger("PALib.ASIO");
@@ -26,7 +26,7 @@ public static partial class Native
         out nint preferredBufferSizeFrames,
         out nint granularity)
     {
-        PALibLogging.TraceCall(Logger, nameof(PaAsio_GetAvailableBufferSizes), (nameof(device), device));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Device})", nameof(PaAsio_GetAvailableBufferSizes), device);
         if (!IsSupportedPlatform)
         {
             minBufferSizeFrames = 0;
@@ -43,7 +43,7 @@ public static partial class Native
     private static partial PaError PaAsio_ShowControlPanel_Import(int device, nint systemSpecific);
     public static PaError PaAsio_ShowControlPanel(int device, nint systemSpecific)
     {
-        PALibLogging.TraceCall(Logger, nameof(PaAsio_ShowControlPanel), (nameof(device), device), (nameof(systemSpecific), PALibLogging.PtrMeta(systemSpecific)));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Device}, {SystemSpecific})", nameof(PaAsio_ShowControlPanel), device, PALibLogging.PtrMeta(systemSpecific));
         if (!IsSupportedPlatform)
             return PaError.paIncompatibleStreamHostApi;
 
@@ -54,7 +54,7 @@ public static partial class Native
     private static partial PaError PaAsio_GetInputChannelName_Import(int device, int channelIndex, out nint channelName);
     public static PaError PaAsio_GetInputChannelName(int device, int channelIndex, out string? channelName)
     {
-        PALibLogging.TraceCall(Logger, nameof(PaAsio_GetInputChannelName), (nameof(device), device), (nameof(channelIndex), channelIndex));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Device}, {ChannelIndex})", nameof(PaAsio_GetInputChannelName), device, channelIndex);
         if (!IsSupportedPlatform)
         {
             channelName = null;
@@ -70,7 +70,7 @@ public static partial class Native
     private static partial PaError PaAsio_GetOutputChannelName_Import(int device, int channelIndex, out nint channelName);
     public static PaError PaAsio_GetOutputChannelName(int device, int channelIndex, out string? channelName)
     {
-        PALibLogging.TraceCall(Logger, nameof(PaAsio_GetOutputChannelName), (nameof(device), device), (nameof(channelIndex), channelIndex));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Device}, {ChannelIndex})", nameof(PaAsio_GetOutputChannelName), device, channelIndex);
         if (!IsSupportedPlatform)
         {
             channelName = null;

@@ -1,4 +1,5 @@
-using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Errors;
@@ -6,1275 +7,1009 @@ using S.Media.Core.Video;
 
 namespace S.Media.Core.Mixing;
 
-public class AudioVideoMixer : IAudioVideoMixer, ISupportsAdvancedRouting, IDisposable
+/// <summary>
+/// Full-featured audio/video mixer.  Runs three internal threads when
+/// <see cref="StartPlayback"/> is called: an audio pump, a video decode pump,
+/// and a video presentation dispatcher.
+/// </summary>
+public class AVMixer : IAVMixer
 {
+    // ── inner per-output worker (ManagedBackground) ───────────────────────────
+
+    private sealed class OutputWorker : IDisposable
+    {
+        private readonly IVideoOutput _output;
+        private readonly int _capacity;
+        private readonly Queue<(VideoFrame Frame, TimeSpan Pts)> _queue = new();
+        private readonly Lock _qLock = new();
+        private readonly Thread _thread;
+        private volatile bool _stop;
+
+        internal long EnqueueDrops;
+        internal long StaleDrops;
+        internal long PushFailures;
+
+        internal OutputWorker(IVideoOutput output, int capacity)
+        {
+            _output = output;
+            _capacity = Math.Max(1, capacity);
+            _thread = new Thread(WorkerLoop)
+            { Name = $"AVMixer.Worker-{output.Id}", IsBackground = true };
+            _thread.Start();
+        }
+
+        internal int QueueDepth { get { lock (_qLock) return _queue.Count; } }
+
+        internal void Enqueue(VideoFrame frame, TimeSpan pts)
+        {
+            VideoFrame? drop = null;
+            lock (_qLock)
+            {
+                if (_queue.Count >= _capacity)
+                {
+                    if (_queue.TryDequeue(out var old)) drop = old.Frame;
+                    Interlocked.Increment(ref EnqueueDrops);
+                }
+                _queue.Enqueue((frame.AddRef(), pts));
+            }
+            drop?.Dispose();
+        }
+
+        private void WorkerLoop()
+        {
+            while (!_stop)
+            {
+                (VideoFrame Frame, TimeSpan Pts) item;
+                bool has;
+                lock (_qLock) { has = _queue.TryDequeue(out item); }
+                if (!has) { Thread.Sleep(1); continue; }
+                using (item.Frame)
+                {
+                    var code = _output.PushFrame(item.Frame, item.Pts);
+                    if (code != MediaResult.Success) Interlocked.Increment(ref PushFailures);
+                }
+            }
+            lock (_qLock)
+                while (_queue.TryDequeue(out var item)) item.Frame.Dispose();
+        }
+
+        public void Stop()
+        {
+            _stop = true;
+            if (!ReferenceEquals(Thread.CurrentThread, _thread))
+                _thread.Join(TimeSpan.FromSeconds(2));
+        }
+
+        public void Dispose() => Stop();
+    }
+
+    // ── state ─────────────────────────────────────────────────────────────────
+
     private readonly Lock _gate = new();
-    private readonly List<IAudioSource> _audioSources = [];
+
+    /// <summary>
+    /// The mixer's internal synchronisation lock.
+    /// Exposed as <see langword="protected"/> so subclasses (e.g. <see cref="S.Media.Core.Playback.MediaPlayer"/>)
+    /// can share the same lock and avoid nested-lock deadlocks.
+    /// </summary>
+    protected Lock Gate => _gate;
+    private readonly IMediaClock _clock;
+    private readonly List<(IAudioSource Source, double StartOffset)> _audioSources = [];
     private readonly List<IVideoSource> _videoSources = [];
-    private readonly List<IAudioOutput> _audioOutputs = [];
+    private readonly List<IAudioSink> _audioOutputs = [];
     private readonly List<IVideoOutput> _videoOutputs = [];
     private readonly List<AudioRoutingRule> _audioRoutingRules = [];
     private readonly List<VideoRoutingRule> _videoRoutingRules = [];
-    private readonly Dictionary<Guid, double> _audioStartOffsets = new();
-    private readonly IMediaClock _clock;
-    private MixerSourceDetachOptions _audioDetachOptions = new();
-    private MixerSourceDetachOptions _videoDetachOptions = new();
-    private IVideoSource? _activeVideoSource;
+    private readonly Queue<VideoFrame> _videoDecodeQueue = new();
+    private readonly Lock _videoQueueLock = new();
+    private AVMixerState _state = AVMixerState.Stopped;
+    private AVSyncMode _syncMode = AVSyncMode.AudioLed;
+    private ClockType _clockType = ClockType.Hybrid;
+    private Guid? _activeVideoSourceId;
+    private AVMixerConfig? _playbackConfig;
+    private bool _disposed;
 
-    // Playback runtime state
-    private AudioVideoMixerConfig? _config;
-    private CancellationTokenSource? _cts;
-    private Task? _audioTask;
-    private Task? _videoTask;
-    private Task? _presentTask;
-    private bool _playbackRunning;
-    private readonly Queue<VideoFrame> _videoQueue = [];
-    private readonly SimpleDriftCorrection _driftCorrection = new();
-    private DateTime _nextCorrectionAtUtc = DateTime.MinValue;
+    // ── seek command channel (§3.9) ───────────────────────────────────────────
+    // AudioPumpLoop drains this at the top of every iteration — no thread restart needed.
+    private readonly Channel<double> _seekChannel = Channel.CreateBounded<double>(
+        new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
 
-    // Debug counters
-    private long _videoPushed;
-    private long _videoPushFailures;
-    private long _videoNoFrame;
-    private long _videoLateDrops;
-    private long _videoQueueTrimDrops;
-    private long _videoCoalescedDrops;
-    private long _audioPushFailures;
-    private long _audioReadFailures;
-    private long _audioEmptyReads;
-    private long _audioPushedFrames;
+    // ── threads ───────────────────────────────────────────────────────────────
 
-    private double _lastDriftMs;
-    private double _lastCorrectionSignalMs;
-    private double _lastCorrectionStepMs;
-    private double _leadMinMs = double.PositiveInfinity;
-    private double _leadMaxMs = double.NegativeInfinity;
-    private double _leadSumMs;
-    private long _leadCount;
+    private CancellationTokenSource? _cancelSource;
+    private ManualResetEventSlim _pauseEvent = new(initialState: true);
+    private Thread? _audioPumpThread;
+    private Thread? _videoDecodeThread;
+    private Thread? _videoPresentThread;
+    private Dictionary<Guid, OutputWorker> _videoWorkers = [];
 
-    public AudioVideoMixer(IMediaClock? clock = null, ClockType clockType = ClockType.Hybrid)
+    // Audio-led clock position written by audio pump, read by video presenter.
+    // Stored as bit-reinterpreted long; Interlocked provides the memory-ordering guarantee.
+    private long _audioTimelineBits; // BitConverter.DoubleToInt64Bits
+
+    private double _audioTimelineSeconds
+    {
+        get => BitConverter.Int64BitsToDouble(Interlocked.Read(ref _audioTimelineBits));
+        set => Interlocked.Exchange(ref _audioTimelineBits, BitConverter.DoubleToInt64Bits(value));
+    }
+
+    // ── diagnostics ───────────────────────────────────────────────────────────
+
+    private long _videoPushed, _videoPushFailures, _videoNoFrame, _videoLateDrops;
+    private long _videoQueueTrimDrops, _videoCoalescedDrops;
+    private long _audioPushFailures, _audioReadFailures, _audioEmptyReads, _audioPushedFrames;
+    private volatile int _videoQueueDepthVal;
+
+    // ── master volume (bit-reinterpreted for lock-free float access) ──────────
+    private int _masterVolumeBits = BitConverter.SingleToInt32Bits(1.0f);
+
+    // ── cached sources snapshot flag (§10.10) — set on source list changes ───
+    private volatile bool _audioSourcesNeedsUpdate = true;
+
+    // ── construction ──────────────────────────────────────────────────────────
+
+    public AVMixer() : this(clock: null, ClockType.Hybrid) { }
+
+    public AVMixer(IMediaClock? clock, ClockType clockType = ClockType.Hybrid)
     {
         _clock = clock ?? new CoreMediaClock();
-
-        if (MixerClockTypeRules.ValidateClockType(clockType) != MediaResult.Success)
-        {
-            throw new ArgumentOutOfRangeException(nameof(clockType));
-        }
-
-        if (clockType == ClockType.External && _clock is CoreMediaClock)
-        {
-            throw new ArgumentException("ClockType.External requires a non-CoreMediaClock implementation.", nameof(clockType));
-        }
-
-        ClockType = clockType;
-        SyncMode = AudioVideoSyncMode.Synced;
-        State = AudioVideoMixerState.Stopped;
+        _clockType = clockType;
     }
 
-    public AudioVideoMixerState State { get; private set; }
+    // ── IAVMixer: properties ──────────────────────────────────────────
 
+    public AVMixerState State { get { lock (_gate) return _state; } }
     public IMediaClock Clock => _clock;
-
-    public ClockType ClockType { get; private set; }
-
-    public AudioVideoSyncMode SyncMode { get; private set; }
-
+    public ClockType ClockType { get { lock (_gate) return _clockType; } }
+    public AVSyncMode SyncMode { get { lock (_gate) return _syncMode; } }
     public double PositionSeconds => _clock.CurrentSeconds;
-
-    public bool IsRunning => State == AudioVideoMixerState.Running;
+    public bool IsRunning { get { lock (_gate) return _state == AVMixerState.Running; } }
 
     public IReadOnlyList<IAudioSource> AudioSources
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<IAudioSource>([.. _audioSources]);
-            }
-        }
-    }
+    { get { lock (_gate) return _audioSources.ConvertAll(x => x.Source); } }
 
     public IReadOnlyList<IVideoSource> VideoSources
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<IVideoSource>([.. _videoSources]);
-            }
-        }
-    }
+    { get { lock (_gate) return [.. _videoSources]; } }
 
-    public IReadOnlyList<IAudioOutput> AudioOutputs
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<IAudioOutput>([.. _audioOutputs]);
-            }
-        }
-    }
+    public IReadOnlyList<IAudioSink> AudioOutputs
+    { get { lock (_gate) return [.. _audioOutputs]; } }
 
     public IReadOnlyList<IVideoOutput> VideoOutputs
+    { get { lock (_gate) return [.. _videoOutputs]; } }
+
+
+    // ── IMixerRouting ──────────────────────────────────────────────────────────
+
+    public IReadOnlyList<AudioRoutingRule> AudioRoutingRules
+    { get { lock (_gate) return [.. _audioRoutingRules]; } }
+
+    public IReadOnlyList<VideoRoutingRule> VideoRoutingRules
+    { get { lock (_gate) return [.. _videoRoutingRules]; } }
+
+    public int AddAudioRoutingRule(AudioRoutingRule rule)    { lock (_gate) _audioRoutingRules.Add(rule);    return MediaResult.Success; }
+    public int RemoveAudioRoutingRule(AudioRoutingRule rule) { lock (_gate) _audioRoutingRules.Remove(rule); return MediaResult.Success; }
+    public int ClearAudioRoutingRules()                     { lock (_gate) _audioRoutingRules.Clear();       return MediaResult.Success; }
+    public int AddVideoRoutingRule(VideoRoutingRule rule)    { lock (_gate) _videoRoutingRules.Add(rule);    return MediaResult.Success; }
+    public int RemoveVideoRoutingRule(VideoRoutingRule rule) { lock (_gate) _videoRoutingRules.Remove(rule); return MediaResult.Success; }
+    public int ClearVideoRoutingRules()                     { lock (_gate) _videoRoutingRules.Clear();       return MediaResult.Success; }
+
+    public float MasterVolume
     {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<IVideoOutput>([.. _videoOutputs]);
-            }
-        }
+        get => BitConverter.Int32BitsToSingle(Volatile.Read(ref _masterVolumeBits));
+        set => Volatile.Write(ref _masterVolumeBits, BitConverter.SingleToInt32Bits(Math.Clamp(value, 0f, 1f)));
     }
 
-    public MixerSourceDetachOptions AudioSourceDetachOptions
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _audioDetachOptions;
-            }
-        }
-    }
+    // ── lifecycle ─────────────────────────────────────────────────────────────
+    // Start / Stop / Pause / Resume are protected: external callers must use
+    // StartPlayback / StopPlayback / PausePlayback / ResumePlayback.
+    // Subclasses (e.g. MediaPlayer) may call them directly.
 
-    public MixerSourceDetachOptions VideoSourceDetachOptions
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _videoDetachOptions;
-            }
-        }
-    }
-
-    public event EventHandler<AudioVideoMixerStateChangedEventArgs>? StateChanged;
-
-    public event EventHandler<AudioSourceErrorEventArgs>? AudioSourceError;
-
-    public event EventHandler<VideoSourceErrorEventArgs>? VideoSourceError;
-
-    public event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveVideoSourceChanged;
-
-    public int Start()
+    protected int Start()
     {
         lock (_gate)
         {
-            if (State == AudioVideoMixerState.Running)
-            {
-                return MediaResult.Success;
-            }
-
-            var result = _clock.Start();
-            if (result != MediaResult.Success)
-            {
-                return result;
-            }
-
-            var previous = State;
-            State = AudioVideoMixerState.Running;
-            StateChanged?.Invoke(this, new AudioVideoMixerStateChangedEventArgs(previous, State));
-            return MediaResult.Success;
+            if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_state == AVMixerState.Running) return MediaResult.Success;
+            _state = AVMixerState.Running;
         }
+        _clock.Start();
+        RaiseStateChanged(AVMixerState.Stopped, AVMixerState.Running);
+        return MediaResult.Success;
     }
 
-    public int Pause()
+    protected int Pause()
     {
+        AVMixerState prev;
         lock (_gate)
         {
-            if (State != AudioVideoMixerState.Running)
-            {
-                return MediaResult.Success;
-            }
-
-            var result = _clock.Pause();
-            if (result != MediaResult.Success)
-            {
-                return result;
-            }
-
-            var previous = State;
-            State = AudioVideoMixerState.Paused;
-            StateChanged?.Invoke(this, new AudioVideoMixerStateChangedEventArgs(previous, State));
-            return MediaResult.Success;
+            if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_state != AVMixerState.Running) return MediaResult.Success;
+            prev = _state;
+            _state = AVMixerState.Paused;
         }
+        _pauseEvent.Reset();
+        _clock.Pause();
+        RaiseStateChanged(prev, AVMixerState.Paused);
+        return MediaResult.Success;
     }
 
-    public int Resume()
+    protected int Resume()
     {
+        AVMixerState prev;
         lock (_gate)
         {
-            if (State != AudioVideoMixerState.Paused)
-            {
-                return MediaResult.Success;
-            }
-
-            var result = _clock.Start();
-            if (result != MediaResult.Success)
-            {
-                return result;
-            }
-
-            var previous = State;
-            State = AudioVideoMixerState.Running;
-            StateChanged?.Invoke(this, new AudioVideoMixerStateChangedEventArgs(previous, State));
-            return MediaResult.Success;
+            if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_state != AVMixerState.Paused) return MediaResult.Success;
+            prev = _state;
+            _state = AVMixerState.Running;
         }
+        _clock.Start();
+        _pauseEvent.Set();
+        RaiseStateChanged(prev, AVMixerState.Running);
+        return MediaResult.Success;
     }
 
-    public int Stop()
+    protected int Stop()
     {
+        AVMixerState prev;
         lock (_gate)
         {
-            var result = _clock.Stop();
-            if (result != MediaResult.Success)
-            {
-                return result;
-            }
-
-            var previous = State;
-            State = AudioVideoMixerState.Stopped;
-            if (previous != State)
-            {
-                StateChanged?.Invoke(this, new AudioVideoMixerStateChangedEventArgs(previous, State));
-            }
-
-            return MediaResult.Success;
+            if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_state == AVMixerState.Stopped) return MediaResult.Success;
+            prev = _state;
+            _state = AVMixerState.Stopped;
         }
+        _pauseEvent.Set();
+        _clock.Stop();
+        RaiseStateChanged(prev, AVMixerState.Stopped);
+        return MediaResult.Success;
     }
 
     public int Seek(double positionSeconds)
     {
-        return _clock.Seek(positionSeconds);
+        if (!double.IsFinite(positionSeconds) || positionSeconds < 0)
+            return (int)MediaErrorCode.MediaInvalidArgument;
+
+        // Fast path when idle — execute synchronously (no pump threads running).
+        bool hasPump;
+        lock (_gate) hasPump = _cancelSource is not null;
+
+        if (!hasPump)
+        {
+            ClearVideoQueue();
+            _audioTimelineSeconds = positionSeconds;
+            _clock.Seek(positionSeconds);
+            foreach (var (src, _) in GetAudioSourcesSnapshot()) _ = src.Seek(positionSeconds);
+            foreach (var src in GetVideoSourcesSnapshot())      _ = src.Seek(positionSeconds);
+            return MediaResult.Success;
+        }
+
+        // Running — enqueue for AudioPumpLoop (drops oldest if already pending).
+        _seekChannel.Writer.TryWrite(positionSeconds);
+        return MediaResult.Success;
     }
 
-    public int AddAudioSource(IAudioSource source)
-    {
-        return AddAudioSource(source, 0.0);
-    }
+    // ── source / output management ────────────────────────────────────────────
+
+    public int AddAudioSource(IAudioSource source) => AddAudioSource(source, 0);
 
     public int AddAudioSource(IAudioSource source, double startOffsetSeconds)
     {
         ArgumentNullException.ThrowIfNull(source);
-
         lock (_gate)
         {
-            if (_audioSources.Any(s => s.SourceId == source.SourceId))
-            {
+            if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_audioSources.Any(x => x.Source.Id == source.Id))
                 return (int)MediaErrorCode.MixerSourceIdCollision;
-            }
-
-            _audioSources.Add(source);
-            _audioStartOffsets[source.SourceId] = startOffsetSeconds;
-            return MediaResult.Success;
+            _audioSources.Add((source, Math.Max(0, startOffsetSeconds)));
+            _audioSourcesNeedsUpdate = true;
         }
+        return MediaResult.Success;
     }
 
     public int SetAudioSourceStartOffset(IAudioSource source, double startOffsetSeconds)
     {
         ArgumentNullException.ThrowIfNull(source);
-
         lock (_gate)
         {
-            if (!_audioSources.Any(s => s.SourceId == source.SourceId))
+            for (var i = 0; i < _audioSources.Count; i++)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                if (_audioSources[i].Source.Id != source.Id) continue;
+                _audioSources[i] = (_audioSources[i].Source, Math.Max(0, startOffsetSeconds));
+                return MediaResult.Success;
             }
-
-            _audioStartOffsets[source.SourceId] = startOffsetSeconds;
-            return MediaResult.Success;
         }
+        return (int)MediaErrorCode.MediaInvalidArgument;
     }
 
-    public int RemoveAudioSource(IAudioSource source)
+    public int RemoveAudioSource(IAudioSource source, bool stopOnDetach = false, bool disposeOnDetach = false)
     {
         ArgumentNullException.ThrowIfNull(source);
-
+        IAudioSource? found = null;
         lock (_gate)
         {
-            _audioSources.RemoveAll(s => s.SourceId == source.SourceId);
-            _audioStartOffsets.Remove(source.SourceId);
-            return MediaResult.Success;
+            for (var i = 0; i < _audioSources.Count; i++)
+            {
+                if (_audioSources[i].Source.Id != source.Id) continue;
+                found = _audioSources[i].Source;
+                _audioSources.RemoveAt(i);
+                _audioSourcesNeedsUpdate = true;
+                break;
+            }
         }
+        if (found is null) return (int)MediaErrorCode.MediaInvalidArgument;
+        if (stopOnDetach)   found.Stop();
+        if (disposeOnDetach) found.Dispose();
+        return MediaResult.Success;
     }
 
     public int AddVideoSource(IVideoSource source)
     {
         ArgumentNullException.ThrowIfNull(source);
-
         lock (_gate)
         {
-            if (_videoSources.Any(s => s.SourceId == source.SourceId))
-            {
+            if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_videoSources.Any(x => x.Id == source.Id))
                 return (int)MediaErrorCode.MixerSourceIdCollision;
-            }
-
             _videoSources.Add(source);
-            return MediaResult.Success;
+            _activeVideoSourceId ??= source.Id;
         }
+        return MediaResult.Success;
     }
 
-    public int RemoveVideoSource(IVideoSource source)
+    public int RemoveVideoSource(IVideoSource source, bool stopOnDetach = false, bool disposeOnDetach = false)
     {
         ArgumentNullException.ThrowIfNull(source);
-
+        IVideoSource? found = null;
         lock (_gate)
         {
-            _videoSources.RemoveAll(s => s.SourceId == source.SourceId);
-
-            if (_activeVideoSource?.SourceId == source.SourceId)
+            for (var i = 0; i < _videoSources.Count; i++)
             {
-                var previous = _activeVideoSource.SourceId;
-                _activeVideoSource = null;
-                ActiveVideoSourceChanged?.Invoke(this, new VideoActiveSourceChangedEventArgs(previous, null));
+                if (_videoSources[i].Id != source.Id) continue;
+                found = _videoSources[i];
+                _videoSources.RemoveAt(i);
+                break;
             }
-
-            return MediaResult.Success;
+            if (_activeVideoSourceId == source.Id)
+                _activeVideoSourceId = _videoSources.Count > 0 ? _videoSources[0].Id : null;
         }
-    }
-
-    public int AddAudioOutput(IAudioOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        lock (_gate)
-        {
-            if (_audioOutputs.Contains(output))
-            {
-                return MediaResult.Success;
-            }
-
-            _audioOutputs.Add(output);
-            return MediaResult.Success;
-        }
-    }
-
-    public int RemoveAudioOutput(IAudioOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        lock (_gate)
-        {
-            _audioOutputs.Remove(output);
-            return MediaResult.Success;
-        }
-    }
-
-    public int AddVideoOutput(IVideoOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        lock (_gate)
-        {
-            if (_videoOutputs.Contains(output))
-            {
-                return MediaResult.Success;
-            }
-
-            _videoOutputs.Add(output);
-            return MediaResult.Success;
-        }
-    }
-
-    public int RemoveVideoOutput(IVideoOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        lock (_gate)
-        {
-            _videoOutputs.Remove(output);
-            return MediaResult.Success;
-        }
-    }
-
-    public int ConfigureAudioSourceDetachOptions(MixerSourceDetachOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        lock (_gate)
-        {
-            _audioDetachOptions = options;
-            return MediaResult.Success;
-        }
-    }
-
-    public int ConfigureVideoSourceDetachOptions(MixerSourceDetachOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        lock (_gate)
-        {
-            _videoDetachOptions = options;
-            return MediaResult.Success;
-        }
-    }
-
-    public int SetClockType(ClockType clockType)
-    {
-        var validation = MixerClockTypeRules.ValidateClockType(clockType);
-        if (validation != MediaResult.Success)
-        {
-            return validation;
-        }
-
-        if (clockType == ClockType.External && _clock is CoreMediaClock)
-        {
-            return (int)MediaErrorCode.MediaExternalClockUnavailable;
-        }
-
-        lock (_gate)
-        {
-            ClockType = clockType;
-            return MediaResult.Success;
-        }
-    }
-
-    public int SetSyncMode(AudioVideoSyncMode syncMode)
-    {
-        lock (_gate)
-        {
-            SyncMode = syncMode;
-            return MediaResult.Success;
-        }
+        if (found is null) return (int)MediaErrorCode.MediaInvalidArgument;
+        if (stopOnDetach)   found.Stop();
+        if (disposeOnDetach) found.Dispose();
+        return MediaResult.Success;
     }
 
     public int SetActiveVideoSource(IVideoSource source)
     {
         ArgumentNullException.ThrowIfNull(source);
-
+        Guid? prev;
         lock (_gate)
         {
-            if (!_videoSources.Any(v => v.SourceId == source.SourceId))
-            {
+            if (!_videoSources.Any(x => x.Id == source.Id))
                 return (int)MediaErrorCode.MediaInvalidArgument;
-            }
-
-            var previous = _activeVideoSource?.SourceId;
-            _activeVideoSource = source;
-            ActiveVideoSourceChanged?.Invoke(this, new VideoActiveSourceChangedEventArgs(previous, source.SourceId));
-            return MediaResult.Success;
+            prev = _activeVideoSourceId;
+            _activeVideoSourceId = source.Id;
         }
-    }
-
-    // ─── Advanced routing (ISupportsAdvancedRouting) ──────────────────
-
-    public IReadOnlyList<AudioRoutingRule> AudioRoutingRules
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<AudioRoutingRule>([.. _audioRoutingRules]);
-            }
-        }
-    }
-
-    public IReadOnlyList<VideoRoutingRule> VideoRoutingRules
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return new ReadOnlyCollection<VideoRoutingRule>([.. _videoRoutingRules]);
-            }
-        }
-    }
-
-    public int AddAudioRoutingRule(AudioRoutingRule rule)
-    {
-        lock (_gate)
-        {
-            _audioRoutingRules.Add(rule);
-            return MediaResult.Success;
-        }
-    }
-
-    public int RemoveAudioRoutingRule(AudioRoutingRule rule)
-    {
-        lock (_gate)
-        {
-            _audioRoutingRules.Remove(rule);
-            return MediaResult.Success;
-        }
-    }
-
-    public int ClearAudioRoutingRules()
-    {
-        lock (_gate)
-        {
-            _audioRoutingRules.Clear();
-            return MediaResult.Success;
-        }
-    }
-
-    public int AddVideoRoutingRule(VideoRoutingRule rule)
-    {
-        lock (_gate)
-        {
-            _videoRoutingRules.Add(rule);
-            return MediaResult.Success;
-        }
-    }
-
-    public int RemoveVideoRoutingRule(VideoRoutingRule rule)
-    {
-        lock (_gate)
-        {
-            _videoRoutingRules.Remove(rule);
-            return MediaResult.Success;
-        }
-    }
-
-    public int ClearVideoRoutingRules()
-    {
-        lock (_gate)
-        {
-            _videoRoutingRules.Clear();
-            return MediaResult.Success;
-        }
-    }
-
-    // ─── Playback runtime ───────────────────────────────────────────────
-
-    /// <summary>
-    /// Starts the managed A/V playback pump threads.
-    /// Audio: reads from all started audio sources, mixes additively, pushes to all audio outputs.
-    /// Video: reads from the active video source, pushes to all video outputs via sync policy.
-    /// </summary>
-    public int StartPlayback(AudioVideoMixerConfig config)
-    {
-        ArgumentNullException.ThrowIfNull(config);
-
-        lock (_gate)
-        {
-            if (_playbackRunning)
-            {
-                return MediaResult.Success;
-            }
-
-            _config = config;
-        }
-
-        // Start all audio sources
-        List<IAudioSource> audioSources;
-        List<IVideoSource> videoSources;
-        IVideoSource? activeVideo;
-
-        lock (_gate)
-        {
-            audioSources = [.. _audioSources];
-            videoSources = [.. _videoSources];
-            activeVideo = _activeVideoSource;
-        }
-
-        foreach (var src in audioSources)
-        {
-            var r = src.Start();
-            if (r != MediaResult.Success)
-            {
-                RaiseAudioSourceError(src.SourceId, r, "Failed to start audio source");
-            }
-        }
-
-        if (activeVideo is not null)
-        {
-            var r = activeVideo.Start();
-            if (r != MediaResult.Success)
-            {
-                RaiseVideoSourceError(activeVideo.SourceId, r, "Failed to start video source");
-            }
-        }
-
-        var startResult = Start();
-        if (startResult != MediaResult.Success)
-        {
-            return startResult;
-        }
-
-        lock (_gate)
-        {
-            _cts = new CancellationTokenSource();
-            var token = _cts.Token;
-
-            ResetDebugCounters();
-            _driftCorrection.Reset();
-            _nextCorrectionAtUtc = DateTime.UtcNow;
-
-            _audioTask = Task.Run(() => PumpAudio(token), token);
-            _videoTask = Task.Run(() => PumpVideo(token), token);
-            if (!config.PresentOnCallerThread)
-            {
-                _presentTask = Task.Run(() => PresentVideoLoop(token), token);
-            }
-
-            _playbackRunning = true;
-        }
-
+        if (prev != source.Id)
+            ActiveVideoSourceChanged?.Invoke(this, new VideoActiveSourceChangedEventArgs(prev, source.Id));
         return MediaResult.Success;
     }
 
-    /// <summary>
-    /// Stops the managed A/V playback pump threads and the mixer clock.
-    /// </summary>
-    public int StopPlayback()
+    public int AddAudioOutput(IAudioSink output)    { ArgumentNullException.ThrowIfNull(output); lock (_gate) _audioOutputs.Add(output);    return MediaResult.Success; }
+    public int RemoveAudioOutput(IAudioSink output) { ArgumentNullException.ThrowIfNull(output); lock (_gate) _audioOutputs.Remove(output); return MediaResult.Success; }
+
+    public int AddVideoOutput(IVideoOutput output)
     {
-        CancellationTokenSource? cts;
-        Task? audioTask;
-        Task? videoTask;
-        Task? presentTask;
-
-        lock (_gate)
-        {
-            if (!_playbackRunning)
-            {
-                return MediaResult.Success;
-            }
-
-            cts = _cts;
-            audioTask = _audioTask;
-            videoTask = _videoTask;
-            presentTask = _presentTask;
-            _playbackRunning = false;
-            _cts = null;
-            _audioTask = null;
-            _videoTask = null;
-            _presentTask = null;
-        }
-
-        cts?.Cancel();
-        WaitTask(audioTask);
-        WaitTask(videoTask);
-        WaitTask(presentTask);
-        cts?.Dispose();
-
-        lock (_gate)
-        {
-            while (_videoQueue.Count > 0)
-            {
-                _videoQueue.Dequeue().Dispose();
-            }
-        }
-
-        // Stop all sources
-        List<IAudioSource> audioSources;
-        IVideoSource? activeVideo;
-        lock (_gate)
-        {
-            audioSources = [.. _audioSources];
-            activeVideo = _activeVideoSource;
-        }
-
-        foreach (var src in audioSources)
-        {
-            src.Stop();
-        }
-
-        activeVideo?.Stop();
-
-        return Stop();
+        ArgumentNullException.ThrowIfNull(output);
+        lock (_gate) _videoOutputs.Add(output);
+        return MediaResult.Success;
     }
 
-    /// <summary>
-    /// Ticks the video presentation step when <see cref="AudioVideoMixerConfig.PresentOnCallerThread"/> is true.
-    /// Returns the suggested delay before the next tick.
-    /// </summary>
-    public TimeSpan TickVideoPresentation()
+    public int RemoveVideoOutput(IVideoOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        lock (_gate)
+        {
+            _videoOutputs.Remove(output);
+            if (_videoWorkers.Remove(output.Id, out var w)) w.Dispose();
+        }
+        return MediaResult.Success;
+    }
+
+    // ── configuration ─────────────────────────────────────────────────────────
+
+    public int SetSyncMode(AVSyncMode syncMode)   { lock (_gate) _syncMode = syncMode;         return MediaResult.Success; }
+
+    public int SetClockType(ClockType clockType)
+    {
+        if (clockType != ClockType.External && clockType != ClockType.Hybrid)
+            return (int)MediaErrorCode.MixerClockTypeInvalid;
+        lock (_gate) _clockType = clockType;
+        return MediaResult.Success;
+    }
+
+    // ── playback ──────────────────────────────────────────────────────────────
+
+    public int StartPlayback(AVMixerConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        lock (_gate)
+        {
+            if (_disposed)        return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_cancelSource is not null) return MediaResult.Success;
+        }
+
+        if (State != AVMixerState.Running) { var c = Start(); if (c != MediaResult.Success) return c; }
+
+        foreach (var (src, _) in GetAudioSourcesSnapshot())
+            if (src.State == AudioSourceState.Stopped) src.Start();
+        foreach (var src in GetVideoSourcesSnapshot())
+            if (src.State == VideoSourceState.Stopped) src.Start();
+
+        StartPlaybackThreads(config);
+        return MediaResult.Success;
+    }
+
+    public int StopPlayback() { StopPlaybackThreads(); return MediaResult.Success; }
+
+    public int PausePlayback() => Pause();
+
+    public int ResumePlayback() => Resume();
+
+
+    // ── diagnostics ───────────────────────────────────────────────────────────
+
+    public AVMixerDiagnostics? GetDebugInfo()
+    {
+        int wQDepth = 0, wQMax = 0;
+        long wEnqDrop = 0, wStaleDrop = 0, wFail = 0;
+        lock (_gate)
+        {
+            foreach (var w in _videoWorkers.Values)
+            {
+                var d = w.QueueDepth;
+                wQDepth += d;
+                if (d > wQMax) wQMax = d;
+                wEnqDrop  += Interlocked.Read(ref w.EnqueueDrops);
+                wStaleDrop += Interlocked.Read(ref w.StaleDrops);
+                wFail      += Interlocked.Read(ref w.PushFailures);
+            }
+        }
+        return new AVMixerDiagnostics(
+            Interlocked.Read(ref _videoPushed), Interlocked.Read(ref _videoPushFailures),
+            Interlocked.Read(ref _videoNoFrame), Interlocked.Read(ref _videoLateDrops),
+            Interlocked.Read(ref _videoQueueTrimDrops), Interlocked.Read(ref _videoCoalescedDrops),
+            _videoQueueDepthVal,
+            Interlocked.Read(ref _audioPushFailures), Interlocked.Read(ref _audioReadFailures),
+            Interlocked.Read(ref _audioEmptyReads), Interlocked.Read(ref _audioPushedFrames),
+            wEnqDrop, wStaleDrop, wFail, wQDepth, wQMax);
+    }
+
+    public IReadOnlyList<VideoOutputDiagnostics> GetVideoOutputDiagnostics()
     {
         lock (_gate)
         {
-            if (!_playbackRunning)
+            var list = new List<VideoOutputDiagnostics>(_videoOutputs.Count);
+            foreach (var o in _videoOutputs)
             {
-                return TimeSpan.Zero;
+                var cap = _playbackConfig?.GetVideoOutputQueueCapacity(o.Id) ?? 0;
+                if (_videoWorkers.TryGetValue(o.Id, out var w))
+                    list.Add(new VideoOutputDiagnostics(o.Id, w.QueueDepth, cap,
+                        Interlocked.Read(ref w.EnqueueDrops),
+                        Interlocked.Read(ref w.StaleDrops),
+                        Interlocked.Read(ref w.PushFailures)));
+                else
+                    list.Add(new VideoOutputDiagnostics(o.Id, 0, 0, 0, 0, 0));
             }
-        }
-
-        return PresentVideoStep();
-    }
-
-    /// <summary>
-    /// Returns a diagnostic snapshot of the playback state, or null if playback is not active.
-    /// </summary>
-    public AudioVideoMixerDebugInfo? GetDebugInfo()
-    {
-        lock (_gate)
-        {
-            if (!_playbackRunning)
-            {
-                return null;
-            }
-
-            var leadAvg = _leadCount > 0 ? _leadSumMs / _leadCount : 0.0;
-            var leadMin = double.IsPositiveInfinity(_leadMinMs) ? 0.0 : _leadMinMs;
-            var leadMax = double.IsNegativeInfinity(_leadMaxMs) ? 0.0 : _leadMaxMs;
-            return new AudioVideoMixerDebugInfo(
-                VideoPushed: _videoPushed,
-                VideoPushFailures: _videoPushFailures,
-                VideoNoFrame: _videoNoFrame,
-                VideoLateDrops: _videoLateDrops,
-                VideoQueueTrimDrops: _videoQueueTrimDrops,
-                VideoCoalescedDrops: _videoCoalescedDrops,
-                VideoQueueDepth: _videoQueue.Count,
-                AudioPushFailures: _audioPushFailures,
-                AudioReadFailures: _audioReadFailures,
-                AudioEmptyReads: _audioEmptyReads,
-                AudioPushedFrames: _audioPushedFrames,
-                DriftMs: _lastDriftMs,
-                CorrectionSignalMs: _lastCorrectionSignalMs,
-                CorrectionStepMs: _lastCorrectionStepMs,
-                CorrectionOffsetMs: _driftCorrection.CurrentOffsetMs,
-                CorrectionResyncCount: _driftCorrection.HardResyncCount,
-                LeadMinMs: leadMin,
-                LeadAvgMs: leadAvg,
-                LeadMaxMs: leadMax);
+            return list;
         }
     }
+
+    // ── events ────────────────────────────────────────────────────────────────
+
+    public event EventHandler<AVMixerStateChangedEventArgs>? StateChanged;
+    public event EventHandler<MediaSourceErrorEventArgs>?            AudioSourceError;
+    public event EventHandler<MediaSourceErrorEventArgs>?            VideoSourceError;
+    public event EventHandler<VideoActiveSourceChangedEventArgs>?    ActiveVideoSourceChanged;
+
+    // ── IDisposable ───────────────────────────────────────────────────────────
 
     public void Dispose()
     {
-        StopPlayback();
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
     }
 
-    // ─── Internal helpers ───────────────────────────────────────────────
-
-    internal void RaiseAudioSourceError(Guid sourceId, int errorCode, string? message)
+    protected virtual void Dispose(bool disposing)
     {
-        AudioSourceError?.Invoke(this, new AudioSourceErrorEventArgs(sourceId, errorCode, message));
+        if (!disposing) return;
+        lock (_gate) { if (_disposed) return; _disposed = true; }
+        StopPlaybackThreads();
+        Stop();
+        _pauseEvent.Dispose();
     }
 
-    internal void RaiseVideoSourceError(Guid sourceId, int errorCode, string? message)
+    // ── private: thread management ────────────────────────────────────────────
+
+    private void StartPlaybackThreads(AVMixerConfig config)
     {
-        VideoSourceError?.Invoke(this, new VideoSourceErrorEventArgs(sourceId, errorCode, message));
-    }
-
-    // ─── Audio pump (many-to-many) ─────────────────────────────────────
-
-    private void PumpAudio(CancellationToken token)
-    {
-        var readFrames = Math.Max(1, _config!.AudioReadFrames);
-        var sourceChannels = Math.Max(1, _config.SourceChannelCount);
-        var sampleRate = Math.Max(1, _config.OutputSampleRate);
-        var defaultRouteMap = _config.RouteMap;
-        var mixBuffer = new float[readFrames * sourceChannels];
-
-        while (!token.IsCancellationRequested)
-        {
-            // Snapshot sources, outputs, and routing rules
-            List<IAudioSource> sources;
-            List<IAudioOutput> outputs;
-            List<AudioRoutingRule> rules;
-            lock (_gate)
-            {
-                sources = [.. _audioSources];
-                outputs = [.. _audioOutputs];
-                rules = [.. _audioRoutingRules];
-            }
-
-            // Read samples from all sources (keyed by SourceId for rule lookup)
-            var sourceData = new Dictionary<Guid, (float[] Samples, int FramesRead)>();
-            var anyFramesRead = false;
-            var maxFramesRead = 0;
-
-            Array.Clear(mixBuffer);
-
-            foreach (var source in sources)
-            {
-                var buf = new float[readFrames * sourceChannels];
-                var audioCode = source.ReadSamples(buf, readFrames, out var framesRead);
-                if (audioCode != MediaResult.Success)
-                {
-                    Interlocked.Increment(ref _audioReadFailures);
-                    continue;
-                }
-
-                if (framesRead <= 0)
-                {
-                    Interlocked.Increment(ref _audioEmptyReads);
-                    continue;
-                }
-
-                anyFramesRead = true;
-                if (framesRead > maxFramesRead)
-                {
-                    maxFramesRead = framesRead;
-                }
-
-                sourceData[source.SourceId] = (buf, framesRead);
-
-                // Also additive-mix into the global buffer for non-routed fallback
-                var sampleCount = framesRead * sourceChannels;
-                for (var i = 0; i < sampleCount; i++)
-                {
-                    mixBuffer[i] += buf[i];
-                }
-            }
-
-            if (!anyFramesRead)
-            {
-                Interlocked.Increment(ref _audioEmptyReads);
-                Thread.Sleep(1);
-                continue;
-            }
-
-            var pts = TimeSpan.FromSeconds(_clock.CurrentSeconds);
-
-            if (rules.Count > 0)
-            {
-                // ── Advanced routing: build a per-output mix buffer ──
-                foreach (var output in outputs)
-                {
-                    var outputRules = rules.FindAll(r => r.OutputId == output.Id);
-                    if (outputRules.Count == 0)
-                    {
-                        continue; // no rules target this output → silence
-                    }
-
-                    // Determine max output channel index to size the output buffer
-                    var maxOutCh = 0;
-                    foreach (var r in outputRules)
-                    {
-                        if (r.OutputChannel > maxOutCh) maxOutCh = r.OutputChannel;
-                    }
-
-                    var outChannels = maxOutCh + 1;
-                    var outBuffer = new float[maxFramesRead * outChannels];
-
-                    foreach (var rule in outputRules)
-                    {
-                        if (!sourceData.TryGetValue(rule.SourceId, out var sd))
-                        {
-                            continue; // source not available this cycle
-                        }
-
-                        var srcCh = rule.SourceChannel;
-                        var dstCh = rule.OutputChannel;
-                        var gain = rule.Gain;
-
-                        if (srcCh < 0 || srcCh >= sourceChannels) continue;
-                        if (dstCh < 0 || dstCh >= outChannels) continue;
-
-                        var frames = sd.FramesRead;
-                        for (var f = 0; f < frames; f++)
-                        {
-                            outBuffer[f * outChannels + dstCh] +=
-                                sd.Samples[f * sourceChannels + srcCh] * gain;
-                        }
-                    }
-
-                    // Clamp
-                    var totalSamples = maxFramesRead * outChannels;
-                    for (var i = 0; i < totalSamples; i++)
-                    {
-                        outBuffer[i] = Math.Clamp(outBuffer[i], -1.0f, 1.0f);
-                    }
-
-                    // Build a trivial 1:1 route map for the output
-                    var outRouteMap = new int[outChannels];
-                    for (var ch = 0; ch < outChannels; ch++) outRouteMap[ch] = ch;
-
-                    var frame = new AudioFrame(
-                        Samples: outBuffer,
-                        FrameCount: maxFramesRead,
-                        SourceChannelCount: outChannels,
-                        Layout: AudioFrameLayout.Interleaved,
-                        SampleRate: sampleRate,
-                        PresentationTime: pts);
-
-                    var push = output.PushFrame(in frame, outRouteMap, outChannels);
-                    if (push != MediaResult.Success)
-                    {
-                        Interlocked.Increment(ref _audioPushFailures);
-                    }
-                }
-            }
-            else
-            {
-                // ── Default: global mix → all outputs with config RouteMap ──
-                var totalSamples = maxFramesRead * sourceChannels;
-                for (var i = 0; i < totalSamples; i++)
-                {
-                    mixBuffer[i] = Math.Clamp(mixBuffer[i], -1.0f, 1.0f);
-                }
-
-                var audioFrame = new AudioFrame(
-                    Samples: mixBuffer,
-                    FrameCount: maxFramesRead,
-                    SourceChannelCount: sourceChannels,
-                    Layout: AudioFrameLayout.Interleaved,
-                    SampleRate: sampleRate,
-                    PresentationTime: pts);
-
-                foreach (var output in outputs)
-                {
-                    var push = output.PushFrame(in audioFrame, defaultRouteMap, sourceChannels);
-                    if (push != MediaResult.Success)
-                    {
-                        Interlocked.Increment(ref _audioPushFailures);
-                    }
-                }
-            }
-
-            Interlocked.Add(ref _audioPushedFrames, maxFramesRead);
-
-            // Update clock from audio position (use the first source as reference)
-            if (sources.Count > 0)
-            {
-                var refSource = sources[0];
-                var corrected = refSource.PositionSeconds + _driftCorrection.CurrentOffsetSeconds;
-                _ = _clock.Seek(Math.Max(0, corrected));
-            }
-        }
-    }
-
-    // ─── Video read thread ─────────────────────────────────────────────
-
-    private void PumpVideo(CancellationToken token)
-    {
-        while (!token.IsCancellationRequested)
-        {
-            IVideoSource? activeVideo;
-            lock (_gate)
-            {
-                activeVideo = _activeVideoSource;
-            }
-
-            if (activeVideo is null)
-            {
-                Thread.Sleep(1);
-                continue;
-            }
-
-            var code = activeVideo.ReadFrame(out var frame);
-            if (code != MediaResult.Success)
-            {
-                if (code == (int)MediaErrorCode.NDIVideoFallbackUnavailable)
-                {
-                    Interlocked.Increment(ref _videoNoFrame);
-                }
-                else
-                {
-                    Interlocked.Increment(ref _videoPushFailures);
-                }
-
-                Thread.Sleep(1);
-                continue;
-            }
-
-            lock (_gate)
-            {
-                var capacity = Math.Max(1, _config?.VideoQueueCapacity ?? 3);
-                while (_videoQueue.Count >= capacity)
-                {
-                    _videoQueue.Dequeue().Dispose();
-                    _videoQueueTrimDrops++;
-                }
-
-                _videoQueue.Enqueue(frame);
-            }
-        }
-    }
-
-    // ─── Video presentation ────────────────────────────────────────────
-
-    private void PresentVideoLoop(CancellationToken token)
-    {
-        while (!token.IsCancellationRequested)
-        {
-            var delay = PresentVideoStep();
-            SleepForPresenter(delay);
-        }
-    }
-
-    private TimeSpan PresentVideoStep()
-    {
-        VideoFrame? ready = null;
-        var minSleep = TimeSpan.FromMilliseconds(1);
-        var delay = minSleep;
-
         lock (_gate)
         {
-            var decision = VideoPresenterSyncPolicy.SelectNextFrame(
-                _videoQueue,
-                SyncMode,
-                _clock.CurrentSeconds,
-                VideoPresenterSyncPolicyOptions.Default);
+            _playbackConfig = config;
+            _cancelSource   = new CancellationTokenSource();
+            _pauseEvent.Set();
 
-            ready = decision.Frame;
-            delay = decision.Delay;
-            _videoLateDrops += decision.LateDrops;
-            _videoCoalescedDrops += decision.CoalescedDrops;
-        }
+            // If the config carries an explicit sync-mode preference, apply it now.
+            if (config.SyncMode.HasValue) _syncMode = config.SyncMode.Value;
 
-        if (ready is not null)
-        {
-            try
+            if (config.PresentationHostPolicy == VideoDispatchPolicy.BackgroundWorker)
             {
-                // Push to video outputs (with routing rule support)
-                List<IVideoOutput> outputs;
-                List<VideoRoutingRule> videoRules;
-                Guid? activeSourceId;
-                lock (_gate)
+                foreach (var output in _videoOutputs)
                 {
-                    outputs = [.. _videoOutputs];
-                    videoRules = [.. _videoRoutingRules];
-                    activeSourceId = _activeVideoSource?.SourceId;
+                    if (_videoWorkers.ContainsKey(output.Id)) continue;
+                    var cap = config.GetVideoOutputQueueCapacity(output.Id);
+                    _videoWorkers[output.Id] = new OutputWorker(output, cap);
                 }
-
-                if (videoRules.Count > 0 && activeSourceId is not null)
-                {
-                    // Advanced routing: only push to outputs that have a matching rule
-                    var targetOutputIds = new HashSet<Guid>();
-                    foreach (var rule in videoRules)
-                    {
-                        if (rule.SourceId == activeSourceId.Value)
-                        {
-                            targetOutputIds.Add(rule.OutputId);
-                        }
-                    }
-
-                    foreach (var output in outputs)
-                    {
-                        if (!targetOutputIds.Contains(output.Id)) continue;
-
-                        var push = output.PushFrame(ready, ready.PresentationTime);
-                        if (push == MediaResult.Success)
-                        {
-                            Interlocked.Increment(ref _videoPushed);
-                        }
-                        else
-                        {
-                            Interlocked.Increment(ref _videoPushFailures);
-                        }
-                    }
-                }
-                else
-                {
-                    // Default: push to all outputs
-                    foreach (var output in outputs)
-                    {
-                        var push = output.PushFrame(ready, ready.PresentationTime);
-                        if (push == MediaResult.Success)
-                        {
-                            Interlocked.Increment(ref _videoPushed);
-                        }
-                        else
-                        {
-                            Interlocked.Increment(ref _videoPushFailures);
-                        }
-                    }
-                }
-
-                // Track lead statistics
-                var clockSeconds = _clock.CurrentSeconds;
-                var leadMs = (ready.PresentationTime.TotalSeconds - clockSeconds) * 1000.0;
-                lock (_gate)
-                {
-                    _leadMinMs = Math.Min(_leadMinMs, leadMs);
-                    _leadMaxMs = Math.Max(_leadMaxMs, leadMs);
-                    _leadSumMs += leadMs;
-                    _leadCount++;
-                }
-
-                delay = TimeSpan.Zero;
-            }
-            finally
-            {
-                ready.Dispose();
             }
         }
 
-        if (DateTime.UtcNow >= _nextCorrectionAtUtc)
+        var ct = _cancelSource!.Token;
+
+        if (GetAudioSourcesSnapshot().Count > 0)
         {
-            ApplyDriftCorrection();
-            _nextCorrectionAtUtc = DateTime.UtcNow.AddSeconds(1);
+            _audioPumpThread = new Thread(() => AudioPumpLoop(ct))
+            { Name = "AVMixer.AudioPump", IsBackground = true, Priority = ThreadPriority.Highest };
+            _audioPumpThread.Start();
         }
 
-        return delay;
+        // Video threads always start so that sources added after StartPlayback are served.
+        // VideoDecodeLoop and VideoPresentLoop handle the empty-source case gracefully
+        // (GetActiveVideoSource returns null → Thread.Sleep(2)).
+        _videoDecodeThread = new Thread(() => VideoDecodeLoop(ct))
+        { Name = "AVMixer.VideoDecode", IsBackground = true, Priority = ThreadPriority.AboveNormal };
+        _videoDecodeThread.Start();
+
+        _videoPresentThread = new Thread(() => VideoPresentLoop(ct))
+        { Name = "AVMixer.VideoPresent", IsBackground = true, Priority = ThreadPriority.AboveNormal };
+        _videoPresentThread.Start();
     }
 
-    private void ApplyDriftCorrection()
+    private void StopPlaybackThreads()
     {
-        IVideoSource? activeVideo;
+        CancellationTokenSource? cts;
+        Dictionary<Guid, OutputWorker> workers;
         lock (_gate)
         {
-            activeVideo = _activeVideoSource;
+            cts = _cancelSource;
+            _cancelSource = null;
+            workers = _videoWorkers;
+            _videoWorkers = [];
         }
 
-        if (activeVideo is null)
-        {
-            return;
-        }
+        if (cts is null) return;
+        _pauseEvent.Set();
+        cts.Cancel();
 
-        var clockSeconds = _clock.CurrentSeconds;
-        var driftMs = (activeVideo.PositionSeconds - clockSeconds) * 1000.0;
+        _audioPumpThread?.Join(TimeSpan.FromSeconds(4));
+        _videoDecodeThread?.Join(TimeSpan.FromSeconds(4));
+        _videoPresentThread?.Join(TimeSpan.FromSeconds(4));
+        _audioPumpThread = _videoDecodeThread = _videoPresentThread = null;
 
-        lock (_gate)
-        {
-            var leadAvgMs = _leadCount > 0 ? _leadSumMs / _leadCount : 0.0;
-            var signalMs = _leadCount > 0 ? leadAvgMs : driftMs;
-            var stepMs = _driftCorrection.Update(signalMs);
-
-            _lastDriftMs = driftMs;
-            _lastCorrectionSignalMs = signalMs;
-            _lastCorrectionStepMs = stepMs;
-
-            _leadMinMs = double.PositiveInfinity;
-            _leadMaxMs = double.NegativeInfinity;
-            _leadSumMs = 0;
-            _leadCount = 0;
-        }
+        foreach (var w in workers.Values) w.Dispose();
+        cts.Dispose();
+        ClearVideoQueue();
     }
 
-    private void ResetDebugCounters()
-    {
-        _videoPushed = 0;
-        _videoPushFailures = 0;
-        _videoNoFrame = 0;
-        _videoLateDrops = 0;
-        _videoQueueTrimDrops = 0;
-        _videoCoalescedDrops = 0;
-        _audioPushFailures = 0;
-        _audioReadFailures = 0;
-        _audioEmptyReads = 0;
-        _audioPushedFrames = 0;
-        _lastDriftMs = 0;
-        _lastCorrectionSignalMs = 0;
-        _lastCorrectionStepMs = 0;
-        _leadMinMs = double.PositiveInfinity;
-        _leadMaxMs = double.NegativeInfinity;
-        _leadSumMs = 0;
-        _leadCount = 0;
-    }
+    // ── private: audio pump ───────────────────────────────────────────────────
 
-    private static void SleepForPresenter(TimeSpan delay)
+    private void AudioPumpLoop(CancellationToken ct)
     {
-        if (delay <= TimeSpan.Zero)
-        {
-            return;
-        }
+        var config = _playbackConfig!;
+        var sourceChannels = Math.Max(1, config.SourceChannelCount);
+        var routeMap = config.RouteMap?.Length > 0 ? config.RouteMap : [0, 1];
+        var framesPerBatch = config.AudioReadFrames > 0 ? config.AudioReadFrames : 1024;
+        var mixBuf  = new float[framesPerBatch * sourceChannels];
+        var tempBuf = new float[framesPerBatch * sourceChannels];
+        var timelineSamples = 0L;
 
-        if (delay.TotalMilliseconds > 1)
-        {
-            var sleepMs = Math.Max(1, (int)Math.Floor(delay.TotalMilliseconds) - 1);
-            Thread.Sleep(sleepMs);
-        }
+        // Per-source buffers used only when routing rules are active.
+        var sourceBufs   = new Dictionary<Guid, float[]>();
+        var sourceFrames = new Dictionary<Guid, int>();
+
+        // Per-output mix buffers for the routing path.
+        // Keyed by output Id; sized to framesPerBatch * outputChannelCount (derived from rules).
+        var outputBufs = new Dictionary<Guid, float[]>();
+
+        // Per-source resamplers, created lazily when a source's rate != sampleRate (§10.9 / P2-6).
+        // Only populated when config.ResamplerFactory != null.
+        var resamplers = new Dictionary<Guid, IAudioResampler>();
+        // Resampler output buffer, sized on demand.
+        float[]? resampledBuf = null;
+
+        // Bootstrap snapshot before the loop.
+        (IAudioSource Source, double StartOffset)[] srcs = GetAudioSourcesSnapshot().ToArray();
+        _audioSourcesNeedsUpdate = false;
+
+        int sampleRate;
+        if (config.OutputSampleRate > 0)
+            sampleRate = config.OutputSampleRate;
+        else if (srcs.Length > 0 && srcs[0].Source.StreamInfo.SampleRate.GetValueOrDefault(0) > 0)
+            sampleRate = srcs[0].Source.StreamInfo.SampleRate!.Value;
         else
-        {
-            Thread.SpinWait(200);
-        }
-    }
-
-    private static void WaitTask(Task? task)
-    {
-        if (task is null)
-        {
-            return;
-        }
+            sampleRate = 48_000;
 
         try
         {
-            task.Wait(TimeSpan.FromSeconds(2));
-        }
-        catch
+
+        while (!ct.IsCancellationRequested)
         {
-            // Best-effort background task shutdown.
-        }
-    }
+            _pauseEvent.Wait(ct);
+            if (ct.IsCancellationRequested) break;
 
-    // ─── Simplified drift correction ───────────────────────────────────
-
-    private sealed class SimpleDriftCorrection
-    {
-        private readonly Lock _gate = new();
-
-        // Internal-only tuning parameters — consumers don't touch these
-        private const double DeadbandMs = 10;
-        private const double Gain = 0.15;
-        private const double MaxStepMs = 5;
-        private const double MaxOffsetMs = 200;
-        private const double HardResyncMs = 300;
-
-        private double _offsetSeconds;
-        private long _hardResyncCount;
-
-        public double CurrentOffsetSeconds
-        {
-            get
+            // §3.9 — drain seek channel (no thread restart needed).
+            if (_seekChannel.Reader.TryRead(out var seekPos))
             {
-                lock (_gate)
-                {
-                    return _offsetSeconds;
-                }
+                timelineSamples = (long)(seekPos * sampleRate);
+                ClearVideoQueue();
+                _audioTimelineSeconds = seekPos;
+                _clock.Seek(seekPos);
+                foreach (var (src, _) in srcs)                      _ = src.Seek(seekPos);
+                foreach (var vSrc in GetVideoSourcesSnapshot())      _ = vSrc.Seek(seekPos);
+                // Reset resampler fractional state after a seek.
+                foreach (var r in resamplers.Values) r.Reset();
+                continue;
             }
-        }
 
-        public double CurrentOffsetMs => CurrentOffsetSeconds * 1000.0;
-
-        public long HardResyncCount
-        {
-            get
+            // Refresh cached snapshot only when the source list changed.
+            if (_audioSourcesNeedsUpdate)
             {
-                lock (_gate)
-                {
-                    return _hardResyncCount;
-                }
+                srcs = GetAudioSourcesSnapshot().ToArray();
+                _audioSourcesNeedsUpdate = false;
             }
-        }
 
-        public void Reset()
-        {
+            var timelineSeconds = (double)timelineSamples / sampleRate;
+
+            // ── choose path based on routing rules ────────────────────────────
+            AudioRoutingRule[]? rules = null;
             lock (_gate)
             {
-                _offsetSeconds = 0;
-                _hardResyncCount = 0;
-            }
-        }
-
-        public double Update(double driftMs)
-        {
-            if (double.IsNaN(driftMs) || double.IsInfinity(driftMs))
-            {
-                return 0;
+                if (_audioRoutingRules.Count > 0)
+                    rules = [.. _audioRoutingRules];
             }
 
-            lock (_gate)
+            if (rules is null)
             {
-                var absDrift = Math.Abs(driftMs);
+                // ── FAST PATH: no routing rules — mix all sources to all outputs ──
+                Array.Clear(mixBuf, 0, mixBuf.Length);
+                var framesProduced = 0;
+                var anyRead = false;
 
-                if (absDrift <= DeadbandMs)
+                foreach (var (src, offset) in srcs)
                 {
-                    // Decay offset towards zero
-                    var offsetMs = _offsetSeconds * 1000.0;
-                    if (Math.Abs(offsetMs) <= 0.05)
+                    if (src.State != AudioSourceState.Running) continue;
+                    if (timelineSeconds < offset) continue;
+
+                    Array.Clear(tempBuf, 0, tempBuf.Length);
+                    if (src.ReadSamples(tempBuf, framesPerBatch, out var fr) == MediaResult.Success && fr > 0)
                     {
-                        _offsetSeconds = 0;
+                        // ── Optional resampling (§10.9 / P2-6) ───────────────────────
+                        var srcRate = src.StreamInfo.SampleRate.GetValueOrDefault(0);
+                        if (config.ResamplerFactory != null && srcRate > 0 && srcRate != sampleRate)
+                        {
+                            // Get or create a resampler for this source.
+                            if (!resamplers.TryGetValue(src.Id, out var resampler))
+                                resamplers[src.Id] = resampler = config.ResamplerFactory(srcRate, sampleRate);
+
+                            // Ensure the output buffer is large enough.
+                            var needed = resampler.EstimateOutputFrameCount(fr) * sourceChannels;
+                            if (resampledBuf is null || resampledBuf.Length < needed)
+                                resampledBuf = new float[needed];
+
+                            var outFrames = resampler.Resample(
+                                new ReadOnlySpan<float>(tempBuf, 0, fr * sourceChannels),
+                                fr, new Span<float>(resampledBuf, 0, needed));
+
+                            if (outFrames > 0)
+                            {
+                                anyRead = true;
+                                if (outFrames > framesProduced) framesProduced = outFrames;
+                                AudioMixUtils.MixInto(mixBuf, resampledBuf, outFrames * sourceChannels, src.Volume);
+                            }
+                        }
+                        else
+                        {
+                            anyRead = true;
+                            if (fr > framesProduced) framesProduced = fr;
+                            AudioMixUtils.MixInto(mixBuf, tempBuf, fr * sourceChannels, src.Volume);
+                        }
+                    }
+                    else Interlocked.Increment(ref _audioReadFailures);
+                }
+
+                if (!anyRead)
+                {
+                    Interlocked.Increment(ref _audioEmptyReads);
+                    Thread.Sleep(1);
+                    continue;
+                }
+
+                var active = framesProduced * sourceChannels;
+                AudioMixUtils.Clamp(mixBuf, active);
+                AudioMixUtils.ApplyVolume(mixBuf, active, MasterVolume);
+
+                var frame = BuildAudioFrame(mixBuf, framesProduced, sourceChannels, sampleRate, timelineSeconds);
+                foreach (var output in GetAudioOutputsSnapshot())
+                {
+                    if (output.PushFrame(in frame, routeMap, sourceChannels) != MediaResult.Success)
+                        Interlocked.Increment(ref _audioPushFailures);
+                    else
+                        Interlocked.Increment(ref _audioPushedFrames);
+                }
+
+                timelineSamples += framesProduced;
+                UpdateAudioClock(timelineSamples, sampleRate);
+            }
+            else
+            {
+                // ── ROUTING PATH: read each source once, then mix per-output ──
+                // This allows per-source-to-output filtering with per-rule gain.
+                sourceFrames.Clear();
+                var framesProduced = 0;
+                var anyRead = false;
+
+                foreach (var (src, offset) in srcs)
+                {
+                    if (src.State != AudioSourceState.Running) continue;
+                    if (timelineSeconds < offset) continue;
+
+                    var size = framesPerBatch * sourceChannels;
+                    if (!sourceBufs.TryGetValue(src.Id, out var sbuf) || sbuf.Length < size)
+                        sourceBufs[src.Id] = sbuf = new float[size];
+
+                    Array.Clear(sbuf, 0, size);
+                    if (src.ReadSamples(sbuf, framesPerBatch, out var fr) == MediaResult.Success && fr > 0)
+                    {
+                        anyRead = true;
+                        if (fr > framesProduced) framesProduced = fr;
+                        sourceFrames[src.Id] = fr;
                     }
                     else
                     {
-                        _offsetSeconds = (offsetMs * 0.995) / 1000.0;
+                        Interlocked.Increment(ref _audioReadFailures);
+                        sourceFrames[src.Id] = 0;
+                    }
+                }
+
+                if (!anyRead)
+                {
+                    Interlocked.Increment(ref _audioEmptyReads);
+                    Thread.Sleep(1);
+                    continue;
+                }
+
+                var outputs = GetAudioOutputsSnapshot();
+
+                foreach (var output in outputs)
+                {
+                    // ── Determine output channel count from rules targeting this output ──
+                    // The output channel count equals max(rule.OutputChannel) + 1 across all
+                    // rules that target this output.  Zero means no rules — skip.
+                    var outChanCount = 0;
+                    foreach (var r in rules)
+                        if (r.OutputId == output.Id && r.OutputChannel + 1 > outChanCount)
+                            outChanCount = r.OutputChannel + 1;
+                    if (outChanCount == 0) continue;
+
+                    // ── Get / resize the per-output mix buffer ──
+                    var outSize = framesProduced * outChanCount;
+                    if (!outputBufs.TryGetValue(output.Id, out var outBuf) || outBuf.Length < outSize)
+                        outputBufs[output.Id] = outBuf = new float[outSize];
+                    Array.Clear(outBuf, 0, outSize);
+
+                    // ── Mix each source's channels into the output buffer via routing rules ──
+                    foreach (var (src, _) in srcs)
+                    {
+                        if (!sourceBufs.TryGetValue(src.Id, out var sbuf)) continue;
+                        if (!sourceFrames.TryGetValue(src.Id, out var fr) || fr == 0) continue;
+
+                        var srcVol = src.Volume;
+
+                        // Apply ALL rules for this source→output pair.
+                        // Multiple rules are normal: e.g. (ch0→ch0, gain=1) + (ch1→ch1, gain=1).
+                        foreach (var r in rules)
+                        {
+                            if (r.SourceId != src.Id || r.OutputId != output.Id) continue;
+
+                            // Guard against out-of-range channel indices.
+                            if ((uint)r.SourceChannel >= (uint)sourceChannels) continue;
+                            if ((uint)r.OutputChannel  >= (uint)outChanCount)   continue;
+
+                            AudioMixUtils.MixChannel(
+                                outBuf, r.OutputChannel, outChanCount,
+                                sbuf,   r.SourceChannel, sourceChannels,
+                                fr, srcVol * r.Gain);
+                        }
                     }
 
-                    return 0;
+                    // ── Post-process and push ──
+                    AudioMixUtils.Clamp(outBuf, outSize);
+                    AudioMixUtils.ApplyVolume(outBuf, outSize, MasterVolume);
+
+                    // Build a frame whose channel count matches the output layout derived from rules.
+                    // Use the identity PushFrame overload — outBuf is already routed correctly.
+                    var outFrame = BuildAudioFrame(outBuf, framesProduced, outChanCount, sampleRate, timelineSeconds);
+                    if (output.PushFrame(in outFrame) != MediaResult.Success)
+                        Interlocked.Increment(ref _audioPushFailures);
+                    else
+                        Interlocked.Increment(ref _audioPushedFrames);
                 }
 
-                double stepMs;
-                if (absDrift >= HardResyncMs)
-                {
-                    // Hard resync: large step
-                    stepMs = Math.Clamp(driftMs * 0.5, -MaxStepMs * 8, MaxStepMs * 8);
-                    _hardResyncCount++;
-                }
-                else
-                {
-                    // Proportional correction
-                    stepMs = Math.Clamp(driftMs * Gain, -MaxStepMs, MaxStepMs);
-                }
+                timelineSamples += framesProduced;
+                UpdateAudioClock(timelineSamples, sampleRate);
+            }
+        }
+        }
+        finally
+        {
+            // Dispose any per-source resamplers created during this playback session.
+            foreach (var r in resamplers.Values) r.Dispose();
+            resamplers.Clear();
+        }
+    }
 
-                var newOffsetMs = (_offsetSeconds * 1000.0) + stepMs;
-                newOffsetMs = Math.Clamp(newOffsetMs, -MaxOffsetMs, MaxOffsetMs);
-                _offsetSeconds = newOffsetMs / 1000.0;
-                return stepMs;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static AudioFrame BuildAudioFrame(
+        float[] buf, int frames, int channels, int sampleRate, double timelineSeconds) =>
+        new(Samples: new ReadOnlyMemory<float>(buf, 0, frames * channels),
+            FrameCount: frames,
+            SourceChannelCount: channels,
+            Layout: AudioFrameLayout.Interleaved,
+            SampleRate: sampleRate,
+            PresentationTime: TimeSpan.FromSeconds(timelineSeconds));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void UpdateAudioClock(long timelineSamples, int sampleRate)
+    {
+        if (_syncMode != AVSyncMode.AudioLed) return;
+        var secs = (double)timelineSamples / sampleRate;
+        _audioTimelineSeconds = secs;
+        _clock.Seek(secs);
+    }
+
+    // ── private: video decode ─────────────────────────────────────────────────
+
+    private void VideoDecodeLoop(CancellationToken ct)
+    {
+        var capacity = _playbackConfig!.VideoDecodeQueueCapacity;
+        while (!ct.IsCancellationRequested)
+        {
+            _pauseEvent.Wait(ct);
+            if (ct.IsCancellationRequested) break;
+
+            int depth;
+            lock (_videoQueueLock) depth = _videoDecodeQueue.Count;
+            if (depth >= capacity) { Thread.Sleep(1); continue; }
+
+            var src = GetActiveVideoSource();
+            if (src is null) { Thread.Sleep(2); continue; }
+
+            if (src.ReadFrame(out var frame) != MediaResult.Success) { Thread.Sleep(2); continue; }
+
+            lock (_videoQueueLock)
+            {
+                _videoDecodeQueue.Enqueue(frame);
+                _videoQueueDepthVal = _videoDecodeQueue.Count;
             }
         }
     }
+
+    // ── private: video presentation ───────────────────────────────────────────
+
+    private void VideoPresentLoop(CancellationToken ct)
+    {
+        var config = _playbackConfig!;
+        var policyOptions = config.PresenterSyncOptions ?? new VideoSyncOptions(
+            StaleFrameDropThreshold: config.OutputStaleFrameThreshold,
+            FrameEarlyTolerance: TimeSpan.FromMilliseconds(2),
+            MinDelay: TimeSpan.FromMilliseconds(1),
+            MaxWait: TimeSpan.FromMilliseconds(50));
+        var syncMode   = _syncMode;
+        var useWorkers = config.PresentationHostPolicy == VideoDispatchPolicy.BackgroundWorker;
+
+        while (!ct.IsCancellationRequested)
+        {
+            _pauseEvent.Wait(ct);
+            if (ct.IsCancellationRequested) break;
+
+            var clockSec = syncMode == AVSyncMode.AudioLed
+                ? _audioTimelineSeconds
+                : _clock.CurrentSeconds;
+
+            VideoPresenterSyncDecision decision;
+            lock (_videoQueueLock)
+            {
+                decision = VideoSyncPolicy.SelectNextFrame(
+                    _videoDecodeQueue, syncMode, clockSec, policyOptions);
+                _videoQueueDepthVal = _videoDecodeQueue.Count;
+            }
+
+            Interlocked.Add(ref _videoLateDrops,     decision.LateDrops);
+            Interlocked.Add(ref _videoCoalescedDrops, decision.CoalescedDrops);
+
+            if (decision.Frame is not null)
+            {
+                using var frame = decision.Frame;
+                PushFrameToOutputs(frame, frame.PresentationTime, config, useWorkers);
+            }
+            else
+            {
+                Interlocked.Increment(ref _videoNoFrame);
+            }
+
+            if (decision.Delay > TimeSpan.Zero)
+                Thread.Sleep(Math.Clamp((int)Math.Ceiling(decision.Delay.TotalMilliseconds), 1, 50));
+        }
+    }
+
+    private void PushFrameToOutputs(
+        VideoFrame frame, TimeSpan pts, AVMixerConfig config, bool useWorkers)
+    {
+        IReadOnlyList<IVideoOutput> outputs;
+        Dictionary<Guid, OutputWorker> workers;
+        lock (_gate) { outputs = [.. _videoOutputs]; workers = _videoWorkers; }
+
+        var rules    = VideoRoutingRules;
+        var hasRules = rules.Count > 0;
+
+        foreach (var output in outputs)
+        {
+            if (hasRules && !rules.Any(r => r.OutputId == output.Id)) continue;
+
+            if (useWorkers && workers.TryGetValue(output.Id, out var worker))
+            {
+                worker.Enqueue(frame, pts);
+                Interlocked.Increment(ref _videoPushed);
+            }
+            else
+            {
+                if (output.PushFrame(frame, pts) != MediaResult.Success)
+                    Interlocked.Increment(ref _videoPushFailures);
+                else
+                    Interlocked.Increment(ref _videoPushed);
+            }
+        }
+    }
+
+    // ── private: helpers ──────────────────────────────────────────────────────
+
+    private IVideoSource? GetActiveVideoSource()
+    {
+        lock (_gate)
+        {
+            var id = _activeVideoSourceId;
+            return id is null ? null : _videoSources.FirstOrDefault(s => s.Id == id);
+        }
+    }
+
+    private List<(IAudioSource Source, double StartOffset)> GetAudioSourcesSnapshot()
+    { lock (_gate) { return [.. _audioSources]; } }
+
+    private List<IVideoSource> GetVideoSourcesSnapshot()
+    { lock (_gate) { return [.. _videoSources]; } }
+
+    private List<IAudioSink> GetAudioOutputsSnapshot()
+    { lock (_gate) { return [.. _audioOutputs]; } }
+
+    private void ClearVideoQueue()
+    {
+        lock (_videoQueueLock)
+        {
+            while (_videoDecodeQueue.TryDequeue(out var f)) f.Dispose();
+            _videoQueueDepthVal = 0;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void RaiseStateChanged(AVMixerState prev, AVMixerState next) =>
+        StateChanged?.Invoke(this, new AVMixerStateChangedEventArgs(prev, next));
 }

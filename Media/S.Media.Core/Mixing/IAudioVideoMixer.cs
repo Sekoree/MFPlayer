@@ -4,27 +4,30 @@ using S.Media.Core.Video;
 
 namespace S.Media.Core.Mixing;
 
-public interface IAudioVideoMixer
+public interface IAVMixer : IMixerRouting, IDisposable
 {
-    AudioVideoMixerState State { get; }
+    AVMixerState State { get; }
 
     IMediaClock Clock { get; }
 
     ClockType ClockType { get; }
 
-    AudioVideoSyncMode SyncMode { get; }
+    AVSyncMode SyncMode { get; }
 
     double PositionSeconds { get; }
 
     bool IsRunning { get; }
 
-    int Start();
+    /// <summary>Master output volume applied post-mix (0.0 = silent, 1.0 = unity). Default: 1.0.</summary>
+    float MasterVolume { get; set; }
 
-    int Pause();
+    int StartPlayback(AVMixerConfig config);
 
-    int Resume();
+    int StopPlayback();
 
-    int Stop();
+    int PausePlayback();
+
+    int ResumePlayback();
 
     int Seek(double positionSeconds);
 
@@ -34,55 +37,43 @@ public interface IAudioVideoMixer
 
     int SetAudioSourceStartOffset(IAudioSource source, double startOffsetSeconds);
 
-    int RemoveAudioSource(IAudioSource source);
+    int RemoveAudioSource(IAudioSource source, bool stopOnDetach = false, bool disposeOnDetach = false);
 
     int AddVideoSource(IVideoSource source);
 
-    int RemoveVideoSource(IVideoSource source);
+    int RemoveVideoSource(IVideoSource source, bool stopOnDetach = false, bool disposeOnDetach = false);
 
     IReadOnlyList<IAudioSource> AudioSources { get; }
 
     IReadOnlyList<IVideoSource> VideoSources { get; }
 
-    MixerSourceDetachOptions AudioSourceDetachOptions { get; }
-
-    MixerSourceDetachOptions VideoSourceDetachOptions { get; }
-
-    int ConfigureAudioSourceDetachOptions(MixerSourceDetachOptions options);
-
-    int ConfigureVideoSourceDetachOptions(MixerSourceDetachOptions options);
-
     int SetClockType(ClockType clockType);
 
-    int SetSyncMode(AudioVideoSyncMode syncMode);
+    int SetSyncMode(AVSyncMode syncMode);
 
     int SetActiveVideoSource(IVideoSource source);
 
-    int AddAudioOutput(IAudioOutput output);
+    int AddAudioOutput(IAudioSink output);
 
-    int RemoveAudioOutput(IAudioOutput output);
+    int RemoveAudioOutput(IAudioSink output);
 
     int AddVideoOutput(IVideoOutput output);
 
     int RemoveVideoOutput(IVideoOutput output);
 
-    IReadOnlyList<IAudioOutput> AudioOutputs { get; }
+    IReadOnlyList<IAudioSink> AudioOutputs { get; }
 
     IReadOnlyList<IVideoOutput> VideoOutputs { get; }
 
-    int StartPlayback(AudioVideoMixerConfig config);
+    AVMixerDiagnostics? GetDebugInfo();
 
-    int StopPlayback();
+    IReadOnlyList<VideoOutputDiagnostics> GetVideoOutputDiagnostics();
 
-    TimeSpan TickVideoPresentation();
+    event EventHandler<AVMixerStateChangedEventArgs>? StateChanged;
 
-    AudioVideoMixerDebugInfo? GetDebugInfo();
+    event EventHandler<MediaSourceErrorEventArgs>? AudioSourceError;
 
-    event EventHandler<AudioVideoMixerStateChangedEventArgs>? StateChanged;
-
-    event EventHandler<AudioSourceErrorEventArgs>? AudioSourceError;
-
-    event EventHandler<VideoSourceErrorEventArgs>? VideoSourceError;
+    event EventHandler<MediaSourceErrorEventArgs>? VideoSourceError;
 
     event EventHandler<VideoActiveSourceChangedEventArgs>? ActiveVideoSourceChanged;
 }

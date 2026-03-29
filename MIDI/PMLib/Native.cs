@@ -9,7 +9,7 @@ namespace PMLib;
 /// (i.e. <c>libportmidi.so</c> on Linux, <c>portmidi.dll</c> on Windows,
 /// <c>libportmidi.dylib</c> on macOS).
 /// </summary>
-public static partial class Native
+internal static partial class Native
 {
     private const string LibraryName = "portmidi";
 
@@ -20,11 +20,11 @@ public static partial class Native
     /// Must be called before any other <c>Pm_*</c> function.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Initialize();
+    internal static partial PmError Pm_Initialize();
 
     /// <summary>Terminates the PortMidi library. Call when you are finished with PortMidi.</summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Terminate();
+    internal static partial PmError Pm_Terminate();
 
     // ── Error handling ──────────────────────────────────────────────────────────
 
@@ -33,14 +33,14 @@ public static partial class Native
     /// Retrieve the error text with <see cref="Pm_GetHostErrorText"/> or <see cref="GetHostErrorText"/>.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial int Pm_HasHostError(nint stream);
+    internal static partial int Pm_HasHostError(nint stream);
 
     /// <summary>
     /// Returns a pointer to a static, library-owned string describing <paramref name="errnum"/>.
     /// For a managed <see cref="string"/> use <see cref="GetErrorText"/> instead.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial nint Pm_GetErrorText(PmError errnum);
+    internal static partial nint Pm_GetErrorText(PmError errnum);
 
     /// <summary>
     /// Writes a human-readable host-error description into <paramref name="msg"/> and clears
@@ -48,21 +48,21 @@ public static partial class Native
     /// For a managed <see cref="string"/> use <see cref="GetHostErrorText"/> instead.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial void Pm_GetHostErrorText(Span<byte> msg, uint len);
+    internal static partial void Pm_GetHostErrorText(Span<byte> msg, uint len);
 
     // ── Device enumeration ──────────────────────────────────────────────────────
 
     /// <summary>Returns the total number of MIDI devices. Valid device IDs range from 0 to Count − 1.</summary>
     [LibraryImport(LibraryName)]
-    public static partial int Pm_CountDevices();
+    internal static partial int Pm_CountDevices();
 
     /// <summary>Returns the default input device ID, or <c>-1</c> (<c>pmNoDevice</c>) if none exists.</summary>
     [LibraryImport(LibraryName)]
-    public static partial int Pm_GetDefaultInputDeviceID();
+    internal static partial int Pm_GetDefaultInputDeviceID();
 
     /// <summary>Returns the default output device ID, or <c>-1</c> (<c>pmNoDevice</c>) if none exists.</summary>
     [LibraryImport(LibraryName)]
-    public static partial int Pm_GetDefaultOutputDeviceID();
+    internal static partial int Pm_GetDefaultOutputDeviceID();
 
     /// <summary>
     /// Finds the first device whose name contains <paramref name="pattern"/> and whose direction
@@ -71,7 +71,7 @@ public static partial class Native
     /// </summary>
     /// <returns>The matching device ID, or <c>-1</c> (<c>pmNoDevice</c>) if not found.</returns>
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
-    public static partial int Pm_FindDevice(string pattern, int isInput);
+    internal static partial int Pm_FindDevice(string pattern, int isInput);
 
     /// <summary>
     /// Returns a native pointer to a <see cref="PmDeviceInfo"/> structure for the given device,
@@ -80,7 +80,7 @@ public static partial class Native
     /// Use <see cref="GetDeviceInfo"/> for a safe managed copy.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial nint Pm_GetDeviceInfo(int id);
+    internal static partial nint Pm_GetDeviceInfo(int id);
 
     // ── Opening and closing streams ─────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ public static partial class Native
     /// </param>
     /// <param name="timeInfo">User-data pointer passed to <paramref name="timeProc"/>.</param>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_OpenInput(
+    internal static partial PmError Pm_OpenInput(
         out nint stream,
         int inputDevice,
         nint inputSysDepInfo,
@@ -130,7 +130,7 @@ public static partial class Native
     /// <c>0</c> means timestamps are ignored and all output is delivered immediately.
     /// </param>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_OpenOutput(
+    internal static partial PmError Pm_OpenOutput(
         out nint stream,
         int outputDevice,
         nint outputSysDepInfo,
@@ -154,7 +154,7 @@ public static partial class Native
     /// Pointer to a <c>PmSysDepInfo</c> struct, or <see cref="nint.Zero"/>.
     /// </param>
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
-    public static partial PmError Pm_CreateVirtualInput(string name, string? interf, nint sysDepInfo);
+    internal static partial PmError Pm_CreateVirtualInput(string name, string? interf, nint sysDepInfo);
 
     /// <summary>
     /// Creates a named virtual output device that appears to other applications as an input device.
@@ -169,14 +169,14 @@ public static partial class Native
     /// Pointer to a <c>PmSysDepInfo</c> struct, or <see cref="nint.Zero"/>.
     /// </param>
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
-    public static partial PmError Pm_CreateVirtualOutput(string name, string? interf, nint sysDepInfo);
+    internal static partial PmError Pm_CreateVirtualOutput(string name, string? interf, nint sysDepInfo);
 
     /// <summary>
     /// Removes a virtual device created by <see cref="Pm_CreateVirtualInput"/> or
     /// <see cref="Pm_CreateVirtualOutput"/>. The device must not be open.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_DeleteVirtualDevice(int device);
+    internal static partial PmError Pm_DeleteVirtualDevice(int device);
 
     // ── Stream configuration ────────────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ public static partial class Native
     /// By default, only <see cref="PmFilter.Active"/> is filtered.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_SetFilter(nint stream, PmFilter filters);
+    internal static partial PmError Pm_SetFilter(nint stream, PmFilter filters);
 
     /// <summary>
     /// Sets a 16-bit channel mask on an input stream.
@@ -195,18 +195,18 @@ public static partial class Native
     /// All channels are enabled by default.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_SetChannelMask(nint stream, int mask);
+    internal static partial PmError Pm_SetChannelMask(nint stream, int mask);
 
     /// <summary>
     /// Immediately terminates outgoing messages on an output stream.
     /// Close the stream immediately after calling this.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Abort(nint stream);
+    internal static partial PmError Pm_Abort(nint stream);
 
     /// <summary>Closes a MIDI stream and flushes any pending output buffers where possible.</summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Close(nint stream);
+    internal static partial PmError Pm_Close(nint stream);
 
     /// <summary>
     /// Re-synchronises the stream to the time procedure.
@@ -214,7 +214,7 @@ public static partial class Native
     /// the time source starts advancing.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Synchronize(nint stream);
+    internal static partial PmError Pm_Synchronize(nint stream);
 
     // ── Reading ─────────────────────────────────────────────────────────────────
 
@@ -227,7 +227,7 @@ public static partial class Native
     /// (e.g. <see cref="PmError.BufferOverflow"/>).
     /// </returns>
     [LibraryImport(LibraryName)]
-    public static partial int Pm_Read(nint stream, Span<PmEvent> buffer, int length);
+    internal static partial int Pm_Read(nint stream, Span<PmEvent> buffer, int length);
 
     /// <summary>
     /// Tests whether input data is available on <paramref name="stream"/>.
@@ -237,7 +237,7 @@ public static partial class Native
     /// <see cref="PmError.NoData"/> (0) if not, or a negative error code.
     /// </returns>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Poll(nint stream);
+    internal static partial PmError Pm_Poll(nint stream);
 
     // ── Writing ─────────────────────────────────────────────────────────────────
 
@@ -246,7 +246,7 @@ public static partial class Native
     /// Events must be in non-decreasing timestamp order.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Write(nint stream, ReadOnlySpan<PmEvent> buffer, int length);
+    internal static partial PmError Pm_Write(nint stream, ReadOnlySpan<PmEvent> buffer, int length);
 
     /// <summary>
     /// Writes a single timestamped short (non-SysEx) MIDI message.
@@ -258,14 +258,14 @@ public static partial class Native
     /// The packed MIDI message. Use <see cref="PmEvent.CreateMessage"/> to build one.
     /// </param>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_WriteShort(nint stream, int when, uint msg);
+    internal static partial PmError Pm_WriteShort(nint stream, int when, uint msg);
 
     /// <summary>
     /// Writes a timestamped SysEx message stored as a contiguous byte array.
     /// The message must be terminated with EOX (<c>0xF7</c>).
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_WriteSysEx(nint stream, int when, ReadOnlySpan<byte> msg);
+    internal static partial PmError Pm_WriteSysEx(nint stream, int when, ReadOnlySpan<byte> msg);
 
     // ── Lock-free queue — pmutil ─────────────────────────────────────────────────
 
@@ -281,11 +281,11 @@ public static partial class Native
     /// and 32-bit on Windows. On Windows, use values that fit in a 32-bit integer.
     /// </remarks>
     [LibraryImport(LibraryName)]
-    public static partial nint Pm_QueueCreate(nint numMsgs, int bytesPerMsg);
+    internal static partial nint Pm_QueueCreate(nint numMsgs, int bytesPerMsg);
 
     /// <summary>Destroys a queue and frees its memory.</summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_QueueDestroy(nint queue);
+    internal static partial PmError Pm_QueueDestroy(nint queue);
 
     /// <summary>
     /// Removes and copies the message at the head of <paramref name="queue"/> into the
@@ -296,7 +296,7 @@ public static partial class Native
     /// or <see cref="PmError.BufferOverflow"/> if a queue overflow was signalled.
     /// </returns>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Dequeue(nint queue, nint msg);
+    internal static partial PmError Pm_Dequeue(nint queue, nint msg);
 
     /// <summary>
     /// Copies the message at <paramref name="msg"/> and appends it to <paramref name="queue"/>.
@@ -305,30 +305,30 @@ public static partial class Native
     /// <see cref="PmError.NoError"/> on success, or <see cref="PmError.BufferOverflow"/> if full.
     /// </returns>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_Enqueue(nint queue, nint msg);
+    internal static partial PmError Pm_Enqueue(nint queue, nint msg);
 
     /// <summary>
     /// Returns non-zero if <paramref name="queue"/> is full,
     /// or <see cref="PmError.BadPtr"/> if <paramref name="queue"/> is <see cref="nint.Zero"/>.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial int Pm_QueueFull(nint queue);
+    internal static partial int Pm_QueueFull(nint queue);
 
     /// <summary>Returns non-zero if <paramref name="queue"/> is empty (or null).</summary>
     [LibraryImport(LibraryName)]
-    public static partial int Pm_QueueEmpty(nint queue);
+    internal static partial int Pm_QueueEmpty(nint queue);
 
     /// <summary>
     /// Returns a pointer to the message at the head of <paramref name="queue"/> without
     /// removing it, or <see cref="nint.Zero"/> if the queue is empty.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial nint Pm_QueuePeek(nint queue);
+    internal static partial nint Pm_QueuePeek(nint queue);
 
     /// <summary>
     /// Signals an overflow condition to the reader so that the next
     /// <see cref="Pm_Dequeue"/> call returns <see cref="PmError.BufferOverflow"/>.
     /// </summary>
     [LibraryImport(LibraryName)]
-    public static partial PmError Pm_SetOverflow(nint queue);
+    internal static partial PmError Pm_SetOverflow(nint queue);
 }

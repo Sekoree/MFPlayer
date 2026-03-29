@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Buffers;
 using NDILib;
 using S.Media.Core.Errors;
+using S.Media.Core.Media;
 using S.Media.Core.Video;
 using S.Media.NDI.Config;
 using S.Media.NDI.Diagnostics;
@@ -50,7 +51,7 @@ public sealed class NDIVideoSource : IVideoSource
     internal NDIVideoSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, NDICaptureCoordinator? captureCoordinator)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
-        SourceId = Guid.NewGuid();
+        Id = Guid.NewGuid();
         SourceOptions = sourceOptions;
         _captureCoordinator = captureCoordinator ?? (mediaItem.Receiver is null ? null : new NDICaptureCoordinator(mediaItem.Receiver));
         _videoFallbackMode = sourceOptions.VideoFallbackMode;
@@ -58,11 +59,27 @@ public sealed class NDIVideoSource : IVideoSource
         _videoJitterBufferFrames = Math.Max(1, sourceOptions.VideoJitterBufferFrames);
     }
 
-    public Guid SourceId { get; }
+    public Guid Id { get; }
 
     public NDISourceOptions SourceOptions { get; }
 
     public VideoSourceState State { get; private set; }
+
+    /// <inheritdoc/>
+    public VideoStreamInfo StreamInfo
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return new VideoStreamInfo
+                {
+                    Width  = _lastFrameWidth  > 0 ? _lastFrameWidth  : null,
+                    Height = _lastFrameHeight > 0 ? _lastFrameHeight : null,
+                };
+            }
+        }
+    }
 
     public double PositionSeconds { get; private set; }
 
@@ -138,7 +155,8 @@ public sealed class NDIVideoSource : IVideoSource
                 _framesDropped++;
             }
 
-            return (int)MediaErrorCode.NDIVideoReadRejected;
+            // §5.4: source is stopped — not a concurrent-read violation.
+            return (int)MediaErrorCode.MediaSourceNotRunning;
         }
 
         if (Interlocked.CompareExchange(ref _readInProgress, 1, 0) != 0)
@@ -148,6 +166,7 @@ public sealed class NDIVideoSource : IVideoSource
                 _framesDropped++;
             }
 
+            // Genuine concurrent-read attempt.
             return (int)MediaErrorCode.NDIVideoReadRejected;
         }
 
@@ -357,12 +376,6 @@ public sealed class NDIVideoSource : IVideoSource
         return (int)MediaErrorCode.MediaSourceNonSeekable;
     }
 
-    public int SeekToFrame(long frameIndex, out long currentFrameIndex, out long? totalFrameCount)
-    {
-        currentFrameIndex = CurrentFrameIndex;
-        totalFrameCount = TotalFrameCount;
-        return (int)MediaErrorCode.MediaSourceNonSeekable;
-    }
 
     public void Dispose()
     {

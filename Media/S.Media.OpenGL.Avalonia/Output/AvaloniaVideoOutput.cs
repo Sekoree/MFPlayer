@@ -30,6 +30,8 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
 
     public Guid Id => _output.Id;
 
+    public VideoOutputState State => _output.State;
+
     public bool IsClone { get; }
 
     public Guid? CloneParentOutputId => _output.CloneParentOutputId;

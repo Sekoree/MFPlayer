@@ -6,3 +6,4 @@ public enum DebugValueKind
     TimeSpan = 1,
     Array = 2,
 }
+

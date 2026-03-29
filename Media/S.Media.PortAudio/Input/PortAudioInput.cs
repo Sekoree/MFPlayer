@@ -2,6 +2,7 @@ using PALib;
 using PALib.Types.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
+using S.Media.Core.Media;
 
 namespace S.Media.PortAudio.Input;
 
@@ -15,15 +16,27 @@ public sealed unsafe class PortAudioInput : IAudioSource
 
     public PortAudioInput()
     {
-        SourceId = Guid.NewGuid();
+        Id = Guid.NewGuid();
         Config = new AudioInputConfig();
     }
 
-    public Guid SourceId { get; }
+    public Guid Id { get; }
 
     public AudioSourceState State { get; private set; } = AudioSourceState.Stopped;
 
+    /// <inheritdoc/>
+    public float Volume { get; set; } = 1.0f;
+
+    /// <inheritdoc/>
+    public long? TotalSampleCount => null; // live capture — no known total
+
     public AudioInputConfig Config { get; private set; }
+
+    public AudioStreamInfo StreamInfo => new()
+    {
+        SampleRate = Config.SampleRate,
+        ChannelCount = Config.ChannelCount,
+    };
 
     public double PositionSeconds { get; private set; }
 

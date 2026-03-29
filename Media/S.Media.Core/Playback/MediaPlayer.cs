@@ -7,12 +7,11 @@ using S.Media.Core.Video;
 
 namespace S.Media.Core.Playback;
 
-public sealed class MediaPlayer : AudioVideoMixer, IMediaPlayer
+public sealed class MediaPlayer : AVMixer, IMediaPlayer
 {
     private readonly List<IAudioSource> _attachedAudioSources = [];
     private readonly List<IVideoSource> _attachedVideoSources = [];
     private IMediaItem? _activeMedia;
-    private readonly Lock _playerGate = new();
 
     public MediaPlayer(IMediaClock? clock = null, ClockType clockType = ClockType.Hybrid)
         : base(clock, clockType)
@@ -21,36 +20,33 @@ public sealed class MediaPlayer : AudioVideoMixer, IMediaPlayer
 
     /// <summary>
     /// Consumer-facing playback config. When set, <see cref="Play"/> will call
-    /// <see cref="IAudioVideoMixer.StartPlayback"/> with this config automatically.
+    /// <see cref="IAVMixer.StartPlayback"/> with this config automatically.
     /// </summary>
-    public AudioVideoMixerConfig? PlaybackConfig { get; set; }
+    public AVMixerConfig? PlaybackConfig { get; set; }
 
     public int Play(IMediaItem media)
     {
         ArgumentNullException.ThrowIfNull(media);
 
-        if (media is IMediaPlaybackSourceBinding binding)
+        // §4.2: A plain IMediaItem has no source binding — reject early rather than
+        // starting the pump threads with no sources attached (silent, empty playback).
+        if (media is not IMediaPlaybackSourceBinding binding)
+            return (int)MediaErrorCode.MediaInvalidArgument;
+
+        var detachCode = DetachCurrentMediaSources();
+        if (detachCode != MediaResult.Success)
+            return detachCode;
+
+        var attachCode = AttachBoundSources(binding);
+        if (attachCode != MediaResult.Success)
+            return attachCode;
+
+        lock (Gate)
         {
-            var detachCode = DetachCurrentMediaSources();
-            if (detachCode != MediaResult.Success)
-            {
-                return detachCode;
-            }
-
-            var attachCode = AttachBoundSources(binding);
-            if (attachCode != MediaResult.Success)
-            {
-                return attachCode;
-            }
-
-            lock (_playerGate)
-            {
-                _activeMedia = media;
-            }
+            _activeMedia = media;
         }
 
-        // Start playback pump threads automatically
-        var config = PlaybackConfig ?? new AudioVideoMixerConfig();
+        var config = PlaybackConfig ?? BuildDefaultConfig(binding);
         return StartPlayback(config);
     }
 
@@ -59,7 +55,7 @@ public sealed class MediaPlayer : AudioVideoMixer, IMediaPlayer
         List<IAudioSource> audioToRemove;
         List<IVideoSource> videoToRemove;
 
-        lock (_playerGate)
+        lock (Gate)
         {
             audioToRemove = [.. _attachedAudioSources];
             videoToRemove = [.. _attachedVideoSources];
@@ -90,7 +86,7 @@ public sealed class MediaPlayer : AudioVideoMixer, IMediaPlayer
             return firstError;
         }
 
-        lock (_playerGate)
+        lock (Gate)
         {
             _attachedAudioSources.Clear();
             _attachedVideoSources.Clear();
@@ -139,7 +135,7 @@ public sealed class MediaPlayer : AudioVideoMixer, IMediaPlayer
             }
         }
 
-        lock (_playerGate)
+        lock (Gate)
         {
             _attachedAudioSources.Clear();
             _attachedAudioSources.AddRange(addedAudio);
@@ -148,6 +144,13 @@ public sealed class MediaPlayer : AudioVideoMixer, IMediaPlayer
         }
 
         return MediaResult.Success;
+    }
+
+    private static AVMixerConfig BuildDefaultConfig(IMediaPlaybackSourceBinding binding)
+    {
+        var firstAudio = binding.PlaybackAudioSources.FirstOrDefault();
+        var channels = firstAudio?.StreamInfo.ChannelCount.GetValueOrDefault(2) ?? 2;
+        return AVMixerConfig.ForSourceToStereo(Math.Max(1, channels));
     }
 
     private void RollbackAdded(IEnumerable<IAudioSource> addedAudio, IEnumerable<IVideoSource> addedVideo)

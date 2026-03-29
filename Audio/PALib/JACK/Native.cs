@@ -4,12 +4,12 @@ using PALib.Types.Core;
 
 namespace PALib.JACK;
 
-public static partial class Native
+internal static partial class Native
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
     private static bool IsSupportedPlatform => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
 
-    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport(LibraryName, EntryPoint = "PaJack_SetClientName", StringMarshalling = StringMarshalling.Utf8)]
     private static partial PaError PaJack_SetClientName_Import(string name);
 
     public static PaError PaJack_SetClientName(string name)

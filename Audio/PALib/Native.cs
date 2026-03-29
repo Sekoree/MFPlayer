@@ -5,7 +5,7 @@ using PALib.Types.Core;
 
 namespace PALib;
 
-public static unsafe partial class Native
+internal static unsafe partial class Native
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
     private static readonly ILogger Logger = PALibLogging.GetLogger("PALib.Core");
@@ -14,7 +14,7 @@ public static unsafe partial class Native
     private static partial int Pa_GetVersion_Import();
     public static int Pa_GetVersion()
     {
-        PALibLogging.TraceCall(Logger, nameof(Pa_GetVersion));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_GetVersion));
         return Pa_GetVersion_Import();
     }
 
@@ -22,16 +22,28 @@ public static unsafe partial class Native
     private static partial nint Pa_GetVersionInfo_Import();
     public static PaVersionInfo? Pa_GetVersionInfo()
     {
-        PALibLogging.TraceCall(Logger, nameof(Pa_GetVersionInfo));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_GetVersionInfo));
         var ptr = Pa_GetVersionInfo_Import();
         return ptr == nint.Zero ? null : Marshal.PtrToStructure<PaVersionInfo>(ptr);
+    }
+
+    [LibraryImport(LibraryName, EntryPoint = "Pa_GetVersionText")]
+    private static partial nint Pa_GetVersionText_Import();
+
+    /// <summary>Returns a textual description of the current PortAudio build.</summary>
+    /// <remarks>Deprecated as of PortAudio 19.5.0 — prefer <see cref="Pa_GetVersionInfo"/> and read <c>VersionText</c>.</remarks>
+    [Obsolete("Deprecated since PortAudio 19.5.0. Use Pa_GetVersionInfo().VersionText instead.")]
+    public static string? Pa_GetVersionText()
+    {
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_GetVersionText));
+        return Marshal.PtrToStringUTF8(Pa_GetVersionText_Import());
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_Initialize")]
     private static partial PaError Pa_Initialize_Import();
     public static PaError Pa_Initialize()
     {
-        PALibLogging.TraceCall(Logger, nameof(Pa_Initialize));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_Initialize));
         return Pa_Initialize_Import();
     }
 
@@ -39,7 +51,7 @@ public static unsafe partial class Native
     private static partial PaError Pa_Terminate_Import();
     public static PaError Pa_Terminate()
     {
-        PALibLogging.TraceCall(Logger, nameof(Pa_Terminate));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_Terminate));
         return Pa_Terminate_Import();
     }
 
@@ -47,7 +59,7 @@ public static unsafe partial class Native
     private static partial nint Pa_GetErrorText_Import(PaError errorCode);
     public static string? Pa_GetErrorText(PaError errorCode)
     {
-        PALibLogging.TraceCall(Logger, nameof(Pa_GetErrorText), (nameof(errorCode), errorCode));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({ErrorCode})", nameof(Pa_GetErrorText), errorCode);
         return Marshal.PtrToStringUTF8(Pa_GetErrorText_Import(errorCode));
     }
 
@@ -63,7 +75,7 @@ public static unsafe partial class Native
     private static partial nint Pa_GetHostApiInfo_Import(int hostApi);
     public static PaHostApiInfo? Pa_GetHostApiInfo(int hostApi)
     {
-        PALibLogging.TraceCall(Logger, nameof(Pa_GetHostApiInfo), (nameof(hostApi), hostApi));
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({HostApi})", nameof(Pa_GetHostApiInfo), hostApi);
         var ptr = Pa_GetHostApiInfo_Import(hostApi);
         return ptr == nint.Zero ? null : Marshal.PtrToStructure<PaHostApiInfo>(ptr);
     }
@@ -102,6 +114,7 @@ public static unsafe partial class Native
     private static partial nint Pa_GetDeviceInfo_Import(int device);
     public static PaDeviceInfo? Pa_GetDeviceInfo(int device)
     {
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Device})", nameof(Pa_GetDeviceInfo), device);
         var ptr = Pa_GetDeviceInfo_Import(device);
         return ptr == nint.Zero ? null : Marshal.PtrToStructure<PaDeviceInfo>(ptr);
     }
@@ -111,29 +124,11 @@ public static unsafe partial class Native
 
     public static PaError Pa_IsFormatSupported(PaStreamParameters? inputParameters, PaStreamParameters? outputParameters, double sampleRate)
     {
-        var inPtr = Marshal.AllocHGlobal(Marshal.SizeOf<PaStreamParameters>());
-        var outPtr = Marshal.AllocHGlobal(Marshal.SizeOf<PaStreamParameters>());
-        try
-        {
-            nint pIn = nint.Zero;
-            nint pOut = nint.Zero;
-            if (inputParameters.HasValue)
-            {
-                Marshal.StructureToPtr(inputParameters.Value, inPtr, false);
-                pIn = inPtr;
-            }
-            if (outputParameters.HasValue)
-            {
-                Marshal.StructureToPtr(outputParameters.Value, outPtr, false);
-                pOut = outPtr;
-            }
-            return Pa_IsFormatSupported_Import(pIn, pOut, sampleRate);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(inPtr);
-            Marshal.FreeHGlobal(outPtr);
-        }
+        PaStreamParameters inParam  = inputParameters  ?? default;
+        PaStreamParameters outParam = outputParameters ?? default;
+        nint pIn  = inputParameters.HasValue  ? (nint)(&inParam)  : nint.Zero;
+        nint pOut = outputParameters.HasValue ? (nint)(&outParam) : nint.Zero;
+        return Pa_IsFormatSupported_Import(pIn, pOut, sampleRate);
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_OpenStream")]
@@ -157,29 +152,11 @@ public static unsafe partial class Native
         delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int> streamCallback,
         nint userData)
     {
-        var inPtr = Marshal.AllocHGlobal(Marshal.SizeOf<PaStreamParameters>());
-        var outPtr = Marshal.AllocHGlobal(Marshal.SizeOf<PaStreamParameters>());
-        try
-        {
-            nint pIn = nint.Zero;
-            nint pOut = nint.Zero;
-            if (inputParameters.HasValue)
-            {
-                Marshal.StructureToPtr(inputParameters.Value, inPtr, false);
-                pIn = inPtr;
-            }
-            if (outputParameters.HasValue)
-            {
-                Marshal.StructureToPtr(outputParameters.Value, outPtr, false);
-                pOut = outPtr;
-            }
-            return Pa_OpenStream_Import(out stream, pIn, pOut, sampleRate, framesPerBuffer, streamFlags, streamCallback, userData);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(inPtr);
-            Marshal.FreeHGlobal(outPtr);
-        }
+        PaStreamParameters inParam  = inputParameters  ?? default;
+        PaStreamParameters outParam = outputParameters ?? default;
+        nint pIn  = inputParameters.HasValue  ? (nint)(&inParam)  : nint.Zero;
+        nint pOut = outputParameters.HasValue ? (nint)(&outParam) : nint.Zero;
+        return Pa_OpenStream_Import(out stream, pIn, pOut, sampleRate, framesPerBuffer, streamFlags, streamCallback, userData);
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_OpenDefaultStream")]
@@ -206,7 +183,11 @@ public static unsafe partial class Native
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_CloseStream")]
     private static partial PaError Pa_CloseStream_Import(nint stream);
-    public static PaError Pa_CloseStream(nint stream) => Pa_CloseStream_Import(stream);
+    public static PaError Pa_CloseStream(nint stream)
+    {
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pa_CloseStream), PALibLogging.PtrMeta(stream));
+        return Pa_CloseStream_Import(stream);
+    }
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_SetStreamFinishedCallback")]
     private static partial PaError Pa_SetStreamFinishedCallback_Import(nint stream, delegate* unmanaged[Cdecl]<nint, void> streamFinishedCallback);
@@ -214,11 +195,25 @@ public static unsafe partial class Native
         => Pa_SetStreamFinishedCallback_Import(stream, streamFinishedCallback);
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_StartStream")] private static partial PaError Pa_StartStream_Import(nint stream);
-    public static PaError Pa_StartStream(nint stream) => Pa_StartStream_Import(stream);
+    public static PaError Pa_StartStream(nint stream)
+    {
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pa_StartStream), PALibLogging.PtrMeta(stream));
+        return Pa_StartStream_Import(stream);
+    }
+
     [LibraryImport(LibraryName, EntryPoint = "Pa_StopStream")] private static partial PaError Pa_StopStream_Import(nint stream);
-    public static PaError Pa_StopStream(nint stream) => Pa_StopStream_Import(stream);
+    public static PaError Pa_StopStream(nint stream)
+    {
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pa_StopStream), PALibLogging.PtrMeta(stream));
+        return Pa_StopStream_Import(stream);
+    }
+
     [LibraryImport(LibraryName, EntryPoint = "Pa_AbortStream")] private static partial PaError Pa_AbortStream_Import(nint stream);
-    public static PaError Pa_AbortStream(nint stream) => Pa_AbortStream_Import(stream);
+    public static PaError Pa_AbortStream(nint stream)
+    {
+        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pa_AbortStream), PALibLogging.PtrMeta(stream));
+        return Pa_AbortStream_Import(stream);
+    }
     [LibraryImport(LibraryName, EntryPoint = "Pa_IsStreamStopped")] private static partial PaError Pa_IsStreamStopped_Import(nint stream);
     public static PaError Pa_IsStreamStopped(nint stream) => Pa_IsStreamStopped_Import(stream);
     [LibraryImport(LibraryName, EntryPoint = "Pa_IsStreamActive")] private static partial PaError Pa_IsStreamActive_Import(nint stream);

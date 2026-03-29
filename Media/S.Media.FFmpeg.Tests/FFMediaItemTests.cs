@@ -3,6 +3,7 @@ using S.Media.FFmpeg.Sources;
 using S.Media.FFmpeg.Config;
 using S.Media.FFmpeg.Runtime;
 using S.Media.Core.Audio;
+using S.Media.Core.Media;
 using S.Media.Core.Errors;
 using S.Media.Core.Video;
 using System.Reflection;
@@ -21,7 +22,7 @@ public sealed class FFMediaItemTests
 
         Assert.Single(item.PlaybackAudioSources);
         Assert.Single(item.PlaybackVideoSources);
-        Assert.Equal(video.SourceId, item.InitialActiveVideoSource?.SourceId);
+        Assert.Equal(video.Id, item.InitialActiveVideoSource?.Id);
         Assert.Null(item.ResolvedOpenOptions);
     }
 
@@ -271,7 +272,7 @@ public sealed class FFMediaItemTests
     }
 
     [Fact]
-    public void MetadataUpdated_IsNotRaisedAfterDisposeCompletion()
+    public void MetadataChanged_IsNotRaisedAfterDisposeCompletion()
     {
         using var item = new FFMediaItem(
             new FFmpegOpenOptions
@@ -285,7 +286,7 @@ public sealed class FFMediaItemTests
         Assert.NotNull(setMetadata);
 
         var eventCount = 0;
-        item.MetadataUpdated += (_, _) => eventCount++;
+        item.MetadataChanged += (_, _) => eventCount++;
 
         var beforeDispose = new S.Media.Core.Media.MediaMetadataSnapshot
         {
@@ -311,7 +312,7 @@ public sealed class FFMediaItemTests
     }
 
     [Fact]
-    public void MetadataUpdated_DoesNotRaiseForEquivalentSnapshotContent()
+    public void MetadataChanged_DoesNotRaiseForEquivalentSnapshotContent()
     {
         using var item = new FFMediaItem(
             new FFmpegOpenOptions
@@ -325,7 +326,7 @@ public sealed class FFMediaItemTests
         Assert.NotNull(setMetadata);
 
         var eventCount = 0;
-        item.MetadataUpdated += (_, _) => eventCount++;
+        item.MetadataChanged += (_, _) => eventCount++;
 
         var snapshotA = new S.Media.Core.Media.MediaMetadataSnapshot
         {
@@ -360,7 +361,7 @@ public sealed class FFMediaItemTests
             });
 
         var eventCount = 0;
-        item.MetadataUpdated += (_, _) => eventCount++;
+        item.MetadataChanged += (_, _) => eventCount++;
 
         var sessionProperty = typeof(FFMediaItem).GetProperty("SharedDemuxSession", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(sessionProperty);
@@ -426,7 +427,7 @@ public sealed class FFMediaItemTests
     }
 
     [HeavyFfmpegFact]
-    public void MetadataUpdated_HeavySeekChurn_IsMonotonic_AndAvoidsDuplicateSpam()
+    public void MetadataChanged_HeavySeekChurn_IsMonotonic_AndAvoidsDuplicateSpam()
     {
         using var item = new FFMediaItem(
             new FFmpegOpenOptions
@@ -438,7 +439,7 @@ public sealed class FFMediaItemTests
             });
 
         var updates = new List<DateTimeOffset>();
-        item.MetadataUpdated += (_, snapshot) => updates.Add(snapshot.UpdatedAtUtc);
+        item.MetadataChanged += (_, snapshot) => updates.Add(snapshot.UpdatedAtUtc);
 
         for (var i = 0; i < 8; i++)
         {
@@ -566,8 +567,11 @@ public sealed class FFMediaItemTests
 
     private sealed class TrackableAudioSource : IAudioSource
     {
-        public Guid SourceId { get; } = Guid.NewGuid();
+        public Guid Id { get; } = Guid.NewGuid();
         public AudioSourceState State => AudioSourceState.Stopped;
+        public AudioStreamInfo StreamInfo => default;
+        public float Volume { get; set; } = 1.0f;
+        public long? TotalSampleCount => null;
         public double PositionSeconds => 0;
         public double DurationSeconds => 0;
         public bool Disposed { get; private set; }
@@ -581,8 +585,9 @@ public sealed class FFMediaItemTests
 
     private sealed class TrackableVideoSource : IVideoSource
     {
-        public Guid SourceId { get; } = Guid.NewGuid();
+        public Guid Id { get; } = Guid.NewGuid();
         public VideoSourceState State => VideoSourceState.Stopped;
+        public VideoStreamInfo StreamInfo => default;
         public double PositionSeconds => 0;
         public double DurationSeconds => 0;
         public long CurrentFrameIndex => 0;
@@ -600,7 +605,6 @@ public sealed class FFMediaItemTests
         }
         public int Seek(double positionSeconds) => 0;
         public int SeekToFrame(long frameIndex) => 0;
-        public int SeekToFrame(long frameIndex, out long currentFrameIndex, out long? totalFrameCount) { currentFrameIndex = 0; totalFrameCount = 0; return 0; }
         public void Dispose() => Disposed = true;
     }
 }

@@ -12,11 +12,9 @@ public sealed class OSCClient : IOSCClient
     private readonly ILogger<OSCClient> _logger;
     private bool _disposed;
 
-    public OSCClient(string host, int port, OSCClientOptions? options = null, ILogger<OSCClient>? logger = null)
-        : this(ResolveEndpoint(host, port), options, logger)
-    {
-    }
-
+    /// <summary>
+    /// Creates an <see cref="OSCClient"/> for the given endpoint.
+    /// </summary>
     public OSCClient(IPEndPoint remoteEndPoint, OSCClientOptions? options = null, ILogger<OSCClient>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(remoteEndPoint);
@@ -29,7 +27,47 @@ public sealed class OSCClient : IOSCClient
         _logger = logger ?? NullLogger<OSCClient>.Instance;
 
         _udpClient = new UdpClient(remoteEndPoint.AddressFamily);
+        if (Options.EnableBroadcast)
+            _udpClient.EnableBroadcast = true;
+
         _udpClient.Connect(remoteEndPoint);
+    }
+
+    /// <summary>
+    /// Creates an <see cref="OSCClient"/> by resolving <paramref name="host"/> asynchronously.
+    /// Prefer this factory over the synchronous string-host constructor to avoid blocking
+    /// the calling thread during DNS resolution.
+    /// </summary>
+    public static async Task<OSCClient> CreateAsync(
+        string host,
+        int port,
+        OSCClientOptions? options = null,
+        ILogger<OSCClient>? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        if (port < IPEndPoint.MinPort || port > IPEndPoint.MaxPort)
+            throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be between 0 and 65535.");
+
+        var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
+        var address = addresses.FirstOrDefault()
+            ?? throw new InvalidOperationException($"No IP addresses were resolved for host '{host}'.");
+
+        return new OSCClient(new IPEndPoint(address, port), options, logger);
+    }
+
+    /// <summary>
+    /// Creates an <see cref="OSCClient"/> by resolving <paramref name="host"/> synchronously.
+    /// </summary>
+    /// <remarks>
+    /// <b>Warning:</b> This constructor performs synchronous DNS resolution which may block the
+    /// calling thread for the full DNS timeout (up to 30 seconds). Use
+    /// <see cref="CreateAsync"/> for host-name resolution in asynchronous code.
+    /// </remarks>
+    [Obsolete("Synchronous DNS resolution can block the thread pool. Use OSCClient.CreateAsync() to resolve host names asynchronously.")]
+    public OSCClient(string host, int port, OSCClientOptions? options = null, ILogger<OSCClient>? logger = null)
+        : this(ResolveEndpointSync(host, port), options, logger)
+    {
     }
 
     public OSCClientOptions Options { get; }
@@ -42,11 +80,20 @@ public sealed class OSCClient : IOSCClient
         using var encoded = OSCPacketCodec.EncodeToRented(packet);
 
         if (encoded.Length > Options.MaxPacketBytes)
-            throw new InvalidOperationException($"OSC packet size {encoded.Length} exceeds configured max {Options.MaxPacketBytes}.");
+        {
+            _logger.LogWarning(
+                "OSC packet size {Size}B exceeds configured max {Max}B — send aborted.",
+                encoded.Length, Options.MaxPacketBytes);
+            throw new InvalidOperationException(
+                $"OSC packet size {encoded.Length} exceeds configured max {Options.MaxPacketBytes}.");
+        }
 
-        await _udpClient.Client
-            .SendToAsync(encoded.Memory, SocketFlags.None, _remoteEndPoint, cancellationToken)
-            .ConfigureAwait(false);
+        _logger.LogDebug(
+            "Sending OSC {Kind} to {Endpoint} ({Bytes}B)",
+            packet.Kind, _remoteEndPoint, encoded.Length);
+
+        // Use the connected-default overload — Connect() was already called in the constructor.
+        await _udpClient.SendAsync(encoded.Memory, cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask SendMessageAsync(string address, IReadOnlyList<OSCArgument>? arguments = null, CancellationToken cancellationToken = default)
@@ -63,7 +110,7 @@ public sealed class OSCClient : IOSCClient
         return ValueTask.CompletedTask;
     }
 
-    private static IPEndPoint ResolveEndpoint(string host, int port)
+    private static IPEndPoint ResolveEndpointSync(string host, int port)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
         if (port < IPEndPoint.MinPort || port > IPEndPoint.MaxPort)

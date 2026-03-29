@@ -514,27 +514,23 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 var packetCode = _packetReader.ReadAudioPacket(out var packet);
                 if (packetCode != MediaResult.Success)
                 {
-                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: ReadAudioPacket failed code={packetCode} attempt={attempt}");
                     return false;
                 }
 
                 var decodeCode = _audioDecoder.Decode(packet, out var decoded);
                 if (decodeCode != MediaResult.Success)
                 {
-                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: Decode failed code={decodeCode} attempt={attempt}");
                     return false;
                 }
 
                 if (decoded.FrameCount <= 0)
                 {
-                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: decoded.FrameCount={decoded.FrameCount} attempt={attempt}, retrying...");
                     continue;
                 }
 
                 var resampleCode = _resampler.Resample(decoded, out var resampled);
                 if (resampleCode != MediaResult.Success)
                 {
-                    Console.Error.WriteLine($"[TRACE] TryCreateQueuedAudioChunk: Resample failed code={resampleCode} attempt={attempt}");
                     return false;
                 }
 
@@ -557,44 +553,59 @@ internal sealed class FFSharedDemuxSession : IDisposable
         {
             frame = default;
 
-            var packetCode = _packetReader.ReadVideoPacket(out var packet);
-            if (packetCode != MediaResult.Success)
+            // Video codecs (H.264, H.265, etc.) typically need several packets before
+            // producing the first frame. Loop feeding packets until a frame is produced
+            // or an unrecoverable error occurs.
+            const int maxPacketsBeforeFrame = 256;
+            for (var attempt = 0; attempt < maxPacketsBeforeFrame; attempt++)
             {
-                return false;
+                var packetCode = _packetReader.ReadVideoPacket(out var packet);
+                if (packetCode != MediaResult.Success)
+                {
+                    return false;
+                }
+
+                var decodeCode = _videoDecoder.Decode(packet, out var decoded);
+                if (decodeCode == (int)MediaErrorCode.FFmpegVideoDecodeNeedMoreData)
+                {
+                    // Decoder buffered the packet but needs more before it can output a frame.
+                    continue;
+                }
+
+                if (decodeCode != MediaResult.Success)
+                {
+                    return false;
+                }
+
+                var convertCode = _pixelConverter.Convert(decoded, out var converted);
+                if (convertCode != MediaResult.Success)
+                {
+                    return false;
+                }
+
+                frame = new QueuedVideoFrame(
+                    converted.Generation,
+                    converted.FrameIndex,
+                    converted.PresentationTime,
+                    converted.IsKeyFrame,
+                    converted.Width,
+                    converted.Height,
+                    converted.Plane0,
+                    converted.Plane0Stride,
+                    converted.Plane1,
+                    converted.Plane1Stride,
+                    converted.Plane2,
+                    converted.Plane2Stride,
+                    converted.MappedPixelFormat,
+                    converted.NativeTimeBaseNumerator,
+                    converted.NativeTimeBaseDenominator,
+                    converted.NativeFrameRateNumerator,
+                    converted.NativeFrameRateDenominator,
+                    converted.NativePixelFormat);
+                return true;
             }
 
-            var decodeCode = _videoDecoder.Decode(packet, out var decoded);
-            if (decodeCode != MediaResult.Success)
-            {
-                return false;
-            }
-
-            var convertCode = _pixelConverter.Convert(decoded, out var converted);
-            if (convertCode != MediaResult.Success)
-            {
-                return false;
-            }
-
-            frame = new QueuedVideoFrame(
-                converted.Generation,
-                converted.FrameIndex,
-                converted.PresentationTime,
-                converted.IsKeyFrame,
-                converted.Width,
-                converted.Height,
-                converted.Plane0,
-                converted.Plane0Stride,
-                converted.Plane1,
-                converted.Plane1Stride,
-                converted.Plane2,
-                converted.Plane2Stride,
-                converted.MappedPixelFormat,
-                converted.NativeTimeBaseNumerator,
-                converted.NativeTimeBaseDenominator,
-                converted.NativeFrameRateNumerator,
-                converted.NativeFrameRateDenominator,
-                converted.NativePixelFormat);
-            return true;
+            return false;
         }
     }
 

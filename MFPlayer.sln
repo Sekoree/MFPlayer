@@ -3,10 +3,6 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.3.32811.315
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MFPlayer", "MFPlayer\MFPlayer.csproj", "{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MFPlayer.Desktop", "MFPlayer.Desktop\MFPlayer.Desktop.csproj", "{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{3DA99C4E-89E3-4049-9C22-0A7EC60D83D8}"
 	ProjectSection(SolutionItems) = preProject
 		Directory.Packages.props = Directory.Packages.props
@@ -17,10 +13,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PMLib", "MIDI\PMLib\PMLib.csproj", "{BFF82F62-49BB-4B0E-9237-45249A41E235}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}"
-	ProjectSection(SolutionItems) = preProject
-		Test\PROJECT-STATUS.md = Test\PROJECT-STATUS.md
-		Test\TEST-APPS-PLAN.md = Test\TEST-APPS-PLAN.md
-	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioEx", "Test\AudioEx\AudioEx.csproj", "{B33BF85C-5F4A-4DB2-BFA2-A62CF1ACBEBC}"
 EndProject
@@ -28,23 +20,21 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoStress", "Test\VideoSt
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB0-47AE-A212-5084CFA63CEC}"
 	ProjectSection(SolutionItems) = preProject
-		Doc\README.md = Doc\README.md
-		Doc\setup-prerequisites.md = Doc\setup-prerequisites.md
-		Doc\audioex-setup.md = Doc\audioex-setup.md
-		Doc\project-implementation-stages.md = Doc\project-implementation-stages.md
-		Doc\refactor-considerations-log.md = Doc\refactor-considerations-log.md
-		Doc\project-status-notes.md = Doc\project-status-notes.md
-		Doc\refactor-remaining-checklist.md = Doc\refactor-remaining-checklist.md
-		Doc\ndi-dropped-frame-remediation-plan.md = Doc\ndi-dropped-frame-remediation-plan.md
-		Doc\hard-cut-sweep.md = Doc\hard-cut-sweep.md
-		Doc\REFACTOR-2026-03-27.md = Doc\REFACTOR-2026-03-27.md
-		Doc\ADVANCED-ROUTING-PLAN-2026-03-27.md = Doc\ADVANCED-ROUTING-PLAN-2026-03-27.md
+		Doc\API-Review.md = Doc\API-Review.md
+		Doc\S.Media.Core.md = Doc\S.Media.Core.md
+		Doc\S.Media.FFmpeg.md = Doc\S.Media.FFmpeg.md
+		Doc\S.Media.PortAudio.md = Doc\S.Media.PortAudio.md
+		Doc\S.Media.NDI.md = Doc\S.Media.NDI.md
+		Doc\S.Media.OpenGL.md = Doc\S.Media.OpenGL.md
+		Doc\S.Media.MIDI.md = Doc\S.Media.MIDI.md
+		Doc\PALib.md = Doc\PALib.md
+		Doc\NDILib.md = Doc\NDILib.md
+		Doc\PMLib.md = Doc\PMLib.md
+		Doc\OSCLib.md = Doc\OSCLib.md
+		Doc\Naming-and-Consolidation.md = Doc\Naming-and-Consolidation.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"
-	ProjectSection(SolutionItems) = preProject
-		NDI\PROJECT-STATUS.md = NDI\PROJECT-STATUS.md
-	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDILib", "NDI\NDILib\NDILib.csproj", "{364EB31E-C31B-4874-AA82-5524BA8D06B9}"
 EndProject
@@ -53,15 +43,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDIVideoReceive", "Test\NDIVideoReceive\NDIVideoReceive.csproj", "{5DA56A07-AD4D-4843-A876-FFEA5C2BAC11}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Media", "Media", "{776AE86F-6A81-4B69-A48A-88A9293EB425}"
-	ProjectSection(SolutionItems) = preProject
-		Media\IMPLEMENTATION-STATUS.md = Media\IMPLEMENTATION-STATUS.md
-		Media\PROJECT-STATUS.md = Media\PROJECT-STATUS.md
-	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Audio", "Audio", "{486A1187-8515-43B7-8075-1DFC7B95B987}"
-	ProjectSection(SolutionItems) = preProject
-		Audio\PROJECT-STATUS.md = Audio\PROJECT-STATUS.md
-	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "OSC", "OSC", "{36B710DB-96D4-4B92-90BD-54636B2D48E1}"
 	ProjectSection(SolutionItems) = preProject
@@ -128,6 +111,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDIReceiveTest", "Test\NDIR
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDISendTest", "Test\NDISendTest\NDISendTest.csproj", "{3D2AB48B-2F36-4EFA-8C6D-F491170839DC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestShared", "Test\TestShared\TestShared.csproj", "{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Archive", "Archive", "{CB6ECFB3-79C6-4AAA-9FCC-9ECDC564467D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -138,30 +125,6 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Debug|x64.Build.0 = Debug|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Debug|x86.Build.0 = Debug|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Release|Any CPU.Build.0 = Release|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Release|x64.ActiveCfg = Release|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Release|x64.Build.0 = Release|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Release|x86.ActiveCfg = Release|Any CPU
-		{EBFA8512-1EA5-4D8C-B4AC-AB5B48A6D568}.Release|x86.Build.0 = Release|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Debug|x64.Build.0 = Debug|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Debug|x86.Build.0 = Debug|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Release|Any CPU.Build.0 = Release|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Release|x64.ActiveCfg = Release|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Release|x64.Build.0 = Release|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Release|x86.ActiveCfg = Release|Any CPU
-		{ABC31E74-02FF-46EB-B3B2-4E6AE43B456C}.Release|x86.Build.0 = Release|Any CPU
 		{BFF82F62-49BB-4B0E-9237-45249A41E235}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{BFF82F62-49BB-4B0E-9237-45249A41E235}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BFF82F62-49BB-4B0E-9237-45249A41E235}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -594,6 +557,18 @@ Global
 		{3D2AB48B-2F36-4EFA-8C6D-F491170839DC}.Release|x64.Build.0 = Release|Any CPU
 		{3D2AB48B-2F36-4EFA-8C6D-F491170839DC}.Release|x86.ActiveCfg = Release|Any CPU
 		{3D2AB48B-2F36-4EFA-8C6D-F491170839DC}.Release|x86.Build.0 = Release|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Debug|x64.Build.0 = Debug|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Debug|x86.Build.0 = Debug|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Release|x64.ActiveCfg = Release|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Release|x64.Build.0 = Release|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Release|x86.ActiveCfg = Release|Any CPU
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -635,6 +610,7 @@ Global
 		{13F6AD49-2A97-43A4-B877-6DD29AB04BA9} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{1FB3786D-07AE-499E-84F0-3E3596816D9E} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{3D2AB48B-2F36-4EFA-8C6D-F491170839DC} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
+		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {83CB65B8-011F-4ED7-BCD3-A6CFA935EF7E}

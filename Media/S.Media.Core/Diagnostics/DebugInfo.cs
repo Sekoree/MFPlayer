@@ -5,3 +5,4 @@ public readonly record struct DebugInfo(
     DebugValueKind ValueKind,
     object Value,
     DateTimeOffset RecordedAtUtc);
+

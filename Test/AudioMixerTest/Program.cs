@@ -1,9 +1,9 @@
-using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
 using S.Media.FFmpeg.Config;
 using S.Media.FFmpeg.Media;
-using S.Media.PortAudio.Engine;
+using S.Media.FFmpeg.Runtime;
+using TestShared;
 
 namespace AudioMixerTest;
 
@@ -11,29 +11,24 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        var input1 = GetArg(args, "--input") ?? Environment.GetEnvironmentVariable("SMEDIA_TEST_INPUT");
-        var input2 = GetArg(args, "--input2");
-        var hostApi = GetArg(args, "--host-api");
-        var deviceIndex = int.TryParse(GetArg(args, "--device-index"), out var di) ? di : -1;
-        var seconds = double.TryParse(GetArg(args, "--seconds"), out var s) && s > 0 ? s : 30;
+        FFmpegRuntime.EnsureInitialized();
+        var a = CommonTestArgs.Parse(args);
+        var input2 = TestHelpers.GetArg(args, "--input2");
 
-        if (args.Contains("--help") || args.Contains("-h"))
-        {
-            PrintUsage();
-            return 0;
-        }
+        if (a.ShowHelp) { PrintUsage(); return 0; }
+        if (a.ListDevices || a.ListHostApis) { return TestHelpers.ListAudioRuntime(a.HostApi, a.ListHostApis, a.ListDevices); }
 
-        if (string.IsNullOrWhiteSpace(input1))
+        if (string.IsNullOrWhiteSpace(a.Input))
         {
             Console.Error.WriteLine("Missing --input <path>. Use --help for usage.");
             return 1;
         }
 
-        var uri1 = ResolveUri(input1);
-        if (uri1 is null) { Console.Error.WriteLine($"Input file not found: {input1}"); return 2; }
+        var uri1 = TestHelpers.ResolveUri(a.Input);
+        if (uri1 is null) { Console.Error.WriteLine($"Input file not found: {a.Input}"); return 2; }
 
         // If no second input, replay the same file
-        var uri2 = !string.IsNullOrWhiteSpace(input2) ? ResolveUri(input2) : uri1;
+        var uri2 = !string.IsNullOrWhiteSpace(input2) ? TestHelpers.ResolveUri(input2) : uri1;
         if (uri2 is null) { Console.Error.WriteLine($"Input2 file not found: {input2}"); return 2; }
 
         Console.WriteLine($"Input 1: {uri1}");
@@ -63,8 +58,8 @@ internal static class Program
 
             Console.WriteLine($"Source1 duration: {source1Duration:0.###}s → Source2 offset: {offset2:0.###}s");
 
-            // Use AudioVideoMixer (audio-only, no video sources/outputs)
-            using var mixer = new AudioVideoMixer();
+            // Use AVMixer (audio-only, no video sources/outputs)
+            using var mixer = new AVMixer();
             var add1 = mixer.AddAudioSource(source1, 0);
             var add2 = mixer.AddAudioSource(source2, offset2);
             if (add1 != MediaResult.Success || add2 != MediaResult.Success)
@@ -73,28 +68,18 @@ internal static class Program
                 return 5;
             }
 
-            using var engine = new PortAudioEngine();
-            var init = engine.Initialize(new AudioEngineConfig
-            {
-                PreferredHostApi = string.IsNullOrWhiteSpace(hostApi) ? null : hostApi,
-            });
-            if (init != MediaResult.Success) { Console.Error.WriteLine($"Engine init failed: {init}"); return 4; }
-            if (engine.Start() != MediaResult.Success) { Console.Error.WriteLine("Engine start failed."); return 4; }
-
-            var createOut = engine.CreateOutputByIndex(deviceIndex, out var output);
-            if (createOut != MediaResult.Success || output is null) { Console.Error.WriteLine($"Create output failed: {createOut}"); return 4; }
-            if (output.Start(new AudioOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("Output start failed."); return 4; }
-
+            var (engine, output) = TestHelpers.InitAudioOutput(a.HostApi, a.DeviceIndex);
+            using var _ae = engine;
             mixer.AddAudioOutput(output);
 
             Console.WriteLine($"Output device: {output.Device.Name}");
-            Console.WriteLine($"Playing ~{seconds:0.#}s via AudioVideoMixer (2 audio sources with offset). Ctrl+C to stop.");
+            Console.WriteLine($"Playing ~{a.Seconds:0.#}s via AVMixer (2 audio sources with offset). Ctrl+C to stop.");
 
             var channels = Math.Max(1, source1.StreamInfo.ChannelCount.GetValueOrDefault(2));
             var sampleRate = Math.Max(1, source1.StreamInfo.SampleRate.GetValueOrDefault(48_000));
             var routeMap = channels <= 1 ? new[] { 0, 0 } : new[] { 0, 1 };
 
-            var startPlayback = mixer.StartPlayback(new AudioVideoMixerConfig
+            var startPlayback = mixer.StartPlayback(new AVMixerConfig
             {
                 SourceChannelCount = channels,
                 OutputSampleRate = sampleRate,
@@ -106,28 +91,20 @@ internal static class Program
                 return 5;
             }
 
-            var deadline = DateTime.UtcNow.AddSeconds(seconds);
-            var lastStatus = DateTime.UtcNow;
-
-            var cancel = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
-
-            while (!cancel.IsCancellationRequested && DateTime.UtcNow < deadline)
+            TestHelpers.RunWithDeadline(a.Seconds, () =>
             {
-                if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
-                {
-                    var info = mixer.GetDebugInfo();
-                    if (info.HasValue)
-                    {
-                        var d = info.Value;
-                        Console.WriteLine(
-                            $"pos={mixer.PositionSeconds:0.###}s aFrames={d.AudioPushedFrames} aFail={d.AudioPushFailures} aEmpty={d.AudioEmptyReads}");
-                    }
-                    lastStatus = DateTime.UtcNow;
-                }
-
                 Thread.Sleep(100);
-            }
+                return true;
+            }, () =>
+            {
+                var info = mixer.GetDebugInfo();
+                if (info.HasValue)
+                {
+                    var d = info.Value;
+                    Console.WriteLine(
+                        $"pos={mixer.PositionSeconds:0.###}s aFrames={d.AudioPushedFrames} aFail={d.AudioPushFailures} aEmpty={d.AudioEmptyReads}");
+                }
+            });
 
             _ = mixer.StopPlayback();
             output.Stop();
@@ -144,23 +121,9 @@ internal static class Program
         }
     }
 
-    private static string? ResolveUri(string input)
-    {
-        if (Uri.TryCreate(input, UriKind.Absolute, out var u) && !string.IsNullOrWhiteSpace(u.Scheme) && u.Scheme != "file")
-            return u.AbsoluteUri;
-        var path = Path.GetFullPath(input);
-        return File.Exists(path) ? new Uri(path).AbsoluteUri : null;
-    }
-
-    private static string? GetArg(string[] args, string name)
-    {
-        var idx = Array.IndexOf(args, name);
-        return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
-    }
-
     private static void PrintUsage()
     {
-        Console.WriteLine("AudioMixerTest — play 2 audio files via AudioVideoMixer with start offsets");
+        Console.WriteLine("AudioMixerTest — play 2 audio files via AVMixer with start offsets");
         Console.WriteLine("Usage: AudioMixerTest --input <file1> [--input2 <file2>] [options]");
         Console.WriteLine();
         Console.WriteLine("Options:");
@@ -169,5 +132,7 @@ internal static class Program
         Console.WriteLine("  --host-api <id>        Preferred PortAudio host API");
         Console.WriteLine("  --device-index <n>     Output device index (-1 = default)");
         Console.WriteLine("  --seconds <n>          Total playback duration (default: 30)");
+        Console.WriteLine("  --list-devices         List output devices and exit");
+        Console.WriteLine("  --list-host-apis       List host APIs and exit");
     }
 }

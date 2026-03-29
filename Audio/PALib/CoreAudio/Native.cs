@@ -4,12 +4,12 @@ using PALib.Types.Core;
 
 namespace PALib.CoreAudio;
 
-public static partial class Native
+internal static partial class Native
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
     private static bool IsSupportedPlatform => OperatingSystem.IsMacOS();
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, EntryPoint = "PaMacCore_SetupStreamInfo")]
     private static partial void PaMacCore_SetupStreamInfo_Import(ref PaMacCoreStreamInfo data, nuint flags);
 
     public static void PaMacCore_SetupStreamInfo(ref PaMacCoreStreamInfo data, nuint flags)
@@ -20,7 +20,7 @@ public static partial class Native
         PaMacCore_SetupStreamInfo_Import(ref data, flags);
     }
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, EntryPoint = "PaMacCore_SetupChannelMap")]
     private static partial void PaMacCore_SetupChannelMap_Import(ref PaMacCoreStreamInfo data, nint channelMap, nuint channelMapSize);
 
     public static void PaMacCore_SetupChannelMap(ref PaMacCoreStreamInfo data, nint channelMap, nuint channelMapSize)
@@ -31,13 +31,13 @@ public static partial class Native
         PaMacCore_SetupChannelMap_Import(ref data, channelMap, channelMapSize);
     }
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, EntryPoint = "PaMacCore_GetStreamInputDevice")]
     private static partial uint PaMacCore_GetStreamInputDevice_Import(nint stream);
 
     public static uint PaMacCore_GetStreamInputDevice(nint stream)
         => !IsSupportedPlatform ? 0u : PaMacCore_GetStreamInputDevice_Import(stream);
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, EntryPoint = "PaMacCore_GetStreamOutputDevice")]
     private static partial uint PaMacCore_GetStreamOutputDevice_Import(nint stream);
 
     public static uint PaMacCore_GetStreamOutputDevice(nint stream)
@@ -49,7 +49,7 @@ public static partial class Native
     public static string? PaMacCore_GetChannelName(int device, int channelIndex, bool input)
         => !IsSupportedPlatform ? null : Marshal.PtrToStringUTF8(PaMacCore_GetChannelName_Import(device, channelIndex, input));
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, EntryPoint = "PaMacCore_GetBufferSizeRange")]
     private static partial PaError PaMacCore_GetBufferSizeRange_Import(int device, out nint minBufferSizeFrames, out nint maxBufferSizeFrames);
 
     public static PaError PaMacCore_GetBufferSizeRange(int device, out nint minBufferSizeFrames, out nint maxBufferSizeFrames)

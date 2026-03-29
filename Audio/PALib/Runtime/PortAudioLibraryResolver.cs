@@ -12,17 +12,27 @@ public static class PortAudioLibraryResolver
     private static ILogger _logger = NullLogger.Instance;
 
     /// <summary>
-    /// Installs an assembly-local DllImport resolver that probes the known PortAudio library names.
-    /// Call this once at app startup before first use of <c>PALib.Native</c>.
+    /// Installs an assembly-local DllImport resolver that probes the known PortAudio library names
+    /// and optionally configures the resolver's internal logger.
+    /// Safe to call multiple times — the resolver is only registered once, but the logger is
+    /// updated on every call that supplies a non-null <paramref name="loggerFactory"/>.
     /// </summary>
+    /// <remarks>
+    /// Because <see cref="PALibModuleInit"/> runs a parameter-less <c>Install()</c> via
+    /// <c>[ModuleInitializer]</c> before any user code, a subsequent call such as
+    /// <c>Install(myLoggerFactory)</c> at app startup is the correct way to attach a real logger.
+    /// </remarks>
     public static void Install(ILoggerFactory? loggerFactory = null)
     {
         lock (Gate)
         {
+            // Always upgrade the logger when a factory is supplied — even if already installed.
+            if (loggerFactory != null)
+                _logger = loggerFactory.CreateLogger("PALib.Runtime");
+
             if (_installed)
                 return;
 
-            _logger = loggerFactory?.CreateLogger("PALib.Runtime") ?? NullLogger.Instance;
             NativeLibrary.SetDllImportResolver(typeof(PortAudioLibraryResolver).Assembly, ResolveLibrary);
             _installed = true;
         }

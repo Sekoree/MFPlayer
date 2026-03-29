@@ -28,6 +28,11 @@ public sealed class NDIEngine : IDisposable
 
 	public event EventHandler<NDIEngineDiagnostics>? DiagnosticsUpdated;
 
+	/// <summary>
+	/// Initializes the NDI engine with default options (Balanced limits, Default diagnostics).
+	/// </summary>
+	public int Initialize() => Initialize(new NDIIntegrationOptions(), NDILimitsOptions.Balanced, NDIDiagnosticsOptions.Default);
+
 	public int Initialize(NDIIntegrationOptions integrationOptions, NDILimitsOptions limitsOptions, NDIDiagnosticsOptions diagnosticsOptions)
 	{
 		ArgumentNullException.ThrowIfNull(integrationOptions);

@@ -1,11 +1,8 @@
-using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
-using S.Media.Core.Video;
 using S.Media.FFmpeg.Media;
-using S.Media.OpenGL.SDL3;
-using S.Media.PortAudio.Engine;
-using SDL3;
+using S.Media.FFmpeg.Runtime;
+using TestShared;
 
 namespace AVMixerTest;
 
@@ -13,26 +10,21 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        var input = GetArg(args, "--input") ?? Environment.GetEnvironmentVariable("SMEDIA_TEST_INPUT");
-        var seconds = double.TryParse(GetArg(args, "--seconds"), out var s) && s > 0 ? s : 30;
-        var hostApi = GetArg(args, "--host-api");
-        var deviceIndex = int.TryParse(GetArg(args, "--device-index"), out var di) ? di : -1;
-        var syncModeStr = GetArg(args, "--sync-mode") ?? "realtime";
+        FFmpegRuntime.EnsureInitialized();
 
-        if (args.Contains("--help") || args.Contains("-h"))
-        {
-            PrintUsage();
-            return 0;
-        }
+        var a = CommonTestArgs.Parse(args);
+        var syncModeStr = TestHelpers.GetArg(args, "--sync-mode") ?? "audioled";
 
-        if (string.IsNullOrWhiteSpace(input))
+        if (a.ShowHelp) { PrintUsage(); return 0; }
+
+        if (string.IsNullOrWhiteSpace(a.Input))
         {
             Console.Error.WriteLine("Missing --input <path>. Use --help for usage.");
             return 1;
         }
 
-        var uri = ResolveUri(input);
-        if (uri is null) { Console.Error.WriteLine($"Input file not found: {input}"); return 2; }
+        var uri = TestHelpers.ResolveUri(a.Input);
+        if (uri is null) { Console.Error.WriteLine($"Input file not found: {a.Input}"); return 2; }
 
         Console.WriteLine($"Input: {uri}");
 
@@ -51,37 +43,17 @@ internal static class Program
             if (audioSource.Start() != MediaResult.Success) { Console.Error.WriteLine("Audio source start failed."); return 3; }
             if (videoSource.Start() != MediaResult.Success) { Console.Error.WriteLine("Video source start failed."); return 3; }
 
-            // Audio engine
-            using var audioEngine = new PortAudioEngine();
-            var init = audioEngine.Initialize(new AudioEngineConfig
-            {
-                PreferredHostApi = string.IsNullOrWhiteSpace(hostApi) ? null : hostApi,
-            });
-            if (init != MediaResult.Success) { Console.Error.WriteLine($"Audio engine init failed: {init}"); return 4; }
-            if (audioEngine.Start() != MediaResult.Success) { Console.Error.WriteLine("Audio engine start failed."); return 4; }
-
-            var createOut = audioEngine.CreateOutputByIndex(deviceIndex, out var audioOutput);
-            if (createOut != MediaResult.Success || audioOutput is null) { Console.Error.WriteLine($"Audio output failed: {createOut}"); return 4; }
-            if (audioOutput.Start(new AudioOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("Audio output start failed."); return 4; }
+            var (audioEngine, audioOutput) = TestHelpers.InitAudioOutput(a.HostApi, a.DeviceIndex);
+            using var _ae = audioEngine;
 
             Console.WriteLine($"Audio output: {audioOutput.Device.Name}");
 
-            // Video output
-            using var view = new SDL3VideoView();
-            var viewInit = view.Initialize(new SDL3VideoViewOptions
-            {
-                Width = 1280, Height = 720,
-                WindowTitle = "AVMixerTest",
-                WindowFlags = SDL.WindowFlags.Resizable,
-                ShowOnInitialize = true, BringToFrontOnShow = true, PreserveAspectRatio = true,
-            });
-            if (viewInit != MediaResult.Success) { Console.Error.WriteLine($"SDL3 init failed: {viewInit}"); return 4; }
-            if (view.Start(new VideoOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("SDL3 start failed."); return 4; }
+            using var view = TestHelpers.InitVideoView("AVMixerTest");
+            _ = view.ShowAndBringToFront();
 
-            // AudioVideoMixer directly (no MediaPlayer)
-            var mixer = new AudioVideoMixer();
+            // AVMixer directly (no MediaPlayer)
+            var mixer = new AVMixer();
             var syncMode = ParseSyncMode(syncModeStr);
-            _ = mixer.SetSyncMode(syncMode);
 
             var addA = mixer.AddAudioSource(audioSource);
             var addV = mixer.AddVideoSource(videoSource);
@@ -95,55 +67,51 @@ internal static class Program
             mixer.AddAudioOutput(audioOutput);
             mixer.AddVideoOutput(view);
 
-            var mixerStart = mixer.Start();
-            if (mixerStart != MediaResult.Success) { Console.Error.WriteLine($"Mixer start failed: {mixerStart}"); return 5; }
-
             var channels = Math.Max(1, audioSource.StreamInfo.ChannelCount.GetValueOrDefault(2));
-            var routeMap = channels <= 1 ? new[] { 0, 0 } : new[] { 0, 1 };
+            var srcRate = audioSource.StreamInfo.SampleRate.GetValueOrDefault(0);
+            Console.WriteLine($"Source: {channels}ch @ {srcRate}Hz");
 
-            var startPlayback = mixer.StartPlayback(new AudioVideoMixerConfig
+            var effectiveChannels = Math.Max(1, channels);
+            var playbackConfig = new AVMixerConfig
             {
-                SourceChannelCount = channels,
-                RouteMap = routeMap,
-                PresentOnCallerThread = true,
-            });
+                SourceChannelCount = effectiveChannels,
+                RouteMap = effectiveChannels == 1 ? [0, 0] : [0, 1],
+                SyncMode = syncMode,
+                OutputSampleRate = srcRate > 0 ? srcRate : 0,
+            };
+
+            // StartPlayback starts the clock (Start()) and the pump threads in one call.
+            var startPlayback = mixer.StartPlayback(playbackConfig);
             if (startPlayback != MediaResult.Success)
             {
                 Console.Error.WriteLine($"StartPlayback failed: {startPlayback}");
                 return 5;
             }
 
-            Console.WriteLine($"Playing ~{seconds:0.#}s via AudioVideoMixer (sync={syncMode}). Ctrl+C to stop.");
+            Console.WriteLine($"Playing ~{a.Seconds:0.#}s via AVMixer (sync={syncMode}). Ctrl+C to stop.");
 
-            var deadline = DateTime.UtcNow.AddSeconds(seconds);
-            var lastStatus = DateTime.UtcNow;
-            var cancel = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
-
-            while (!cancel.IsCancellationRequested && DateTime.UtcNow < deadline)
+            TestHelpers.RunWithDeadline(a.Seconds, () =>
             {
-                var tickDelay = mixer.TickVideoPresentation();
-
-                if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
+                Thread.Sleep(8);
+                return true;
+            }, () =>
+            {
+                var info = mixer.GetDebugInfo();
+                if (info.HasValue)
                 {
-                    var info = mixer.GetDebugInfo();
-                    if (info.HasValue)
-                    {
-                        var d = info.Value;
-                        Console.WriteLine(
-                            $"pos={mixer.PositionSeconds:0.###}s | vPushed={d.VideoPushed} vDrop={d.VideoLateDrops} vNoFrame={d.VideoNoFrame} " +
-                            $"aFrames={d.AudioPushedFrames} aFail={d.AudioPushFailures} " +
-                            $"drift={d.DriftMs:F1}ms corr={d.CorrectionSignalMs:F1}ms sync={syncMode}");
-                    }
-                    lastStatus = DateTime.UtcNow;
+                    var d = info.Value;
+                    var perOutput = mixer.GetVideoOutputDiagnostics();
+                    var firstOutput = perOutput.Count > 0 ? perOutput[0] : default;
+                    Console.Write(
+                        $"\rpos={mixer.PositionSeconds:0.###}s | vPushed={d.VideoPushed} vPushFail={d.VideoPushFailures} vDrop={d.VideoLateDrops} vQ={d.VideoQueueDepth} vNoFrame={d.VideoNoFrame} " +
+                        $"wQ={d.VideoWorkerQueueDepth} wQMax={d.VideoWorkerMaxQueueDepth} wDrop={d.VideoWorkerEnqueueDrops + d.VideoWorkerStaleDrops} wFail={d.VideoWorkerPushFailures} " +
+                        $"outQ={firstOutput.QueueDepth}/{Math.Max(1, firstOutput.QueueCapacity)} outDrop={firstOutput.EnqueueDrops + firstOutput.StaleDrops} " +
+                        $"aFrames={d.AudioPushedFrames} aFail={d.AudioPushFailures} " +
+                        $"sync={syncMode}    ");
                 }
-
-                var sleepMs = Math.Max(1, (int)Math.Ceiling(tickDelay.TotalMilliseconds));
-                Thread.Sleep(sleepMs);
-            }
+            });
 
             _ = mixer.StopPlayback();
-            _ = mixer.Stop();
             audioOutput.Stop();
             audioOutput.Dispose();
             _ = view.Stop();
@@ -161,29 +129,17 @@ internal static class Program
         }
     }
 
-    private static AudioVideoSyncMode ParseSyncMode(string raw) => raw.Trim().ToLowerInvariant() switch
+    private static AVSyncMode ParseSyncMode(string raw) => raw.Trim().ToLowerInvariant() switch
     {
-        "synced" or "sync" or "hybrid" or "strict" or "strictav" or "strict-av" => AudioVideoSyncMode.Synced,
-        _ => AudioVideoSyncMode.Realtime,
+        "synced" or "sync" or "hybrid" or "strict" or "strictav" or "strict-av" => AVSyncMode.Synced,
+        "audioled" or "audio-led" or "audio" => AVSyncMode.AudioLed,
+        _ => AVSyncMode.Realtime,
     };
 
-    private static string? ResolveUri(string input)
-    {
-        if (Uri.TryCreate(input, UriKind.Absolute, out var u) && !string.IsNullOrWhiteSpace(u.Scheme) && u.Scheme != "file")
-            return u.AbsoluteUri;
-        var path = Path.GetFullPath(input);
-        return File.Exists(path) ? new Uri(path).AbsoluteUri : null;
-    }
-
-    private static string? GetArg(string[] args, string name)
-    {
-        var idx = Array.IndexOf(args, name);
-        return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
-    }
 
     private static void PrintUsage()
     {
-        Console.WriteLine("AVMixerTest — A/V playback via AudioVideoMixer directly + SDL3");
+        Console.WriteLine("AVMixerTest — A/V playback via AVMixer directly + SDL3");
         Console.WriteLine("Usage: AVMixerTest --input <file> [options]");
         Console.WriteLine();
         Console.WriteLine("Options:");
@@ -191,6 +147,6 @@ internal static class Program
         Console.WriteLine("  --host-api <id>        Preferred PortAudio host API");
         Console.WriteLine("  --device-index <n>     Audio output device index (-1 = default)");
         Console.WriteLine("  --seconds <n>          Playback duration (default: 30)");
-        Console.WriteLine("  --sync-mode <mode>     Sync mode: realtime|synced (default: realtime)");
+        Console.WriteLine("  --sync-mode <mode>     Sync mode: audioled|realtime|synced (default: audioled)");
     }
 }

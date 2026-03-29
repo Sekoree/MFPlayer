@@ -12,7 +12,7 @@ namespace PMLib.Devices;
 /// </summary>
 public abstract class MIDIDevice : IDisposable
 {
-    private static readonly ILogger Logger = PMLibLogging.GetLogger("PMLib.Devices");
+    protected static readonly ILogger Logger = PMLibLogging.GetLogger("PMLib.Devices");
     private bool _disposed;
 
     /// <summary>Native PortMidi stream handle. <see cref="nint.Zero"/> when not open.</summary>

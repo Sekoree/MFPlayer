@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
     <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
     <ProjectReference Include="..\..\Media\S.Media.NDI\S.Media.NDI.csproj" />
+    <ProjectReference Include="..\TestShared\TestShared.csproj" />
   </ItemGroup>
 
 </Project>

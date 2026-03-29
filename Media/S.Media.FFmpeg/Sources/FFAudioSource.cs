@@ -47,14 +47,23 @@ public sealed class FFAudioSource : IAudioSource
         IsSeekable = isSeekable;
         Options = options ?? new FFAudioSourceOptions();
         _sharedDemuxSession = sharedDemuxSession;
-        SourceId = Guid.NewGuid();
+        Id = Guid.NewGuid();
     }
 
-    public Guid SourceId { get; }
+    public Guid Id { get; }
 
     public AudioSourceState State { get; private set; } = AudioSourceState.Stopped;
 
     public AudioStreamInfo StreamInfo { get; }
+
+    /// <inheritdoc/>
+    public float Volume { get; set; } = 1.0f;
+
+    /// <inheritdoc/>
+    public long? TotalSampleCount =>
+        StreamInfo.Duration.HasValue && StreamInfo.SampleRate.GetValueOrDefault(0) > 0
+            ? (long)(StreamInfo.Duration.Value.TotalSeconds * StreamInfo.SampleRate!.Value)
+            : null;
 
     public FFAudioSourceOptions Options { get; }
 
@@ -126,6 +135,11 @@ public sealed class FFAudioSource : IAudioSource
                     {
                         _positionSeconds += (double)framesRead / Math.Max(1, StreamInfo.SampleRate.GetValueOrDefault(48_000));
                     }
+                }
+                else if (framesRead == 0 && readCode == MediaResult.Success)
+                {
+                    // No more samples — signal end of stream
+                    lock (_gate) { if (State == AudioSourceState.Running) State = AudioSourceState.EndOfStream; }
                 }
 
                 return readCode;

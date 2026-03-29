@@ -53,6 +53,16 @@ public sealed class SDL3VideoView : IVideoOutput
     private nint _platformHandle;
     private string _platformDescriptor = string.Empty;
 
+    // ── Render thread (standalone window) ─────────────────────────────────────
+    // All OpenGL calls for standalone windows happen exclusively on this thread.
+    // PushFrame() is non-blocking: it enqueues frames here; the render thread
+    // dequeues them, sleeps for PTS-based timing, uploads textures, and swaps.
+    private Thread? _renderThread;
+    private volatile bool _renderStopRequested;
+    private readonly Queue<(VideoFrame Frame, TimeSpan Pts)> _renderQueue = new();
+    private readonly Lock _renderQueueLock = new();
+    private VideoOutputConfig _renderConfig = new();
+
     private delegate void GlViewport(int x, int y, int width, int height);
     private delegate void GlClearColor(float r, float g, float b, float a);
     private delegate void GlClear(int mask);
@@ -147,6 +157,8 @@ public sealed class SDL3VideoView : IVideoOutput
     }
 
     public Guid Id => _output.Id;
+
+    public VideoOutputState State => _output.State;
 
     public bool EnableHudOverlay { get; set; }
 
@@ -251,28 +263,36 @@ public sealed class SDL3VideoView : IVideoOutput
     {
         lock (_gate)
         {
-            if (_parentLost)
-            {
-                return (int)MediaErrorCode.SDL3EmbedParentLost;
-            }
+            if (_parentLost)   return (int)MediaErrorCode.SDL3EmbedParentLost;
+            if (!_initialized) return (int)MediaErrorCode.SDL3EmbedNotInitialized;
 
-            if (!_initialized)
-            {
-                return (int)MediaErrorCode.SDL3EmbedNotInitialized;
-            }
+            var outStart = _output.Start(config);
+            if (outStart != MediaResult.Success) return outStart;
 
-            if (!_pipelineReady)
+            _renderConfig = config;
+
+            // Embedded path: pipeline must be ready on the calling thread.
+            if (_embedded)
             {
-                var init = _shaderPipeline.EnsureInitialized();
-                if (init != MediaResult.Success)
+                if (!_pipelineReady)
                 {
-                    return init;
+                    var init = _shaderPipeline.EnsureInitialized();
+                    if (init != MediaResult.Success) return init;
+                    _pipelineReady = true;
                 }
-
-                _pipelineReady = true;
+                return MediaResult.Success;
             }
 
-            return _output.Start(config);
+            // Standalone path: start dedicated render thread which owns the GL context.
+            if (_renderThread is null && _windowHandle != nint.Zero)
+            {
+                _renderStopRequested = false;
+                _renderThread = new Thread(RenderLoop)
+                { Name = "SDL3VideoView.RenderLoop", IsBackground = true };
+                _renderThread.Start();
+            }
+
+            return MediaResult.Success;
         }
     }
 
@@ -283,6 +303,24 @@ public sealed class SDL3VideoView : IVideoOutput
 
     public int Stop()
     {
+        Thread? renderThread;
+        lock (_gate)
+        {
+            _renderStopRequested = true;
+            renderThread = _renderThread;
+            _renderThread = null;
+        }
+
+        if (renderThread is not null && !ReferenceEquals(Thread.CurrentThread, renderThread))
+            renderThread.Join(TimeSpan.FromSeconds(3));
+
+        // Drain any queued frames.
+        lock (_renderQueueLock)
+        {
+            while (_renderQueue.TryDequeue(out var item))
+                item.Frame.Dispose();
+        }
+
         return _output.Stop();
     }
 
@@ -293,70 +331,68 @@ public sealed class SDL3VideoView : IVideoOutput
 
     public int PushFrame(VideoFrame frame, TimeSpan presentationTime)
     {
+        bool embedded;
         lock (_gate)
         {
-            if (_parentLost)
-            {
-                return (int)MediaErrorCode.SDL3EmbedParentLost;
-            }
+            if (_parentLost)   return (int)MediaErrorCode.SDL3EmbedParentLost;
+            if (!_initialized) return (int)MediaErrorCode.SDL3EmbedNotInitialized;
+            embedded = _embedded;
+        }
 
-            if (!_initialized)
+        // ── Embedded path (e.g. Avalonia): synchronous on calling thread ───────
+        if (embedded)
+        {
+            lock (_gate)
             {
-                return (int)MediaErrorCode.SDL3EmbedNotInitialized;
-            }
+                var push = _output.PushFrame(frame, presentationTime);
+                if (push != MediaResult.Success) return push;
 
-            var push = _output.PushFrame(frame, presentationTime);
-            if (push != MediaResult.Success)
-            {
-                return push;
-            }
-
-            var generation = _output.Surface.LastPresentedFrameGeneration;
-            if (generation == _lastPresentedGeneration)
-            {
-                if (EnableHudOverlay && _hudDirty)
+                var generation = _output.Surface.LastPresentedFrameGeneration;
+                if (generation == _lastPresentedGeneration)
                 {
-                    _ = _hudRenderer.Render();
-                    _hudDirty = false;
+                    if (EnableHudOverlay && _hudDirty) { _ = _hudRenderer.Render(); _hudDirty = false; }
+                    return MediaResult.Success;
+                }
+                _lastPresentedGeneration = generation;
+
+                if (_pipelineReady)
+                {
+                    var upload = _shaderPipeline.Upload(frame);
+                    if (upload != MediaResult.Success) return upload;
+                    var draw = _shaderPipeline.Draw();
+                    if (draw != MediaResult.Success) return draw;
                 }
 
+                if (EnableHudOverlay) { _ = _hudRenderer.Render(); _hudDirty = false; }
                 return MediaResult.Success;
             }
-
-            _lastPresentedGeneration = generation;
-
-            if (_pipelineReady)
-            {
-                var upload = _shaderPipeline.Upload(frame);
-                if (upload != MediaResult.Success)
-                {
-                    return upload;
-                }
-
-                var draw = _shaderPipeline.Draw();
-                if (draw != MediaResult.Success)
-                {
-                    return draw;
-                }
-            }
-
-            if (!_embedded)
-            {
-                var present = PresentStandaloneFrameLocked(frame);
-                if (present != MediaResult.Success)
-                {
-                    return present;
-                }
-            }
-
-            if (EnableHudOverlay)
-            {
-                _ = _hudRenderer.Render();
-                _hudDirty = false;
-            }
-
-            return MediaResult.Success;
         }
+
+        // ── Standalone path: enqueue for the render thread ─────────────────────
+        var capacity = Math.Max(1, _renderConfig.QueueCapacity);
+        VideoFrame? toDrop = null;
+
+        lock (_renderQueueLock)
+        {
+            if (_renderQueue.Count >= capacity)
+            {
+                if (_renderConfig.BackpressureMode == VideoOutputBackpressureMode.DropOldest)
+                {
+                    if (_renderQueue.TryDequeue(out var old)) toDrop = old.Frame;
+                }
+                else
+                {
+                    // Busy – caller should back off.
+                    return (int)MediaErrorCode.VideoOutputBackpressureQueueFull;
+                }
+            }
+
+            try { _renderQueue.Enqueue((frame.AddRef(), presentationTime)); }
+            catch (ObjectDisposedException) { return (int)MediaErrorCode.VideoFrameDisposed; }
+        }
+
+        toDrop?.Dispose();
+        return MediaResult.Success;
     }
 
     public int PushAudio(in AudioFrame frame, TimeSpan presentationTime)
@@ -634,6 +670,9 @@ public sealed class SDL3VideoView : IVideoOutput
 
     public void Dispose()
     {
+        // Stop the render thread first so it releases the GL context before we destroy the window.
+        _ = Stop();
+
         var releaseSdl = false;
 
         lock (_gate)
@@ -811,6 +850,9 @@ public sealed class SDL3VideoView : IVideoOutput
         }
 
         _ = SDL.GLSetSwapInterval(1);
+
+        // Release the context from the calling thread so the render thread can acquire it.
+        _ = SDL.GLMakeCurrent(_windowHandle, nint.Zero);
 
         _glInitialized = false;
         _glTexture = 0;
@@ -1596,5 +1638,103 @@ public sealed class SDL3VideoView : IVideoOutput
         public int InternalFormat;
         public int Format;
         public int Type;
+    }
+
+    // ── Render thread ─────────────────────────────────────────────────────────
+
+    private void RenderLoop()
+    {
+        // Capture the handles once; they are immutable while the render thread lives
+        // (Stop() joins before DestroyStandaloneWindowLocked() can run).
+        nint wnd, ctx;
+        lock (_gate) { wnd = _windowHandle; ctx = _glContextHandle; }
+
+        if (wnd == nint.Zero || ctx == nint.Zero) return;
+
+        if (!SDL.GLMakeCurrent(wnd, ctx))
+        {
+            Console.Error.WriteLine("[SDL3VideoView] RenderLoop: GLMakeCurrent failed – " + SDL.GetError());
+            return;
+        }
+
+        // Initialise GL resources and the shader pipeline on this thread.
+        lock (_gate)
+        {
+            var glInit = EnsureGlResourcesLocked();
+            if (glInit != MediaResult.Success)
+            {
+                SDL.GLMakeCurrent(wnd, nint.Zero);
+                return;
+            }
+
+            if (!_pipelineReady)
+            {
+                var pipeInit = _shaderPipeline.EnsureInitialized();
+                if (pipeInit == MediaResult.Success)
+                    _pipelineReady = true;
+                // Non-fatal if pipeline fails – standalone rendering still works.
+            }
+        }
+
+        while (!_renderStopRequested)
+        {
+            // TODO: on macOS SDL events must be pumped on the main thread.
+            //       For now, pump them here (fine on Linux X11/Wayland).
+            PumpSdlEvents();
+
+            (VideoFrame Frame, TimeSpan Pts) item;
+            bool hasItem;
+            lock (_renderQueueLock) { hasItem = _renderQueue.TryDequeue(out item); }
+
+            if (!hasItem)
+            {
+                Thread.Sleep(1);
+                continue;
+            }
+
+            using (item.Frame)
+            {
+                RenderFrameOnRenderThread(item.Frame, item.Pts, wnd);
+            }
+        }
+
+        // Release the GL context before returning so it can be destroyed on the main thread.
+        SDL.GLMakeCurrent(wnd, nint.Zero);
+    }
+
+    private void RenderFrameOnRenderThread(VideoFrame frame, TimeSpan pts, nint wnd)
+    {
+        // Delegate timing (Thread.Sleep) + surface metadata update to OpenGLVideoOutput.
+        // This sleep now happens on the render thread, not the calling thread.
+        var push = _output.PushFrame(frame, pts);
+        if (push != MediaResult.Success) return;
+
+        var generation = _output.LastPresentedFrameGeneration;
+        if (generation == _lastPresentedGeneration) return;
+        _lastPresentedGeneration = generation;
+
+        // Shader pipeline upload (used by clone/Avalonia consumers sharing this engine).
+        bool pipelineReady;
+        lock (_gate) { pipelineReady = _pipelineReady; }
+        if (pipelineReady)
+        {
+            _ = _shaderPipeline.Upload(frame);
+            _ = _shaderPipeline.Draw();
+        }
+
+        // Standalone window rendering – no lock needed; render thread exclusively owns GL.
+        if (SDL.GetWindowSizeInPixels(wnd, out var pw, out var ph))
+            ApplyViewportForFrame(frame.Width, frame.Height, pw, ph);
+
+        int renderCode;
+        if (frame.PixelFormat is VideoPixelFormat.Rgba32 or VideoPixelFormat.Bgra32)
+            renderCode = RenderRgbaFrameLocked(frame);
+        else
+            renderCode = RenderYuvFrameLocked(frame);
+
+        if (renderCode != MediaResult.Success) return;
+
+        if (!SDL.GLSwapWindow(wnd))
+            Console.Error.WriteLine("[SDL3VideoView] GLSwapWindow failed – " + SDL.GetError());
     }
 }

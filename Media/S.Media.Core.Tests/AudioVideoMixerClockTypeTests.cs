@@ -1,3 +1,4 @@
+using S.Media.Core.Clock;
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
 using Xunit;
@@ -9,7 +10,7 @@ public sealed class AudioVideoMixerClockTypeTests
     [Fact]
     public void Constructor_UsesHybridByDefault()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
 
         Assert.Equal(ClockType.Hybrid, mixer.ClockType);
     }
@@ -17,7 +18,7 @@ public sealed class AudioVideoMixerClockTypeTests
     [Fact]
     public void SetClockType_ReturnsInvalid_ForUnknownClockType()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
 
         var result = mixer.SetClockType((ClockType)99);
 

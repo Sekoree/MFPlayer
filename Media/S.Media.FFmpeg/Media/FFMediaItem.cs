@@ -269,7 +269,9 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
 
     public bool HasMetadata => _metadata is not null;
 
-    public event EventHandler<MediaMetadataSnapshot>? MetadataUpdated;
+    public MediaMetadataSnapshot? GetMetadata() => _metadata;
+
+    public event EventHandler<MediaMetadataSnapshot>? MetadataChanged;
 
     public IReadOnlyList<IAudioSource> PlaybackAudioSources { get; }
 
@@ -287,7 +289,7 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
             }
 
             _disposed = true;
-            MetadataUpdated = null;
+            MetadataChanged = null;
         }
 
         if (!_ownsSources)
@@ -358,7 +360,7 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
 
             _metadataSignature = signature;
             _metadata = metadata;
-            handler = metadata is null ? null : MetadataUpdated;
+            handler = metadata is null ? null : MetadataChanged;
         }
 
         if (metadata is not null)

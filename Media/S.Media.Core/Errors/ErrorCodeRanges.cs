@@ -22,10 +22,13 @@ public static class ErrorCodeRanges
     {
         return code switch
         {
-            (int)MediaErrorCode.FFmpegConcurrentReadViolation => (int)MediaErrorCode.MediaConcurrentOperationViolation,
-            (int)MediaErrorCode.MIDIConcurrentOperationRejected => (int)MediaErrorCode.MediaConcurrentOperationViolation,
-            (int)MediaErrorCode.NDIAudioReadRejected => (int)MediaErrorCode.MediaConcurrentOperationViolation,
-            (int)MediaErrorCode.NDIVideoReadRejected => (int)MediaErrorCode.MediaConcurrentOperationViolation,
+            (int)MediaErrorCode.FFmpegConcurrentReadViolation    => (int)MediaErrorCode.MediaConcurrentOperationViolation,
+            (int)MediaErrorCode.MIDIConcurrentOperationRejected  => (int)MediaErrorCode.MediaConcurrentOperationViolation,
+            // NDI*ReadRejected intentionally NOT remapped here (§5.4 fix):
+            // Both codes fire when the source is stopped *and* during a concurrent read.
+            // Callers should check source.State to distinguish MediaSourceNotRunning from
+            // MediaConcurrentOperationViolation; NDI source implementations should return
+            // MediaSourceNotRunning when _running == false.
             _ => code,
         };
     }
@@ -52,6 +55,8 @@ public static class ErrorCodeRanges
     {
         if (code >= 0 && code <= 999)
         {
+            // MIDI lives in the GenericCommon band — check it first.
+            if (code >= 900 && code <= 949) return MediaErrorArea.MIDI;
             return MediaErrorArea.GenericCommon;
         }
 
@@ -72,6 +77,10 @@ public static class ErrorCodeRanges
 
         if (code >= 4000 && code <= 4999)
         {
+            // Sub-ranges inside OutputRender — check most-specific first.
+            if (code >= 4460 && code <= 4468) return MediaErrorArea.SDL3;
+            if (code >= 4400 && code <= 4499) return MediaErrorArea.OpenGL;
+            if (code >= 4300 && code <= 4399) return MediaErrorArea.PortAudio;
             return MediaErrorArea.OutputRender;
         }
 

@@ -6,6 +6,7 @@ namespace S.Media.Core.Video;
 public sealed class VideoFrame : IDisposable
 {
     private readonly Action<VideoFrame>? _releaseAction;
+    private int _refCount = 1;
     private int _disposed;
 
     public VideoFrame(
@@ -222,13 +223,57 @@ public sealed class VideoFrame : IDisposable
         return IsDisposed ? (int)MediaErrorCode.VideoFrameDisposed : MediaResult.Success;
     }
 
+    /// <summary>
+    /// Increments the reference count, keeping this frame alive past the original owner's
+    /// <see cref="Dispose"/> call. The returned instance is the same object; the caller must
+    /// call <see cref="Dispose"/> when done.
+    /// </summary>
+    /// <returns>The same <see cref="VideoFrame"/> instance with an incremented reference count.</returns>
+    /// <exception cref="ObjectDisposedException">Thrown if the frame has already been fully released.</exception>
+    /// <remarks>
+    /// <b>Ownership rule:</b> every code path that stores or enqueues a <see cref="VideoFrame"/>
+    /// across a scope boundary <em>must</em> call <c>AddRef()</c> before storing, and <em>must</em>
+    /// call <c>Dispose()</c> when done. Failing to call <c>AddRef()</c> before enqueue is a
+    /// silent use-after-free bug — the backing buffer may be returned to the pool while the
+    /// enqueued reference is still live.
+    /// <para>
+    /// Pattern:
+    /// <code>
+    /// frame.AddRef();           // keep alive
+    /// _queue.Enqueue(frame);    // safe — ref-count now ≥ 2
+    /// // … later, in consumer:
+    /// var f = _queue.Dequeue();
+    /// try { Process(f); }
+    /// finally { f.Dispose(); } // drops the AddRef
+    /// </code>
+    /// </para>
+    /// </remarks>
+    public VideoFrame AddRef()
+    {
+        // CAS loop: safely increment only if the ref-count is still positive.
+        int current;
+        do
+        {
+            current = Volatile.Read(ref _refCount);
+            if (current <= 0)
+            {
+                throw new ObjectDisposedException(nameof(VideoFrame));
+            }
+        }
+        while (Interlocked.CompareExchange(ref _refCount, current + 1, current) != current);
+
+        return this;
+    }
+
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        var remaining = Interlocked.Decrement(ref _refCount);
+        if (remaining == 0)
         {
-            return;
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _releaseAction?.Invoke(this);
+            }
         }
-
-        _releaseAction?.Invoke(this);
     }
 }

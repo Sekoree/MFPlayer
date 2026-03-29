@@ -49,10 +49,10 @@ public sealed class FFVideoSource : IVideoSource
         IsSeekable = isSeekable;
         TotalFrameCount = totalFrameCount;
         _sharedDemuxSession = sharedDemuxSession;
-        SourceId = Guid.NewGuid();
+        Id = Guid.NewGuid();
     }
 
-    public Guid SourceId { get; }
+    public Guid Id { get; }
 
     public VideoSourceState State { get; private set; } = VideoSourceState.Stopped;
 
@@ -305,18 +305,6 @@ public sealed class FFVideoSource : IVideoSource
         }
     }
 
-    public int SeekToFrame(long frameIndex, out long currentFrameIndex, out long? totalFrameCount)
-    {
-        var result = SeekToFrame(frameIndex);
-
-        lock (_gate)
-        {
-            currentFrameIndex = _currentFrameIndex;
-            totalFrameCount = TotalFrameCount;
-        }
-
-        return result;
-    }
 
     public void Dispose()
     {

@@ -2,7 +2,20 @@ namespace S.Media.Core.Errors;
 
 public enum MediaErrorCode
 {
-    Success = 0,
+    // ── GenericCommon (0–999) ─────────────────────────────────────────────────
+
+    /// <summary>The operation was called on an object that has already been disposed.</summary>
+    MediaObjectDisposed = 10,
+
+    /// <summary>
+    /// The operation was rejected because the source is not running.
+    /// Distinct from <see cref="MediaConcurrentOperationViolation"/> — the source is stopped,
+    /// not concurrently in use.
+    /// </summary>
+    MediaSourceNotRunning = 11,
+
+    /// <summary>A concurrent read or write operation was attempted while another was in progress.</summary>
+    MediaConcurrentOperationViolation = 950,
 
     MIDINotInitialized = 900,
     MIDIInitializeFailed = 901,
@@ -22,8 +35,7 @@ public enum MediaErrorCode
     MIDIDeviceDisconnected = 919,
     MIDIReconnectFailed = 920,
 
-    MediaConcurrentOperationViolation = 950,
-
+    // ── FFmpeg (2000–2999) ────────────────────────────────────────────────────
     FFmpegOpenFailed = 2000,
     FFmpegStreamNotFound = 2001,
     FFmpegDecoderInitFailed = 2002,
@@ -39,6 +51,7 @@ public enum MediaErrorCode
     FFmpegSharedContextOpenFailed = 2012,
     FFmpegSharedContextDisposed = 2013,
     FFmpegConcurrentReadViolation = 2014,
+    FFmpegVideoDecodeNeedMoreData = 2015,
 
     MixerDetachStepFailed = 3000,
     MixerSourceIdCollision = 3001,
@@ -51,6 +64,7 @@ public enum MediaErrorCode
     AudioRouteMapMissing = 4200,
     AudioRouteMapInvalid = 4201,
     AudioChannelCountMismatch = 4203,
+    AudioSampleRateMismatch = 4204,
     MediaSourceNonSeekable = 4208,
     MediaSourceReadTimeout = 4209,
     MediaInvalidArgument = 4210,
@@ -124,4 +138,6 @@ public enum MediaErrorCode
     NDIInvalidQueueOverflowPolicyOverride = 5023,
     NDIInvalidVideoFallbackOverride = 5024,
     NDIInvalidDiagnosticsTickOverride = 5025,
+    NDIOutputUnsupportedPixelFormat = 5026,
+    NDISenderCreateFailed = 5027,
 }

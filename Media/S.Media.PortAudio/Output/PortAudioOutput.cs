@@ -18,6 +18,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
     private int _nativeFramesPerBuffer;
     private bool _nativeStreaming;
     private bool _disposed;
+    private AudioResampler? _resampler;
+    private AudioOutputConfig _outputConfig = new();
 
     public PortAudioOutput(
         AudioDeviceInfo device,
@@ -51,6 +53,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             {
                 return (int)MediaErrorCode.PortAudioStreamStartFailed;
             }
+
+            _outputConfig = config ?? new AudioOutputConfig();
+            _resampler?.Dispose();
+            _resampler = null;
 
             if (State == AudioOutputState.Running && _nativeStreaming && _stream != nint.Zero)
             {
@@ -180,6 +186,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             }
 
             _disposed = true;
+            _resampler?.Dispose();
+            _resampler = null;
             CloseNativeStreamIfOpen();
             State = AudioOutputState.Stopped;
             AudioDeviceChanged = null;
@@ -199,6 +207,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
             previous = Device;
             Device = newDevice;
+            _resampler?.Dispose();
+            _resampler = null;
         }
 
         if (previous != newDevice)
@@ -325,83 +335,155 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
     private int TryWriteNativeFrame(in AudioFrame frame, ReadOnlySpan<int> routeMap, int sourceChannelCount)
     {
-        var requiredSamples = frame.FrameCount * _nativeChannelCount;
-        if (requiredSamples <= 0)
-        {
-            return MediaResult.Success;
-        }
-
         var source = frame.Samples.Span;
-        var rented = ArrayPool<float>.Shared.Rent(requiredSamples);
+        var effectiveFrameCount = frame.FrameCount;
+        var effectiveSourceChannelCount = sourceChannelCount;
+        float[]? resampledRented = null;
 
         try
         {
-            for (var frameIndex = 0; frameIndex < frame.FrameCount; frameIndex++)
+            // --- Sample-rate conversion when source rate differs from native output rate ---
+            if (frame.SampleRate > 0 && frame.SampleRate != _nativeSampleRate)
             {
-                for (var outputChannel = 0; outputChannel < _nativeChannelCount; outputChannel++)
+                var resampler = EnsureResampler(frame.SampleRate, sourceChannelCount);
+                if (resampler is null)
                 {
-                    var outputOffset = (frameIndex * _nativeChannelCount) + outputChannel;
-                    var sourceChannel = outputChannel < routeMap.Length ? routeMap[outputChannel] : -1;
-                    if (sourceChannel < 0)
-                    {
-                        rented[outputOffset] = 0f;
-                        continue;
-                    }
-
-                    if (sourceChannel >= sourceChannelCount)
-                    {
-                        return (int)MediaErrorCode.AudioRouteMapInvalid;
-                    }
-
-                    var sourceOffset = (frameIndex * sourceChannelCount) + sourceChannel;
-                    rented[outputOffset] = sourceOffset < source.Length ? source[sourceOffset] : 0f;
+                    return (int)MediaErrorCode.AudioSampleRateMismatch;
                 }
+
+                var estimatedFrames = resampler.EstimateOutputFrameCount(frame.FrameCount);
+                var resampledSampleCount = estimatedFrames * sourceChannelCount;
+                resampledRented = ArrayPool<float>.Shared.Rent(resampledSampleCount);
+
+                var resampledFrames = resampler.Resample(source, frame.FrameCount, resampledRented.AsSpan(0, resampledSampleCount));
+                if (resampledFrames < 0)
+                {
+                    // Channel mismatch with Fail policy
+                    return (int)MediaErrorCode.AudioChannelCountMismatch;
+                }
+
+                source = resampledRented.AsSpan(0, resampledFrames * sourceChannelCount);
+                effectiveFrameCount = resampledFrames;
             }
 
-            fixed (float* ptr = rented)
+            var requiredSamples = effectiveFrameCount * _nativeChannelCount;
+            if (requiredSamples <= 0)
             {
-                var framesRemaining = frame.FrameCount;
-                var frameOffset = 0;
+                return MediaResult.Success;
+            }
 
-                while (framesRemaining > 0)
+            var rented = ArrayPool<float>.Shared.Rent(requiredSamples);
+
+            try
+            {
+                for (var frameIndex = 0; frameIndex < effectiveFrameCount; frameIndex++)
                 {
-                    if (_disposed || State != AudioOutputState.Running || _stream == nint.Zero)
+                    for (var outputChannel = 0; outputChannel < _nativeChannelCount; outputChannel++)
                     {
+                        var outputOffset = (frameIndex * _nativeChannelCount) + outputChannel;
+                        var sourceChannel = outputChannel < routeMap.Length ? routeMap[outputChannel] : -1;
+                        if (sourceChannel < 0)
+                        {
+                            rented[outputOffset] = 0f;
+                            continue;
+                        }
+
+                        if (sourceChannel >= effectiveSourceChannelCount)
+                        {
+                            return (int)MediaErrorCode.AudioRouteMapInvalid;
+                        }
+
+                        var sourceOffset = (frameIndex * effectiveSourceChannelCount) + sourceChannel;
+                        rented[outputOffset] = sourceOffset < source.Length ? source[sourceOffset] : 0f;
+                    }
+                }
+
+                fixed (float* ptr = rented)
+                {
+                    var framesRemaining = effectiveFrameCount;
+                    var frameOffset = 0;
+
+                    while (framesRemaining > 0)
+                    {
+                        if (_disposed || State != AudioOutputState.Running || _stream == nint.Zero)
+                        {
+                            return (int)MediaErrorCode.PortAudioPushFailed;
+                        }
+
+                        var writableFrames = Math.Min(framesRemaining, Math.Max(1, _nativeFramesPerBuffer));
+                        var sampleOffset = frameOffset * _nativeChannelCount;
+                        var writePtr = ptr + sampleOffset;
+                        var write = Native.Pa_WriteStream(_stream, (nint)writePtr, (nuint)writableFrames);
+                        if (write == PaError.paNoError)
+                        {
+                            frameOffset += writableFrames;
+                            framesRemaining -= writableFrames;
+                            continue;
+                        }
+
+                        if (write == PaError.paTimedOut || write == PaError.paOutputUnderflowed)
+                        {
+                            // Keep blocking semantics: retry transient backpressure.
+                            // Thread.Sleep is preferred over Pa_Sleep in managed code.
+                            Thread.Sleep(1);
+                            continue;
+                        }
+
+                        if (write == PaError.paUnanticipatedHostError)
+                        {
+                            return (int)MediaErrorCode.PortAudioHostError;
+                        }
+
                         return (int)MediaErrorCode.PortAudioPushFailed;
                     }
 
-                    var writableFrames = Math.Min(framesRemaining, Math.Max(1, _nativeFramesPerBuffer));
-                    var sampleOffset = frameOffset * _nativeChannelCount;
-                    var writePtr = ptr + sampleOffset;
-                    var write = Native.Pa_WriteStream(_stream, (nint)writePtr, (nuint)writableFrames);
-                    if (write == PaError.paNoError)
-                    {
-                        frameOffset += writableFrames;
-                        framesRemaining -= writableFrames;
-                        continue;
-                    }
-
-                    if (write == PaError.paTimedOut || write == PaError.paOutputUnderflowed)
-                    {
-                        // Keep blocking semantics: retry transient backpressure until the chunk is accepted.
-                        Native.Pa_Sleep(1);
-                        continue;
-                    }
-
-                    if (write == PaError.paUnanticipatedHostError)
-                    {
-                        return (int)MediaErrorCode.PortAudioHostError;
-                    }
-
-                    return (int)MediaErrorCode.PortAudioPushFailed;
+                    return MediaResult.Success;
                 }
-
-                return MediaResult.Success;
+            }
+            finally
+            {
+                ArrayPool<float>.Shared.Return(rented, clearArray: false);
             }
         }
         finally
         {
-            ArrayPool<float>.Shared.Return(rented, clearArray: false);
+            if (resampledRented is not null)
+            {
+                ArrayPool<float>.Shared.Return(resampledRented, clearArray: false);
+            }
+        }
+    }
+
+    private AudioResampler? EnsureResampler(int sourceSampleRate, int sourceChannelCount)
+    {
+        if (_resampler is not null
+            && _resampler.SourceSampleRate == sourceSampleRate
+            && _resampler.SourceChannelCount == sourceChannelCount
+            && _resampler.TargetSampleRate == _nativeSampleRate
+            && _resampler.TargetChannelCount == sourceChannelCount)
+        {
+            return _resampler;
+        }
+
+        _resampler?.Dispose();
+        _resampler = null;
+
+        try
+        {
+            // Resample rate only; channel routing is handled by the route map in the caller.
+            // Pass sourceChannelCount as both source and target channel count.
+            _resampler = new AudioResampler(
+                sourceSampleRate,
+                sourceChannelCount,
+                _nativeSampleRate,
+                sourceChannelCount,
+                _outputConfig.ResamplerMode,
+                _outputConfig.ChannelMismatchPolicy);
+            return _resampler;
+        }
+        catch
+        {
+            return null;
         }
     }
 

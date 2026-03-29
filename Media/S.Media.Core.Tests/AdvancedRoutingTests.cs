@@ -12,20 +12,20 @@ public sealed class AdvancedRoutingTests
     // ─── Interface discovery ────────────────────────────────────────────
 
     [Fact]
-    public void AudioVideoMixer_ImplementsISupportsAdvancedRouting()
+    public void AudioVideoMixer_ImplementsIMixerRouting()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
 
-        Assert.IsAssignableFrom<ISupportsAdvancedRouting>(mixer);
+        Assert.IsAssignableFrom<IMixerRouting>(mixer);
     }
 
     [Fact]
-    public void MediaPlayer_AlsoImplementsISupportsAdvancedRouting()
+    public void MediaPlayer_AlsoImplementsIMixerRouting()
     {
         IMediaPlayer player = new MediaPlayer();
 
-        // MediaPlayer inherits from AudioVideoMixer, which implements ISupportsAdvancedRouting.
-        Assert.IsAssignableFrom<ISupportsAdvancedRouting>(player);
+        // MediaPlayer inherits from AVMixer, which implements IMixerRouting.
+        Assert.IsAssignableFrom<IMixerRouting>(player);
     }
 
     // ─── Audio routing rules ────────────────────────────────────────────
@@ -33,7 +33,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void AddAudioRoutingRule_AddsRule_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule = new AudioRoutingRule(Guid.NewGuid(), 0, Guid.NewGuid(), 0, 1.0f);
 
         var result = mixer.AddAudioRoutingRule(rule);
@@ -46,7 +46,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void RemoveAudioRoutingRule_RemovesRule_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule = new AudioRoutingRule(Guid.NewGuid(), 0, Guid.NewGuid(), 0, 1.0f);
         mixer.AddAudioRoutingRule(rule);
 
@@ -59,7 +59,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void RemoveAudioRoutingRule_NonExistentRule_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule = new AudioRoutingRule(Guid.NewGuid(), 0, Guid.NewGuid(), 0, 1.0f);
 
         var result = mixer.RemoveAudioRoutingRule(rule);
@@ -70,7 +70,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void ClearAudioRoutingRules_ClearsAll_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         mixer.AddAudioRoutingRule(new AudioRoutingRule(Guid.NewGuid(), 0, Guid.NewGuid(), 0));
         mixer.AddAudioRoutingRule(new AudioRoutingRule(Guid.NewGuid(), 1, Guid.NewGuid(), 1));
 
@@ -83,7 +83,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void AudioRoutingRules_ReturnsSnapshot_NotLiveReference()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule1 = new AudioRoutingRule(Guid.NewGuid(), 0, Guid.NewGuid(), 0);
         mixer.AddAudioRoutingRule(rule1);
 
@@ -107,7 +107,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void AddVideoRoutingRule_AddsRule_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule = new VideoRoutingRule(Guid.NewGuid(), Guid.NewGuid());
 
         var result = mixer.AddVideoRoutingRule(rule);
@@ -120,7 +120,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void RemoveVideoRoutingRule_RemovesRule_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule = new VideoRoutingRule(Guid.NewGuid(), Guid.NewGuid());
         mixer.AddVideoRoutingRule(rule);
 
@@ -133,7 +133,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void RemoveVideoRoutingRule_NonExistentRule_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule = new VideoRoutingRule(Guid.NewGuid(), Guid.NewGuid());
 
         var result = mixer.RemoveVideoRoutingRule(rule);
@@ -144,7 +144,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void ClearVideoRoutingRules_ClearsAll_ReturnsSuccess()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         mixer.AddVideoRoutingRule(new VideoRoutingRule(Guid.NewGuid(), Guid.NewGuid()));
         mixer.AddVideoRoutingRule(new VideoRoutingRule(Guid.NewGuid(), Guid.NewGuid()));
 
@@ -157,7 +157,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void VideoRoutingRules_ReturnsSnapshot_NotLiveReference()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var rule1 = new VideoRoutingRule(Guid.NewGuid(), Guid.NewGuid());
         mixer.AddVideoRoutingRule(rule1);
 
@@ -173,7 +173,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void MultipleAudioRules_CanTargetSameOutput()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var sourceA = Guid.NewGuid();
         var sourceB = Guid.NewGuid();
         var outputId = Guid.NewGuid();
@@ -188,7 +188,7 @@ public sealed class AdvancedRoutingTests
     [Fact]
     public void MultipleVideoRules_CanTargetDifferentOutputs()
     {
-        var mixer = new AudioVideoMixer();
+        var mixer = new AVMixer();
         var sourceId = Guid.NewGuid();
         var out1 = Guid.NewGuid();
         var out2 = Guid.NewGuid();

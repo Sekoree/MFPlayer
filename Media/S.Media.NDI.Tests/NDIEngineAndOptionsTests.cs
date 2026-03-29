@@ -225,6 +225,85 @@ public sealed class NDIEngineAndOptionsTests
         Assert.Equal(0, Volatile.Read(ref callbackCount));
     }
 
+    [Fact]
+    public void NDISourceOptions_LowLatency_HasExpectedValues()
+    {
+        var opts = NDISourceOptions.LowLatency;
+        Assert.Equal(1, opts.VideoJitterBufferFrames);
+        Assert.Equal(20, opts.AudioJitterBufferMs);
+        Assert.Equal(TimeSpan.FromMilliseconds(50), opts.DiagnosticsTickInterval);
+        Assert.Equal(MediaResult.Success, opts.Validate());
+    }
+
+    [Fact]
+    public void NDISourceOptions_Balanced_MatchesDefaults()
+    {
+        var opts = NDISourceOptions.Balanced;
+        var defaults = new NDISourceOptions();
+        Assert.Equal(defaults.VideoJitterBufferFrames, opts.VideoJitterBufferFrames);
+        Assert.Equal(defaults.AudioJitterBufferMs, opts.AudioJitterBufferMs);
+        Assert.Equal(defaults.DiagnosticsTickInterval, opts.DiagnosticsTickInterval);
+    }
+
+    [Fact]
+    public void NDISourceOptions_Safe_HasExpectedValues()
+    {
+        var opts = NDISourceOptions.Safe;
+        Assert.Equal(6, opts.VideoJitterBufferFrames);
+        Assert.Equal(150, opts.AudioJitterBufferMs);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), opts.DiagnosticsTickInterval);
+        Assert.Equal(MediaResult.Success, opts.Validate());
+    }
+
+    [Fact]
+    public void NDILimitsOptions_LowLatency_HasExpectedValues()
+    {
+        var opts = NDILimitsOptions.LowLatency;
+        Assert.Equal(1, opts.VideoJitterBufferFrames);
+        Assert.Equal(20, opts.AudioJitterBufferMs);
+        Assert.Equal(4, opts.MaxPendingAudioFrames);
+        Assert.Equal(4, opts.MaxPendingVideoFrames);
+    }
+
+    [Fact]
+    public void NDILimitsOptions_Balanced_MatchesDefaults()
+    {
+        var opts = NDILimitsOptions.Balanced;
+        var defaults = new NDILimitsOptions();
+        Assert.Equal(defaults.VideoJitterBufferFrames, opts.VideoJitterBufferFrames);
+        Assert.Equal(defaults.AudioJitterBufferMs, opts.AudioJitterBufferMs);
+        Assert.Equal(defaults.MaxPendingAudioFrames, opts.MaxPendingAudioFrames);
+        Assert.Equal(defaults.MaxPendingVideoFrames, opts.MaxPendingVideoFrames);
+    }
+
+    [Fact]
+    public void NDILimitsOptions_Safe_HasExpectedValues()
+    {
+        var opts = NDILimitsOptions.Safe;
+        Assert.Equal(6, opts.VideoJitterBufferFrames);
+        Assert.Equal(150, opts.AudioJitterBufferMs);
+        Assert.Equal(16, opts.MaxPendingAudioFrames);
+        Assert.Equal(16, opts.MaxPendingVideoFrames);
+    }
+
+    [Fact]
+    public void NDIDiagnosticsOptions_Default_MatchesConstructor()
+    {
+        var opts = NDIDiagnosticsOptions.Default;
+        var defaults = new NDIDiagnosticsOptions();
+        Assert.Equal(defaults.EnableDedicatedDiagnosticsThread, opts.EnableDedicatedDiagnosticsThread);
+        Assert.Equal(defaults.DiagnosticsTickInterval, opts.DiagnosticsTickInterval);
+    }
+
+    [Fact]
+    public void NDIEngine_ParameterlessInitialize_Succeeds()
+    {
+        using var engine = new NDIEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize());
+        Assert.True(engine.IsInitialized);
+        Assert.Equal(MediaResult.Success, engine.Terminate());
+    }
+
     private static VideoFrame CreateVideoFrame()
     {
         var rgba = new byte[2 * 2 * 4];

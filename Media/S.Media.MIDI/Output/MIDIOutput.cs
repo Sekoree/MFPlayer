@@ -85,7 +85,7 @@ public sealed class MIDIOutput : IDisposable
         var closeCode = MediaResult.Success;
         if (_nativeEnabled && stream != nint.Zero)
         {
-            closeCode = MIDIPortMidiErrorMapper.MapCloseOutput(Native.Pm_Close(stream));
+            closeCode = MIDIPortMidiErrorMapper.MapCloseOutput(PMUtil.Close(stream));
         }
 
         PublishStatus(MIDIConnectionStatus.Closed, closeCode == MediaResult.Success ? null : closeCode);
@@ -115,7 +115,7 @@ public sealed class MIDIOutput : IDisposable
             stream = _stream;
         }
 
-        var send = Native.Pm_WriteShort(stream, message.Timestamp, message.RawMessage);
+        var send = PMUtil.WriteShort(stream, message.Timestamp, message.RawMessage);
         var sendCode = MIDIPortMidiErrorMapper.MapSend(send);
         if (sendCode != (int)MediaErrorCode.MIDIDeviceDisconnected)
         {
@@ -138,7 +138,7 @@ public sealed class MIDIOutput : IDisposable
             stream = _stream;
         }
 
-        var retry = Native.Pm_WriteShort(stream, message.Timestamp, message.RawMessage);
+        var retry = PMUtil.WriteShort(stream, message.Timestamp, message.RawMessage);
         var retryCode = MIDIPortMidiErrorMapper.MapSend(retry);
         return retryCode == (int)MediaErrorCode.MIDIDeviceDisconnected
             ? HandleDisconnected(retryCode)
@@ -183,7 +183,7 @@ public sealed class MIDIOutput : IDisposable
 
         if (_nativeEnabled && stream != nint.Zero)
         {
-            _ = MIDIPortMidiErrorMapper.MapCloseOutput(Native.Pm_Close(stream));
+            _ = MIDIPortMidiErrorMapper.MapCloseOutput(PMUtil.Close(stream));
         }
 
         PublishStatus(MIDIConnectionStatus.Disconnected, errorCode);
@@ -207,13 +207,10 @@ public sealed class MIDIOutput : IDisposable
 
     private int TryOpenNative(out nint stream)
     {
-        var open = Native.Pm_OpenOutput(
+        var open = PMUtil.OpenOutput(
             out stream,
             Device.DeviceId,
-            outputSysDepInfo: nint.Zero,
             bufferSize: 256,
-            timeProc: nint.Zero,
-            timeInfo: nint.Zero,
             latency: 0);
 
         return MIDIPortMidiErrorMapper.MapOpenOutput(open);
@@ -243,7 +240,7 @@ public sealed class MIDIOutput : IDisposable
                 {
                     if (_disposed)
                     {
-                        _ = MIDIPortMidiErrorMapper.MapCloseOutput(Native.Pm_Close(stream));
+                        _ = MIDIPortMidiErrorMapper.MapCloseOutput(PMUtil.Close(stream));
                         reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
                         return false;
                     }

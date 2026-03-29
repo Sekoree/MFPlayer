@@ -30,6 +30,11 @@ public sealed class OSCServer : IOSCServer
         Options = options;
         _logger = logger ?? NullLogger<OSCServer>.Instance;
         _udpClient = new UdpClient(options.Port);
+
+        if (options.MulticastGroup != null)
+            _udpClient.JoinMulticastGroup(
+                options.MulticastGroup,
+                options.MulticastLocalAddress ?? IPAddress.Any);
     }
 
     public OSCServerOptions Options { get; }
@@ -70,7 +75,6 @@ public sealed class OSCServer : IOSCServer
         }
         catch (Exception ex)
         {
-            // If the receive loop faulted (e.g. Throw oversize policy), still complete cleanup.
             _logger.LogDebug(ex, "OSC receive loop exited with an exception during stop.");
         }
         finally
@@ -106,6 +110,10 @@ public sealed class OSCServer : IOSCServer
                 continue;
             }
 
+            // Capture the receive timestamp immediately — before any decoding or dispatch —
+            // to give handlers the most accurate network arrival time.
+            var receivedAt = DateTimeOffset.UtcNow;
+
             if (received.Buffer.Length > Options.MaxPacketBytes)
             {
                 HandleOversizePacket(received.Buffer.Length);
@@ -124,7 +132,7 @@ public sealed class OSCServer : IOSCServer
             if (_logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("Decoded OSC packet {Kind} from {Remote}", packet!.Kind, received.RemoteEndPoint);
 
-            await DispatchPacketAsync(packet!, received.RemoteEndPoint, null, cancellationToken).ConfigureAwait(false);
+            await DispatchPacketAsync(packet!, received.RemoteEndPoint, null, receivedAt, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -132,18 +140,19 @@ public sealed class OSCServer : IOSCServer
         OSCPacket packet,
         IPEndPoint remote,
         OSCTimeTag? bundleTimeTag,
+        DateTimeOffset receivedAt,
         CancellationToken cancellationToken)
     {
         if (packet.Kind == OSCPacketKind.Message)
         {
-            var context = new OSCMessageContext(packet.Message!, remote, bundleTimeTag, DateTimeOffset.UtcNow);
+            var context = new OSCMessageContext(packet.Message!, remote, bundleTimeTag, receivedAt);
             _ = await _router.DispatchAsync(context, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         var bundle = packet.Bundle!;
         foreach (var child in bundle.Elements)
-            await DispatchPacketAsync(child, remote, bundle.TimeTag, cancellationToken).ConfigureAwait(false);
+            await DispatchPacketAsync(child, remote, bundle.TimeTag, receivedAt, cancellationToken).ConfigureAwait(false);
     }
 
     private void HandleOversizePacket(int packetLength)

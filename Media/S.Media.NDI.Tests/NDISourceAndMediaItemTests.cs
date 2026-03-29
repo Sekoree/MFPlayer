@@ -25,8 +25,10 @@ public sealed class NDISourceAndMediaItemTests
     }
 
     [Fact]
-    public void StoppedReadRejectCodes_MapToSharedConcurrentSemantic()
+    public void StoppedReadRejectCodes_ReturnMediaSourceNotRunning()
     {
+        // §5.4: a stopped (never-started) source returns MediaSourceNotRunning, not the
+        // concurrent-read code.  Callers must inspect source.State to distinguish the two.
         var item = new NDIMediaItem(new NdiDiscoveredSource("test-source", null));
         Assert.Equal(MediaResult.Success, item.CreateAudioSource(out var audio));
         Assert.Equal(MediaResult.Success, item.CreateVideoSource(out var video));
@@ -35,10 +37,11 @@ public sealed class NDISourceAndMediaItemTests
         var audioCode = audio!.ReadSamples(destination, requestedFrameCount: 4, out _);
         var videoCode = video!.ReadFrame(out _);
 
-        Assert.Equal((int)MediaErrorCode.NDIAudioReadRejected, audioCode);
-        Assert.Equal((int)MediaErrorCode.NDIVideoReadRejected, videoCode);
-        Assert.Equal((int)MediaErrorCode.MediaConcurrentOperationViolation, ErrorCodeRanges.ResolveSharedSemantic(audioCode));
-        Assert.Equal((int)MediaErrorCode.MediaConcurrentOperationViolation, ErrorCodeRanges.ResolveSharedSemantic(videoCode));
+        Assert.Equal((int)MediaErrorCode.MediaSourceNotRunning, audioCode);
+        Assert.Equal((int)MediaErrorCode.MediaSourceNotRunning, videoCode);
+        // MediaSourceNotRunning passes through ResolveSharedSemantic unchanged.
+        Assert.Equal((int)MediaErrorCode.MediaSourceNotRunning, ErrorCodeRanges.ResolveSharedSemantic(audioCode));
+        Assert.Equal((int)MediaErrorCode.MediaSourceNotRunning, ErrorCodeRanges.ResolveSharedSemantic(videoCode));
     }
 
     [Fact]
@@ -46,7 +49,7 @@ public sealed class NDISourceAndMediaItemTests
     {
         var item = new NDIMediaItem(new NdiDiscoveredSource("test-source", null));
         MediaMetadataSnapshot? observed = null;
-        item.MetadataUpdated += (_, snapshot) => observed = snapshot;
+        item.MetadataChanged += (_, snapshot) => observed = snapshot;
 
         item.PublishMetadata(new Dictionary<string, string> { ["ndi:name"] = "test-source" });
 
@@ -89,7 +92,7 @@ public sealed class NDISourceAndMediaItemTests
 
         Span<float> destination = stackalloc float[16];
         var rejected = audio!.ReadSamples(destination, requestedFrameCount: 4, out _);
-        Assert.Equal((int)MediaErrorCode.NDIAudioReadRejected, rejected);
+        Assert.Equal((int)MediaErrorCode.MediaSourceNotRunning, rejected); // §5.4: stopped → not running
 
         Assert.Equal(MediaResult.Success, audio.Start());
         Assert.Equal(MediaResult.Success, audio.ReadSamples(destination, requestedFrameCount: 4, out var framesRead));
@@ -112,7 +115,7 @@ public sealed class NDISourceAndMediaItemTests
         PrimeAudioRing(audio!, [0.25f, 0.5f, 0.75f, 1.0f]); // Two stereo frames.
 
         Span<float> destination = stackalloc float[8]; // Four requested stereo frames.
-        Assert.Equal((int)MediaErrorCode.NDIAudioReadRejected, audio!.ReadSamples(destination, requestedFrameCount: 4, out var rejectedBeforeStartFramesRead));
+        Assert.Equal((int)MediaErrorCode.MediaSourceNotRunning, audio!.ReadSamples(destination, requestedFrameCount: 4, out var rejectedBeforeStartFramesRead));
         Assert.Equal(0, rejectedBeforeStartFramesRead);
 
         Assert.Equal(MediaResult.Success, audio.Start());
@@ -137,7 +140,7 @@ public sealed class NDISourceAndMediaItemTests
         Assert.Equal(MediaResult.Success, item.CreateVideoSource(out var video));
 
         var rejected = video!.ReadFrame(out _);
-        Assert.Equal((int)MediaErrorCode.NDIVideoReadRejected, rejected);
+        Assert.Equal((int)MediaErrorCode.MediaSourceNotRunning, rejected);
 
         Assert.Equal(MediaResult.Success, video.Start());
         Assert.Equal(MediaResult.Success, video.ReadFrame(out var frame));

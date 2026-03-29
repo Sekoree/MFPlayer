@@ -186,7 +186,7 @@ public sealed class MIDIEngine : IDisposable
     {
         try
         {
-            var code = Native.Pm_Initialize();
+            var code = PMUtil.Initialize();
             return code == PmError.NoError;
         }
         catch (DllNotFoundException)
@@ -207,7 +207,7 @@ public sealed class MIDIEngine : IDisposable
     {
         try
         {
-            _ = Native.Pm_Terminate();
+            _ = PMUtil.Terminate();
         }
         catch (DllNotFoundException)
         {
@@ -232,24 +232,17 @@ public sealed class MIDIEngine : IDisposable
             return;
         }
 
-        var count = Native.Pm_CountDevices();
-        for (var id = 0; id < count; id++)
+        foreach (var entry in PMUtil.GetAllDevices())
         {
-            var info = PMUtil.GetDeviceInfo(id);
-            if (!info.HasValue)
-            {
-                continue;
-            }
-
-            var name = string.IsNullOrWhiteSpace(info.Value.Name)
-                ? $"MIDI Device {id}"
-                : info.Value.Name!;
+            var name = string.IsNullOrWhiteSpace(entry.Name)
+                ? $"MIDI Device {entry.Id}"
+                : entry.Name!;
 
             var device = new MIDIDeviceInfo(
-                DeviceId: id,
+                DeviceId: entry.Id,
                 Name: name,
-                IsInput: info.Value.Input != 0,
-                IsOutput: info.Value.Output != 0,
+                IsInput: entry.IsInput,
+                IsOutput: entry.IsOutput,
                 IsNative: true);
 
             if (device.IsInput)

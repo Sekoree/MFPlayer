@@ -1,14 +1,14 @@
 namespace S.Media.Core.Mixing;
 
-public sealed class AudioVideoMixerStateChangedEventArgs : EventArgs
+public sealed class AVMixerStateChangedEventArgs : EventArgs
 {
-    public AudioVideoMixerStateChangedEventArgs(AudioVideoMixerState previousState, AudioVideoMixerState currentState)
+    public AVMixerStateChangedEventArgs(AVMixerState previousState, AVMixerState currentState)
     {
         PreviousState = previousState;
         CurrentState = currentState;
     }
 
-    public AudioVideoMixerState PreviousState { get; }
+    public AVMixerState PreviousState { get; }
 
-    public AudioVideoMixerState CurrentState { get; }
+    public AVMixerState CurrentState { get; }
 }

@@ -1,9 +1,10 @@
+using Microsoft.Extensions.Logging;
 using PALib.Runtime;
 using PALib.Types.Core;
 
 namespace PALib.WDMKS;
 
-public static class Native
+internal static class Native
 {
     private const string Category = "PALib.WDMKS";
     private static bool IsSupportedPlatform => OperatingSystem.IsWindows();
@@ -14,13 +15,9 @@ public static class Native
             return PaError.paIncompatibleStreamHostApi;
 
         var logger = PALibLogging.GetLogger(Category);
-        PALibLogging.TraceCall(logger, nameof(TraceInfo),
-            (nameof(info.size), info.size),
-            (nameof(info.hostApiType), info.hostApiType),
-            (nameof(info.version), info.version),
-            (nameof(info.flags), info.flags),
-            (nameof(info.noOfPackets), info.noOfPackets),
-            (nameof(info.channelMask), info.channelMask));
+        if (logger.IsEnabled(LogLevel.Trace))
+            logger.LogTrace("{Method}(size={Size}, hostApiType={HostApiType}, version={Version}, flags={Flags}, noOfPackets={NoOfPackets}, channelMask={ChannelMask})",
+                nameof(TraceInfo), info.size, info.hostApiType, info.version, info.flags, info.noOfPackets, info.channelMask);
 
         return PaError.paNoError;
     }

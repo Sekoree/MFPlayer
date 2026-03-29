@@ -30,6 +30,11 @@ internal sealed class FFVideoDecoder : IDisposable
 
     public int Decode() => _disposed || !_initialized ? (int)MediaErrorCode.FFmpegVideoDecodeFailed : MediaResult.Success;
 
+    /// <summary>
+    /// Decodes a video packet. Returns <see cref="MediaResult.Success"/> when a frame is produced,
+    /// <c>EAGAIN</c> (via <see cref="MediaErrorCode.FFmpegVideoDecodeNeedMoreData"/>) when the
+    /// decoder needs more packets before it can output a frame, or an error code on failure.
+    /// </summary>
     public int Decode(FFPacket packet, out FFVideoDecodeResult result)
     {
         result = default;
@@ -39,13 +44,22 @@ internal sealed class FFVideoDecoder : IDisposable
             return (int)MediaErrorCode.FFmpegVideoDecodeFailed;
         }
 
-        if (_nativeDecodeEnabled && TryDecodeNative(packet, out var nativeResult))
+        if (!_nativeDecodeEnabled)
         {
-            result = nativeResult;
-            return MediaResult.Success;
+            return (int)MediaErrorCode.FFmpegVideoDecodeFailed;
         }
 
-        return (int)MediaErrorCode.FFmpegVideoDecodeFailed;
+        var status = TryDecodeNative(packet, out var nativeResult);
+        switch (status)
+        {
+            case DecodeStatus.Success:
+                result = nativeResult;
+                return MediaResult.Success;
+            case DecodeStatus.NeedMoreData:
+                return (int)MediaErrorCode.FFmpegVideoDecodeNeedMoreData;
+            default:
+                return (int)MediaErrorCode.FFmpegVideoDecodeFailed;
+        }
     }
 
     public void Dispose()
@@ -55,13 +69,15 @@ internal sealed class FFVideoDecoder : IDisposable
         _nativeBackend = null;
     }
 
-    private bool TryDecodeNative(FFPacket packet, out FFVideoDecodeResult result)
+    private enum DecodeStatus { Success, NeedMoreData, Failed }
+
+    private DecodeStatus TryDecodeNative(FFPacket packet, out FFVideoDecodeResult result)
     {
         result = default;
 
         if (packet.NativeCodecId is null || packet.NativePacketData is null || packet.NativePacketData.Length == 0)
         {
-            return false;
+            return DecodeStatus.Failed;
         }
 
         try
@@ -70,7 +86,7 @@ internal sealed class FFVideoDecoder : IDisposable
             if (!_nativeBackend.TryEnsureInitialized(packet.NativeCodecId.Value, packet.NativeCodecParametersPtr))
             {
                 _nativeDecodeEnabled = false;
-                return false;
+                return DecodeStatus.Failed;
             }
 
             if (!_nativeBackend.TryDecode(
@@ -85,10 +101,16 @@ internal sealed class FFVideoDecoder : IDisposable
                     out var plane1,
                     out var plane1Stride,
                     out var plane2,
-                    out var plane2Stride))
+                    out var plane2Stride,
+                    out var needMoreData))
             {
+                if (needMoreData)
+                {
+                    return DecodeStatus.NeedMoreData;
+                }
+
                 _nativeDecodeEnabled = false;
-                return false;
+                return DecodeStatus.Failed;
             }
 
             result = new FFVideoDecodeResult(
@@ -109,27 +131,27 @@ internal sealed class FFVideoDecoder : IDisposable
                 NativeFrameRateNumerator: packet.NativeFrameRateNumerator,
                 NativeFrameRateDenominator: packet.NativeFrameRateDenominator,
                 NativePixelFormat: nativePixelFormat);
-            return true;
+            return DecodeStatus.Success;
         }
         catch (DllNotFoundException)
         {
             _nativeDecodeEnabled = false;
-            return false;
+            return DecodeStatus.Failed;
         }
         catch (EntryPointNotFoundException)
         {
             _nativeDecodeEnabled = false;
-            return false;
+            return DecodeStatus.Failed;
         }
         catch (TypeInitializationException)
         {
             _nativeDecodeEnabled = false;
-            return false;
+            return DecodeStatus.Failed;
         }
         catch (NotSupportedException)
         {
             _nativeDecodeEnabled = false;
-            return false;
+            return DecodeStatus.Failed;
         }
     }
 }
@@ -207,7 +229,8 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
         out ReadOnlyMemory<byte> plane1,
         out int plane1Stride,
         out ReadOnlyMemory<byte> plane2,
-        out int plane2Stride)
+        out int plane2Stride,
+        out bool needMoreData)
     {
         width = 0;
         height = 0;
@@ -219,6 +242,7 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
         plane1Stride = 0;
         plane2 = default;
         plane2Stride = 0;
+        needMoreData = false;
 
         if (_disposed || _codecContext is null || _frame is null)
         {
@@ -287,6 +311,7 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
 
             if (receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN))
             {
+                needMoreData = true;
                 return false;
             }
 

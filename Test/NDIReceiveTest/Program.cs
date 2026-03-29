@@ -1,14 +1,10 @@
 using NDILib;
-using S.Media.Core.Audio;
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
-using S.Media.Core.Video;
 using S.Media.NDI.Config;
 using S.Media.NDI.Diagnostics;
 using S.Media.NDI.Runtime;
-using S.Media.OpenGL.SDL3;
-using S.Media.PortAudio.Engine;
-using SDL3;
+using TestShared;
 
 namespace NDIReceiveTest;
 
@@ -16,25 +12,27 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        var sourceName = GetArg(args, "--source-name");
-        var discoverySec = int.TryParse(GetArg(args, "--discover-seconds"), out var ds) && ds > 0 ? ds : 10;
-        var seconds = double.TryParse(GetArg(args, "--seconds"), out var s) && s > 0 ? s : 60;
-        var hostApi = GetArg(args, "--host-api");
-        var deviceIndex = int.TryParse(GetArg(args, "--device-index"), out var di) ? di : -1;
-        var listSources = args.Contains("--list-sources");
+        var sourceName   = TestHelpers.GetArg(args, "--source-name");
+        var discoverySec = int.TryParse(TestHelpers.GetArg(args, "--discover-seconds"), out var ds) && ds > 0 ? ds : 10;
+        var seconds      = double.TryParse(TestHelpers.GetArg(args, "--seconds"), out var s) && s > 0 ? s : 60;
+        var hostApi      = TestHelpers.GetArg(args, "--host-api");
+        var deviceIndex  = int.TryParse(TestHelpers.GetArg(args, "--device-index"), out var di) ? di : -1;
+        var listSources  = args.Contains("--list-sources");
 
-        if (args.Contains("--help") || args.Contains("-h"))
-        {
-            PrintUsage();
-            return 0;
-        }
+        if (args.Contains("--help") || args.Contains("-h")) { PrintUsage(); return 0; }
+        if (args.Contains("--list-devices") || args.Contains("--list-host-apis"))
+            return TestHelpers.ListAudioRuntime(hostApi, args.Contains("--list-host-apis"), args.Contains("--list-devices"));
 
         try
         {
-            using var runtime = new NDIRuntimeScope();
+            var rErr = NDIRuntime.Create(out var runtimeInst);
+            if (rErr != 0) { Console.Error.WriteLine($"NDI init failed: {rErr}"); return 1; }
+            using var _runtime = runtimeInst!;
             Console.WriteLine($"NDI runtime version: {NDIRuntime.Version}");
 
-            using var finder = new NDIFinder();
+            var fErr = NDIFinder.Create(out var finderInst);
+            if (fErr != 0) { Console.Error.WriteLine($"NDI finder create failed: {fErr}"); return 2; }
+            using var finder = finderInst!;
             var sources = DiscoverSources(finder, discoverySec);
             if (sources.Length == 0)
             {
@@ -43,27 +41,22 @@ internal static class Program
             }
 
             Console.WriteLine("Discovered sources:");
-            foreach (var src in sources)
-                Console.WriteLine($"  - {src.Name}");
-
+            foreach (var src in sources) Console.WriteLine($"  - {src.Name}");
             if (listSources) return 0;
 
             var selected = SelectSource(sources, sourceName);
-            if (selected is null)
-            {
-                Console.Error.WriteLine($"No source matched '{sourceName}'.");
-                return 4;
-            }
-
+            if (selected is null) { Console.Error.WriteLine($"No source matched '{sourceName}'."); return 4; }
             Console.WriteLine($"Connecting to: {selected.Value.Name}");
 
-            using var receiver = new NDIReceiver(new NDIReceiverSettings
+            var recvErr = NDIReceiver.Create(out var receiverInst, new NDIReceiverSettings
             {
-                ColorFormat = NdiRecvColorFormat.RgbxRgba,
-                Bandwidth = NdiRecvBandwidth.Highest,
+                ColorFormat  = NdiRecvColorFormat.RgbxRgba,
+                Bandwidth    = NdiRecvBandwidth.Highest,
                 AllowVideoFields = false,
                 ReceiverName = "MFPlayer NDIReceiveTest",
             });
+            if (recvErr != 0) { Console.Error.WriteLine($"NDI receiver create failed: {recvErr}"); return 7; }
+            using var receiver = receiverInst!;
             receiver.Connect(selected.Value);
 
             using var engine = new NDIEngine();
@@ -75,88 +68,50 @@ internal static class Program
             if (createA != MediaResult.Success || audioSource is null) { Console.Error.WriteLine($"CreateAudioSource failed: {createA}"); return 6; }
             if (createV != MediaResult.Success || videoSource is null) { Console.Error.WriteLine($"CreateVideoSource failed: {createV}"); return 6; }
 
-            // Audio engine
-            using var audioEngine = new PortAudioEngine();
-            var audioInit = audioEngine.Initialize(new AudioEngineConfig
-            {
-                PreferredHostApi = string.IsNullOrWhiteSpace(hostApi) ? null : hostApi,
-            });
-            if (audioInit != MediaResult.Success) { Console.Error.WriteLine($"Audio engine init failed: {audioInit}"); return 7; }
-            if (audioEngine.Start() != MediaResult.Success) { Console.Error.WriteLine("Audio engine start failed."); return 7; }
-
-            var createOut = audioEngine.CreateOutputByIndex(deviceIndex, out var audioOutput);
-            if (createOut != MediaResult.Success || audioOutput is null) { Console.Error.WriteLine($"Audio output failed: {createOut}"); return 7; }
-            if (audioOutput.Start(new AudioOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("Audio output start failed."); return 7; }
-
+            var (audioEngine, audioOutput) = TestHelpers.InitAudioOutput(hostApi, deviceIndex);
+            using var _ae = audioEngine;
             Console.WriteLine($"Audio output: {audioOutput.Device.Name}");
 
-            // Video output
-            using var view = new SDL3VideoView();
-            var viewInit = view.Initialize(new SDL3VideoViewOptions
-            {
-                Width = 1280, Height = 720,
-                WindowTitle = $"NDIReceiveTest - {selected.Value.Name}",
-                WindowFlags = SDL.WindowFlags.Resizable,
-                ShowOnInitialize = true, BringToFrontOnShow = true, PreserveAspectRatio = true,
-            });
-            if (viewInit != MediaResult.Success) { Console.Error.WriteLine($"SDL3 init failed: {viewInit}"); return 8; }
-            if (view.Start(new VideoOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("SDL3 start failed."); return 8; }
+            using var view = TestHelpers.InitVideoView(title: $"NDIReceiveTest - {selected.Value.Name}");
 
-            // AV Mixer
-            var mixer = new AudioVideoMixer();
-            _ = mixer.SetSyncMode(AudioVideoSyncMode.Realtime);
+            using var mixer = new AVMixer();
             _ = mixer.AddAudioSource(audioSource);
             _ = mixer.AddVideoSource(videoSource);
             _ = mixer.SetActiveVideoSource(videoSource);
-            _ = mixer.Start();
-
             mixer.AddAudioOutput(audioOutput);
             mixer.AddVideoOutput(view);
 
-            var startPlayback = mixer.StartPlayback(new AudioVideoMixerConfig
+            var startPlayback = mixer.StartPlayback(new AVMixerConfig
             {
                 SourceChannelCount = 2,
-                RouteMap = [0, 1],
-                PresentOnCallerThread = true,
+                RouteMap           = [0, 1],
+                SyncMode           = AVSyncMode.Realtime,
             });
             if (startPlayback != MediaResult.Success) { Console.Error.WriteLine($"StartPlayback failed: {startPlayback}"); return 9; }
 
             Console.WriteLine($"Preview running ~{seconds:0.#}s. Ctrl+C to stop.");
 
-            var deadline = DateTime.UtcNow.AddSeconds(seconds);
-            var lastStatus = DateTime.UtcNow;
-            var cancel = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
-
-            while (!cancel.IsCancellationRequested && DateTime.UtcNow < deadline)
+            TestHelpers.RunWithDeadline(seconds, () =>
             {
-                var tickDelay = mixer.TickVideoPresentation();
-
-                if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
-                {
-                    var info = mixer.GetDebugInfo();
-                    var vDiag = videoSource.Diagnostics;
-                    if (info.HasValue)
-                    {
-                        var d = info.Value;
-                        Console.WriteLine(
-                            $"vPushed={d.VideoPushed} vDrop={d.VideoLateDrops} aFrames={d.AudioPushedFrames} " +
-                            $"drift={d.DriftMs:F1}ms | ndi: q={vDiag.QueueDepth}/{vDiag.JitterBufferFrames} " +
-                            $"fmt={vDiag.IncomingPixelFormat}→{vDiag.OutputPixelFormat} fallback={vDiag.FallbackFramesPresented}");
-                    }
-                    lastStatus = DateTime.UtcNow;
-                }
-
-                var sleepMs = Math.Max(1, (int)Math.Ceiling(tickDelay.TotalMilliseconds));
-                Thread.Sleep(sleepMs);
-            }
+                Thread.Sleep(10);
+                return true;
+            }, () =>
+            {
+                var info  = mixer.GetDebugInfo();
+                var vDiag = videoSource.Diagnostics;
+                if (!info.HasValue) return;
+                var d = info.Value;
+                Console.WriteLine(
+                    $"vPushed={d.VideoPushed} vDrop={d.VideoLateDrops} aFrames={d.AudioPushedFrames} " +
+                    $"wQ={d.VideoWorkerQueueDepth}/{d.VideoWorkerMaxQueueDepth} wDrop={d.VideoWorkerEnqueueDrops + d.VideoWorkerStaleDrops} wFail={d.VideoWorkerPushFailures} " +
+                    $"| ndi: q={vDiag.QueueDepth}/{vDiag.JitterBufferFrames} " +
+                    $"fmt={vDiag.IncomingPixelFormat}→{vDiag.OutputPixelFormat} fallback={vDiag.FallbackFramesPresented}");
+            });
 
             _ = mixer.StopPlayback();
-            _ = mixer.Stop();
             audioOutput.Stop();
             audioOutput.Dispose();
             _ = view.Stop();
-            _ = audioEngine.Stop();
             _ = engine.Terminate();
 
             Console.WriteLine("Done.");
@@ -186,15 +141,8 @@ internal static class Program
         if (sources.Count == 0) return null;
         if (string.IsNullOrWhiteSpace(name)) return sources[0];
         foreach (var src in sources)
-            if (src.Name.Contains(name, StringComparison.OrdinalIgnoreCase))
-                return src;
+            if (src.Name.Contains(name, StringComparison.OrdinalIgnoreCase)) return src;
         return null;
-    }
-
-    private static string? GetArg(string[] args, string name)
-    {
-        var idx = Array.IndexOf(args, name);
-        return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
     private static void PrintUsage()
@@ -209,5 +157,7 @@ internal static class Program
         Console.WriteLine("  --seconds <n>              Preview duration (default: 60)");
         Console.WriteLine("  --host-api <id>            Preferred PortAudio host API");
         Console.WriteLine("  --device-index <n>         Audio output device index (-1 = default)");
+        Console.WriteLine("  --list-devices             List audio output devices and exit");
+        Console.WriteLine("  --list-host-apis           List host APIs and exit");
     }
 }

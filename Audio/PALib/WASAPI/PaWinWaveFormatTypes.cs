@@ -54,19 +54,34 @@ public unsafe struct PaWinWaveFormat
     public uint extraLongForAlignment;
 }
 
-public static partial class WaveFormatNative
+internal static partial class WaveFormatNative
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
+    private static bool IsSupportedPlatform => OperatingSystem.IsWindows();
 
-    [LibraryImport(LibraryName)]
-    public static partial int PaWin_SampleFormatToLinearWaveFormatTag(PaSampleFormat sampleFormat);
+    [LibraryImport(LibraryName, EntryPoint = "PaWin_SampleFormatToLinearWaveFormatTag")]
+    private static partial int PaWin_SampleFormatToLinearWaveFormatTag_Import(PaSampleFormat sampleFormat);
+    public static int PaWin_SampleFormatToLinearWaveFormatTag(PaSampleFormat sampleFormat)
+        => !IsSupportedPlatform ? 0 : PaWin_SampleFormatToLinearWaveFormatTag_Import(sampleFormat);
 
-    [LibraryImport(LibraryName)]
-    public static unsafe partial void PaWin_InitializeWaveFormatEx(PaWinWaveFormat* waveFormat, int numChannels, PaSampleFormat sampleFormat, int waveFormatTag, double sampleRate);
+    [LibraryImport(LibraryName, EntryPoint = "PaWin_InitializeWaveFormatEx")]
+    private static unsafe partial void PaWin_InitializeWaveFormatEx_Import(PaWinWaveFormat* waveFormat, int numChannels, PaSampleFormat sampleFormat, int waveFormatTag, double sampleRate);
+    public static unsafe void PaWin_InitializeWaveFormatEx(PaWinWaveFormat* waveFormat, int numChannels, PaSampleFormat sampleFormat, int waveFormatTag, double sampleRate)
+    {
+        if (!IsSupportedPlatform) return;
+        PaWin_InitializeWaveFormatEx_Import(waveFormat, numChannels, sampleFormat, waveFormatTag, sampleRate);
+    }
 
-    [LibraryImport(LibraryName)]
-    public static unsafe partial void PaWin_InitializeWaveFormatExtensible(PaWinWaveFormat* waveFormat, int numChannels, PaSampleFormat sampleFormat, int waveFormatTag, double sampleRate, PaWinWaveFormatChannelMask channelMask);
+    [LibraryImport(LibraryName, EntryPoint = "PaWin_InitializeWaveFormatExtensible")]
+    private static unsafe partial void PaWin_InitializeWaveFormatExtensible_Import(PaWinWaveFormat* waveFormat, int numChannels, PaSampleFormat sampleFormat, int waveFormatTag, double sampleRate, PaWinWaveFormatChannelMask channelMask);
+    public static unsafe void PaWin_InitializeWaveFormatExtensible(PaWinWaveFormat* waveFormat, int numChannels, PaSampleFormat sampleFormat, int waveFormatTag, double sampleRate, PaWinWaveFormatChannelMask channelMask)
+    {
+        if (!IsSupportedPlatform) return;
+        PaWin_InitializeWaveFormatExtensible_Import(waveFormat, numChannels, sampleFormat, waveFormatTag, sampleRate, channelMask);
+    }
 
-    [LibraryImport(LibraryName)]
-    public static partial PaWinWaveFormatChannelMask PaWin_DefaultChannelMask(int numChannels);
+    [LibraryImport(LibraryName, EntryPoint = "PaWin_DefaultChannelMask")]
+    private static partial PaWinWaveFormatChannelMask PaWin_DefaultChannelMask_Import(int numChannels);
+    public static PaWinWaveFormatChannelMask PaWin_DefaultChannelMask(int numChannels)
+        => !IsSupportedPlatform ? 0 : PaWin_DefaultChannelMask_Import(numChannels);
 }

@@ -1,10 +1,9 @@
 using S.Media.Core.Errors;
 using S.Media.Core.Mixing;
-using S.Media.Core.Video;
 using S.Media.FFmpeg.Config;
 using S.Media.FFmpeg.Media;
-using S.Media.OpenGL.SDL3;
-using SDL3;
+using S.Media.FFmpeg.Runtime;
+using TestShared;
 
 namespace VideoMixerTest;
 
@@ -12,26 +11,22 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        var input1 = GetArg(args, "--input") ?? Environment.GetEnvironmentVariable("SMEDIA_TEST_INPUT");
-        var input2 = GetArg(args, "--input2");
-        var seconds = double.TryParse(GetArg(args, "--seconds"), out var s) && s > 0 ? s : 30;
+        FFmpegRuntime.EnsureInitialized();
+        var a = CommonTestArgs.Parse(args);
+        var input2 = TestHelpers.GetArg(args, "--input2");
 
-        if (args.Contains("--help") || args.Contains("-h"))
-        {
-            PrintUsage();
-            return 0;
-        }
+        if (a.ShowHelp) { PrintUsage(); return 0; }
 
-        if (string.IsNullOrWhiteSpace(input1))
+        if (string.IsNullOrWhiteSpace(a.Input))
         {
             Console.Error.WriteLine("Missing --input <path>. Use --help for usage.");
             return 1;
         }
 
-        var uri1 = ResolveUri(input1);
-        if (uri1 is null) { Console.Error.WriteLine($"Input file not found: {input1}"); return 2; }
+        var uri1 = TestHelpers.ResolveUri(a.Input);
+        if (uri1 is null) { Console.Error.WriteLine($"Input file not found: {a.Input}"); return 2; }
 
-        var uri2 = !string.IsNullOrWhiteSpace(input2) ? ResolveUri(input2) : uri1;
+        var uri2 = !string.IsNullOrWhiteSpace(input2) ? TestHelpers.ResolveUri(input2) : uri1;
         if (uri2 is null) { Console.Error.WriteLine($"Input2 file not found: {input2}"); return 2; }
 
         Console.WriteLine($"Input 1: {uri1}");
@@ -56,9 +51,8 @@ internal static class Program
                 return 3;
             }
 
-            // Use AudioVideoMixer (video-only, no audio sources/outputs)
-            using var mixer = new AudioVideoMixer();
-            _ = mixer.SetSyncMode(AudioVideoSyncMode.Realtime);
+            // Use AVMixer (video-only, no audio sources/outputs)
+            using var mixer = new AVMixer();
             var add1 = mixer.AddVideoSource(source1);
             var add2 = mixer.AddVideoSource(source2);
             if (add1 != MediaResult.Success || add2 != MediaResult.Success)
@@ -69,24 +63,15 @@ internal static class Program
 
             _ = mixer.SetActiveVideoSource(source1);
 
-            using var view = new SDL3VideoView();
-            var viewInit = view.Initialize(new SDL3VideoViewOptions
-            {
-                Width = 1280, Height = 720,
-                WindowTitle = "VideoMixerTest",
-                WindowFlags = SDL.WindowFlags.Resizable,
-                ShowOnInitialize = true, BringToFrontOnShow = true, PreserveAspectRatio = true,
-            });
-            if (viewInit != MediaResult.Success) { Console.Error.WriteLine($"SDL3 init failed: {viewInit}"); return 4; }
-            if (view.Start(new VideoOutputConfig()) != MediaResult.Success) { Console.Error.WriteLine("SDL3 start failed."); return 4; }
-
+            using var view = TestHelpers.InitVideoView("VideoMixerTest");
             mixer.AddVideoOutput(view);
 
-            Console.WriteLine($"Playing ~{seconds:0.#}s via AudioVideoMixer (2 video sources). Ctrl+C to stop.");
+            Console.WriteLine($"Playing ~{a.Seconds:0.#}s via AVMixer (2 video sources). Ctrl+C to stop.");
 
-            var startPlayback = mixer.StartPlayback(new AudioVideoMixerConfig
+            var startPlayback = mixer.StartPlayback(new AVMixerConfig
             {
-                PresentOnCallerThread = true,
+                VideoOutputQueueCapacity = 4,
+                SyncMode = AVSyncMode.Realtime,
             });
             if (startPlayback != MediaResult.Success)
             {
@@ -95,20 +80,11 @@ internal static class Program
             }
 
             var source1Duration = source1.DurationSeconds;
-            var switchAt = double.IsFinite(source1Duration) && source1Duration > 0 ? source1Duration : seconds / 2;
-
-            var deadline = DateTime.UtcNow.AddSeconds(seconds);
-            var lastStatus = DateTime.UtcNow;
+            var switchAt = double.IsFinite(source1Duration) && source1Duration > 0 ? source1Duration : a.Seconds / 2;
             var switchedToSource2 = false;
 
-            var cancel = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
-
-            while (!cancel.IsCancellationRequested && DateTime.UtcNow < deadline)
+            TestHelpers.RunWithDeadline(a.Seconds, () =>
             {
-                var tickDelay = mixer.TickVideoPresentation();
-
-                // Switch when source1 position passes its duration
                 if (!switchedToSource2 && source1.PositionSeconds >= switchAt)
                 {
                     Console.WriteLine($"Source1 reached {switchAt:0.###}s, switching to Source2.");
@@ -116,23 +92,20 @@ internal static class Program
                     _ = mixer.SetActiveVideoSource(source2);
                 }
 
-                if ((DateTime.UtcNow - lastStatus).TotalSeconds >= 1)
+                Thread.Sleep(10);
+                return true;
+            }, () =>
+            {
+                var info = mixer.GetDebugInfo();
+                var name = switchedToSource2 ? "Source2" : "Source1";
+                var activeSource = switchedToSource2 ? source2 : source1;
+                if (info.HasValue)
                 {
-                    var info = mixer.GetDebugInfo();
-                    var name = switchedToSource2 ? "Source2" : "Source1";
-                    var activeSource = switchedToSource2 ? source2 : source1;
-                    if (info.HasValue)
-                    {
-                        var d = info.Value;
-                        Console.WriteLine(
-                            $"active={name} pos={activeSource.PositionSeconds:0.###}s vPushed={d.VideoPushed} vDrop={d.VideoLateDrops}");
-                    }
-                    lastStatus = DateTime.UtcNow;
+                    var d = info.Value;
+                    Console.WriteLine(
+                        $"active={name} pos={activeSource.PositionSeconds:0.###}s vPushed={d.VideoPushed} vDrop={d.VideoLateDrops}");
                 }
-
-                var sleepMs = Math.Max(1, (int)Math.Ceiling(tickDelay.TotalMilliseconds));
-                Thread.Sleep(sleepMs);
-            }
+            });
 
             _ = mixer.StopPlayback();
             _ = view.Stop();
@@ -147,23 +120,9 @@ internal static class Program
         }
     }
 
-    private static string? ResolveUri(string input)
-    {
-        if (Uri.TryCreate(input, UriKind.Absolute, out var u) && !string.IsNullOrWhiteSpace(u.Scheme) && u.Scheme != "file")
-            return u.AbsoluteUri;
-        var path = Path.GetFullPath(input);
-        return File.Exists(path) ? new Uri(path).AbsoluteUri : null;
-    }
-
-    private static string? GetArg(string[] args, string name)
-    {
-        var idx = Array.IndexOf(args, name);
-        return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
-    }
-
     private static void PrintUsage()
     {
-        Console.WriteLine("VideoMixerTest — play 2 video files via AudioVideoMixer with source switching");
+        Console.WriteLine("VideoMixerTest — play 2 video files via AVMixer with source switching");
         Console.WriteLine("Usage: VideoMixerTest --input <file1> [--input2 <file2>] [options]");
         Console.WriteLine();
         Console.WriteLine("Options:");

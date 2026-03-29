@@ -11,30 +11,42 @@ public sealed class OSCDecodeOptions
     /// When <see langword="true"/>, unknown type tags and malformed payloads are rejected.
     /// Default: <see langword="true"/>.
     /// </summary>
-    public bool StrictMode { get; set; } = true;
+    public bool StrictMode { get; init; } = true;
 
     /// <summary>
     /// Allows decoding messages that omit the OSC type tag string.
     /// Default: <see langword="true"/> for compatibility with older senders.
+    /// <para>
+    /// <b>Note:</b> This setting takes effect regardless of <see cref="StrictMode"/>.
+    /// A message without a type tag string is accepted even when <see cref="StrictMode"/> is
+    /// <see langword="true"/> unless this property is explicitly set to <see langword="false"/>.
+    /// </para>
     /// </summary>
-    public bool AllowMissingTypeTagString { get; set; } = true;
+    public bool AllowMissingTypeTagString { get; init; } = true;
 
     /// <summary>
     /// Preserves unknown arguments as <see cref="OSCUnknownArgument"/> when strict mode is disabled.
     /// </summary>
-    public bool PreserveUnknownArguments { get; set; }
+    public bool PreserveUnknownArguments { get; init; }
 
     /// <summary>
     /// Optional callback that returns the payload byte-length for an unknown type tag.
     /// Required when <see cref="StrictMode"/> is disabled and unknown payload bytes should be consumed.
     /// </summary>
-    public Func<char, ReadOnlySpan<char>, int>? UnknownTagByteLengthResolver { get; set; }
+    public Func<char, ReadOnlySpan<char>, int>? UnknownTagByteLengthResolver { get; init; }
 
     /// <summary>
     /// Maximum nesting depth for OSC array tags.
     /// Default: <c>16</c>.
     /// </summary>
-    public int MaxArrayDepth { get; set; } = 16;
+    public int MaxArrayDepth { get; init; } = 16;
+
+    /// <summary>
+    /// Maximum nesting depth for OSC bundles. A crafted packet exceeding this depth
+    /// would cause unbounded recursion and is rejected as malformed.
+    /// Default: <c>8</c>.
+    /// </summary>
+    public int MaxBundleDepth { get; init; } = 8;
 }
 
 /// <summary>
@@ -45,35 +57,62 @@ public sealed class OSCServerOptions
     /// <summary>
     /// Local UDP port to bind.
     /// </summary>
-    public int Port { get; set; }
+    public int Port { get; init; }
 
     /// <summary>
     /// Maximum accepted datagram size in bytes.
     /// Default: <c>8192</c>.
     /// </summary>
-    public int MaxPacketBytes { get; set; } = 8192;
+    public int MaxPacketBytes { get; init; } = 8192;
 
     /// <summary>
     /// Action for packets larger than <see cref="MaxPacketBytes"/>.
     /// Default: <see cref="OSCOversizePolicy.DropAndLog"/>.
     /// </summary>
-    public OSCOversizePolicy OversizePolicy { get; set; } = OSCOversizePolicy.DropAndLog;
+    public OSCOversizePolicy OversizePolicy { get; init; } = OSCOversizePolicy.DropAndLog;
 
     /// <summary>
     /// Minimum interval between repeated oversize-drop warning logs.
     /// Default: 5 seconds.
     /// </summary>
-    public TimeSpan OversizeLogInterval { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan OversizeLogInterval { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Decode behavior applied to inbound datagrams.
     /// </summary>
-    public OSCDecodeOptions DecodeOptions { get; set; } = new();
+    public OSCDecodeOptions DecodeOptions { get; init; } = new();
 
     /// <summary>
     /// Enables per-datagram hex dumps at <c>Trace</c> log level.
     /// </summary>
-    public bool EnableTraceHexDump { get; set; }
+    public bool EnableTraceHexDump { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/> (the default), OSC bundles are dispatched immediately
+    /// regardless of their timetag value. This is the OSC 1.0 "deliver now if in the past"
+    /// interpretation adopted by most real-world implementations (Max/MSP, TouchOSC, etc.).
+    /// <para>
+    /// The <see cref="OSCMessageContext.BundleTimeTag"/> property is always populated and
+    /// available for application-level scheduling inside message handlers.
+    /// </para>
+    /// <para>
+    /// Set to <see langword="false"/> only if your handler code implements its own
+    /// timetag-based scheduling. Future versions of OSCLib may provide a built-in
+    /// server-side scheduler that observes this flag.
+    /// </para>
+    /// </summary>
+    public bool IgnoreTimeTagScheduling { get; init; } = true;
+
+    /// <summary>
+    /// If set, the server joins this multicast group immediately after binding.
+    /// </summary>
+    public IPAddress? MulticastGroup { get; init; }
+
+    /// <summary>
+    /// Local network interface to use when joining <see cref="MulticastGroup"/>.
+    /// <see langword="null"/> selects the default interface (<see cref="IPAddress.Any"/>).
+    /// </summary>
+    public IPAddress? MulticastLocalAddress { get; init; }
 }
 
 /// <summary>
@@ -85,12 +124,18 @@ public sealed class OSCClientOptions
     /// Maximum packet size the client is allowed to send.
     /// Default: <c>8192</c>.
     /// </summary>
-    public int MaxPacketBytes { get; set; } = 8192;
+    public int MaxPacketBytes { get; init; } = 8192;
 
     /// <summary>
     /// Reserved for symmetry with server-side decode settings.
     /// </summary>
-    public OSCDecodeOptions DecodeOptions { get; set; } = new();
+    public OSCDecodeOptions DecodeOptions { get; init; } = new();
+
+    /// <summary>
+    /// Enables sending to broadcast addresses (255.255.255.255 or subnet-directed broadcast).
+    /// Default: <see langword="false"/>.
+    /// </summary>
+    public bool EnableBroadcast { get; init; }
 }
 
 /// <summary>
@@ -146,6 +191,10 @@ public interface IOSCServer : IAsyncDisposable
     /// <summary>
     /// Starts the UDP receive loop.
     /// </summary>
+    /// <remarks>
+    /// Bundle timetag scheduling is controlled by <see cref="OSCServerOptions.IgnoreTimeTagScheduling"/>.
+    /// When <see langword="true"/> (the default), all bundles are dispatched immediately.
+    /// </remarks>
     Task StartAsync(CancellationToken cancellationToken = default);
 
     /// <summary>

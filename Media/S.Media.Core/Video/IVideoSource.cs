@@ -1,10 +1,15 @@
+using S.Media.Core.Media;
+
 namespace S.Media.Core.Video;
 
 public interface IVideoSource : IDisposable
 {
-    Guid SourceId { get; }
+    Guid Id { get; }
 
     VideoSourceState State { get; }
+
+    /// <summary>Codec, resolution, frame rate, and duration info. Returns <see langword="default"/> when unavailable.</summary>
+    VideoStreamInfo StreamInfo { get; }
 
     int Start();
 
@@ -15,8 +20,6 @@ public interface IVideoSource : IDisposable
     int Seek(double positionSeconds);
 
     int SeekToFrame(long frameIndex);
-
-    int SeekToFrame(long frameIndex, out long currentFrameIndex, out long? totalFrameCount);
 
     double PositionSeconds { get; }
 
