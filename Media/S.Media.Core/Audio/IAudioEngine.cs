@@ -36,6 +36,20 @@ public interface IAudioEngine : IMediaEngine
 
     int CreateOutputByIndex(int deviceIndex, out IAudioOutput? output);
 
+    /// <summary>
+    /// Removes <paramref name="output"/> from the engine's tracked output list and disposes it.
+    /// Returns <see cref="S.Media.Core.Errors.MediaResult.Success"/> if removed, or
+    /// <see cref="S.Media.Core.Errors.MediaErrorCode.PortAudioDeviceNotFound"/> if not tracked.
+    /// </summary>
+    int RemoveOutput(IAudioOutput output);
+
+    /// <summary>
+    /// Re-enumerates available audio devices without tearing down active streams.
+    /// Useful for responding to hot-plug events after <see cref="Initialize"/> has been called.
+    /// Returns <see cref="S.Media.Core.Errors.MediaResult.Success"/> on success.
+    /// </summary>
+    int RefreshDevices();
+
     IReadOnlyList<IAudioOutput> Outputs { get; }
 
     event EventHandler<AudioEngineStateChangedEventArgs>? StateChanged;

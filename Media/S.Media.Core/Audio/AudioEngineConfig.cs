@@ -22,4 +22,19 @@ public sealed record AudioEngineConfig
     }
 
     public bool FailOnDeviceLoss { get; init; }
+
+    /// <summary>
+    /// Suggested PortAudio output stream latency mode.
+    /// Default: <see cref="AudioLatencyMode.High"/> (stable for most playback use cases).
+    /// Use <see cref="AudioLatencyMode.Low"/> for real-time monitoring or live performance.
+    /// </summary>
+    public AudioLatencyMode LatencyMode { get; init; } = AudioLatencyMode.High;
+
+    /// <summary>
+    /// Maximum time in milliseconds to wait per <c>Pa_WriteStream</c> call before abandoning the
+    /// write and returning <see cref="S.Media.Core.Errors.MediaErrorCode.PortAudioPushFailed"/>.
+    /// Default: 2 000 ms. Set to 0 or a negative value to wait indefinitely (not recommended
+    /// for production — a stalled device will block the audio pump permanently).
+    /// </summary>
+    public int WriteTimeoutMs { get; init; } = 2_000;
 }

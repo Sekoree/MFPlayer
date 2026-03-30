@@ -12,9 +12,11 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
     private readonly Func<IReadOnlyList<AudioDeviceInfo>> _deviceProvider;
     private readonly Func<AudioDeviceInfo?> _defaultOutputProvider;
     private readonly AudioEngineConfig _config;
+    private readonly Action<IAudioOutput>? _onDisposed;  // (7.5) cleanup callback for the engine
     private nint _stream;
+    private readonly int _configChannelCount;   // immutable: config-requested channel count
     private int _nativeSampleRate;
-    private int _nativeChannelCount;
+    private int _nativeChannelCount;            // (8.2) effective channel count actually opened
     private int _nativeFramesPerBuffer;
     private bool _nativeStreaming;
     private bool _disposed;
@@ -25,15 +27,18 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         AudioDeviceInfo device,
         Func<IReadOnlyList<AudioDeviceInfo>> deviceProvider,
         AudioEngineConfig config,
-        Func<AudioDeviceInfo?>? defaultOutputProvider = null)
+        Func<AudioDeviceInfo?>? defaultOutputProvider = null,
+        Action<IAudioOutput>? onDisposed = null)   // (7.5)
     {
         Id = Guid.NewGuid();
         Device = device;
         _deviceProvider = deviceProvider;
         _config = config;
         _defaultOutputProvider = defaultOutputProvider ?? (() => null);
+        _onDisposed = onDisposed;
+        _configChannelCount = Math.Max(1, config.OutputChannelCount);
         _nativeSampleRate = Math.Max(1, config.SampleRate);
-        _nativeChannelCount = Math.Max(1, config.OutputChannelCount);
+        _nativeChannelCount = _configChannelCount;
         _nativeFramesPerBuffer = Math.Max(1, config.FramesPerBuffer);
     }
 
@@ -62,6 +67,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             {
                 return MediaResult.Success;
             }
+
+            // Reset effective channel count to config value before each open attempt (8.2)
+            _nativeChannelCount = _configChannelCount;
 
             var startCode = TryStartNativeStream();
             if (startCode != MediaResult.Success)
@@ -152,15 +160,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
     public int PushFrame(in AudioFrame frame, ReadOnlySpan<int> sourceChannelByOutputIndex, int sourceChannelCount)
     {
+        // (8.4) Fast-reject before expensive validation: check state before route-map validation.
         if (_disposed)
         {
             return (int)MediaErrorCode.PortAudioPushFailed;
-        }
-
-        var validation = AudioRouteMapValidator.ValidatePushFrameMap(frame, sourceChannelByOutputIndex, sourceChannelCount);
-        if (validation != MediaResult.Success)
-        {
-            return validation;
         }
 
         if (State != AudioOutputState.Running)
@@ -171,6 +174,12 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         if (!_nativeStreaming || _stream == nint.Zero)
         {
             return (int)MediaErrorCode.PortAudioStreamStartFailed;
+        }
+
+        var validation = AudioRouteMapValidator.ValidatePushFrameMap(frame, sourceChannelByOutputIndex, sourceChannelCount);
+        if (validation != MediaResult.Success)
+        {
+            return validation;
         }
 
         return TryWriteNativeFrame(frame, sourceChannelByOutputIndex, sourceChannelCount);
@@ -192,11 +201,17 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             State = AudioOutputState.Stopped;
             AudioDeviceChanged = null;
         }
+
+        // (7.5) Notify the engine so it can remove this output from its tracked list.
+        // Called outside the lock to avoid deadlock with the engine's own lock.
+        _onDisposed?.Invoke(this);
     }
 
+    // (8.1) Restart the native stream on the new device when already running.
     private int ApplyDeviceChange(AudioDeviceInfo newDevice)
     {
         AudioDeviceInfo previous;
+        int restartResult = MediaResult.Success;
 
         lock (_gate)
         {
@@ -209,6 +224,23 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             Device = newDevice;
             _resampler?.Dispose();
             _resampler = null;
+
+            if (_nativeStreaming)
+            {
+                // Close the old stream and reopen on the new device under the same lock,
+                // consistent with how Start() manages the native stream.
+                CloseNativeStreamIfOpen();
+
+                // Reset effective channel count to config value before reopening (8.2)
+                _nativeChannelCount = _configChannelCount;
+
+                restartResult = TryStartNativeStream();
+            }
+        }
+
+        if (restartResult != MediaResult.Success)
+        {
+            return (int)MediaErrorCode.PortAudioDeviceSwitchFailed;
         }
 
         if (previous != newDevice)
@@ -296,20 +328,29 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             return PaError.paInvalidDevice;
         }
 
-        _nativeChannelCount = Math.Clamp(_nativeChannelCount, 1, Math.Max(1, deviceInfo.Value.maxOutputChannels));
+        // (8.2) Clamp the effective channel count to device capability.
+        // Only update _nativeChannelCount after a successful open so a failed attempt does not
+        // permanently reduce the requested count (which would corrupt the fallback path).
+        var effectiveChannelCount = Math.Clamp(
+            _nativeChannelCount, 1, Math.Max(1, deviceInfo.Value.maxOutputChannels));
+
+        // (8.3) Use the configured latency mode.
+        var suggestedLatency = _config.LatencyMode == AudioLatencyMode.Low
+            ? deviceInfo.Value.defaultLowOutputLatency
+            : (deviceInfo.Value.defaultHighOutputLatency > 0
+                ? deviceInfo.Value.defaultHighOutputLatency
+                : deviceInfo.Value.defaultLowOutputLatency);
 
         var outputParams = new PaStreamParameters
         {
             device = deviceIndex,
-            channelCount = _nativeChannelCount,
+            channelCount = effectiveChannelCount,
             sampleFormat = PaSampleFormat.paFloat32,
-            suggestedLatency = deviceInfo.Value.defaultHighOutputLatency > 0
-                ? deviceInfo.Value.defaultHighOutputLatency
-                : deviceInfo.Value.defaultLowOutputLatency,
+            suggestedLatency = suggestedLatency,
             hostApiSpecificStreamInfo = nint.Zero,
         };
 
-        return Native.Pa_OpenStream(
+        var result = Native.Pa_OpenStream(
             out _stream,
             inputParameters: null,
             outputParameters: outputParams,
@@ -318,6 +359,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             streamFlags: PaStreamFlags.paNoFlag,
             streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
             userData: nint.Zero);
+
+        // (8.2) Commit the effective channel count only after a successful open.
+        if (result == PaError.paNoError)
+        {
+            _nativeChannelCount = effectiveChannelCount;
+        }
+
+        return result;
     }
 
     private static bool TryResolvePortAudioDeviceIndex(AudioDeviceId id, out int deviceIndex)
@@ -358,7 +407,6 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                 var resampledFrames = resampler.Resample(source, frame.FrameCount, resampledRented.AsSpan(0, resampledSampleCount));
                 if (resampledFrames < 0)
                 {
-                    // Channel mismatch with Fail policy
                     return (int)MediaErrorCode.AudioChannelCountMismatch;
                 }
 
@@ -403,9 +451,20 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                     var framesRemaining = effectiveFrameCount;
                     var frameOffset = 0;
 
+                    // (6.1) Compute the deadline for the entire write of this frame batch.
+                    var deadline = _config.WriteTimeoutMs > 0
+                        ? Environment.TickCount64 + _config.WriteTimeoutMs
+                        : long.MaxValue;
+
                     while (framesRemaining > 0)
                     {
                         if (_disposed || State != AudioOutputState.Running || _stream == nint.Zero)
+                        {
+                            return (int)MediaErrorCode.PortAudioPushFailed;
+                        }
+
+                        // (6.1) Enforce write deadline to prevent permanent stall on a blocked device.
+                        if (Environment.TickCount64 > deadline)
                         {
                             return (int)MediaErrorCode.PortAudioPushFailed;
                         }
@@ -423,8 +482,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
                         if (write == PaError.paTimedOut || write == PaError.paOutputUnderflowed)
                         {
-                            // Keep blocking semantics: retry transient backpressure.
-                            // Thread.Sleep is preferred over Pa_Sleep in managed code.
+                            // Transient backpressure — sleep briefly and retry until deadline.
                             Thread.Sleep(1);
                             continue;
                         }
@@ -470,8 +528,6 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
         try
         {
-            // Resample rate only; channel routing is handled by the route map in the caller.
-            // Pass sourceChannelCount as both source and target channel count.
             _resampler = new AudioResampler(
                 sourceSampleRate,
                 sourceChannelCount,
@@ -502,7 +558,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         }
         catch
         {
-            // Best-effort close for deterministic teardown in fallback-friendly scaffolding.
+            // Best-effort close for deterministic teardown.
         }
         finally
         {

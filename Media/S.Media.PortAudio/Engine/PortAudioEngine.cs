@@ -9,6 +9,11 @@ namespace S.Media.PortAudio.Engine;
 
 public sealed class PortAudioEngine : IAudioEngine
 {
+    // Validation bounds (6.4)
+    private const int MaxSampleRate = 384_000;
+    private const int MaxOutputChannelCount = 64;
+    private const int MaxFramesPerBuffer = 32_768;
+
     private readonly Lock _gate = new();
     private readonly List<AudioDeviceInfo> _outputDevices;
     private readonly List<AudioDeviceInfo> _inputDevices;
@@ -21,20 +26,26 @@ public sealed class PortAudioEngine : IAudioEngine
 
     public PortAudioEngine()
     {
+        // (6.6) Phantom devices are flagged as IsFallback = true so callers can distinguish
+        // them from real hardware devices discovered after native initialization.
         _outputDevices =
         [
-            new AudioDeviceInfo(new AudioDeviceId("default-output"), "Default Output", HostApi: "fallback", IsDefaultOutput: true),
-            new AudioDeviceInfo(new AudioDeviceId("monitor-output"), "Monitor Output", HostApi: "fallback"),
+            new AudioDeviceInfo(new AudioDeviceId("default-output"), "Default Output",
+                HostApi: "fallback", IsDefaultOutput: true, IsFallback: true),
+            new AudioDeviceInfo(new AudioDeviceId("monitor-output"), "Monitor Output",
+                HostApi: "fallback", IsFallback: true),
         ];
 
         _inputDevices =
         [
-            new AudioDeviceInfo(new AudioDeviceId("default-input"), "Default Input", HostApi: "fallback", IsDefaultInput: true),
+            new AudioDeviceInfo(new AudioDeviceId("default-input"), "Default Input",
+                HostApi: "fallback", IsDefaultInput: true, IsFallback: true),
         ];
 
         _hostApis =
         [
-            new AudioHostApiInfo("fallback", "Fallback", IsDefault: true, DeviceCount: _outputDevices.Count + _inputDevices.Count),
+            new AudioHostApiInfo("fallback", "Fallback", IsDefault: true,
+                DeviceCount: _outputDevices.Count + _inputDevices.Count),
         ];
 
         _defaultOutputDevice = _outputDevices.FirstOrDefault(device => device.IsDefaultOutput);
@@ -73,16 +84,34 @@ public sealed class PortAudioEngine : IAudioEngine
                 return (int)MediaErrorCode.PortAudioInitializeFailed;
             }
 
+            // (7.2) Guard against re-initialization without a prior Terminate().
+            if (State == AudioEngineState.Initialized || State == AudioEngineState.Running)
+            {
+                return (int)MediaErrorCode.PortAudioInitializeFailed;
+            }
+
+            // Lower-bound validation
             if (config.SampleRate <= 0 || config.OutputChannelCount <= 0 || config.FramesPerBuffer <= 0)
             {
                 return (int)MediaErrorCode.PortAudioInvalidConfig;
             }
 
-            Config = config;
-            var discoveryOk = TryInitializeNativeRuntimeAndRefreshDevices();
-            if (!discoveryOk)
+            // Upper-bound validation (6.4)
+            if (config.SampleRate > MaxSampleRate ||
+                config.OutputChannelCount > MaxOutputChannelCount ||
+                config.FramesPerBuffer > MaxFramesPerBuffer)
             {
                 return (int)MediaErrorCode.PortAudioInvalidConfig;
+            }
+
+            Config = config;
+            var (discoveryOk, nativeFailed) = TryInitializeNativeRuntimeAndRefreshDevices();
+            if (!discoveryOk)
+            {
+                // (7.7) Distinguish between a native load failure and a bad config (wrong API name).
+                return nativeFailed
+                    ? (int)MediaErrorCode.PortAudioInitializeFailed
+                    : (int)MediaErrorCode.PortAudioInvalidConfig;
             }
 
             TransitionTo(AudioEngineState.Initialized);
@@ -109,6 +138,7 @@ public sealed class PortAudioEngine : IAudioEngine
         }
     }
 
+    // (7.4) Stop() stops all active outputs in addition to transitioning state.
     public int Stop()
     {
         lock (_gate)
@@ -120,6 +150,11 @@ public sealed class PortAudioEngine : IAudioEngine
 
             if (State == AudioEngineState.Running)
             {
+                foreach (var output in _outputs)
+                {
+                    output.Stop();
+                }
+
                 TransitionTo(AudioEngineState.Initialized);
             }
 
@@ -136,12 +171,17 @@ public sealed class PortAudioEngine : IAudioEngine
                 return MediaResult.Success;
             }
 
-            foreach (var output in _outputs)
+            // (7.1) Clear the list before calling Dispose() so that the per-output
+            // _onDisposed cleanup callback finds an already-empty list and does no extra work.
+            var outputs = _outputs.ToArray();
+            _outputs.Clear();
+
+            foreach (var output in outputs)
             {
                 output.Stop();
+                output.Dispose();  // (7.1) was missing — outputs were never disposed by Terminate
             }
 
-            _outputs.Clear();
             if (_nativeInitialized)
             {
                 try
@@ -230,8 +270,7 @@ public sealed class PortAudioEngine : IAudioEngine
                 return (int)MediaErrorCode.PortAudioDeviceNotFound;
             }
 
-            output = new PortAudioOutput(device.Value, () => _outputDevices, Config, () => _defaultOutputDevice);
-            _outputs.Add(output);
+            output = CreateTrackedOutput(device.Value);
             return MediaResult.Success;
         }
     }
@@ -259,8 +298,7 @@ public sealed class PortAudioEngine : IAudioEngine
                     continue;
                 }
 
-                output = new PortAudioOutput(_outputDevices[i], () => _outputDevices, Config, () => _defaultOutputDevice);
-                _outputs.Add(output);
+                output = CreateTrackedOutput(_outputDevices[i]);
                 return MediaResult.Success;
             }
 
@@ -287,8 +325,7 @@ public sealed class PortAudioEngine : IAudioEngine
                     return (int)MediaErrorCode.PortAudioDeviceNotFound;
                 }
 
-                output = new PortAudioOutput(defaultOutput.Value, () => _outputDevices, Config, () => _defaultOutputDevice);
-                _outputs.Add(output);
+                output = CreateTrackedOutput(defaultOutput.Value);
                 return MediaResult.Success;
             }
 
@@ -297,9 +334,45 @@ public sealed class PortAudioEngine : IAudioEngine
                 return (int)MediaErrorCode.PortAudioDeviceNotFound;
             }
 
-            output = new PortAudioOutput(_outputDevices[deviceIndex], () => _outputDevices, Config, () => _defaultOutputDevice);
-            _outputs.Add(output);
+            output = CreateTrackedOutput(_outputDevices[deviceIndex]);
             return MediaResult.Success;
+        }
+    }
+
+    // (7.5) Remove a specific output from the engine's tracked list and dispose it.
+    public int RemoveOutput(IAudioOutput output)
+    {
+        lock (_gate)
+        {
+            if (!_outputs.Remove(output))
+            {
+                return (int)MediaErrorCode.PortAudioDeviceNotFound;
+            }
+        }
+
+        output.Dispose();
+        return MediaResult.Success;
+    }
+
+    // (7.6) Re-enumerate devices without tearing down active streams.
+    public int RefreshDevices()
+    {
+        lock (_gate)
+        {
+            if (_disposed || !IsInitialized)
+            {
+                return (int)MediaErrorCode.PortAudioNotInitialized;
+            }
+
+            if (!_nativeInitialized)
+            {
+                // Native library not available; fallback devices are still in place.
+                return (int)MediaErrorCode.PortAudioNotInitialized;
+            }
+
+            return RefreshNativeDevices()
+                ? MediaResult.Success
+                : (int)MediaErrorCode.PortAudioInvalidConfig;
         }
     }
 
@@ -312,21 +385,41 @@ public sealed class PortAudioEngine : IAudioEngine
                 return;
             }
 
-            if (State == AudioEngineState.Running)
-            {
-                TransitionTo(AudioEngineState.Initialized);
-            }
+            _disposed = true;
+            StateChanged = null;
 
-            foreach (var output in _outputs)
+            // (7.1) Same cleanup as Terminate() but inline — calling Terminate() while holding
+            // _gate would be safe (System.Threading.Lock is re-entrant) but more fragile.
+            // Clear the list first so per-output onDisposed callbacks find an empty list.
+            var outputs = _outputs.ToArray();
+            _outputs.Clear();
+
+            foreach (var output in outputs)
             {
                 output.Stop();
                 output.Dispose();
             }
 
-            _outputs.Clear();
-            TransitionTo(AudioEngineState.Terminated);
-            _disposed = true;
-            StateChanged = null;
+            if (_nativeInitialized)
+            {
+                try
+                {
+                    _ = Native.Pa_Terminate();
+                }
+                catch
+                {
+                    // Best-effort — Dispose must not throw.
+                }
+                finally
+                {
+                    _nativeInitialized = false;
+                }
+            }
+
+            if (State != AudioEngineState.Terminated)
+            {
+                TransitionTo(AudioEngineState.Terminated);
+            }
         }
     }
 
@@ -343,6 +436,27 @@ public sealed class PortAudioEngine : IAudioEngine
         return null;
     }
 
+    // (7.5) Centralised factory that wires up the cleanup callback.
+    private PortAudioOutput CreateTrackedOutput(AudioDeviceInfo device)
+    {
+        var output = new PortAudioOutput(
+            device,
+            deviceProvider: () => _outputDevices,
+            config: Config,
+            defaultOutputProvider: () => _defaultOutputDevice,
+            onDisposed: o =>
+            {
+                // Re-entrant-safe: System.Threading.Lock allows same-thread re-entry.
+                lock (_gate)
+                {
+                    _outputs.Remove(o);
+                }
+            });
+
+        _outputs.Add(output);
+        return output;
+    }
+
     private void TransitionTo(AudioEngineState next)
     {
         if (State == next)
@@ -355,7 +469,8 @@ public sealed class PortAudioEngine : IAudioEngine
         StateChanged?.Invoke(this, new AudioEngineStateChangedEventArgs(previous, next));
     }
 
-    private bool TryInitializeNativeRuntimeAndRefreshDevices()
+    // (7.7) Returns (ok, nativeFailed) so Initialize() can emit the right error code.
+    private (bool ok, bool nativeFailed) TryInitializeNativeRuntimeAndRefreshDevices()
     {
         try
         {
@@ -364,26 +479,27 @@ public sealed class PortAudioEngine : IAudioEngine
             if (init != PaError.paNoError)
             {
                 _nativeInitialized = false;
-                return string.IsNullOrWhiteSpace(Config.PreferredHostApi);
+                // Native library present but Pa_Initialize failed.
+                return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
             }
 
             _nativeInitialized = true;
-            return RefreshNativeDevices();
+            return (RefreshNativeDevices(), nativeFailed: false);
         }
         catch (DllNotFoundException)
         {
             _nativeInitialized = false;
-            return string.IsNullOrWhiteSpace(Config.PreferredHostApi);
+            return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
         }
         catch (EntryPointNotFoundException)
         {
             _nativeInitialized = false;
-            return string.IsNullOrWhiteSpace(Config.PreferredHostApi);
+            return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
         }
         catch (TypeInitializationException)
         {
             _nativeInitialized = false;
-            return string.IsNullOrWhiteSpace(Config.PreferredHostApi);
+            return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
         }
     }
 
@@ -504,6 +620,16 @@ public sealed class PortAudioEngine : IAudioEngine
         if (_defaultOutputDevice is null && _outputDevices.Count > 0)
         {
             _defaultOutputDevice = _outputDevices[0];
+        }
+
+        // (7.3) If PreferredOutputDevice is set, override the default with the preferred device.
+        if (Config.PreferredOutputDevice.HasValue)
+        {
+            var preferred = _outputDevices.FirstOrDefault(d => d.Id == Config.PreferredOutputDevice.Value);
+            if (preferred.Id.Value is not null)
+            {
+                _defaultOutputDevice = preferred;
+            }
         }
 
         _defaultInputDevice = _inputDevices.FirstOrDefault(device => device.IsDefaultInput);

@@ -8,9 +8,13 @@ namespace S.Media.PortAudio.Input;
 
 public sealed unsafe class PortAudioInput : IAudioSource
 {
+    // Validation bounds (6.4)
+    private const int MaxSampleRate = 384_000;
+    private const int MaxChannelCount = 64;
+    private const int MaxFramesPerBuffer = 32_768;
+
     private readonly Lock _gate = new();
     private bool _disposed;
-    private long _sampleCursor;
     private nint _stream;
     private bool _nativeStreaming;
 
@@ -58,14 +62,39 @@ public sealed unsafe class PortAudioInput : IAudioSource
                 return (int)MediaErrorCode.PortAudioInputStartFailed;
             }
 
-            if (config.SampleRate <= 0 || config.ChannelCount <= 0)
+            // Lower-bound validation
+            if (config.SampleRate <= 0 || config.ChannelCount <= 0 || config.FramesPerBuffer <= 0)
+            {
+                return (int)MediaErrorCode.PortAudioInvalidConfig;
+            }
+
+            // Upper-bound validation (6.4)
+            if (config.SampleRate > MaxSampleRate ||
+                config.ChannelCount > MaxChannelCount ||
+                config.FramesPerBuffer > MaxFramesPerBuffer)
             {
                 return (int)MediaErrorCode.PortAudioInvalidConfig;
             }
 
             Config = config;
+
+            // If already running with an active native stream, nothing to do.
+            if (State == AudioSourceState.Running && _nativeStreaming && _stream != nint.Zero)
+            {
+                return MediaResult.Success;
+            }
+
+            // Close any stale stream from a previous failed start attempt.
+            CloseNativeStreamIfOpen();
+
+            // (6.5) Surface the native open/start result to the caller.
+            var startResult = TryStartNativeStream();
+            if (startResult != MediaResult.Success)
+            {
+                return startResult;
+            }
+
             State = AudioSourceState.Running;
-            TryStartNativeStream();
             return MediaResult.Success;
         }
     }
@@ -106,6 +135,13 @@ public sealed unsafe class PortAudioInput : IAudioSource
             config = Config;
         }
 
+        // (6.3) No synthetic fallback — if native is not available, return an error rather
+        // than generating sawtooth test samples that would silently corrupt downstream audio.
+        if (!_nativeStreaming || _stream == nint.Zero)
+        {
+            return (int)MediaErrorCode.PortAudioInputReadFailed;
+        }
+
         var writableFrames = destination.Length / Math.Max(1, config.ChannelCount);
         framesRead = Math.Min(requestedFrameCount, writableFrames);
 
@@ -114,65 +150,42 @@ public sealed unsafe class PortAudioInput : IAudioSource
             return MediaResult.Success;
         }
 
-        if (_nativeStreaming && _stream != nint.Zero)
+        fixed (float* ptr = destination)
         {
-            fixed (float* ptr = destination)
+            var read = Native.Pa_ReadStream(_stream, (nint)ptr, (nuint)framesRead);
+            if (read == PaError.paNoError)
             {
-                var read = Native.Pa_ReadStream(_stream, (nint)ptr, (nuint)framesRead);
-                if (read == PaError.paNoError)
+                var writtenSamples = framesRead * config.ChannelCount;
+                if (writtenSamples < destination.Length)
                 {
-                    var writtenSamples = framesRead * config.ChannelCount;
-                    if (writtenSamples < destination.Length)
-                    {
-                        destination[writtenSamples..].Fill(0f);
-                    }
-
-                    lock (_gate)
-                    {
-                        _sampleCursor += writtenSamples;
-                        PositionSeconds += framesRead / (double)config.SampleRate;
-                    }
-
-                    return MediaResult.Success;
+                    destination[writtenSamples..].Fill(0f);
                 }
 
-                if (read == PaError.paInputOverflowed)
+                lock (_gate)
                 {
-                    return (int)MediaErrorCode.PortAudioOverflow;
+                    PositionSeconds += framesRead / (double)config.SampleRate;
                 }
 
-                if (read == PaError.paTimedOut)
-                {
-                    return (int)MediaErrorCode.MediaSourceReadTimeout;
-                }
-
-                if (read == PaError.paUnanticipatedHostError)
-                {
-                    return (int)MediaErrorCode.PortAudioHostError;
-                }
-
-                return (int)MediaErrorCode.PortAudioInputReadFailed;
+                return MediaResult.Success;
             }
-        }
 
-        var sampleCount = framesRead * config.ChannelCount;
-        for (var i = 0; i < sampleCount; i++)
-        {
-            destination[i] = ((_sampleCursor + i) % 64) / 64f;
-        }
+            if (read == PaError.paInputOverflowed)
+            {
+                return (int)MediaErrorCode.PortAudioOverflow;
+            }
 
-        if (sampleCount < destination.Length)
-        {
-            destination[sampleCount..].Fill(0f);
-        }
+            if (read == PaError.paTimedOut)
+            {
+                return (int)MediaErrorCode.MediaSourceReadTimeout;
+            }
 
-        lock (_gate)
-        {
-            _sampleCursor += sampleCount;
-            PositionSeconds += framesRead / (double)config.SampleRate;
-        }
+            if (read == PaError.paUnanticipatedHostError)
+            {
+                return (int)MediaErrorCode.PortAudioHostError;
+            }
 
-        return MediaResult.Success;
+            return (int)MediaErrorCode.PortAudioInputReadFailed;
+        }
     }
 
     public int Seek(double positionSeconds)
@@ -195,11 +208,12 @@ public sealed unsafe class PortAudioInput : IAudioSource
         }
     }
 
-    private void TryStartNativeStream()
+    // (6.5) Returns an int error code so Start() can surface native failures to the caller.
+    private int TryStartNativeStream()
     {
         if (_nativeStreaming)
         {
-            return;
+            return MediaResult.Success;
         }
 
         try
@@ -210,7 +224,7 @@ public sealed unsafe class PortAudioInput : IAudioSource
                 numOutputChannels: 0,
                 sampleFormat: PaSampleFormat.paFloat32,
                 sampleRate: Config.SampleRate,
-                framesPerBuffer: 256,
+                framesPerBuffer: (nuint)Math.Max(1, Config.FramesPerBuffer), // (6.2) use config
                 streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
                 userData: nint.Zero);
 
@@ -218,7 +232,7 @@ public sealed unsafe class PortAudioInput : IAudioSource
             {
                 _stream = nint.Zero;
                 _nativeStreaming = false;
-                return;
+                return (int)MediaErrorCode.PortAudioStreamOpenFailed;
             }
 
             var start = Native.Pa_StartStream(_stream);
@@ -227,25 +241,29 @@ public sealed unsafe class PortAudioInput : IAudioSource
                 Native.Pa_CloseStream(_stream);
                 _stream = nint.Zero;
                 _nativeStreaming = false;
-                return;
+                return (int)MediaErrorCode.PortAudioStreamStartFailed;
             }
 
             _nativeStreaming = true;
+            return MediaResult.Success;
         }
         catch (DllNotFoundException)
         {
             _stream = nint.Zero;
             _nativeStreaming = false;
+            return (int)MediaErrorCode.PortAudioInitializeFailed;
         }
         catch (EntryPointNotFoundException)
         {
             _stream = nint.Zero;
             _nativeStreaming = false;
+            return (int)MediaErrorCode.PortAudioInitializeFailed;
         }
         catch (TypeInitializationException)
         {
             _stream = nint.Zero;
             _nativeStreaming = false;
+            return (int)MediaErrorCode.PortAudioInitializeFailed;
         }
     }
 
@@ -264,7 +282,7 @@ public sealed unsafe class PortAudioInput : IAudioSource
         }
         catch
         {
-            // Best-effort close for deterministic teardown in fallback-friendly scaffolding.
+            // Best-effort close for deterministic teardown.
         }
         finally
         {

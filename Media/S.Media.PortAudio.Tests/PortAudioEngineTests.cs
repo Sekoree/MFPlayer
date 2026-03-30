@@ -93,13 +93,39 @@ public sealed class PortAudioEngineTests
     }
 
     [Fact]
-    public void Initialize_ReturnsInvalidConfig_WhenPreferredHostApiIsUnknown()
+    public void Initialize_ReturnsError_WhenPreferredHostApiIsUnknown()
     {
         using var engine = new PortAudioEngine();
 
         var code = engine.Initialize(new AudioEngineConfig { PreferredHostApi = "definitely-not-a-real-host-api" });
 
-        Assert.Equal((int)MediaErrorCode.PortAudioInvalidConfig, code);
+        // (7.7) The error code is PortAudioInvalidConfig when native is present but the API name
+        // is unknown, or PortAudioInitializeFailed when the native library itself is absent.
+        Assert.True(
+            code is (int)MediaErrorCode.PortAudioInvalidConfig
+                 or (int)MediaErrorCode.PortAudioInitializeFailed,
+            $"Unexpected error code: {code}");
+    }
+
+    [Fact]
+    public void Initialize_ReturnsInitializeFailed_WhenCalledTwice()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        // (7.2) A second Initialize() without a prior Terminate() must be rejected.
+        var code = engine.Initialize(new AudioEngineConfig());
+
+        Assert.Equal((int)MediaErrorCode.PortAudioInitializeFailed, code);
+    }
+
+    [Fact]
+    public void Initialize_ReturnsInvalidConfig_ForUpperBoundViolation()
+    {
+        using var engine = new PortAudioEngine();
+
+        Assert.Equal((int)MediaErrorCode.PortAudioInvalidConfig,
+            engine.Initialize(new AudioEngineConfig { SampleRate = 999_999 }));
     }
 
     [Fact]
@@ -116,6 +142,98 @@ public sealed class PortAudioEngineTests
         Assert.Equal(MediaResult.Success, code);
         Assert.NotNull(output);
         Assert.Equal(defaultOutput.Value.Id, output!.Device.Id);
+    }
+
+    [Fact]
+    public void RemoveOutput_StopsAndDisposesOutput_AndRemovesFromList()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var deviceId = engine.GetOutputDevices()[0].Id;
+        var code = engine.CreateOutput(deviceId, out var output);
+        Assert.Equal(MediaResult.Success, code);
+        Assert.NotNull(output);
+        Assert.Single(engine.Outputs);
+
+        var removeCode = engine.RemoveOutput(output!);
+        Assert.Equal(MediaResult.Success, removeCode);
+        Assert.Empty(engine.Outputs);
+    }
+
+    [Fact]
+    public void RemoveOutput_ReturnsDeviceNotFound_ForUntrackedOutput()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        // Create another engine just to get a foreign output.
+        using var other = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, other.Initialize(new AudioEngineConfig()));
+        var foreignDeviceId = other.GetOutputDevices()[0].Id;
+        Assert.Equal(MediaResult.Success, other.CreateOutput(foreignDeviceId, out var foreignOutput));
+
+        var code = engine.RemoveOutput(foreignOutput!);
+        Assert.Equal((int)MediaErrorCode.PortAudioDeviceNotFound, code);
+    }
+
+    [Fact]
+    public void OutputDisposedDirectly_IsRemovedFromEngineOutputsList()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+        var deviceId = engine.GetOutputDevices()[0].Id;
+        Assert.Equal(MediaResult.Success, engine.CreateOutput(deviceId, out var output));
+        Assert.Single(engine.Outputs);
+
+        // (7.5) Directly disposing the output must remove it from the engine's Outputs list.
+        output!.Dispose();
+
+        Assert.Empty(engine.Outputs);
+    }
+
+    [Fact]
+    public void RefreshDevices_ReturnsSuccess_WhenNativeIsInitialized()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        // (7.6) If native PortAudio is available, RefreshDevices returns Success.
+        // If it is not available (e.g. CI without audio), the engine falls back to phantom
+        // devices and RefreshDevices is expected to return NotInitialized.
+        var code = engine.RefreshDevices();
+        Assert.True(
+            code is MediaResult.Success or (int)MediaErrorCode.PortAudioNotInitialized,
+            $"Unexpected RefreshDevices code: {code}");
+    }
+
+    [Fact]
+    public void FallbackDevices_AreFlaggedAsIsFallback_BeforeNativeInit()
+    {
+        // (6.6) Before Initialize(), all devices are phantom/fallback.
+        using var engine = new PortAudioEngine();
+
+        var outputs = engine.GetOutputDevices();
+        Assert.NotEmpty(outputs);
+        Assert.All(outputs, d => Assert.True(d.IsFallback));
+    }
+
+    [Fact]
+    public void Stop_StopsAllActiveOutputs()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+        Assert.Equal(MediaResult.Success, engine.Start());
+
+        var deviceId = engine.GetOutputDevices()[0].Id;
+        Assert.Equal(MediaResult.Success,
+            engine.CreateOutput(deviceId, out var output));
+        Assert.NotNull(output);
+        _ = output!.Start(new AudioOutputConfig());  // may or may not start native stream
+
+        // (7.4) engine.Stop() must stop all tracked outputs.
+        Assert.Equal(MediaResult.Success, engine.Stop());
+        Assert.Equal(AudioOutputState.Stopped, output.State);
     }
 
     [Fact]
