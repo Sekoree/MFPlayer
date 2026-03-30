@@ -32,6 +32,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB
 		Doc\PMLib.md = Doc\PMLib.md
 		Doc\OSCLib.md = Doc\OSCLib.md
 		Doc\Naming-and-Consolidation.md = Doc\Naming-and-Consolidation.md
+		Doc\Audio-Review-2026-03-30.md = Doc\Audio-Review-2026-03-30.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"

@@ -1,19 +1,19 @@
 using Avalonia;
 using Avalonia.Media;
-using S.Media.Core.Diagnostics;
+using S.Media.OpenGL;
 
 namespace S.Media.OpenGL.Avalonia.Diagnostics;
 
 public sealed class MediaHudOverlay
 {
 	private readonly Lock _gate = new();
-	private readonly Dictionary<string, DebugInfo> _entries = [];
+	private readonly Dictionary<string, HudEntry> _entries = [];
 
-	public void Update(DebugInfo debugInfo)
+	public void Update(HudEntry entry)
 	{
 		lock (_gate)
 		{
-			_entries[debugInfo.Key] = debugInfo;
+			_entries[entry.Key] = entry;
 		}
 	}
 
@@ -142,7 +142,7 @@ public sealed class MediaHudOverlay
 		return "UNKNOWN";
 	}
 
-	private bool TryGetEntry(string[] keys, out DebugInfo info)
+	private bool TryGetEntry(string[] keys, out HudEntry info)
 	{
 		foreach (var key in keys)
 		{

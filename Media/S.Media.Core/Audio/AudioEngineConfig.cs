@@ -27,8 +27,18 @@ public sealed record AudioEngineConfig
     /// Suggested PortAudio output stream latency mode.
     /// Default: <see cref="AudioLatencyMode.High"/> (stable for most playback use cases).
     /// Use <see cref="AudioLatencyMode.Low"/> for real-time monitoring or live performance.
+    /// Use <see cref="AudioLatencyMode.Custom"/> together with <see cref="CustomLatencySeconds"/>
+    /// for pro-audio drivers that require a specific buffer latency.
     /// </summary>
     public AudioLatencyMode LatencyMode { get; init; } = AudioLatencyMode.High;
+
+    /// <summary>
+    /// Suggested output stream latency in seconds, used only when
+    /// <see cref="LatencyMode"/> is <see cref="AudioLatencyMode.Custom"/>.
+    /// Ignored for <c>High</c> and <c>Low</c> modes.
+    /// Typical values: 0.005–0.100 s (5–100 ms).
+    /// </summary>
+    public double CustomLatencySeconds { get; init; } = 0.02;
 
     /// <summary>
     /// Maximum time in milliseconds to wait per <c>Pa_WriteStream</c> call before abandoning the

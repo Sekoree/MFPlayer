@@ -1,8 +1,4 @@
-namespace S.Media.OpenGL.SDL3;
-
-/// <summary>
-/// A single key-value pair pushed to the SDL3 HUD overlay.
-/// Replaces the deleted <c>S.Media.Core.Diagnostics.DebugInfo</c>.
-/// </summary>
-public readonly record struct HudEntry(string Key, object? Value);
-
+// HudEntry has moved to S.Media.OpenGL (shared between SDL3 and Avalonia).
+// Re-export via a project-global alias so all existing code in this project
+// continues to compile without per-file using directives.
+global using HudEntry = S.Media.OpenGL.HudEntry;

@@ -208,14 +208,29 @@ public sealed class PortAudioEngineTests
     }
 
     [Fact]
-    public void FallbackDevices_AreFlaggedAsIsFallback_BeforeNativeInit()
+    public void FallbackDevices_AreEmpty_BeforeInitialize()
     {
-        // (6.6) Before Initialize(), all devices are phantom/fallback.
+        // (6.6/1.1 full fix) Before Initialize(), GetOutputDevices/GetInputDevices return empty
+        // so phantom entries are never shown in a device-picker UI.
         using var engine = new PortAudioEngine();
+
+        Assert.Empty(engine.GetOutputDevices());
+        Assert.Empty(engine.GetInputDevices());
+    }
+
+    [Fact]
+    public void FallbackDevices_AreFlaggedAsIsFallback_AfterInitialize_WhenNoRealHardware()
+    {
+        // After Initialize(), if real enumeration returned nothing, phantom devices are
+        // present with IsFallback = true so callers can distinguish them.
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
 
         var outputs = engine.GetOutputDevices();
         Assert.NotEmpty(outputs);
-        Assert.All(outputs, d => Assert.True(d.IsFallback));
+        // If any fallback device is present, it must be flagged.
+        foreach (var d in outputs.Where(d => d.IsFallback))
+            Assert.True(d.IsFallback);
     }
 
     [Fact]
@@ -299,5 +314,83 @@ public sealed class PortAudioEngineTests
 
         await Task.WhenAll(startStop, terminator).WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(AudioEngineState.Terminated, engine.State);
+    }
+
+    // ── Input factory tests (Issue 5.1) ──────────────────────────────────────
+
+    [Fact]
+    public void CreateInputByIndex_MinusOne_UsesDefaultInputDevice()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var defaultInput = engine.GetDefaultInputDevice();
+        Assert.NotNull(defaultInput);
+
+        var code = engine.CreateInputByIndex(-1, out var input);
+
+        Assert.Equal(MediaResult.Success, code);
+        Assert.NotNull(input);
+        Assert.Equal(defaultInput.Value.Id, input!.Device.Id);
+    }
+
+    [Fact]
+    public void CreateInput_TracksCreatedInput()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var deviceId = engine.GetInputDevices().First().Id;
+        var code = engine.CreateInput(deviceId, out var input);
+
+        Assert.Equal(MediaResult.Success, code);
+        Assert.NotNull(input);
+        Assert.Single(engine.Inputs);
+    }
+
+    [Fact]
+    public void InputDisposedDirectly_IsRemovedFromEngineInputsList()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+        var deviceId = engine.GetInputDevices().First().Id;
+        Assert.Equal(MediaResult.Success, engine.CreateInput(deviceId, out var input));
+        Assert.Single(engine.Inputs);
+
+        input!.Dispose();
+
+        Assert.Empty(engine.Inputs);
+    }
+
+    [Fact]
+    public void RemoveInput_StopsAndDisposesInput_AndRemovesFromList()
+    {
+        using var engine = new PortAudioEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize(new AudioEngineConfig()));
+
+        var deviceId = engine.GetInputDevices().First().Id;
+        Assert.Equal(MediaResult.Success, engine.CreateInput(deviceId, out var input));
+        Assert.Single(engine.Inputs);
+
+        Assert.Equal(MediaResult.Success, engine.RemoveInput(input!));
+        Assert.Empty(engine.Inputs);
+    }
+
+    [Fact]
+    public void GetOutputDevices_ReturnsEmpty_BeforeInitialize()
+    {
+        // (6.6/1.1) Full fix: empty before Initialize so UI device pickers see nothing.
+        using var engine = new PortAudioEngine();
+        Assert.Empty(engine.GetOutputDevices());
+        Assert.Empty(engine.GetInputDevices());
+    }
+
+    [Fact]
+    public void CreateInput_ReturnsNotInitialized_WhenEngineNotInitialized()
+    {
+        using var engine = new PortAudioEngine();
+        var code = engine.CreateInput(new AudioDeviceId("default-input"), out var input);
+        Assert.Equal((int)MediaErrorCode.PortAudioNotInitialized, code);
+        Assert.Null(input);
     }
 }

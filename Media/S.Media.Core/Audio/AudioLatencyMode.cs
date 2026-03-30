@@ -14,5 +14,13 @@ public enum AudioLatencyMode
     /// and live performance where minimum round-trip latency is required.
     /// </summary>
     Low = 1,
+
+    /// <summary>
+    /// Use a caller-specified latency in seconds set via
+    /// <see cref="AudioEngineConfig.CustomLatencySeconds"/>.
+    /// Useful for pro-audio drivers (ASIO, WASAPI Exclusive) that expose a specific
+    /// buffer size requirement.
+    /// </summary>
+    Custom = 2,
 }
 

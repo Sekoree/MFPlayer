@@ -736,7 +736,8 @@ public class AVMixer : IAVMixer
                     if (timelineSeconds < offset) continue;
 
                     Array.Clear(tempBuf, 0, tempBuf.Length);
-                    if (src.ReadSamples(tempBuf, framesPerBatch, out var fr) == MediaResult.Success && fr > 0)
+                    var readCode = src.ReadSamples(tempBuf, framesPerBatch, out var fr);
+                    if (readCode == MediaResult.Success && fr > 0)
                     {
                         // ── Optional resampling (§10.9 / P2-6) ───────────────────────
                         var srcRate = src.StreamInfo.SampleRate.GetValueOrDefault(0);
@@ -769,7 +770,14 @@ public class AVMixer : IAVMixer
                             AudioMixUtils.MixInto(mixBuf, tempBuf, fr * sourceChannels, src.Volume);
                         }
                     }
-                    else Interlocked.Increment(ref _audioReadFailures);
+                    else
+                    {
+                        Interlocked.Increment(ref _audioReadFailures);
+                        // (10.8) Notify subscribers of source read failures so they can react
+                        // (e.g. display a warning, stop the source, switch to a fallback).
+                        if (readCode != MediaResult.Success)
+                            AudioSourceError?.Invoke(this, new MediaSourceErrorEventArgs(src.Id, readCode, null));
+                    }
                 }
 
                 if (!anyRead)
@@ -813,7 +821,8 @@ public class AVMixer : IAVMixer
                         sourceBufs[src.Id] = sbuf = new float[size];
 
                     Array.Clear(sbuf, 0, size);
-                    if (src.ReadSamples(sbuf, framesPerBatch, out var fr) == MediaResult.Success && fr > 0)
+                    var readCode = src.ReadSamples(sbuf, framesPerBatch, out var fr);
+                    if (readCode == MediaResult.Success && fr > 0)
                     {
                         anyRead = true;
                         if (fr > framesProduced) framesProduced = fr;
@@ -822,6 +831,8 @@ public class AVMixer : IAVMixer
                     else
                     {
                         Interlocked.Increment(ref _audioReadFailures);
+                        if (readCode != MediaResult.Success)
+                            AudioSourceError?.Invoke(this, new MediaSourceErrorEventArgs(src.Id, readCode, null));
                         sourceFrames[src.Id] = 0;
                     }
                 }
@@ -940,7 +951,17 @@ public class AVMixer : IAVMixer
             if (src.State == VideoSourceState.Stopped)     { Thread.Sleep(5);  continue; }
             if (src.State == VideoSourceState.EndOfStream) { Thread.Sleep(50); continue; }
 
-            if (src.ReadFrame(out var frame) != MediaResult.Success) { Thread.Sleep(2); continue; }
+            var videoReadCode = src.ReadFrame(out var frame);
+            if (videoReadCode != MediaResult.Success)
+            {
+                // (10.8) Fire VideoSourceError for genuine decode failures.
+                // Suppress FFmpegVideoDecodeNeedMoreData — it is a normal transient state,
+                // not an error worth surfacing to the application layer.
+                if (videoReadCode != (int)MediaErrorCode.FFmpegVideoDecodeNeedMoreData)
+                    VideoSourceError?.Invoke(this, new MediaSourceErrorEventArgs(src.Id, videoReadCode, null));
+                Thread.Sleep(2);
+                continue;
+            }
 
             // N8: merge depth check and enqueue into a single lock to eliminate the TOCTOU window.
             bool enqueued;
@@ -954,7 +975,13 @@ public class AVMixer : IAVMixer
                 }
                 else enqueued = false;
             }
-            if (!enqueued) { frame.Dispose(); Thread.Sleep(1); }
+            if (!enqueued)
+            {
+                // (10.8) Count frames dropped because the queue was at capacity.
+                Interlocked.Increment(ref _videoQueueTrimDrops);
+                frame.Dispose();
+                Thread.Sleep(1);
+            }
         }
     }
 

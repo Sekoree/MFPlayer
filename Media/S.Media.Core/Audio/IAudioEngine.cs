@@ -52,5 +52,33 @@ public interface IAudioEngine : IMediaEngine
 
     IReadOnlyList<IAudioOutput> Outputs { get; }
 
+    // ── Input factory (5.1) ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a capture input for the device with the given ID and registers it with the engine.
+    /// Pass <see cref="AudioDeviceId"/> from <see cref="GetInputDevices"/> or
+    /// <see cref="GetDefaultInputDevice"/>.
+    /// </summary>
+    int CreateInput(AudioDeviceId deviceId, out IAudioInput? input);
+
+    /// <summary>Creates a capture input by device name (case-insensitive).</summary>
+    int CreateInputByName(string deviceName, out IAudioInput? input);
+
+    /// <summary>
+    /// Creates a capture input by index in the engine's input-device list.
+    /// Pass <c>-1</c> to use the default input device.
+    /// </summary>
+    int CreateInputByIndex(int deviceIndex, out IAudioInput? input);
+
+    /// <summary>
+    /// Removes <paramref name="input"/> from the engine's tracked input list and disposes it.
+    /// Returns <see cref="S.Media.Core.Errors.MediaResult.Success"/> if removed, or
+    /// <see cref="S.Media.Core.Errors.MediaErrorCode.PortAudioDeviceNotFound"/> if not tracked.
+    /// </summary>
+    int RemoveInput(IAudioInput input);
+
+    /// <summary>All inputs currently created by this engine (including stopped ones).</summary>
+    IReadOnlyList<IAudioInput> Inputs { get; }
+
     event EventHandler<AudioEngineStateChangedEventArgs>? StateChanged;
 }

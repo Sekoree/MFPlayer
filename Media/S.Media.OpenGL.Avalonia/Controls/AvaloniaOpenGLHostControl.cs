@@ -3,7 +3,7 @@ using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
 using S.Media.Core.Errors;
-using S.Media.Core.Diagnostics;
+using S.Media.OpenGL;
 using S.Media.Core.Video;
 using S.Media.OpenGL.Avalonia.Diagnostics;
 using S.Media.OpenGL.Output;
@@ -70,11 +70,11 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
         return MediaResult.Success;
     }
 
-    public int UpdateHud(DebugInfo debugInfo)
+    public int UpdateHud(HudEntry entry)
     {
         lock (_gate)
         {
-            HudOverlay.Update(debugInfo);
+            HudOverlay.Update(entry);
         }
 
         if (EnableHudOverlay)

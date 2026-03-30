@@ -1,11 +1,24 @@
 using System.Buffers;
+using Microsoft.Extensions.Logging;
 using PALib;
 using PALib.Types.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
+using S.Media.PortAudio.Engine;
 
 namespace S.Media.PortAudio.Output;
 
+/// <summary>
+/// Hardware audio output backed by a PortAudio stream.
+/// Implements <see cref="IAudioOutput"/> with device-selection APIs and automatic resampling.
+/// </summary>
+/// <remarks>
+/// <b>Configuration snapshot (Issue 4.1 / 6.7):</b> Each <see cref="PortAudioOutput"/> captures
+/// a snapshot of <see cref="AudioEngineConfig"/> at creation time via
+/// <see cref="PortAudioEngine.CreateOutput"/>. Re-initializing the engine with different settings
+/// does not update the config of existing outputs.  Recreate outputs after re-initialization if
+/// config changes (sample rate, buffer size, latency mode) are needed.
+/// </remarks>
 public sealed unsafe class PortAudioOutput : IAudioOutput
 {
     private readonly Lock _gate = new();
@@ -13,13 +26,13 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
     private readonly Func<AudioDeviceInfo?> _defaultOutputProvider;
     private readonly AudioEngineConfig _config;
     private readonly Action<IAudioOutput>? _onDisposed;  // (7.5) cleanup callback for the engine
-    private nint _stream;
+    private volatile nint _stream;                       // (10.6) volatile: read lock-free in PushFrame hot-path
     private readonly int _configChannelCount;   // immutable: config-requested channel count
     private int _nativeSampleRate;
     private int _nativeChannelCount;            // (8.2) effective channel count actually opened
     private int _nativeFramesPerBuffer;
-    private bool _nativeStreaming;
-    private bool _disposed;
+    private volatile bool _nativeStreaming;     // (10.6) volatile: read lock-free in PushFrame hot-path
+    private volatile bool _disposed;            // (10.6) volatile: read lock-free in PushFrame hot-path
     private AudioResampler? _resampler;
     private AudioOutputConfig _outputConfig = new();
 
@@ -263,8 +276,11 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             var open = TryOpenSelectedDeviceStream();
             if (open != PaError.paNoError)
             {
+                // (10.6) Use a local for the out-parameter; direct volatile-field ref would suppress
+                // volatile semantics (CS0420). Assign back with a volatile write after the call.
+                nint streamHandle;
                 open = Native.Pa_OpenDefaultStream(
-                    out _stream,
+                    out streamHandle,
                     numInputChannels: 0,
                     numOutputChannels: _nativeChannelCount,
                     sampleFormat: PaSampleFormat.paFloat32,
@@ -272,12 +288,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                     framesPerBuffer: (nuint)_nativeFramesPerBuffer,
                     streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
                     userData: nint.Zero);
+                _stream = streamHandle;
             }
 
             if (open != PaError.paNoError)
             {
                 _stream = nint.Zero;
                 _nativeStreaming = false;
+                PortAudioEngine.Logger?.LogError("Pa_OpenStream failed with {Code} for device '{Device}'.", open, Device.Name);
                 return (int)MediaErrorCode.PortAudioStreamOpenFailed;
             }
 
@@ -287,6 +305,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                 Native.Pa_CloseStream(_stream);
                 _stream = nint.Zero;
                 _nativeStreaming = false;
+                PortAudioEngine.Logger?.LogError("Pa_StartStream failed with {Code} for device '{Device}'.", start, Device.Name);
                 return (int)MediaErrorCode.PortAudioStreamStartFailed;
             }
 
@@ -335,11 +354,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             _nativeChannelCount, 1, Math.Max(1, deviceInfo.Value.maxOutputChannels));
 
         // (8.3) Use the configured latency mode.
-        var suggestedLatency = _config.LatencyMode == AudioLatencyMode.Low
-            ? deviceInfo.Value.defaultLowOutputLatency
-            : (deviceInfo.Value.defaultHighOutputLatency > 0
-                ? deviceInfo.Value.defaultHighOutputLatency
-                : deviceInfo.Value.defaultLowOutputLatency);
+        var suggestedLatency = _config.LatencyMode switch
+        {
+            AudioLatencyMode.Low    => deviceInfo.Value.defaultLowOutputLatency,
+            AudioLatencyMode.Custom => _config.CustomLatencySeconds,
+            _                       => deviceInfo.Value.defaultHighOutputLatency > 0
+                                           ? deviceInfo.Value.defaultHighOutputLatency
+                                           : deviceInfo.Value.defaultLowOutputLatency,
+        };
 
         var outputParams = new PaStreamParameters
         {
@@ -350,8 +372,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             hostApiSpecificStreamInfo = nint.Zero,
         };
 
+        // (10.6) Use a local for the out-parameter to avoid CS0420 on volatile field.
+        nint openedStream;
         var result = Native.Pa_OpenStream(
-            out _stream,
+            out openedStream,
             inputParameters: null,
             outputParameters: outputParams,
             sampleRate: _nativeSampleRate,
@@ -359,6 +383,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
             streamFlags: PaStreamFlags.paNoFlag,
             streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
             userData: nint.Zero);
+        _stream = openedStream;
 
         // (8.2) Commit the effective channel count only after a successful open.
         if (result == PaError.paNoError)
@@ -451,6 +476,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                     var framesRemaining = effectiveFrameCount;
                     var frameOffset = 0;
 
+                    // (10.6) Snapshot the stream handle once before the write loop.
+                    // _stream is volatile so this read has acquire semantics on ARM64.
+                    var stream = _stream;
+
                     // (6.1) Compute the deadline for the entire write of this frame batch.
                     var deadline = _config.WriteTimeoutMs > 0
                         ? Environment.TickCount64 + _config.WriteTimeoutMs
@@ -458,7 +487,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
                     while (framesRemaining > 0)
                     {
-                        if (_disposed || State != AudioOutputState.Running || _stream == nint.Zero)
+                        if (_disposed || State != AudioOutputState.Running || stream == nint.Zero)
                         {
                             return (int)MediaErrorCode.PortAudioPushFailed;
                         }
@@ -466,13 +495,16 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                         // (6.1) Enforce write deadline to prevent permanent stall on a blocked device.
                         if (Environment.TickCount64 > deadline)
                         {
+                            PortAudioEngine.Logger?.LogWarning(
+                                "PortAudioOutput write timeout after {Ms} ms on device '{Device}'. Device may be unplugged or stalled.",
+                                _config.WriteTimeoutMs, Device.Name);
                             return (int)MediaErrorCode.PortAudioPushFailed;
                         }
 
                         var writableFrames = Math.Min(framesRemaining, Math.Max(1, _nativeFramesPerBuffer));
                         var sampleOffset = frameOffset * _nativeChannelCount;
                         var writePtr = ptr + sampleOffset;
-                        var write = Native.Pa_WriteStream(_stream, (nint)writePtr, (nuint)writableFrames);
+                        var write = Native.Pa_WriteStream(stream, (nint)writePtr, (nuint)writableFrames);
                         if (write == PaError.paNoError)
                         {
                             frameOffset += writableFrames;

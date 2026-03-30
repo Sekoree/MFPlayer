@@ -25,7 +25,11 @@ public interface IAudioSink : IDisposable
     /// </summary>
     int PushFrame(in AudioFrame frame)
     {
-        int ch = Math.Max(1, frame.SourceChannelCount);
+        // (10.7) Reject zero-channel frames rather than clamping to 1 (which would produce
+        // a [0] route map and potentially read out-of-bounds from an empty Samples span).
+        int ch = frame.SourceChannelCount;
+        if (ch <= 0)
+            return (int)S.Media.Core.Errors.MediaErrorCode.MediaInvalidArgument;
         Span<int> identity = stackalloc int[ch];
         for (int i = 0; i < ch; i++) identity[i] = i;
         return PushFrame(in frame, identity, ch);

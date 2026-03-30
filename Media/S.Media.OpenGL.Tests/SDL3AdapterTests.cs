@@ -1,5 +1,5 @@
 using S.Media.Core.Audio;
-using S.Media.Core.Diagnostics;
+using S.Media.OpenGL;
 using S.Media.Core.Errors;
 using S.Media.Core.Video;
 using S.Media.OpenGL.SDL3;
@@ -117,14 +117,14 @@ public sealed class SDL3AdapterTests
             EnableHudOverlay = true,
         };
 
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("render.fps", DebugValueKind.Scalar, 60.0, DateTimeOffset.UtcNow)));
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("video.fps", DebugValueKind.Scalar, 59.9, DateTimeOffset.UtcNow)));
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("pixel.format", DebugValueKind.Scalar, "nv12->rgba", DateTimeOffset.UtcNow)));
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("queue.depth", DebugValueKind.Scalar, 2, DateTimeOffset.UtcNow)));
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("upload.ms", DebugValueKind.Scalar, 0.25, DateTimeOffset.UtcNow)));
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("av.drift.ms", DebugValueKind.Scalar, 0.6, DateTimeOffset.UtcNow)));
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("gpu.decode", DebugValueKind.Scalar, true, DateTimeOffset.UtcNow)));
-        Assert.Equal(MediaResult.Success, view.UpdateHud(new DebugInfo("drop.frames", DebugValueKind.Scalar, 3, DateTimeOffset.UtcNow)));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("render.fps", 60.0)));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("video.fps", 59.9)));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("pixel.format", "nv12->rgba")));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("queue.depth", 2)));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("upload.ms", 0.25)));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("av.drift.ms", 0.6)));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("gpu.decode", true)));
+        Assert.Equal(MediaResult.Success, view.UpdateHud(new HudEntry("drop.frames", 3)));
 
         var text = view.HudRenderer.BuildHudTextSnapshot();
         Assert.Equal("RENDER:60.0 VIDEO:59.9 NV12/RGBA\nQ:2 UP:0.25 AV:0.6 GPU:1 DROP:3", text);

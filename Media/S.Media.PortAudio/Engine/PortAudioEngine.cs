@@ -1,8 +1,10 @@
 using PALib;
 using PALib.Runtime;
 using PALib.Types.Core;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
+using S.Media.PortAudio.Input;
 using S.Media.PortAudio.Output;
 
 namespace S.Media.PortAudio.Engine;
@@ -19,6 +21,7 @@ public sealed class PortAudioEngine : IAudioEngine
     private readonly List<AudioDeviceInfo> _inputDevices;
     private readonly List<AudioHostApiInfo> _hostApis;
     private readonly List<IAudioOutput> _outputs = [];
+    private readonly List<IAudioInput> _inputs = [];
     private AudioDeviceInfo? _defaultOutputDevice;
     private AudioDeviceInfo? _defaultInputDevice;
     private bool _nativeInitialized;
@@ -143,21 +146,13 @@ public sealed class PortAudioEngine : IAudioEngine
     {
         lock (_gate)
         {
-            if (_disposed)
-            {
-                return MediaResult.Success;
-            }
-
+            if (_disposed) return MediaResult.Success;
             if (State == AudioEngineState.Running)
             {
-                foreach (var output in _outputs)
-                {
-                    output.Stop();
-                }
-
+                foreach (var output in _outputs) output.Stop();
+                foreach (var input  in _inputs)  input.Stop();
                 TransitionTo(AudioEngineState.Initialized);
             }
-
             return MediaResult.Success;
         }
     }
@@ -166,21 +161,15 @@ public sealed class PortAudioEngine : IAudioEngine
     {
         lock (_gate)
         {
-            if (_disposed)
-            {
-                return MediaResult.Success;
-            }
+            if (_disposed) return MediaResult.Success;
 
-            // (7.1) Clear the list before calling Dispose() so that the per-output
-            // _onDisposed cleanup callback finds an already-empty list and does no extra work.
             var outputs = _outputs.ToArray();
             _outputs.Clear();
+            foreach (var output in outputs) { output.Stop(); output.Dispose(); }
 
-            foreach (var output in outputs)
-            {
-                output.Stop();
-                output.Dispose();  // (7.1) was missing — outputs were never disposed by Terminate
-            }
+            var inputs = _inputs.ToArray();
+            _inputs.Clear();
+            foreach (var input in inputs) { input.Stop(); input.Dispose(); }
 
             if (_nativeInitialized)
             {
@@ -217,6 +206,11 @@ public sealed class PortAudioEngine : IAudioEngine
     {
         lock (_gate)
         {
+            // (6.6/1.1) Return empty before Initialize so phantom/fallback entries are never
+            // exposed to callers who haven't started the engine.  After Initialize() the real
+            // (or fallback-with-IsFallback=true) device list is returned.
+            if (State == AudioEngineState.Uninitialized)
+                return Array.Empty<AudioDeviceInfo>();
             return _outputDevices.ToArray();
         }
     }
@@ -225,6 +219,8 @@ public sealed class PortAudioEngine : IAudioEngine
     {
         lock (_gate)
         {
+            if (State == AudioEngineState.Uninitialized)
+                return Array.Empty<AudioDeviceInfo>();
             return _inputDevices.ToArray();
         }
     }
@@ -354,6 +350,76 @@ public sealed class PortAudioEngine : IAudioEngine
         return MediaResult.Success;
     }
 
+    // ── Input factory (Issue 5.1) ─────────────────────────────────────────────
+
+    public IReadOnlyList<IAudioInput> Inputs
+    {
+        get { lock (_gate) { return _inputs.ToArray(); } }
+    }
+
+    public int CreateInput(AudioDeviceId deviceId, out IAudioInput? input)
+    {
+        input = null;
+        lock (_gate)
+        {
+            if (_disposed || (State != AudioEngineState.Initialized && State != AudioEngineState.Running))
+                return (int)MediaErrorCode.PortAudioNotInitialized;
+            var device = TryFindInputDevice(deviceId);
+            if (!device.HasValue) return (int)MediaErrorCode.PortAudioDeviceNotFound;
+            input = CreateTrackedInput(device.Value);
+            return MediaResult.Success;
+        }
+    }
+
+    public int CreateInputByName(string deviceName, out IAudioInput? input)
+    {
+        input = null;
+        if (string.IsNullOrWhiteSpace(deviceName)) return (int)MediaErrorCode.MediaInvalidArgument;
+        lock (_gate)
+        {
+            if (_disposed || (State != AudioEngineState.Initialized && State != AudioEngineState.Running))
+                return (int)MediaErrorCode.PortAudioNotInitialized;
+            for (var i = 0; i < _inputDevices.Count; i++)
+            {
+                if (!string.Equals(_inputDevices[i].Name, deviceName, StringComparison.OrdinalIgnoreCase)) continue;
+                input = CreateTrackedInput(_inputDevices[i]);
+                return MediaResult.Success;
+            }
+            return (int)MediaErrorCode.PortAudioDeviceNotFound;
+        }
+    }
+
+    public int CreateInputByIndex(int deviceIndex, out IAudioInput? input)
+    {
+        input = null;
+        lock (_gate)
+        {
+            if (_disposed || (State != AudioEngineState.Initialized && State != AudioEngineState.Running))
+                return (int)MediaErrorCode.PortAudioNotInitialized;
+            if (deviceIndex == -1)
+            {
+                var def = _defaultInputDevice;
+                if (!def.HasValue) return (int)MediaErrorCode.PortAudioDeviceNotFound;
+                input = CreateTrackedInput(def.Value);
+                return MediaResult.Success;
+            }
+            if (deviceIndex < 0 || deviceIndex >= _inputDevices.Count)
+                return (int)MediaErrorCode.PortAudioDeviceNotFound;
+            input = CreateTrackedInput(_inputDevices[deviceIndex]);
+            return MediaResult.Success;
+        }
+    }
+
+    public int RemoveInput(IAudioInput input)
+    {
+        lock (_gate)
+        {
+            if (!_inputs.Remove(input)) return (int)MediaErrorCode.PortAudioDeviceNotFound;
+        }
+        input.Dispose();
+        return MediaResult.Success;
+    }
+
     // (7.6) Re-enumerate devices without tearing down active streams.
     public int RefreshDevices()
     {
@@ -391,14 +457,13 @@ public sealed class PortAudioEngine : IAudioEngine
             // (7.1) Same cleanup as Terminate() but inline — calling Terminate() while holding
             // _gate would be safe (System.Threading.Lock is re-entrant) but more fragile.
             // Clear the list first so per-output onDisposed callbacks find an empty list.
-            var outputs = _outputs.ToArray();
+            var dOutputs = _outputs.ToArray();
             _outputs.Clear();
+            var dInputs = _inputs.ToArray();
+            _inputs.Clear();
 
-            foreach (var output in outputs)
-            {
-                output.Stop();
-                output.Dispose();
-            }
+            foreach (var output in dOutputs) { output.Stop(); output.Dispose(); }
+            foreach (var input  in dInputs)  { input.Stop();  input.Dispose();  }
 
             if (_nativeInitialized)
             {
@@ -423,16 +488,36 @@ public sealed class PortAudioEngine : IAudioEngine
         }
     }
 
+    // ── Logging (Issue 6.8) ───────────────────────────────────────────────────
+    private static ILogger? _logger;
+
+    /// <summary>
+    /// Configures a shared logger for all <see cref="PortAudioEngine"/>,
+    /// <see cref="PortAudioOutput"/>, and <see cref="PortAudioInput"/> instances.
+    /// Call once at application startup before creating any engine.
+    /// </summary>
+    public static void ConfigureLogging(ILogger logger)
+    {
+        _logger = logger;
+    }
+
+    internal static ILogger? Logger => _logger;
+
     private AudioDeviceInfo? TryFindOutputDevice(AudioDeviceId deviceId)
     {
         for (var i = 0; i < _outputDevices.Count; i++)
         {
-            if (_outputDevices[i].Id == deviceId)
-            {
-                return _outputDevices[i];
-            }
+            if (_outputDevices[i].Id == deviceId) return _outputDevices[i];
         }
+        return null;
+    }
 
+    private AudioDeviceInfo? TryFindInputDevice(AudioDeviceId deviceId)
+    {
+        for (var i = 0; i < _inputDevices.Count; i++)
+        {
+            if (_inputDevices[i].Id == deviceId) return _inputDevices[i];
+        }
         return null;
     }
 
@@ -444,17 +529,20 @@ public sealed class PortAudioEngine : IAudioEngine
             deviceProvider: () => _outputDevices,
             config: Config,
             defaultOutputProvider: () => _defaultOutputDevice,
-            onDisposed: o =>
-            {
-                // Re-entrant-safe: System.Threading.Lock allows same-thread re-entry.
-                lock (_gate)
-                {
-                    _outputs.Remove(o);
-                }
-            });
-
+            onDisposed: o => { lock (_gate) { _outputs.Remove(o); } });
         _outputs.Add(output);
         return output;
+    }
+
+    private PortAudioInput CreateTrackedInput(AudioDeviceInfo device)
+    {
+        var input = new PortAudioInput(
+            deviceProvider: () => _inputDevices,
+            defaultInputProvider: () => _defaultInputDevice,
+            onDisposed: i => { lock (_gate) { _inputs.Remove(i); } },
+            initialDevice: device);
+        _inputs.Add(input);
+        return input;
     }
 
     private void TransitionTo(AudioEngineState next)
@@ -484,21 +572,25 @@ public sealed class PortAudioEngine : IAudioEngine
             }
 
             _nativeInitialized = true;
+            _logger?.LogDebug("PortAudio native runtime initialized; refreshing devices.");
             return (RefreshNativeDevices(), nativeFailed: false);
         }
         catch (DllNotFoundException)
         {
             _nativeInitialized = false;
+            _logger?.LogWarning("PortAudio native library not found (DllNotFoundException); falling back to phantom devices.");
             return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
         }
         catch (EntryPointNotFoundException)
         {
             _nativeInitialized = false;
+            _logger?.LogWarning("PortAudio entry point not found; falling back to phantom devices.");
             return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
         }
         catch (TypeInitializationException)
         {
             _nativeInitialized = false;
+            _logger?.LogWarning("PortAudio type initialization failed; falling back to phantom devices.");
             return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
         }
     }

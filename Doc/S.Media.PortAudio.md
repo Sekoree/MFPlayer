@@ -16,6 +16,7 @@
 7. [Engine Correctness Bugs (New Pass)](#7-engine-correctness-bugs-new-pass)
 8. [Output Stream Correctness (New Pass)](#8-output-stream-correctness-new-pass)
 9. [Summary of Recommended Changes](#9-summary-of-recommended-changes-by-priority)
+10. [Review Pass 2 — New Findings](#10-review-pass-2--new-findings)
 
 ---
 
@@ -1354,6 +1355,542 @@ is accumulated directly. Remove the field and its updates.
 | 6.7 / 4.1 — Config snapshot vs. live reference | **LOW** | ⬜ Open | Document-it path (Option A) is viable; live ref adds complexity |
 | 6.8 — No logging / diagnostics framework | **LOW** | ⬜ Open | `PortAudioLogAdapter` exists but unwired |
 | 3.1 — `CreateOutput` out-parameter type consistency | **LOW** | ⬜ Open | NDI-side change, outside S.Media.PortAudio scope |
+| 10.1 — `PortAudioInput.Volume` never applied to samples | **MEDIUM** | ✅ Fixed | Volume multiplier applied after `Pa_ReadStream` in `ReadSamples` |
+| 10.2 — `AudioLatencyMode.Custom` doc/code gap | **LOW** | ✅ Fixed | `Custom = 2` added to enum; `CustomLatencySeconds` added to `AudioEngineConfig`; switch expr in `TryOpenSelectedDeviceStream` |
+| 10.3 — TOCTOU race in `PortAudioInput.ReadSamples` | **MEDIUM** | ✅ Fixed | `_stream` snapshot via volatile read after lock release; stream handle consistent with null-check |
+| 10.4 — Wrong error code in input `TryStartNativeStream` | **LOW** | ✅ Fixed | All three catch blocks now return `PortAudioStreamOpenFailed`; test acceptance list tightened |
+| 10.5 — Standalone `PortAudioInput` requires `Pa_Initialize()` | **LOW** | ✅ Fixed | Comprehensive XML doc on `PortAudioInput` class documents the dependency and limitation |
+| 10.6 — Lock-free hot-path reads lack `Volatile` semantics | **LOW** | ✅ Fixed | `_disposed`, `_nativeStreaming`, `_stream` marked `volatile` in both Output and Input; local stream snapshot used in write loop |
+| 10.7 — Identity overload mishandles zero-channel frames | **LOW** | ✅ Fixed | `IAudioSink.PushFrame` identity DIM rejects `ch ≤ 0` with `MediaInvalidArgument` |
+| 10.8 — `AVMixer` unused events / unassigned field | **LOW** | ✅ Fixed | `AudioSourceError` fired on read failures in both mix paths; `VideoSourceError` fired on decode errors (suppresses `NeedMoreData`); `_videoQueueTrimDrops` incremented on queue-full frame drops |
+
+---
+
+*See also `API-Review.md` §5, `S.Media.Core.md` §1.1–1.2, and `PALib.md` for the full analysis of related issues in the native wrapper layer.*
+
+---
+
+## 10. Review Pass 2 — New Findings
+
+> **Scope of this pass:** Full source read of `PortAudioEngine.cs`, `PortAudioOutput.cs`,
+> `PortAudioInput.cs`, `AudioEngineConfig`, `AudioLatencyMode`, `IAudioSink`,
+> `AudioRouteMapValidator`, `AVMixer`, and all 31 unit tests.
+> All 31 tests pass; build is clean except for three CS0067/CS0649 warnings in
+> `S.Media.Core` (see Issue 10.8).
+
+---
+
+### Issue 10.1 — `PortAudioInput.Volume` property exists but is never applied to captured samples ✅ FIXED
+
+> **Status:** `ReadSamples()` now applies the `Volume` multiplier to the captured samples after
+> a successful `Pa_ReadStream` call. Zero-fill of the trailing padding is applied after the
+> volume pass. The fix is lock-free: `Volume` is a plain `float` auto-property, whose reads
+> are atomic on all .NET targets.
+
+`PortAudioInput` correctly inherits `IAudioSource.Volume` and exposes it as a settable
+auto-property (`public float Volume { get; set; } = 1.0f;`). However, `ReadSamples()` never
+multiplies the captured native float32 data by `Volume`. A caller who sets `input.Volume = 0.5f`
+will still receive full-amplitude audio.
+
+**Current `ReadSamples` success path (abridged):**
+```csharp
+var read = Native.Pa_ReadStream(_stream, (nint)ptr, (nuint)framesRead);
+if (read == PaError.paNoError)
+{
+    var writtenSamples = framesRead * config.ChannelCount;
+    if (writtenSamples < destination.Length)
+        destination[writtenSamples..].Fill(0f);   // zero-padding — correct
+
+    lock (_gate)
+        PositionSeconds += framesRead / (double)config.SampleRate;
+
+    return MediaResult.Success;  // ← Volume multiplier NEVER applied
+}
+```
+
+**Fix:** Apply `Volume` after the native read succeeds:
+
+```csharp
+if (read == PaError.paNoError)
+{
+    var writtenSamples = framesRead * config.ChannelCount;
+
+    // Apply per-source volume (matches how AVMixer applies Volume for file-based sources).
+    var vol = Volume;
+    if (vol != 1.0f)
+    {
+        var written = destination[..writtenSamples];
+        for (var i = 0; i < written.Length; i++)
+            written[i] *= vol;
+    }
+
+    if (writtenSamples < destination.Length)
+        destination[writtenSamples..].Fill(0f);
+
+    lock (_gate)
+        PositionSeconds += framesRead / (double)config.SampleRate;
+
+    return MediaResult.Success;
+}
+```
+
+**Note:** `Volume` is read without the lock (same pattern as `MasterVolume` in `AVMixer`
+which uses bit-reinterpreted `Volatile` access for lock-free float reads). Reading a plain
+`float` auto-property is atomic on all common .NET targets, so this is safe.
+
+**Test to add:**
+
+```csharp
+[Fact]
+public void Volume_IsAppliedToReadSamples_WhenNativeStreamActive()
+{
+    // Only verifiable when native hardware is present; otherwise skip.
+    using var input = new PortAudioInput();
+    var startCode = input.Start(new AudioInputConfig { SampleRate = 48_000, ChannelCount = 1 });
+    if (startCode != MediaResult.Success) return;
+
+    input.Volume = 0f;
+
+    var buf = new float[256];
+    input.ReadSamples(buf, 256, out _);
+
+    Assert.All(buf, s => Assert.Equal(0f, s));
+}
+```
+
+---
+
+### Issue 10.2 — `AudioLatencyMode.Custom` / `CustomLatencySeconds` referenced in Issue 8.3 doc but never implemented ✅ FIXED
+
+> **Status:** `AudioLatencyMode.Custom = 2` added to the enum. `AudioEngineConfig.CustomLatencySeconds`
+> (default 20 ms) added. `TryOpenSelectedDeviceStream()` updated to a switch expression covering
+> all three modes. The previous ternary would have silently fallen through to `High` for any
+> unrecognised value.
+
+The fix code in Issue 8.3 references:
+```csharp
+public enum AudioLatencyMode { Low, High, Custom }
+
+public sealed record AudioEngineConfig
+{
+    public AudioLatencyMode LatencyMode { get; init; } = AudioLatencyMode.High;
+
+    /// <summary>Custom suggested latency in seconds. Only used when LatencyMode is Custom.</summary>
+    public double CustomLatencySeconds { get; init; } = 0.0;
+}
+```
+
+The actual `AudioLatencyMode` enum only has `High = 0` and `Low = 1`. The `Custom` member and
+`CustomLatencySeconds` property were never added. `TryOpenSelectedDeviceStream()` uses a binary
+`_config.LatencyMode == AudioLatencyMode.Low` check, which is correct for the current two values
+but would silently default to `High` for any future third value.
+
+**Fix — Option A (defer, document):**
+Update the doc note on Issue 8.3 to state `Custom` latency was deferred; only `High`/`Low`
+are implemented. The current `switch`-equivalent is a ternary, which is safe.
+
+**Fix — Option B (implement `Custom`):**
+
+```csharp
+// AudioLatencyMode.cs
+public enum AudioLatencyMode
+{
+    High   = 0,
+    Low    = 1,
+    Custom = 2,  // ADD
+}
+
+// AudioEngineConfig.cs
+/// <summary>
+/// Suggested latency in seconds. Only used when <see cref="AudioLatencyMode"/> is
+/// <see cref="AudioLatencyMode.Custom"/>. Ignored otherwise.
+/// </summary>
+public double CustomLatencySeconds { get; init; } = 0.0;
+
+// TryOpenSelectedDeviceStream():
+var suggestedLatency = _config.LatencyMode switch
+{
+    AudioLatencyMode.Low    => deviceInfo.Value.defaultLowOutputLatency,
+    AudioLatencyMode.Custom => _config.CustomLatencySeconds,
+    _                       => deviceInfo.Value.defaultHighOutputLatency > 0
+                                   ? deviceInfo.Value.defaultHighOutputLatency
+                                   : deviceInfo.Value.defaultLowOutputLatency,
+};
+```
+
+Option B is the intended end-state and low effort to implement.
+
+---
+
+### Issue 10.3 — TOCTOU race in `PortAudioInput.ReadSamples` between lock release and `Pa_ReadStream` ✅ FIXED
+
+> **Status:** `_stream` and `_nativeStreaming` are now `volatile`. `ReadSamples` captures a
+> local `stream = _stream` snapshot after the guard lock is released (volatile read gives acquire
+> semantics on ARM64). The local is used for the null-check AND passed to `Pa_ReadStream`, so
+> both sides of the check are consistent. The previous stale-register problem is eliminated.
+
+After the safety guard lock is released, a concurrent `Stop()` or `Dispose()` call can close
+the native stream before `Pa_ReadStream` is invoked with its handle.
+
+**Race sequence:**
+```
+Thread A: ReadSamples  → lock(_gate) → validate State/Disposed → config = Config → RELEASE LOCK
+Thread B: Stop()       → lock(_gate) → CloseNativeStreamIfOpen()
+                         → Pa_StopStream(_stream)
+                         → Pa_CloseStream(_stream)
+                         → _stream = nint.Zero
+                         → RELEASE LOCK
+Thread A:              → _nativeStreaming check (still sees old true from stack cache)
+                       → _stream read (may see stale non-zero from Thread A's register)
+                       → Pa_ReadStream(stale_handle, ptr, count)  ← UB / bad handle
+```
+
+PortAudio will typically return `paBadStreamPtr` or `paStreamIsStopped` rather than crashing
+(it validates the handle internally), so in practice this is a graceful degradation rather than
+a hard crash. However, it is formally undefined behavior to pass a closed handle to a C library.
+
+**Current code (PortAudioInput.ReadSamples — abbreviated):**
+```csharp
+lock (_gate)
+{
+    if (_disposed || State != AudioSourceState.Running)
+        return (int)MediaErrorCode.PortAudioInputReadFailed;
+    config = Config;
+}                                  // ← lock released here
+
+if (!_nativeStreaming || _stream == nint.Zero)  // ← stale read possible
+    return (int)MediaErrorCode.PortAudioInputReadFailed;
+
+// ... set up framesRead ...
+
+fixed (float* ptr = destination)
+{
+    var read = Native.Pa_ReadStream(_stream, (nint)ptr, (nuint)framesRead);  // ← stale _stream
+```
+
+**Fix — `Volatile.Read` for the secondary checks:**
+
+```csharp
+lock (_gate)
+{
+    if (_disposed || State != AudioSourceState.Running)
+        return (int)MediaErrorCode.PortAudioInputReadFailed;
+    config = Config;
+}
+
+// Use Volatile.Read to obtain a stable snapshot of stream state after releasing the lock.
+var stream = Volatile.Read(ref _stream);
+if (!Volatile.Read(ref _nativeStreaming) || stream == nint.Zero)
+    return (int)MediaErrorCode.PortAudioInputReadFailed;
+
+// ... set up framesRead ...
+
+fixed (float* ptr = destination)
+{
+    // Use the captured `stream` value so Pa_ReadStream and the _stream handle are consistent.
+    var read = Native.Pa_ReadStream(stream, (nint)ptr, (nuint)framesRead);
+```
+
+For `Volatile.Read(ref _stream)` and `Volatile.Read(ref _nativeStreaming)` to compile, the
+fields must be accessible by ref:
+- `_stream` is a `nint` — `Volatile.Read<nint>` is available via the generic overload.
+- `_nativeStreaming` is a `bool` — `Volatile.Read` has a `bool` overload.
+
+**Alternatively:** mark both fields `volatile` and use direct field reads. The `volatile` keyword
+on a `nint`/`bool` field is idiomatic and avoids the verbose `Volatile.Read(ref ...)` syntax.
+
+---
+
+### Issue 10.4 — `PortAudioInput.TryStartNativeStream` exception handlers return wrong error code ✅ FIXED
+
+> **Status:** All three catch blocks (`DllNotFoundException`, `EntryPointNotFoundException`,
+> `TypeInitializationException`) now return `PortAudioStreamOpenFailed` (4304), consistent
+> with `PortAudioOutput`. The unit tests no longer accept `PortAudioInitializeFailed` as a
+> valid start error code.
+
+`PortAudioInput.TryStartNativeStream()` catches `DllNotFoundException`,
+`EntryPointNotFoundException`, and `TypeInitializationException` and returns
+`PortAudioInitializeFailed` (4301). The semantically equivalent catch blocks in
+`PortAudioOutput.TryStartNativeStream()` return `PortAudioStreamOpenFailed` (4304).
+
+`PortAudioInitializeFailed` belongs to *engine-level* failures (calling `Pa_Initialize` when
+the native library is missing). A stream-open failure from a missing DLL is correctly
+`PortAudioStreamOpenFailed`. The inconsistency:
+
+1. Misleads callers (they get an "engine initialization failed" code from an input-level call).
+2. Forces the unit test to include `PortAudioInitializeFailed` in its list of acceptable codes
+   as a workaround, widening the acceptance surface beyond what it should be.
+
+**Current code (PortAudioInput.TryStartNativeStream):**
+```csharp
+catch (DllNotFoundException)
+{
+    _stream = nint.Zero;
+    _nativeStreaming = false;
+    return (int)MediaErrorCode.PortAudioInitializeFailed;  // ← wrong
+}
+catch (EntryPointNotFoundException)
+{
+    _stream = nint.Zero;
+    _nativeStreaming = false;
+    return (int)MediaErrorCode.PortAudioInitializeFailed;  // ← wrong
+}
+catch (TypeInitializationException)
+{
+    _stream = nint.Zero;
+    _nativeStreaming = false;
+    return (int)MediaErrorCode.PortAudioInitializeFailed;  // ← wrong
+}
+```
+
+**Fix:** Change all three to `PortAudioStreamOpenFailed`:
+
+```csharp
+catch (DllNotFoundException)
+{
+    _stream = nint.Zero;
+    _nativeStreaming = false;
+    return (int)MediaErrorCode.PortAudioStreamOpenFailed;  // consistent with PortAudioOutput
+}
+// ... same for the other two catch blocks ...
+```
+
+Update the test `ReadSamples_ZeroFillsRemainingDestination_WhenNotEnoughWritableFrames` to
+remove `PortAudioInitializeFailed` from the acceptable start error codes.
+
+---
+
+### Issue 10.5 — `PortAudioInput` standalone use requires `Pa_Initialize()` — undocumented ✅ FIXED
+
+> **Status:** Comprehensive XML doc added to the `PortAudioInput` class covering: the
+> `Pa_Initialize()` dependency, the standalone-use failure mode, planned `CreateInput` factory
+> (Issue 5.1), device-selection limitation (Issue 5.2), and the non-seekable/NaN-duration
+> behaviour for live capture sources.
+
+`PortAudioInput` can be instantiated and `Start()`-ed without a `PortAudioEngine`. However,
+PortAudio requires `Pa_Initialize()` to have been called before `Pa_OpenDefaultStream` is
+invoked. If no `PortAudioEngine` has been created (and its `Initialize()` called), the
+underlying `Pa_Initialize()` is never performed.
+
+In this case, `Pa_OpenDefaultStream` returns `paNotInitialized`, which `TryStartNativeStream`
+maps to `PortAudioStreamOpenFailed`. The caller has no way to tell why the stream failed to
+open — a "not initialized" error looks identical to a "device unavailable" error.
+
+**Behaviour matrix:**
+
+| Scenario | `Start()` result |
+|---|---|
+| `PortAudioEngine.Initialize()` called first | May succeed |
+| `PortAudioInput` used standalone, no PA init | `PortAudioStreamOpenFailed` (ambiguous) |
+| Native library absent | `PortAudioStreamOpenFailed` (ambiguous) |
+
+**Fix — Option A (document only):** Add an XML doc note to `PortAudioInput`:
+
+```csharp
+/// <summary>
+/// Live audio capture source backed by PortAudio.
+/// </summary>
+/// <remarks>
+/// <b>Initialization dependency:</b> PortAudio's native runtime must be initialized via
+/// <c>Pa_Initialize</c> before calling <see cref="Start"/>. When using the engine API,
+/// ensure a <see cref="PortAudioEngine"/> has been successfully initialized first.
+/// Standalone use without an engine will fail with
+/// <see cref="MediaErrorCode.PortAudioStreamOpenFailed"/>.
+/// A <c>CreateInput</c> factory method on <see cref="IAudioEngine"/> is planned (see Issue 5.1)
+/// and will enforce correct initialization order.
+/// </remarks>
+```
+
+**Fix — Option B (self-initializing):** Have `PortAudioInput.TryStartNativeStream` call
+`PortAudioLibraryResolver.Install()` and `Pa_Initialize()` itself, and balance it with a
+`Pa_Terminate()` in `CloseNativeStreamIfOpen`. This makes standalone use work but introduces
+a second PortAudio reference-count increment if an engine is also active — which is
+permissible under PortAudio's init/terminate reference-counting semantics.
+
+Option A is the recommended short-term fix. Option B defers naturally to Issue 5.1
+(`CreateInput` factory on the engine).
+
+---
+
+### Issue 10.6 — Hot-path reads of `_disposed`, `State`, `_nativeStreaming`, `_stream` lack `Volatile` semantics ✅ FIXED
+
+> **Status:** `_disposed`, `_nativeStreaming`, and `_stream` are now declared `volatile` in both
+> `PortAudioOutput` and `PortAudioInput`. `volatile nint` is valid in C# 10 / .NET 9+.
+> For the P/Invoke `out` parameters (which cannot receive a `volatile` field by-ref without
+> CS0420), a local `nint streamHandle` intermediary is used; the volatile write-back
+> (`_stream = streamHandle`) preserves release semantics. The write loop captures `_stream`
+> into a local at the top of the loop (one volatile read with acquire semantics on ARM64), then
+> uses the local throughout, eliminating per-iteration re-reads.
+
+> **Note:** This issue formalises and extends the informal note at the end of Issue 8.4.
+
+In `PortAudioOutput.PushFrame` and the `TryWriteNativeFrame` inner write loop, the following
+fields are read **without the `_gate` lock and without `Volatile.Read`**:
+
+- `_disposed` (`bool`)
+- `State` (`AudioOutputState` — an enum backed by `int`)
+- `_nativeStreaming` (`bool`)
+- `_stream` (`nint`)
+
+These fields are written exclusively under `_gate` in `Stop()`, `Dispose()`, and
+`CloseNativeStreamIfOpen()`. Without `Volatile.Read` at the consumption site, the C#
+memory model does not guarantee that writes from other threads are visible to the reading
+thread immediately.
+
+**Practical risk assessment:**
+
+| Platform | Risk |
+|---|---|
+| x86/x64 (Total Store Order) | Very low — TSO makes store-load ordering practically safe |
+| ARM64 Linux (`linux-arm64`) | Real — store-load reordering is permitted; stale values possible |
+| WASM / other weakly ordered | Real |
+
+The worst-case outcome is that `TryWriteNativeFrame` makes **one extra `Pa_WriteStream` call
+on a closed stream** before the stale `_stream == nint.Zero` check fires. PortAudio returns
+`paBadStreamPtr` rather than crashing, so this degrades gracefully. However, it is formally
+incorrect and could cause intermittent write-error failures that are hard to diagnose.
+
+The same pattern exists in `PortAudioInput.ReadSamples` for `_nativeStreaming` and `_stream`
+(see also Issue 10.3).
+
+**Fix:** Use `volatile` fields or `Volatile.Read` at read sites:
+
+```csharp
+// Option A — mark fields volatile (idiomatic, zero runtime cost):
+private volatile bool _disposed;
+private volatile bool _nativeStreaming;
+// State is an enum (int) — volatile int backing works:
+private volatile int _stateValue;   // replace AudioOutputState State { get; private set; }
+// _stream is nint — no `volatile nint` in C# 10; use Volatile.Read:
+
+// In PushFrame / write loop:
+var stream = Volatile.Read(ref _stream);   // consistent snapshot
+if (stream == nint.Zero) return ...;
+```
+
+```csharp
+// Option B — Volatile.Read at each consumption site (verbose but no field change):
+if (Volatile.Read(ref _disposed)) return ...;
+if (Volatile.Read(ref _nativeStreaming) == false) return ...;
+var stream = Volatile.Read(ref _stream);
+if (stream == nint.Zero) return ...;
+```
+
+Given the project targets ARM64 Linux (the dev machine is ARM-class), Option A or B should
+be applied to `_nativeStreaming` and `_stream` in both `PortAudioOutput` and `PortAudioInput`.
+`_disposed` is a write-once flag and is less critical in practice, but consistency recommends
+treating it the same way.
+
+---
+
+### Issue 10.7 — `IAudioSink.PushFrame` identity overload mishandles zero-channel frames ✅ FIXED
+
+> **Status:** The `IAudioSink.PushFrame(in AudioFrame frame)` default interface method now
+> rejects `frame.SourceChannelCount ≤ 0` immediately with `MediaInvalidArgument` instead of
+> clamping to 1 and producing a spurious `[0]` route map.
+
+The default `IAudioSink.PushFrame(in AudioFrame frame)` DIM (default interface method):
+
+```csharp
+int PushFrame(in AudioFrame frame)
+{
+    int ch = Math.Max(1, frame.SourceChannelCount);  // clamps 0 → 1
+    Span<int> identity = stackalloc int[ch];
+    for (int i = 0; i < ch; i++) identity[i] = i;
+    return PushFrame(in frame, identity, ch);
+}
+```
+
+When `frame.SourceChannelCount = 0`, `ch` is clamped to `1` and `identity = [0]`. The call
+becomes `PushFrame(frame, [0], sourceChannelCount: 1)`. In `TryWriteNativeFrame`:
+
+```csharp
+var sourceOffset = (frameIndex * effectiveSourceChannelCount) + sourceChannel;
+// effectiveSourceChannelCount = 1, sourceChannel = 0
+// sourceOffset = frameIndex * 1 + 0 = frameIndex
+rented[outputOffset] = sourceOffset < source.Length ? source[sourceOffset] : 0f;
+```
+
+If `frame.Samples` is empty (which is valid for a zero-channel or zero-frame packet),
+`source.Length = 0`, so `sourceOffset < source.Length` is false and `0f` is written — no
+OOB. However, `ValidatePushFrameMap` is called with `sourceChannelCount = 1`:
+
+```csharp
+if (frame.SourceChannelCount > 0 && sourceChannelCount != frame.SourceChannelCount)
+    return (int)MediaErrorCode.AudioChannelCountMismatch;
+```
+
+`frame.SourceChannelCount = 0` means the channel-count guard is skipped — the mismatch
+(`sourceChannelCount = 1` vs `frame.SourceChannelCount = 0`) is silently accepted. The
+call returns `MediaResult.Success` having written one channel of silence per frame, which
+is incorrect for a genuinely zero-channel payload.
+
+**Fix:** Reject zero-channel frames early rather than clamping:
+
+```csharp
+int PushFrame(in AudioFrame frame)
+{
+    int ch = frame.SourceChannelCount;
+    if (ch <= 0)
+        return (int)MediaErrorCode.MediaInvalidArgument;
+
+    Span<int> identity = stackalloc int[ch];
+    for (int i = 0; i < ch; i++) identity[i] = i;
+    return PushFrame(in frame, identity, ch);
+}
+```
+
+This makes the identity overload consistent with the explicit-route overload, which lets
+`ValidatePushFrameMap` reject `sourceChannelCount ≤ 0` with `MediaInvalidArgument`.
+
+---
+
+### Issue 10.8 — `AVMixer` declares `AudioSourceError`/`VideoSourceError` events and `_videoQueueTrimDrops` field that are never used ✅ FIXED
+
+> **Status:**
+> - `AudioSourceError` is now fired in both the simple mix path and the routing path when
+>   `ReadSamples` returns a non-success code. The counter `_audioReadFailures` is still
+>   incremented as before for diagnostics.
+> - `VideoSourceError` is now fired in `VideoDecodeLoop` when `ReadFrame` returns a non-success
+>   code, with `FFmpegVideoDecodeNeedMoreData` explicitly suppressed (it is a normal transient
+>   state, not a genuine error).
+> - `_videoQueueTrimDrops` is now incremented whenever a decoded frame is dropped because the
+>   video decode queue was at capacity, making the `VideoQueueTrimDrops` field in
+>   `AVMixerDiagnostics` meaningful.
+> - All three CS0067 / CS0649 compiler warnings are resolved.
+
+Three compiler warnings are emitted by `S.Media.Core` on every build:
+
+```
+CS0067  AVMixer.AudioSourceError  — event declared but never used
+CS0067  AVMixer.VideoSourceError  — event declared but never used
+CS0649  AVMixer._videoQueueTrimDrops — field is never assigned, always 0
+```
+
+**`AudioSourceError` / `VideoSourceError`:**
+These events are declared on `IAVMixer` (or `AVMixer`) to notify consumers when a source
+encounters a read or decode error during playback. They are the correct hook for surfacing
+errors from `PortAudioInput` (e.g. `PortAudioOverflow`, `PortAudioInputReadFailed`) up to
+the application layer. Currently the audio pump loop silently increments `_audioReadFailures`
+and continues; it never fires these events.
+
+Fix:
+```csharp
+// In the audio pump loop, when ReadSamples returns an error:
+if (readCode != MediaResult.Success)
+{
+    Interlocked.Increment(ref _audioReadFailures);
+    AudioSourceError?.Invoke(this, new MediaSourceErrorEventArgs(src.Id, readCode));
+    continue;
+}
+```
+
+**`_videoQueueTrimDrops`:**
+The field is included in `GetDebugInfo()` via `Interlocked.Read(ref _videoQueueTrimDrops)`,
+so it appears in diagnostics snapshots — but always as `0`. It should be incremented whenever
+the video queue is trimmed to enforce a maximum depth (the "trim" path that probably existed
+at some point). Either assign it in the relevant code path, or remove it from
+`AVMixerDiagnostics` and `GetDebugInfo()` if queue trimming is no longer implemented.
 
 ---
 
