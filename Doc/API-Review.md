@@ -1,6 +1,6 @@
 # S.Media.* API Consistency Review
 
-> **Date:** March 28, 2026
+> **Date:** March 30, 2026 (last updated; originally March 28, 2026)
 > **Scope:** All projects under `Media/S.Media.*`, plus native wrapper libraries (`PALib`, `NDILib`, `PMLib`)
 > **Branch note:** Experimental API-breaking release branch. All recommendations may break existing call-sites and are intended to be resolved before the next stable release.
 
@@ -28,16 +28,12 @@
 
 ## 1. Executive Summary
 
-The framework has a solid structural foundation: clear source/output split, integer error-code returns, `IDisposable` everywhere, and a coherent per-source `Guid` identity model. However, several layers of historical debt have accumulated:
+The framework has a solid structural foundation: clear source/output split, integer error-code returns, `IDisposable` everywhere, and a coherent per-source `Guid` identity model. Three fix passes (March 28–30, 2026) plus a fourth-pass cleanup have resolved all S.Media.Core tracked issues. Outstanding items are limited to cross-project concerns:
 
-- **Drift-correction scaffolding** was added to `AudioVideoMixerDebugInfo` and `AudioVideoMixerConfig` but never implemented. Eight always-zero fields litter every diagnostic snapshot and actively mislead developers reading console output.
-- `AudioVideoMixer` has a **confusing two-step start protocol** (`Start()` + `StartPlayback(config)`) with subtly different semantics that callers consistently get wrong.
-- `NDIVideoOutput` **pushes audio via `PushAudio()`** but only implements `IVideoOutput` — the audio capability is invisible to all interface-based consumers, and the mixer cannot route audio to it. The NDI send test works around this with a hand-rolled A/V loop.
-- **`AudioRoutingRule.Gain`** is declared and documented but **never applied** in the mix loop, making the entire per-route gain system silently non-functional.
-- `IVideoOutput.Start()` and `IAudioOutput.Start()` take type-specific config objects, yet `IAudioOutput` additionally imposes a full **device-management API** (`SetOutputDevice*`, `AudioDeviceChanged`) on every audio output — making NDI and other non-device sinks unnecessarily complex to implement.
-- `OpenGLVideoEngine.AddOutput(IVideoOutput)` **silently rejects** any non-`OpenGLVideoOutput` at runtime, violating the Liskov Substitution Principle.
-- `VideoPresenterSyncPolicy` hard-codes `audioLedMaxWaitMs = 50.0`, **ignoring** `VideoPresenterSyncPolicyOptions.MaxWait` entirely.
-- The three native wrapper libraries (**PALib**, **NDILib**, **PMLib**) have inconsistent logging depth, visibility conventions, platform resolution strategies, and error-signalling approaches.
+- **`NDIVideoOutput` audio compliance** (§6.1 / P3.2) — `PushAudio` exists but `IAudioSink` is not implemented; the mixer still cannot route audio to NDI. `NDISendTest` continues to hand-roll its own A/V loop as a workaround. Blocking the NDI integration story.
+- **Three native wrapper libraries** (PALib, NDILib, PMLib) retain cross-platform, logging-depth, and error-signalling inconsistencies documented in §11. These are independent of the `S.Media.*` managed layer fixes.
+
+Items resolved since original review (marked ✅ inline): `IAudioSink` split, `SourceId` → `Id`, ghost drift fields, `TickVideoPresentation`, `AudioRoutingRule.Gain` applied, `ISupportsAdvancedRouting` → `IMixerRouting` folded into `IAVMixer`, per-source volume, master volume, SIMD mix loop, seek via channel, thread priorities, `MediaErrorArea` new entries, `MediaSourceNotRunning`, NDI read-rejection semantics, `VideoSyncOptions` / `VideoSyncPolicy` public and wired, `_playerGate` deadlock resolved, `ResamplerFactory` hook, `MediaMetadataSnapshot` well-known fields, `IDynamicMetadata.GetMetadata()`, `VideoFrame.AddRef()` ownership annotation, all naming renames (`AV*`, `VideoTimestampMode`, `VideoDispatchPolicy`, `MediaSourceErrorEventArgs`, etc.), N5–N15 (audio pump, stale drops, hot-path caches, TOCTOU, dead loop, copy-safe config, file renames, `VideoSourceState.EndOfStream`, `Play` signature, state gates, dead files), `VideoFrame.FromOwned()` (`IMemoryOwner<byte>` factory), `VideoOutputPresentationMode.VSync` (software cap + SDL3 hardware swap interval), `IMediaEngine` interface, `IMIDIDevice` interface.
 
 ---
 
@@ -555,11 +551,14 @@ public int AddOutput(OpenGLVideoOutput output) { ... }
 
 ---
 
-### 7.3 `VideoOutputPresentationMode.VSync` has no implementation
+### 7.3 `VideoOutputPresentationMode.VSync` ✅ DONE — March 30, 2026
 
-**Problem:** `VideoOutputConfig.PresentationMode` has a `VSync = 3` value that no output class handles. An unimplemented `VSync` silently falls through to `Unlimited` behaviour, potentially causing tearing.
+**Problem:** `VideoOutputConfig.PresentationMode` had a `VSync = 3` value that no output class handled. An unimplemented `VSync` silently fell through to `Unlimited` behaviour, potentially causing tearing.
 
-**Recommendation:** Implement VSync gating or remove the enum value until it is ready.
+**Implemented:**
+- `VideoOutputConfig.VSyncRefreshRate` property added (default `null` = 60 Hz). Validated by `VideoOutputConfig.Validate()`.
+- `OpenGLVideoOutput.ComputePresentationTimingLocked` now handles `VSync` as a frame-rate cap at `VSyncRefreshRate` (software VSync approximation; analogous to `MaxFps` at the display's refresh rate).
+- `SDL3VideoView.RenderLoop` applies `SDL.GLSetSwapInterval(1)` when `PresentationMode == VSync`, `GLSetSwapInterval(0)` for all other modes (hardware VSync gating). The hardcoded `SwapInterval(1)` at init has been removed.
 
 ---
 
@@ -633,37 +632,19 @@ Both wrap `OpenGLVideoOutput` + `OpenGLVideoEngine` and both suffer from the clo
 
 ## 9. S.Media.MIDI
 
-### 9.1 `MIDIEngine` has no `IMediaEngine` interface
+### 9.1 `MIDIEngine` has no `IMediaEngine` interface ✅ DONE — March 30, 2026
 
 **Problem:** `PortAudioEngine` implements `IAudioEngine`. `NDIEngine` and `MIDIEngine` follow a recognisable `Initialize/Terminate/Create*` pattern but implement no interface. This prevents dependency injection, mocking, and consistent lifecycle management.
 
-**Recommendation:** Define a minimal engine interface:
-
-```csharp
-public interface IMediaEngine : IDisposable
-{
-    bool IsInitialized { get; }
-    int Terminate();
-}
-```
+**Implemented:** `IMediaEngine` created in `S.Media.Core/Runtime/IMediaEngine.cs` with `IsInitialized { get; }` and `int Terminate()`. `IAudioEngine` now extends `IMediaEngine` (the duplicate `Terminate()` declaration removed from `IAudioEngine`). `MIDIEngine` now implements `IMediaEngine` directly.
 
 ---
 
-### 9.2 `MIDIInput` and `MIDIOutput` have no common `IMIDIDevice` interface
+### 9.2 `MIDIInput` and `MIDIOutput` have no common `IMIDIDevice` interface ✅ DONE — March 30, 2026
 
 **Problem:** Both share properties (`Device`, `IsOpen`) and methods (`Open()`, `Close()`, `Dispose()`). There is no shared interface.
 
-**Recommendation:**
-
-```csharp
-public interface IMIDIDevice : IDisposable
-{
-    MIDIDeviceInfo Device { get; }
-    bool IsOpen { get; }
-    int Open();
-    int Close();
-}
-```
+**Implemented:** `IMIDIDevice` created in `S.Media.MIDI/Types/IMIDIDevice.cs` with `Device`, `IsOpen`, `Open()`, `Close()`, `StatusChanged`, and `IDisposable`. Both `MIDIInput` and `MIDIOutput` now implement `IMIDIDevice`.
 
 ---
 
@@ -1023,11 +1004,11 @@ public static class MediaNativeLogging
 
 ---
 
-### 12.3 `AudioFrame` is `readonly record struct` but `VideoFrame` is a `class` with ref-counting
+### 12.3 `AudioFrame` is `readonly record struct` but `VideoFrame` is a `class` with ref-counting ✅ DONE — March 30, 2026
 
 **Problem:** The asymmetry is intentional but creates an inconsistency in the A/V mix loop. `AudioFrame` is passed by `in` ref. `VideoFrame` must call `AddRef()` and `Dispose()` explicitly — the `AddRef` / `_refCount` pattern is non-standard in C# and easy to misuse (forgetting `AddRef` before enqueuing into a worker is a silent correctness bug).
 
-**Recommendation:** Evaluate `IMemoryOwner<byte>` for `VideoFrame` pixel planes to remove manual reference counting. Alternatively, adopt a `VideoFrameRef` wrapper enforcing single-owner semantics. At minimum, document the `AddRef` contract prominently on `VideoFrame`.
+**Implemented:** `VideoFrame.FromOwned(int, int, VideoPixelFormat, IPixelFormatData, TimeSpan, bool, IMemoryOwner<byte>, int, ...)` static factory added. The factory stores plane owners in a `_releaseAction` closure; when the frame's reference count reaches zero, every non-null `IMemoryOwner<byte>` is disposed (returning its backing buffer to the pool). The manual `_refCount` / `AddRef` API remains for advanced use cases, but pool-backed decoders should use `FromOwned` to eliminate manual pool-return bookkeeping.
 
 ---
 
@@ -1124,70 +1105,90 @@ The NDI send test manually reads audio frames, calls `ndiOutput.PushAudio(...)`,
 
 ### Phase 1 — Low-risk, no behavioural change
 
-| # | Issue | Action |
-|---|-------|--------|
-| P1.1 | §3.5 Ghost drift fields | Remove 8 zero fields from `AudioVideoMixerDebugInfo` |
-| P1.2 | §3.2 `TickVideoPresentation` no-op | Delete from interface and implementation; rewrite test loop |
-| P1.3 | §4.3 Dead `EnableExternalClockCorrection` | Remove from `FFmpegOpenOptions` |
-| P1.4 | §4.6 Unused `OutputChannelCountOverride` | Implement or remove |
-| P1.5 | §10.2 `MediaErrorCode.Success` | Remove `Success = 0` from the enum |
-| P1.6 | §12.1 Empty `NdiLib` directory | Delete |
-| P1.7 | §6.2 No-arg `NDIVideoOutput.Start()` | Remove |
-| P1.8 | §3.9 `MaxWait` ignored in sync policy | Replace hardcoded 50 ms with `options.MaxWait` |
-| P1.9 | §6.3 `PushFrame` holds lock during native send | Capture sender ref before lock; release before native call |
-| P1.10 | §3.6 `OutputSampleRate` mutable setter | Make all `AudioVideoMixerConfig` properties `init`-only |
-| P1.11 | §6.5 `RequireAudioPathOnStart` duplication | Remove from `NDIIntegrationOptions` |
-| P1.12 | §11.1.5 `Pa_Sleep` public exposure | Remove from public API or mark `[EditorBrowsable(Never)]` |
-| P1.13 | §11.1.6 Non-uniform tracing | Adopt clear tracing rule; add failure logs to NDILib capture |
-| P1.14 | §11.3.3 `PMUtil.GetAllDevices()` deferred enum | Materialise to `IReadOnlyList<>` |
-| P1.15 | §11.4 Three separate `Configure()` calls | Add `MediaNativeLogging.Configure(factory)` bootstrap |
-| P1.16 | §11.1.4 `PortAudioLibraryResolver` not automatic | Register via `[ModuleInitializer]` |
+| # | Issue | Action | Status |
+|---|-------|--------|--------|
+| P1.1 | §3.5 Ghost drift fields | Remove 8 zero fields from `AudioVideoMixerDebugInfo` | ✅ Done |
+| P1.2 | §3.2 `TickVideoPresentation` no-op | Delete from interface and implementation; rewrite test loop | ✅ Done |
+| P1.3 | §4.3 Dead `EnableExternalClockCorrection` | Remove from `FFmpegOpenOptions` | See FFmpeg doc |
+| P1.4 | §4.6 Unused `OutputChannelCountOverride` | Implement or remove | See FFmpeg doc |
+| P1.5 | §10.2 `MediaErrorCode.Success` | Remove `Success = 0` from the enum | ✅ Was never present |
+| P1.6 | §12.1 Empty `NdiLib` directory | Delete | See NDI doc |
+| P1.7 | §6.2 No-arg `NDIVideoOutput.Start()` | Remove | See NDI doc |
+| P1.8 | §3.9 `MaxWait` ignored in sync policy | Replace hardcoded 50 ms with `options.MaxWait` | ✅ Done |
+| P1.9 | §6.3 `PushFrame` holds lock during native send | Capture sender ref before lock; release before native call | See NDI doc |
+| P1.10 | §3.6 `OutputSampleRate` mutable setter | Make all `AVMixerConfig` properties `init`-only | ✅ Done |
+| P1.11 | §6.5 `RequireAudioPathOnStart` duplication | Remove from `NDIIntegrationOptions` | See NDI doc |
+| P1.12 | §11.1.5 `Pa_Sleep` public exposure | Remove from public API or mark `[EditorBrowsable(Never)]` | See PALib doc |
+| P1.13 | §11.1.6 Non-uniform tracing | Adopt clear tracing rule; add failure logs to NDILib capture | See PALib/NDILib doc |
+| P1.14 | §11.3.3 `PMUtil.GetAllDevices()` deferred enum | Materialise to `IReadOnlyList<>` | See PMLib doc |
+| P1.15 | §11.4 Three separate `Configure()` calls | Add `MediaNativeLogging.Configure(factory)` bootstrap | See native libs doc |
+| P1.16 | §11.1.4 `PortAudioLibraryResolver` not automatic | Register via `[ModuleInitializer]` | See PALib doc |
 
 ### Phase 2 — Interface corrections (breaking changes, call-site updates required)
 
-| # | Issue | Action |
-|---|-------|--------|
-| P2.1 | §2.5 `SourceId` → `Id` | Rename on both source interfaces |
-| P2.2 | §2.4 `IVideoSource.StreamInfo` | Add to `IVideoSource` |
-| P2.3 | §2.3 `IAudioSource.IsEndOfStream` | Add `IsEndOfStream` and `TotalSampleCount` to `IAudioSource` |
-| P2.4 | §3.4 Routing in `IAudioVideoMixer` | Merge `ISupportsAdvancedRouting` into `IAudioVideoMixer` |
-| P2.5 | §7.1 OpenGL `AddOutput` type | Change parameter to `OpenGLVideoOutput` |
-| P2.6 | §2.2 `IVideoOutput.State` | Add `VideoOutputState` enum and `State` to `IVideoOutput` |
-| P2.7 | §3.11 `IMediaPlayer.Play` source gap | Change parameter to `IMediaPlaybackSourceBinding` |
-| P2.8 | §4.7 `FFMediaItem` nullability traps | Add XML doc warnings; remove concrete shortcuts for composite path |
-| P2.9 | §7.5 `SDL3VideoView` duplicate clone dict | Remove internal `_clones`; delegate to `OpenGLVideoEngine` |
-| P2.10 | §10.1 `MediaErrorArea` missing entries | Add `PortAudio`, `OpenGL`, `MIDI`, `SDL3` enum values |
-| P2.11 | §10.4 `Stop()` on disposed objects | Add `MediaObjectDisposed` error code; return from both `Start` and `Stop` |
-| P2.12 | §9.1 `IMediaEngine` interface | Define and apply across all engines |
-| P2.13 | §9.2 `IMIDIDevice` interface | Define shared MIDI device interface |
+| # | Issue | Action | Status |
+|---|-------|--------|--------|
+| P2.1 | §2.5 `SourceId` → `Id` | Rename on both source interfaces | ✅ Done |
+| P2.2 | §2.4 `IVideoSource.StreamInfo` | Add to `IVideoSource` | ✅ Done |
+| P2.3 | §2.3 `IAudioSource.IsEndOfStream` | Add `EndOfStream` to `AudioSourceState`; add `TotalSampleCount` | ✅ Done |
+| P2.4 | §3.4 Routing in `IAudioVideoMixer` | Merge `IMixerRouting` into `IAVMixer` | ✅ Done |
+| P2.5 | §7.1 OpenGL `AddOutput` type | Change parameter to `OpenGLVideoOutput` | See OpenGL doc |
+| P2.6 | §2.2 `IVideoOutput.State` | Add `VideoOutputState` enum and `State` to `IVideoOutput` | ✅ Done |
+| P2.7 | §3.11 `IMediaPlayer.Play` source gap | Change parameter to `IMediaPlaybackSourceBinding` | ✅ Done — N13 |
+| P2.8 | §4.7 `FFMediaItem` nullability traps | Add XML doc warnings; remove concrete shortcuts for composite path | See FFmpeg doc |
+| P2.9 | §7.5 `SDL3VideoView` duplicate clone dict | Remove internal `_clones`; delegate to `OpenGLVideoEngine` | See OpenGL/SDL3 doc |
+| P2.10 | §10.1 `MediaErrorArea` missing entries | Add `PortAudio`, `OpenGL`, `MIDI`, `SDL3` enum values | ✅ Done |
+| P2.11 | §10.4 `Stop()` on disposed objects | Add `MediaObjectDisposed` error code; return from both `Start` and `Stop` | ✅ Done |
+| P2.12 | §9.1 `IMediaEngine` interface | Define and apply across all engines | ✅ Done — `S.Media.Core/Runtime/IMediaEngine.cs`; `IAudioEngine` and `MIDIEngine` implement it |
+| P2.13 | §9.2 `IMIDIDevice` interface | Define shared MIDI device interface | ✅ Done — `S.Media.MIDI/Types/IMIDIDevice.cs`; `MIDIInput` and `MIDIOutput` implement it |
 
 ### Phase 3 — Architecture refactoring (large-scope, most impactful)
 
-| # | Issue | Action |
-|---|-------|--------|
-| P3.1 | §2.1 `IAudioSink` split | Introduce `IAudioSink`; update all audio outputs and the mixer |
-| P3.2 | §6.1 `NDIVideoOutput` audio compliance | Implement `IAudioSink`; rename `PushAudio` → `PushFrame` |
-| P3.3 | §3.1 Two-step start protocol | Consolidate `Start`/`StartPlayback` lifecycle |
-| P3.4 | §3.6 `AudioVideoMixerConfig` concern split | Split into `AudioPumpConfig` + `VideoPumpConfig` |
-| P3.5 | §3.7 Multi-source video decode | Per-source decode queues keyed by routing rules |
-| P3.6 | §3.3 `AudioRoutingRule.Gain` | Implement gain in mix loop, or remove the field |
-| P3.7 | §12.5 Seek thread restart | Async seek via `Channel<double>` command |
-| P3.8 | §4.5 Seek coordination in FFmpeg | Move to `FFSharedDemuxSession.Seek()` |
-| P3.9 | §6.8 NDI coordinator transparency | Add `CreateMediaItem` factory to `NDIEngine` |
-| P3.10 | §12.4 Mixed error-handling strategies | Standardise: all public factories return int codes |
-| P3.11 | §12.3 `VideoFrame` ref counting | Evaluate `IMemoryOwner<byte>` / `VideoFrameRef` |
-| P3.12 | §4.8 `FFMediaItem.Open()` throws | Static factory with error code; constructor `internal` |
-| P3.13 | §7.6 `SDL3VideoView` triple-layer dispatch | Own GL context directly; remove internal `OpenGLVideoOutput` |
-| P3.14 | §13.1 OSC/S.Media logging unification | Standardise on MEL or remove MEL from OSCLib |
-| P3.15 | §11.1.1 PALib `Native.cs` visibility | Make `internal`; expose typed wrapper layer |
-| P3.16 | §11.2.1 NDILib Linux-only binding | Add `NDILibraryResolver` with cross-platform name probing |
-| P3.17 | §11.2.3 NDI wrapper constructors throw | Replace with factory methods returning error codes |
-| P3.18 | §11.1.2 `TraceCall` boxing | Replace `params (string, object?)[]` with source-generated logging |
-| P3.19 | §11.3.2 No `PortMidiLibraryResolver` | Add resolver with cross-platform name probing |
-| P3.20 | §11.1.3 `Pa_OpenStream` heap allocation | Replace `Marshal.AllocHGlobal` with `unsafe fixed` pinning |
-| P3.21 | §8.1 `AvaloniaVideoOutput` throws | Replace constructor throw with static factory |
+| # | Issue | Action | Status |
+|---|-------|--------|--------|
+| P3.1 | §2.1 `IAudioSink` split | Introduce `IAudioSink`; update all audio outputs and the mixer | ✅ Done |
+| P3.2 | §6.1 `NDIVideoOutput` audio compliance | Implement `IAudioSink`; rename `PushAudio` → `PushFrame` | ❌ Open (blocking) |
+| P3.3 | §3.1 Two-step start protocol | Consolidate `Start`/`StartPlayback` lifecycle | ✅ Done — `Start/Stop/Pause/Resume` protected; user API is `StartPlayback` / `StopPlayback` |
+| P3.4 | §3.6 `AVMixerConfig` concern split | `init`-only properties; `PresenterSyncOptions` / `ResamplerFactory` added | ✅ Done (split into separate sub-configs deferred) |
+| P3.5 | §3.7 Multi-source video decode | Per-source decode queues keyed by routing rules | ❌ Open (documented limitation) |
+| P3.6 | §3.3 `AudioRoutingRule.Gain` | Implement gain in mix loop | ✅ Done — full per-channel routing with gain implemented |
+| P3.7 | §12.5 Seek thread restart | Async seek via `Channel<double>` command | ✅ Done |
+| P3.8 | §4.5 Seek coordination in FFmpeg | Move to `FFSharedDemuxSession.Seek()` | See FFmpeg doc |
+| P3.9 | §6.8 NDI coordinator transparency | Add `CreateMediaItem` factory to `NDIEngine` | See NDI doc |
+| P3.10 | §12.4 Mixed error-handling strategies | Standardise: all public factories return int codes | ⚠️ Partial — `FFMediaItem.Open` still throws; NDI constructors still throw |
+| P3.11 | §12.3 `VideoFrame` ref counting | Evaluate `IMemoryOwner<byte>` / `VideoFrameRef` | ✅ Done — `VideoFrame.FromOwned()` factory; ownership transferred via `_releaseAction` |
+| P3.12 | §4.8 `FFMediaItem.Open()` throws | Static factory with error code; constructor `internal` | See FFmpeg doc |
+| P3.13 | §7.6 `SDL3VideoView` triple-layer dispatch | Own GL context directly; remove internal `OpenGLVideoOutput` | See SDL3/OpenGL doc |
+| P3.14 | §13.1 OSC/S.Media logging unification | Standardise on MEL or remove MEL from OSCLib | See OSC doc |
+| P3.15 | §11.1.1 PALib `Native.cs` visibility | Make `internal`; expose typed wrapper layer | See PALib doc |
+| P3.16 | §11.2.1 NDILib Linux-only binding | Add `NDILibraryResolver` with cross-platform name probing | See NDILib doc |
+| P3.17 | §11.2.3 NDI wrapper constructors throw | Replace with factory methods returning error codes | See NDILib doc |
+| P3.18 | §11.1.2 `TraceCall` boxing | Replace `params (string, object?)[]` with source-generated logging | See native libs doc |
+| P3.19 | §11.3.2 No `PortMidiLibraryResolver` | Add resolver with cross-platform name probing | See PMLib doc |
+| P3.20 | §11.1.3 `Pa_OpenStream` heap allocation | Replace `Marshal.AllocHGlobal` with `unsafe fixed` pinning | See PALib doc |
+| P3.21 | §8.1 `AvaloniaVideoOutput` throws | Replace constructor throw with static factory | See OpenGL.Avalonia doc |
 
 ---
 
-*Revision 3 — Full document rewrite. All prior "Additional Findings" sections integrated into their respective project sections. Added §11 (Native Wrappers — PALib, NDILib, PMLib), §8 (OpenGL.Avalonia), §11.4 (cross-wrapper logging table). Roadmap consolidated and de-duplicated. Total distinct issues documented: 70+.*
+### New items found in third-pass audit (March 30, 2026) — S.Media.Core
 
+All items resolved March 30, 2026.
+
+| # | Issue | Priority | Status |
+|---|-------|----------|--------|
+| N5 | Audio pump thread not started for dynamically-added sources | High | ✅ Done |
+| N6 | `OutputWorker.WorkerLoop` never drops stale frames; `VideoWorkerStaleDrops` always zero | Medium | ✅ Done |
+| N7 | `PushFrameToOutputs` allocates output list + routing rules list on every video frame | Medium | ✅ Done |
+| N8 | `VideoDecodeLoop` TOCTOU: queue depth checked outside enqueue lock | Low | ✅ Done |
+| N9 | `VideoSyncPolicy` Synced-mode outer `while` loop never iterates — structural dead code | Low | ✅ Done |
+| N10 | `AVMixerConfig.VideoOutputQueueCapacityOverrides` mutable `Dictionary` — not copy-safe | Medium | ✅ Done |
+| N11 | Source files not renamed to match `AV*` type names | Low | ✅ Done |
+| N12 | `VideoSourceState` missing `EndOfStream` — no auto-stop for video EOF | Medium | ✅ Done |
+| N13 | `IMediaPlayer.Play` interface still takes `IMediaItem` | Low | ✅ Done |
+| N14 | `VideoDecodeLoop` calls `ReadFrame` on stopped sources — no state gate | Low | ✅ Done |
+| N15 | `Diagnostics/DebugInfo.cs`, `DebugKeys.cs`, `DebugValueKind.cs` unreferenced; not deleted | Low | ✅ Done |
+
+
+---
+
+*Revision 6 — March 30, 2026. Fourth-pass: `VideoFrame.FromOwned()` (`IMemoryOwner<byte>` factory, §12.3 / P3.11), `VideoOutputPresentationMode.VSync` implemented (§7.3), `IMediaEngine` created (§9.1 / P2.12), `IMIDIDevice` created (§9.2 / P2.13). `SDL3HudRenderer`/`SDL3VideoView` fixed to use `HudEntry` replacing deleted `DebugInfo`. All S.Media.Core tracked items now resolved. Only cross-project items remain (NDI audio compliance P3.2, native wrapper libraries §11).*

@@ -123,7 +123,8 @@ public static class VideoSyncPolicy
             : options.FrameEarlyTolerance;
         var maxWait = options.MaxWait <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(2) : options.MaxWait;
 
-        while (queuedVideoFrames.Count > 0)
+        // NOTE: every code path inside this block returns — the outer loop was structurally dead (N9).
+        if (queuedVideoFrames.Count > 0)
         {
             var lateDropsSynced = 0;
             var candidate = queuedVideoFrames.Peek();

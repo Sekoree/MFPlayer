@@ -1,6 +1,12 @@
+using S.Media.Core.Runtime;
+
 namespace S.Media.Core.Audio;
 
-public interface IAudioEngine : IDisposable
+/// <summary>
+/// Engine interface for audio subsystem management. Extends <see cref="IMediaEngine"/> with
+/// audio-device enumeration and output creation.
+/// </summary>
+public interface IAudioEngine : IMediaEngine
 {
     AudioEngineState State { get; }
 
@@ -12,7 +18,7 @@ public interface IAudioEngine : IDisposable
 
     int Stop();
 
-    int Terminate();
+    // Terminate() and IsInitialized are inherited from IMediaEngine.
 
     IReadOnlyList<AudioDeviceInfo> GetOutputDevices();
 

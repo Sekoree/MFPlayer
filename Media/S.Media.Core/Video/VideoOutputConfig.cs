@@ -39,6 +39,14 @@ public sealed record VideoOutputConfig
     public double? MaxFps { get; init; }
 
     /// <summary>
+    /// Hint for the display's vertical-sync rate used by
+    /// <see cref="VideoOutputPresentationMode.VSync"/>.
+    /// When <see langword="null"/> (default), implementations assume 60 Hz.
+    /// Has no effect in other presentation modes.
+    /// </summary>
+    public int? VSyncRefreshRate { get; init; }
+
+    /// <summary>
     /// Maximum blocking time per scheduling wait. Default: 33ms.
     /// </summary>
     public TimeSpan MaxSchedulingWait { get; init; } = TimeSpan.FromMilliseconds(33);
@@ -76,6 +84,11 @@ public sealed record VideoOutputConfig
         }
 
         if (StaleFrameDropThreshold.HasValue && StaleFrameDropThreshold.Value < TimeSpan.Zero)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
+        }
+
+        if (VSyncRefreshRate.HasValue && VSyncRefreshRate.Value <= 0)
         {
             return (int)MediaErrorCode.MediaInvalidArgument;
         }

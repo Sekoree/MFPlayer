@@ -138,13 +138,12 @@ public sealed class ConfigSimplificationTests
     [Fact]
     public void GetVideoOutputQueueCapacity_UsesPerOutputOverride_WhenPresent()
     {
+        var outputId = Guid.NewGuid();
         var config = new AVMixerConfig
         {
             VideoOutputQueueCapacity = 4,
+            VideoOutputQueueCapacityOverrides = new Dictionary<Guid, int> { [outputId] = 8 },
         };
-
-        var outputId = Guid.NewGuid();
-        config.VideoOutputQueueCapacityOverrides[outputId] = 8;
 
         Assert.Equal(8, config.GetVideoOutputQueueCapacity(outputId));
         Assert.Equal(4, config.GetVideoOutputQueueCapacity(Guid.NewGuid()));

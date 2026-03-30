@@ -231,9 +231,24 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     {
         var nowTicks = Stopwatch.GetTimestamp();
 
-        if (_config.PresentationMode is VideoOutputPresentationMode.Unlimited or VideoOutputPresentationMode.VSync)
+        if (_config.PresentationMode == VideoOutputPresentationMode.Unlimited)
         {
             return (TimeSpan.Zero, false);
+        }
+
+        if (_config.PresentationMode == VideoOutputPresentationMode.VSync)
+        {
+            // Software VSync approximation: cap to the configured (or default 60 Hz) refresh rate.
+            // True hardware VSync is handled by the display backend (e.g. SDL3 GLSetSwapInterval).
+            var vsyncFps = _config.VSyncRefreshRate is > 0 ? (double)_config.VSyncRefreshRate.Value : 60.0;
+            if (_lastPresentTicks <= 0)
+                return (TimeSpan.Zero, false);
+            var frameIntervalTicks = (long)(Stopwatch.Frequency / vsyncFps);
+            var vsyncTarget = _lastPresentTicks + Math.Max(1, frameIntervalTicks);
+            if (vsyncTarget <= nowTicks)
+                return (TimeSpan.Zero, false);
+            var wait = TimeSpan.FromSeconds((vsyncTarget - nowTicks) / (double)Stopwatch.Frequency);
+            return (ClampWait(wait, _config.MaxSchedulingWait), false);
         }
 
         if (_config.PresentationMode == VideoOutputPresentationMode.MaxFps)

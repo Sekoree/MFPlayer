@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
 using S.Media.Core.Errors;
 using S.Media.Core.Audio;
-using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.OpenGL.Output;
 using SDL3;
@@ -402,9 +401,9 @@ public sealed class SDL3VideoView : IVideoOutput
         return (int)MediaErrorCode.MediaInvalidArgument;
     }
 
-    public int UpdateHud(DebugInfo debugInfo)
+    public int UpdateHud(HudEntry entry)
     {
-        var code = _hudRenderer.Update(debugInfo);
+        var code = _hudRenderer.Update(entry);
         if (code == MediaResult.Success)
         {
             lock (_gate)
@@ -849,11 +848,10 @@ public sealed class SDL3VideoView : IVideoOutput
             return false;
         }
 
-        _ = SDL.GLSetSwapInterval(1);
+        // Swap interval is applied at the start of RenderLoop based on VideoOutputConfig.PresentationMode.
 
         // Release the context from the calling thread so the render thread can acquire it.
         _ = SDL.GLMakeCurrent(_windowHandle, nint.Zero);
-
         _glInitialized = false;
         _glTexture = 0;
         _rgbaUploadState = default;
@@ -1656,6 +1654,12 @@ public sealed class SDL3VideoView : IVideoOutput
             Console.Error.WriteLine("[SDL3VideoView] RenderLoop: GLMakeCurrent failed – " + SDL.GetError());
             return;
         }
+
+        // Apply hardware VSync based on the output config set at Start().
+        // VSync mode → SwapInterval(1); all other modes → SwapInterval(0) so the
+        // software timing in OpenGLVideoOutput is the sole pacing mechanism.
+        var useHwVSync = _renderConfig.PresentationMode == VideoOutputPresentationMode.VSync;
+        _ = SDL.GLSetSwapInterval(useHwVSync ? 1 : 0);
 
         // Initialise GL resources and the shader pipeline on this thread.
         lock (_gate)

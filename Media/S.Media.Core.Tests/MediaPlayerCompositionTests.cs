@@ -12,22 +12,9 @@ namespace S.Media.Core.Tests;
 
 public sealed class MediaPlayerCompositionTests
 {
-    /// <summary>
-    /// §4.2 fix: a plain <see cref="IMediaItem"/> that does not implement
-    /// <see cref="IMediaPlaybackSourceBinding"/> must be rejected — starting the pump
-    /// threads with no sources attached produces silent, empty playback with no error.
-    /// </summary>
-    [Fact]
-    public void Play_PlainMediaItem_ReturnsInvalidArgument_AndDoesNotStartMixer()
-    {
-        var player = new MediaPlayer();
-        var media = new FakeMediaItem();
-
-        var result = player.Play(media);
-
-        Assert.Equal((int)MediaErrorCode.MediaInvalidArgument, result);
-        Assert.Equal(AVMixerState.Stopped, player.State);
-    }
+    // NOTE: The old "Play_PlainMediaItem_ReturnsInvalidArgument" test was removed.
+    // IMediaPlayer.Play now takes IMediaPlaybackSourceBinding directly (N13), so passing
+    // a plain IMediaItem that does not implement the binding is prevented at compile time.
 
     [Fact]
     public void Play_BoundMedia_AttachesSources_ThenStartsPlayback()
@@ -80,16 +67,6 @@ public sealed class MediaPlayerCompositionTests
         Assert.Equal(AVMixerState.Running, player.State);
     }
 
-    private sealed class FakeMediaItem : IMediaItem
-    {
-        public IReadOnlyList<AudioStreamInfo> AudioStreams => [];
-
-        public IReadOnlyList<VideoStreamInfo> VideoStreams => [];
-
-        public MediaMetadataSnapshot? Metadata => null;
-
-        public bool HasMetadata => false;
-    }
 
     private sealed class FakeBoundMediaItem : IMediaItem, IMediaPlaybackSourceBinding
     {

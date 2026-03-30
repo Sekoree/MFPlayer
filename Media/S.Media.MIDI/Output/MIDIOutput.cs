@@ -8,7 +8,7 @@ using S.Media.MIDI.Types;
 
 namespace S.Media.MIDI.Output;
 
-public sealed class MIDIOutput : IDisposable
+public sealed class MIDIOutput : IMIDIDevice
 {
     private readonly Lock _gate = new();
     private readonly bool _nativeEnabled;

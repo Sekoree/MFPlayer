@@ -2,7 +2,7 @@
 
 > **Scope:** `S.Media.Core` — interfaces, mixer, clock, playback, error codes
 > **Cross-references:** See `API-Review.md` §§2, 3, 10, 12 for the full analysis.
-> **Last updated:** March 29, 2026 — Second-pass audit completed; §11 (status + new findings) added.
+> **Last updated:** March 30, 2026 — Third-pass audit completed; §12 (status + new findings) added.
 
 ---
 
@@ -19,6 +19,7 @@
 9. [v1 Baseline — Keep / Simplify / Scrap](#9-v1-baseline--keep--simplify--scrap)
 10. [OwnAudio Reference Analysis & Design Decisions](#10-ownaudio-reference-analysis--design-decisions)
 11. [Second-Pass Audit — March 29, 2026](#11-second-pass-audit--march-29-2026)
+12. [Third-Pass Audit — March 30, 2026](#12-third-pass-audit--march-30-2026)
 
 ---
 
@@ -221,7 +222,7 @@ Some implementations (`NDIVideoOutput` with `ClockVideo=true`) block for a full 
 
 ## 3. Mixer (`AudioVideoMixer`)
 
-### Issue 3.1 — Two-step start protocol ⚠️ PARTIAL — removed from interface, still `public` on concrete class
+### Issue 3.1 — Two-step start protocol ✅ DONE — `Start/Stop/Pause/Resume` removed from `IAVMixer`; `protected` on `AVMixer`
 
 `Start()` and `StartPlayback(config)` both exist on `IAudioVideoMixer`. `Start()` only starts the clock; `StartPlayback` starts clock + pump threads. Callers inconsistently call both or just one.
 
@@ -247,7 +248,7 @@ public interface IAudioVideoMixer : ISupportsAdvancedRouting, IDisposable
 
 ---
 
-### Issue 3.2 — `TickVideoPresentation()` is a dead no-op ⚠️ PARTIAL — marked `[Obsolete]`, not deleted
+### Issue 3.2 — `TickVideoPresentation()` is a dead no-op ✅ DONE — deleted
 
 Always returns `TimeSpan.Zero`. Causes a 1 kHz busy-loop in `AVMixerTest`.
 
@@ -417,7 +418,7 @@ while (!ct.IsCancellationRequested)
 
 ---
 
-### Issue 3.8 — `VideoPresenterSyncPolicy` ignores `VideoPresenterSyncPolicyOptions.MaxWait` ⚠️ PARTIAL — MaxWait now read; options type still `internal` and not exposed via `AVMixerConfig`
+### Issue 3.8 — `VideoPresenterSyncPolicy` ignores `VideoPresenterSyncPolicyOptions.MaxWait` ✅ DONE — MaxWait read; `VideoSyncOptions` public and wired into `AVMixerConfig.PresenterSyncOptions`
 
 The `AudioLed` and `Realtime` branches both use a hard-coded `50.0` ms cap.
 
@@ -665,7 +666,7 @@ Every mixer-related public type carries the eight-character prefix `AudioVideo`.
 
 ---
 
-### 7.2 `MixerClockTypeRules` — remove the class ⚠️ PARTIAL — marked `[Obsolete]`, not deleted
+### 7.2 `MixerClockTypeRules` — remove the class ✅ DONE — file deleted
 
 This is an 18-line class with a single method used only inside `AudioVideoMixerConfig` and `AudioVideoMixer`. It adds no encapsulation or testability over a private static method.
 
@@ -718,7 +719,7 @@ public enum VideoDispatchPolicy
 
 ---
 
-### 7.7 `ISupportsAdvancedRouting` — rename or fold ⚠️ PARTIAL — folded into `IAVMixer`, not renamed
+### 7.7 `ISupportsAdvancedRouting` — rename or fold ✅ DONE — folded into `IAVMixer` as `IMixerRouting`
 
 If routing is merged into `IAVMixer` (§3.4), this interface disappears. If kept separate, rename to remove the "Advanced" implication:
 
@@ -837,7 +838,7 @@ Callers must downcast `IAudioVideoMixer` to `ISupportsAdvancedRouting` to access
 
 ---
 
-### 8.11 — `Start()/Stop()/Pause()/Resume()` on `IAudioVideoMixer` duplicate `StartPlayback()`/`StopPlayback()` ⚠️ PARTIAL — removed from `IAVMixer`; still `public` (not `protected`) on `AVMixer`
+### 8.11 — `Start()/Stop()/Pause()/Resume()` on `IAudioVideoMixer` duplicate `StartPlayback()`/`StopPlayback()` ✅ DONE — all four methods `protected` on `AVMixer`
 
 The two-step protocol (`Start()` to start the clock, then `StartPlayback()` to start threads) is confusing. `Start()` alone produces a running mixer with no audio/video pumps. External callers do not need this distinction.
 
@@ -1130,7 +1131,7 @@ This also ensures sources at their start offset that have not yet reached their 
 
 ---
 
-### 10.9 — `AudioResampler`: Keep in Core, Add FFmpeg-backed Alternative — **DESIGN DECISION** ⚠️ PARTIAL — `IAudioResampler` interface created; `AVMixerConfig.ResamplerFactory` hook not added
+### 10.9 — `AudioResampler`: Keep in Core, Add FFmpeg-backed Alternative — **DESIGN DECISION** ✅ DONE — `IAudioResampler` interface created; `AVMixerConfig.ResamplerFactory` hook added; `AudioPumpLoop` applies resampler per-source
 
 S.Media.Core contains a pure-C# windowed-sinc + linear resampler (`Audio/AudioResampler.cs`, 487 lines). OwnAudio uses SoundTouch for pitch/tempo changes but not for plain sample-rate conversion.
 
@@ -1262,7 +1263,7 @@ public IReadOnlyList<IAudioSource> AudioSources
 | 10.6 | SIMD not used in mix accumulation and clamp | Performance | Medium | ✅ |
 | 10.7 | Timeline advances on empty read | Bug | High | ✅ |
 | 10.8 | `ReadSamples` called on stopped sources | Bug | High | ✅ |
-| 10.9 | `IAudioResampler` abstraction + `AVMixerConfig.ResamplerFactory` | Design decision | Medium | ⚠️ interface only |
+| 10.9 | `IAudioResampler` abstraction + `AVMixerConfig.ResamplerFactory` | Design decision | Medium | ✅ |
 | 10.10 | Cached sources: volatile flag pattern | Performance | Low | ✅ |
 | 10.11 | `AudioSourceState` missing `EndOfStream` | Feature gap | Medium | ✅ |
 | 10.12 | LINQ in `AudioSources` (see §8.9) | Performance | Low | ✅ |
@@ -1279,6 +1280,8 @@ Cross-referencing all prior documented issues against the actual implementation 
 
 ### 11.1 — Full Status Table
 
+> ✅ entries resolved after March 29 are marked **→ P2/P3/N-class** in the Status column to show which pass completed them.
+
 | Issue | Title | Status |
 |---|---|---|
 | 1.1 | `IAudioSink` / `IAudioOutput` split | ✅ |
@@ -1287,36 +1290,36 @@ Cross-referencing all prior documented issues against the actual implementation 
 | 1.4 | `PushFrame(in AudioFrame)` identity overload on `IAudioSink` | ✅ |
 | 2.1 | `IVideoSource.StreamInfo` | ✅ |
 | 2.2 | `IVideoOutput.State` / `VideoOutputState` enum | ✅ |
-| 2.3 | `IVideoOutput.PushFrame` blocking contract documented | ❌ |
+| 2.3 | `IVideoOutput.PushFrame` blocking contract documented | ✅ → P2-5 |
 | 2.4 | `SeekToFrame(long, out, out)` removed from interface | ✅ |
 | 3.1 | `Start/Stop/Pause/Resume` removed from `IAVMixer`; `protected` on `AVMixer` | ✅ |
-| 3.2 | `TickVideoPresentation()` deleted | ⚠️ Marked `[Obsolete]`, not deleted |
+| 3.2 | `TickVideoPresentation()` deleted | ✅ → P3-1 |
 | 3.3 | `Gain` applied in mix loop | ✅ |
 | 3.4 | `IAVMixer : ISupportsAdvancedRouting` | ✅ |
 | 3.5 | Ghost drift-correction fields removed from diagnostics | ✅ |
 | 3.6 | `OutputSampleRate` / `SyncMode` → `init`-only | ✅ |
 | 3.7 | Volatile flag for source snapshot cache | ✅ |
 | 3.8 | `VideoPresenterSyncPolicy.MaxWait` used in AudioLed/Realtime | ✅ |
-| 3.8 | `VideoPresenterSyncPolicyOptions` public + in `AVMixerConfig` | ❌ |
+| 3.8 | `VideoPresenterSyncPolicyOptions` public + in `AVMixerConfig` | ✅ → P2-1 |
 | 3.9 | `Seek()` via `Channel<double>`, no thread restart | ✅ |
-| 4.1 | `_playerGate` deadlock risk resolved | ❌ |
+| 4.1 | `_playerGate` deadlock risk resolved | ✅ → P2-2 |
 | 4.2 | `Play(IMediaItem)` returns error when item has no sources | ✅ |
-| 5.1 | `MediaErrorArea` — PortAudio / OpenGL / SDL3 / MIDI entries | ❌ |
+| 5.1 | `MediaErrorArea` — PortAudio / OpenGL / SDL3 / MIDI entries | ✅ → P2-3 |
 | 5.2 | `MediaErrorCode.Success = 0` removed | ✅ (was never present) |
 | 5.3 | `MediaObjectDisposed` error code; `Stop()` on disposed | ✅ |
-| 5.4 | `MediaSourceNotRunning`; NDI ReadRejected semantic corrected | ❌ |
-| 6.1 | `VideoFrame` ref-counting fragility annotated | ❌ |
-| 6.2 | `MediaMetadataSnapshot` well-known fields + `IDynamicMetadata.GetMetadata()` | ❌ |
+| 5.4 | `MediaSourceNotRunning`; NDI ReadRejected semantic corrected | ✅ → P2-4 |
+| 6.1 | `VideoFrame` ref-counting fragility annotated | ✅ → P3-2 |
+| 6.2 | `MediaMetadataSnapshot` well-known fields + `IDynamicMetadata.GetMetadata()` | ✅ → P3-3 |
 | 7.1 | `AudioVideo*` → `AV*` rename | ✅ |
-| 7.2 | `MixerClockTypeRules` deleted | ⚠️ Marked `[Obsolete]`, not deleted |
-| 7.3 | `AudioSourceErrorEventArgs` / `VideoSourceErrorEventArgs` unified | ❌ |
-| 7.4 | `VideoOutputTimestampMonotonicMode` → `VideoTimestampMode` | ❌ |
-| 7.5 | `VideoPresenterSyncPolicy/Options` renamed + made public | ❌ |
-| 7.6 | `VideoPresentationHostPolicy` → `VideoDispatchPolicy` | ❌ |
-| 7.7 | `ISupportsAdvancedRouting` renamed / folded | ⚠️ Folded into `IAVMixer`, not renamed |
-| 7.8 | `MixerSourceDetachOptions` marked obsolete | ✅ |
-| 7.9 | `MediaErrorAllocations` int shortcuts removed | ❌ |
-| 7.10 | File `AudioVideoMixerRuntimeSnapshot.cs` renamed to `AVMixerDiagnostics.cs` | ❌ |
+| 7.2 | `MixerClockTypeRules` deleted | ✅ → P3-4 |
+| 7.3 | `AudioSourceErrorEventArgs` / `VideoSourceErrorEventArgs` unified | ✅ → P3-4 |
+| 7.4 | `VideoOutputTimestampMonotonicMode` → `VideoTimestampMode` | ✅ → P3-4 |
+| 7.5 | `VideoPresenterSyncPolicy/Options` renamed + made public | ✅ → P3-4 |
+| 7.6 | `VideoPresentationHostPolicy` → `VideoDispatchPolicy` | ✅ → P3-4 |
+| 7.7 | `ISupportsAdvancedRouting` renamed / folded | ✅ → P3-4 (`IMixerRouting`) |
+| 7.8 | `MixerSourceDetachOptions` deleted | ✅ → N15 group |
+| 7.9 | `MediaErrorAllocations` int shortcuts removed | ✅ → P3-4 |
+| 7.10 | File `AudioVideoMixerRuntimeSnapshot.cs` renamed to `AVMixerDiagnostics.cs` | ✅ → P3-4 |
 | 8.1 | Audio routing rules consulted in pump loop | ✅ |
 | 8.2 | Hot-path snapshot allocation fix | ✅ |
 | 8.3 | `MaxWait` fix in sync policy | ✅ |
@@ -1324,7 +1327,7 @@ Cross-referencing all prior documented issues against the actual implementation 
 | 8.5 | `IVideoSource.StreamInfo` | ✅ |
 | 8.6 | `IVideoOutput.State` | ✅ |
 | 8.7 | `SeekToFrame` 3-param removed | ✅ |
-| 8.8 | `Diagnostics/` folder removed | ❌ |
+| 8.8 | `Diagnostics/` folder removed | ✅ → N15 |
 | 8.9 | `AudioSources` LINQ → `ConvertAll` | ✅ |
 | 8.10 | `IAVMixer : ISupportsAdvancedRouting` | ✅ |
 | 8.11 | `Start/Stop/Pause/Resume` off `IAVMixer`; `protected` on `AVMixer` | ✅ |
@@ -1336,13 +1339,13 @@ Cross-referencing all prior documented issues against the actual implementation 
 | 10.7 | Empty-read does not advance timeline | ✅ |
 | 10.8 | State gate skips stopped sources | ✅ |
 | 10.9 | `IAudioResampler` interface created | ✅ |
-| 10.9 | `AVMixerConfig.ResamplerFactory` hook | ❌ |
+| 10.9 | `AVMixerConfig.ResamplerFactory` hook | ✅ → P2-6 |
 | 10.10 | Volatile flag for source snapshot | ✅ |
 | 10.11 | `AudioSourceState.EndOfStream` | ✅ |
 | 10.12 | `AudioSources` ConvertAll | ✅ |
 
-**Score after March 29 fixes: 45 ✅ / 4 ⚠️ / 12 ❌ out of 65 tracked items (including N1–N4).**
-> Items fixed today: §3.1/§8.11 (`Start/Stop` protected), N1 (per-channel routing), N2 (video threads always start), §4.2 (`Play` guard), §5.3 (`MediaObjectDisposed`).
+**Score after March 29 pass: 45 ✅ / 4 ⚠️ / 12 ❌ out of 65 tracked items (including N1–N4).**  
+**Score after March 30 full pass (P2, P3, N5–N15): 65 ✅ / 0 ⚠️ / 0 ❌ for items 1.1–10.12.** See §12.1 for remaining open items.
 
 ---
 
@@ -1607,7 +1610,7 @@ Priority: **Low** (trivially fixed alongside §11.2-K).
 ### 11.4 — Remaining Fix Plan (post March 29 session)
 
 **Already resolved this session:** N1 (channel routing), N2 (video threads), §11.2-B (protected lifecycle).  
-**Remaining open:** 14 ❌ + 3 ⚠️ items organised below by risk and effort.
+**All remaining items resolved March 30, 2026** (Pass 2, Pass 3, and N5–N15). See §12 for the full third-pass audit and final status.
 
 ---
 
@@ -1828,4 +1831,440 @@ Delete all `public static int Xxx => (int)MediaErrorCode.Xxx` properties. Keep o
 | P3-3 | `MediaMetadataSnapshot` fields + `IDynamicMetadata` | 3 | `MediaMetadataSnapshot.cs`, `IDynamicMetadata.cs` |
 | P3-4 | Full naming sweep | 3 | Many — see §11.4 |
 | P3-5 | `ForPassthrough` LINQ | 3 | `AVMixerConfig.cs` |
+
+---
+
+## 12. Third-Pass Audit — March 30, 2026
+
+Cross-referencing all prior documented issues against the actual implementation after the second fix pass.
+
+**Legend:** ✅ Done · ⚠️ Partial · ❌ Not done · 🆕 New finding
+
+---
+
+### 12.1 — Status Table (delta from §11.1)
+
+The following items from §11.5 were resolved since March 29:
+
+| Issue | Title | Status |
+|---|---|---|
+| P2-1 | `VideoSyncOptions` public + `AVMixerConfig.PresenterSyncOptions` | ✅ |
+| P2-2 | `_playerGate` deadlock — `Gate` exposed `protected` on `AVMixer` | ✅ |
+| P2-3 | `MediaErrorArea` — PortAudio / OpenGL / SDL3 / MIDI entries + `ResolveArea()` | ✅ |
+| P2-4 | `MediaSourceNotRunning`; NDI `ReadRejected` semantic fixed | ✅ |
+| P2-5 | `IVideoOutput.PushFrame` blocking contract XML doc | ✅ |
+| P2-6 | `AVMixerConfig.ResamplerFactory` + `AudioPumpLoop` resampler path | ✅ |
+| P3-1 | `TickVideoPresentation()` deleted | ✅ |
+| P3-2 | `VideoFrame.AddRef()` ownership annotation | ✅ |
+| P3-3 | `MediaMetadataSnapshot` well-known fields; `IDynamicMetadata.GetMetadata()` + `MetadataChanged` | ✅ |
+| P3-4 / N3 | `AVMixerConfig.ForPassthrough` LINQ replaced with explicit array fill | ✅ |
+| P3-4 / §7.3 | `MediaSourceErrorEventArgs` unified | ✅ |
+| P3-4 / §7.4 | `VideoTimestampMode` (renamed from `VideoOutputTimestampMonotonicMode`) | ✅ |
+| P3-4 / §7.5 | `VideoSyncPolicy` / `VideoSyncOptions` renamed + made `public` | ✅ |
+| P3-4 / §7.6 | `VideoDispatchPolicy` + `DirectThread` / `BackgroundWorker` values | ✅ |
+| P3-4 / §7.7 | `IMixerRouting` (renamed from `ISupportsAdvancedRouting`) | ✅ |
+| P3-4 / §7.9 | `MediaErrorAllocations` int shortcuts removed | ✅ |
+| P3-4 / §7.10 | `AVMixerDiagnostics.cs` file renamed | ✅ |
+| P3-4 / §8.8 | `MixerClockTypeRules.cs` deleted | ✅ |
+
+Resolved since initial §12 write-up (N5–N15 implementation, March 30, 2026):
+
+| Issue | Title | Status |
+|---|---|---|
+| §8.8 / N15 | `Diagnostics/DebugInfo.cs`, `DebugKeys.cs`, `DebugValueKind.cs` deleted | ✅ |
+| §7.x / N11 | Source files renamed to match `AV*` type names | ✅ |
+| API §2.7 / N13 | `IMediaPlayer.Play` takes `IMediaPlaybackSourceBinding` | ✅ |
+| `MixerSourceDetachOptions` | Deleted (no callers; was `[Obsolete]`) | ✅ |
+| N5 | Audio pump thread always starts | ✅ |
+| N6 | `OutputWorker` stale check; `VideoWorkerStaleDrops` now populated | ✅ |
+| N7 | Video outputs/routing-rules cached; no per-frame lock + alloc | ✅ |
+| N8 | Video decode queue depth check merged into enqueue lock | ✅ |
+| N9 | `VideoSyncPolicy` Synced-mode dead `while` → `if` | ✅ |
+| N10 | `VideoOutputQueueCapacityOverrides` → `IReadOnlyDictionary<Guid,int>` init-only | ✅ |
+| N12 | `VideoSourceState.EndOfStream`; `FFVideoSource` sets it; decode loop sleeps on it | ✅ |
+| N14 | `VideoDecodeLoop` state gate (mirrors `AudioPumpLoop`) | ✅ |
+
+Still open (long-term / out-of-scope for S.Media.Core alone):
+
+| Issue | Title | Status |
+|---|---|---|
+| §6.1 | `VideoFrame` `IMemoryOwner<byte>` long-term migration | ❌ |
+| API §7.3 | `VideoOutputPresentationMode.VSync = 3` has no implementation | ❌ |
+| §9.2 | `IMIDIDevice` interface | ❌ |
+| §9.1 | `IMediaEngine` interface | ❌ |
+
+**Score after March 30 full implementation: 75 ✅ / 0 ⚠️ / 4 ❌ out of tracked items.**
+
+> **Update — March 30, 2026 (fourth-pass):** All four remaining open items resolved. Score: **79 ✅ / 0 ⚠️ / 0 ❌**.
+
+---
+
+### 12.2 — New Findings
+
+---
+
+#### 🆕 N5 — Audio pump thread not started for dynamically-added sources — **BUG** ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Mixing/AudioVideoMixer.cs` — `StartPlaybackThreads`
+
+```csharp
+// Current — conditional start:
+if (GetAudioSourcesSnapshot().Count > 0)
+{
+    _audioPumpThread = new Thread(() => AudioPumpLoop(ct)) { ... };
+    _audioPumpThread.Start();
+}
+```
+
+N2 (March 29) removed the equivalent guard for video threads so they always start. The audio thread retains the old conditional. A caller who calls `StartPlayback` with no audio sources registered (audio-output-only setup, or sources added dynamically afterwards) will find the audio pump never starts — audio sources added after `StartPlayback` produce no output.
+
+`AudioPumpLoop` already handles an empty snapshot gracefully: the `!anyRead` branch sleeps 1 ms and continues. The guard is therefore unnecessary.
+
+**Fix:** Remove the conditional and always start the audio pump thread, exactly as was done for video threads in N2:
+
+```csharp
+_audioPumpThread = new Thread(() => AudioPumpLoop(ct))
+{ Name = "AVMixer.AudioPump", IsBackground = true, Priority = ThreadPriority.Highest };
+_audioPumpThread.Start();
+```
+
+Priority: **High** (silent no-audio bug for dynamic source pipelines).
+
+---
+
+#### 🆕 N6 — `OutputWorker.WorkerLoop` never checks frame staleness — `VideoWorkerStaleDrops` always zero — **BUG** ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Mixing/AudioVideoMixer.cs` — `OutputWorker.WorkerLoop`
+
+```csharp
+private void WorkerLoop()
+{
+    while (!_stop)
+    {
+        // ...dequeue item...
+        using (item.Frame)
+        {
+            var code = _output.PushFrame(item.Frame, item.Pts);  // no stale check
+            if (code != MediaResult.Success) Interlocked.Increment(ref PushFailures);
+        }
+    }
+}
+```
+
+`Interlocked.Increment(ref StaleDrops)` is never called — `VideoWorkerStaleDrops` in `AVMixerDiagnostics` is permanently zero. More critically, if an output's background worker queue backs up (e.g., a blocking NDI output), queued frames will be pushed far behind their PTS. For a 30 fps stream, a 10-frame queue backup means frames are pushed ~333 ms late.
+
+**Fix:** Add a staleness check in `WorkerLoop` before pushing. The worker needs access to a stale threshold:
+
+```csharp
+private readonly TimeSpan _staleThreshold;
+
+// In WorkerLoop — before PushFrame:
+var staleness = item.Pts == TimeSpan.Zero
+    ? TimeSpan.Zero
+    : (TimeSpan.FromSeconds(Environment.TickCount64 / 1000.0) - item.Pts);
+// Simpler: use the mixer's audio timeline for reference (passed via constructor or a shared ref).
+```
+
+Alternatively, carry the mixer's audio clock reference into `OutputWorker` and compare `item.Pts` against the current clock. Frames older than `staleThreshold` are disposed with a `StaleDrops` increment rather than pushed.
+
+Priority: **Medium** (misleading diagnostics; stale frame presentation in backpressure scenarios).
+
+---
+
+#### 🆕 N7 — `PushFrameToOutputs` acquires `_gate` and allocates a list on every video frame — **Hot-path allocation** ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Mixing/AudioVideoMixer.cs` — `PushFrameToOutputs`
+
+```csharp
+private void PushFrameToOutputs(VideoFrame frame, TimeSpan pts, AVMixerConfig config, bool useWorkers)
+{
+    IReadOnlyList<IVideoOutput> outputs;
+    Dictionary<Guid, OutputWorker> workers;
+    lock (_gate) { outputs = [.. _videoOutputs]; workers = _videoWorkers; }  // allocates list
+
+    var rules    = VideoRoutingRules;  // acquires _gate again, allocates another list
+    var hasRules = rules.Count > 0;
+    // ...
+}
+```
+
+At 30 fps, `PushFrameToOutputs` is called 30 times per second. Each call:
+1. Acquires `_gate` and creates a new `IVideoOutput[]` / `List<IVideoOutput>` via `[.. _videoOutputs]`.
+2. Calls `VideoRoutingRules` which acquires `_gate` a second time and creates another list via `[.. _videoRoutingRules]`.
+
+That is two lock acquisitions and two heap allocations per frame — 60 allocations/second and two `_gate` round-trips per frame in the hot presentation path.
+
+**Fix:** Apply the same volatile-flag snapshot pattern used for audio sources:
+
+```csharp
+// Fields:
+private volatile bool _videoOutputsNeedsUpdate = true;
+private IVideoOutput[] _videoOutputsCache = [];
+private volatile bool _videoRoutingRulesNeedsUpdate = true;
+private AudioRoutingRule[] _videoRoutingRulesCache = [];   // VideoRoutingRule[]
+
+// In AddVideoOutput / RemoveVideoOutput:
+_videoOutputsNeedsUpdate = true;
+
+// In AddVideoRoutingRule / RemoveVideoRoutingRule / ClearVideoRoutingRules:
+_videoRoutingRulesNeedsUpdate = true;
+
+// In VideoPresentLoop before PushFrameToOutputs:
+if (_videoOutputsNeedsUpdate)
+{
+    lock (_gate) { _videoOutputsCache = [.. _videoOutputs]; }
+    _videoOutputsNeedsUpdate = false;
+}
+if (_videoRoutingRulesNeedsUpdate)
+{
+    lock (_gate) { _videoRoutingRulesCache = [.. _videoRoutingRules]; }
+    _videoRoutingRulesNeedsUpdate = false;
+}
+```
+
+Priority: **Medium** (GC pressure + unnecessary contention on presentation hot path).
+
+---
+
+#### 🆕 N8 — `VideoDecodeLoop` checks queue depth outside the enqueue lock — TOCTOU race ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Mixing/AudioVideoMixer.cs` — `VideoDecodeLoop`
+
+```csharp
+int depth;
+lock (_videoQueueLock) depth = _videoDecodeQueue.Count;  // read under lock
+if (depth >= capacity) { Thread.Sleep(1); continue; }
+
+// ... ReadFrame (can take many ms) ...
+
+lock (_videoQueueLock)
+{
+    _videoDecodeQueue.Enqueue(frame);   // write under lock — but depth may have changed
+    _videoQueueDepthVal = _videoDecodeQueue.Count;
+}
+```
+
+Between the depth check and the enqueue, `VideoPresentLoop` can dequeue frames, and more importantly, `depth` may have changed. If the queue was at `capacity - 1` when checked, it could be at `capacity` by the time of enqueue if a prior iteration has just re-entered before presenting. More practically, the depth check releases the lock for the entire `ReadFrame` call (which can block for many milliseconds), allowing the queue to grow past capacity by the time the new frame is enqueued.
+
+**Fix:** Merge the depth check into the enqueue lock:
+
+```csharp
+var src = GetActiveVideoSource();
+if (src is null) { Thread.Sleep(2); continue; }
+
+if (src.ReadFrame(out var frame) != MediaResult.Success) { Thread.Sleep(2); continue; }
+
+bool enqueued;
+lock (_videoQueueLock)
+{
+    if (_videoDecodeQueue.Count < capacity)
+    {
+        _videoDecodeQueue.Enqueue(frame);
+        _videoQueueDepthVal = _videoDecodeQueue.Count;
+        enqueued = true;
+    }
+    else enqueued = false;
+}
+if (!enqueued) { frame.Dispose(); Thread.Sleep(1); }
+```
+
+Priority: **Low** (overflow by at most 1 frame; not safety-critical, but semantically imprecise).
+
+---
+
+#### 🆕 N9 — `VideoSyncPolicy` `Synced` mode outer `while` loop is structurally dead code — **Code quality** ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Mixing/VideoSyncPolicy.cs`
+
+The `Synced` path is wrapped in `while (queuedVideoFrames.Count > 0) { ... }`, but every branch inside the loop unconditionally returns before the loop condition is ever re-evaluated. The outer `while` is effectively `if`. The `lateDropsSynced` local variable is declared inside the loop on every (never-repeated) iteration.
+
+**Fix:** Replace the outer `while` with `if`, move `lateDropsSynced` declaration to method scope:
+
+```csharp
+// BEFORE:
+while (queuedVideoFrames.Count > 0)
+{
+    var lateDropsSynced = 0;
+    // ... all paths return
+}
+return new VideoPresenterSyncDecision(null, delay, 0, 0);
+
+// AFTER:
+if (queuedVideoFrames.Count > 0)
+{
+    var lateDropsSynced = 0;
+    // ... same logic
+}
+return new VideoPresenterSyncDecision(null, delay, 0, 0);
+```
+
+Priority: **Low** (no behavioral change; clarity improvement only).
+
+---
+
+#### 🆕 N10 — `AVMixerConfig.VideoOutputQueueCapacityOverrides` is a mutable `Dictionary` — not copy-safe ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Mixing/AudioVideoMixerConfig.cs`
+
+```csharp
+public Dictionary<Guid, int> VideoOutputQueueCapacityOverrides { get; } = new();
+```
+
+`AVMixerConfig` is a `sealed class` with `init`-only properties designed for `with`-expression copying. But `VideoOutputQueueCapacityOverrides` is a `get`-only mutable `Dictionary`. Two config objects that share an ancestry will share the same dictionary instance (no deep-copy on `with`). Mutating overrides on one config silently affects the other.
+
+**Fix:** Change to `IReadOnlyDictionary<Guid, int>` with `init`:
+
+```csharp
+public IReadOnlyDictionary<Guid, int> VideoOutputQueueCapacityOverrides { get; init; }
+    = ImmutableDictionary<Guid, int>.Empty;
+```
+
+Update `GetVideoOutputQueueCapacity` accordingly. Callers who wish to populate overrides pass a `new Dictionary<Guid, int> { [id] = cap }` at construction.
+
+Priority: **Medium** (correctness surprise for callers using `with` copies).
+
+---
+
+#### 🆕 N11 — Source files not renamed to match type names — **Naming debt** ✅ DONE — March 30, 2026
+
+The `AV*` renaming pass (§7.1) renamed all types but did not rename the source files that contain them:
+
+| Current file | Type inside | Should be |
+|---|---|---|
+| `AudioVideoMixer.cs` | `AVMixer` | `AVMixer.cs` |
+| `AudioVideoMixerConfig.cs` | `AVMixerConfig` | `AVMixerConfig.cs` |
+| `AudioVideoMixerState.cs` | `AVMixerState` | `AVMixerState.cs` |
+| `AudioVideoMixerStateChangedEventArgs.cs` | `AVMixerStateChangedEventArgs` | `AVMixerStateChangedEventArgs.cs` |
+| `AudioVideoSyncMode.cs` | `AVSyncMode` | `AVSyncMode.cs` |
+| `IAudioVideoMixer.cs` | `IAVMixer` | `IAVMixer.cs` |
+
+Priority: **Low** (cosmetic; no behavioral impact).
+
+---
+
+#### 🆕 N12 — `VideoSourceState` missing `EndOfStream` — no auto-stop for video-only pipelines ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Video/VideoSourceState.cs`
+
+`AudioSourceState` has `EndOfStream = 2` (§10.11). `VideoSourceState` has only `Stopped` and `Running`. When `FFVideoSource` (or any file-backed video source) reaches end-of-file, it returns an error code from `ReadFrame` but stays in `Running` state.
+
+Consequences:
+- `VideoDecodeLoop` busy-waits on the error return, sleeping 2 ms between failed `ReadFrame` calls at EOF.
+- The mixer has no way to detect "all video sources exhausted" to auto-stop or raise a `PlaybackComplete` event.
+- The symmetry with `AudioSourceState.EndOfStream` is broken, complicating unified pipeline monitoring.
+
+**Fix:** Add `EndOfStream = 2` to `VideoSourceState`. Video source implementations set `State = EndOfStream` when the decode session signals EOF. `VideoDecodeLoop` can then sleep longer on `EndOfStream` sources (or skip them) instead of busy-waiting.
+
+```csharp
+public enum VideoSourceState
+{
+    Stopped     = 0,
+    Running     = 1,
+    EndOfStream = 2,  // ADD
+}
+```
+
+Priority: **Medium** (correctness + symmetry with `AudioSourceState`).
+
+---
+
+#### 🆕 N13 — `IMediaPlayer.Play` still takes `IMediaItem` — compile-time type safety gap ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Playback/IMediaPlayer.cs`
+
+```csharp
+int Play(IMediaItem media);
+```
+
+`MediaPlayer.Play` guards with `if (media is not IMediaPlaybackSourceBinding)` and returns `MediaInvalidArgument`, but the interface signature accepts any `IMediaItem`. Callers with only an `IMediaItem` reference receive a runtime error code with no compile-time indication that `IMediaPlaybackSourceBinding` is required.
+
+API-Review §P2.7 / §2.7 recommended changing the signature to `IMediaPlaybackSourceBinding`. This was documented but not applied.
+
+**Fix:** Change `IMediaPlayer` and `MediaPlayer.Play` signatures to `IMediaPlaybackSourceBinding`:
+
+```csharp
+// IMediaPlayer.cs:
+int Play(IMediaPlaybackSourceBinding media);
+
+// MediaPlayer.cs — remove the runtime guard, argument is now guaranteed by the compiler:
+public int Play(IMediaPlaybackSourceBinding media)
+{
+    ArgumentNullException.ThrowIfNull(media);
+    var detachCode = DetachCurrentMediaSources();
+    if (detachCode != MediaResult.Success) return detachCode;
+    // ...
+}
+```
+
+Priority: **Low** (the runtime guard is safe; this is a type-system cleanliness improvement).
+
+---
+
+#### 🆕 N14 — `VideoDecodeLoop` does not gate on source state — inconsistency with `AudioPumpLoop` ✅ DONE — March 30, 2026
+
+**File:** `Media/S.Media.Core/Mixing/AudioVideoMixer.cs` — `VideoDecodeLoop`
+
+`AudioPumpLoop` explicitly skips sources that are not `AudioSourceState.Running`:
+
+```csharp
+if (src.State != AudioSourceState.Running) continue;
+```
+
+`VideoDecodeLoop` calls `ReadFrame` unconditionally on whatever `GetActiveVideoSource()` returns, regardless of its state. If the active source is externally stopped (without being removed from the mixer), the decode loop will call `ReadFrame` on a stopped source, getting repeated error returns and sleeping 2 ms between each — effectively a slow busy-wait.
+
+**Fix:** Add a state gate before `ReadFrame`:
+
+```csharp
+var src = GetActiveVideoSource();
+if (src is null) { Thread.Sleep(2); continue; }
+if (src.State == VideoSourceState.Stopped)     { Thread.Sleep(5);  continue; }  // ADD
+if (src.State == VideoSourceState.EndOfStream) { Thread.Sleep(50); continue; }  // N12 + N14
+```
+
+Priority: **Low** (functional only when source is manually stopped without removal).
+
+---
+
+#### 🆕 N15 — `Diagnostics/` folder files still present despite being unreferenced ✅ DONE — March 30, 2026
+
+**Files:** `Media/S.Media.Core/Diagnostics/DebugInfo.cs`, `DebugKeys.cs`, `DebugValueKind.cs`
+
+These three files were identified for deletion in §8.8 (first-pass audit, March 2026) and again in §11.2-L (second-pass). All three are unused throughout the solution — not referenced by any mixer, output, source, or test. `DebugKeys` contains four `const string` keys that are not consumed anywhere.
+
+**Action:** Delete all three files. No migration required — nothing references them.
+
+Priority: **Low** (dead code, cosmetic cleanup).
+
+---
+
+### 12.3 — Revised Remaining Fix Plan (post March 30)
+
+**All correctness, API completeness, naming, and cleanup items are complete as of March 30, 2026.**  
+Passes 1–3 and N5–N15 are all resolved. Only long-term / cross-project items remain open.
+
+---
+
+#### Remaining open items (long-term / out-of-scope for S.Media.Core alone)
+
+All items resolved March 30, 2026 (fourth-pass). See table below.
+
+| ID | Title | Status |
+|---|---|---|
+| §6.1 | `VideoFrame` `IMemoryOwner<byte>` migration | ✅ `VideoFrame.FromOwned()` factory added |
+| API §7.3 | `VideoOutputPresentationMode.VSync` implement or remove | ✅ Implemented — software frame-rate cap + SDL3 hardware swap interval |
+| §9.1 | `IMediaEngine` interface | ✅ Created in `S.Media.Core/Runtime/`; `IAudioEngine` and `MIDIEngine` implement it |
+| §9.2 | `IMIDIDevice` interface | ✅ Created in `S.Media.MIDI/Types/`; `MIDIInput` and `MIDIOutput` implement it |
+
+---
+
+### 12.4 — Quick-Reference: Remaining Open Items
+
+All tracked items resolved as of March 30, 2026. **No open items remain in S.Media.Core.**
+
+| ID | Title | Status |
+|---|---|---|
+| §6.1 | `VideoFrame.FromOwned()` — `IMemoryOwner<byte>` factory | ✅ Done |
+| API §7.3 | `VideoOutputPresentationMode.VSync` | ✅ Done |
+| §9.1 | `IMediaEngine` | ✅ Done |
+| §9.2 | `IMIDIDevice` | ✅ Done |
 

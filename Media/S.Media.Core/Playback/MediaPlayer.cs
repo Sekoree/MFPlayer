@@ -24,29 +24,24 @@ public sealed class MediaPlayer : AVMixer, IMediaPlayer
     /// </summary>
     public AVMixerConfig? PlaybackConfig { get; set; }
 
-    public int Play(IMediaItem media)
+    public int Play(IMediaPlaybackSourceBinding media)
     {
         ArgumentNullException.ThrowIfNull(media);
-
-        // §4.2: A plain IMediaItem has no source binding — reject early rather than
-        // starting the pump threads with no sources attached (silent, empty playback).
-        if (media is not IMediaPlaybackSourceBinding binding)
-            return (int)MediaErrorCode.MediaInvalidArgument;
 
         var detachCode = DetachCurrentMediaSources();
         if (detachCode != MediaResult.Success)
             return detachCode;
 
-        var attachCode = AttachBoundSources(binding);
+        var attachCode = AttachBoundSources(media);
         if (attachCode != MediaResult.Success)
             return attachCode;
 
         lock (Gate)
         {
-            _activeMedia = media;
+            _activeMedia = media as IMediaItem;
         }
 
-        var config = PlaybackConfig ?? BuildDefaultConfig(binding);
+        var config = PlaybackConfig ?? BuildDefaultConfig(media);
         return StartPlayback(config);
     }
 
@@ -146,8 +141,7 @@ public sealed class MediaPlayer : AVMixer, IMediaPlayer
         return MediaResult.Success;
     }
 
-    private static AVMixerConfig BuildDefaultConfig(IMediaPlaybackSourceBinding binding)
-    {
+    private static AVMixerConfig BuildDefaultConfig(IMediaPlaybackSourceBinding binding)    {
         var firstAudio = binding.PlaybackAudioSources.FirstOrDefault();
         var channels = firstAudio?.StreamInfo.ChannelCount.GetValueOrDefault(2) ?? 2;
         return AVMixerConfig.ForSourceToStereo(Math.Max(1, channels));

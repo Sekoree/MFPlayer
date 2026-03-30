@@ -131,6 +131,19 @@ public sealed class FFVideoSource : IVideoSource
             var code = _sharedDemuxSession.ReadVideoFrame(out var sessionFrame);
             if (code != MediaResult.Success)
             {
+                // N12: transition to EndOfStream when the session signals no more frames and the
+                // source has a known finite duration that we appear to have consumed.
+                if (double.IsFinite(DurationSeconds) && DurationSeconds > 0)
+                {
+                    lock (_gate)
+                    {
+                        if (State == VideoSourceState.Running &&
+                            _positionSeconds >= DurationSeconds * 0.98)
+                        {
+                            State = VideoSourceState.EndOfStream;
+                        }
+                    }
+                }
                 frame = null!;
                 return code;
             }
@@ -261,6 +274,9 @@ public sealed class FFVideoSource : IVideoSource
             }
 
             _positionSeconds = positionSeconds;
+            // N12: a seek restarts the stream — move back to Running if we were at EndOfStream.
+            if (State == VideoSourceState.EndOfStream)
+                State = VideoSourceState.Running;
             return MediaResult.Success;
         }
     }

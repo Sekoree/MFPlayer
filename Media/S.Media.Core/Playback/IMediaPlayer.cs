@@ -19,6 +19,8 @@ public interface IMediaPlayer : IAVMixer
     /// <summary>
     /// Attaches the media item's sources to the mixer and starts playback,
     /// including pump threads via <see cref="IAVMixer.StartPlayback"/>.
+    /// The parameter requires <see cref="IMediaPlaybackSourceBinding"/> directly so
+    /// the source-binding requirement is enforced at compile time.
     /// </summary>
-    int Play(IMediaItem media);
+    int Play(IMediaPlaybackSourceBinding media);
 }

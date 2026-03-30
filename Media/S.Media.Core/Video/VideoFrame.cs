@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Threading;
 using S.Media.Core.Errors;
 
@@ -65,6 +66,58 @@ public sealed class VideoFrame : IDisposable
         Plane2Stride = plane2Stride;
         Plane3Stride = plane3Stride;
         _releaseAction = releaseAction;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="VideoFrame"/> whose plane buffers are owned by the supplied
+    /// <see cref="IMemoryOwner{T}"/> instances.  When the frame's reference count reaches zero
+    /// (i.e. after the matching number of <see cref="Dispose"/> calls), every non-<see langword="null"/>
+    /// owner is disposed, returning its backing buffer to its originating pool.
+    /// </summary>
+    /// <remarks>
+    /// <b>Ownership transfer:</b> the caller must NOT dispose the owners after passing them here.
+    /// The frame takes sole ownership.  The owners are disposed exactly once when the final
+    /// reference is released.
+    /// <para>
+    /// Typical pattern (e.g. in a decoder that rents from <see cref="System.Buffers.ArrayPool{T}"/>):
+    /// <code>
+    /// IMemoryOwner&lt;byte&gt; p0 = MemoryPool&lt;byte&gt;.Shared.Rent(requiredBytes);
+    /// // fill p0.Memory.Span …
+    /// var frame = VideoFrame.FromOwned(width, height, format, fmtData, pts, isKey, p0, stride);
+    /// // Do NOT dispose p0 here — the frame owns it now.
+    /// </code>
+    /// </para>
+    /// </remarks>
+    public static VideoFrame FromOwned(
+        int width,
+        int height,
+        VideoPixelFormat pixelFormat,
+        IPixelFormatData pixelFormatData,
+        TimeSpan presentationTime,
+        bool isKeyFrame,
+        IMemoryOwner<byte> plane0,
+        int plane0Stride,
+        IMemoryOwner<byte>? plane1 = null,
+        int plane1Stride = 0,
+        IMemoryOwner<byte>? plane2 = null,
+        int plane2Stride = 0,
+        IMemoryOwner<byte>? plane3 = null,
+        int plane3Stride = 0)
+    {
+        ArgumentNullException.ThrowIfNull(plane0);
+        return new VideoFrame(
+            width, height, pixelFormat, pixelFormatData, presentationTime, isKeyFrame,
+            plane0.Memory, plane0Stride,
+            plane1?.Memory ?? default, plane1Stride,
+            plane2?.Memory ?? default, plane2Stride,
+            plane3?.Memory ?? default, plane3Stride,
+            releaseAction: _ =>
+            {
+                plane0.Dispose();
+                plane1?.Dispose();
+                plane2?.Dispose();
+                plane3?.Dispose();
+            });
     }
 
     private static void ValidatePlaneShape(

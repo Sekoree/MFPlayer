@@ -1,4 +1,3 @@
-using S.Media.Core.Diagnostics;
 using S.Media.Core.Errors;
 
 namespace S.Media.OpenGL.SDL3;
@@ -6,13 +5,13 @@ namespace S.Media.OpenGL.SDL3;
 public sealed class SDL3HudRenderer
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, DebugInfo> _entries = [];
+    private readonly Dictionary<string, HudEntry> _entries = [];
 
-    public int Update(DebugInfo debugInfo)
+    public int Update(HudEntry entry)
     {
         lock (_gate)
         {
-            _entries[debugInfo.Key] = debugInfo;
+            _entries[entry.Key] = entry;
             return MediaResult.Success;
         }
     }
@@ -132,7 +131,7 @@ public sealed class SDL3HudRenderer
         return "UNKNOWN";
     }
 
-    private bool TryGetEntry(string[] keys, out DebugInfo info)
+    private bool TryGetEntry(string[] keys, out HudEntry info)
     {
         foreach (var key in keys)
         {

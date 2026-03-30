@@ -1,6 +1,7 @@
 using PMLib;
 using PMLib.Types;
 using S.Media.Core.Errors;
+using S.Media.Core.Runtime;
 using S.Media.MIDI.Config;
 using S.Media.MIDI.Input;
 using S.Media.MIDI.Output;
@@ -8,7 +9,7 @@ using S.Media.MIDI.Types;
 
 namespace S.Media.MIDI.Runtime;
 
-public sealed class MIDIEngine : IDisposable
+public sealed class MIDIEngine : IMediaEngine
 {
     private readonly Lock _gate = new();
     private readonly List<MIDIInput> _inputs = [];
