@@ -16,7 +16,7 @@ public sealed class NDIAudioSource : IAudioSource
     private readonly Lock _gate = new();
     private readonly int _sampleRate;
     private readonly int _channelCount;
-    private readonly NDICaptureCoordinator? _captureCoordinator;
+    private readonly INDICaptureCoordinator? _captureCoordinator;
     private float[] _audioRing;
     private int _ringReadIndex;
     private int _ringWriteIndex;
@@ -28,16 +28,16 @@ public sealed class NDIAudioSource : IAudioSource
     private double _lastReadMs;
 
     public NDIAudioSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions)
-        : this(mediaItem, sourceOptions, captureCoordinator: null)
+        : this(mediaItem, sourceOptions, captureCoordinator: mediaItem.CaptureCoordinator)
     {
     }
 
-    internal NDIAudioSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, NDICaptureCoordinator? captureCoordinator)
+    internal NDIAudioSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, INDICaptureCoordinator? captureCoordinator)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
         Id = Guid.NewGuid();
         SourceOptions = sourceOptions;
-        _captureCoordinator = captureCoordinator ?? (mediaItem.Receiver is null ? null : new NDICaptureCoordinator(mediaItem.Receiver));
+        _captureCoordinator = captureCoordinator;
 
         var stream = mediaItem.AudioStreams.FirstOrDefault();
         _sampleRate = stream.SampleRate ?? 48_000;

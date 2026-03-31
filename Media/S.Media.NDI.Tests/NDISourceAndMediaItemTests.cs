@@ -253,7 +253,8 @@ public sealed class NDISourceAndMediaItemTests
         buffer[1] = (byte)(marker + 1);
         buffer[2] = (byte)(marker + 2);
         buffer[3] = (byte)(marker + 3);
-        _ = enqueueMethod!.Invoke(videoSource, [buffer, 4, 1, 1, 0L, "test", S.Media.Core.Video.VideoPixelFormat.Rgba32, "test", DateTime.UtcNow]);
+        // DateTime capturedUtc removed from EnqueueCapturedFrame in Issue 5.7 fix.
+        _ = enqueueMethod!.Invoke(videoSource, [buffer, 4, 1, 1, 0L, "test", S.Media.Core.Video.VideoPixelFormat.Rgba32, "test"]);
     }
 
     private static bool TryDequeueBufferedFrame(object videoSource, out object? frame)

@@ -19,21 +19,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoStress", "Test\VideoStress\VideoStress.csproj", "{136BC955-3AB3-42D8-8E46-C8680F94B4E7}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB0-47AE-A212-5084CFA63CEC}"
-	ProjectSection(SolutionItems) = preProject
-		Doc\API-Review.md = Doc\API-Review.md
-		Doc\S.Media.Core.md = Doc\S.Media.Core.md
-		Doc\S.Media.FFmpeg.md = Doc\S.Media.FFmpeg.md
-		Doc\S.Media.PortAudio.md = Doc\S.Media.PortAudio.md
-		Doc\S.Media.NDI.md = Doc\S.Media.NDI.md
-		Doc\S.Media.OpenGL.md = Doc\S.Media.OpenGL.md
-		Doc\S.Media.MIDI.md = Doc\S.Media.MIDI.md
-		Doc\PALib.md = Doc\PALib.md
-		Doc\NDILib.md = Doc\NDILib.md
-		Doc\PMLib.md = Doc\PMLib.md
-		Doc\OSCLib.md = Doc\OSCLib.md
-		Doc\Naming-and-Consolidation.md = Doc\Naming-and-Consolidation.md
-		Doc\Audio-Review-2026-03-30.md = Doc\Audio-Review-2026-03-30.md
-	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"
 EndProject
@@ -48,9 +33,6 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Audio", "Audio", "{486A1187-8515-43B7-8075-1DFC7B95B987}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "OSC", "OSC", "{36B710DB-96D4-4B92-90BD-54636B2D48E1}"
-	ProjectSection(SolutionItems) = preProject
-		OSC\PROJECT-STATUS.md = OSC\PROJECT-STATUS.md
-	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OSCLib", "OSC\OSCLib\OSCLib.csproj", "{76DE0424-A676-4797-BE13-FF716C70296C}"
 EndProject
@@ -115,6 +97,24 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestShared", "Test\TestShared\TestShared.csproj", "{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Archive", "Archive", "{CB6ECFB3-79C6-4AAA-9FCC-9ECDC564467D}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "OldReviews", "OldReviews", "{CEE19154-533B-4FF9-9417-C12EF214B5F4}"
+	ProjectSection(SolutionItems) = preProject
+		Doc\OldReviews\API-Review.md = Doc\OldReviews\API-Review.md
+		Doc\OldReviews\Audio-Review-2026-03-30.md = Doc\OldReviews\Audio-Review-2026-03-30.md
+		Doc\OldReviews\Naming-and-Consolidation.md = Doc\OldReviews\Naming-and-Consolidation.md
+		Doc\OldReviews\NDILib.md = Doc\OldReviews\NDILib.md
+		Doc\OldReviews\OSCLib.md = Doc\OldReviews\OSCLib.md
+		Doc\OldReviews\PALib.md = Doc\OldReviews\PALib.md
+		Doc\OldReviews\PMLib.md = Doc\OldReviews\PMLib.md
+		Doc\OldReviews\S.Media.Core.md = Doc\OldReviews\S.Media.Core.md
+		Doc\OldReviews\S.Media.FFmpeg.md = Doc\OldReviews\S.Media.FFmpeg.md
+		Doc\OldReviews\S.Media.MIDI.md = Doc\OldReviews\S.Media.MIDI.md
+		Doc\OldReviews\S.Media.NDI.md = Doc\OldReviews\S.Media.NDI.md
+		Doc\OldReviews\S.Media.NDI-Checklist.md = Doc\OldReviews\S.Media.NDI-Checklist.md
+		Doc\OldReviews\S.Media.OpenGL.md = Doc\OldReviews\S.Media.OpenGL.md
+		Doc\OldReviews\S.Media.PortAudio.md = Doc\OldReviews\S.Media.PortAudio.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -612,6 +612,7 @@ Global
 		{1FB3786D-07AE-499E-84F0-3E3596816D9E} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{3D2AB48B-2F36-4EFA-8C6D-F491170839DC} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{50462EBD-4FBA-4B54-8721-FDC7B9AF9F5D} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
+		{CEE19154-533B-4FF9-9417-C12EF214B5F4} = {C5A09A9C-9EB0-47AE-A212-5084CFA63CEC}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {83CB65B8-011F-4ED7-BCD3-A6CFA935EF7E}

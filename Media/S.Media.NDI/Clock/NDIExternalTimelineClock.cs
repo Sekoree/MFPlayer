@@ -3,6 +3,16 @@ using S.Media.Core.Errors;
 
 namespace S.Media.NDI.Clock;
 
+/// <summary>
+/// An <see cref="IMediaClock"/> that tracks time from incoming NDI timecodes.
+/// <para>
+/// <b>Integration status:</b> The clock is fully implemented but not yet wired into
+/// <c>NDICaptureCoordinator</c> or <c>NDIVideoSource</c>. <see cref="OnAudioFrame"/> and
+/// <see cref="ResolveVideoPtsSeconds"/> currently have no call-sites inside <c>S.Media.NDI</c>.
+/// Consumers may advance the clock manually by calling <see cref="OnAudioFrame"/> from their
+/// own capture loop, or use <see cref="IMediaClock.Seek"/> to set the position directly.
+/// </para>
+/// </summary>
 public sealed class NDIExternalTimelineClock : IMediaClock
 {
     private readonly Lock _gate = new();

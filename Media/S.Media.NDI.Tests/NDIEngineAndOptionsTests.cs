@@ -34,17 +34,20 @@ public sealed class NDIEngineAndOptionsTests
     }
 
     [Fact]
-    public void CreateOutput_UsesIntegrationRequireAudioPath_WhenEnabledGlobally()
+    public void CreateOutput_RequireAudioPath_WhenSetOnOutputOptions()
     {
         using var engine = new NDIEngine();
         Assert.Equal(
             MediaResult.Success,
             engine.Initialize(
-                new NDIIntegrationOptions { RequireAudioPathOnStart = true },
+                new NDIIntegrationOptions(),
                 new NDILimitsOptions(),
                 new NDIDiagnosticsOptions()));
 
-        var code = engine.CreateOutput("ndi-out", new NDIOutputOptions { EnableAudio = false }, out var output);
+        // RequireAudioPathOnStart now lives only on NDIOutputOptions (Issue 4.1).
+        var code = engine.CreateOutput("ndi-out",
+            new NDIOutputOptions { EnableAudio = false, RequireAudioPathOnStart = true },
+            out var output);
 
         Assert.Equal((int)MediaErrorCode.NDIOutputAudioStreamDisabled, code);
         Assert.Null(output);
@@ -182,6 +185,7 @@ public sealed class NDIEngineAndOptionsTests
         badFrame.Dispose();
         Assert.Equal((int)MediaErrorCode.VideoFrameDisposed, output.PushFrame(badFrame));
 
+        var audioSink = (IAudioSink)output;
         var audioFrame = new AudioFrame(
             Samples: new ReadOnlyMemory<float>(new float[8]),
             FrameCount: 4,
@@ -189,10 +193,10 @@ public sealed class NDIEngineAndOptionsTests
             Layout: AudioFrameLayout.Interleaved,
             SampleRate: 48_000,
             PresentationTime: TimeSpan.Zero);
-        Assert.Equal(MediaResult.Success, output.PushAudio(audioFrame, TimeSpan.Zero));
+        Assert.Equal(MediaResult.Success, audioSink.PushFrame(in audioFrame));
 
         Assert.Equal(MediaResult.Success, output.Stop());
-        Assert.Equal((int)MediaErrorCode.NDIOutputPushAudioFailed, output.PushAudio(audioFrame, TimeSpan.Zero));
+        Assert.Equal((int)MediaErrorCode.NDIOutputPushAudioFailed, audioSink.PushFrame(in audioFrame));
 
         Assert.Equal(MediaResult.Success, engine.GetDiagnosticsSnapshot(out var snapshot));
         Assert.True(snapshot.VideoOutput.VideoPushSuccesses >= 1);

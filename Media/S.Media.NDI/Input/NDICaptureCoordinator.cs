@@ -4,20 +4,27 @@ using S.Media.Core.Video;
 
 namespace S.Media.NDI.Input;
 
-
-internal sealed class NDICaptureCoordinator
+/// <summary>
+/// Manual-polling coordinator: calls <c>NDIlib_recv_capture_v3</c> and demuxes audio/video
+/// into separate, bounded queues. Prefer <see cref="NDIFrameSyncCoordinator"/> for live-playback;
+/// this implementation is retained for recording workflows and as a fallback.
+/// </summary>
+internal sealed class NDICaptureCoordinator : INDICaptureCoordinator
 {
-    private const int MaxBufferedVideoFrames = 8;
-    private const int MaxBufferedAudioBlocks = 16;
-
+    // Semaphore ensures only one thread calls the native capture API at a time (Issue 5.5).
+    private readonly SemaphoreSlim _captureSemaphore = new(1, 1);
     private readonly Lock _gate = new();
     private readonly NDIReceiver _receiver;
     private readonly Queue<CapturedVideoFrame> _videoQueue = new();
     private readonly Queue<CapturedAudioBlock> _audioQueue = new();
+    private readonly int _maxBufferedVideoFrames;
+    private readonly int _maxBufferedAudioBlocks;
 
-    public NDICaptureCoordinator(NDIReceiver receiver)
+    public NDICaptureCoordinator(NDIReceiver receiver, int maxVideoFrames = 8, int maxAudioBlocks = 16)
     {
         _receiver = receiver;
+        _maxBufferedVideoFrames = Math.Max(1, maxVideoFrames);
+        _maxBufferedAudioBlocks = Math.Max(1, maxAudioBlocks);
     }
 
     public bool TryReadVideo(uint timeoutMs, out CapturedVideoFrame frame)
@@ -72,8 +79,15 @@ internal sealed class NDICaptureCoordinator
         return false;
     }
 
+    public void Dispose() => _captureSemaphore.Dispose();
+
     private unsafe void CaptureOnce(uint timeoutMs)
     {
+        // Non-blocking tryacquire (Issue 5.5): if another thread (e.g. the audio reader) is
+        // already inside the native capture call, skip — do not queue a second concurrent call.
+        if (!_captureSemaphore.Wait(0))
+            return;
+
         try
         {
             using var capture = _receiver.CaptureScoped(timeoutMs);
@@ -83,13 +97,11 @@ internal sealed class NDICaptureCoordinator
                 var height = Math.Max(1, capture.Video.Yres);
                 var stride = Math.Max(1, capture.Video.LineStrideInBytes);
                 if (capture.Video.PData == nint.Zero)
-                {
                     return;
-                }
 
                 var validLength = checked(width * height * 4);
                 var rented = ArrayPool<byte>.Shared.Rent(validLength);
-                if (!TryCopyPacked32(capture.Video.PData, stride, capture.Video.FourCC, width, height, rented, validLength, out var outputFormat, out var conversionPath))
+                if (!NDIVideoPixelConverter.TryCopyPacked32(capture.Video.PData, stride, capture.Video.FourCC, width, height, rented, validLength, out var outputFormat, out var conversionPath))
                 {
                     ArrayPool<byte>.Shared.Return(rented);
                     return;
@@ -108,18 +120,14 @@ internal sealed class NDICaptureCoordinator
 
                 lock (_gate)
                 {
-                    while (_videoQueue.Count >= MaxBufferedVideoFrames)
+                    while (_videoQueue.Count >= _maxBufferedVideoFrames)
                     {
                         var dropped = _videoQueue.Dequeue();
                         if (dropped.IsPooled)
-                        {
                             ArrayPool<byte>.Shared.Return(dropped.Rgba);
-                        }
                     }
-
                     _videoQueue.Enqueue(mapped);
                 }
-
                 return;
             }
 
@@ -128,9 +136,7 @@ internal sealed class NDICaptureCoordinator
                 var noChannels = Math.Max(1, capture.Audio.NoChannels);
                 var noSamples = Math.Max(0, capture.Audio.NoSamples);
                 if (noSamples == 0 || capture.Audio.PData == nint.Zero)
-                {
                     return;
-                }
 
                 var channelStrideBytes = capture.Audio.ChannelStrideInBytes > 0
                     ? capture.Audio.ChannelStrideInBytes
@@ -141,13 +147,11 @@ internal sealed class NDICaptureCoordinator
                 var interleaved = rented.AsSpan(0, sampleCount);
                 var basePtr = (byte*)capture.Audio.PData;
                 for (var s = 0; s < noSamples; s++)
-                {
                     for (var c = 0; c < noChannels; c++)
                     {
                         var channelPtr = (float*)(basePtr + (c * channelStrideBytes));
                         interleaved[(s * noChannels) + c] = channelPtr[s];
                     }
-                }
 
                 var mapped = new CapturedAudioBlock(
                     InterleavedSamples: rented,
@@ -160,99 +164,24 @@ internal sealed class NDICaptureCoordinator
 
                 lock (_gate)
                 {
-                    while (_audioQueue.Count >= MaxBufferedAudioBlocks)
+                    while (_audioQueue.Count >= _maxBufferedAudioBlocks)
                     {
                         var dropped = _audioQueue.Dequeue();
                         if (dropped.IsPooled)
-                        {
                             ArrayPool<float>.Shared.Return(dropped.InterleavedSamples);
-                        }
                     }
-
                     _audioQueue.Enqueue(mapped);
                 }
             }
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException and not AccessViolationException)
         {
-            // Capture is best-effort by contract in this phase.
+            // Capture is best-effort — transient network / decode errors are non-fatal.
         }
-    }
-
-    private static unsafe bool TryCopyPacked32(
-        nint sourcePtr,
-        int sourceStride,
-        NdiFourCCVideoType sourceFormat,
-        int width,
-        int height,
-        byte[] destination,
-        int destinationLength,
-        out VideoPixelFormat outputFormat,
-        out string conversionPath)
-    {
-        switch (sourceFormat)
+        finally
         {
-            case NdiFourCCVideoType.Rgba:
-                outputFormat = VideoPixelFormat.Rgba32;
-                conversionPath = "passthrough-rgba";
-                break;
-            case NdiFourCCVideoType.Rgbx:
-                outputFormat = VideoPixelFormat.Rgba32;
-                conversionPath = "passthrough-rgbx";
-                break;
-            case NdiFourCCVideoType.Bgra:
-                outputFormat = VideoPixelFormat.Bgra32;
-                conversionPath = "passthrough-bgra";
-                break;
-            case NdiFourCCVideoType.Bgrx:
-                outputFormat = VideoPixelFormat.Bgra32;
-                conversionPath = "passthrough-bgrx";
-                break;
-            default:
-                outputFormat = VideoPixelFormat.Unknown;
-                conversionPath = "unsupported-source-format";
-                return false;
+            _captureSemaphore.Release();
         }
-
-        var destinationStride = width * 4;
-        var pixelsPerRow = Math.Min(width, Math.Max(0, sourceStride / 4));
-        var copyBytesPerRow = pixelsPerRow * 4;
-        if (destinationLength < destinationStride * height)
-        {
-            outputFormat = VideoPixelFormat.Unknown;
-            conversionPath = "destination-too-small";
-            return false;
-        }
-
-        if (copyBytesPerRow == destinationStride)
-        {
-            fixed (byte* destinationBase = destination)
-            {
-                Buffer.MemoryCopy((void*)sourcePtr, destinationBase, destinationLength, destinationStride * height);
-            }
-
-            return true;
-        }
-
-        fixed (byte* destinationBase = destination)
-        {
-            for (var y = 0; y < height; y++)
-            {
-                var sourceRow = (byte*)sourcePtr + (y * sourceStride);
-                var destinationRow = destinationBase + (y * destinationStride);
-                if (copyBytesPerRow < destinationStride)
-                {
-                    new Span<byte>(destinationRow, destinationStride).Clear();
-                }
-
-                if (copyBytesPerRow > 0)
-                {
-                    Buffer.MemoryCopy(sourceRow, destinationRow, destinationStride, copyBytesPerRow);
-                }
-            }
-        }
-
-        return true;
     }
 }
 

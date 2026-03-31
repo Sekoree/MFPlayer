@@ -101,7 +101,8 @@ internal static class Program
             var pushed = 0L;
             var failed = 0L;
             var audioPushed = 0L;
-            var audioPts = TimeSpan.Zero; // running audio presentation timestamp
+            var audioPts = TimeSpan.Zero;
+            var ndiAudioSink = (S.Media.Core.Audio.IAudioSink)ndiOutput;
 
             TestHelpers.RunWithDeadline(seconds, () =>
             {
@@ -132,7 +133,7 @@ internal static class Program
                             SampleRate: sampleRate,
                             PresentationTime: audioPts);
 
-                        ndiOutput.PushAudio(audioFrame, audioPts);
+                        ndiAudioSink.PushFrame(in audioFrame);
                         audioPts += TimeSpan.FromSeconds((double)totalRead / sampleRate);
                         audioPushed++;
                     }

@@ -16,7 +16,7 @@ public sealed class NDIVideoSource : IVideoSource
     private static readonly TimeSpan FallbackTimeout = TimeSpan.FromMilliseconds(250);
 
     private readonly Lock _gate = new();
-    private readonly NDICaptureCoordinator? _captureCoordinator;
+    private readonly INDICaptureCoordinator? _captureCoordinator;
     private int _readInProgress;
     private bool _disposed;
     private long _framesCaptured;
@@ -34,7 +34,7 @@ public sealed class NDIVideoSource : IVideoSource
     private int _lastFrameValidLength;
     private int _lastFrameWidth;
     private int _lastFrameHeight;
-    private DateTime _lastFrameCapturedUtc;
+    private long _lastFrameCapturedTimestamp; // Stopwatch.GetTimestamp() — monotonic (Issue 5.7)
     private string _lastFrameIncomingPixelFormat = "none";
     private VideoPixelFormat _lastFrameOutputPixelFormat = VideoPixelFormat.Rgba32;
     private string _lastFrameConversionPath = "none";
@@ -44,16 +44,18 @@ public sealed class NDIVideoSource : IVideoSource
     private string _conversionPath = "none";
 
     public NDIVideoSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions)
-        : this(mediaItem, sourceOptions, captureCoordinator: null)
+        : this(mediaItem, sourceOptions, captureCoordinator: mediaItem.CaptureCoordinator)
     {
     }
 
-    internal NDIVideoSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, NDICaptureCoordinator? captureCoordinator)
+    internal NDIVideoSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions, INDICaptureCoordinator? captureCoordinator)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
         Id = Guid.NewGuid();
         SourceOptions = sourceOptions;
-        _captureCoordinator = captureCoordinator ?? (mediaItem.Receiver is null ? null : new NDICaptureCoordinator(mediaItem.Receiver));
+        // Use the provided coordinator (from the media item or the engine).
+        // If neither has one (e.g. source-only NDIMediaItem with no receiver), coordinator is null.
+        _captureCoordinator = captureCoordinator;
         _videoFallbackMode = sourceOptions.VideoFallbackMode;
         _queueOverflowPolicy = sourceOptions.QueueOverflowPolicy;
         _videoJitterBufferFrames = Math.Max(1, sourceOptions.VideoJitterBufferFrames);
@@ -205,8 +207,7 @@ public sealed class NDIVideoSource : IVideoSource
                     capture.Timestamp100Ns,
                     incomingPixelFormat,
                     outputPixelFormat,
-                    conversionPath,
-                    DateTime.UtcNow);
+                    conversionPath);
 
                 if (_lastTimestamp100ns != 0 && capture.Timestamp100Ns == _lastTimestamp100ns)
                 {
@@ -250,7 +251,6 @@ public sealed class NDIVideoSource : IVideoSource
             if (hasReceiver && !capturedFrame && repeatedTimestamp && _videoFallbackMode == NDIVideoFallbackMode.PresentLastFrameOnRepeatedTimestamp)
             {
                 if (TryGetFallbackFrame(
-                        DateTime.UtcNow,
                         out var repeatedFrame,
                         out var repeatedWidth,
                         out var repeatedHeight,
@@ -275,7 +275,6 @@ public sealed class NDIVideoSource : IVideoSource
             {
                 if (_videoFallbackMode == NDIVideoFallbackMode.PresentLastFrameUntilTimeout
                     && TryGetFallbackFrame(
-                        DateTime.UtcNow,
                         out var fallbackFrame,
                         out var fallbackWidth,
                         out var fallbackHeight,
@@ -298,13 +297,18 @@ public sealed class NDIVideoSource : IVideoSource
 
             if (hasReceiver && !capturedFrame)
             {
+                bool isBuffering;
                 lock (_gate)
                 {
                     _framesDropped++;
                     _lastReadMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                    // Frames are actively arriving but the jitter buffer has not yet primed.
+                    // Return a dedicated code so callers can distinguish "buffering" from "no signal".
+                    isBuffering = !_videoJitterPrimed && _videoJitterQueue.Count > 0;
                 }
-
-                return (int)MediaErrorCode.NDIVideoFallbackUnavailable;
+                return isBuffering
+                    ? (int)MediaErrorCode.NDIVideoBuffering
+                    : (int)MediaErrorCode.NDIVideoFallbackUnavailable;
             }
 
             rgba ??= new byte[width * height * 4];
@@ -319,7 +323,7 @@ public sealed class NDIVideoSource : IVideoSource
             }
             else if (hasReceiver && presentedFromBuffer)
             {
-                CacheFallbackFrame(rgba, frameDataLength, width, height, incomingPixelFormat, outputPixelFormat, conversionPath, DateTime.UtcNow);
+                CacheFallbackFrame(rgba, frameDataLength, width, height, incomingPixelFormat, outputPixelFormat, conversionPath);
             }
 
             frame = new VideoFrame(
@@ -399,7 +403,7 @@ public sealed class NDIVideoSource : IVideoSource
         }
     }
 
-    private void EnqueueCapturedFrame(byte[] rgba, int validLength, int width, int height, long timestamp100Ns, string incomingPixelFormat, VideoPixelFormat outputPixelFormat, string conversionPath, DateTime capturedUtc)
+    private void EnqueueCapturedFrame(byte[] rgba, int validLength, int width, int height, long timestamp100Ns, string incomingPixelFormat, VideoPixelFormat outputPixelFormat, string conversionPath)
     {
         lock (_gate)
         {
@@ -415,21 +419,28 @@ public sealed class NDIVideoSource : IVideoSource
 
                 if (_queueOverflowPolicy == NDIQueueOverflowPolicy.DropNewest)
                 {
-                    ArrayPool<byte>.Shared.Return(rgba);
+                    // Evict the most-recently-enqueued frame to make room for the incoming one.
+                    // Queue<T> is FIFO so we copy to a list, remove the last item, and re-enqueue.
+                    // For typical queue depths (≤ 9) this is inexpensive.
+                    var temp = _videoJitterQueue.ToArray();
+                    _videoJitterQueue.Clear();
+                    var evicted = temp[^1];
+                    if (evicted.IsPooled) ArrayPool<byte>.Shared.Return(evicted.Rgba);
                     _framesDropped++;
-                    return;
+                    for (var i = 0; i < temp.Length - 1; i++)
+                        _videoJitterQueue.Enqueue(temp[i]);
+                    // Fall through to enqueue the incoming frame below.
                 }
-
-                var dropped = _videoJitterQueue.Dequeue();
-                if (dropped.IsPooled)
+                else
                 {
-                    ArrayPool<byte>.Shared.Return(dropped.Rgba);
+                    // DropOldest: dequeue the head of the queue to make room.
+                    var dropped = _videoJitterQueue.Dequeue();
+                    if (dropped.IsPooled) ArrayPool<byte>.Shared.Return(dropped.Rgba);
+                    _framesDropped++;
                 }
-
-                _framesDropped++;
             }
 
-            _videoJitterQueue.Enqueue(new BufferedVideoFrame(rgba, validLength, true, width, height, timestamp100Ns, capturedUtc, incomingPixelFormat, outputPixelFormat, conversionPath));
+            _videoJitterQueue.Enqueue(new BufferedVideoFrame(rgba, validLength, true, width, height, timestamp100Ns, incomingPixelFormat, outputPixelFormat, conversionPath));
         }
     }
 
@@ -555,8 +566,7 @@ public sealed class NDIVideoSource : IVideoSource
         int height,
         string incomingPixelFormat,
         VideoPixelFormat outputPixelFormat,
-        string conversionPath,
-        DateTime capturedUtc)
+        string conversionPath)
     {
         lock (_gate)
         {
@@ -569,7 +579,7 @@ public sealed class NDIVideoSource : IVideoSource
             _lastFrameValidLength = validLength;
             _lastFrameWidth = width;
             _lastFrameHeight = height;
-            _lastFrameCapturedUtc = capturedUtc;
+            _lastFrameCapturedTimestamp = Stopwatch.GetTimestamp();
             _lastFrameIncomingPixelFormat = incomingPixelFormat;
             _lastFrameOutputPixelFormat = outputPixelFormat;
             _lastFrameConversionPath = conversionPath;
@@ -577,7 +587,6 @@ public sealed class NDIVideoSource : IVideoSource
     }
 
     private bool TryGetFallbackFrame(
-        DateTime nowUtc,
         out byte[] rgba,
         out int width,
         out int height,
@@ -600,7 +609,8 @@ public sealed class NDIVideoSource : IVideoSource
                 return false;
             }
 
-            if (_videoFallbackMode == NDIVideoFallbackMode.PresentLastFrameUntilTimeout && nowUtc - _lastFrameCapturedUtc > FallbackTimeout)
+            if (_videoFallbackMode == NDIVideoFallbackMode.PresentLastFrameUntilTimeout
+                && Stopwatch.GetElapsedTime(_lastFrameCapturedTimestamp) > FallbackTimeout)
             {
                 rgba = Array.Empty<byte>();
                 width = 0;
@@ -630,7 +640,6 @@ public sealed class NDIVideoSource : IVideoSource
         int Width,
         int Height,
         long Timestamp100Ns,
-        DateTime CapturedAtUtc,
         string IncomingPixelFormat,
         VideoPixelFormat OutputPixelFormat,
         string ConversionPath);

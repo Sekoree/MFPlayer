@@ -8,7 +8,6 @@ public sealed record NDIOutputOptions
 
     public bool EnableAudio { get; init; }
 
-    public bool ValidateCapabilitiesOnStart { get; init; } = true;
 
     public bool RequireAudioPathOnStart { get; init; }
 

@@ -146,4 +146,11 @@ public enum MediaErrorCode
     NDIInvalidDiagnosticsTickOverride = 5025,
     NDIOutputUnsupportedPixelFormat = 5026,
     NDISenderCreateFailed = 5027,
+
+    /// <summary>
+    /// Returned by <c>NDIVideoSource.ReadFrame()</c> while the jitter buffer is still priming.
+    /// Frames are actively being received from the network but the buffer has not yet reached
+    /// its configured depth. Distinct from <see cref="NDIVideoFallbackUnavailable"/> (no signal).
+    /// </summary>
+    NDIVideoBuffering = 5028,
 }
