@@ -6,13 +6,13 @@ using PALib.Types.Core;
 namespace PALib.WDMKS;
 
 [Flags]
-public enum PaWinWDMKSFlags : uint
+internal enum PaWinWDMKSFlags : uint
 {
     paWinWDMKSOverrideFramesize = 1 << 0,
     paWinWDMKSUseGivenChannelMask = 1 << 1
 }
 
-public enum PaWDMKSType
+internal enum PaWDMKSType
 {
     Type_kNotUsed,
     Type_kWaveCyclic,
@@ -20,7 +20,7 @@ public enum PaWDMKSType
     Type_kCnt
 }
 
-public enum PaWDMKSSubType
+internal enum PaWDMKSSubType
 {
     SubType_kUnknown,
     SubType_kNotification,
@@ -29,7 +29,7 @@ public enum PaWDMKSSubType
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaWinWDMKSInfo
+internal struct PaWinWDMKSInfo
 {
     public nuint size;
     public PaHostApiTypeId hostApiType;
@@ -40,7 +40,7 @@ public struct PaWinWDMKSInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PaWinWDMKSDeviceInfo
+internal unsafe struct PaWinWDMKSDeviceInfo
 {
     public const int MaxPath = 260;
     public fixed char filterPath[MaxPath];
@@ -50,7 +50,7 @@ public unsafe struct PaWinWDMKSDeviceInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaWDMKSDirectionSpecificStreamInfo
+internal struct PaWDMKSDirectionSpecificStreamInfo
 {
     public int device;
     public uint channels;
@@ -61,7 +61,7 @@ public struct PaWDMKSDirectionSpecificStreamInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaWDMKSSpecificStreamInfo
+internal struct PaWDMKSSpecificStreamInfo
 {
     public PaWDMKSDirectionSpecificStreamInfo input;
     public PaWDMKSDirectionSpecificStreamInfo output;

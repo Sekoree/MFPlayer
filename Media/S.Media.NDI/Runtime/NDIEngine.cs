@@ -198,7 +198,6 @@ public sealed class NDIEngine : IDisposable
 			var effective = outputOptions with
 			{
 				SendFormatOverride = outputOptions.SendFormatOverride ?? _integrationOptions.SendFormat,
-				RequireAudioPathOnStart = outputOptions.RequireAudioPathOnStart || _integrationOptions.RequireAudioPathOnStart,
 			};
 
 			var validate = effective.Validate();

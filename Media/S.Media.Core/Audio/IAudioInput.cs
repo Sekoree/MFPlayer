@@ -10,6 +10,12 @@ namespace S.Media.Core.Audio;
 /// <see cref="IAudioSource.Seek"/> returns
 /// <see cref="S.Media.Core.Errors.MediaErrorCode.MediaSourceNonSeekable"/> — this is a
 /// live capture source with no known total duration.
+/// <para>
+/// <b>ReadSamples layout:</b> <see cref="IAudioSource.ReadSamples"/> returns interleaved
+/// float32 samples at <see cref="Config"/>.<see cref="AudioInputConfig.SampleRate"/> Hz
+/// with <see cref="Config"/>.<see cref="AudioInputConfig.ChannelCount"/> channels per frame
+/// (i.e. <c>FrameCount × ChannelCount</c> floats written).
+/// </para>
 /// </remarks>
 public interface IAudioInput : IAudioSource
 {

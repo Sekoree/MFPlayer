@@ -4,7 +4,7 @@ using PALib.Types.Core;
 namespace PALib.ALSA;
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaAlsaStreamInfo
+internal struct PaAlsaStreamInfo
 {
     public nuint size;
     public PaHostApiTypeId hostApiType;

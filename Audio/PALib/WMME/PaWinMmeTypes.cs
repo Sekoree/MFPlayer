@@ -4,7 +4,7 @@ using PALib.WASAPI;
 
 namespace PALib.WMME;
 
-public static class PaWinMmeConstants
+internal static class PaWinMmeConstants
 {
     public const uint paWinMmeUseLowLevelLatencyParameters = 0x01;
     public const uint paWinMmeUseMultipleDevices = 0x02;
@@ -15,14 +15,14 @@ public static class PaWinMmeConstants
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaWinMmeDeviceAndChannelCount
+internal struct PaWinMmeDeviceAndChannelCount
 {
     public int device;
     public int channelCount;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaWinMmeStreamInfo
+internal struct PaWinMmeStreamInfo
 {
     public nuint size;
     public PaHostApiTypeId hostApiType;

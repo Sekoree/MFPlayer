@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.ComponentModel;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using PALib.Runtime;
 using PALib.Types.Core;
@@ -8,7 +9,10 @@ namespace PALib;
 internal static unsafe partial class Native
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
-    private static readonly ILogger Logger = PALibLogging.GetLogger("PALib.Core");
+
+    // A.1 — late-bound property so PALibLogging.Configure() is always honoured,
+    // even if called after the first Native.* reference.
+    private static ILogger Logger => PALibLogging.GetLogger("PALib.Core");
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_GetVersion")]
     private static partial int Pa_GetVersion_Import();
@@ -263,5 +267,7 @@ internal static unsafe partial class Native
     public static PaError Pa_GetSampleSize(PaSampleFormat format) => Pa_GetSampleSize_Import(format);
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_Sleep")] private static partial void Pa_Sleep_Import(nint msec);
+    [Obsolete("Use Thread.Sleep or Task.Delay instead. Pa_Sleep is a PortAudio-internal utility.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public static void Pa_Sleep(nint msec) => Pa_Sleep_Import(msec);
 }

@@ -19,6 +19,4 @@ public sealed record FFmpegOpenOptions
     public bool OpenVideo { get; init; } = true;
 
     public bool UseSharedDecodeContext { get; init; } = true;
-
-    public bool EnableExternalClockCorrection { get; init; }
 }

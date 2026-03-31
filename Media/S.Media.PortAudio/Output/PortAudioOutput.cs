@@ -33,7 +33,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
     private int _nativeFramesPerBuffer;
     private volatile bool _nativeStreaming;     // (10.6) volatile: read lock-free in PushFrame hot-path
     private volatile bool _disposed;            // (10.6) volatile: read lock-free in PushFrame hot-path
-    private AudioResampler? _resampler;
+    // C.1 — volatile so a PushFrame thread reading _resampler sees the null written by Start() under _gate.
+    private volatile AudioResampler? _resampler;
     private AudioOutputConfig _outputConfig = new();
 
     public PortAudioOutput(
@@ -248,6 +249,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
                 _nativeChannelCount = _configChannelCount;
 
                 restartResult = TryStartNativeStream();
+                // B.3 — roll back Device on failure so it stays consistent with the (closed) stream.
+                if (restartResult != MediaResult.Success)
+                    Device = previous;
             }
         }
 
@@ -409,6 +413,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
     private int TryWriteNativeFrame(in AudioFrame frame, ReadOnlySpan<int> routeMap, int sourceChannelCount)
     {
+        // E.1 — guard: only interleaved frames are supported; planar would be silently misinterpreted.
+        if (frame.Layout != AudioFrameLayout.Interleaved)
+            return (int)MediaErrorCode.MediaInvalidArgument;
         var source = frame.Samples.Span;
         var effectiveFrameCount = frame.FrameCount;
         var effectiveSourceChannelCount = sourceChannelCount;
@@ -514,8 +521,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
                         if (write == PaError.paTimedOut || write == PaError.paOutputUnderflowed)
                         {
-                            // Transient backpressure — sleep briefly and retry until deadline.
-                            Thread.Sleep(1);
+                            // C.2 — hot-spin first, then yield; avoids the ~15 ms Windows timer
+                            // granularity penalty of Thread.Sleep(1) on the first underflow.
+                            Thread.SpinWait(50);
+                            Thread.Sleep(0);
                             continue;
                         }
 
@@ -558,21 +567,20 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         _resampler?.Dispose();
         _resampler = null;
 
-        try
+        var code = AudioResampler.Create(
+            sourceSampleRate,
+            sourceChannelCount,
+            _nativeSampleRate,
+            sourceChannelCount,
+            out var resampler,
+            _outputConfig.ResamplerMode,
+            _outputConfig.ChannelMismatchPolicy);
+        if (code == MediaResult.Success)
         {
-            _resampler = new AudioResampler(
-                sourceSampleRate,
-                sourceChannelCount,
-                _nativeSampleRate,
-                sourceChannelCount,
-                _outputConfig.ResamplerMode,
-                _outputConfig.ChannelMismatchPolicy);
+            _resampler = resampler;
             return _resampler;
         }
-        catch
-        {
-            return null;
-        }
+        return null;
     }
 
     private void CloseNativeStreamIfOpen()
@@ -585,7 +593,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
         try
         {
-            _ = Native.Pa_StopStream(_stream);
+            // A.4 — AbortStream terminates immediately without draining the ring buffer.
+            // This prevents stalls on hot-unplug or misbehaving drivers in all teardown paths.
+            _ = Native.Pa_AbortStream(_stream);
             _ = Native.Pa_CloseStream(_stream);
         }
         catch

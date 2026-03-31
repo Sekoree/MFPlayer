@@ -342,7 +342,8 @@ public sealed class PortAudioEngine : IAudioEngine
         {
             if (!_outputs.Remove(output))
             {
-                return (int)MediaErrorCode.PortAudioDeviceNotFound;
+                // D.1 — "not in our list" is a bad argument, not a missing device.
+                return (int)MediaErrorCode.MediaInvalidArgument;
             }
         }
 
@@ -414,7 +415,7 @@ public sealed class PortAudioEngine : IAudioEngine
     {
         lock (_gate)
         {
-            if (!_inputs.Remove(input)) return (int)MediaErrorCode.PortAudioDeviceNotFound;
+            if (!_inputs.Remove(input)) return (int)MediaErrorCode.MediaInvalidArgument;
         }
         input.Dispose();
         return MediaResult.Success;
@@ -432,8 +433,8 @@ public sealed class PortAudioEngine : IAudioEngine
 
             if (!_nativeInitialized)
             {
-                // Native library not available; fallback devices are still in place.
-                return (int)MediaErrorCode.PortAudioNotInitialized;
+                // D.3 — engine IS initialized (fallback mode) but native runtime is unavailable.
+                return (int)MediaErrorCode.PortAudioNativeUnavailable;
             }
 
             return RefreshNativeDevices()
@@ -567,8 +568,10 @@ public sealed class PortAudioEngine : IAudioEngine
             if (init != PaError.paNoError)
             {
                 _nativeInitialized = false;
-                // Native library present but Pa_Initialize failed.
-                return (string.IsNullOrWhiteSpace(Config.PreferredHostApi), nativeFailed: true);
+                // D.2 — Pa_Initialize failed even though the DLL loaded. This is always a real
+                // error, regardless of PreferredHostApi. Only DllNotFoundException / EntryPoint /
+                // TypeInitialization (below) should fall through to the phantom-device fallback.
+                return (ok: false, nativeFailed: true);
             }
 
             _nativeInitialized = true;
@@ -675,12 +678,22 @@ public sealed class PortAudioEngine : IAudioEngine
 
                 if (info.Value.maxOutputChannels > 0)
                 {
-                    discoveredOutputs.Add(new AudioDeviceInfo(id, name, HostApi: host.Info.Id, IsDefaultOutput: isDefaultOutput));
+                    discoveredOutputs.Add(new AudioDeviceInfo(id, name,
+                        HostApi: host.Info.Id,
+                        IsDefaultOutput: isDefaultOutput,
+                        MaxInputChannels: 0,
+                        MaxOutputChannels: info.Value.maxOutputChannels,
+                        DefaultSampleRate: info.Value.defaultSampleRate > 0 ? info.Value.defaultSampleRate : null));
                 }
 
                 if (info.Value.maxInputChannels > 0)
                 {
-                    discoveredInputs.Add(new AudioDeviceInfo(id, name, HostApi: host.Info.Id, IsDefaultInput: isDefaultInput));
+                    discoveredInputs.Add(new AudioDeviceInfo(id, name,
+                        HostApi: host.Info.Id,
+                        IsDefaultInput: isDefaultInput,
+                        MaxInputChannels: info.Value.maxInputChannels,
+                        MaxOutputChannels: 0,
+                        DefaultSampleRate: info.Value.defaultSampleRate > 0 ? info.Value.defaultSampleRate : null));
                 }
             }
         }

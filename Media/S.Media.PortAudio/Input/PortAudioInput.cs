@@ -44,6 +44,8 @@ public sealed unsafe class PortAudioInput : IAudioInput
     private volatile bool _disposed;           // (10.6) volatile
     private volatile nint _stream;             // (10.6) volatile
     private volatile bool _nativeStreaming;    // (10.6) volatile
+    // B.4 — lock-free PositionSeconds: stored as bit-reinterpreted long for Interlocked access.
+    private long _positionSamplesBits;
 
     public PortAudioInput()
         : this(deviceProvider: null, defaultInputProvider: null, onDisposed: null) { }
@@ -72,7 +74,9 @@ public sealed unsafe class PortAudioInput : IAudioInput
     public AudioInputConfig Config { get; private set; }
     public AudioDeviceInfo Device { get; private set; }
     public AudioStreamInfo StreamInfo => new() { SampleRate = Config.SampleRate, ChannelCount = Config.ChannelCount };
-    public double PositionSeconds { get; private set; }
+    // B.4 — lock-free: reads the bit-reinterpreted double without acquiring _gate.
+    public double PositionSeconds =>
+        BitConverter.Int64BitsToDouble(Interlocked.Read(ref _positionSamplesBits));
     public double DurationSeconds => double.NaN;
     public event EventHandler<AudioDeviceChangedEventArgs>? AudioDeviceChanged;
 
@@ -88,10 +92,19 @@ public sealed unsafe class PortAudioInput : IAudioInput
                 return (int)MediaErrorCode.PortAudioInvalidConfig;
             if (config.SampleRate > MaxSampleRate || config.ChannelCount > MaxChannelCount || config.FramesPerBuffer > MaxFramesPerBuffer)
                 return (int)MediaErrorCode.PortAudioInvalidConfig;
-            Config = config;
+
+            // B.1 — if already running with the same config, no-op; if config differs, restart.
             if (State == AudioSourceState.Running && _nativeStreaming && _stream != nint.Zero)
-                return MediaResult.Success;
-            CloseNativeStreamIfOpen();
+            {
+                if (config.SampleRate      == Config.SampleRate &&
+                    config.ChannelCount    == Config.ChannelCount &&
+                    config.FramesPerBuffer == Config.FramesPerBuffer)
+                    return MediaResult.Success;  // truly identical — no-op is correct
+                // Config differs — close and reopen below.
+                CloseNativeStreamIfOpen();
+            }
+
+            Config = config;
             var startResult = TryStartNativeStream();
             if (startResult != MediaResult.Success) return startResult;
             State = AudioSourceState.Running;
@@ -156,7 +169,6 @@ public sealed unsafe class PortAudioInput : IAudioInput
                 return (int)MediaErrorCode.PortAudioInputReadFailed;
             config = Config;
         }
-        // (10.3) volatile snapshot after lock release
         var stream = _stream;
         if (!_nativeStreaming || stream == nint.Zero) return (int)MediaErrorCode.PortAudioInputReadFailed;
         var writableFrames = destination.Length / Math.Max(1, config.ChannelCount);
@@ -169,10 +181,14 @@ public sealed unsafe class PortAudioInput : IAudioInput
             {
                 var writtenSamples = framesRead * config.ChannelCount;
                 var vol = Volume;
-                if (vol != 1.0f && writtenSamples > 0)                 // (10.1) apply volume
+                if (vol != 1.0f && writtenSamples > 0)
                     for (var i = 0; i < writtenSamples; i++) destination[i] *= vol;
                 if (writtenSamples < destination.Length) destination[writtenSamples..].Fill(0f);
-                lock (_gate) { PositionSeconds += framesRead / (double)config.SampleRate; }
+                // B.4 — update PositionSeconds without holding _gate (diagnostic counter only).
+                var prevBits = Interlocked.Read(ref _positionSamplesBits);
+                var prevSecs = BitConverter.Int64BitsToDouble(prevBits);
+                Interlocked.Exchange(ref _positionSamplesBits,
+                    BitConverter.DoubleToInt64Bits(prevSecs + framesRead / (double)config.SampleRate));
                 return MediaResult.Success;
             }
             if (read == PaError.paInputOverflowed) return (int)MediaErrorCode.PortAudioOverflow;
@@ -208,7 +224,14 @@ public sealed unsafe class PortAudioInput : IAudioInput
             if (_disposed) return (int)MediaErrorCode.PortAudioDeviceSwitchFailed;
             previous = Device;
             Device = newDevice;
-            if (_nativeStreaming) { CloseNativeStreamIfOpen(); restartResult = TryStartNativeStream(); }
+            if (_nativeStreaming)
+            {
+                CloseNativeStreamIfOpen();
+                restartResult = TryStartNativeStream();
+                // B.3 — roll back Device on restart failure so it stays consistent with the live stream.
+                if (restartResult != MediaResult.Success)
+                    Device = previous;
+            }
         }
         if (restartResult != MediaResult.Success) return (int)MediaErrorCode.PortAudioDeviceSwitchFailed;
         if (previous != newDevice)
@@ -222,7 +245,6 @@ public sealed unsafe class PortAudioInput : IAudioInput
         try
         {
             PaError open;
-            // (5.2) Use Pa_OpenStream for specific (pa:N) devices, Pa_OpenDefaultStream otherwise.
             if (TryResolvePortAudioDeviceIndex(Device.Id, out var deviceIndex))
             {
                 var deviceInfo = Native.Pa_GetDeviceInfo(deviceIndex);
@@ -249,9 +271,15 @@ public sealed unsafe class PortAudioInput : IAudioInput
             }
             else
             {
+                // B.2 — clamp channel count against the default device's capability.
+                var defaultDeviceIndex = Native.Pa_GetDefaultInputDevice();
+                var defaultDeviceInfo  = Native.Pa_GetDeviceInfo(defaultDeviceIndex);
+                var maxCh = defaultDeviceInfo?.maxInputChannels ?? Config.ChannelCount;
+                var effectiveCh = Math.Clamp(Config.ChannelCount, 1, Math.Max(1, maxCh));
+
                 nint sh;
                 open = Native.Pa_OpenDefaultStream(out sh,
-                    numInputChannels: Config.ChannelCount, numOutputChannels: 0,
+                    numInputChannels: effectiveCh, numOutputChannels: 0,
                     sampleFormat: PaSampleFormat.paFloat32, sampleRate: Config.SampleRate,
                     framesPerBuffer: (nuint)Math.Max(1, Config.FramesPerBuffer),
                     streamCallback: (delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>)0,
@@ -270,7 +298,7 @@ public sealed unsafe class PortAudioInput : IAudioInput
             _nativeStreaming = true;
             return MediaResult.Success;
         }
-        catch (DllNotFoundException)        { _stream = nint.Zero; _nativeStreaming = false; return (int)MediaErrorCode.PortAudioStreamOpenFailed; }  // (10.4)
+        catch (DllNotFoundException)        { _stream = nint.Zero; _nativeStreaming = false; return (int)MediaErrorCode.PortAudioStreamOpenFailed; }
         catch (EntryPointNotFoundException) { _stream = nint.Zero; _nativeStreaming = false; return (int)MediaErrorCode.PortAudioStreamOpenFailed; }
         catch (TypeInitializationException) { _stream = nint.Zero; _nativeStreaming = false; return (int)MediaErrorCode.PortAudioStreamOpenFailed; }
     }
@@ -287,7 +315,12 @@ public sealed unsafe class PortAudioInput : IAudioInput
     private void CloseNativeStreamIfOpen()
     {
         if (_stream == nint.Zero) { _nativeStreaming = false; return; }
-        try   { _ = Native.Pa_StopStream(_stream); _ = Native.Pa_CloseStream(_stream); }
+        try
+        {
+            // A.4 — AbortStream for immediate teardown (no drain); prevents stalls on hot-unplug.
+            _ = Native.Pa_AbortStream(_stream);
+            _ = Native.Pa_CloseStream(_stream);
+        }
         catch { /* Best-effort */ }
         finally { _stream = nint.Zero; _nativeStreaming = false; }
     }

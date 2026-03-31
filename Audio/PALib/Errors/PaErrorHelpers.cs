@@ -2,7 +2,7 @@ using PALib.Types.Core;
 
 namespace PALib.Errors;
 
-public static class PaErrorHelpers
+internal static class PaErrorHelpers
 {
     public static string Describe(PaError error)
         => Native.Pa_GetErrorText(error) ?? error.ToString();

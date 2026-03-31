@@ -8,6 +8,10 @@
 > followed by the affected file(s), a description of the problem, and the recommended fix.
 > Items that duplicate an already-documented finding in `S.Media.PortAudio.md` or `API-Review.md`
 > cross-reference the existing entry rather than repeating the full analysis.
+>
+> **Implementation status (March 30, 2026):** All 26 issues (A.1–A.4, B.1–B.4, C.1–C.2,
+> D.1–D.3, E.1–E.4, F.1–F.4, G.1–G.6) have been implemented. Build passes with 0 errors.
+> See the [Summary Table](#8-summary-table) for individual statuses.
 
 ---
 
@@ -860,52 +864,74 @@ if (!anyRead && srcs.All(s => s.Source.State == AudioSourceState.EndOfStream))
 
 ## 8. Summary Table
 
-| ID | Severity | Component | Summary |
-|----|----------|-----------|---------|
-| G.1 | **HIGH** | AVMixer | `GetAudioOutputsSnapshot()` allocates on every audio pump iteration |
-| G.2 | **HIGH** | AVMixer | Audio routing rules re-read under lock on every pump iteration |
-| A.4 | **MEDIUM** | PALib / PortAudio{Input,Output} | `Pa_StopStream` (blocking/draining) used in all cleanup paths; should be `Pa_AbortStream` |
-| C.1 | **MEDIUM** | PortAudioOutput | `EnsureResampler` not thread-safe against concurrent `Start()` |
-| D.2 | **MEDIUM** | PortAudioEngine | `Pa_Initialize` failure + no preferred API silently reports `Initialize()` success |
-| E.1 | **MEDIUM** | AudioFrame / all sinks | `AudioFrame.Layout` (Interleaved/Planar) declared but never validated |
-| G.3 | **MEDIUM** | AVMixer | `resampledBuf` uses heap allocation; should use `ArrayPool<float>` |
-| A.1 | LOW | PALib | Static `Logger` in `Native.cs` is captured before `Configure()` runs |
-| A.2 | LOW | PALib | `Pa_Sleep` is public |
-| A.3 | LOW | PALib | `PaStructs`, `PaEnums`, `PaConstants` are public (API-Review P3.15) |
-| B.1 | LOW | PortAudioInput | `Start()` silently ignores new config when already running |
-| B.2 | LOW | PortAudioInput | `Pa_OpenDefaultStream` path doesn't clamp channel count to device capability |
-| B.3 | LOW | PortAudioInput + Output | `Device` property not rolled back on `ApplyDeviceChange` restart failure |
-| B.4 | LOW | PortAudioInput | `ReadSamples` acquires `_gate` lock to update diagnostic `PositionSeconds` |
-| D.1 | LOW | PortAudioEngine | `RemoveInput`/`RemoveOutput` return `PortAudioDeviceNotFound` for wrong reason |
-| D.3 | LOW | PortAudioEngine | `RefreshDevices` returns `PortAudioNotInitialized` when engine IS initialized (fallback mode) |
-| E.2 | LOW | AVMixerConfig | `RouteMap` is mutable `int[]`; should be `IReadOnlyList<int>` |
-| F.1 | LOW | AudioResampler | `ResampleLinear` has chunk-boundary discontinuity (no ring-buffer carry-over) |
-| F.2 | LOW | AudioResampler | `BesselI0(KaiserBeta)` recomputed on every kernel evaluation; should be cached |
-| F.3 | LOW | AudioResampler | Constructor throws instead of returning error codes |
-| G.4 | LOW | AVMixer | `sourceBufs`/`outputBufs` routing path dictionaries accumulate stale entries |
-| G.5 | LOW | AVMixer | Sample rate resolved from first source only; no warning for mismatched multi-source rates |
-| G.6 | LOW | AVMixer | Audio pump doesn't handle `EndOfStream` for audio sources (vs. video which does) |
-| C.2 | INFO | PortAudioOutput | `Thread.Sleep(1)` on underflow can sleep 15 ms on Windows |
-| E.3 | INFO | AudioDeviceInfo | Missing `MaxInputChannels`, `MaxOutputChannels`, `DefaultSampleRate` capability fields |
-| E.4 | INFO | IAudioInput | No XML doc cross-reference linking `IAudioInput` to `ReadSamples` semantics |
-| F.4 | INFO | AudioResampler | `Dispose()` sets flag only; ring buffer not cleared |
+| ID | Severity | Component | Summary | Status |
+|----|----------|-----------|---------|--------|
+| G.1 | **HIGH** | AVMixer | `GetAudioOutputsSnapshot()` allocates on every audio pump iteration | ✅ Done |
+| G.2 | **HIGH** | AVMixer | Audio routing rules re-read under lock on every pump iteration | ✅ Done |
+| A.4 | **MEDIUM** | PALib / PortAudio{Input,Output} | `Pa_StopStream` (blocking/draining) used in all cleanup paths; should be `Pa_AbortStream` | ✅ Done |
+| C.1 | **MEDIUM** | PortAudioOutput | `EnsureResampler` not thread-safe against concurrent `Start()` | ✅ Done |
+| D.2 | **MEDIUM** | PortAudioEngine | `Pa_Initialize` failure + no preferred API silently reports `Initialize()` success | ✅ Done |
+| E.1 | **MEDIUM** | AudioFrame / all sinks | `AudioFrame.Layout` (Interleaved/Planar) declared but never validated | ✅ Done |
+| G.3 | **MEDIUM** | AVMixer | `resampledBuf` uses heap allocation; should use `ArrayPool<float>` | ✅ Done |
+| A.1 | LOW | PALib | Static `Logger` in `Native.cs` is captured before `Configure()` runs | ✅ Done |
+| A.2 | LOW | PALib | `Pa_Sleep` is public | ✅ Done |
+| A.3 | LOW | PALib | `PaStructs`, `PaEnums`, `PaConstants` are public (API-Review P3.15) | ✅ Done |
+| B.1 | LOW | PortAudioInput | `Start()` silently ignores new config when already running | ✅ Done |
+| B.2 | LOW | PortAudioInput | `Pa_OpenDefaultStream` path doesn't clamp channel count to device capability | ✅ Done |
+| B.3 | LOW | PortAudioInput + Output | `Device` property not rolled back on `ApplyDeviceChange` restart failure | ✅ Done |
+| B.4 | LOW | PortAudioInput | `ReadSamples` acquires `_gate` lock to update diagnostic `PositionSeconds` | ✅ Done |
+| D.1 | LOW | PortAudioEngine | `RemoveInput`/`RemoveOutput` return `PortAudioDeviceNotFound` for wrong reason | ✅ Done |
+| D.3 | LOW | PortAudioEngine | `RefreshDevices` returns `PortAudioNotInitialized` when engine IS initialized (fallback mode) | ✅ Done |
+| E.2 | LOW | AVMixerConfig | `RouteMap` is mutable `int[]`; should be `IReadOnlyList<int>` | ✅ Done |
+| F.1 | LOW | AudioResampler | `ResampleLinear` has chunk-boundary discontinuity (no ring-buffer carry-over) | ✅ Done |
+| F.2 | LOW | AudioResampler | `BesselI0(KaiserBeta)` recomputed on every kernel evaluation; should be cached | ✅ Done |
+| F.3 | LOW | AudioResampler | Constructor throws instead of returning error codes | ✅ Done |
+| G.4 | LOW | AVMixer | `sourceBufs`/`outputBufs` routing path dictionaries accumulate stale entries | ✅ Done |
+| G.5 | LOW | AVMixer | Sample rate resolved from first source only; no warning for mismatched multi-source rates | ✅ Done |
+| G.6 | LOW | AVMixer | Audio pump doesn't handle `EndOfStream` for audio sources (vs. video which does) | ✅ Done |
+| C.2 | INFO | PortAudioOutput | `Thread.Sleep(1)` on underflow can sleep 15 ms on Windows | ✅ Done |
+| E.3 | INFO | AudioDeviceInfo | Missing `MaxInputChannels`, `MaxOutputChannels`, `DefaultSampleRate` capability fields | ✅ Done |
+| E.4 | INFO | IAudioInput | No XML doc cross-reference linking `IAudioInput` to `ReadSamples` semantics | ✅ Done |
+| F.4 | INFO | AudioResampler | `Dispose()` sets flag only; ring buffer not cleared | ✅ Done |
 
 ---
 
-### Recommended Fix Order
+### Implementation Summary (March 30, 2026)
 
-**Immediate (correctness / data-loss risk):**
-1. G.1 + G.2 — audio output list and routing-rule cache (mirrors the existing N7/video fix; one change, big impact on GC pressure)
-2. D.2 — silent `Initialize()` success on `Pa_Initialize` failure (misleads callers about audio availability)
-3. E.1 — `AudioFrame.Layout` guard at sink entry points (prevents silent audio corruption)
-4. A.4 — `Pa_AbortStream` in cleanup paths (prevents stalls on hot-unplug)
+All 26 issues were implemented in a single pass. Key changes per component:
 
-**Short-term (reliability):**
-5. C.1 — `EnsureResampler` thread-safety
-6. B.3 — `Device` rollback on restart failure
-7. G.3 — `ArrayPool` for `resampledBuf`
-8. G.4 + G.6 — stale routing dicts + EndOfStream audio handling
+**PALib** — `Native.Logger` made late-bound property (A.1); `Pa_Sleep` deprecated (A.2);
+all `PaStructs`/`PaEnums`/`PaConstants` and sub-API types made `internal` (A.3).
 
-**Housekeeping:**
-9. B.1, B.2, B.4, D.1, D.3, E.2, F.1–F.4, G.5 — all LOW/INFO items as bandwidth allows.
+**PortAudioInput** — `Pa_AbortStream` in teardown (A.4); restart on config change while
+running (B.1); channel clamp for default-device path (B.2); `Device` rollback on failure
+(B.3); lock-free `PositionSeconds` via `Interlocked` + `BitConverter` (B.4).
+
+**PortAudioOutput** — `Pa_AbortStream` (A.4); `volatile AudioResampler?` for C.1 race;
+`SpinWait(50)` + `Sleep(0)` instead of `Sleep(1)` (C.2); `Device` rollback (B.3);
+`AudioFrameLayout.Interleaved` guard at `TryWriteNativeFrame` entry (E.1);
+`AudioResampler.Create` factory used instead of constructor (F.3).
+
+**PortAudioEngine** — `RemoveInput`/`RemoveOutput` return `MediaInvalidArgument` (D.1);
+`Pa_Initialize` failure always marks native as failed (D.2); `RefreshDevices` returns new
+`PortAudioNativeUnavailable` error code (D.3); capability fields populated in
+`RefreshNativeDevices` (E.3).
+
+**AudioDeviceInfo** — `MaxInputChannels`, `MaxOutputChannels`, `DefaultSampleRate` optional
+fields added (E.3).
+
+**AudioResampler** — `_linearHistory` buffer for chunk-boundary continuity (F.1);
+`BesselI0Beta` cached as `static readonly` (F.2); `static Create(...)` factory added,
+constructor made `internal` (F.3); buffers cleared in `Dispose()` (F.4).
+
+**AVMixerConfig** — `RouteMap` changed from `int[]` to `IReadOnlyList<int>` (E.2).
+
+**IAudioInput** — `<remarks>` documenting `ReadSamples` layout semantics added (E.4).
+
+**AVMixer** — Audio output and routing-rule dirty-flag caches (G.1, G.2); `ArrayPool<float>`
+for resampled buffer (G.3); stale dict pruning (G.4); sample-rate mismatch warning (G.5);
+EndOfStream stop (G.6). `routeMap` stored as `int[]` at pump start for span conversion.
+
+**MediaErrorCode** — `PortAudioNativeUnavailable = 4318` added (D.3).
+
 

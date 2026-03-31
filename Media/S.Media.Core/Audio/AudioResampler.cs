@@ -10,6 +10,10 @@ namespace S.Media.Core.Audio;
 /// When <c>S.Media.FFmpeg</c> is available, prefer <c>FFAudioResampler</c> (backed by libswresample)
 /// for higher quality. This implementation serves as the zero-dependency fallback.
 /// </para>
+/// <para>
+/// Use the static <see cref="Create"/> factory to construct an instance using the project's
+/// error-code convention instead of exceptions.
+/// </para>
 /// </summary>
 public sealed class AudioResampler : IAudioResampler
 {
@@ -17,6 +21,9 @@ public sealed class AudioResampler : IAudioResampler
     private const int SincKernelHalfSize = 32;
     private const int SincKernelSize = SincKernelHalfSize * 2;
     private const double KaiserBeta = 5.0;
+
+    // F.2 — cache the denominator; BesselI0(KaiserBeta) is constant for the lifetime of the class.
+    private static readonly double BesselI0Beta = BesselI0(KaiserBeta);
 
     private readonly int _sourceSampleRate;
     private readonly int _sourceChannelCount;
@@ -34,12 +41,43 @@ public sealed class AudioResampler : IAudioResampler
     private int _ringWritePos;
     private int _ringValidSamples;
 
+    // F.1 — last source frame from previous call, used as s0 for linear interpolation at chunk boundaries.
+    private float[]? _linearHistory; // length = sourceChannelCount (allocated lazily)
+
     private bool _disposed;
+
+    // ── F.3: static factory ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a resampler using the project's error-code convention.
+    /// Returns <see cref="S.Media.Core.Errors.MediaResult.Success"/> and populates
+    /// <paramref name="resampler"/> on success; returns an error code and sets
+    /// <paramref name="resampler"/> to <see langword="null"/> on invalid arguments.
+    /// </summary>
+    public static int Create(
+        int sourceSampleRate,
+        int sourceChannelCount,
+        int targetSampleRate,
+        int targetChannelCount,
+        out AudioResampler? resampler,
+        AudioResamplerMode mode = AudioResamplerMode.Sinc,
+        ChannelMismatchPolicy channelPolicy = ChannelMismatchPolicy.Drop)
+    {
+        resampler = null;
+        if (sourceSampleRate  <= 0) return (int)S.Media.Core.Errors.MediaErrorCode.MediaInvalidArgument;
+        if (sourceChannelCount <= 0) return (int)S.Media.Core.Errors.MediaErrorCode.MediaInvalidArgument;
+        if (targetSampleRate  <= 0) return (int)S.Media.Core.Errors.MediaErrorCode.MediaInvalidArgument;
+        if (targetChannelCount <= 0) return (int)S.Media.Core.Errors.MediaErrorCode.MediaInvalidArgument;
+        resampler = new AudioResampler(sourceSampleRate, sourceChannelCount,
+            targetSampleRate, targetChannelCount, mode, channelPolicy);
+        return S.Media.Core.Errors.MediaResult.Success;
+    }
 
     /// <summary>
     /// Creates a resampler for the given source→target conversion.
+    /// Prefer the <see cref="Create"/> factory for error-code-based error handling.
     /// </summary>
-    public AudioResampler(
+    internal AudioResampler(
         int sourceSampleRate,
         int sourceChannelCount,
         int targetSampleRate,
@@ -151,11 +189,17 @@ public sealed class AudioResampler : IAudioResampler
         _ringWritePos = 0;
         _ringValidSamples = 0;
         Array.Clear(_ringBuffer);
+        // F.1 — also clear linear history so the next chunk starts fresh.
+        if (_linearHistory is not null) Array.Clear(_linearHistory);
     }
 
     public void Dispose()
     {
+        if (_disposed) return;
         _disposed = true;
+        // F.4 — zero buffers so any use-after-dispose reads zero rather than stale audio data.
+        Array.Clear(_ringBuffer);
+        if (_linearHistory is not null) Array.Clear(_linearHistory);
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -247,7 +291,6 @@ public sealed class AudioResampler : IAudioResampler
 
             if (_sourceChannelCount == 1)
             {
-                // Mono: duplicate to both
                 var idx = srcBase;
                 var val = idx < source.Length ? source[idx] : 0f;
                 left = val;
@@ -257,7 +300,6 @@ public sealed class AudioResampler : IAudioResampler
             }
             else
             {
-                // Even-indexed → left, odd-indexed → right
                 for (var ch = 0; ch < _sourceChannelCount; ch++)
                 {
                     var idx = srcBase + ch;
@@ -273,7 +315,6 @@ public sealed class AudioResampler : IAudioResampler
             if (_targetChannelCount >= 2)
                 dest[dstBase + 1] = rightCount > 0 ? right / rightCount : 0f;
 
-            // Zero-fill any remaining target channels
             for (var ch = 2; ch < _targetChannelCount; ch++)
                 dest[dstBase + ch] = 0f;
         }
@@ -285,10 +326,13 @@ public sealed class AudioResampler : IAudioResampler
 
     private int ResampleLinear(ReadOnlySpan<float> source, int inputFrameCount, int channelCount, Span<float> destination)
     {
+        // F.1 — ensure history buffer is allocated.
+        if (_linearHistory is null || _linearHistory.Length < channelCount)
+            _linearHistory = new float[channelCount];
+
         var outputFrames = 0;
         var maxOutputFrames = destination.Length / channelCount;
         var frac = _fractionalPosition;
-
 
         while (outputFrames < maxOutputFrames)
         {
@@ -304,10 +348,18 @@ public sealed class AudioResampler : IAudioResampler
 
             for (var ch = 0; ch < channelCount; ch++)
             {
-                var s0Idx = intPos * channelCount + ch;
-                var s1Idx = nextPos * channelCount + ch;
+                // F.1 — when intPos == 0 and frac started negative (carry-over from previous chunk),
+                // the "previous" sample is in _linearHistory; otherwise read from the current source.
+                float s0;
+                if (intPos == 0 && frac < 0.0)
+                    s0 = ch < _linearHistory.Length ? _linearHistory[ch] : 0f;
+                else
+                {
+                    var s0Idx = intPos * channelCount + ch;
+                    s0 = s0Idx < source.Length ? source[s0Idx] : 0f;
+                }
 
-                var s0 = s0Idx < source.Length ? source[s0Idx] : 0f;
+                var s1Idx = nextPos * channelCount + ch;
                 var s1 = s1Idx < source.Length ? source[s1Idx] : s0;
 
                 destination[dstBase + ch] = s0 + t * (s1 - s0);
@@ -315,6 +367,17 @@ public sealed class AudioResampler : IAudioResampler
 
             outputFrames++;
             frac += _ratio;
+        }
+
+        // F.1 — save the last source frame as history for the next call.
+        var lastFrame = inputFrameCount - 1;
+        if (lastFrame >= 0)
+        {
+            for (var ch = 0; ch < channelCount; ch++)
+            {
+                var idx = lastFrame * channelCount + ch;
+                _linearHistory[ch] = idx < source.Length ? source[idx] : 0f;
+            }
         }
 
         // Store the residual fractional position relative to unconsumed input
@@ -341,21 +404,15 @@ public sealed class AudioResampler : IAudioResampler
         var halfSize = SincKernelHalfSize;
 
         // Snapshot ring buffer state for read-only look-back during this call.
-        // _ringWritePos and _ringValidSamples reflect history from PREVIOUS calls only.
         var historyWritePos = _ringWritePos;
         var historyValidSamples = _ringValidSamples;
 
-        // The kernel needs look-ahead of halfSize samples beyond intPos.
-        // Stop producing output when we'd need samples beyond the current input.
-        // Those deferred output frames are produced at the start of the next chunk
-        // via a negative fractional position carry-over.
         var inputLimit = inputFrameCount - halfSize;
 
         while (outputFrames < maxOutputFrames)
         {
             var intPos = (int)Math.Floor(frac);
 
-            // Stop when the kernel would need future samples past the current input
             if (intPos >= inputLimit)
                 break;
 
@@ -374,15 +431,12 @@ public sealed class AudioResampler : IAudioResampler
 
                     if (inputFrame >= 0 && inputFrame < inputFrameCount)
                     {
-                        // Current chunk
                         var srcIdx = inputFrame * channelCount + ch;
                         sample = srcIdx < source.Length ? source[srcIdx] : 0f;
                     }
                     else if (inputFrame < 0)
                     {
-                        // Look back into ring buffer history from previous calls.
-                        // Frame at position -1 = most recent history frame.
-                        var age = -inputFrame; // 1-based
+                        var age = -inputFrame;
                         if (age <= historyValidSamples)
                         {
                             var ringIdx = ((historyWritePos - age) % SincKernelSize + SincKernelSize) % SincKernelSize;
@@ -411,8 +465,7 @@ public sealed class AudioResampler : IAudioResampler
             frac += _ratio;
         }
 
-        // Update ring buffer with ALL frames from the current chunk (for next call's look-back).
-        // If inputFrameCount > SincKernelSize, only the last SincKernelSize frames matter.
+        // Update ring buffer with frames from the current chunk for the next call's look-back.
         var startFrame = Math.Max(0, inputFrameCount - SincKernelSize);
         for (var f = startFrame; f < inputFrameCount; f++)
         {
@@ -429,10 +482,6 @@ public sealed class AudioResampler : IAudioResampler
                 _ringValidSamples++;
         }
 
-        // Carry-over fractional position relative to next chunk's input origin.
-        // This CAN be negative: deferred output frames from the tail of this chunk
-        // will be produced at the start of the next chunk, with the ring buffer
-        // providing the look-back context and the new chunk providing the look-ahead.
         _fractionalPosition = frac - inputFrameCount;
 
         return outputFrames;
@@ -461,16 +510,15 @@ public sealed class AudioResampler : IAudioResampler
             return 0.0;
 
         var arg = KaiserBeta * Math.Sqrt(1.0 - r * r);
-        return BesselI0(arg) / BesselI0(KaiserBeta);
+        // F.2 — use pre-computed BesselI0Beta as denominator (no recomputation per kernel sample).
+        return BesselI0(arg) / BesselI0Beta;
     }
 
     /// <summary>
     /// Modified Bessel function of the first kind, order 0.
-    /// Computed via the series expansion.
     /// </summary>
     private static double BesselI0(double x)
     {
-        // I0(x) = Σ_{k=0}^{∞} [(x/2)^k / k!]^2
         var sum = 1.0;
         var term = 1.0;
         var halfX = x * 0.5;

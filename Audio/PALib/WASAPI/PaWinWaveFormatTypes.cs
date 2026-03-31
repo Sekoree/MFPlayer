@@ -5,7 +5,7 @@ using PALib.Types.Core;
 namespace PALib.WASAPI;
 
 [Flags]
-public enum PaWinWaveFormatChannelMask : uint
+internal enum PaWinWaveFormatChannelMask : uint
 {
     PAWIN_SPEAKER_FRONT_LEFT = 0x1,
     PAWIN_SPEAKER_FRONT_RIGHT = 0x2,
@@ -36,7 +36,7 @@ public enum PaWinWaveFormatChannelMask : uint
     PAWIN_SPEAKER_7POINT1_SURROUND = PAWIN_SPEAKER_FRONT_LEFT | PAWIN_SPEAKER_FRONT_RIGHT | PAWIN_SPEAKER_FRONT_CENTER | PAWIN_SPEAKER_LOW_FREQUENCY | PAWIN_SPEAKER_BACK_LEFT | PAWIN_SPEAKER_BACK_RIGHT | PAWIN_SPEAKER_SIDE_LEFT | PAWIN_SPEAKER_SIDE_RIGHT
 }
 
-public static class PaWinWaveFormatConstants
+internal static class PaWinWaveFormatConstants
 {
     public const int PAWIN_SIZEOF_WAVEFORMATEX = 18;
     public const int PAWIN_SIZEOF_WAVEFORMATEXTENSIBLE = PAWIN_SIZEOF_WAVEFORMATEX + 22;
@@ -48,7 +48,7 @@ public static class PaWinWaveFormatConstants
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PaWinWaveFormat
+internal unsafe struct PaWinWaveFormat
 {
     public fixed byte fields[PaWinWaveFormatConstants.PAWIN_SIZEOF_WAVEFORMATEXTENSIBLE];
     public uint extraLongForAlignment;

@@ -9,5 +9,4 @@ public sealed class NDIIntegrationOptions
 
     public NDIVideoSendFormat SendFormat { get; init; } = NDIVideoSendFormat.Program;
 
-    public bool RequireAudioPathOnStart { get; init; }
 }

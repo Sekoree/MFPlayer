@@ -8,7 +8,7 @@ using System.Diagnostics;
 
 namespace S.Media.NDI.Output;
 
-public sealed class NDIVideoOutput : IVideoOutput
+public sealed class NDIVideoOutput : IVideoOutput, IAudioSink
 {
     private readonly Lock _gate = new();
     private bool _disposed;
@@ -34,7 +34,11 @@ public sealed class NDIVideoOutput : IVideoOutput
 
     public Guid Id { get; }
 
+    /// <summary>Video output state. Use <c>((IAudioSink)this).State</c> for <see cref="AudioOutputState"/>.</summary>
     public VideoOutputState State => _running ? VideoOutputState.Running : VideoOutputState.Stopped;
+
+    // IAudioSink.State — same lifecycle, different enum.
+    AudioOutputState IAudioSink.State => _running ? AudioOutputState.Running : AudioOutputState.Stopped;
 
     public string OutputName { get; }
 
@@ -55,6 +59,8 @@ public sealed class NDIVideoOutput : IVideoOutput
             }
         }
     }
+
+    // ── IVideoOutput.Start ────────────────────────────────────────────────────
 
     public int Start(VideoOutputConfig config)
     {
@@ -80,8 +86,7 @@ public sealed class NDIVideoOutput : IVideoOutput
         // Dispose any previous sender outside the lock.
         oldSender?.Dispose();
 
-        NDISender? newSender;
-        var createErr = NDISender.Create(out newSender,
+        var createErr = NDISender.Create(out var newSender,
             senderName: OutputName,
             clockVideo: Options.ClockVideo,
             clockAudio: Options.ClockAudio);
@@ -102,7 +107,28 @@ public sealed class NDIVideoOutput : IVideoOutput
         }
     }
 
-    public int Start() => Start(new VideoOutputConfig());
+    // ── IAudioSink.Start ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts this output as an audio sink. If the NDI sender is already running (started
+    /// via <see cref="Start(VideoOutputConfig)"/>), returns <see cref="MediaResult.Success"/>
+    /// immediately. Otherwise creates the sender with a default video config.
+    /// </summary>
+    int IAudioSink.Start(AudioOutputConfig config)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return (int)MediaErrorCode.MediaObjectDisposed;
+            if (_running)
+                return MediaResult.Success;
+        }
+
+        // Start sender with a default video config — NDI senders are A/V combined.
+        return Start(new VideoOutputConfig());
+    }
+
+    // ── Stop (serves both IVideoOutput.Stop and IAudioSink.Stop) ─────────────
 
     public int Stop()
     {
@@ -122,6 +148,9 @@ public sealed class NDIVideoOutput : IVideoOutput
         return MediaResult.Success;
     }
 
+    // ── IVideoOutput.PushFrame ────────────────────────────────────────────────
+    // P1.9: capture sender ref under lock, release lock before native SendVideo call.
+
     public int PushFrame(VideoFrame frame) => PushFrame(frame, frame.PresentationTime);
 
     public int PushFrame(VideoFrame frame, TimeSpan presentationTime)
@@ -129,106 +158,145 @@ public sealed class NDIVideoOutput : IVideoOutput
         var started = Stopwatch.GetTimestamp();
         var frameValidation = frame.ValidateForPush();
 
+        NDISender? sender;
         lock (_gate)
         {
-            if (_disposed)
+            if (_disposed || frameValidation != MediaResult.Success || !_running || _sender is null)
             {
-                _videoPushFailures++;
+                Interlocked.Increment(ref _videoPushFailures);
                 _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-                return (int)MediaErrorCode.NDIOutputPushVideoFailed;
+                return _disposed ? (int)MediaErrorCode.MediaObjectDisposed
+                    : frameValidation != MediaResult.Success ? frameValidation
+                    : (int)MediaErrorCode.NDIOutputPushVideoFailed;
             }
-
-            if (frameValidation != MediaResult.Success)
-            {
-                _videoPushFailures++;
-                _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-                return frameValidation;
-            }
-
-            if (!_running || _sender is null)
-            {
-                _videoPushFailures++;
-                _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-                return (int)MediaErrorCode.NDIOutputPushVideoFailed;
-            }
-
-            var result = PushFrameCore(frame, presentationTime);
-
-            if (result == MediaResult.Success)
-                _videoPushSuccesses++;
-            else
-                _videoPushFailures++;
-
-            _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            return result;
+            sender = _sender;
         }
+
+        // Native SendVideo call happens outside the lock (P1.9).
+        var result = PushFrameCore(frame, presentationTime, sender);
+
+        if (result == MediaResult.Success)
+            Interlocked.Increment(ref _videoPushSuccesses);
+        else
+            Interlocked.Increment(ref _videoPushFailures);
+        _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        return result;
     }
 
+    // ── IAudioSink.PushFrame ──────────────────────────────────────────────────
+
+    int IAudioSink.PushFrame(in AudioFrame frame, ReadOnlySpan<int> routeMap)
+        => PushAudioInternal(in frame, routeMap, frame.SourceChannelCount);
+
+    int IAudioSink.PushFrame(in AudioFrame frame, ReadOnlySpan<int> routeMap, int sourceChannelCount)
+        => PushAudioInternal(in frame, routeMap, sourceChannelCount);
+
+    // ── Legacy PushAudio (kept for source compatibility, redirects to IAudioSink) ──
+
+    /// <summary>
+    /// Pushes an audio frame to the NDI stream.
+    /// </summary>
+    /// <remarks>
+    /// Prefer casting to <see cref="IAudioSink"/> and calling <c>PushFrame</c>,
+    /// which supports explicit channel routing.
+    /// </remarks>
     public int PushAudio(in AudioFrame frame, TimeSpan presentationTime)
+    {
+        var ch = frame.SourceChannelCount;
+        if (ch <= 0) return PushAudioInternal(in frame, ReadOnlySpan<int>.Empty, 0);
+        Span<int> identity = stackalloc int[ch];
+        for (var i = 0; i < ch; i++) identity[i] = i;
+        return PushAudioInternal(in frame, identity, ch);
+    }
+
+    // ── Internal audio push ────────────────────────────────────────────────────
+
+    private int PushAudioInternal(in AudioFrame frame, ReadOnlySpan<int> routeMap, int sourceChannelCount)
     {
         var started = Stopwatch.GetTimestamp();
 
+        NDISender? sender;
         lock (_gate)
         {
-            if (_disposed)
+            if (_disposed || !_running || _sender is null)
             {
-                _audioPushFailures++;
+                Interlocked.Increment(ref _audioPushFailures);
                 _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-                return (int)MediaErrorCode.NDIOutputPushAudioFailed;
+                return _disposed ? (int)MediaErrorCode.MediaObjectDisposed
+                    : (int)MediaErrorCode.NDIOutputPushAudioFailed;
             }
 
             if (!Options.EnableAudio)
             {
-                _audioPushFailures++;
+                Interlocked.Increment(ref _audioPushFailures);
                 _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
                 return (int)MediaErrorCode.NDIOutputAudioStreamDisabled;
             }
 
-            if (!_running || _sender is null)
-            {
-                _audioPushFailures++;
-                _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-                return (int)MediaErrorCode.NDIOutputPushAudioFailed;
-            }
-
-            var result = PushAudioCore(frame, presentationTime);
-
-            if (result == MediaResult.Success)
-                _audioPushSuccesses++;
-            else
-                _audioPushFailures++;
-
-            _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            return result;
+            sender = _sender;
         }
+
+        // Native SendAudio call happens outside the lock (P1.9).
+        var result = PushAudioCore(in frame, frame.PresentationTime, routeMap, sourceChannelCount, sender);
+
+        if (result == MediaResult.Success)
+            Interlocked.Increment(ref _audioPushSuccesses);
+        else
+            Interlocked.Increment(ref _audioPushFailures);
+        _lastPushMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        return result;
     }
 
-    private unsafe int PushAudioCore(in AudioFrame frame, TimeSpan presentationTime)
+    private unsafe int PushAudioCore(in AudioFrame frame, TimeSpan presentationTime,
+        ReadOnlySpan<int> routeMap, int sourceChannelCount, NDISender sender)
     {
         if (frame.FrameCount <= 0 || frame.SourceChannelCount <= 0 || frame.SampleRate <= 0)
             return (int)MediaErrorCode.NDIOutputPushAudioFailed;
 
-        var channels = frame.SourceChannelCount;
+        var srcChannels = Math.Max(1, sourceChannelCount > 0 ? sourceChannelCount : frame.SourceChannelCount);
+        var outputChannels = routeMap.IsEmpty ? frame.SourceChannelCount : routeMap.Length;
         var samplesPerChannel = frame.FrameCount;
-        var totalFloats = channels * samplesPerChannel;
+        var totalFloats = outputChannels * samplesPerChannel;
 
         EnsureAudioStagingBuffer(totalFloats);
 
         var src = frame.Samples.Span;
 
-        if (frame.Layout == AudioFrameLayout.Planar)
+        if (routeMap.IsEmpty)
         {
-            // Already planar: [ch0_s0..ch0_sN, ch1_s0..ch1_sN, ...]
-            src.Slice(0, totalFloats).CopyTo(_audioStagingBuffer.AsSpan(0, totalFloats));
+            // Identity path — no remapping needed.
+            if (frame.Layout == AudioFrameLayout.Planar)
+            {
+                src.Slice(0, totalFloats).CopyTo(_audioStagingBuffer.AsSpan(0, totalFloats));
+            }
+            else
+            {
+                // Interleaved → planar
+                for (var ch = 0; ch < outputChannels; ch++)
+                    for (var s = 0; s < samplesPerChannel; s++)
+                        _audioStagingBuffer![ch * samplesPerChannel + s] = src[s * outputChannels + ch];
+            }
         }
         else
         {
-            // Interleaved → deinterleave: [ch0_s0, ch1_s0, ..., ch0_s1, ch1_s1, ...] → planar
-            for (var ch = 0; ch < channels; ch++)
+            // Route-map path: routeMap[outputCh] = sourceCh.
+            if (frame.Layout == AudioFrameLayout.Planar)
             {
-                for (var s = 0; s < samplesPerChannel; s++)
+                for (var outCh = 0; outCh < outputChannels; outCh++)
                 {
-                    _audioStagingBuffer![ch * samplesPerChannel + s] = src[s * channels + ch];
+                    var srcCh = Math.Clamp(routeMap[outCh], 0, srcChannels - 1);
+                    for (var s = 0; s < samplesPerChannel; s++)
+                        _audioStagingBuffer![outCh * samplesPerChannel + s] = src[srcCh * samplesPerChannel + s];
+                }
+            }
+            else
+            {
+                // Interleaved → planar with route map
+                for (var outCh = 0; outCh < outputChannels; outCh++)
+                {
+                    var srcCh = Math.Clamp(routeMap[outCh], 0, srcChannels - 1);
+                    for (var s = 0; s < samplesPerChannel; s++)
+                        _audioStagingBuffer![outCh * samplesPerChannel + s] = src[s * srcChannels + srcCh];
                 }
             }
         }
@@ -238,7 +306,7 @@ public sealed class NDIVideoOutput : IVideoOutput
             var ndiFrame = new NdiAudioFrameV3
             {
                 SampleRate = frame.SampleRate,
-                NoChannels = channels,
+                NoChannels = outputChannels,
                 NoSamples = samplesPerChannel,
                 Timecode = presentationTime.Ticks,
                 FourCC = NdiFourCCAudioType.Fltp,
@@ -247,7 +315,7 @@ public sealed class NDIVideoOutput : IVideoOutput
                 PMetadata = nint.Zero,
                 Timestamp = presentationTime.Ticks,
             };
-            _sender!.SendAudio(ndiFrame);
+            sender.SendAudio(ndiFrame);
         }
 
         return MediaResult.Success;
@@ -277,9 +345,8 @@ public sealed class NDIVideoOutput : IVideoOutput
         senderToDispose?.Dispose();
     }
 
-    private unsafe int PushFrameCore(VideoFrame frame, TimeSpan presentationTime)
+    private unsafe int PushFrameCore(VideoFrame frame, TimeSpan presentationTime, NDISender sender)
     {
-        // NDI timecode is in 100-nanosecond units — same as TimeSpan.Ticks.
         var timecode = presentationTime.Ticks;
         var frameRateN = Options.FrameRateN;
         var frameRateD = Options.FrameRateD;
@@ -307,7 +374,7 @@ public sealed class NDIVideoOutput : IVideoOutput
                     PMetadata = nint.Zero,
                     Timestamp = timecode,
                 };
-                _sender!.SendVideo(ndiFrame);
+                sender.SendVideo(ndiFrame);
                 return MediaResult.Success;
             }
 
@@ -329,14 +396,12 @@ public sealed class NDIVideoOutput : IVideoOutput
                     PMetadata = nint.Zero,
                     Timestamp = timecode,
                 };
-                _sender!.SendVideo(ndiFrame);
+                sender.SendVideo(ndiFrame);
                 return MediaResult.Success;
             }
 
             case VideoPixelFormat.Nv12:
             {
-                // NDI NV12 layout: Y plane immediately followed by interleaved UV plane,
-                // both sharing the same stride.
                 var yStride = frame.Plane0Stride;
                 var uvStride = frame.Plane1Stride;
                 var ySize = yStride * frame.Height;
@@ -363,14 +428,13 @@ public sealed class NDIVideoOutput : IVideoOutput
                         PMetadata = nint.Zero,
                         Timestamp = timecode,
                     };
-                    _sender!.SendVideo(ndiFrame);
+                    sender.SendVideo(ndiFrame);
                 }
                 return MediaResult.Success;
             }
 
             case VideoPixelFormat.Yuv420P:
             {
-                // NDI I420 layout: Y, then U, then V planes consecutively.
                 var yStride = frame.Plane0Stride;
                 var uStride = frame.Plane1Stride;
                 var vStride = frame.Plane2Stride;
@@ -401,7 +465,7 @@ public sealed class NDIVideoOutput : IVideoOutput
                         PMetadata = nint.Zero,
                         Timestamp = timecode,
                     };
-                    _sender!.SendVideo(ndiFrame);
+                    sender.SendVideo(ndiFrame);
                 }
                 return MediaResult.Success;
             }

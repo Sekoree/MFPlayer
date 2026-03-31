@@ -6,7 +6,7 @@ using PALib.Types.Core;
 namespace PALib.WASAPI;
 
 [Flags]
-public enum PaWasapiFlags : uint
+internal enum PaWasapiFlags : uint
 {
     paWinWasapiExclusive = 1 << 0,
     paWinWasapiRedirectHostProcessor = 1 << 1,
@@ -18,7 +18,7 @@ public enum PaWasapiFlags : uint
 }
 
 [Flags]
-public enum PaWasapiStreamState : uint
+internal enum PaWasapiStreamState : uint
 {
     paWasapiStreamStateError = 1 << 0,
     paWasapiStreamStateThreadPrepare = 1 << 1,
@@ -26,7 +26,7 @@ public enum PaWasapiStreamState : uint
     paWasapiStreamStateThreadStop = 1 << 3
 }
 
-public enum PaWasapiDeviceRole : int
+internal enum PaWasapiDeviceRole : int
 {
     eRoleRemoteNetworkDevice = 0,
     eRoleSpeakers,
@@ -41,7 +41,7 @@ public enum PaWasapiDeviceRole : int
     eRoleUnknownFormFactor
 }
 
-public enum PaWasapiJackConnectionType : int
+internal enum PaWasapiJackConnectionType : int
 {
     eJackConnTypeUnknown,
     eJackConnType3Point5mm,
@@ -57,7 +57,7 @@ public enum PaWasapiJackConnectionType : int
     eJackConnTypeCombination
 }
 
-public enum PaWasapiJackGeoLocation : int
+internal enum PaWasapiJackGeoLocation : int
 {
     eJackGeoLocUnk = 0,
     eJackGeoLocRear = 0x1,
@@ -77,7 +77,7 @@ public enum PaWasapiJackGeoLocation : int
     eJackGeoLocReserved6
 }
 
-public enum PaWasapiJackGenLocation : int
+internal enum PaWasapiJackGenLocation : int
 {
     eJackGenLocPrimaryBox = 0,
     eJackGenLocInternal,
@@ -85,7 +85,7 @@ public enum PaWasapiJackGenLocation : int
     eJackGenLocOther
 }
 
-public enum PaWasapiJackPortConnection : int
+internal enum PaWasapiJackPortConnection : int
 {
     eJackPortConnJack = 0,
     eJackPortConnIntegratedDevice,
@@ -93,7 +93,7 @@ public enum PaWasapiJackPortConnection : int
     eJackPortConnUnknown
 }
 
-public enum PaWasapiThreadPriority : int
+internal enum PaWasapiThreadPriority : int
 {
     eThreadPriorityNone = 0,
     eThreadPriorityAudio,
@@ -105,7 +105,7 @@ public enum PaWasapiThreadPriority : int
     eThreadPriorityWindowManager
 }
 
-public enum PaWasapiStreamCategory : int
+internal enum PaWasapiStreamCategory : int
 {
     eAudioCategoryOther = 0,
     eAudioCategoryCommunications = 3,
@@ -119,7 +119,7 @@ public enum PaWasapiStreamCategory : int
     eAudioCategoryMedia = 11
 }
 
-public enum PaWasapiStreamOption : int
+internal enum PaWasapiStreamOption : int
 {
     eStreamOptionNone = 0,
     eStreamOptionRaw = 1,
@@ -127,13 +127,13 @@ public enum PaWasapiStreamOption : int
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-public delegate void PaWasapiHostProcessorCallback(nint inputBuffer, nint inputFrames, nint outputBuffer, nint outputFrames, nint userData);
+internal delegate void PaWasapiHostProcessorCallback(nint inputBuffer, nint inputFrames, nint outputBuffer, nint outputFrames, nint userData);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-public delegate void PaWasapiStreamStateCallback(nint stream, uint stateFlags, uint errorId, nint userData);
+internal delegate void PaWasapiStreamStateCallback(nint stream, uint stateFlags, uint errorId, nint userData);
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaWasapiJackDescription
+internal struct PaWasapiJackDescription
 {
     public uint channelMapping;
     public uint color;
@@ -145,7 +145,7 @@ public struct PaWasapiJackDescription
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaWasapiStreamInfo
+internal struct PaWasapiStreamInfo
 {
     public nuint size;
     public PaHostApiTypeId hostApiType;

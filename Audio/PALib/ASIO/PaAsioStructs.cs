@@ -3,13 +3,13 @@ using PALib.Types.Core;
 
 namespace PALib.ASIO;
 
-public static class PaAsioConstants
+internal static class PaAsioConstants
 {
     public const uint paAsioUseChannelSelectors = 0x01;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaAsioStreamInfo
+internal struct PaAsioStreamInfo
 {
     public nuint size;
     public PaHostApiTypeId hostApiType;

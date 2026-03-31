@@ -33,7 +33,7 @@ public sealed class AVMixerConfig
     /// Maps output channel indices to source channel indices.
     /// Length determines the output channel count.
     /// </summary>
-    public int[] RouteMap { get; init; } = [0, 1];
+    public IReadOnlyList<int> RouteMap { get; init; } = [0, 1];
 
     /// <summary>
     /// Target output sample rate. <c>0</c> = use the primary source's sample rate.

@@ -3,7 +3,7 @@ using PALib.Types.Core;
 
 namespace PALib.CoreAudio;
 
-public static class PaMacCoreConstants
+internal static class PaMacCoreConstants
 {
     public const uint paMacCoreChangeDeviceParameters = 0x01;
     public const uint paMacCoreFailIfConversionRequired = 0x02;
@@ -19,7 +19,7 @@ public static class PaMacCoreConstants
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaMacCoreStreamInfo
+internal struct PaMacCoreStreamInfo
 {
     public nuint size;
     public PaHostApiTypeId hostApiType;

@@ -1,6 +1,6 @@
 namespace PALib.Types.Core;
 
-public static class PaConstants
+internal static class PaConstants
 {
     public const int paNoDevice = -1;
     public const int paUseHostApiSpecificDeviceSpecification = -2;

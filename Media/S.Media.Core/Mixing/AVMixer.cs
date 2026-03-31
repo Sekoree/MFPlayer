@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using S.Media.Core.Audio;
@@ -164,6 +165,13 @@ public class AVMixer : IAVMixer
     // ── cached sources snapshot flag (§10.10) — set on source list changes ───
     private volatile bool _audioSourcesNeedsUpdate = true;
 
+    // ── cached audio-output / routing-rule snapshots (mirrors N7 for video) ──
+    // G.1 — avoids per-frame GetAudioOutputsSnapshot() allocation in AudioPumpLoop.
+    private volatile bool _audioOutputsNeedsUpdate      = true;
+    private volatile bool _audioRoutingRulesNeedsUpdate = true;
+    private IAudioSink[]        _audioOutputsCache      = [];
+    private AudioRoutingRule[]  _audioRoutingRulesCache = [];
+
     // ── cached video-output / routing-rule snapshots (N7) ────────────────────
     // Avoids per-frame lock acquisition and list allocation in the hot PushFrameToOutputs path.
     private volatile bool _videoOutputsNeedsUpdate      = true;
@@ -211,9 +219,26 @@ public class AVMixer : IAVMixer
     public IReadOnlyList<VideoRoutingRule> VideoRoutingRules
     { get { lock (_gate) return [.. _videoRoutingRules]; } }
 
-    public int AddAudioRoutingRule(AudioRoutingRule rule)    { lock (_gate) _audioRoutingRules.Add(rule);    return MediaResult.Success; }
-    public int RemoveAudioRoutingRule(AudioRoutingRule rule) { lock (_gate) _audioRoutingRules.Remove(rule); return MediaResult.Success; }
-    public int ClearAudioRoutingRules()                     { lock (_gate) _audioRoutingRules.Clear();       return MediaResult.Success; }
+    public int AddAudioRoutingRule(AudioRoutingRule rule)
+    {
+        lock (_gate) _audioRoutingRules.Add(rule);
+        _audioRoutingRulesNeedsUpdate = true;
+        return MediaResult.Success;
+    }
+
+    public int RemoveAudioRoutingRule(AudioRoutingRule rule)
+    {
+        lock (_gate) _audioRoutingRules.Remove(rule);
+        _audioRoutingRulesNeedsUpdate = true;
+        return MediaResult.Success;
+    }
+
+    public int ClearAudioRoutingRules()
+    {
+        lock (_gate) _audioRoutingRules.Clear();
+        _audioRoutingRulesNeedsUpdate = true;
+        return MediaResult.Success;
+    }
     public int AddVideoRoutingRule(VideoRoutingRule rule)
     {
         lock (_gate) _videoRoutingRules.Add(rule);
@@ -435,8 +460,21 @@ public class AVMixer : IAVMixer
         return MediaResult.Success;
     }
 
-    public int AddAudioOutput(IAudioSink output)    { ArgumentNullException.ThrowIfNull(output); lock (_gate) _audioOutputs.Add(output);    return MediaResult.Success; }
-    public int RemoveAudioOutput(IAudioSink output) { ArgumentNullException.ThrowIfNull(output); lock (_gate) _audioOutputs.Remove(output); return MediaResult.Success; }
+    public int AddAudioOutput(IAudioSink output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        lock (_gate) _audioOutputs.Add(output);
+        _audioOutputsNeedsUpdate = true;
+        return MediaResult.Success;
+    }
+
+    public int RemoveAudioOutput(IAudioSink output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        lock (_gate) _audioOutputs.Remove(output);
+        _audioOutputsNeedsUpdate = true;
+        return MediaResult.Success;
+    }
 
     public int AddVideoOutput(IVideoOutput output)
     {
@@ -652,7 +690,7 @@ public class AVMixer : IAVMixer
     {
         var config = _playbackConfig!;
         var sourceChannels = Math.Max(1, config.SourceChannelCount);
-        var routeMap = config.RouteMap?.Length > 0 ? config.RouteMap : [0, 1];
+        var routeMap = (config.RouteMap?.Count > 0 ? config.RouteMap : (IReadOnlyList<int>)[0, 1]).ToArray();
         var framesPerBatch = config.AudioReadFrames > 0 ? config.AudioReadFrames : 1024;
         var mixBuf  = new float[framesPerBatch * sourceChannels];
         var tempBuf = new float[framesPerBatch * sourceChannels];
@@ -663,14 +701,14 @@ public class AVMixer : IAVMixer
         var sourceFrames = new Dictionary<Guid, int>();
 
         // Per-output mix buffers for the routing path.
-        // Keyed by output Id; sized to framesPerBatch * outputChannelCount (derived from rules).
         var outputBufs = new Dictionary<Guid, float[]>();
 
-        // Per-source resamplers, created lazily when a source's rate != sampleRate (§10.9 / P2-6).
-        // Only populated when config.ResamplerFactory != null.
+        // Per-source resamplers, created lazily when a source's rate != sampleRate.
         var resamplers = new Dictionary<Guid, IAudioResampler>();
-        // Resampler output buffer, sized on demand.
-        float[]? resampledBuf = null;
+
+        // G.1/G.2 — local caches, refreshed via dirty flags (no per-frame lock/allocation).
+        IAudioSink[]       audioOutputsCache      = [];
+        AudioRoutingRule[] audioRoutingRulesCache = [];
 
         // Bootstrap snapshot before the loop.
         (IAudioSource Source, double StartOffset)[] srcs = GetAudioSourcesSnapshot().ToArray();
@@ -699,29 +737,54 @@ public class AVMixer : IAVMixer
                 ClearVideoQueue();
                 _audioTimelineSeconds = seekPos;
                 _clock.Seek(seekPos);
-                foreach (var (src, _) in srcs)                      _ = src.Seek(seekPos);
-                foreach (var vSrc in GetVideoSourcesSnapshot())      _ = vSrc.Seek(seekPos);
-                // Reset resampler fractional state after a seek.
+                foreach (var (src, _) in srcs)                  _ = src.Seek(seekPos);
+                foreach (var vSrc in GetVideoSourcesSnapshot()) _ = vSrc.Seek(seekPos);
                 foreach (var r in resamplers.Values) r.Reset();
                 continue;
             }
 
-            // Refresh cached snapshot only when the source list changed.
+            // Refresh audio source snapshot when the list changed.
             if (_audioSourcesNeedsUpdate)
             {
                 srcs = GetAudioSourcesSnapshot().ToArray();
                 _audioSourcesNeedsUpdate = false;
+
+                // G.4 — prune stale source buffers and resamplers.
+                var activeIds = new HashSet<Guid>(srcs.Length);
+                foreach (var (s, _) in srcs) activeIds.Add(s.Id);
+                foreach (var key in sourceBufs.Keys.Where(k => !activeIds.Contains(k)).ToList())
+                    sourceBufs.Remove(key);
+                foreach (var key in resamplers.Keys.Where(k => !activeIds.Contains(k)).ToList())
+                { resamplers[key].Dispose(); resamplers.Remove(key); }
+            }
+
+            // G.1 — refresh audio outputs cache.
+            if (_audioOutputsNeedsUpdate)
+            {
+                lock (_gate) { audioOutputsCache = [.. _audioOutputs]; }
+                _audioOutputsNeedsUpdate = false;
+
+                // G.4 — prune stale output mix buffers.
+                var activeOutIds = new HashSet<Guid>(audioOutputsCache.Length);
+                foreach (var o in audioOutputsCache) activeOutIds.Add(o.Id);
+                foreach (var key in outputBufs.Keys.Where(k => !activeOutIds.Contains(k)).ToList())
+                    outputBufs.Remove(key);
+            }
+
+            // G.2 — refresh audio routing rules cache.
+            if (_audioRoutingRulesNeedsUpdate)
+            {
+                lock (_gate)
+                {
+                    audioRoutingRulesCache = _audioRoutingRules.Count > 0
+                        ? [.. _audioRoutingRules]
+                        : [];
+                }
+                _audioRoutingRulesNeedsUpdate = false;
             }
 
             var timelineSeconds = (double)timelineSamples / sampleRate;
-
-            // ── choose path based on routing rules ────────────────────────────
-            AudioRoutingRule[]? rules = null;
-            lock (_gate)
-            {
-                if (_audioRoutingRules.Count > 0)
-                    rules = [.. _audioRoutingRules];
-            }
+            var rules = audioRoutingRulesCache.Length > 0 ? audioRoutingRulesCache : (AudioRoutingRule[]?)null;
 
             if (rules is null)
             {
@@ -735,33 +798,38 @@ public class AVMixer : IAVMixer
                     if (src.State != AudioSourceState.Running) continue;
                     if (timelineSeconds < offset) continue;
 
+                    // G.5 — warn when a source rate differs and no resampler is configured.
+                    var srcRate = src.StreamInfo.SampleRate.GetValueOrDefault(0);
+                    if (srcRate > 0 && srcRate != sampleRate && config.ResamplerFactory == null)
+                        AudioSourceError?.Invoke(this, new MediaSourceErrorEventArgs(src.Id,
+                            (int)Errors.MediaErrorCode.AudioSampleRateMismatch, null));
+
                     Array.Clear(tempBuf, 0, tempBuf.Length);
                     var readCode = src.ReadSamples(tempBuf, framesPerBatch, out var fr);
-                    if (readCode == MediaResult.Success && fr > 0)
+                    if (readCode == Errors.MediaResult.Success && fr > 0)
                     {
-                        // ── Optional resampling (§10.9 / P2-6) ───────────────────────
-                        var srcRate = src.StreamInfo.SampleRate.GetValueOrDefault(0);
                         if (config.ResamplerFactory != null && srcRate > 0 && srcRate != sampleRate)
                         {
-                            // Get or create a resampler for this source.
                             if (!resamplers.TryGetValue(src.Id, out var resampler))
                                 resamplers[src.Id] = resampler = config.ResamplerFactory(srcRate, sampleRate);
 
-                            // Ensure the output buffer is large enough.
+                            // G.3 — use ArrayPool for the resampled buffer.
                             var needed = resampler.EstimateOutputFrameCount(fr) * sourceChannels;
-                            if (resampledBuf is null || resampledBuf.Length < needed)
-                                resampledBuf = new float[needed];
-
-                            var outFrames = resampler.Resample(
-                                new ReadOnlySpan<float>(tempBuf, 0, fr * sourceChannels),
-                                fr, new Span<float>(resampledBuf, 0, needed));
-
-                            if (outFrames > 0)
+                            var resampledRented = System.Buffers.ArrayPool<float>.Shared.Rent(needed);
+                            try
                             {
-                                anyRead = true;
-                                if (outFrames > framesProduced) framesProduced = outFrames;
-                                AudioMixUtils.MixInto(mixBuf, resampledBuf, outFrames * sourceChannels, src.Volume);
+                                var outFrames = resampler.Resample(
+                                    new ReadOnlySpan<float>(tempBuf, 0, fr * sourceChannels),
+                                    fr, new Span<float>(resampledRented, 0, needed));
+
+                                if (outFrames > 0)
+                                {
+                                    anyRead = true;
+                                    if (outFrames > framesProduced) framesProduced = outFrames;
+                                    AudioMixUtils.MixInto(mixBuf, resampledRented, outFrames * sourceChannels, src.Volume);
+                                }
                             }
+                            finally { System.Buffers.ArrayPool<float>.Shared.Return(resampledRented, clearArray: false); }
                         }
                         else
                         {
@@ -773,9 +841,7 @@ public class AVMixer : IAVMixer
                     else
                     {
                         Interlocked.Increment(ref _audioReadFailures);
-                        // (10.8) Notify subscribers of source read failures so they can react
-                        // (e.g. display a warning, stop the source, switch to a fallback).
-                        if (readCode != MediaResult.Success)
+                        if (readCode != Errors.MediaResult.Success)
                             AudioSourceError?.Invoke(this, new MediaSourceErrorEventArgs(src.Id, readCode, null));
                     }
                 }
@@ -783,6 +849,12 @@ public class AVMixer : IAVMixer
                 if (!anyRead)
                 {
                     Interlocked.Increment(ref _audioEmptyReads);
+                    // G.6 — if all audio sources are at end-of-stream, stop playback.
+                    if (srcs.Length > 0 && srcs.All(s => s.Source.State == AudioSourceState.EndOfStream))
+                    {
+                        _ = StopPlayback();
+                        break;
+                    }
                     Thread.Sleep(1);
                     continue;
                 }
@@ -791,10 +863,11 @@ public class AVMixer : IAVMixer
                 AudioMixUtils.Clamp(mixBuf, active);
                 AudioMixUtils.ApplyVolume(mixBuf, active, MasterVolume);
 
+                // G.1 — use pre-cached outputs snapshot (no allocation or lock per frame).
                 var frame = BuildAudioFrame(mixBuf, framesProduced, sourceChannels, sampleRate, timelineSeconds);
-                foreach (var output in GetAudioOutputsSnapshot())
+                foreach (var output in audioOutputsCache)
                 {
-                    if (output.PushFrame(in frame, routeMap, sourceChannels) != MediaResult.Success)
+                    if (output.PushFrame(in frame, routeMap, sourceChannels) != Errors.MediaResult.Success)
                         Interlocked.Increment(ref _audioPushFailures);
                     else
                         Interlocked.Increment(ref _audioPushedFrames);
@@ -806,7 +879,6 @@ public class AVMixer : IAVMixer
             else
             {
                 // ── ROUTING PATH: read each source once, then mix per-output ──
-                // This allows per-source-to-output filtering with per-rule gain.
                 sourceFrames.Clear();
                 var framesProduced = 0;
                 var anyRead = false;
@@ -822,7 +894,7 @@ public class AVMixer : IAVMixer
 
                     Array.Clear(sbuf, 0, size);
                     var readCode = src.ReadSamples(sbuf, framesPerBatch, out var fr);
-                    if (readCode == MediaResult.Success && fr > 0)
+                    if (readCode == Errors.MediaResult.Success && fr > 0)
                     {
                         anyRead = true;
                         if (fr > framesProduced) framesProduced = fr;
@@ -831,7 +903,7 @@ public class AVMixer : IAVMixer
                     else
                     {
                         Interlocked.Increment(ref _audioReadFailures);
-                        if (readCode != MediaResult.Success)
+                        if (readCode != Errors.MediaResult.Success)
                             AudioSourceError?.Invoke(this, new MediaSourceErrorEventArgs(src.Id, readCode, null));
                         sourceFrames[src.Id] = 0;
                     }
@@ -840,47 +912,41 @@ public class AVMixer : IAVMixer
                 if (!anyRead)
                 {
                     Interlocked.Increment(ref _audioEmptyReads);
+                    // G.6 — end-of-stream check for routing path.
+                    if (srcs.Length > 0 && srcs.All(s => s.Source.State == AudioSourceState.EndOfStream))
+                    {
+                        _ = StopPlayback();
+                        break;
+                    }
                     Thread.Sleep(1);
                     continue;
                 }
 
-                var outputs = GetAudioOutputsSnapshot();
-
-                foreach (var output in outputs)
+                // G.1 — use pre-cached outputs snapshot.
+                foreach (var output in audioOutputsCache)
                 {
-                    // ── Determine output channel count from rules targeting this output ──
-                    // The output channel count equals max(rule.OutputChannel) + 1 across all
-                    // rules that target this output.  Zero means no rules — skip.
                     var outChanCount = 0;
                     foreach (var r in rules)
                         if (r.OutputId == output.Id && r.OutputChannel + 1 > outChanCount)
                             outChanCount = r.OutputChannel + 1;
                     if (outChanCount == 0) continue;
 
-                    // ── Get / resize the per-output mix buffer ──
                     var outSize = framesProduced * outChanCount;
                     if (!outputBufs.TryGetValue(output.Id, out var outBuf) || outBuf.Length < outSize)
                         outputBufs[output.Id] = outBuf = new float[outSize];
                     Array.Clear(outBuf, 0, outSize);
 
-                    // ── Mix each source's channels into the output buffer via routing rules ──
                     foreach (var (src, _) in srcs)
                     {
                         if (!sourceBufs.TryGetValue(src.Id, out var sbuf)) continue;
                         if (!sourceFrames.TryGetValue(src.Id, out var fr) || fr == 0) continue;
 
                         var srcVol = src.Volume;
-
-                        // Apply ALL rules for this source→output pair.
-                        // Multiple rules are normal: e.g. (ch0→ch0, gain=1) + (ch1→ch1, gain=1).
                         foreach (var r in rules)
                         {
                             if (r.SourceId != src.Id || r.OutputId != output.Id) continue;
-
-                            // Guard against out-of-range channel indices.
                             if ((uint)r.SourceChannel >= (uint)sourceChannels) continue;
                             if ((uint)r.OutputChannel  >= (uint)outChanCount)   continue;
-
                             AudioMixUtils.MixChannel(
                                 outBuf, r.OutputChannel, outChanCount,
                                 sbuf,   r.SourceChannel, sourceChannels,
@@ -888,14 +954,11 @@ public class AVMixer : IAVMixer
                         }
                     }
 
-                    // ── Post-process and push ──
                     AudioMixUtils.Clamp(outBuf, outSize);
                     AudioMixUtils.ApplyVolume(outBuf, outSize, MasterVolume);
 
-                    // Build a frame whose channel count matches the output layout derived from rules.
-                    // Use the identity PushFrame overload — outBuf is already routed correctly.
                     var outFrame = BuildAudioFrame(outBuf, framesProduced, outChanCount, sampleRate, timelineSeconds);
-                    if (output.PushFrame(in outFrame) != MediaResult.Success)
+                    if (output.PushFrame(in outFrame) != Errors.MediaResult.Success)
                         Interlocked.Increment(ref _audioPushFailures);
                     else
                         Interlocked.Increment(ref _audioPushedFrames);
@@ -908,7 +971,6 @@ public class AVMixer : IAVMixer
         }
         finally
         {
-            // Dispose any per-source resamplers created during this playback session.
             foreach (var r in resamplers.Values) r.Dispose();
             resamplers.Clear();
         }
@@ -1092,8 +1154,6 @@ public class AVMixer : IAVMixer
     private List<IVideoSource> GetVideoSourcesSnapshot()
     { lock (_gate) { return [.. _videoSources]; } }
 
-    private List<IAudioSink> GetAudioOutputsSnapshot()
-    { lock (_gate) { return [.. _audioOutputs]; } }
 
     private void ClearVideoQueue()
     {

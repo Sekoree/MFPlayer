@@ -203,6 +203,10 @@ public sealed class FFAudioSource : IAudioSource
     public int TryGetEffectiveChannelMap(out FFAudioChannelMap map)
     {
         var channelCount = StreamInfo.ChannelCount.GetValueOrDefault(2);
+        // OutputChannelCountOverride limits the number of output channels produced.
+        var outputChannelCount = Options.OutputChannelCountOverride is > 0
+            ? Options.OutputChannelCountOverride.Value
+            : channelCount;
 
         if (Options.MappingPolicy == FFAudioChannelMappingPolicy.ApplyExplicitRouteMap)
         {
@@ -225,6 +229,16 @@ public sealed class FFAudioSource : IAudioSource
         if (Options.MappingPolicy == FFAudioChannelMappingPolicy.DownmixToStereo)
         {
             map = new FFAudioChannelMap(channelCount, 2, [0, Math.Min(1, channelCount - 1)]);
+            return MediaResult.Success;
+        }
+
+        // PreserveSourceLayout — apply override if set.
+        if (outputChannelCount != channelCount)
+        {
+            var clampedOutput = Math.Min(outputChannelCount, channelCount);
+            var indices = new int[clampedOutput];
+            for (var i = 0; i < clampedOutput; i++) indices[i] = i;
+            map = new FFAudioChannelMap(channelCount, clampedOutput, indices);
             return MediaResult.Success;
         }
 

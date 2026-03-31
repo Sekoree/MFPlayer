@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace PALib.Types.Core;
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaVersionInfo
+internal struct PaVersionInfo
 {
     public int versionMajor;
     public int versionMinor;
@@ -16,7 +16,7 @@ public struct PaVersionInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaHostApiInfo
+internal struct PaHostApiInfo
 {
     public int structVersion;
     public PaHostApiTypeId type;
@@ -29,7 +29,7 @@ public struct PaHostApiInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaHostErrorInfo
+internal struct PaHostErrorInfo
 {
     public PaHostApiTypeId hostApiType;
     public nint errorCode;
@@ -39,7 +39,7 @@ public struct PaHostErrorInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaDeviceInfo
+internal struct PaDeviceInfo
 {
     public int structVersion;
     public nint name;
@@ -56,7 +56,7 @@ public struct PaDeviceInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaStreamParameters
+internal struct PaStreamParameters
 {
     public int device;
     public int channelCount;
@@ -66,7 +66,7 @@ public struct PaStreamParameters
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaStreamCallbackTimeInfo
+internal struct PaStreamCallbackTimeInfo
 {
     public double inputBufferAdcTime;
     public double currentTime;
@@ -74,7 +74,7 @@ public struct PaStreamCallbackTimeInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PaStreamInfo
+internal struct PaStreamInfo
 {
     public int structVersion;
     public double inputLatency;

@@ -186,9 +186,46 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
     }
 
     /// <summary>
-    /// Opens a media item from a URI, returning both audio and video sources via shared decode context.
-    /// Throws <see cref="DecodingException"/> on failure.
+    /// Creates a media item from the given options without throwing.
     /// </summary>
+    /// <param name="options">Open and decode options.</param>
+    /// <param name="item">On success, the opened media item. <see langword="null"/> on failure.</param>
+    /// <returns><c>0</c> on success; a <see cref="MediaErrorCode"/> value on failure.</returns>
+    public static int Create(FFmpegOpenOptions options, out FFMediaItem? item)
+    {
+        item = null;
+        ArgumentNullException.ThrowIfNull(options);
+        try
+        {
+            item = new FFMediaItem(options);
+            return MediaResult.Success;
+        }
+        catch (DecodingException ex)
+        {
+            return (int)ex.ErrorCode;
+        }
+    }
+
+    /// <summary>
+    /// Creates a media item from a URI without throwing.
+    /// </summary>
+    /// <param name="uri">Input URI or file path.</param>
+    /// <param name="item">On success, the opened media item. <see langword="null"/> on failure.</param>
+    /// <returns><c>0</c> on success; a <see cref="MediaErrorCode"/> value on failure.</returns>
+    public static int Create(string uri, out FFMediaItem? item)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(uri);
+        return Create(new FFmpegOpenOptions { InputUri = uri }, out item);
+    }
+
+    /// <summary>
+    /// Opens a media item from a URI, returning both audio and video sources via shared decode context.
+    /// </summary>
+    /// <remarks>
+    /// <b>Prefer <see cref="Create(string,out FFMediaItem?)"/></b> — it returns an integer error
+    /// code instead of throwing. This overload is kept for compatibility.
+    /// </remarks>
+    [Obsolete("Use FFMediaItem.Create(uri, out item) which returns an int error code instead of throwing.")]
     public static FFMediaItem Open(string uri)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(uri);
@@ -196,9 +233,13 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
     }
 
     /// <summary>
-    /// Opens a media item from a <see cref="Stream"/>, returning both audio and video sources via shared decode context.
-    /// Throws <see cref="DecodingException"/> on failure.
+    /// Opens a media item from a <see cref="Stream"/>.
     /// </summary>
+    /// <remarks>
+    /// <b>Prefer <see cref="Create(FFmpegOpenOptions,out FFMediaItem?)"/></b> — it returns an
+    /// integer error code instead of throwing. This overload is kept for compatibility.
+    /// </remarks>
+    [Obsolete("Use FFMediaItem.Create(options, out item) which returns an int error code instead of throwing.")]
     public static FFMediaItem Open(Stream stream, bool leaveOpen = true)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -209,50 +250,98 @@ public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDyna
     /// Attempts to open a media item from a URI without throwing.
     /// Returns <c>true</c> on success; <paramref name="item"/> is <c>null</c> on failure.
     /// </summary>
+    /// <remarks>Prefer <see cref="Create(string,out FFMediaItem?)"/> for consistent error-code semantics.</remarks>
+    [Obsolete("Use FFMediaItem.Create(uri, out item) which returns an int error code.")]
     public static bool TryOpen(string uri, out FFMediaItem? item)
     {
         item = null;
         if (string.IsNullOrWhiteSpace(uri))
-        {
             return false;
-        }
-
-        try
-        {
-            item = Open(uri);
-            return true;
-        }
-        catch (DecodingException)
-        {
-            return false;
-        }
+        return Create(uri, out item) == MediaResult.Success;
     }
 
     /// <summary>
     /// Attempts to open a media item from a <see cref="Stream"/> without throwing.
     /// Returns <c>true</c> on success; <paramref name="item"/> is <c>null</c> on failure.
     /// </summary>
+    /// <remarks>Prefer <see cref="Create(FFmpegOpenOptions,out FFMediaItem?)"/> for consistent error-code semantics.</remarks>
+    [Obsolete("Use FFMediaItem.Create(options, out item) which returns an int error code.")]
     public static bool TryOpen(Stream? stream, out FFMediaItem? item, bool leaveOpen = true)
     {
         item = null;
         if (stream is null)
-        {
             return false;
-        }
-
-        try
-        {
-            item = Open(stream, leaveOpen);
-            return true;
-        }
-        catch (DecodingException)
-        {
-            return false;
-        }
+        return Create(new FFmpegOpenOptions { InputStream = stream, LeaveInputStreamOpen = leaveOpen }, out item) == MediaResult.Success;
     }
 
+    /// <summary>
+    /// Seeks all playback sources to <paramref name="positionSeconds"/> via the shared demux
+    /// session when one exists, or falls through to per-source seek otherwise.
+    /// </summary>
+    /// <remarks>
+    /// When audio and video sources share an <see cref="FFSharedDemuxSession"/>, this method
+    /// seeks once and both sources are repositioned atomically. Calling
+    /// <see cref="FFAudioSource.Seek"/> and <see cref="FFVideoSource.Seek"/> independently on
+    /// sources that share a session can corrupt the decoder state.
+    /// </remarks>
+    /// <returns><c>0</c> on success; a <see cref="MediaErrorCode"/> value on failure.</returns>
+    public int Seek(double positionSeconds)
+    {
+        if (!double.IsFinite(positionSeconds) || positionSeconds < 0)
+            return (int)MediaErrorCode.MediaInvalidArgument;
+
+        if (_sharedDemuxSession is not null)
+        {
+            var seekCode = _sharedDemuxSession.Seek(positionSeconds);
+            if (seekCode != MediaResult.Success)
+                return seekCode;
+
+            // Update position tracking on all owned sources.
+            foreach (var src in _playbackAudioSources)
+                if (src is FFAudioSource ff) ff.Seek(positionSeconds);
+            foreach (var src in _playbackVideoSources)
+                if (src is FFVideoSource fv) fv.Seek(positionSeconds);
+
+            return MediaResult.Success;
+        }
+
+        // No shared session — seek each source independently.
+        var result = MediaResult.Success;
+        foreach (var src in _playbackAudioSources)
+        {
+            var r = src.Seek(positionSeconds);
+            if (r != MediaResult.Success) result = r;
+        }
+        foreach (var src in _playbackVideoSources)
+        {
+            var r = src.Seek(positionSeconds);
+            if (r != MediaResult.Success) result = r;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The primary FFmpeg audio source, or <see langword="null"/> if this item was constructed
+    /// from an external source list or without audio (<c>OpenAudio = false</c>).
+    /// </summary>
+    /// <remarks>
+    /// <b>Warning:</b> Do not use this as a null-check for "has audio".
+    /// Check <c>PlaybackAudioSources.Count &gt; 0</c> instead — <see cref="AudioSource"/> can be
+    /// <see langword="null"/> even when <see cref="PlaybackAudioSources"/> is non-empty (composite
+    /// constructor path with non-<see cref="FFAudioSource"/> entries).
+    /// </remarks>
     public FFAudioSource? AudioSource { get; }
 
+    /// <summary>
+    /// The primary FFmpeg video source, or <see langword="null"/> if this item was constructed
+    /// from an external source list or without video (<c>OpenVideo = false</c>).
+    /// </summary>
+    /// <remarks>
+    /// <b>Warning:</b> Do not use this as a null-check for "has video".
+    /// Check <c>PlaybackVideoSources.Count &gt; 0</c> instead — <see cref="VideoSource"/> can be
+    /// <see langword="null"/> even when <see cref="PlaybackVideoSources"/> is non-empty (composite
+    /// constructor path with non-<see cref="FFVideoSource"/> entries).
+    /// </remarks>
     public FFVideoSource? VideoSource { get; }
 
     public FFmpegOpenOptions? ResolvedOpenOptions { get; }

@@ -88,6 +88,12 @@ public enum MediaErrorCode
     PortAudioInputStartFailed = 4315,
     PortAudioInputStopFailed = 4316,
     PortAudioInputReadFailed = 4317,
+    /// <summary>
+    /// The PortAudio native library loaded successfully but the engine is running in
+    /// fallback/phantom-device mode because <c>Pa_Initialize</c> failed or the native
+    /// runtime became unavailable after initialization.
+    /// </summary>
+    PortAudioNativeUnavailable = 4318,
 
     OpenGLCloneParentNotFound = 4400,
     OpenGLCloneAlreadyAttached = 4401,

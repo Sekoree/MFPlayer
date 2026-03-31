@@ -2,7 +2,7 @@
 
 namespace PALib.Types.Core;
 
-public enum PaError : int
+internal enum PaError : int
 {
     paNoError = 0,
     paNotInitialized = -10000,
@@ -36,7 +36,7 @@ public enum PaError : int
     paBadBufferPtr
 }
 
-public enum PaHostApiTypeId : int
+internal enum PaHostApiTypeId : int
 {
     paInDevelopment = 0,
     paDirectSound = 1,
@@ -55,7 +55,7 @@ public enum PaHostApiTypeId : int
 }
 
 [Flags]
-public enum PaSampleFormat : ulong
+internal enum PaSampleFormat : ulong
 {
     paFloat32 = 0x00000001,
     paInt32 = 0x00000002,
@@ -68,7 +68,7 @@ public enum PaSampleFormat : ulong
 }
 
 [Flags]
-public enum PaStreamFlags : ulong
+internal enum PaStreamFlags : ulong
 {
     paNoFlag = 0,
     paClipOff = 0x00000001,
@@ -79,7 +79,7 @@ public enum PaStreamFlags : ulong
 }
 
 [Flags]
-public enum PaStreamCallbackFlags : ulong
+internal enum PaStreamCallbackFlags : ulong
 {
     paInputUnderflow = 0x00000001,
     paInputOverflow = 0x00000002,
@@ -88,7 +88,7 @@ public enum PaStreamCallbackFlags : ulong
     paPrimingOutput = 0x00000010
 }
 
-public enum PaStreamCallbackResult : int
+internal enum PaStreamCallbackResult : int
 {
     paContinue = 0,
     paComplete = 1,
