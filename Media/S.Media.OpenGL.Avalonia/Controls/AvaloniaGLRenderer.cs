@@ -390,17 +390,15 @@ internal sealed class AvaloniaGLRenderer : IDisposable
     {
         if (planeData.IsEmpty || width <= 0 || height <= 0) return;
 
-        // Set row length for strided uploads
-        var stridePixels = type == GL_UNSIGNED_SHORT
-            ? planeStride / 2
-            : planeStride;
-
-        if (format == GL_RG || format == GlConsts.GL_RGBA)
+        // GL_UNPACK_ROW_LENGTH is specified in pixels (texels), not bytes.
+        // bytes-per-pixel = components × bytes-per-component
+        var bytesPerPixel = format switch
         {
-            stridePixels = format == GL_RG
-                ? planeStride / 2
-                : planeStride / 4;
-        }
+            var f when f == GlConsts.GL_RGBA => 4,        // 4 × GL_UNSIGNED_BYTE
+            var f when f == GL_RG            => type == GL_UNSIGNED_SHORT ? 4 : 2,   // 2 × 2 or 2 × 1
+            _                                => type == GL_UNSIGNED_SHORT ? 2 : 1,   // 1 × 2 or 1 × 1
+        };
+        var stridePixels = planeStride / bytesPerPixel;
 
         _pixelStoreI?.Invoke(GL_UNPACK_ALIGNMENT, 1);
         _pixelStoreI?.Invoke(GL_UNPACK_ROW_LENGTH, stridePixels);

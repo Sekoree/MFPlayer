@@ -16,7 +16,7 @@ public sealed class OpenGLDiagnosticsContractsTests
         var raised = false;
         eventsHub.SurfaceChanged += (_, surface) => raised = surface.SurfaceWidth == 2;
 
-        eventsHub.PublishSurfaceChanged(new OpenGLSurfaceMetadata(2, 2, 2, 2, VideoPixelFormat.Rgba32, 1, new[] { 8 }, 1));
+        eventsHub.PublishSurfaceChanged(new OpenGLSurfaceMetadata(2, 2, VideoPixelFormat.Rgba32, 1, new[] { 8 }, 1));
 
         Assert.True(raised);
     }
@@ -29,7 +29,8 @@ public sealed class OpenGLDiagnosticsContractsTests
         eventsHub.DiagnosticsUpdated += (_, _) => raised++;
         eventsHub.Dispose();
 
-        eventsHub.PublishDiagnosticsUpdated(Guid.NewGuid(), new OpenGLOutputDebugInfo(1, 0, 0, 0.1, 0.2, OpenGLSurfaceMetadata.Empty));
+        eventsHub.PublishDiagnosticsUpdated(Guid.NewGuid(),
+            new VideoOutputDiagnosticsSnapshot(1, 0, 0, 0.1, 0.2, OpenGLSurfaceMetadata.Empty));
 
         Assert.Equal(0, raised);
     }
@@ -85,7 +86,7 @@ public sealed class OpenGLDiagnosticsContractsTests
         using var frame = CreateFrame();
         frame.Dispose();
 
-        OpenGLOutputDebugInfo? observed = null;
+        VideoOutputDiagnosticsSnapshot? observed = null;
         engine.Diagnostics.DiagnosticsUpdated += (_, e) =>
         {
             if (e.OutputId == output.Id)

@@ -2,7 +2,7 @@ namespace S.Media.OpenGL.Output;
 
 public sealed record OpenGLCloneOptions
 {
-    public OpenGLCloneMode Mode { get; init; } = OpenGLCloneMode.SharedTexture;
+    public OpenGLCloneMode Mode { get; init; } = OpenGLCloneMode.CopyFallback;
 
     /// <summary>
     /// When <see langword="true"/> (default), the clone automatically tracks the parent
@@ -10,10 +10,8 @@ public sealed record OpenGLCloneOptions
     /// </summary>
     public bool AutoResizeToParent { get; init; } = true;
 
-    // Reserved until shared-context path (CloneMode) is implemented (see Issue B2).
-    internal bool ShareParentColorPipeline { get; init; } = true;
-
-    internal bool FailIfContextSharingUnavailable { get; init; } = true;
+    // TODO(B2): ShareParentColorPipeline and FailIfContextSharingUnavailable reserved for
+    //           the shared-GL-context path. Restore as public properties when B2 is implemented.
 
     public OpenGLHUDCloneMode HudMode { get; init; } = OpenGLHUDCloneMode.Independent;
 

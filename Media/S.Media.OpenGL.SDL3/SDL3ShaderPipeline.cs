@@ -10,7 +10,7 @@ namespace S.Media.OpenGL.SDL3;
 /// Mirrors the proven standalone rendering path from <see cref="SDL3VideoView"/> and the
 /// Avalonia renderer, supporting all 11 <see cref="VideoPixelFormat"/> values including 10-bit.
 /// </summary>
-public sealed class SDL3ShaderPipeline : IDisposable
+internal sealed class SDL3ShaderPipeline : IDisposable
 {
     // GL constants
     private const int GL_TEXTURE_2D = 0x0DE1;
@@ -35,15 +35,9 @@ public sealed class SDL3ShaderPipeline : IDisposable
     private const int GL_UNPACK_ALIGNMENT = 0x0CF5;
     private const int GL_UNSIGNED_BYTE = 0x1401;
     private const int GL_UNSIGNED_SHORT = 0x1403;
-    private const int GL_RGBA = 0x1908;
-    private const int GL_BGRA = 0x80E1;
     private const int GL_RGBA8 = 0x8058;
-    private const int GL_R8 = 0x8229;
-    private const int GL_RG8 = 0x822B;
-    private const int GL_R16 = 0x822A;
-    private const int GL_RG16 = 0x822C;
-    private const int GL_RED = 0x1903;
-    private const int GL_RG = 0x8227;
+    private const int GL_BGRA  = 0x80E1;
+    private const int GL_RGBA  = 0x1908;
 
     // GL delegate types
     private delegate void GlClearColorProc(float r, float g, float b, float a);
@@ -560,67 +554,7 @@ public sealed class SDL3ShaderPipeline : IDisposable
     // ── YUV upload plan ───────────────────────────────────────────────────────
 
     private static bool TryBuildYuvPlan(VideoFrame frame, out YuvPlan plan)
-    {
-        var width = frame.Width;
-        var height = frame.Height;
-        var cw = (width + 1) / 2;
-        var ch420 = (height + 1) / 2;
-
-        plan = frame.PixelFormat switch
-        {
-            VideoPixelFormat.Nv12 => new YuvPlan(1, true,
-                width, height, width, GL_R8, GL_RED, GL_UNSIGNED_BYTE,
-                cw, ch420, cw * 2, GL_RG8, GL_RG, GL_UNSIGNED_BYTE,
-                0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0),
-            VideoPixelFormat.Yuv420P => new YuvPlan(2, false,
-                width, height, width, GL_R8, GL_RED, GL_UNSIGNED_BYTE,
-                0, 0, 0, 0, 0, 0,
-                cw, ch420, cw, GL_R8, GL_RED, GL_UNSIGNED_BYTE,
-                cw, ch420, cw, GL_R8, GL_RED, GL_UNSIGNED_BYTE),
-            VideoPixelFormat.Yuv422P => new YuvPlan(2, false,
-                width, height, width, GL_R8, GL_RED, GL_UNSIGNED_BYTE,
-                0, 0, 0, 0, 0, 0,
-                cw, height, cw, GL_R8, GL_RED, GL_UNSIGNED_BYTE,
-                cw, height, cw, GL_R8, GL_RED, GL_UNSIGNED_BYTE),
-            VideoPixelFormat.Yuv444P => new YuvPlan(2, false,
-                width, height, width, GL_R8, GL_RED, GL_UNSIGNED_BYTE,
-                0, 0, 0, 0, 0, 0,
-                width, height, width, GL_R8, GL_RED, GL_UNSIGNED_BYTE,
-                width, height, width, GL_R8, GL_RED, GL_UNSIGNED_BYTE),
-            VideoPixelFormat.P010Le => new YuvPlan(3, true,
-                width, height, width * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT,
-                cw, ch420, cw * 4, GL_RG16, GL_RG, GL_UNSIGNED_SHORT,
-                0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0),
-            VideoPixelFormat.Yuv420P10Le => new YuvPlan(4, false,
-                width, height, width * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT,
-                0, 0, 0, 0, 0, 0,
-                cw, ch420, cw * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT,
-                cw, ch420, cw * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT),
-            VideoPixelFormat.Yuv422P10Le => new YuvPlan(4, false,
-                width, height, width * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT,
-                0, 0, 0, 0, 0, 0,
-                cw, height, cw * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT,
-                cw, height, cw * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT),
-            VideoPixelFormat.Yuv444P10Le => new YuvPlan(4, false,
-                width, height, width * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT,
-                0, 0, 0, 0, 0, 0,
-                width, height, width * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT,
-                width, height, width * 2, GL_R16, GL_RED, GL_UNSIGNED_SHORT),
-            _ => default,
-        };
-
-        return plan.ModeId != 0;
-    }
-
-    private readonly record struct YuvPlan(
-        int ModeId,
-        bool IsSemiPlanar,
-        int YWidth, int YHeight, int YRowBytes, int YInternalFormat, int YFormat, int YType,
-        int UvWidth, int UvHeight, int UvRowBytes, int UvInternalFormat, int UvFormat, int UvType,
-        int UWidth, int UHeight, int URowBytes, int UInternalFormat, int UFormat, int UType,
-        int VWidth, int VHeight, int VRowBytes, int VInternalFormat, int VFormat, int VType);
+        => YuvPlan.TryBuild(frame, out plan);
 
     // ── GL function loading ───────────────────────────────────────────────────
 

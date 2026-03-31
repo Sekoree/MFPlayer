@@ -90,10 +90,6 @@ public sealed class AvaloniaVideoOutput : OpenGLWrapperVideoOutput
 
         lock (_gate)
         {
-            if (!Output.IsRunning && Output.State == VideoOutputState.Stopped)
-            {
-                // allow creation even when stopped (policy allows it by default)
-            }
 
             var create = CreateCloneCore(ToOpenGlCloneOptions(options), out var glClone);
             if (create != MediaResult.Success || glClone is null)

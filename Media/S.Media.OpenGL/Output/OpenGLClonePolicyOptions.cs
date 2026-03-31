@@ -26,16 +26,14 @@ public sealed record OpenGLClonePolicyOptions
     /// </summary>
     public bool AllowAttachWhileRunning { get; init; } = true;
 
-    internal int AttachPauseBudgetFrames { get; init; } = 1;
-
-    internal bool WarnOnPauseBudgetExceeded { get; init; } = true;
+    // TODO(B2): AttachPauseBudgetFrames and WarnOnPauseBudgetExceeded reserved for the
+    //           shared-context pause-during-attach path. Restore when B2 is implemented.
 
     public OpenGLClonePolicyOptions Normalize()
     {
         return this with
         {
             MaxCloneDepth = Math.Max(1, MaxCloneDepth),
-            AttachPauseBudgetFrames = Math.Max(0, AttachPauseBudgetFrames),
         };
     }
 }

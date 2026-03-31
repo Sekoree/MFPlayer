@@ -5,8 +5,6 @@ namespace S.Media.OpenGL.Output;
 public readonly record struct OpenGLSurfaceMetadata(
     int SurfaceWidth,
     int SurfaceHeight,
-    int RenderWidth,
-    int RenderHeight,
     VideoPixelFormat PixelFormat,
     int PlaneCount,
     IReadOnlyList<int> PlaneStrides,
@@ -15,8 +13,6 @@ public readonly record struct OpenGLSurfaceMetadata(
     public static OpenGLSurfaceMetadata Empty { get; } = new(
         SurfaceWidth: 0,
         SurfaceHeight: 0,
-        RenderWidth: 0,
-        RenderHeight: 0,
         PixelFormat: VideoPixelFormat.Unknown,
         PlaneCount: 0,
         PlaneStrides: Array.Empty<int>(),

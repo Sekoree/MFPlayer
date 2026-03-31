@@ -23,8 +23,8 @@
 | **B2** | **Clone** | **`OpenGLCloneMode` values stored but never enforced** | ✅ Fixed (Option A) — `SharedTexture` and `SharedFboBlit` marked `[Obsolete]`; `CopyFallback` is documented as the only active path |
 | **B3** | **SDL3** | **Embedded `PushFrame` sleeps while holding `_gate` lock** | ✅ Fixed — see Issue 1.3 |
 | **B4** | **Avalonia** | **`_lastFrame` never cleared after render — memory leak** | ✅ Fixed — `AddRef` on store; cleared + `Dispose` after render |
-| **B5** | **Core GL** | **`Upload/` subsystem is orphaned dead code** | 🔴 Open |
-| **B6** | **Shaders** | **YUV shaders assume full-range; most real video is limited-range** | 🔴 Open — needs `IsFullRange` in `VideoFrame` first |
+| **B5** | **Core GL** | **`Upload/` subsystem is orphaned dead code** | ✅ Fixed (Option A) — `Upload/` and `Conversion/` directories were planned in the API outline but never created; no files exist to remove. `OpenGLCapabilitySnapshot` retained for future texture-sharing (B2). |
+| **B6** | **Shaders** | **YUV shaders assume full-range; most real video is limited-range** | ✅ Fixed — `IsFullRange` added to `VideoFrame`; `uFullRange` uniform + limited-range BT.709 expansion added to all YUV shaders; both backends pass `frame.IsFullRange` |
 | **B7** | **Clone** | **`AttachClone` ignores its `options` parameter in both backends** | ✅ Fixed — public engine overload added; both backends forward options |
 | **B8** | **SDL3** | **Platform-handle default fallback wrong on macOS / Windows** | ✅ Fixed — `RuntimeInformation.IsOSPlatform` guards added |
 | **B9** | **Diagnostics** | **Diagnostic structs inconsistent; timing metrics always zero** | ✅ Fixed — unified `VideoOutputDiagnosticsSnapshot` record added; `AvaloniaOutputDebugInfo` / `SDL3OutputDebugInfo` aligned (all fields present) with `ToSnapshot()` converters; upload and present timings measured via `Stopwatch` in both backends and wired through `OpenGLVideoOutput.UpdateTimings()` |
@@ -32,7 +32,18 @@
 | **C1** | **Core** | **`IVideoOutput.PushFrame` XML docs name concrete types** | ✅ Fixed — generic language + fully-qualified `cref` links |
 | **C2** | **Core** | **`VideoOutputState` has no `Paused` value** | ✅ Fixed — `Paused = 2` added to `VideoOutputState` |
 | **C3** | **Core** | **`BackpressureWaitFrameMultiplier`/`BackpressureTimeout` interaction undocumented** | ✅ Fixed — `<remarks>` added to both properties |
-| **C4** | **Shaders** | **Shader source strings duplicated across three files** | 🔴 Open |
+| **C4** | **Shaders** | **Shader source strings duplicated across three files** | ✅ Partially fixed — `GlslShaders.cs` created in `S.Media.OpenGL`; all three backends reference it. **Remaining:** `SDL3VideoView` still uses raw hex GL constants inline; see §N6 sub-item |
+| **N1** | **Avalonia GL** | **P010 UV plane stride wrong in `AvaloniaGLRenderer.UploadPlane`** | ✅ Fixed — replaced ad-hoc `/ 2` formula with `planeStride / bytesPerPixel` (bytes-per-pixel derived from format + type); P010 UV now correctly passes `stride / 4` to `GL_UNPACK_ROW_LENGTH` |
+| **N2** | **SDL3** | **Standalone render thread double-renders every frame** | ✅ Fixed — removed errant `_shaderPipeline.Upload` + `Draw` block from `RenderFrameOnRenderThread`; pipeline is now called exclusively on the embedded path |
+| **N3** | **Clone API** | **Clone options default to `[Obsolete]` `SharedTexture` mode** | ✅ Fixed — `CloneMode` default changed to `CopyFallback` in `SDL3CloneOptions`, `AvaloniaCloneOptions`, and `OpenGLCloneOptions` |
+| **N4** | **Clone API** | **`FailIfParentWindowClosed` / `FailIfParentDisposed` silently dropped in options mapping** | ✅ Fixed — both properties marked `[Obsolete]` with an explanatory message; will be wired in a future release |
+| **N5** | **Engine** | **`OpenGLVideoEngine.Dispose()` TOCTOU race on `_disposed`** | ✅ Fixed — `_disposed = true` is now set first inside a single lock before draining outputs; concurrent `AddOutput` calls correctly see the disposed state |
+| **N6** | **SDL3** | **`YuvPlan` record struct duplicated between `SDL3VideoView` and `SDL3ShaderPipeline`** | ✅ Fixed — extracted to `YuvPlan.cs` (internal, `S.Media.OpenGL.SDL3`) with a static `TryBuild` method; both callers now delegate to `YuvPlan.TryBuild` |
+| **N7** | **Avalonia** | **Dead no-op `if` block in `AvaloniaVideoOutput.CreateClone`** | ✅ Fixed — empty block removed |
+| **N8** | **Diagnostics** | **`OpenGLDiagnosticsEvents` still publishes legacy `OpenGLOutputDebugInfo` instead of unified type** | ✅ Fixed — `PublishDiagnosticsUpdated` now takes `VideoOutputDiagnosticsSnapshot`; `OpenGLDiagnosticsSnapshotEventArgs.Snapshot` is `VideoOutputDiagnosticsSnapshot`; all `OpenGLVideoOutput` local vars updated accordingly |
+| **N9** | **Core GL** | **`SurfaceWidth/Height` vs `RenderWidth/Height` distinction never used** | ✅ Fixed (Option A) — `RenderWidth` and `RenderHeight` removed from `OpenGLSurfaceMetadata`; `BuildSurfaceMetadata` updated; tests updated |
+| **N10** | **Clone API** | **Unused `internal` sentinel properties in `OpenGLClonePolicyOptions`** | ✅ Fixed — `AttachPauseBudgetFrames`, `WarnOnPauseBudgetExceeded` removed from `OpenGLClonePolicyOptions`; `ShareParentColorPipeline`, `FailIfContextSharingUnavailable` removed from `OpenGLCloneOptions`; replaced with `// TODO(B2)` comments |
+| **N11** | **SDL3** | **`SDL3ShaderPipeline` unnecessarily `public`** | ✅ Fixed — changed to `internal sealed class` |
 
 ---
 
@@ -46,6 +57,7 @@
 6. [Diagnostics](#6-diagnostics)
 7. [S.Media.Core Adjustments](#7-smediacore-adjustments)
 8. [Common Concerns](#8-common-concerns)
+9. [New Issues (N-series)](#9-new-issues-n-series)
 
 ---
 
@@ -547,110 +559,64 @@ protected override void OnOpenGlRender(GlInterface gl, int fb)
 
 ### Issue C4 — Shader source strings duplicated across three files
 
-**Status:** 🔴 Open
+**Status:** ✅ Partially fixed
 
-Identical (or near-identical) GLSL shader strings appear in three places:
+`GlslShaders.cs` now exists in `S.Media.OpenGL` and is the single source of truth for all six
+shader variants (vertex/RGBA-fragment/YUV-fragment × core/ES). All three backends reference it
+via `InternalsVisibleTo`:
 
-| File | Form |
+| Backend | References |
 |---|---|
-| `SDL3VideoView` | Single-line packed string constants |
-| `SDL3ShaderPipeline` | Named `private const int` GL constants + inline strings |
-| `AvaloniaGLRenderer` | Proper multi-line raw string literals (best form, but separate) |
+| `SDL3VideoView` | `GlslShaders.VertexCore`, `FragmentRgbaCore`, `FragmentYuvCore` |
+| `SDL3ShaderPipeline` | same |
+| `AvaloniaGLRenderer` | same, plus ES variants |
 
-Any fix to the YUV color math (Issue B6 below) must be applied in all three places.
-
-**Fix:** Create a single `GlslShaders` static class in `S.Media.OpenGL`:
-
-```csharp
-// S.Media.OpenGL/GlslShaders.cs
-internal static class GlslShaders
-{
-    internal static string VertexCore { get; } = """
-        #version 330 core
-        layout(location = 0) in vec2 aPosition;
-        layout(location = 1) in vec2 aTexCoord;
-        out vec2 vTexCoord;
-        void main() { gl_Position = vec4(aPosition, 0.0, 1.0); vTexCoord = aTexCoord; }
-        """;
-
-    internal static string VertexEs { get; } = /* #version 300 es variant */;
-    internal static string FragmentRgbaCore { get; } = /* ... */;
-    internal static string FragmentRgbaEs { get; } = /* ... */;
-    internal static string FragmentYuvCore { get; } = /* single source of truth for YUV math */;
-    internal static string FragmentYuvEs { get; } = /* ... */;
-}
-```
-
-`SDL3VideoView`, `SDL3ShaderPipeline`, and `AvaloniaGLRenderer` all reference this class.
-`SDL3VideoView` should also move its remaining inline hex GL constants (`0x0DE1`, `0x8229`, etc.)
-to named `const int` fields, matching the pattern already used in `SDL3ShaderPipeline`.
+**Remaining sub-item:** ✅ Fixed — `SDL3VideoView` now has a private `static class Gl` with
+named constants (`Gl.TextureTarget2D`, `Gl.Rgba8`, `Gl.ColorBufferBit`, etc.) replacing all
+inline hex literals in the render, upload, and shader-setup paths.
 
 ---
 
 ### Issue B6 — YUV shaders assume full-range luma; most real video is limited-range
 
-**Status:** 🔴 Open — Quality Bug
+**Status:** ✅ Fixed
 
-The YUV → RGB formula in all three shader sources uses BT.709 coefficients applied directly to
-raw texture samples:
-
-```glsl
-float y = texture(uTextureY, vTexCoord).r;   // raw sample, no range correction
-float r = y + 1.5748 * v;
-```
-
-H.264 and H.265 content defaults to **limited-range** (TV range): luma encoded 16–235 rather
-than 0–255. Without range expansion, black appears grey (~6%) and peak white is compressed.
-
-**Fix:** Add a `uFullRange` uniform and apply range correction in all YUV shaders:
+`VideoFrame.IsFullRange` has been added. `GlslShaders.FragmentYuvCore` / `FragmentYuvEs` now
+include a `uFullRange` uniform and apply the full BT.709 limited-range expansion:
 
 ```glsl
-uniform int uFullRange;  // 1 = full range (0..255), 0 = limited range (16..235)
-
-void main()
-{
-    float y = texture(uTextureY, vTexCoord).r;
-    float u = texture(uTextureU, vTexCoord).r - 0.5;
-    float v = texture(uTextureV, vTexCoord).r - 0.5;
-
-    if (uFullRange == 0) {
-        y = (y - 16.0/255.0) * (255.0/219.0);
-        u *= (255.0/224.0);
-        v *= (255.0/224.0);
-    }
-
-    FragColor = vec4(yuvToRgb(y, u, v), 1.0);
+// Limited-range expansion (BT.709 / BT.601):
+//   luma  16-235 → 0-1:  multiply by 255/219, subtract 16/255
+//   chroma 16-240 → -0.5..+0.5: multiply by 255/224, subtract 0.5
+if (uFullRange == 0) {
+    y = (y - 16.0 / 255.0) * (255.0 / 219.0);
+    u = (u - 128.0 / 255.0) * (255.0 / 224.0);
+    v = (v - 128.0 / 255.0) * (255.0 / 224.0);
+} else {
+    u -= 0.5;
+    v -= 0.5;
 }
 ```
 
-`uFullRange` should be driven by frame metadata. **Required upstream change:** add
-`bool IsFullRange` to `VideoFrame` (or `IPixelFormatData`) and map `AVFrame.color_range`
-in `S.Media.FFmpeg` (`AVCOL_RANGE_JPEG` = full, `AVCOL_RANGE_MPEG` = limited).
+Both `SDL3VideoView.RenderYuvFrameLocked`, `SDL3ShaderPipeline.UploadYuv`, and
+`AvaloniaGLRenderer.RenderFrame` pass `frame.IsFullRange ? 1 : 0` to the uniform.
+
+> **Remaining upstream work:** `S.Media.FFmpeg` should map `AVFrame.color_range`
+> (`AVCOL_RANGE_JPEG` = full, `AVCOL_RANGE_MPEG` = limited) when constructing `VideoFrame`.
 
 ---
 
 ### Issue B5 — `Upload/` subsystem is orphaned dead code
 
-**Status:** 🔴 Open
+**Status:** ✅ Fixed (Option A)
 
-`OpenGLTextureUploader`, `OpenGLUploadPlanner`, `UploadPlan`, and `YuvToRgbaConverter`
-(`S.Media.OpenGL/Upload`, `S.Media.OpenGL/Conversion`) are **never called** by any active
-rendering path:
+`Upload/` and `Conversion/` were listed in the API outline and migration plan as planned targets
+but were **never created**. The three active rendering paths (`SDL3VideoView`,
+`SDL3ShaderPipeline`, `AvaloniaGLRenderer`) each handle texture uploads internally, which is
+sufficient given their differing GL-context models.
 
-- `SDL3VideoView` does inline texture upload via private GL delegates
-- `SDL3ShaderPipeline` has its own complete upload path
-- `AvaloniaGLRenderer` has its own complete upload path
-
-Additionally `YuvToRgbaConverter` only handles `Rgba32`, `Bgra32`, `Yuv420P`, and `Nv12` —
-missing 7 of the 11 `VideoPixelFormat` values.
-
-**Decision needed:**
-
-- **Option A (delete):** Remove `Upload/` and `Conversion/`. Retain `OpenGLCapabilitySnapshot`
-  for future texture-sharing (B2). Add a `// TODO` comment linking to B2.
-- **Option B (integrate):** Wire `OpenGLTextureUploader` into `SDL3ShaderPipeline` and
-  `AvaloniaGLRenderer` as the canonical upload path, extend `YuvToRgbaConverter` to all 11
-  formats, delete the duplicated inline logic.
+`OpenGLCapabilitySnapshot` is retained in `S.Media.OpenGL/Diagnostics/` for future use by the
+shared-context path (Issue B2). No source files were deleted because none existed.
 
 ---
 
@@ -807,3 +773,162 @@ returns `OpenGLClonePixelFormatIncompatible` if mismatched. Document this requir
 `MediaErrorCode.OpenGLCloneMaxDepthExceeded` (= 4412) is already defined and returned correctly
 by the engine. ~~"Consider adding `OpenGLCloneDepthExceeded`"~~ — **this error code already
 exists; no action needed.** Ensure it is documented on `CreateClone` and `AttachClone`.
+
+---
+
+## 9. New Issues (N-series)
+
+> Issues found during the 2026-03-31 review pass. All were absent from the prior checklist.
+
+---
+
+### Issue N1 — P010 UV plane stride wrong in `AvaloniaGLRenderer.UploadPlane` *(Bug)*
+
+**Status:** ✅ Fixed
+
+`GL_UNPACK_ROW_LENGTH` is specified in pixels (texels), not bytes. The `UploadPlane` method now
+computes `stridePixels` using a `bytesPerPixel` lookup derived from both `format` and `type`:
+
+```csharp
+var bytesPerPixel = format switch
+{
+    var f when f == GlConsts.GL_RGBA => 4,
+    var f when f == GL_RG            => type == GL_UNSIGNED_SHORT ? 4 : 2,
+    _                                => type == GL_UNSIGNED_SHORT ? 2 : 1,
+};
+var stridePixels = planeStride / bytesPerPixel;
+```
+
+P010 UV (`GL_RG + GL_UNSIGNED_SHORT`, stride = `width × 4`) now correctly yields `width`;
+NV12 UV (`GL_RG + GL_UNSIGNED_BYTE`) was already correct and remains so.
+
+---
+
+### Issue N2 — Standalone render thread double-renders every frame *(Bug / Waste)*
+
+**Status:** ✅ Fixed
+
+Removed the errant `_shaderPipeline.Upload(frame)` + `_shaderPipeline.Draw()` block from
+`RenderFrameOnRenderThread`. The `_shaderPipeline` is called exclusively on the embedded path
+(inside `PushFrame` when `_embedded` is true). The standalone render thread now performs exactly
+one texture upload and one draw call per frame.
+
+---
+
+### Issue N3 — Clone options default to `[Obsolete]` mode
+
+**Status:** ✅ Fixed
+
+`CloneMode` default changed from `OpenGLCloneMode.SharedTexture` (obsolete) to
+`OpenGLCloneMode.CopyFallback` in all three option records: `SDL3CloneOptions`,
+`AvaloniaCloneOptions`, and `OpenGLCloneOptions`. No caller constructing options with defaults
+will now trigger CS0618.
+
+---
+
+### Issue N4 — `FailIfParentWindowClosed` / `FailIfParentDisposed` silently dropped
+
+**Status:** ✅ Fixed
+
+Both properties are now marked `[Obsolete]` with a message stating they are not yet wired and
+will be implemented in a future release. Callers who set them get a compile-time warning rather
+than silent no-op behaviour.
+
+---
+
+### Issue N5 — `OpenGLVideoEngine.Dispose()` TOCTOU race on `_disposed`
+
+**Status:** ✅ Fixed
+
+`Dispose()` now sets `_disposed = true` as the first action inside a single lock, then drains
+outputs outside the lock. `AddOutput` already checks `_disposed` under the same lock, so no
+new output can slip in after the flag is set:
+
+```csharp
+public void Dispose()
+{
+    Guid[] ids;
+    lock (_gate)
+    {
+        if (_disposed) return;
+        _disposed = true;
+        ids = _outputs.Keys.ToArray();
+    }
+    foreach (var id in ids)
+        _ = RemoveOutput(id);
+    _diagnostics.Dispose();
+}
+```
+
+
+---
+
+### Issue N6 — `YuvPlan` record struct duplicated between `SDL3VideoView` and `SDL3ShaderPipeline`
+
+**Status:** ✅ Fixed
+
+Extracted to `S.Media.OpenGL.SDL3/YuvPlan.cs` as an `internal readonly record struct` with a
+static `TryBuild(VideoFrame, out YuvPlan)` factory that owns the format-table switch expression
+and all related GL constants. Both `SDL3VideoView.TryBuildYuvPlan` and
+`SDL3ShaderPipeline.TryBuildYuvPlan` are now one-liners:
+
+```csharp
+private static bool TryBuildYuvPlan(VideoFrame frame, out YuvPlan plan)
+    => YuvPlan.TryBuild(frame, out plan);
+```
+
+The six duplicated YUV-format GL constants (`GL_R8`, `GL_RG8`, `GL_R16`, `GL_RG16`, `GL_RED`,
+`GL_RG`) were also removed from `SDL3ShaderPipeline` since they are now owned by `YuvPlan.cs`.
+
+---
+
+### Issue N7 — Dead no-op `if` block in `AvaloniaVideoOutput.CreateClone`
+
+**Status:** ✅ Fixed
+
+The empty `if (!Output.IsRunning && Output.State == VideoOutputState.Stopped) { }` block and
+its comment have been deleted from `AvaloniaVideoOutput.CreateClone`.
+
+---
+
+### Issue N8 — `OpenGLDiagnosticsEvents` publishes legacy `OpenGLOutputDebugInfo` instead of unified type
+
+**Status:** ✅ Fixed
+
+- `OpenGLDiagnosticsEvents.PublishDiagnosticsUpdated` now takes `VideoOutputDiagnosticsSnapshot`.
+- `OpenGLDiagnosticsSnapshotEventArgs.Snapshot` is `VideoOutputDiagnosticsSnapshot`.
+- `OpenGLVideoOutput.BuildDiagnosticsSnapshotLocked()` returns `VideoOutputDiagnosticsSnapshot`.
+- All four call-site local variables (`Start`, `Stop`, `PushFrame`, `PresentClonedFrame`) updated.
+- `OpenGLOutputDebugInfo` is retained as a public backwards-compatibility type with `ToSnapshot()`.
+
+---
+
+### Issue N9 — `SurfaceWidth/Height` vs `RenderWidth/Height` distinction never used
+
+**Status:** ✅ Fixed (Option A)
+
+`RenderWidth` and `RenderHeight` removed from `OpenGLSurfaceMetadata`. The record now carries
+only `SurfaceWidth`/`SurfaceHeight` (the frame's native pixel dimensions). `BuildSurfaceMetadata`
+and `OpenGLSurfaceMetadata.Empty` updated accordingly; tests updated.
+
+---
+
+### Issue N10 — Unused `internal` sentinel properties in `OpenGLClonePolicyOptions`
+
+**Status:** ✅ Fixed
+
+Removed from `OpenGLClonePolicyOptions`: `AttachPauseBudgetFrames`, `WarnOnPauseBudgetExceeded`.
+Removed from `OpenGLCloneOptions`: `ShareParentColorPipeline`, `FailIfContextSharingUnavailable`.
+Each removal site replaced with a `// TODO(B2): reserved for shared-context path` comment.
+`Normalize()` updated to remove the `AttachPauseBudgetFrames` clamp.
+
+---
+
+### Issue N11 — `SDL3ShaderPipeline` unnecessarily `public`
+
+**Status:** ✅ Fixed
+
+`SDL3ShaderPipeline` changed from `public sealed class` to `internal sealed class`. It is only
+ever held as the private `_shaderPipeline` field inside `SDL3VideoView`; no public API surface
+is lost.
+

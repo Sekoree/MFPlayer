@@ -64,7 +64,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     public int Start(VideoOutputConfig config)
     {
         OpenGLDiagnosticsEvents? diagnostics;
-        OpenGLOutputDebugInfo snapshot;
+        VideoOutputDiagnosticsSnapshot snapshot;
 
         lock (_gate)
         {
@@ -105,7 +105,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     public int Stop()
     {
         OpenGLDiagnosticsEvents? diagnostics;
-        OpenGLOutputDebugInfo snapshot;
+        VideoOutputDiagnosticsSnapshot snapshot;
 
         lock (_gate)
         {
@@ -137,10 +137,10 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     {
         OpenGLDiagnosticsEvents? diagnostics;
         OpenGLSurfaceMetadata surface;
-        OpenGLOutputDebugInfo snapshot;
+        VideoOutputDiagnosticsSnapshot snapshot;
         int resultCode;
         TimeSpan delay = TimeSpan.Zero;
-        var dropAsStale = false;
+        bool dropAsStale = false;
 
         lock (_gate)
         {
@@ -397,7 +397,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     internal void PresentClonedFrame(OpenGLSurfaceMetadata parentSurface)
     {
         OpenGLDiagnosticsEvents? diagnostics;
-        OpenGLOutputDebugInfo snapshot;
+        VideoOutputDiagnosticsSnapshot snapshot;
 
         lock (_gate)
         {
@@ -417,9 +417,9 @@ public sealed class OpenGLVideoOutput : IVideoOutput
         diagnostics?.PublishDiagnosticsUpdated(Id, snapshot);
     }
 
-    private OpenGLOutputDebugInfo BuildDiagnosticsSnapshotLocked()
+    private VideoOutputDiagnosticsSnapshot BuildDiagnosticsSnapshotLocked()
     {
-        return new OpenGLOutputDebugInfo(
+        return new VideoOutputDiagnosticsSnapshot(
             FramesPresented: _framesPresented,
             FramesDropped: _framesDropped,
             FramesCloned: _framesCloned,
@@ -454,8 +454,6 @@ public sealed class OpenGLVideoOutput : IVideoOutput
         return new OpenGLSurfaceMetadata(
             SurfaceWidth: frame.Width,
             SurfaceHeight: frame.Height,
-            RenderWidth: frame.Width,
-            RenderHeight: frame.Height,
             PixelFormat: frame.PixelFormat,
             PlaneCount: strides.Count,
             PlaneStrides: strides,

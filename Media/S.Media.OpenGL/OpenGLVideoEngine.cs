@@ -349,12 +349,17 @@ public sealed class OpenGLVideoEngine : IDisposable
 
     public void Dispose()
     {
-        _ = ClearOutputs();
-
+        Guid[] ids;
         lock (_gate)
         {
-            _disposed = true;
+            if (_disposed)
+                return;
+            _disposed = true;                   // gate: AddOutput now returns Disposed immediately
+            ids = _outputs.Keys.ToArray();
         }
+
+        foreach (var id in ids)
+            _ = RemoveOutput(id);
 
         _diagnostics.Dispose();
     }

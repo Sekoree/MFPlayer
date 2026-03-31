@@ -195,10 +195,11 @@ public sealed class NDIEngine : IDisposable
 				return (int)MediaErrorCode.NDIInitializeFailed;
 			}
 
-			var effective = outputOptions with
-			{
-				SendFormatOverride = outputOptions.SendFormatOverride ?? _integrationOptions.SendFormat,
-			};
+                        var effective = outputOptions with
+                        {
+                                SendFormatOverride = outputOptions.SendFormatOverride ?? _integrationOptions.SendFormat,
+                                RequireAudioPathOnStart = _integrationOptions.RequireAudioPathOnStart || outputOptions.RequireAudioPathOnStart,
+                        };
 
 			var validate = effective.Validate();
 			if (validate != MediaResult.Success)

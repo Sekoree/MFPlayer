@@ -981,16 +981,15 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
 
-        UploadTexture(ref _rgbaUploadState, _glTexture, frame.Width, frame.Height, 0x8058, uploadFormat, 0x1401, contiguous);
-
+        UploadTexture(ref _rgbaUploadState, _glTexture, frame.Width, frame.Height, Gl.Rgba8, uploadFormat, Gl.UnsignedByte, contiguous);
 
         _glClearColor!(0f, 0f, 0f, 1f);
-        _glClear!(0x00004000); // GL_COLOR_BUFFER_BIT
+        _glClear!(Gl.ColorBufferBit);
         _glUseProgram!(_glProgram);
-        _glActiveTexture!(0x84C0); // GL_TEXTURE0
-        _glBindTexture!(0x0DE1, _glTexture);
+        _glActiveTexture!(Gl.Texture0);
+        _glBindTexture!(Gl.TextureTarget2D, _glTexture);
         _glBindVertexArray!(_glVao);
-        _glDrawArrays!(0x0004, 0, 6); // GL_TRIANGLES
+        _glDrawArrays!(Gl.Triangles, 0, 6);
         _glBindVertexArray!(0);
         _glUseProgram!(0);
         return MediaResult.Success;
@@ -1035,7 +1034,7 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         }
 
         _glClearColor!(0f, 0f, 0f, 1f);
-        _glClear!(0x00004000); // GL_COLOR_BUFFER_BIT
+        _glClear!(Gl.ColorBufferBit);
         _glUseProgram!(_glYuvProgram);
         if (_glYuvPixelFormatLocation >= 0)
         {
@@ -1046,15 +1045,15 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
             _glUniform1I!(_glYuvFullRangeLocation, frame.IsFullRange ? 1 : 0); // B6
         }
 
-        _glActiveTexture!(0x84C0);
-        _glBindTexture!(0x0DE1, _glTextureY);
-        _glActiveTexture!(0x84C1);
-        _glBindTexture!(0x0DE1, _glTextureU);
-        _glActiveTexture!(0x84C2);
-        _glBindTexture!(0x0DE1, plan.IsSemiPlanar ? _glTextureU : _glTextureV);
+        _glActiveTexture!(Gl.Texture0);
+        _glBindTexture!(Gl.TextureTarget2D, _glTextureY);
+        _glActiveTexture!(Gl.Texture1);
+        _glBindTexture!(Gl.TextureTarget2D, _glTextureU);
+        _glActiveTexture!(Gl.Texture2);
+        _glBindTexture!(Gl.TextureTarget2D, plan.IsSemiPlanar ? _glTextureU : _glTextureV);
 
         _glBindVertexArray!(_glVao);
-        _glDrawArrays!(0x0004, 0, 6); // GL_TRIANGLES
+        _glDrawArrays!(Gl.Triangles, 0, 6);
         _glBindVertexArray!(0);
         _glUseProgram!(0);
         return MediaResult.Success;
@@ -1062,8 +1061,8 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
 
     private void UploadTexture(ref TextureUploadState state, int textureId, int width, int height, int internalFormat, int format, int type, ReadOnlySpan<byte> data)
     {
-        _glBindTexture!(0x0DE1, textureId);
-        _glPixelStoreI!(0x0CF5, 1); // GL_UNPACK_ALIGNMENT
+        _glBindTexture!(Gl.TextureTarget2D, textureId);
+        _glPixelStoreI!(Gl.UnpackAlignment, 1);
 
         var reallocate = !state.IsInitialized
             || state.Width != width
@@ -1099,7 +1098,7 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
 
     private bool TryGetPackedRgbaBytes(VideoFrame frame, out ReadOnlySpan<byte> packed, out int glFormat)
     {
-        glFormat = frame.PixelFormat == VideoPixelFormat.Bgra32 ? 0x80E1 : 0x1908; // GL_BGRA / GL_RGBA
+        glFormat = frame.PixelFormat == VideoPixelFormat.Bgra32 ? Gl.Bgra : Gl.Rgba;
         packed = default;
 
         var requiredStride = frame.Width * 4;
@@ -1160,88 +1159,9 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         return scratch;
     }
 
-    private bool TryBuildYuvPlan(VideoFrame frame, out YuvPlan plan)
-    {
-        var width = frame.Width;
-        var height = frame.Height;
-        var cw = (width + 1) / 2;
-        var ch420 = (height + 1) / 2;
-
-        plan = frame.PixelFormat switch
-        {
-            VideoPixelFormat.Nv12 => new YuvPlan(1, true,
-                width, height, width, 0x8229, 0x1903, 0x1401,
-                cw, ch420, cw * 2, 0x822B, 0x8227, 0x1401,
-                0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0),
-            VideoPixelFormat.Yuv420P => new YuvPlan(2, false,
-                width, height, width, 0x8229, 0x1903, 0x1401,
-                0, 0, 0, 0, 0, 0,
-                cw, ch420, cw, 0x8229, 0x1903, 0x1401,
-                cw, ch420, cw, 0x8229, 0x1903, 0x1401),
-            VideoPixelFormat.Yuv422P => new YuvPlan(2, false,
-                width, height, width, 0x8229, 0x1903, 0x1401,
-                0, 0, 0, 0, 0, 0,
-                cw, height, cw, 0x8229, 0x1903, 0x1401,
-                cw, height, cw, 0x8229, 0x1903, 0x1401),
-            VideoPixelFormat.Yuv444P => new YuvPlan(2, false,
-                width, height, width, 0x8229, 0x1903, 0x1401,
-                0, 0, 0, 0, 0, 0,
-                width, height, width, 0x8229, 0x1903, 0x1401,
-                width, height, width, 0x8229, 0x1903, 0x1401),
-            VideoPixelFormat.P010Le => new YuvPlan(3, true,
-                width, height, width * 2, 0x822A, 0x1903, 0x1403,
-                cw, ch420, cw * 4, 0x822C, 0x8227, 0x1403,
-                0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0),
-            VideoPixelFormat.Yuv420P10Le => new YuvPlan(4, false,
-                width, height, width * 2, 0x822A, 0x1903, 0x1403,
-                0, 0, 0, 0, 0, 0,
-                cw, ch420, cw * 2, 0x822A, 0x1903, 0x1403,
-                cw, ch420, cw * 2, 0x822A, 0x1903, 0x1403),
-            VideoPixelFormat.Yuv422P10Le => new YuvPlan(4, false,
-                width, height, width * 2, 0x822A, 0x1903, 0x1403,
-                0, 0, 0, 0, 0, 0,
-                cw, height, cw * 2, 0x822A, 0x1903, 0x1403,
-                cw, height, cw * 2, 0x822A, 0x1903, 0x1403),
-            VideoPixelFormat.Yuv444P10Le => new YuvPlan(4, false,
-                width, height, width * 2, 0x822A, 0x1903, 0x1403,
-                0, 0, 0, 0, 0, 0,
-                width, height, width * 2, 0x822A, 0x1903, 0x1403,
-                width, height, width * 2, 0x822A, 0x1903, 0x1403),
-            _ => default,
-        };
-
-        return plan.ModeId != 0;
-    }
-
-    private readonly record struct YuvPlan(
-        int ModeId,
-        bool IsSemiPlanar,
-        int YWidth,
-        int YHeight,
-        int YRowBytes,
-        int YInternalFormat,
-        int YFormat,
-        int YType,
-        int UvWidth,
-        int UvHeight,
-        int UvRowBytes,
-        int UvInternalFormat,
-        int UvFormat,
-        int UvType,
-        int UWidth,
-        int UHeight,
-        int URowBytes,
-        int UInternalFormat,
-        int UFormat,
-        int UType,
-        int VWidth,
-        int VHeight,
-        int VRowBytes,
-        int VInternalFormat,
-        int VFormat,
-        int VType);
+    // N6: YuvPlan record and TryBuildYuvPlan moved to YuvPlan.cs (shared with SDL3ShaderPipeline).
+    private static bool TryBuildYuvPlan(VideoFrame frame, out YuvPlan plan)
+        => YuvPlan.TryBuild(frame, out plan);
 
     private int EnsureGlResourcesLocked()
     {
@@ -1255,20 +1175,20 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
 
-        var vertexShader = CompileShader(0x8B31, GlslShaders.VertexCore); // GL_VERTEX_SHADER
+        var vertexShader = CompileShader(Gl.VertexShader, GlslShaders.VertexCore);
         if (vertexShader == 0)
         {
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
 
-        var fragmentShader = CompileShader(0x8B30, GlslShaders.FragmentRgbaCore); // GL_FRAGMENT_SHADER
+        var fragmentShader = CompileShader(Gl.FragmentShader, GlslShaders.FragmentRgbaCore);
         if (fragmentShader == 0)
         {
             _glDeleteShader!(vertexShader);
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
 
-        var yuvFragmentShader = CompileShader(0x8B30, GlslShaders.FragmentYuvCore); // GL_FRAGMENT_SHADER
+        var yuvFragmentShader = CompileShader(Gl.FragmentShader, GlslShaders.FragmentYuvCore);
         if (yuvFragmentShader == 0)
         {
             _glDeleteShader!(vertexShader);
@@ -1283,7 +1203,7 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         _glBindAttribLocation!(_glProgram, 1, "aTexCoord");
         _glLinkProgram!(_glProgram);
 
-        _glGetProgramIv!(_glProgram, 0x8B82, out var linked); // GL_LINK_STATUS
+        _glGetProgramIv!(_glProgram, Gl.LinkStatus, out var linked);
         if (linked == 0)
         {
             _glDeleteShader!(vertexShader);
@@ -1303,7 +1223,7 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         _glDeleteShader!(fragmentShader);
         _glDeleteShader!(yuvFragmentShader);
 
-        _glGetProgramIv!(_glYuvProgram, 0x8B82, out var yuvLinked); // GL_LINK_STATUS
+        _glGetProgramIv!(_glYuvProgram, Gl.LinkStatus, out var yuvLinked);
         if (yuvLinked == 0)
         {
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
@@ -1323,27 +1243,15 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         var uTextureV = _glGetUniformLocation!(_glYuvProgram, "uTextureV");
         _glYuvPixelFormatLocation = _glGetUniformLocation!(_glYuvProgram, "uPixelFormat");
         _glYuvFullRangeLocation   = _glGetUniformLocation!(_glYuvProgram, "uFullRange"); // B6
-        if (uTextureY >= 0)
-        {
-            _glUniform1I!(uTextureY, 0);
-        }
-
-        if (uTextureU >= 0)
-        {
-            _glUniform1I!(uTextureU, 1);
-        }
-
-        if (uTextureV >= 0)
-        {
-            _glUniform1I!(uTextureV, 2);
-        }
-
+        if (uTextureY >= 0) { _glUniform1I!(uTextureY, 0); }
+        if (uTextureU >= 0) { _glUniform1I!(uTextureU, 1); }
+        if (uTextureV >= 0) { _glUniform1I!(uTextureV, 2); }
         _glUseProgram!(0);
 
         _glGenVertexArrays!(1, out _glVao);
         _glGenBuffers!(1, out _glVbo);
         _glBindVertexArray!(_glVao);
-        _glBindBuffer!(0x8892, _glVbo); // GL_ARRAY_BUFFER
+        _glBindBuffer!(Gl.ArrayBuffer, _glVbo);
 
         var quad = new[]
         {
@@ -1359,15 +1267,15 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         {
             fixed (float* ptr = quad)
             {
-                _glBufferData!(0x8892, quad.Length * sizeof(float), (nint)ptr, 0x88E4); // GL_STATIC_DRAW
+                _glBufferData!(Gl.ArrayBuffer, quad.Length * sizeof(float), (nint)ptr, Gl.StaticDraw);
             }
         }
 
         _glEnableVertexAttribArray!(0);
-        _glVertexAttribPointer!(0, 2, 0x1406, 0, 4 * sizeof(float), nint.Zero); // GL_FLOAT
+        _glVertexAttribPointer!(0, 2, Gl.Float, 0, 4 * sizeof(float), nint.Zero);
         _glEnableVertexAttribArray!(1);
-        _glVertexAttribPointer!(1, 2, 0x1406, 0, 4 * sizeof(float), new nint(2 * sizeof(float)));
-        _glBindBuffer!(0x8892, 0);
+        _glVertexAttribPointer!(1, 2, Gl.Float, 0, 4 * sizeof(float), new nint(2 * sizeof(float)));
+        _glBindBuffer!(Gl.ArrayBuffer, 0);
         _glBindVertexArray!(0);
 
         _glGenTextures!(1, out _glTexture);
@@ -1388,12 +1296,12 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
 
     private void InitializeTextureParameters(int textureId)
     {
-        _glBindTexture!(0x0DE1, textureId);
-        _glTexParameteri!(0x0DE1, 0x2801, 0x2601); // GL_TEXTURE_MIN_FILTER / GL_LINEAR
-        _glTexParameteri!(0x0DE1, 0x2800, 0x2601); // GL_TEXTURE_MAG_FILTER / GL_LINEAR
-        _glTexParameteri!(0x0DE1, 0x2802, 0x812F); // GL_TEXTURE_WRAP_S / GL_CLAMP_TO_EDGE
-        _glTexParameteri!(0x0DE1, 0x2803, 0x812F); // GL_TEXTURE_WRAP_T / GL_CLAMP_TO_EDGE
-        _glBindTexture!(0x0DE1, 0);
+        _glBindTexture!(Gl.TextureTarget2D, textureId);
+        _glTexParameteri!(Gl.TextureTarget2D, Gl.TextureMinFilter, Gl.Linear);
+        _glTexParameteri!(Gl.TextureTarget2D, Gl.TextureMagFilter, Gl.Linear);
+        _glTexParameteri!(Gl.TextureTarget2D, Gl.TextureWrapS, Gl.ClampToEdge);
+        _glTexParameteri!(Gl.TextureTarget2D, Gl.TextureWrapT, Gl.ClampToEdge);
+        _glBindTexture!(Gl.TextureTarget2D, 0);
     }
 
     private bool LoadGlFunctions()
@@ -1498,7 +1406,7 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
             Marshal.FreeHGlobal(sourcePtr);
         }
 
-        _glGetShaderIv!(shader, 0x8B81, out var compiled); // GL_COMPILE_STATUS
+        _glGetShaderIv!(shader, Gl.CompileStatus, out var compiled);
         if (compiled != 0)
         {
             return shader;
@@ -1617,6 +1525,35 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         _glViewport!(viewportX, viewportY, viewportWidth, viewportHeight);
     }
 
+    // ── Named GL constants (C4: replaces inline hex literals) ─────────────────
+    private static class Gl
+    {
+        public const int TextureTarget2D    = 0x0DE1; // GL_TEXTURE_2D
+        public const int Texture0           = 0x84C0; // GL_TEXTURE0
+        public const int Texture1           = 0x84C1; // GL_TEXTURE1
+        public const int Texture2           = 0x84C2; // GL_TEXTURE2
+        public const int TextureMinFilter   = 0x2801; // GL_TEXTURE_MIN_FILTER
+        public const int TextureMagFilter   = 0x2800; // GL_TEXTURE_MAG_FILTER
+        public const int TextureWrapS       = 0x2802; // GL_TEXTURE_WRAP_S
+        public const int TextureWrapT       = 0x2803; // GL_TEXTURE_WRAP_T
+        public const int Linear             = 0x2601; // GL_LINEAR
+        public const int ClampToEdge        = 0x812F; // GL_CLAMP_TO_EDGE
+        public const int Rgba8              = 0x8058; // GL_RGBA8
+        public const int Rgba               = 0x1908; // GL_RGBA
+        public const int Bgra               = 0x80E1; // GL_BGRA
+        public const int UnsignedByte       = 0x1401; // GL_UNSIGNED_BYTE
+        public const int Float              = 0x1406; // GL_FLOAT
+        public const int ArrayBuffer        = 0x8892; // GL_ARRAY_BUFFER
+        public const int StaticDraw         = 0x88E4; // GL_STATIC_DRAW
+        public const int ColorBufferBit     = 0x00004000; // GL_COLOR_BUFFER_BIT
+        public const int Triangles          = 0x0004; // GL_TRIANGLES
+        public const int VertexShader       = 0x8B31; // GL_VERTEX_SHADER
+        public const int FragmentShader     = 0x8B30; // GL_FRAGMENT_SHADER
+        public const int CompileStatus      = 0x8B81; // GL_COMPILE_STATUS
+        public const int LinkStatus         = 0x8B82; // GL_LINK_STATUS
+        public const int UnpackAlignment    = 0x0CF5; // GL_UNPACK_ALIGNMENT
+    }
+
     private struct TextureUploadState
     {
         public bool IsInitialized;
@@ -1704,13 +1641,6 @@ public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
         if (generation == _lastPresentedGeneration) return;
         _lastPresentedGeneration = generation;
 
-        bool pipelineReady;
-        lock (_gate) { pipelineReady = _pipelineReady; }
-        if (pipelineReady)
-        {
-            _ = _shaderPipeline.Upload(frame);
-            _ = _shaderPipeline.Draw();
-        }
 
         if (SDL.GetWindowSizeInPixels(wnd, out var pw, out var ph))
             ApplyViewportForFrame(frame.Width, frame.Height, pw, ph);

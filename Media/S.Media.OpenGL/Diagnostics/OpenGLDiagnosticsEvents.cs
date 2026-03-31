@@ -45,7 +45,7 @@ public sealed class OpenGLDiagnosticsEvents : IDisposable
         handler?.Invoke(this, new OpenGLCloneGraphChangedEventArgs(parentOutputId, cloneOutputId, changeKind));
     }
 
-    public void PublishDiagnosticsUpdated(Guid outputId, OpenGLOutputDebugInfo snapshot)
+    public void PublishDiagnosticsUpdated(Guid outputId, VideoOutputDiagnosticsSnapshot snapshot)
     {
         EventHandler<OpenGLDiagnosticsSnapshotEventArgs>? handler;
         lock (_gate)
