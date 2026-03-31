@@ -41,9 +41,9 @@ public sealed class FFmpegConfigValidatorTests
     public void Validate_ReturnsInvalidAudioChannelMap_WhenExplicitMapPolicyHasNoMap()
     {
         var options = new FFmpegOpenOptions { InputUri = "file:///tmp/fake.mp4" };
-        var audioOptions = new FFAudioSourceOptions
+        var audioOptions = new FFmpegAudioSourceOptions
         {
-            MappingPolicy = FFAudioChannelMappingPolicy.ApplyExplicitRouteMap,
+            MappingPolicy = FFmpegAudioChannelMappingPolicy.ApplyExplicitRouteMap,
             ExplicitChannelMap = null,
         };
 
@@ -56,10 +56,10 @@ public sealed class FFmpegConfigValidatorTests
     public void Validate_ReturnsSuccess_ForValidExplicitMap()
     {
         var options = new FFmpegOpenOptions { InputUri = "file:///tmp/fake.mp4" };
-        var audioOptions = new FFAudioSourceOptions
+        var audioOptions = new FFmpegAudioSourceOptions
         {
-            MappingPolicy = FFAudioChannelMappingPolicy.ApplyExplicitRouteMap,
-            ExplicitChannelMap = new FFAudioChannelMap(2, 2, [0, 1]),
+            MappingPolicy = FFmpegAudioChannelMappingPolicy.ApplyExplicitRouteMap,
+            ExplicitChannelMap = new FFmpegAudioChannelMap(2, 2, [0, 1]),
         };
 
         var result = FFmpegConfigValidator.Validate(options, audioOptions);
@@ -133,8 +133,10 @@ public sealed class FFmpegConfigValidatorTests
     }
 
     [Fact]
-    public void Validate_ReturnsInvalidConfig_WhenInputFormatHintIsSetForUri()
+    public void Validate_ReturnsSuccess_WhenInputFormatHintIsSetForUri()
     {
+        // N11: InputFormatHint is now passed to av_find_input_format / avformat_open_input
+        // for URI-based inputs, so the validator no longer rejects this combination.
         var options = new FFmpegOpenOptions
         {
             InputUri = "file:///tmp/fake.mp4",
@@ -143,7 +145,7 @@ public sealed class FFmpegConfigValidatorTests
 
         var result = FFmpegConfigValidator.Validate(options);
 
-        Assert.Equal((int)MediaErrorCode.FFmpegInvalidConfig, result);
+        Assert.Equal(MediaResult.Success, result);
     }
 
     [Fact]

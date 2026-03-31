@@ -13,24 +13,23 @@ public interface IVideoOutput : IDisposable
 
     /// <summary>
     /// Pushes a decoded video frame to this output for immediate or scheduled presentation.
-    /// <para>
-    /// <b>Blocking behaviour varies by implementation:</b><br/>
-    /// — <c>NDIVideoOutput</c> with <c>ClockVideo = true</c>: blocks for approximately one frame
-    ///   interval to pace the NDI stream. Do not call from a latency-sensitive thread.<br/>
-    /// — <c>SDL3VideoView</c> and <c>AvaloniaVideoOutput</c>: non-blocking; returns immediately.
-    /// </para>
-    /// <para>
-    /// The mixer's <c>VideoPresentLoop</c> accounts for this variance via
-    /// <see cref="AVMixerConfig.PresentationHostPolicy"/>: use
-    /// <see cref="VideoDispatchPolicy.BackgroundWorker"/> to offload blocking outputs
-    /// to their own worker threads.
-    /// </para>
     /// </summary>
+    /// <remarks>
+    /// <b>Blocking behaviour varies by implementation:</b><br/>
+    /// Outputs that perform hardware-paced presentation (e.g. those backed by a blocking
+    /// send API) may block for approximately one frame interval. Non-blocking implementations
+    /// enqueue the frame and return immediately.<br/>
+    /// <br/>
+    /// Use <see cref="S.Media.Core.Mixing.AVMixerConfig.PresentationHostPolicy"/> with
+    /// <see cref="S.Media.Core.Mixing.VideoDispatchPolicy.BackgroundWorker"/> to route
+    /// potentially-blocking outputs to their own worker threads, isolating them from the
+    /// mixer's presentation loop.
+    /// </remarks>
     int PushFrame(VideoFrame frame);
 
     /// <summary>
     /// Pushes a decoded video frame with an explicit presentation timestamp.
-    /// <inheritdoc cref="PushFrame(VideoFrame)" path="/remarks"/>
     /// </summary>
+    /// <remarks><inheritdoc cref="PushFrame(VideoFrame)" path="/remarks"/></remarks>
     int PushFrame(VideoFrame frame, TimeSpan presentationTime);
 }

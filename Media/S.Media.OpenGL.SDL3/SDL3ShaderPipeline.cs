@@ -122,6 +122,7 @@ public sealed class SDL3ShaderPipeline : IDisposable
     private int _rgbaProgram;
     private int _yuvProgram;
     private int _yuvPixelFormatLocation = -1;
+    private int _yuvFullRangeLocation = -1;      // B6: full-range uniform
     private int _vao;
     private int _vbo;
     private int _textureRgba;
@@ -143,6 +144,13 @@ public sealed class SDL3ShaderPipeline : IDisposable
     // Last uploaded frame info for draw
     private bool _lastFrameIsYuv;
     private int _lastYuvModeId;
+    private bool _lastYuvFullRange;
+
+    /// <summary>
+    /// Time (ms) spent uploading the last frame to GPU textures.
+    /// Updated after each successful <see cref="Upload"/> call.
+    /// </summary>
+    public double LastUploadMs { get; private set; }
 
     public int EnsureInitialized()
     {
@@ -163,31 +171,26 @@ public sealed class SDL3ShaderPipeline : IDisposable
         lock (_gate)
         {
             if (!_initialized)
-            {
                 return (int)MediaErrorCode.SDL3EmbedNotInitialized;
-            }
 
             var validation = frame.ValidateForPush();
             if (validation != MediaResult.Success)
-            {
                 return validation;
-            }
 
             if (!_glReady)
             {
                 var init = InitializeGlResources();
                 if (init != MediaResult.Success)
-                {
                     return init;
-                }
             }
 
             if (frame.Width <= 0 || frame.Height <= 0 || frame.Plane0.IsEmpty)
-            {
                 return (int)MediaErrorCode.MediaInvalidArgument;
-            }
 
-            return UploadFrame(frame);
+            var uploadStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            var result = UploadFrame(frame);
+            LastUploadMs = System.Diagnostics.Stopwatch.GetElapsedTime(uploadStart).TotalMilliseconds;
+            return result;
         }
     }
 
@@ -234,10 +237,10 @@ public sealed class SDL3ShaderPipeline : IDisposable
         }
 
         // Compile RGBA program
-        var vs = CompileShader(GL_VERTEX_SHADER, VertexShaderSource);
+        var vs = CompileShader(GL_VERTEX_SHADER, GlslShaders.VertexCore);
         if (vs == 0) return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
 
-        var fs = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSource);
+        var fs = CompileShader(GL_FRAGMENT_SHADER, GlslShaders.FragmentRgbaCore);
         if (fs == 0) { _glDeleteShader!(vs); return (int)MediaErrorCode.SDL3EmbedInitializeFailed; }
 
         _rgbaProgram = LinkProgram(vs, fs);
@@ -246,10 +249,10 @@ public sealed class SDL3ShaderPipeline : IDisposable
         if (_rgbaProgram == 0) return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
 
         // Compile YUV program
-        vs = CompileShader(GL_VERTEX_SHADER, VertexShaderSource);
+        vs = CompileShader(GL_VERTEX_SHADER, GlslShaders.VertexCore);
         if (vs == 0) return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
 
-        var yuvFs = CompileShader(GL_FRAGMENT_SHADER, YuvFragmentShaderSource);
+        var yuvFs = CompileShader(GL_FRAGMENT_SHADER, GlslShaders.FragmentYuvCore);
         if (yuvFs == 0) { _glDeleteShader!(vs); return (int)MediaErrorCode.SDL3EmbedInitializeFailed; }
 
         _yuvProgram = LinkProgram(vs, yuvFs);
@@ -269,6 +272,7 @@ public sealed class SDL3ShaderPipeline : IDisposable
         var uTextureU = _glGetUniformLocation!(_yuvProgram, "uTextureU");
         var uTextureV = _glGetUniformLocation!(_yuvProgram, "uTextureV");
         _yuvPixelFormatLocation = _glGetUniformLocation!(_yuvProgram, "uPixelFormat");
+        _yuvFullRangeLocation   = _glGetUniformLocation!(_yuvProgram, "uFullRange");   // B6
         if (uTextureY >= 0) _glUniform1I!(uTextureY, 0);
         if (uTextureU >= 0) _glUniform1I!(uTextureU, 1);
         if (uTextureV >= 0) _glUniform1I!(uTextureV, 2);
@@ -409,6 +413,7 @@ public sealed class SDL3ShaderPipeline : IDisposable
 
         _lastFrameIsYuv = true;
         _lastYuvModeId = plan.ModeId;
+        _lastYuvFullRange = frame.IsFullRange;
         return MediaResult.Success;
     }
 
@@ -423,9 +428,9 @@ public sealed class SDL3ShaderPipeline : IDisposable
         {
             _glUseProgram!(_yuvProgram);
             if (_yuvPixelFormatLocation >= 0)
-            {
                 _glUniform1I!(_yuvPixelFormatLocation, _lastYuvModeId);
-            }
+            if (_yuvFullRangeLocation >= 0)
+                _glUniform1I!(_yuvFullRangeLocation, _lastYuvFullRange ? 1 : 0);   // B6
 
             _glActiveTexture!(GL_TEXTURE0);
             _glBindTexture!(GL_TEXTURE_2D, _textureY);
@@ -739,6 +744,7 @@ public sealed class SDL3ShaderPipeline : IDisposable
         if (_yuvProgram != 0) { _glDeleteProgram?.Invoke(_yuvProgram); _yuvProgram = 0; }
 
         _yuvPixelFormatLocation = -1;
+        _yuvFullRangeLocation = -1;
         _rgbaUploadState = default;
         _yUploadState = default;
         _uUploadState = default;
@@ -750,39 +756,7 @@ public sealed class SDL3ShaderPipeline : IDisposable
         _glReady = false;
     }
 
-    // ── Shaders ───────────────────────────────────────────────────────────────
-
-    private const string VertexShaderSource =
-        "#version 330 core\n" +
-        "layout(location=0) in vec2 aPosition;\n" +
-        "layout(location=1) in vec2 aTexCoord;\n" +
-        "out vec2 vTexCoord;\n" +
-        "void main(){ gl_Position = vec4(aPosition, 0.0, 1.0); vTexCoord = aTexCoord; }";
-
-    private const string FragmentShaderSource =
-        "#version 330 core\n" +
-        "in vec2 vTexCoord;\n" +
-        "out vec4 FragColor;\n" +
-        "uniform sampler2D uTexture;\n" +
-        "void main(){ FragColor = texture(uTexture, vTexCoord); }";
-
-    private const string YuvFragmentShaderSource =
-        "#version 330 core\n" +
-        "in vec2 vTexCoord;\n" +
-        "uniform sampler2D uTextureY;\n" +
-        "uniform sampler2D uTextureU;\n" +
-        "uniform sampler2D uTextureV;\n" +
-        "uniform int uPixelFormat;\n" +
-        "out vec4 FragColor;\n" +
-        "vec3 yuvToRgb(float y, float u, float v){ float r=y+1.5748*v; float g=y-0.1873*u-0.4681*v; float b=y+1.8556*u; return clamp(vec3(r,g,b),0.0,1.0); }\n" +
-        "void main(){\n" +
-        "  float scale=(uPixelFormat==4)?(65535.0/1023.0):1.0;\n" +
-        "  float y=texture(uTextureY,vTexCoord).r*scale;\n" +
-        "  float u; float v;\n" +
-        "  if(uPixelFormat==1 || uPixelFormat==3){ vec2 uv=texture(uTextureU,vTexCoord).rg*scale; u=uv.r-0.5; v=uv.g-0.5; }\n" +
-        "  else { u=texture(uTextureU,vTexCoord).r*scale-0.5; v=texture(uTextureV,vTexCoord).r*scale-0.5; }\n" +
-        "  FragColor=vec4(yuvToRgb(y,u,v),1.0);\n" +
-        "}";
+    // Shader sources are now in GlslShaders.cs (S.Media.OpenGL) — single source of truth.
 
     private struct TextureUploadState
     {

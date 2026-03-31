@@ -11,10 +11,18 @@ internal sealed class FFPixelConverter : IDisposable
     private bool _initialized;
     private bool _nativeConvertEnabled = true;
     private FFNativePixelConverterBackend? _nativeBackend;
+    // N9: configurable target packed format (defaults to Rgba32).
+    private VideoPixelFormat _preferredOutputPixelFormat = VideoPixelFormat.Rgba32;
 
     internal bool IsNativeConvertEnabled => _nativeConvertEnabled;
 
-    public int Initialize()
+    /// <param name="preferredOutputPixelFormat">
+    /// Preferred output format for the sws_scale fallback path. Only packed single-plane formats
+    /// (<see cref="VideoPixelFormat.Rgba32"/>, <see cref="VideoPixelFormat.Bgra32"/>) are
+    /// supported here; multi-plane formats are already handled by the native pass-through path
+    /// and are unaffected by this setting.
+    /// </param>
+    public int Initialize(VideoPixelFormat? preferredOutputPixelFormat = null)
     {
         if (_disposed)
         {
@@ -24,11 +32,15 @@ internal sealed class FFPixelConverter : IDisposable
         _nativeConvertEnabled = true;
         _nativeBackend?.Dispose();
         _nativeBackend = null;
+        // N9: only honour the preference if it is a packed single-plane format we can scale into.
+        _preferredOutputPixelFormat = preferredOutputPixelFormat.HasValue && IsPackedOutputFormat(preferredOutputPixelFormat.Value)
+            ? preferredOutputPixelFormat.Value
+            : VideoPixelFormat.Rgba32;
         _initialized = true;
         return MediaResult.Success;
     }
 
-    public int Convert() => _disposed || !_initialized ? (int)MediaErrorCode.FFmpegPixelConversionFailed : MediaResult.Success;
+    // N3: removed no-arg Convert() overload — it was a no-op.
 
     public int Convert(FFVideoDecodeResult decoded, out FFVideoConvertResult result)
     {
@@ -100,12 +112,15 @@ internal sealed class FFPixelConverter : IDisposable
 
         try
         {
+            // N9: use the configured target format instead of hardcoded AV_PIX_FMT_RGBA.
+            var targetAvFormat = FFNativeFormatMapper.MapToNativePixelFormat(_preferredOutputPixelFormat);
+
             _nativeBackend ??= new FFNativePixelConverterBackend();
             if (!_nativeBackend.TryEnsureInitialized(
                     decoded.Width,
                     decoded.Height,
                     decoded.NativePixelFormat.Value,
-                    (int)AVPixelFormat.AV_PIX_FMT_RGBA))
+                    targetAvFormat))
             {
                 _nativeConvertEnabled = false;
                 return false;
@@ -143,7 +158,7 @@ internal sealed class FFPixelConverter : IDisposable
                 decoded.NativeFrameRateNumerator,
                 decoded.NativeFrameRateDenominator,
                 decoded.NativePixelFormat,
-                VideoPixelFormat.Rgba32);
+                _preferredOutputPixelFormat);
             return true;
         }
         catch (DllNotFoundException)
@@ -178,7 +193,6 @@ internal sealed class FFPixelConverter : IDisposable
         return HasRequiredPlanes(decoded, mappedFormat);
     }
 
-
     private static bool HasRequiredPlanes(FFVideoDecodeResult decoded, VideoPixelFormat mappedFormat)
     {
         if (decoded.Plane0.IsEmpty || decoded.Plane0Stride <= 0)
@@ -206,6 +220,12 @@ internal sealed class FFPixelConverter : IDisposable
             VideoPixelFormat.Yuv420P10Le or
             VideoPixelFormat.Yuv444P or
             VideoPixelFormat.Yuv444P10Le;
+    }
+
+    /// <summary>Returns <see langword="true"/> for packed single-plane formats safe to use as sws_scale targets.</summary>
+    private static bool IsPackedOutputFormat(VideoPixelFormat format)
+    {
+        return format is VideoPixelFormat.Rgba32 or VideoPixelFormat.Bgra32;
     }
 }
 
@@ -281,18 +301,23 @@ internal unsafe sealed class FFNativePixelConverterBackend : IDisposable
             return false;
         }
 
+        // N9: derive the target line size from the actual pixel format via av_image_get_linesize
+        // instead of assuming 4 bytes/pixel (the old RGBA-only hardcode).
+        var targetLs = ffmpeg.av_image_get_linesize((AVPixelFormat)_targetPixelFormat, _width, 0);
+        var targetLinesize0 = targetLs > 0 ? targetLs : _width * 4;
+
         var sourceLinesize = new int[4];
         var targetLinesize = new int[4];
         sourceLinesize[0] = sourcePlane0Stride > 0 ? sourcePlane0Stride : _width * 4;
         sourceLinesize[1] = sourcePlane1Stride > 0 ? sourcePlane1Stride : 0;
         sourceLinesize[2] = sourcePlane2Stride > 0 ? sourcePlane2Stride : 0;
-        targetLinesize[0] = _width * 4;
-        plane0Stride = targetLinesize[0];
+        targetLinesize[0] = targetLinesize0;
+        plane0Stride = targetLinesize0;
 
         var sourceBuffer0 = sourcePlane0.IsEmpty ? Array.Empty<byte>() : sourcePlane0.ToArray();
         var sourceBuffer1 = sourcePlane1.IsEmpty ? Array.Empty<byte>() : sourcePlane1.ToArray();
         var sourceBuffer2 = sourcePlane2.IsEmpty ? Array.Empty<byte>() : sourcePlane2.ToArray();
-        var targetBuffer = new byte[Math.Max(1, targetLinesize[0] * _height)];
+        var targetBuffer = new byte[Math.Max(1, targetLinesize0 * _height)];
 
         fixed (byte* srcPtr0 = sourceBuffer0)
         fixed (byte* srcPtr1 = sourceBuffer1)

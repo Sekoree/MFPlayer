@@ -37,6 +37,29 @@ internal static class FFNativeFormatMapper
         };
     }
 
+    /// <summary>
+    /// Maps a <see cref="VideoPixelFormat"/> to the corresponding <c>AVPixelFormat</c> integer value.
+    /// Only packed single-plane formats are guaranteed to produce valid sws_scale output via the
+    /// single-plane converter path. Unknown/unsupported formats fall back to RGBA.
+    /// </summary>
+    public static int MapToNativePixelFormat(VideoPixelFormat format)
+    {
+        return (int)(format switch
+        {
+            VideoPixelFormat.Rgba32 => AVPixelFormat.AV_PIX_FMT_RGBA,
+            VideoPixelFormat.Bgra32 => AVPixelFormat.AV_PIX_FMT_BGRA,
+            VideoPixelFormat.Yuv420P => AVPixelFormat.AV_PIX_FMT_YUV420P,
+            VideoPixelFormat.Nv12 => AVPixelFormat.AV_PIX_FMT_NV12,
+            VideoPixelFormat.Yuv422P => AVPixelFormat.AV_PIX_FMT_YUV422P,
+            VideoPixelFormat.Yuv422P10Le => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
+            VideoPixelFormat.P010Le => AVPixelFormat.AV_PIX_FMT_P010LE,
+            VideoPixelFormat.Yuv420P10Le => AVPixelFormat.AV_PIX_FMT_YUV420P10LE,
+            VideoPixelFormat.Yuv444P => AVPixelFormat.AV_PIX_FMT_YUV444P,
+            VideoPixelFormat.Yuv444P10Le => AVPixelFormat.AV_PIX_FMT_YUV444P10LE,
+            _ => AVPixelFormat.AV_PIX_FMT_RGBA,
+        });
+    }
+
     public static VideoPixelFormat ResolvePreferredPixelFormat(
         int? nativePixelFormat,
         int width,

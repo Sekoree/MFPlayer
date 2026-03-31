@@ -8,12 +8,12 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
 
-public sealed class FFVideoSourceTests
+public sealed class FFmpegVideoSourceTests
 {
     [Fact]
     public void SeekToFrame_ReturnsInvalidArgument_ForNegativeFrameIndex()
     {
-        var source = new FFVideoSource();
+        var source = new FFmpegVideoSource();
 
         var result = source.SeekToFrame(-1);
 
@@ -23,7 +23,7 @@ public sealed class FFVideoSourceTests
     [Fact]
     public void SeekToFrame_ReturnsNonSeekable_WhenSourceIsNotSeekable()
     {
-        var source = new FFVideoSource(isSeekable: false);
+        var source = new FFmpegVideoSource(isSeekable: false);
 
         var result = source.SeekToFrame(5);
 
@@ -33,7 +33,7 @@ public sealed class FFVideoSourceTests
     [Fact]
     public void ReadFrame_IncrementsCurrentFrameIndex_OnSuccess()
     {
-        var source = new FFVideoSource();
+        var source = new FFmpegVideoSource();
 
         var code = source.ReadFrame(out var frame);
         frame.Dispose();
@@ -46,7 +46,7 @@ public sealed class FFVideoSourceTests
     public void Constructor_ExposesStreamInfo()
     {
         var info = new VideoStreamInfo { Codec = "h264", Width = 1920, Height = 1080, FrameRate = 60d };
-        var source = new FFVideoSource(info, durationSeconds: 4.0);
+        var source = new FFmpegVideoSource(info, durationSeconds: 4.0);
 
         Assert.Equal("h264", source.StreamInfo.Codec);
         Assert.Equal(1920, source.StreamInfo.Width);
@@ -57,7 +57,7 @@ public sealed class FFVideoSourceTests
     [Fact]
     public void ReadFrame_FromMediaItemSharedSession_ReturnsError_WhenNativeUnavailable()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -79,7 +79,7 @@ public sealed class FFVideoSourceTests
     [Fact]
     public void Seek_FromMediaItemSharedSession_SucceedsButReadReturnsError_WhenNativeUnavailable()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -99,9 +99,12 @@ public sealed class FFVideoSourceTests
     }
 
     [Fact]
-    public void SeekToFrame_FromMediaItemSharedSession_SucceedsButReadReturnsError_WhenNativeUnavailable()
+    public void SeekToFrame_FromMediaItemSharedSession_ReturnsNonSeekable_WhenFrameRateUnknown()
     {
-        using var item = new FFMediaItem(
+        // Issue 4.1 fix: SeekToFrame returns MediaSourceNonSeekable when no frame rate
+        // can be determined (no native stream, no observed frame rate from prior reads).
+        // The old behaviour silently fell back to 30 fps which produced wrong seek positions.
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -113,15 +116,14 @@ public sealed class FFVideoSourceTests
         var source = item.VideoSource;
         Assert.NotNull(source);
 
-        Assert.Equal(MediaResult.Success, source.SeekToFrame(45));
-        var code = source.ReadFrame(out _);
-        Assert.NotEqual(MediaResult.Success, code);
+        var seekCode = source.SeekToFrame(45);
+        Assert.Equal((int)MediaErrorCode.MediaSourceNonSeekable, seekCode);
     }
 
     [Fact]
     public void ReadFrame_ReturnsConcurrentReadViolation_WhenReadAlreadyInProgress()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -134,7 +136,7 @@ public sealed class FFVideoSourceTests
         var source = item.VideoSource;
         Assert.NotNull(source);
 
-        var field = typeof(FFVideoSource).GetField("_readInProgress", BindingFlags.Instance | BindingFlags.NonPublic);
+        var field = typeof(FFmpegVideoSource).GetField("_readInProgress", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(field);
         field!.SetValue(source, 1);
 
@@ -146,9 +148,9 @@ public sealed class FFVideoSourceTests
     [Fact]
     public void Constructor_FromMediaItemWithoutVideo_ThrowsDecodingException()
     {
-        using var audioOnly = new FFMediaItem([new FFAudioSource()], []);
+        using var audioOnly = new FFmpegMediaItem([new FFmpegAudioSource()], []);
 
-        var ex = Assert.Throws<DecodingException>(() => new FFVideoSource(audioOnly));
+        var ex = Assert.Throws<DecodingException>(() => new FFmpegVideoSource(audioOnly));
 
         Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }
@@ -156,7 +158,7 @@ public sealed class FFVideoSourceTests
     [Fact]
     public void ReadFrame_FromMediaItemSharedSession_ReturnsNonSuccess_WhenNativeUnavailable_MultiPlaneCheck()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",

@@ -28,7 +28,7 @@ internal static class Program
 
         try
         {
-            using var media = FFMediaItem.Open(uri);
+            using var media = FFmpegMediaItem.Open(uri);
 
             var (audioEngine, audioOutput) = TestHelpers.InitAudioOutput(a.HostApi, a.DeviceIndex);
             using var _ae = audioEngine;

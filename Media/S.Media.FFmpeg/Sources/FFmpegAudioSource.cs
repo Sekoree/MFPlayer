@@ -7,7 +7,7 @@ using S.Media.FFmpeg.Media;
 
 namespace S.Media.FFmpeg.Sources;
 
-public sealed class FFAudioSource : IAudioSource
+public sealed class FFmpegAudioSource : IAudioSource
 {
     private readonly Lock _gate = new();
     private readonly FFSharedDemuxSession? _sharedDemuxSession;
@@ -15,12 +15,12 @@ public sealed class FFAudioSource : IAudioSource
     private bool _disposed;
     private double _positionSeconds;
 
-    public FFAudioSource(double durationSeconds = double.NaN, bool isSeekable = true)
+    public FFmpegAudioSource(double durationSeconds = double.NaN, bool isSeekable = true)
         : this(new AudioStreamInfo { Duration = CreateDuration(durationSeconds) }, durationSeconds, isSeekable, options: null)
     {
     }
 
-    public FFAudioSource(FFMediaItem mediaItem)
+    public FFmpegAudioSource(FFmpegMediaItem mediaItem)
         : this(
             ResolveAudioStreamInfo(mediaItem),
             durationSeconds: ResolveDurationSeconds(ResolveAudioStreamInfo(mediaItem).Duration),
@@ -30,22 +30,22 @@ public sealed class FFAudioSource : IAudioSource
     {
     }
 
-    public FFAudioSource(AudioStreamInfo streamInfo, double durationSeconds = double.NaN, bool isSeekable = true, FFAudioSourceOptions? options = null)
+    public FFmpegAudioSource(AudioStreamInfo streamInfo, double durationSeconds = double.NaN, bool isSeekable = true, FFmpegAudioSourceOptions? options = null)
         : this(streamInfo, durationSeconds, isSeekable, options, sharedDemuxSession: null)
     {
     }
 
-    internal FFAudioSource(
+    internal FFmpegAudioSource(
         AudioStreamInfo streamInfo,
         double durationSeconds,
         bool isSeekable,
-        FFAudioSourceOptions? options,
+        FFmpegAudioSourceOptions? options,
         FFSharedDemuxSession? sharedDemuxSession)
     {
         StreamInfo = streamInfo;
         DurationSeconds = durationSeconds;
         IsSeekable = isSeekable;
-        Options = options ?? new FFAudioSourceOptions();
+        Options = options ?? new FFmpegAudioSourceOptions();
         _sharedDemuxSession = sharedDemuxSession;
         Id = Guid.NewGuid();
     }
@@ -65,7 +65,7 @@ public sealed class FFAudioSource : IAudioSource
             ? (long)(StreamInfo.Duration.Value.TotalSeconds * StreamInfo.SampleRate!.Value)
             : null;
 
-    public FFAudioSourceOptions Options { get; }
+    public FFmpegAudioSourceOptions Options { get; }
 
     public bool IsSeekable { get; }
 
@@ -86,7 +86,10 @@ public sealed class FFAudioSource : IAudioSource
     {
         lock (_gate)
         {
-            return _disposed ? (int)MediaErrorCode.MediaInvalidArgument : (State = AudioSourceState.Running) switch { _ => MediaResult.Success };
+            if (_disposed)
+                return (int)MediaErrorCode.MediaInvalidArgument;
+            State = AudioSourceState.Running;
+            return MediaResult.Success;
         }
     }
 
@@ -182,7 +185,25 @@ public sealed class FFAudioSource : IAudioSource
             }
 
             _positionSeconds = positionSeconds;
+            // P4-4: a seek restarts the stream — move back to Running if we were at EndOfStream.
+            if (State == AudioSourceState.EndOfStream)
+                State = AudioSourceState.Running;
             return MediaResult.Success;
+        }
+    }
+
+    /// <summary>
+    /// Updates the position tracking state without triggering a session seek.
+    /// Called by <see cref="FFmpegMediaItem.Seek"/> after the shared session has already been seeked
+    /// to avoid the double-seek that would occur if <see cref="Seek"/> were called directly.
+    /// </summary>
+    internal void NotifySeek(double positionSeconds)
+    {
+        lock (_gate)
+        {
+            _positionSeconds = positionSeconds;
+            if (State == AudioSourceState.EndOfStream)
+                State = AudioSourceState.Running;
         }
     }
 
@@ -200,7 +221,7 @@ public sealed class FFAudioSource : IAudioSource
         return double.IsFinite(seconds) && seconds >= 0 ? TimeSpan.FromSeconds(seconds) : null;
     }
 
-    public int TryGetEffectiveChannelMap(out FFAudioChannelMap map)
+    public int TryGetEffectiveChannelMap(out FFmpegAudioChannelMap map)
     {
         var channelCount = StreamInfo.ChannelCount.GetValueOrDefault(2);
         // OutputChannelCountOverride limits the number of output channels produced.
@@ -208,7 +229,7 @@ public sealed class FFAudioSource : IAudioSource
             ? Options.OutputChannelCountOverride.Value
             : channelCount;
 
-        if (Options.MappingPolicy == FFAudioChannelMappingPolicy.ApplyExplicitRouteMap)
+        if (Options.MappingPolicy == FFmpegAudioChannelMappingPolicy.ApplyExplicitRouteMap)
         {
             if (Options.ExplicitChannelMap is null)
             {
@@ -220,15 +241,15 @@ public sealed class FFAudioSource : IAudioSource
             return map.Validate(out _);
         }
 
-        if (Options.MappingPolicy == FFAudioChannelMappingPolicy.DownmixToMono)
+        if (Options.MappingPolicy == FFmpegAudioChannelMappingPolicy.DownmixToMono)
         {
-            map = new FFAudioChannelMap(channelCount, 1, [0]);
+            map = new FFmpegAudioChannelMap(channelCount, 1, [0]);
             return MediaResult.Success;
         }
 
-        if (Options.MappingPolicy == FFAudioChannelMappingPolicy.DownmixToStereo)
+        if (Options.MappingPolicy == FFmpegAudioChannelMappingPolicy.DownmixToStereo)
         {
-            map = new FFAudioChannelMap(channelCount, 2, [0, Math.Min(1, channelCount - 1)]);
+            map = new FFmpegAudioChannelMap(channelCount, 2, [0, Math.Min(1, channelCount - 1)]);
             return MediaResult.Success;
         }
 
@@ -238,21 +259,21 @@ public sealed class FFAudioSource : IAudioSource
             var clampedOutput = Math.Min(outputChannelCount, channelCount);
             var indices = new int[clampedOutput];
             for (var i = 0; i < clampedOutput; i++) indices[i] = i;
-            map = new FFAudioChannelMap(channelCount, clampedOutput, indices);
+            map = new FFmpegAudioChannelMap(channelCount, clampedOutput, indices);
             return MediaResult.Success;
         }
 
-        map = FFAudioChannelMap.Identity(channelCount);
+        map = FFmpegAudioChannelMap.Identity(channelCount);
         return MediaResult.Success;
     }
 
-    private static AudioStreamInfo ResolveAudioStreamInfo(FFMediaItem mediaItem)
+    private static AudioStreamInfo ResolveAudioStreamInfo(FFmpegMediaItem mediaItem)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
 
         if (mediaItem.AudioStreams.Count == 0)
         {
-            throw new DecodingException(MediaErrorCode.FFmpegInvalidConfig, "FFMediaItem does not contain an audio stream.");
+            throw new DecodingException(MediaErrorCode.FFmpegInvalidConfig, "FFmpegMediaItem does not contain an audio stream.");
         }
 
         return mediaItem.AudioStreams[0];

@@ -17,8 +17,6 @@ internal sealed class FFPacketReader : IDisposable
     private long _generation;
     private long _nextAudioPacketIndex;
     private long _nextVideoPacketIndex;
-    private TimeSpan _nextAudioPresentationTime;
-    private TimeSpan _nextVideoPresentationTime;
     private FFNativeFileDemux? _nativeDemux;
 
     internal bool IsNativeDemuxActive => _isNativeDemuxActive;
@@ -63,8 +61,6 @@ internal sealed class FFPacketReader : IDisposable
         _generation = 0;
         _nextAudioPacketIndex = 0;
         _nextVideoPacketIndex = 0;
-        _nextAudioPresentationTime = TimeSpan.Zero;
-        _nextVideoPresentationTime = TimeSpan.Zero;
         _initialized = true;
         return MediaResult.Success;
     }
@@ -88,8 +84,6 @@ internal sealed class FFPacketReader : IDisposable
             return (int)MediaErrorCode.FFmpegSeekFailed;
         }
 
-        _nextAudioPresentationTime = TimeSpan.FromSeconds(positionSeconds);
-        _nextVideoPresentationTime = TimeSpan.FromSeconds(positionSeconds);
         _nextAudioPacketIndex = 0;
         _nextVideoPacketIndex = 0;
         return MediaResult.Success;
@@ -122,13 +116,12 @@ internal sealed class FFPacketReader : IDisposable
                 return (int)MediaErrorCode.FFmpegReadFailed;
             }
 
-            var nativeSampleValue = (float)((_nextAudioPacketIndex % 16) / 16d);
             packet = new FFPacket(
                 _generation,
                 _nextAudioPacketIndex,
                 presentationTime,
                 isKeyFrame,
-                nativeSampleValue,
+                SampleValue: 0f,
                 NativePacketData: nativePacketData,
                 NativePacketFlags: packetFlags,
                 NativeStreamIndex: streamIndex,
@@ -194,20 +187,6 @@ internal sealed class FFPacketReader : IDisposable
         return (int)MediaErrorCode.FFmpegReadFailed;
     }
 
-    public int ReadNextPacket()
-    {
-        if (_hasAudio)
-        {
-            return ReadAudioPacket(out _);
-        }
-
-        if (_hasVideo)
-        {
-            return ReadVideoPacket(out _);
-        }
-
-        return (int)MediaErrorCode.FFmpegReadFailed;
-    }
 
     public void Dispose()
     {
@@ -262,18 +241,40 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
             return false;
         }
 
-        var path = ResolveLocalPath(openOptions.InputUri);
-        if (path is null || !File.Exists(path))
+        var path = ResolveInputPath(openOptions.InputUri);
+        if (path is null)
         {
             return false;
         }
+
+        // For local filesystem paths verify existence before handing to FFmpeg (better error message).
+        if (Uri.TryCreate(path, UriKind.Absolute, out var pathUri) && pathUri.IsFile)
+        {
+            if (!File.Exists(pathUri.LocalPath))
+            {
+                return false;
+            }
+        }
+        else if (!path.Contains("://") && !File.Exists(path))
+        {
+            // Bare relative path — check existence.
+            return false;
+        }
+        // Network URIs (rtsp://, http://, etc.) are passed directly to avformat_open_input.
 
         AVFormatContext* formatContext = null;
         AVPacket* packet = null;
 
         try
         {
-            var openCode = ffmpeg.avformat_open_input(&formatContext, path, null, null);
+            // N11: resolve the forced input format if a hint was provided.
+            AVInputFormat* forcedFormat = null;
+            if (!string.IsNullOrWhiteSpace(openOptions.InputFormatHint))
+            {
+                forcedFormat = ffmpeg.av_find_input_format(openOptions.InputFormatHint);
+            }
+
+            var openCode = ffmpeg.avformat_open_input(&formatContext, path, forcedFormat, null);
             if (openCode < 0)
             {
                 return false;
@@ -657,19 +658,23 @@ internal unsafe sealed class FFNativeFileDemux : IDisposable
         return ffmpeg.av_find_best_stream(formatContext, streamType, -1, -1, null, 0);
     }
 
-    private static string? ResolveLocalPath(string? inputUri)
+    private static string? ResolveInputPath(string? inputUri)
     {
         if (string.IsNullOrWhiteSpace(inputUri))
         {
             return null;
         }
 
+        // Convert file:// URIs to their local path form.
         if (Uri.TryCreate(inputUri, UriKind.Absolute, out var uri) && uri.IsFile)
         {
             return uri.LocalPath;
         }
 
-        return File.Exists(inputUri) ? inputUri : null;
+        // Pass all other URIs (bare paths, rtsp://, http://, etc.) through as-is.
+        // FFmpeg will attempt to open them natively; File.Exists is not called here
+        // because network URIs would always fail that test.
+        return inputUri;
     }
 
     private FFStreamDescriptor? BuildStreamDescriptor(int streamIndex, bool isAudio)

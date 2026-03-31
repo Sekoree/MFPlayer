@@ -29,8 +29,12 @@ public sealed class FFResamplerTests
     }
 
     [Fact]
-    public void Resample_InvalidNativeFormat_ReturnsErrorAndDisablesNativePath()
+    public void Resample_WithNativeFields_PassesThroughSamples()
     {
+        // N4 fix: the resampler is now a pure pass-through; no SwrContext is allocated.
+        // Any valid (non-null, positive) sample rate / channel count results in Success
+        // regardless of the sample format integer value, because format conversion was
+        // already done upstream in FFNativeAudioDecoderBackend.
         using var resampler = new FFResampler();
         Assert.Equal(MediaResult.Success, resampler.Initialize());
 
@@ -43,15 +47,19 @@ public sealed class FFResamplerTests
             NativeChannelCount: 2,
             NativeSampleFormat: int.MaxValue);
 
-        var code = resampler.Resample(decoded, out _);
+        var code = resampler.Resample(decoded, out var result);
 
-        Assert.Equal((int)MediaErrorCode.FFmpegResampleFailed, code);
-        Assert.False(resampler.IsNativeResampleEnabled);
+        Assert.Equal(MediaResult.Success, code);
+        Assert.Equal(256, result.FrameCount);
+        Assert.Equal(2, result.NativeChannelCount);
+        Assert.Equal(48_000, result.NativeSampleRate);
     }
 
     [Fact]
-    public void Resample_WithNativeFields_WithoutNativeLibs_ReturnsError()
+    public void Resample_WithNativeFields_NoNativeLibsRequired()
     {
+        // N4 fix: swr_convert is no longer called, so no native FFmpeg libraries are
+        // required.  Samples flow through unchanged.
         using var resampler = new FFResampler();
         Assert.Equal(MediaResult.Success, resampler.Initialize());
 
@@ -64,9 +72,9 @@ public sealed class FFResamplerTests
             NativeChannelCount: 2,
             NativeSampleFormat: 1);
 
-        var code = resampler.Resample(decoded, out _);
+        var code = resampler.Resample(decoded, out var result);
 
-        // Without native FFmpeg libraries, resample fails
-        Assert.Equal((int)MediaErrorCode.FFmpegResampleFailed, code);
+        Assert.Equal(MediaResult.Success, code);
+        Assert.Equal(128, result.FrameCount);
     }
 }

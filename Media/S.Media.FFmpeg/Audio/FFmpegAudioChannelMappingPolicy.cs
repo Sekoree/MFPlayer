@@ -1,6 +1,6 @@
 namespace S.Media.FFmpeg.Audio;
 
-public enum FFAudioChannelMappingPolicy
+public enum FFmpegAudioChannelMappingPolicy
 {
     PreserveSourceLayout = 0,
     ApplyExplicitRouteMap = 1,

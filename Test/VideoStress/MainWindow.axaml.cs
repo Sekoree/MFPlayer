@@ -26,8 +26,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _statusTimer;
     private readonly CancellationTokenSource _playbackCts = new();
 
-    private FFMediaItem? _mediaItem;
-    private FFVideoSource? _videoSource;
+    private FFmpegMediaItem? _mediaItem;
+    private FFmpegVideoSource? _videoSource;
     private AvaloniaVideoOutput[] _outputs = [];
     private AvaloniaOpenGLHostControl[] _hosts = [];
     private Task? _playbackLoopTask;
@@ -49,7 +49,7 @@ public partial class MainWindow : Window
         Opened += (_, _) => InitializePlayback();
         Closing += (_, _) => DisposePlayback();
 
-        var summary = $"Wired modules: {nameof(FFMediaItem)}, {nameof(AvaloniaVideoOutput)}, {nameof(PortAudioEngine)}";
+        var summary = $"Wired modules: {nameof(FFmpegMediaItem)}, {nameof(AvaloniaVideoOutput)}, {nameof(PortAudioEngine)}";
 
         SummaryText.Text = summary;
     }
@@ -104,7 +104,7 @@ public partial class MainWindow : Window
 
         try
         {
-            _mediaItem = new FFMediaItem(
+            _mediaItem = new FFmpegMediaItem(
                 new FFmpegOpenOptions
                 {
                     InputUri = inputUri,
@@ -121,7 +121,7 @@ public partial class MainWindow : Window
             _videoSource = _mediaItem.VideoSource;
             if (_videoSource is null)
             {
-                StatusText.Text = "FFMediaItem did not expose a video source.";
+                StatusText.Text = "FFmpegMediaItem did not expose a video source.";
                 return;
             }
 
@@ -137,7 +137,7 @@ public partial class MainWindow : Window
                 _ = output.Start(new VideoOutputConfig());
             }
 
-            _hosts = _outputs.Select(o => new AvaloniaOpenGLHostControl(o.Output)).ToArray();
+            _hosts = _outputs.Select(o => new AvaloniaOpenGLHostControl(o.InternalOutput)).ToArray();
             AttachHosts();
 
             _playbackLoopTask = Task.Run(() => PlaybackLoop(_playbackCts.Token));

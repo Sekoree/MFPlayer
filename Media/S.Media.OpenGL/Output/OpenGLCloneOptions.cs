@@ -4,8 +4,13 @@ public sealed record OpenGLCloneOptions
 {
     public OpenGLCloneMode Mode { get; init; } = OpenGLCloneMode.SharedTexture;
 
-    internal bool AutoResizeToParent { get; init; } = true;
+    /// <summary>
+    /// When <see langword="true"/> (default), the clone automatically tracks the parent
+    /// output's surface dimensions.
+    /// </summary>
+    public bool AutoResizeToParent { get; init; } = true;
 
+    // Reserved until shared-context path (CloneMode) is implemented (see Issue B2).
     internal bool ShareParentColorPipeline { get; init; } = true;
 
     internal bool FailIfContextSharingUnavailable { get; init; } = true;

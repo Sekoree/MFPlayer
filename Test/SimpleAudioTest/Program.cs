@@ -32,7 +32,7 @@ internal static class Program
 
         try
         {
-            using var media = FFMediaItem.Open(uri);
+            using var media = FFmpegMediaItem.Open(uri);
 
             var source = media.AudioSource;
             if (source is null) { Console.Error.WriteLine("No audio source in media."); return 3; }

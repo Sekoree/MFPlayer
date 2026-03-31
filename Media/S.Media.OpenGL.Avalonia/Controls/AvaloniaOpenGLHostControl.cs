@@ -1,9 +1,7 @@
-using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
 using S.Media.Core.Errors;
-using S.Media.OpenGL;
 using S.Media.Core.Video;
 using S.Media.OpenGL.Avalonia.Diagnostics;
 using S.Media.OpenGL.Output;
@@ -87,14 +85,19 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
 
     /// <summary>
     /// Push a video frame for rendering. The control will present it on the next render cycle.
+    /// Takes a reference via <see cref="VideoFrame.AddRef"/> so the caller may safely dispose
+    /// the frame immediately after this call returns.
     /// </summary>
     public void PushFrame(VideoFrame frame)
     {
+        VideoFrame? previous;
         lock (_gate)
         {
-            _lastFrame = frame;
+            previous = _lastFrame;
+            _lastFrame = frame.AddRef();   // take ownership of a reference
         }
 
+        previous?.Dispose();               // release the old reference outside the lock
         QueueRenderRequest();
     }
 
@@ -127,11 +130,12 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
             }
 
             surface = _output.Surface;
+            frame = _lastFrame;
+            _lastFrame = null;             // take ownership; clear so the ref is not held past this render pass
             shouldRender = surface.LastPresentedFrameGeneration != _lastRenderedGeneration
-                           || _lastFrame != null
+                           || frame != null
                            || EnableHudOverlay;
             keepPumping = _output.IsRunning;
-            frame = _lastFrame;
 
             if (shouldRender)
             {
@@ -141,6 +145,7 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
 
         if (!shouldRender)
         {
+            frame?.Dispose();              // release the ref we took even if we are not rendering
             return;
         }
 
@@ -151,6 +156,8 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
             var pixelHeight = Math.Max(1, (int)(Bounds.Height * scaling));
 
             _renderer.RenderFrame(gl, fb, frame, pixelWidth, pixelHeight, KeepAspectRatio);
+            _output.UpdateTimings(_renderer.LastUploadMs, _renderer.LastPresentMs);
+            frame.Dispose();              // release our ownership ref after upload
         }
 
         if (EnableHudOverlay)
@@ -168,12 +175,16 @@ public sealed class AvaloniaOpenGLHostControl : OpenGlControlBase
     {
         _renderer.Deinitialize(gl);
 
+        VideoFrame? lastFrame;
         lock (_gate)
         {
             _glInitialized = false;
             _lastRenderedGeneration = -1;
+            lastFrame = _lastFrame;
             _lastFrame = null;
         }
+
+        lastFrame?.Dispose();
 
         base.OnOpenGlDeinit(gl);
     }

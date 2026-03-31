@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
-using Avalonia;
 using Avalonia.OpenGL;
 using S.Media.Core.Video;
+using S.Media.OpenGL;
 
 namespace S.Media.OpenGL.Avalonia.Controls;
 
@@ -64,6 +64,7 @@ internal sealed class AvaloniaGLRenderer : IDisposable
     private bool _canUseGpuYuvPath;
     private bool _can16BitTextures;
     private int _yuvPixelFormatLocation = -1;
+    private int _yuvFullRangeLocation = -1;      // B6
     private TexSubImage2DProc? _texSubImage2D;
     private GetUniformLocationProc? _getUniformLocation;
     private Uniform1iProc? _uniform1i;
@@ -82,6 +83,12 @@ internal sealed class AvaloniaGLRenderer : IDisposable
     public int TextureWidth => _textureWidth;
     public int TextureHeight => _textureHeight;
 
+    /// <summary>Time (ms) spent uploading textures during the last <see cref="RenderFrame"/> call.</summary>
+    public double LastUploadMs { get; private set; }
+
+    /// <summary>Time (ms) spent in the draw call during the last <see cref="RenderFrame"/> call.</summary>
+    public double LastPresentMs { get; private set; }
+
     public void Initialize(GlInterface gl)
     {
         if (_disposed) return;
@@ -96,12 +103,12 @@ internal sealed class AvaloniaGLRenderer : IDisposable
 
         // Build shader programs
         _rgbaProgram = BuildProgram(gl,
-            isEs ? VertexShaderEs : VertexShaderCore,
-            isEs ? FragmentShaderEs : FragmentShaderCore);
+            isEs ? GlslShaders.VertexEs : GlslShaders.VertexCore,
+            isEs ? GlslShaders.FragmentRgbaEs : GlslShaders.FragmentRgbaCore);
 
         _yuvProgram = BuildProgram(gl,
-            isEs ? VertexShaderEs : VertexShaderCore,
-            isEs ? YuvFragmentShaderEs : YuvFragmentShaderCore);
+            isEs ? GlslShaders.VertexEs : GlslShaders.VertexCore,
+            isEs ? GlslShaders.FragmentYuvEs : GlslShaders.FragmentYuvCore);
 
         _canUseGpuYuvPath = _yuvProgram != 0 && _getUniformLocation != null && _uniform1i != null;
 
@@ -161,7 +168,9 @@ internal sealed class AvaloniaGLRenderer : IDisposable
         if (frame.Width <= 0 || frame.Height <= 0 || frame.Plane0.IsEmpty) return;
 
         var useYuv = false;
-        var yuvMode = 0; // 0=none, 1=NV12, 2=planar8, 3=P010LE, 4=planar10
+        var yuvMode = 0;
+
+        var uploadStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
         switch (frame.PixelFormat)
         {
@@ -174,7 +183,7 @@ internal sealed class AvaloniaGLRenderer : IDisposable
                 if (_canUseGpuYuvPath)
                     { UploadNv12Gpu(gl, frame); useYuv = true; yuvMode = 1; }
                 else
-                    UploadRgba(gl, frame); // CPU fallback would go here
+                    UploadRgba(gl, frame);
                 break;
 
             case VideoPixelFormat.Yuv420P:
@@ -203,10 +212,11 @@ internal sealed class AvaloniaGLRenderer : IDisposable
                 break;
 
             default:
-                return; // unsupported format
+                return;
         }
 
-        // Draw
+        LastUploadMs = System.Diagnostics.Stopwatch.GetElapsedTime(uploadStart).TotalMilliseconds;
+
         var vp = GetAspectFitViewport(surfaceWidth, surfaceHeight, _textureWidth, _textureHeight, keepAspectRatio);
         gl.Viewport(vp.x, vp.y, vp.w, vp.h);
 
@@ -215,17 +225,21 @@ internal sealed class AvaloniaGLRenderer : IDisposable
             gl.UseProgram(_yuvProgram);
             if (_uniform1i != null && _yuvPixelFormatLocation >= 0)
                 _uniform1i(_yuvPixelFormatLocation, yuvMode);
+            if (_uniform1i != null && _yuvFullRangeLocation >= 0)  // B6
+                _uniform1i(_yuvFullRangeLocation, frame.IsFullRange ? 1 : 0);
         }
         else
         {
             gl.UseProgram(_rgbaProgram);
         }
 
+        var drawStart = System.Diagnostics.Stopwatch.GetTimestamp();
         gl.BindVertexArray(_vao);
         gl.DrawArrays(GlConsts.GL_TRIANGLES, 0, 6);
         gl.BindVertexArray(0);
         gl.UseProgram(0);
         gl.BindTexture(GlConsts.GL_TEXTURE_2D, 0);
+        LastPresentMs = System.Diagnostics.Stopwatch.GetElapsedTime(drawStart).TotalMilliseconds;
     }
 
     public void Deinitialize(GlInterface gl)
@@ -420,110 +434,8 @@ internal sealed class AvaloniaGLRenderer : IDisposable
     // ── Shader source strings ────────────────────────────────────────────────
     // Ported from VideoGlShaders — dual profile (core 3.3 + ES 3.0)
 
-    private const string VertexShaderCore = """
-        #version 330 core
-        layout(location = 0) in vec2 aPosition;
-        layout(location = 1) in vec2 aTexCoord;
-        out vec2 vTexCoord;
-        void main() {
-            gl_Position = vec4(aPosition, 0.0, 1.0);
-            vTexCoord = aTexCoord;
-        }
-        """;
-
-    private const string FragmentShaderCore = """
-        #version 330 core
-        in vec2 vTexCoord;
-        uniform sampler2D uTexture;
-        out vec4 FragColor;
-        void main() {
-            FragColor = texture(uTexture, vTexCoord);
-        }
-        """;
-
-    private const string YuvFragmentShaderCore = """
-        #version 330 core
-        in vec2 vTexCoord;
-        uniform sampler2D uTextureY;
-        uniform sampler2D uTextureU;
-        uniform sampler2D uTextureV;
-        uniform int uPixelFormat;
-        out vec4 FragColor;
-        vec3 yuvToRgb(float y, float u, float v) {
-            float r = y + 1.5748 * v;
-            float g = y - 0.1873 * u - 0.4681 * v;
-            float b = y + 1.8556 * u;
-            return clamp(vec3(r, g, b), 0.0, 1.0);
-        }
-        void main() {
-            float scale = (uPixelFormat == 4) ? (65535.0 / 1023.0) : 1.0;
-            float y = texture(uTextureY, vTexCoord).r * scale;
-            float u, v;
-            if (uPixelFormat == 1 || uPixelFormat == 3) {
-                vec2 uv = texture(uTextureU, vTexCoord).rg * scale;
-                u = uv.r - 0.5; v = uv.g - 0.5;
-            } else {
-                u = texture(uTextureU, vTexCoord).r * scale - 0.5;
-                v = texture(uTextureV, vTexCoord).r * scale - 0.5;
-            }
-            FragColor = vec4(yuvToRgb(y, u, v), 1.0);
-        }
-        """;
-
-    private const string VertexShaderEs = """
-        #version 300 es
-        layout(location = 0) in vec2 aPosition;
-        layout(location = 1) in vec2 aTexCoord;
-        out vec2 vTexCoord;
-        void main() {
-            gl_Position = vec4(aPosition, 0.0, 1.0);
-            vTexCoord = aTexCoord;
-        }
-        """;
-
-    private const string FragmentShaderEs = """
-        #version 300 es
-        precision mediump float;
-        in vec2 vTexCoord;
-        uniform sampler2D uTexture;
-        out vec4 FragColor;
-        void main() {
-            FragColor = texture(uTexture, vTexCoord);
-        }
-        """;
-
-    private const string YuvFragmentShaderEs = """
-        #version 300 es
-        precision mediump float;
-        in vec2 vTexCoord;
-        uniform sampler2D uTextureY;
-        uniform sampler2D uTextureU;
-        uniform sampler2D uTextureV;
-        uniform int uPixelFormat;
-        out vec4 FragColor;
-        vec3 yuvToRgb(float y, float u, float v) {
-            float r = y + 1.5748 * v;
-            float g = y - 0.1873 * u - 0.4681 * v;
-            float b = y + 1.8556 * u;
-            return clamp(vec3(r, g, b), 0.0, 1.0);
-        }
-        void main() {
-            float scale = (uPixelFormat == 4) ? (65535.0 / 1023.0) : 1.0;
-            float y = texture(uTextureY, vTexCoord).r * scale;
-            float u, v;
-            if (uPixelFormat == 1 || uPixelFormat == 3) {
-                vec2 uv = texture(uTextureU, vTexCoord).rg * scale;
-                u = uv.r - 0.5; v = uv.g - 0.5;
-            } else {
-                u = texture(uTextureU, vTexCoord).r * scale - 0.5;
-                v = texture(uTextureV, vTexCoord).r * scale - 0.5;
-            }
-            FragColor = vec4(yuvToRgb(y, u, v), 1.0);
-        }
-        """;
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
+    // Shader sources are in GlslShaders.cs (S.Media.OpenGL) — single source of truth.
+    // (VertexShaderCore/Es, FragmentShaderCore/Es, YuvFragmentShaderCore/Es removed from this file.)
     private void InitializeYuvUniforms(GlInterface gl)
     {
         if (_getUniformLocation == null || _uniform1i == null || _yuvProgram == 0) return;
@@ -533,6 +445,7 @@ internal sealed class AvaloniaGLRenderer : IDisposable
         var uLoc = _getUniformLocation(_yuvProgram, "uTextureU");
         var vLoc = _getUniformLocation(_yuvProgram, "uTextureV");
         _yuvPixelFormatLocation = _getUniformLocation(_yuvProgram, "uPixelFormat");
+        _yuvFullRangeLocation   = _getUniformLocation(_yuvProgram, "uFullRange");  // B6
 
         if (yLoc >= 0) _uniform1i(yLoc, 0);
         if (uLoc >= 0) _uniform1i(uLoc, 1);

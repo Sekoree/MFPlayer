@@ -102,8 +102,6 @@ internal sealed class FFSharedDemuxSession : IDisposable
             }
 
             // After native stream resolution, clear streams that don't actually exist
-            // (e.g. OpenVideo=true on an audio-only file like FLAC).
-            if (_packetReader.IsNativeDemuxActive)
             {
                 if (hasAudio && nativeAudioStream is null)
                 {
@@ -144,7 +142,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
                     return videoInit;
                 }
 
-                var convertInit = _pixelConverter.Initialize();
+                // N9: pass the caller's preferred output pixel format to the converter.
+                var convertInit = _pixelConverter.Initialize(normalizedDecodeOptions.PreferredOutputPixelFormat);
                 if (convertInit != MediaResult.Success)
                 {
                     _context.Close();
@@ -396,6 +395,11 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 return seekCode;
             }
 
+            // N6: flush stale B-frame / reference state from both codec contexts so the
+            // first frames after the seek are clean.
+            _audioDecoder.FlushCodecBuffers();
+            _videoDecoder.FlushCodecBuffers();
+
             lock (_gate)
             {
                 if (_disposed || !_isOpen)
@@ -405,6 +409,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
                 _audioQueue.Clear();
                 _videoQueue.Clear();
+                _pendingAudioChunk = null;
 
                 publishDescriptors = _context.AudioStream is not null || _context.VideoStream is not null;
                 _workerSignal.Set();
@@ -493,7 +498,9 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
             if (!produced)
             {
-                _workerSignal.WaitOne(5);
+                // N7: 5 ms wait caused ~200 Hz busy-polling when both queues were full.
+                // 20 ms (50 Hz) is ample for a 4-frame / 4-packet queue.
+                _workerSignal.WaitOne(20);
                 continue;
             }
 

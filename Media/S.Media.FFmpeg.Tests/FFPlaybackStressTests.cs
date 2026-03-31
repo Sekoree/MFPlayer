@@ -26,7 +26,7 @@ public sealed class FFPlaybackStressTests
             MaxQueuedFrames = 8,
         };
 
-        using var item = new FFMediaItem(openOptions, decodeOptions);
+        using var item = new FFmpegMediaItem(openOptions, decodeOptions);
         var source = item.VideoSource;
         Assert.NotNull(source);
 

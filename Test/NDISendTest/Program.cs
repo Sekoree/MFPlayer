@@ -40,7 +40,7 @@ internal static class Program
             using var _runtime = runtimeInst!;
             Console.WriteLine($"NDI runtime version: {NDIRuntime.Version}");
 
-            using var media = FFMediaItem.Open(uri);
+            using var media = FFmpegMediaItem.Open(uri);
 
             var videoSource = media.VideoSource;
             if (videoSource is null) { Console.Error.WriteLine("No video source in media."); return 3; }

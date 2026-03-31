@@ -11,14 +11,14 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
 
-public sealed class FFMediaItemTests
+public sealed class FFmpegMediaItemTests
 {
     [Fact]
     public void AudioVideoConstructor_ExposesPlaybackSources_AndInitialActiveVideo()
     {
-        var audio = new FFAudioSource();
-        var video = new FFVideoSource();
-        var item = new FFMediaItem(audio, video);
+        var audio = new FFmpegAudioSource();
+        var video = new FFmpegVideoSource();
+        var item = new FFmpegMediaItem(audio, video);
 
         Assert.Single(item.PlaybackAudioSources);
         Assert.Single(item.PlaybackVideoSources);
@@ -31,7 +31,7 @@ public sealed class FFMediaItemTests
     {
         var audio = new TrackableAudioSource();
         var video = new TrackableVideoSource();
-        var item = new FFMediaItem([audio], [video], video, ownsSources: true);
+        var item = new FFmpegMediaItem([audio], [video], video, ownsSources: true);
 
         item.Dispose();
 
@@ -49,7 +49,7 @@ public sealed class FFMediaItemTests
             OpenVideo = false,
         };
 
-        var ex = Assert.Throws<DecodingException>(() => new FFMediaItem(options));
+        var ex = Assert.Throws<DecodingException>(() => new FFmpegMediaItem(options));
 
         Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }
@@ -60,7 +60,7 @@ public sealed class FFMediaItemTests
         var options = new FFmpegOpenOptions { InputUri = "file:///tmp/fake.mp4" };
         var decodeOptions = new FFmpegDecodeOptions { DecodeThreadCount = -1 };
 
-        var ex = Assert.Throws<DecodingException>(() => new FFMediaItem(options, decodeOptions));
+        var ex = Assert.Throws<DecodingException>(() => new FFmpegMediaItem(options, decodeOptions));
 
         Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }
@@ -68,9 +68,9 @@ public sealed class FFMediaItemTests
     [Fact]
     public void AudioVideoConstructor_ExposesTypedSources_AndStreamLists()
     {
-        var audio = new FFAudioSource();
-        var video = new FFVideoSource();
-        var item = new FFMediaItem(audio, video);
+        var audio = new FFmpegAudioSource();
+        var video = new FFmpegVideoSource();
+        var item = new FFmpegMediaItem(audio, video);
 
         Assert.NotNull(item.AudioSource);
         Assert.NotNull(item.VideoSource);
@@ -82,7 +82,7 @@ public sealed class FFMediaItemTests
     public void StreamCtor_DisposesOwnedStream_WhenLeaveInputStreamOpenIsFalse()
     {
         var stream = new TrackingMemoryStream();
-        var item = new FFMediaItem(stream, leaveInputStreamOpen: false);
+        var item = new FFmpegMediaItem(stream, leaveInputStreamOpen: false);
 
         item.Dispose();
 
@@ -93,7 +93,7 @@ public sealed class FFMediaItemTests
     public void StreamCtor_DoesNotDisposeOwnedStream_WhenLeaveInputStreamOpenIsTrue()
     {
         var stream = new TrackingMemoryStream();
-        var item = new FFMediaItem(stream, leaveInputStreamOpen: true);
+        var item = new FFmpegMediaItem(stream, leaveInputStreamOpen: true);
 
         item.Dispose();
 
@@ -105,7 +105,7 @@ public sealed class FFMediaItemTests
     {
         using var stream = new NonReadableMemoryStream();
 
-        var ex = Assert.Throws<DecodingException>(() => new FFMediaItem(stream));
+        var ex = Assert.Throws<DecodingException>(() => new FFmpegMediaItem(stream));
 
         Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }
@@ -116,7 +116,7 @@ public sealed class FFMediaItemTests
         using var stream = new MemoryStream([1, 2, 3]);
         var openOptions = new FFmpegOpenOptions { InputUri = "file:///tmp/fake.mp4" };
 
-        var ex = Assert.Throws<DecodingException>(() => new FFMediaItem(stream, openOptions));
+        var ex = Assert.Throws<DecodingException>(() => new FFmpegMediaItem(stream, openOptions));
 
         Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }
@@ -132,7 +132,7 @@ public sealed class FFMediaItemTests
             LeaveInputStreamOpen = false,
         };
 
-        var item = new FFMediaItem(stream, openOptions);
+        var item = new FFmpegMediaItem(stream, openOptions);
         item.Dispose();
 
         Assert.True(stream.Disposed);
@@ -149,7 +149,7 @@ public sealed class FFMediaItemTests
             LeaveInputStreamOpen = true,
         };
 
-        var item = new FFMediaItem(stream, openOptions);
+        var item = new FFmpegMediaItem(stream, openOptions);
         item.Dispose();
 
         Assert.False(stream.Disposed);
@@ -160,7 +160,7 @@ public sealed class FFMediaItemTests
     {
         using var stream = new MemoryStream([1, 2, 3]);
 
-        var item = new FFMediaItem(stream, leaveInputStreamOpen: true, inputFormatHint: "mpegts");
+        var item = new FFmpegMediaItem(stream, leaveInputStreamOpen: true, inputFormatHint: "mpegts");
 
         Assert.NotNull(item.ResolvedOpenOptions);
         Assert.Equal("mpegts", item.ResolvedOpenOptions!.InputFormatHint);
@@ -179,7 +179,7 @@ public sealed class FFMediaItemTests
             InputFormatHint = "matroska",
         };
 
-        var item = new FFMediaItem(stream, options);
+        var item = new FFmpegMediaItem(stream, options);
 
         Assert.NotNull(item.ResolvedOpenOptions);
         Assert.True(item.ResolvedOpenOptions!.OpenVideo);
@@ -200,7 +200,7 @@ public sealed class FFMediaItemTests
             MaxQueuedPackets = -2,
         };
 
-        var item = new FFMediaItem(options, decodeOptions);
+        var item = new FFmpegMediaItem(options, decodeOptions);
 
         Assert.NotNull(item.ResolvedDecodeOptions);
         Assert.Equal(Math.Max(1, Environment.ProcessorCount), item.ResolvedDecodeOptions!.DecodeThreadCount);
@@ -211,7 +211,7 @@ public sealed class FFMediaItemTests
     [Fact]
     public void OpenOptionsConstructor_WiresSessionBackedSources_WithDefaultMetadata()
     {
-        var item = new FFMediaItem(
+        var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -236,7 +236,7 @@ public sealed class FFMediaItemTests
     public void StreamCtor_PropagatesNonSeekableInput_ToCreatedSources()
     {
         using var stream = new NonSeekableReadableMemoryStream([1, 2, 3, 4]);
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             stream,
             new FFmpegOpenOptions
             {
@@ -254,7 +254,7 @@ public sealed class FFMediaItemTests
     [Fact]
     public void OpenOptionsConstructor_PopulatesBaselineMetadataSnapshot()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -274,7 +274,7 @@ public sealed class FFMediaItemTests
     [Fact]
     public void MetadataChanged_IsNotRaisedAfterDisposeCompletion()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -282,7 +282,7 @@ public sealed class FFMediaItemTests
                 OpenVideo = false,
             });
 
-        var setMetadata = typeof(FFMediaItem).GetMethod("SetMetadata", BindingFlags.Instance | BindingFlags.NonPublic);
+        var setMetadata = typeof(FFmpegMediaItem).GetMethod("SetMetadata", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(setMetadata);
 
         var eventCount = 0;
@@ -314,7 +314,7 @@ public sealed class FFMediaItemTests
     [Fact]
     public void MetadataChanged_DoesNotRaiseForEquivalentSnapshotContent()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -322,7 +322,7 @@ public sealed class FFMediaItemTests
                 OpenVideo = false,
             });
 
-        var setMetadata = typeof(FFMediaItem).GetMethod("SetMetadata", BindingFlags.Instance | BindingFlags.NonPublic);
+        var setMetadata = typeof(FFmpegMediaItem).GetMethod("SetMetadata", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(setMetadata);
 
         var eventCount = 0;
@@ -351,7 +351,7 @@ public sealed class FFMediaItemTests
     [Fact]
     public void SharedSessionDescriptorRefresh_UpdatesMetadataAndRaisesEvent()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -363,7 +363,7 @@ public sealed class FFMediaItemTests
         var eventCount = 0;
         item.MetadataChanged += (_, _) => eventCount++;
 
-        var sessionProperty = typeof(FFMediaItem).GetProperty("SharedDemuxSession", BindingFlags.Instance | BindingFlags.NonPublic);
+        var sessionProperty = typeof(FFmpegMediaItem).GetProperty("SharedDemuxSession", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(sessionProperty);
 
         var session = sessionProperty!.GetValue(item);
@@ -409,7 +409,7 @@ public sealed class FFMediaItemTests
     [HeavyFfmpegFact]
     public void OpenOptionsConstructor_HeavyFile_CanExposeNativeResolvedStreamMetadata()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = new Uri(HeavyFfmpegTestConfig.ResolveVideoPath()).AbsoluteUri,
@@ -429,7 +429,7 @@ public sealed class FFMediaItemTests
     [HeavyFfmpegFact]
     public void MetadataChanged_HeavySeekChurn_IsMonotonic_AndAvoidsDuplicateSpam()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = new Uri(HeavyFfmpegTestConfig.ResolveVideoPath()).AbsoluteUri,
@@ -461,7 +461,7 @@ public sealed class FFMediaItemTests
     [Fact]
     public void Open_Uri_CreatesMediaItem_WithAudioAndVideo()
     {
-        using var item = FFMediaItem.Open("file:///tmp/fake.mp4");
+        using var item = FFmpegMediaItem.Open("file:///tmp/fake.mp4");
 
         Assert.NotNull(item.AudioSource);
         Assert.NotNull(item.VideoSource);
@@ -475,16 +475,16 @@ public sealed class FFMediaItemTests
     [Fact]
     public void Open_Uri_ThrowsForNullOrWhitespace()
     {
-        Assert.ThrowsAny<ArgumentException>(() => FFMediaItem.Open((string)null!));
-        Assert.ThrowsAny<ArgumentException>(() => FFMediaItem.Open(""));
-        Assert.ThrowsAny<ArgumentException>(() => FFMediaItem.Open("   "));
+        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Open((string)null!));
+        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Open(""));
+        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Open("   "));
     }
 
     [Fact]
     public void Open_Stream_CreatesMediaItem()
     {
         using var stream = new MemoryStream([1, 2, 3]);
-        using var item = FFMediaItem.Open(stream);
+        using var item = FFmpegMediaItem.Open(stream);
 
         Assert.NotNull(item.ResolvedOpenOptions);
         Assert.Same(stream, item.ResolvedOpenOptions!.InputStream);
@@ -493,13 +493,13 @@ public sealed class FFMediaItemTests
     [Fact]
     public void Open_Stream_ThrowsForNull()
     {
-        Assert.Throws<ArgumentNullException>(() => FFMediaItem.Open((Stream)null!));
+        Assert.Throws<ArgumentNullException>(() => FFmpegMediaItem.Open((Stream)null!));
     }
 
     [Fact]
     public void TryOpen_Uri_ReturnsTrueForValidUri()
     {
-        var result = FFMediaItem.TryOpen("file:///tmp/fake.mp4", out var item);
+        var result = FFmpegMediaItem.TryOpen("file:///tmp/fake.mp4", out var item);
 
         Assert.True(result);
         Assert.NotNull(item);
@@ -511,13 +511,13 @@ public sealed class FFMediaItemTests
     [Fact]
     public void TryOpen_Uri_ReturnsFalseForNullOrWhitespace()
     {
-        Assert.False(FFMediaItem.TryOpen((string)null!, out var item1));
+        Assert.False(FFmpegMediaItem.TryOpen((string)null!, out var item1));
         Assert.Null(item1);
 
-        Assert.False(FFMediaItem.TryOpen("", out var item2));
+        Assert.False(FFmpegMediaItem.TryOpen("", out var item2));
         Assert.Null(item2);
 
-        Assert.False(FFMediaItem.TryOpen("   ", out var item3));
+        Assert.False(FFmpegMediaItem.TryOpen("   ", out var item3));
         Assert.Null(item3);
     }
 
@@ -525,7 +525,7 @@ public sealed class FFMediaItemTests
     public void TryOpen_Stream_ReturnsTrueForValidStream()
     {
         using var stream = new MemoryStream([1, 2, 3]);
-        var result = FFMediaItem.TryOpen(stream, out var item);
+        var result = FFmpegMediaItem.TryOpen(stream, out var item);
 
         Assert.True(result);
         Assert.NotNull(item);
@@ -535,7 +535,7 @@ public sealed class FFMediaItemTests
     [Fact]
     public void TryOpen_Stream_ReturnsFalseForNull()
     {
-        Assert.False(FFMediaItem.TryOpen((Stream?)null, out var item));
+        Assert.False(FFmpegMediaItem.TryOpen((Stream?)null, out var item));
         Assert.Null(item);
     }
 

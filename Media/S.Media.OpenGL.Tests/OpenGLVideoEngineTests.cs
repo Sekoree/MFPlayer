@@ -39,7 +39,7 @@ public sealed class OpenGLVideoEngineTests
 
         Assert.Equal((int)MediaErrorCode.OpenGLCloneCycleDetected, code);
         Assert.Equal(root.Id, child.CloneParentOutputId);
-        Assert.Contains(child.Id, root.CloneOutputIds);
+        Assert.Contains(child.Id, engine.GetCloneIds(root.Id));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class OpenGLVideoEngineTests
 
         Assert.Equal(MediaResult.Success, code);
         Assert.Equal(parent.Id, child.CloneParentOutputId);
-        Assert.Contains(child.Id, parent.CloneOutputIds);
+        Assert.Contains(child.Id, engine.GetCloneIds(parent.Id));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public sealed class OpenGLVideoEngineTests
 
         Assert.Equal((int)MediaErrorCode.OpenGLCloneAttachFailed, code);
         Assert.Null(child.CloneParentOutputId);
-        Assert.DoesNotContain(child.Id, parent.CloneOutputIds);
+        Assert.DoesNotContain(child.Id, engine.GetCloneIds(parent.Id));
     }
 
     [Fact]

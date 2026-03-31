@@ -2,9 +2,9 @@ using S.Media.Core.Errors;
 
 namespace S.Media.FFmpeg.Audio;
 
-public readonly record struct FFAudioChannelMap
+public readonly record struct FFmpegAudioChannelMap
 {
-    public FFAudioChannelMap(int sourceChannelCount, int destinationChannelCount, IReadOnlyList<int> sourceChannelByOutputIndex)
+    public FFmpegAudioChannelMap(int sourceChannelCount, int destinationChannelCount, IReadOnlyList<int> sourceChannelByOutputIndex)
     {
         SourceChannelCount = sourceChannelCount;
         DestinationChannelCount = destinationChannelCount;
@@ -56,9 +56,9 @@ public readonly record struct FFAudioChannelMap
         return MediaResult.Success;
     }
 
-    public static FFAudioChannelMap Identity(int channelCount)
+    public static FFmpegAudioChannelMap Identity(int channelCount)
     {
         var map = Enumerable.Range(0, channelCount).ToArray();
-        return new FFAudioChannelMap(channelCount, channelCount, map);
+        return new FFmpegAudioChannelMap(channelCount, channelCount, map);
     }
 }

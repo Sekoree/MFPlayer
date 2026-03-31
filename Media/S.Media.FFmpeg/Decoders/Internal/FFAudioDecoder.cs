@@ -28,8 +28,6 @@ internal sealed class FFAudioDecoder : IDisposable
         return MediaResult.Success;
     }
 
-    public int Decode() => _disposed || !_initialized ? (int)MediaErrorCode.FFmpegAudioDecodeFailed : MediaResult.Success;
-
     public int Decode(FFPacket packet, out FFAudioDecodeResult result)
     {
         result = default;
@@ -64,6 +62,12 @@ internal sealed class FFAudioDecoder : IDisposable
         }
 
         return (int)MediaErrorCode.FFmpegAudioDecodeFailed;
+    }
+
+    /// <summary>Flushes the native codec context after a seek to discard stale B-frame / reference state.</summary>
+    public void FlushCodecBuffers()
+    {
+        _nativeBackend?.FlushCodecBuffers();
     }
 
     public void Dispose()
@@ -150,6 +154,8 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
 {
     private AVCodecContext* _codecContext;
     private AVFrame* _frame;
+    // N5: pre-allocated packet reused across TryDecode calls to avoid per-call native heap allocation.
+    private AVPacket* _packet;
     private AVCodecID? _codecId;
     private bool _disposed;
 
@@ -203,6 +209,14 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
             return false;
         }
 
+        // N5: allocate the reusable packet once after the codec context is fully initialised.
+        _packet = ffmpeg.av_packet_alloc();
+        if (_packet is null)
+        {
+            DisposeCodecContext();
+            return false;
+        }
+
         _codecId = requestedCodecId;
         return true;
     }
@@ -224,64 +238,62 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
         samples = default;
         needMoreInput = false;
 
-        if (_disposed || _codecContext is null || _frame is null)
+        if (_disposed || _codecContext is null || _frame is null || _packet is null)
         {
             return false;
         }
 
-        AVPacket* packet = ffmpeg.av_packet_alloc();
-        if (packet is null)
+        // N5: reuse the pre-allocated packet — unref first so av_grow_packet starts from a clean state.
+        ffmpeg.av_packet_unref(_packet);
+        if (ffmpeg.av_grow_packet(_packet, packetData.Length) < 0)
         {
             return false;
         }
 
-        try
+        Marshal.Copy(packetData, 0, (IntPtr)_packet->data, packetData.Length);
+        _packet->flags = packetFlags;
+
+        if (ffmpeg.avcodec_send_packet(_codecContext, _packet) < 0)
         {
-            if (ffmpeg.av_new_packet(packet, packetData.Length) < 0)
-            {
-                return false;
-            }
-
-            Marshal.Copy(packetData, 0, (IntPtr)packet->data, packetData.Length);
-            packet->flags = packetFlags;
-
-            if (ffmpeg.avcodec_send_packet(_codecContext, packet) < 0)
-            {
-                return false;
-            }
-
-            var receiveCode = ffmpeg.avcodec_receive_frame(_codecContext, _frame);
-            if (receiveCode == 0)
-            {
-                frameCount = _frame->nb_samples;
-                sampleRate = _frame->sample_rate > 0
-                    ? _frame->sample_rate
-                    : _codecContext->sample_rate;
-                channelCount = _frame->ch_layout.nb_channels > 0
-                    ? _frame->ch_layout.nb_channels
-                    : _codecContext->ch_layout.nb_channels;
-                if (channelCount <= 0)
-                {
-                    channelCount = 2;
-                }
-
-                sampleFormat = _frame->format;
-                samples = ExtractSamples(_frame, frameCount, channelCount, sampleFormat);
-                ffmpeg.av_frame_unref(_frame);
-                return true;
-            }
-
-            if (receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN))
-            {
-                needMoreInput = true;
-                return false;
-            }
-
             return false;
         }
-        finally
+
+        var receiveCode = ffmpeg.avcodec_receive_frame(_codecContext, _frame);
+        if (receiveCode == 0)
         {
-            ffmpeg.av_packet_free(&packet);
+            frameCount = _frame->nb_samples;
+            sampleRate = _frame->sample_rate > 0
+                ? _frame->sample_rate
+                : _codecContext->sample_rate;
+            channelCount = _frame->ch_layout.nb_channels > 0
+                ? _frame->ch_layout.nb_channels
+                : _codecContext->ch_layout.nb_channels;
+            if (channelCount <= 0)
+            {
+                channelCount = 2;
+            }
+
+            sampleFormat = _frame->format;
+            samples = ExtractSamples(_frame, frameCount, channelCount, sampleFormat);
+            ffmpeg.av_frame_unref(_frame);
+            return true;
+        }
+
+        if (receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+        {
+            needMoreInput = true;
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>Flushes stale codec state after a seek. Must be called while the pipeline gate is held.</summary>
+    public void FlushCodecBuffers()
+    {
+        if (_codecContext is not null)
+        {
+            ffmpeg.avcodec_flush_buffers(_codecContext);
         }
     }
 
@@ -303,6 +315,14 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
             var frame = _frame;
             ffmpeg.av_frame_free(&frame);
             _frame = null;
+        }
+
+        // N5: free the pre-allocated packet alongside the codec context.
+        if (_packet is not null)
+        {
+            var pkt = _packet;
+            ffmpeg.av_packet_free(&pkt);
+            _packet = null;
         }
 
         if (_codecContext is not null)

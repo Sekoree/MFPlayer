@@ -9,12 +9,12 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
 
-public sealed class FFAudioSourceTests
+public sealed class FFmpegAudioSourceTests
 {
     [Fact]
     public void Seek_ReturnsInvalidArgument_ForNegativePosition()
     {
-        var source = new FFAudioSource();
+        var source = new FFmpegAudioSource();
 
         var result = source.Seek(-0.5);
 
@@ -24,7 +24,7 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void Seek_ReturnsNonSeekable_WhenSourceIsNotSeekable()
     {
-        var source = new FFAudioSource(isSeekable: false);
+        var source = new FFmpegAudioSource(isSeekable: false);
 
         var result = source.Seek(1.0);
 
@@ -34,7 +34,7 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void ReadSamples_WithNonPositiveRequest_IsSuccessAndReadsZero()
     {
-        var source = new FFAudioSource();
+        var source = new FFmpegAudioSource();
 
         var result = source.ReadSamples(Span<float>.Empty, 0, out var framesRead);
 
@@ -46,7 +46,7 @@ public sealed class FFAudioSourceTests
     public void Constructor_ExposesStreamInfo()
     {
         var info = new AudioStreamInfo { Codec = "aac", SampleRate = 48000, ChannelCount = 2 };
-        var source = new FFAudioSource(info, durationSeconds: 3.5);
+        var source = new FFmpegAudioSource(info, durationSeconds: 3.5);
 
         Assert.Equal("aac", source.StreamInfo.Codec);
         Assert.Equal(48000, source.StreamInfo.SampleRate);
@@ -56,9 +56,9 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void TryGetEffectiveChannelMap_ReturnsInvalid_ForExplicitPolicyWithoutMap()
     {
-        var source = new FFAudioSource(
+        var source = new FFmpegAudioSource(
             new AudioStreamInfo { ChannelCount = 2 },
-            options: new FFAudioSourceOptions { MappingPolicy = FFAudioChannelMappingPolicy.ApplyExplicitRouteMap });
+            options: new FFmpegAudioSourceOptions { MappingPolicy = FFmpegAudioChannelMappingPolicy.ApplyExplicitRouteMap });
 
         var code = source.TryGetEffectiveChannelMap(out _);
 
@@ -68,7 +68,7 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void TryGetEffectiveChannelMap_ReturnsIdentity_ForPreserveLayout()
     {
-        var source = new FFAudioSource(new AudioStreamInfo { ChannelCount = 2 });
+        var source = new FFmpegAudioSource(new AudioStreamInfo { ChannelCount = 2 });
 
         var code = source.TryGetEffectiveChannelMap(out var map);
 
@@ -79,7 +79,7 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void ReadSamples_FromMediaItemSharedSession_ReturnsError_WhenNativeUnavailable()
     {
-        var item = new FFMediaItem(
+        var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -104,7 +104,7 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void Seek_FromMediaItemSharedSession_SucceedsButReadReturnsError_WhenNativeUnavailable()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -130,7 +130,7 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void ReadSamples_ReturnsConcurrentReadViolation_WhenReadAlreadyInProgress()
     {
-        using var item = new FFMediaItem(
+        using var item = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -143,7 +143,7 @@ public sealed class FFAudioSourceTests
         var source = item.AudioSource;
         Assert.NotNull(source);
 
-        var field = typeof(FFAudioSource).GetField("_readInProgress", BindingFlags.Instance | BindingFlags.NonPublic);
+        var field = typeof(FFmpegAudioSource).GetField("_readInProgress", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(field);
         field!.SetValue(source, 1);
 
@@ -156,9 +156,9 @@ public sealed class FFAudioSourceTests
     [Fact]
     public void Constructor_FromMediaItemWithoutAudio_ThrowsDecodingException()
     {
-        using var videoOnly = new FFMediaItem([], [new FFVideoSource()]);
+        using var videoOnly = new FFmpegMediaItem([], [new FFmpegVideoSource()]);
 
-        var ex = Assert.Throws<DecodingException>(() => new FFAudioSource(videoOnly));
+        var ex = Assert.Throws<DecodingException>(() => new FFmpegAudioSource(videoOnly));
 
         Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }

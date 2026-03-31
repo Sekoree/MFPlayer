@@ -4,47 +4,85 @@ using S.Media.OpenGL.Output;
 
 namespace S.Media.OpenGL.Avalonia.Output;
 
-public sealed class AvaloniaVideoOutput : IVideoOutput
+public sealed class AvaloniaVideoOutput : OpenGLWrapperVideoOutput
 {
     private readonly Lock _gate = new();
-    private readonly OpenGLVideoOutput _output;
-    private readonly OpenGLVideoEngine _engine;
-    private bool _disposed;
+    private Action<VideoFrame>? _frameCallback;
 
+    // Keep existing public constructor for backwards compatibility, but prefer Create().
     internal AvaloniaVideoOutput(OpenGLVideoOutput output, OpenGLVideoEngine engine, bool isClone)
+        : base(output, engine, isClone)
     {
-        _output = output;
-        _engine = engine;
-        IsClone = isClone;
-
-        var add = _engine.AddOutput(_output);
-        if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
-        {
-            throw new InvalidOperationException($"Failed to register output in OpenGL engine. Code={add}.");
-        }
     }
 
     public AvaloniaVideoOutput() : this(new OpenGLVideoOutput(), new OpenGLVideoEngine(), isClone: false)
     {
     }
 
-    public Guid Id => _output.Id;
+    /// <summary>
+    /// Creates a new <see cref="AvaloniaVideoOutput"/> without throwing on failure.
+    /// Preferred over the public constructor for code that follows the framework's
+    /// integer-return-code convention.
+    /// </summary>
+    public static int Create(out AvaloniaVideoOutput? result)
+    {
+        result = null;
+        var output = new OpenGLVideoOutput();
+        var engine = new OpenGLVideoEngine();
+        var add = engine.AddOutput(output);
+        if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
+        {
+            output.Dispose();
+            engine.Dispose();
+            return add;
+        }
 
-    public VideoOutputState State => _output.State;
+        result = new AvaloniaVideoOutput(output, engine, isClone: false);
+        return MediaResult.Success;
+    }
 
-    public bool IsClone { get; }
+    /// <summary>The underlying <see cref="OpenGLVideoOutput"/> managed by this view.</summary>
+    public OpenGLVideoOutput InternalOutput => Output;
 
-    public Guid? CloneParentOutputId => _output.CloneParentOutputId;
+    /// <summary>
+    /// Binds a callback that will be invoked with each successfully pushed
+    /// <see cref="VideoFrame"/>. Use this to forward frames from the mixer into an
+    /// <c>AvaloniaOpenGLHostControl</c>:
+    /// <code>avOut.BindFrameCallback(control.PushFrame);</code>
+    /// </summary>
+    public void BindFrameCallback(Action<VideoFrame>? callback)
+    {
+        lock (_gate)
+        {
+            _frameCallback = callback;
+        }
+    }
 
-    public OpenGLVideoOutput Output => _output;
+    public override int PushFrame(VideoFrame frame)
+    {
+        var r = Output.PushFrame(frame);
+        if (r == MediaResult.Success)
+        {
+            Action<VideoFrame>? cb;
+            lock (_gate) { cb = _frameCallback; }
+            cb?.Invoke(frame);
+        }
 
-    public int Start(VideoOutputConfig config) => _output.Start(config);
+        return r;
+    }
 
-    public int Stop() => _output.Stop();
+    public override int PushFrame(VideoFrame frame, TimeSpan presentationTime)
+    {
+        var r = Output.PushFrame(frame, presentationTime);
+        if (r == MediaResult.Success)
+        {
+            Action<VideoFrame>? cb;
+            lock (_gate) { cb = _frameCallback; }
+            cb?.Invoke(frame);
+        }
 
-    public int PushFrame(VideoFrame frame) => _output.PushFrame(frame);
-
-    public int PushFrame(VideoFrame frame, TimeSpan presentationTime) => _output.PushFrame(frame, presentationTime);
+        return r;
+    }
 
     public int CreateClone(in AvaloniaCloneOptions options, out AvaloniaVideoOutput? cloneOutput)
     {
@@ -52,18 +90,16 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
 
         lock (_gate)
         {
-            if (_disposed)
+            if (!Output.IsRunning && Output.State == VideoOutputState.Stopped)
             {
-                return (int)MediaErrorCode.OpenGLCloneParentDisposed;
+                // allow creation even when stopped (policy allows it by default)
             }
 
-            var create = _engine.CreateCloneOutput(Id, ToOpenGlCloneOptions(options), out var cloneBaseOutput);
-            if (create != MediaResult.Success || cloneBaseOutput is not OpenGLVideoOutput glClone)
-            {
+            var create = CreateCloneCore(ToOpenGlCloneOptions(options), out var glClone);
+            if (create != MediaResult.Success || glClone is null)
                 return create != MediaResult.Success ? create : (int)MediaErrorCode.OpenGLCloneCreationFailed;
-            }
 
-            cloneOutput = new AvaloniaVideoOutput(glClone, _engine, isClone: true);
+            cloneOutput = new AvaloniaVideoOutput(glClone, Engine, isClone: true);
             return MediaResult.Success;
         }
     }
@@ -71,75 +107,38 @@ public sealed class AvaloniaVideoOutput : IVideoOutput
     public int AttachClone(AvaloniaVideoOutput? cloneOutput, in AvaloniaCloneOptions options)
     {
         if (cloneOutput is null)
-        {
             return (int)MediaErrorCode.MediaInvalidArgument;
-        }
 
         lock (_gate)
         {
-            if (_disposed)
-            {
-                return (int)MediaErrorCode.OpenGLCloneParentDisposed;
-            }
-
-            var add = _engine.AddOutput(cloneOutput.Output);
+            var add = Engine.AddOutput(cloneOutput.Output);
             if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
-            {
                 return add;
-            }
 
-            return _engine.AttachCloneOutput(Id, cloneOutput.Id);
+            // B7 fix: forward options to the engine rather than discarding them.
+            var attach = Engine.AttachCloneOutput(Id, cloneOutput.Id, ToOpenGlCloneOptions(options));
+            if (attach == MediaResult.Success)
+                cloneOutput.IsClone = true;
+            return attach;
         }
     }
 
-    public int DetachClone(Guid cloneOutputId)
+    public int DetachClone(Guid cloneOutputId) => Engine.DetachCloneOutput(Id, cloneOutputId);
+
+    protected override void OnBeforeDispose()
     {
         lock (_gate)
         {
-            if (_disposed)
-            {
-                return MediaResult.Success;
-            }
-
-            var detach = _engine.DetachCloneOutput(Id, cloneOutputId);
-            if (detach != MediaResult.Success)
-            {
-                return detach;
-            }
-
-            return MediaResult.Success;
+            _frameCallback = null;
         }
     }
 
-    public void Dispose()
-    {
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-        }
-
-        _ = _engine.RemoveOutput(Id);
-        if (!IsClone)
-        {
-            _engine.Dispose();
-        }
-
-        _output.Dispose();
-    }
-
-    private static OpenGLCloneOptions ToOpenGlCloneOptions(in AvaloniaCloneOptions options)
-    {
-        return new OpenGLCloneOptions
+    private static OpenGLCloneOptions ToOpenGlCloneOptions(in AvaloniaCloneOptions options) =>
+        new()
         {
             Mode = options.CloneMode,
             AutoResizeToParent = options.AutoTrackParentSize,
             HudMode = options.HudMode,
             MaxCloneDepth = options.MaxCloneDepth,
         };
-    }
 }

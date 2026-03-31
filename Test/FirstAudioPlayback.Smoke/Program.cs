@@ -41,7 +41,7 @@ internal static class Program
 
         try
         {
-            using var media = new FFMediaItem(
+            using var media = new FFmpegMediaItem(
                 new FFmpegOpenOptions
                 {
                     InputUri = inputUri,
@@ -58,7 +58,7 @@ internal static class Program
             var source = media.AudioSource;
             if (source is null)
             {
-                Console.Error.WriteLine("FFMediaItem did not expose an audio source.");
+                Console.Error.WriteLine("FFmpegMediaItem did not expose an audio source.");
                 return 3;
             }
 

@@ -31,7 +31,7 @@ internal static class Program
 
         try
         {
-            using var media = new FFMediaItem(new FFmpegOpenOptions
+            using var media = new FFmpegMediaItem(new FFmpegOpenOptions
             {
                 InputUri = uri,
                 OpenAudio = false,

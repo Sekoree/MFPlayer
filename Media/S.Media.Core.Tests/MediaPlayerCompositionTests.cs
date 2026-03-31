@@ -57,7 +57,7 @@ public sealed class MediaPlayerCompositionTests
     public void Play_FFMediaItem_AttachesRealBinding_ThenStartsPlayback()
     {
         var player = new MediaPlayer();
-        var media = new FFMediaItem(new FFAudioSource(), new FFVideoSource());
+        var media = new FFmpegMediaItem(new FFmpegAudioSource(), new FFmpegVideoSource());
 
         var result = player.Play(media);
 

@@ -12,7 +12,7 @@ public sealed class MediaPlayerPortAudioIntegrationTests
     [Fact]
     public void MediaPlayer_PlayBindsFFmpegAudioSource_AndReadReturnsError_WhenNativeUnavailable()
     {
-        using var media = new FFMediaItem(
+        using var media = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",
@@ -38,7 +38,7 @@ public sealed class MediaPlayerPortAudioIntegrationTests
     [Fact]
     public void MediaPlayer_SustainedReadLoop_ReturnsConsistentErrors_WhenNativeUnavailable()
     {
-        using var media = new FFMediaItem(
+        using var media = new FFmpegMediaItem(
             new FFmpegOpenOptions
             {
                 InputUri = "file:///tmp/fake.mp4",

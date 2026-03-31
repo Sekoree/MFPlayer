@@ -4,12 +4,12 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
 
-public sealed class FFAudioChannelMapTests
+public sealed class FFmpegAudioChannelMapTests
 {
     [Fact]
     public void Identity_ReturnsExpectedChannelMap()
     {
-        var map = FFAudioChannelMap.Identity(2);
+        var map = FFmpegAudioChannelMap.Identity(2);
 
         Assert.Equal(2, map.SourceChannelCount);
         Assert.Equal(2, map.DestinationChannelCount);
@@ -19,7 +19,7 @@ public sealed class FFAudioChannelMapTests
     [Fact]
     public void Validate_ReturnsInvalidAudioChannelMap_WhenIndexOutOfRange()
     {
-        var map = new FFAudioChannelMap(2, 2, [0, 2]);
+        var map = new FFmpegAudioChannelMap(2, 2, [0, 2]);
 
         var code = map.Validate(out var message);
 

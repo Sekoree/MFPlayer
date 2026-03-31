@@ -7,7 +7,7 @@ using S.Media.FFmpeg.Runtime;
 
 namespace S.Media.FFmpeg.Sources;
 
-public sealed class FFVideoSource : IVideoSource
+public sealed class FFmpegVideoSource : IVideoSource
 {
     private readonly Lock _gate = new();
     private readonly FFSharedDemuxSession? _sharedDemuxSession;
@@ -17,12 +17,12 @@ public sealed class FFVideoSource : IVideoSource
     private double? _observedNativeFrameRate;
     private long _currentFrameIndex;
 
-    public FFVideoSource(double durationSeconds = double.NaN, bool isSeekable = true, long? totalFrameCount = null)
+    public FFmpegVideoSource(double durationSeconds = double.NaN, bool isSeekable = true, long? totalFrameCount = null)
         : this(new VideoStreamInfo { Duration = CreateDuration(durationSeconds) }, durationSeconds, isSeekable, totalFrameCount)
     {
     }
 
-    public FFVideoSource(FFMediaItem mediaItem)
+    public FFmpegVideoSource(FFmpegMediaItem mediaItem)
         : this(
             ResolveVideoStreamInfo(mediaItem),
             durationSeconds: ResolveDurationSeconds(ResolveVideoStreamInfo(mediaItem).Duration),
@@ -32,12 +32,12 @@ public sealed class FFVideoSource : IVideoSource
     {
     }
 
-    public FFVideoSource(VideoStreamInfo streamInfo, double durationSeconds = double.NaN, bool isSeekable = true, long? totalFrameCount = null)
+    public FFmpegVideoSource(VideoStreamInfo streamInfo, double durationSeconds = double.NaN, bool isSeekable = true, long? totalFrameCount = null)
         : this(streamInfo, durationSeconds, isSeekable, totalFrameCount, sharedDemuxSession: null)
     {
     }
 
-    internal FFVideoSource(
+    internal FFmpegVideoSource(
         VideoStreamInfo streamInfo,
         double durationSeconds,
         bool isSeekable,
@@ -131,17 +131,15 @@ public sealed class FFVideoSource : IVideoSource
             var code = _sharedDemuxSession.ReadVideoFrame(out var sessionFrame);
             if (code != MediaResult.Success)
             {
-                // N12: transition to EndOfStream when the session signals no more frames and the
-                // source has a known finite duration that we appear to have consumed.
-                if (double.IsFinite(DurationSeconds) && DurationSeconds > 0)
+                // N8: trust the session return code for EOS detection instead of a fragile
+                // position-based 98% heuristic. Any failed read on a running source is treated
+                // as end-of-stream (the session returns FFmpegReadFailed when the container
+                // is exhausted, not a dedicated EOS code).
+                lock (_gate)
                 {
-                    lock (_gate)
+                    if (State == VideoSourceState.Running)
                     {
-                        if (State == VideoSourceState.Running &&
-                            _positionSeconds >= DurationSeconds * 0.98)
-                        {
-                            State = VideoSourceState.EndOfStream;
-                        }
+                        State = VideoSourceState.EndOfStream;
                     }
                 }
                 frame = null!;
@@ -179,8 +177,6 @@ public sealed class FFVideoSource : IVideoSource
                     _observedNativeFrameRate = nativeFrameRate.Value;
                 }
 
-                _ = sessionFrame.HasNativeTimingMetadata;
-                _ = sessionFrame.HasNativePixelMetadata;
 
                 var pixelFormatData = CreatePixelFormatData(mappedFormat);
                 var plane0Stride = ComputePlane0Stride(mappedFormat, Math.Max(1, sessionFrame.Width));
@@ -281,8 +277,22 @@ public sealed class FFVideoSource : IVideoSource
         }
     }
 
-    public int SeekToFrame(long frameIndex)
+    /// <summary>
+    /// Updates position tracking state without triggering a session seek.
+    /// Called by <see cref="FFmpegMediaItem.Seek"/> after the shared session has already been seeked
+    /// to avoid the double-seek that would occur if <see cref="Seek"/> were called directly.
+    /// </summary>
+    internal void NotifySeek(double positionSeconds)
     {
+        lock (_gate)
+        {
+            _positionSeconds = positionSeconds;
+            if (State == VideoSourceState.EndOfStream)
+                State = VideoSourceState.Running;
+        }
+    }
+
+    public int SeekToFrame(long frameIndex)    {
         if (frameIndex < 0)
         {
             return (int)MediaErrorCode.MediaInvalidArgument;
@@ -295,13 +305,16 @@ public sealed class FFVideoSource : IVideoSource
 
         if (_sharedDemuxSession is not null)
         {
-            var fps = StreamInfo.FrameRate.GetValueOrDefault(_observedNativeFrameRate.GetValueOrDefault(30d));
-            if (!double.IsFinite(fps) || fps <= 0)
+            // 4.1: use observed native frame rate first, then stream info, then give up.
+            // A 30 fps hard-fallback would produce silently wrong seek positions for non-30fps
+            // and VFR content, so return NonSeekable when the rate is genuinely unknown.
+            var fps = StreamInfo.FrameRate ?? _observedNativeFrameRate;
+            if (fps is not > 0 || !double.IsFinite(fps.Value))
             {
-                fps = 30d;
+                return (int)MediaErrorCode.MediaSourceNonSeekable;
             }
 
-            var targetSeconds = frameIndex / fps;
+            var targetSeconds = frameIndex / fps.Value;
             var seekCode = _sharedDemuxSession.Seek(targetSeconds);
             if (seekCode != MediaResult.Success)
             {
@@ -374,13 +387,13 @@ public sealed class FFVideoSource : IVideoSource
         };
     }
 
-    private static VideoStreamInfo ResolveVideoStreamInfo(FFMediaItem mediaItem)
+    private static VideoStreamInfo ResolveVideoStreamInfo(FFmpegMediaItem mediaItem)
     {
         ArgumentNullException.ThrowIfNull(mediaItem);
 
         if (mediaItem.VideoStreams.Count == 0)
         {
-            throw new DecodingException(MediaErrorCode.FFmpegInvalidConfig, "FFMediaItem does not contain a video stream.");
+            throw new DecodingException(MediaErrorCode.FFmpegInvalidConfig, "FFmpegMediaItem does not contain a video stream.");
         }
 
         return mediaItem.VideoStreams[0];

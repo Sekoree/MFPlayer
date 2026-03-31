@@ -3,7 +3,7 @@ using S.Media.FFmpeg.Config;
 
 namespace S.Media.FFmpeg.Runtime;
 
-public sealed class FFSharedDecodeContext : IDisposable
+internal sealed class FFSharedDecodeContext : IDisposable
 {
     private readonly Lock _gate = new();
     private bool _disposed;

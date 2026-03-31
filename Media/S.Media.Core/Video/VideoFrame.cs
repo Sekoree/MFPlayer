@@ -25,7 +25,8 @@ public sealed class VideoFrame : IDisposable
         int plane2Stride = 0,
         ReadOnlyMemory<byte> plane3 = default,
         int plane3Stride = 0,
-        Action<VideoFrame>? releaseAction = null)
+        Action<VideoFrame>? releaseAction = null,
+        bool isFullRange = false)
     {
         if (width <= 0 || height <= 0)
         {
@@ -65,6 +66,7 @@ public sealed class VideoFrame : IDisposable
         Plane1Stride = plane1Stride;
         Plane2Stride = plane2Stride;
         Plane3Stride = plane3Stride;
+        IsFullRange = isFullRange;
         _releaseAction = releaseAction;
     }
 
@@ -102,7 +104,8 @@ public sealed class VideoFrame : IDisposable
         IMemoryOwner<byte>? plane2 = null,
         int plane2Stride = 0,
         IMemoryOwner<byte>? plane3 = null,
-        int plane3Stride = 0)
+        int plane3Stride = 0,
+        bool isFullRange = false)
     {
         ArgumentNullException.ThrowIfNull(plane0);
         return new VideoFrame(
@@ -117,7 +120,8 @@ public sealed class VideoFrame : IDisposable
                 plane1?.Dispose();
                 plane2?.Dispose();
                 plane3?.Dispose();
-            });
+            },
+            isFullRange: isFullRange);
     }
 
     private static void ValidatePlaneShape(
@@ -251,6 +255,14 @@ public sealed class VideoFrame : IDisposable
     public TimeSpan PresentationTime { get; }
 
     public bool IsKeyFrame { get; }
+
+    /// <summary>
+    /// When <see langword="true"/>, YUV sample values use full range (0–255 for 8-bit).
+    /// When <see langword="false"/> (the default), values use limited/TV range (16–235 luma,
+    /// 16–240 chroma for 8-bit), as produced by most H.264 and H.265 encoders.
+    /// Renderers use this to apply the correct range-expansion matrix before colour conversion.
+    /// </summary>
+    public bool IsFullRange { get; }
 
     public ReadOnlyMemory<byte> Plane0 { get; }
 

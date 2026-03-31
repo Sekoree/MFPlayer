@@ -1,7 +1,47 @@
 # S.Media.FFmpeg — Issues & Fix Guide
 
-> **Scope:** `S.Media.FFmpeg` — `FFMediaItem`, `FFAudioSource`, `FFVideoSource`, `FFSharedDemuxSession`, options types
+> **Scope:** `S.Media.FFmpeg` — `FFmpegMediaItem`, `FFmpegAudioSource`, `FFmpegVideoSource`, `FFSharedDemuxSession`, options types
 > **Cross-references:** See `API-Review.md` §4 for the full analysis.
+> **Last reviewed:** March 31, 2026 (Pass 4 — all fixes implemented)
+
+---
+
+## Progress Checklist
+
+| # | Issue | Status |
+|---|-------|--------|
+| 1.1 | `EnableExternalClockCorrection` dead flag removed | ✅ Fixed |
+| 1.2 | `OutputChannelCountOverride` applied in `TryGetEffectiveChannelMap` | ✅ Fixed |
+| 2.1 | `FFmpegMediaItem.Create()` factory; `Open()`/`TryOpen()` `[Obsolete]` | ✅ Fixed |
+| 3.1 | `FFmpegVideoSource` stub frame when no session | ✅ Fixed (blocked by N10 validator) |
+| 3.2 | `FFmpegAudioSource` returns Success+0 when no session | ✅ Fixed (blocked by N10 validator) |
+| 4.1 | `SeekToFrame` 30 fps hard fallback | ✅ Fixed — returns `MediaSourceNonSeekable` when fps unknown |
+| 4.2 | Coordinated seek via `FFmpegMediaItem.Seek()` | ✅ Fixed |
+| 5.1 | Full channel-mapping policy implemented | ✅ Fixed |
+| 6.1 | `AudioSource`/`VideoSource` nullability trap XML docs | ✅ Fixed |
+| 6.2 | `Open()`/`TryOpen()` obsoleted | ✅ Fixed |
+| 7.1 | `FF*` / `FFmpeg*` prefix inconsistency — public types renamed to `FFmpeg*` | ✅ Fixed |
+| 7.2 | `FFSharedDecodeContext` make `internal` | ✅ Fixed |
+| 7.3 | `FFStreamDescriptor` make `internal` | ✅ Fixed |
+| N1 | Network URI support (`rtsp://`, `http://`) — `File.Exists` gate removed | ✅ Fixed |
+| N2 | `FFPacketReader.ReadNextPacket()` dead code | ✅ Fixed — removed |
+| N3 | No-arg decoder/pipeline overloads dead code | ✅ Fixed — removed |
+| N4 | `FFResampler` never calls `swr_convert` | ✅ Fixed — backend removed, documented as limitation |
+| N5 | Per-packet `av_packet_alloc` in hot path | ✅ Fixed — pre-allocated per backend |
+| N6 | Seek does not flush decoder codec buffers | ✅ Fixed — `avcodec_flush_buffers` called post-seek |
+| N7 | `WorkerLoop` busy-polls at ~200 Hz | ✅ Fixed — `WaitOne(20)`; queue depth raised to 4 |
+| N8 | Video `EndOfStream` 98% heuristic is fragile | ✅ Fixed — trusts session return code |
+| N9 | `FFPixelConverter` hardcodes RGBA32 target | ✅ Fixed — configurable via `FFmpegDecodeOptions.PreferredOutputPixelFormat` |
+| N10 | `UseSharedDecodeContext = false` silently creates non-functional sources | ✅ Fixed — validator rejects it |
+| N11 | `InputFormatHint` is dead configuration surface | ✅ Fixed — passed to `av_find_input_format` + `avformat_open_input` |
+| P4-1 | Debug oscillating `nativeSampleValue` in `FFPacketReader.ReadAudioPacket` | ✅ Fixed — replaced with `0f` |
+| P4-2 | Double-seek in `FFmpegMediaItem.Seek` — session seeked N+1 times for N sources | ✅ Fixed — `NotifySeek()` skips session re-seek |
+| P4-3 | `_pendingAudioChunk` not cleared on `Seek` — stale audio post-seek | ✅ Fixed — cleared alongside queues |
+| P4-4 | `FFmpegAudioSource.Seek()` doesn't reset `EndOfStream` → `Running` | ✅ Fixed — parity with `FFmpegVideoSource.Seek()` |
+| P4-5 | Dead `_ = sessionFrame.Has*` reads in `FFmpegVideoSource.ReadFrame` | ✅ Fixed — removed |
+| P4-6 | `EnableHardwareDecode`, `LowLatencyMode`, `UseDedicatedDecodeThread` unimplemented | ✅ Documented — XML remarks flag them as reserved/not-yet-wired |
+| P4-7 | `_nextAudioPresentationTime` / `_nextVideoPresentationTime` dead fields | ✅ Fixed — removed |
+| P4-8 | `FFmpegAudioSource.Start()` uses bizarre `switch { _ => }` expression pattern | ✅ Fixed — explicit `if + return` |
 
 ---
 
@@ -12,295 +52,303 @@
 3. [Source Behaviour Without a Session](#3-source-behaviour-without-a-session)
 4. [Seeking](#4-seeking)
 5. [Audio Channel Mapping](#5-audio-channel-mapping)
-6. [API Surface (`FFMediaItem`)](#6-api-surface-ffmediaitem)
+6. [API Surface (`FFmpegMediaItem`)](#6-api-surface-ffmpegmediaitem)
 7. [Naming & Consolidation](#7-naming--consolidation)
+8. [Decode Pipeline Issues (Pass 3)](#8-decode-pipeline-issues-pass-3)
+9. [Configuration & Dead Surface (Pass 3)](#9-configuration--dead-surface-pass-3)
+10. [Pass 4 — Bugs, Dead Code & Style](#10-pass-4--bugs-dead-code--style)
 
 ---
 
 ## 1. Dead Code & Configuration Flags
 
-### Issue 1.1 — `FFmpegOpenOptions.EnableExternalClockCorrection` is never read
+### Issue 1.1 — `FFmpegOpenOptions.EnableExternalClockCorrection` is never read ✅ Fixed
 
-This flag exists in `FFmpegOpenOptions` but no code in `FFSharedDemuxSession` or anywhere else reads or branches on it. It is a remnant of the removed drift-correction system.
-
-**Fix:** Remove the property entirely:
-
-```csharp
-public sealed class FFmpegOpenOptions
-{
-    // DELETE:
-    // public bool EnableExternalClockCorrection { get; init; }
-}
-```
-
-**Migration:** Any call sites that set this property should simply remove the assignment. It had no effect.
+**Resolution:** Property removed from `FFmpegOpenOptions`. No call-site migration required.
 
 ---
 
-### Issue 1.2 — `FFAudioSourceOptions.OutputChannelCountOverride` is never applied
+### Issue 1.2 — `FFmpegAudioSourceOptions.OutputChannelCountOverride` is never applied ✅ Fixed
 
-Declared in `FFAudioSourceOptions`, but `FFAudioSource.TryGetEffectiveChannelMap()` only reads `MappingPolicy` and `ExplicitChannelMap`. `OutputChannelCountOverride` is silently ignored.
-
-**Fix (implement):**
-
-```csharp
-private bool TryGetEffectiveChannelMap(out int[]? channelMap, out int outputChannelCount)
-{
-    outputChannelCount = _options.OutputChannelCountOverride > 0
-        ? _options.OutputChannelCountOverride
-        : _streamInfo.ChannelCount;
-
-    // ...rest of mapping logic uses outputChannelCount...
-}
-```
-
-**Fix (remove):** If this feature is not planned, remove `OutputChannelCountOverride` from the options type to avoid confusion.
+**Resolution:** `TryGetEffectiveChannelMap` now reads `OutputChannelCountOverride` and applies it to cap the output channel count across all mapping policies.
 
 ---
 
 ## 2. Error Handling & Factory Pattern
 
-### Issue 2.1 — `FFMediaItem.Open()` throws `DecodingException`
+### Issue 2.1 — `FFmpegMediaItem.Open()` throws `DecodingException` ✅ Fixed
 
-`FFMediaItem.Open(uri)` is the only framework factory that throws. Every other factory uses integer return codes. This forces callers to use try/catch in addition to checking return codes elsewhere.
-
-**Fix:** Make the constructor `internal` and expose a static factory:
-
-```csharp
-public sealed class FFMediaItem : IMediaItem, IMediaPlaybackSourceBinding, IDisposable
-{
-    // Make constructors internal:
-    internal FFMediaItem(...) { ... }
-
-    // Static factories — return int, not throw:
-    public static int Create(string uri, out FFMediaItem? item)
-        => Create(new FFmpegOpenOptions { Uri = uri }, out item);
-
-    public static int Create(FFmpegOpenOptions options, out FFMediaItem? item)
-    {
-        item = null;
-        try
-        {
-            var session = FFSharedDemuxSession.Open(options);
-            item = new FFMediaItem(session, options);
-            return MediaResult.Success;
-        }
-        catch (DecodingException ex)
-        {
-            return ex.ErrorCode;
-        }
-    }
-}
-```
-
-`FFMediaItem.TryOpen` (the existing non-throwing alternative) can be deprecated in favour of `Create`.
-
-**Consideration:** Callers using `using var media = FFMediaItem.Open(uri)` in a try/catch must be updated to the new pattern. Update `AVMixerTest` and other test programs accordingly.
+**Resolution:**
+- `FFmpegMediaItem.Create(string uri, out FFmpegMediaItem? item)` — primary factory, returns int, never throws.
+- `FFmpegMediaItem.Create(FFmpegOpenOptions options, out FFmpegMediaItem? item)` — full-options variant.
+- `FFmpegMediaItem.Open(string)` and `FFmpegMediaItem.TryOpen(string, out)` marked `[Obsolete]` pointing to `Create`.
 
 ---
 
 ## 3. Source Behaviour Without a Session
 
-### Issue 3.1 — `FFVideoSource` returns a stub frame when `_sharedDemuxSession` is null
+### Issue 3.1 — `FFmpegVideoSource` stub frame when no session ✅ Fixed
 
-`ReadFrame()` returns a hardcoded 2×2 RGBA placeholder when no session is set. This masks misconfiguration.
+**Resolution:** `FFmpegConfigValidator` now rejects `UseSharedDecodeContext = false` (§N10). `FFmpegMediaItem` can no longer construct sources with a null session via the public API. The standalone `new FFmpegVideoSource()` path remains intentional (returns 2×2 placeholder for test/stub use).
 
-### Issue 3.2 — `FFAudioSource` returns `Success` + 0 frames when session is absent
+---
 
-`ReadSamples()` returns `Success` with `framesRead = 0` and never advances `_positionSeconds`. The mixer treats this as "no data yet" rather than "misconfigured", advancing its own timeline while the audio source stays frozen. This creates A/V desync.
+### Issue 3.2 — `FFmpegAudioSource` returns Success+0 when no session ✅ Fixed
 
-**Fix for both:** Remove the stub paths. Return a dedicated error code instead:
-
-```csharp
-// Add to MediaErrorCode (or FFmpegErrorCode):
-FFmpegSessionNotAttached = ...,
-
-// In FFVideoSource.ReadFrame():
-if (_sharedDemuxSession is null)
-    return (int)FFmpegErrorCode.FFmpegSessionNotAttached;
-
-// In FFAudioSource.ReadSamples():
-if (_sharedDemuxSession is null)
-{
-    framesRead = 0;
-    return (int)FFmpegErrorCode.FFmpegSessionNotAttached;
-}
-```
-
-**Consideration:** The existing `FFAudioSource(double durationSeconds)` constructor explicitly documents that it produces silence. This is the correct standalone test path — keep it. The zero-session stub in the main constructor is the bug.
+**Resolution:** Same as §3.1 — `UseSharedDecodeContext = false` is now rejected by the validator.
 
 ---
 
 ## 4. Seeking
 
-### Issue 4.1 — `FFVideoSource.SeekToFrame` uses frame-rate heuristics
+### Issue 4.1 — `SeekToFrame` 30 fps hard fallback ✅ Fixed
+
+**Before:** Hard fallback to 30 fps when frame rate was unknown, silently producing wrong seek positions.
+
+**Now:** Returns `MediaErrorCode.MediaSourceNonSeekable` when frame rate is genuinely unknown (neither `StreamInfo.FrameRate` nor `_observedNativeFrameRate` from prior reads is available):
 
 ```csharp
-var targetSeconds = frameIndex / (fps > 0 ? fps : 30.0);
+var fps = StreamInfo.FrameRate ?? _observedNativeFrameRate;
+if (fps is not > 0 || !double.IsFinite(fps.Value))
+    return (int)MediaErrorCode.MediaSourceNonSeekable;
+var targetSeconds = frameIndex / fps.Value;
 ```
-
-For VFR content or when frame rate is unknown (defaults to 30 fps), this produces an incorrect seek position. `_currentFrameIndex` is set to `frameIndex` but the actual decode position may differ.
-
-**Fix (short term):** Return an error when frame rate is unknown:
-
-```csharp
-public int SeekToFrame(long frameIndex)
-{
-    if (StreamInfo.FrameRate is not > 0)
-        return (int)MediaErrorCode.MediaSourceNonSeekable;
-
-    var targetSeconds = frameIndex / StreamInfo.FrameRate;
-    return Seek(targetSeconds);
-}
-```
-
-**Fix (long term):** Expose a native frame-accurate seek through `FFSharedDemuxSession` using `AVSEEK_FLAG_FRAME` (if supported by the container).
 
 ---
 
-### Issue 4.2 — Seeking via `FFAudioSource` and `FFVideoSource` independently is fragile
+### Issue 4.2 — Seeking via `FFmpegAudioSource` and `FFmpegVideoSource` independently is fragile ✅ Fixed
 
-Both sources call `_sharedDemuxSession.Seek()` independently. Seeking via one may flush shared decode buffers used by the other, depending on the session's internal lock semantics.
-
-**Fix:** Provide a unified seek point on `FFMediaItem`:
-
-```csharp
-public sealed class FFMediaItem
-{
-    // Single canonical seek:
-    public int Seek(double positionSeconds)
-        => _sharedDemuxSession?.Seek(positionSeconds)
-           ?? (int)FFmpegErrorCode.FFmpegSessionNotAttached;
-}
-```
-
-Have `FFSharedDemuxSession.Seek()` coordinate the audio and video decoder streams internally (drain both queues, seek once, signal both sources). The individual `FFAudioSource.Seek` and `FFVideoSource.Seek` can then delegate to the item:
-
-```csharp
-// In FFAudioSource:
-public int Seek(double positionSeconds) => _mediaItem.Seek(positionSeconds);
-```
-
-**Consideration:** `AudioVideoMixer.Seek()` currently calls `Seek(double)` on each source independently in a loop. After this fix, it should detect when two sources share the same `FFMediaItem` and only call `FFMediaItem.Seek()` once.
+**Resolution:** `FFmpegMediaItem.Seek(double positionSeconds)` is the canonical seek point for shared-session items.
 
 ---
 
 ## 5. Audio Channel Mapping
 
-### Issue 5.1 — Channel mapping options partially implemented
+### Issue 5.1 — Channel mapping options partially implemented ✅ Fixed
 
-`FFAudioSourceOptions` has `MappingPolicy`, `ExplicitChannelMap`, and `OutputChannelCountOverride`. Only `MappingPolicy` and `ExplicitChannelMap` are applied in `TryGetEffectiveChannelMap`. `OutputChannelCountOverride` is ignored (see §1.2).
-
-**Recommended complete implementation:**
-
-```csharp
-private bool TryGetEffectiveChannelMap(out ReadOnlySpan<int> channelMap, out int outputChannelCount)
-{
-    // 1. Determine output channel count
-    outputChannelCount = _options.OutputChannelCountOverride > 0
-        ? _options.OutputChannelCountOverride
-        : _streamInfo.ChannelCount;
-
-    // 2. Apply mapping policy
-    switch (_options.MappingPolicy)
-    {
-        case FFAudioChannelMappingPolicy.Passthrough:
-            channelMap = BuildIdentityMap(_streamInfo.ChannelCount);
-            return true;
-
-        case FFAudioChannelMappingPolicy.Explicit:
-            if (_options.ExplicitChannelMap is not { Length: > 0 })
-                goto default;
-            channelMap = _options.ExplicitChannelMap;
-            return true;
-
-        default:
-            channelMap = default;
-            return false;
-    }
-}
-```
+All four policies (`PreserveSourceLayout`, `ApplyExplicitRouteMap`, `DownmixToStereo`, `DownmixToMono`) are implemented. `OutputChannelCountOverride` is respected.
 
 ---
 
-## 6. API Surface (`FFMediaItem`)
+## 6. API Surface (`FFmpegMediaItem`)
 
-### Issue 6.1 — `AudioSource` / `VideoSource` properties create nullability traps
+### Issue 6.1 — `AudioSource` / `VideoSource` properties create nullability traps ✅ Fixed
 
-`FFMediaItem` exposes:
-- `FFAudioSource? AudioSource` — null when constructed from an `IReadOnlyList<IAudioSource>` that has no `FFAudioSource`.
-- `IReadOnlyList<IAudioSource> PlaybackAudioSources` — can be non-empty when `AudioSource` is null.
-
-A caller checking `media.AudioSource is null` may silently miss sources.
-
-**Fix (minimal):** Add XML doc warnings:
-
-```csharp
-/// <summary>
-/// The primary FFmpeg audio source, or <see langword="null"/> if this item was constructed
-/// from an external source list. Use <see cref="PlaybackAudioSources"/> for the authoritative list.
-/// </summary>
-/// <remarks>
-/// <b>Warning:</b> Do not use this as a null-check for "has audio". Check
-/// <c>PlaybackAudioSources.Count > 0</c> instead.
-/// </remarks>
-public FFAudioSource? AudioSource { get; }
-```
-
-**Fix (API clean-up):** Restrict `AudioSource` and `VideoSource` to the URI-open path. The composite constructor should only expose `PlaybackAudioSources` / `PlaybackVideoSources`:
-
-```csharp
-// Composite constructor: hide concrete-typed shortcuts
-public FFMediaItem(IReadOnlyList<IAudioSource> audioSources, IReadOnlyList<IVideoSource> videoSources)
-{
-    _audioSources = audioSources;
-    _videoSources = videoSources;
-    // Do NOT set AudioSource / VideoSource — leave them null
-}
-```
+**Resolution:** Both properties carry XML doc warnings.
 
 ---
 
-### Issue 6.2 — `FFMediaItem.Open()` is inconsistently discoverable
+### Issue 6.2 — `FFmpegMediaItem.Open()` is inconsistently discoverable ✅ Fixed
 
-`Open(string uri)` is the prominent factory; `TryOpen` is the non-throwing alternative. With the factory pattern fix from §2.1 (`Create`), this hierarchy becomes:
-
-```
-FFMediaItem.Create(options, out item)  — primary: returns int, never throws
-FFMediaItem.Open(uri)                  — [Obsolete] convenience: throws DecodingException
-FFMediaItem.TryOpen(uri, out item)     — [Obsolete] non-throwing shortcut: returns bool
-```
-
-Mark `Open` and `TryOpen` as `[Obsolete]` pointing to `Create`.
+**Resolution:** `Open()` and `TryOpen()` marked `[Obsolete]`. `Create()` is the primary path.
 
 ---
 
 ## 7. Naming & Consolidation
 
-> See `Naming-and-Consolidation.md` for the full cross-project analysis.
+### Issue 7.1 — `FFMediaItem`, `FFAudioSource`, `FFVideoSource` — standardise on `FFmpeg` prefix ✅ Fixed
 
-### 7.1 `FFMediaItem`, `FFAudioSource`, `FFVideoSource` — standardise on `FFmpeg` prefix
+**Before:** The public API had a split personality — configuration types (`FFmpegOpenOptions`, `FFmpegDecodeOptions`, `FFmpegConfigValidator`, `FFmpegRuntime`) used the full `FFmpeg` prefix while the primary consumer-facing types used the shorter `FF` prefix:
 
-The `S.Media.FFmpeg` project uses two prefixes inconsistently: user-facing config types use `FFmpeg` (`FFmpegOpenOptions`, `FFmpegDecodeOptions`) while source/media types use the short `FF` (`FFMediaItem`, `FFAudioSource`, `FFVideoSource`). A caller new to the library can't predict which prefix to type.
-
-**Proposed renames:**
-
-| Current | Proposed |
+| Old name | New name |
 |---|---|
 | `FFMediaItem` | `FFmpegMediaItem` |
 | `FFAudioSource` | `FFmpegAudioSource` |
 | `FFVideoSource` | `FFmpegVideoSource` |
-| `FFAudioChannelMap` | `FFmpegAudioChannelMap` |
 | `FFAudioSourceOptions` | `FFmpegAudioSourceOptions` |
+| `FFAudioChannelMap` | `FFmpegAudioChannelMap` |
+| `FFAudioChannelMappingPolicy` | `FFmpegAudioChannelMappingPolicy` |
+
+**Considerations:**
+- **Breaking change** — all six types are `sealed` so no compat-shim subclasses are possible. C# does not support `[Obsolete]` on `using` type aliases. A clean rename with no forwarding stubs was the only viable path.
+- **Internal types untouched** — `FFPacketReader`, `FFAudioDecoder`, `FFVideoDecoder`, `FFSharedDemuxSession`, `FFSharedDecodeContext`, `FFStreamDescriptor` and all other `internal` types keep their short `FF*` names; the naming rule applies only to the public API surface.
+- **Source files renamed** — `FFAudioSource.cs` → `FFmpegAudioSource.cs`, `FFMediaItem.cs` → `FFmpegMediaItem.cs`, etc. for all six types and their matching test files.
+
+**Resolution:** All 28 affected files across `S.Media.FFmpeg`, `S.Media.FFmpeg.Tests`, `S.Media.Core.Tests`, and all `Test/` programs were updated in a single pass. All projects build with 0 errors.
 
 ---
 
-### 7.2 `FFSharedDecodeContext` → `FFmpegDecodeSession`
+### Issue 7.2 — `FFSharedDecodeContext` should be `internal` ✅ Fixed
 
-`FFSharedDecodeContext` holds the format context, manages `RefCount`, coordinates open/close, and stores `ResolvedDecodeOptions`. It is a session manager, not a lightweight context. The word "Context" understates this. Rename to `FFmpegDecodeSession` to match the `FFmpeg` prefix convention and better describe what it does. Also see §1.6 for making it `internal`.
+`FFSharedDecodeContext` is now `internal sealed class`. Accessible to the test assembly via `[assembly: InternalsVisibleTo("S.Media.FFmpeg.Tests")]`.
 
 ---
 
-### 7.3 `FFStreamDescriptor` → make `internal`
+### Issue 7.3 — `FFStreamDescriptor` should be `internal` ✅ Fixed
 
-`FFStreamDescriptor` is public but duplicates `AudioStreamInfo` / `VideoStreamInfo` from `S.Media.Core`. It should be `internal` FFmpeg plumbing. Expose stream info to consumers via `AudioStreamInfo` / `VideoStreamInfo` only. See `Naming-and-Consolidation.md` §1.6.
+`FFStreamDescriptor` is now `internal readonly record struct`. Same `InternalsVisibleTo` coverage applies.
+
+---
+
+## 8. Decode Pipeline Issues (Pass 3)
+
+### Issue N1 — Network URI support ✅ Fixed
+
+`ResolveInputPath` (formerly `ResolveLocalPath`) no longer gates on `File.Exists` for non-local URIs. `rtsp://`, `http://`, and `https://` URIs are now passed directly to `avformat_open_input`. Local `file://` paths still have a `File.Exists` pre-check for a cleaner error message.
+
+---
+
+### Issue N2 — `FFPacketReader.ReadNextPacket()` dead code ✅ Fixed
+
+Method removed.
+
+---
+
+### Issue N3 — No-arg decoder/pipeline overloads dead code ✅ Fixed
+
+Removed `Decode()` from `FFAudioDecoder` and `FFVideoDecoder`, `Resample()` from `FFResampler`, and `Convert()` from `FFPixelConverter`.
+
+---
+
+### Issue N4 — `FFResampler` never calls `swr_convert` ✅ Fixed (documented limitation)
+
+`FFNativeResamplerBackend` has been removed. The resampler is now a documented direct pass-through. Format conversion (S16/S32/DBL → FLT) is already performed upstream in `FFNativeAudioDecoderBackend.ExtractSamples`. A comment in `FFResampler` notes that sample-rate conversion is not yet implemented and a `SwrContext`-based path should be added when needed.
+
+---
+
+### Issue N5 — Per-packet `av_packet_alloc` in hot path ✅ Fixed
+
+`FFNativeAudioDecoderBackend` and `FFNativeVideoDecoderBackend` now pre-allocate one `AVPacket*` per instance in `TryEnsureInitialized`. `TryDecode` reuses it via `av_packet_unref` + `av_grow_packet` instead of allocating on every call.
+
+---
+
+### Issue N6 — Seek does not flush decoder codec buffers ✅ Fixed
+
+`FlushCodecBuffers()` added to `FFAudioDecoder`, `FFVideoDecoder`, `FFNativeAudioDecoderBackend`, and `FFNativeVideoDecoderBackend`. `FFSharedDemuxSession.Seek` calls both flush methods (inside `_pipelineGate`) after the packet reader seek succeeds.
+
+---
+
+### Issue N7 — `WorkerLoop` busy-polls at ~200 Hz ✅ Fixed
+
+- `_workerSignal.WaitOne(5)` → `WaitOne(20)` (50 Hz idle rate).
+- Default `MaxQueuedPackets` and `MaxQueuedFrames` raised from 1 → 4.
+
+---
+
+### Issue N8 — Video `EndOfStream` 98% heuristic ✅ Fixed
+
+Replaced the `_positionSeconds >= DurationSeconds * 0.98` guard with a direct trust of the session return code:
+
+```csharp
+if (code != MediaResult.Success)
+{
+    lock (_gate)
+    {
+        if (State == VideoSourceState.Running)
+            State = VideoSourceState.EndOfStream;
+    }
+    frame = null!;
+    return code;
+}
+```
+
+---
+
+### Issue N9 — `FFPixelConverter` hardcodes RGBA32 target ✅ Fixed
+
+`FFmpegDecodeOptions.PreferredOutputPixelFormat` (`VideoPixelFormat?`) added. Threaded through `FFSharedDemuxSession.Open` → `FFPixelConverter.Initialize(preferredOutputPixelFormat)`. `TryNativeConvert` uses `FFNativeFormatMapper.MapToNativePixelFormat` to select the sws_scale target. `TryExecuteScale` uses `av_image_get_linesize` for correct stride computation (replaces the hardcoded `_width * 4`). Only packed single-plane formats (Rgba32, Bgra32) are accepted as sws_scale targets; multi-plane formats continue to use the native pass-through path.
+
+---
+
+## 9. Configuration & Dead Surface (Pass 3)
+
+### Issue N10 — `UseSharedDecodeContext = false` silently creates non-functional sources ✅ Fixed
+
+`FFmpegConfigValidator.Validate` now returns `FFmpegInvalidConfig` when `UseSharedDecodeContext = false`. A code comment documents that this flag should be removed or given a real implementation.
+
+---
+
+### Issue N11 — `InputFormatHint` is dead configuration surface ✅ Fixed
+
+`FFNativeFileDemux.TryOpen` now calls `av_find_input_format(openOptions.InputFormatHint)` and passes the resulting `AVInputFormat*` as the forced format argument to `avformat_open_input`. The validator restriction that previously blocked `InputFormatHint` for URI inputs has been removed.
+
+---
+
+## 10. Pass 4 — Bugs, Dead Code & Style
+
+### Issue P4-1 — Debug oscillating `nativeSampleValue` in `FFPacketReader.ReadAudioPacket` ✅ Fixed
+
+**Before:**
+```csharp
+var nativeSampleValue = (float)((_nextAudioPacketIndex % 16) / 16d);
+```
+A debug-era ramp wave was being injected into the `SampleValue` field of every audio packet (values cycling 0 → 0.9375 and repeating every 16 packets). This field is used as a fill value in `FFSharedDemuxSession.ReadAudioSamples` when decoded samples don't fully cover the destination buffer, so any partial read would produce audible artifacts.
+
+**Fix:** Replaced with `SampleValue: 0f`, matching the existing `ReadVideoPacket` behaviour.
+
+---
+
+### Issue P4-2 — Double-seek in `FFmpegMediaItem.Seek` ✅ Fixed
+
+**Root cause:** `FFmpegMediaItem.Seek()` correctly called `_sharedDemuxSession.Seek()` once. It then looped over `_playbackAudioSources` and `_playbackVideoSources` calling `src.Seek(positionSeconds)` — but `FFmpegAudioSource.Seek()` and `FFmpegVideoSource.Seek()` each also forwarded to `_sharedDemuxSession.Seek()`. Result: with one audio + one video source, the session was seeked three times total, flushing decoder buffers and clearing the freshly-populated queues on every extra call.
+
+**Fix:** Added `internal void NotifySeek(double positionSeconds)` to both `FFmpegAudioSource` and `FFmpegVideoSource`. `NotifySeek` only updates `_positionSeconds` and resets `EndOfStream` → `Running` state — it does not touch the session. `FFmpegMediaItem.Seek()` now calls `NotifySeek()` instead of `Seek()` on each source after the single session seek. Direct per-source `Seek()` calls from user code continue to trigger a full session seek as expected.
+
+---
+
+### Issue P4-3 — `_pendingAudioChunk` not cleared on `Seek` ✅ Fixed
+
+**Root cause:** `FFSharedDemuxSession.Seek()` cleared `_audioQueue` and `_videoQueue` but left `_pendingAudioChunk` intact. `_pendingAudioChunk` holds the leftover tail of a partially-consumed audio chunk and is consumed as the very first data on the next `ReadAudioSamples` call — meaning audio from before the seek would be delivered as the first samples after the seek, causing an audible time-skip artefact.
+
+**Fix:** Added `_pendingAudioChunk = null;` inside the `_gate` lock in `Seek()`, alongside the existing queue clears.
+
+---
+
+### Issue P4-4 — `FFmpegAudioSource.Seek()` does not reset `EndOfStream` state ✅ Fixed
+
+**Root cause:** `FFmpegVideoSource.Seek()` had explicit code to transition `State` from `EndOfStream` back to `Running` when a seek is performed (added during the N8 fix). `FFmpegAudioSource.Seek()` was missing the equivalent, so seeking an audio source that had reached end-of-stream left it permanently stuck in `EndOfStream`, silently producing no further samples.
+
+**Fix:** Added the same `if (State == AudioSourceState.EndOfStream) State = AudioSourceState.Running;` guard to `FFmpegAudioSource.Seek()`. Also added it to the new `FFmpegAudioSource.NotifySeek()` for the `FFmpegMediaItem` coordinated-seek path.
+
+---
+
+### Issue P4-5 — Dead `_ = sessionFrame.Has*` reads in `FFmpegVideoSource.ReadFrame` ✅ Fixed
+
+```csharp
+// Before — dead reads, no effect on any state
+_ = sessionFrame.HasNativeTimingMetadata;
+_ = sessionFrame.HasNativePixelMetadata;
+```
+These two lines computed boolean properties on `FFSessionVideoFrame` and discarded the results. They had no effect on observable behaviour and appeared to be debug/tracing stubs that were never completed.
+
+**Fix:** Both lines removed.
+
+---
+
+### Issue P4-6 — `EnableHardwareDecode`, `LowLatencyMode`, `UseDedicatedDecodeThread` unimplemented ✅ Documented
+
+Three `public` properties of `FFmpegDecodeOptions` have no wiring in the decode pipeline:
+- `EnableHardwareDecode` — hardware-accelerated contexts (VAAPI, DXVA2, VideoToolbox) not yet implemented
+- `LowLatencyMode` — B-frame reorder buffer suppression not yet implemented
+- `UseDedicatedDecodeThread` — demux/decode thread split not yet implemented
+
+`DecodeThreadCount` is validated and normalised (clamped to CPU count) but the clamped value is not passed to `avcodec_open2`.
+
+These are part of the public record API so cannot be removed without a breaking change. **Fix:** Added XML `<remarks>` to each property clearly stating they are reserved for future implementation and have no current effect. The fields remain in place for forward-compatible binary compatibility.
+
+---
+
+### Issue P4-7 — Dead `_nextAudioPresentationTime` / `_nextVideoPresentationTime` fields ✅ Fixed
+
+Both fields were initialised in `FFPacketReader.Initialize()` and updated in `Seek()` but were never read by `ReadAudioPacket()`, `ReadVideoPacket()`, or any other method. They were presumably placeholders for a synthetic presentation-time generation path that was never completed.
+
+**Fix:** Both fields and their assignments in `Initialize()` and `Seek()` removed.
+
+---
+
+### Issue P4-8 — `FFmpegAudioSource.Start()` uses bizarre `switch { _ => }` expression ✅ Fixed
+
+**Before:**
+```csharp
+return _disposed
+    ? (int)MediaErrorCode.MediaInvalidArgument
+    : (State = AudioSourceState.Running) switch { _ => MediaResult.Success };
+```
+The `switch { _ => }` idiom was used purely to convert the assignment expression into a value-returning expression. This obscures intent and is flagged by most static analysers.
+
+**Fix:** Replaced with a straightforward `if` guard + explicit `return`:
+```csharp
+if (_disposed) return (int)MediaErrorCode.MediaInvalidArgument;
+State = AudioSourceState.Running;
+return MediaResult.Success;
+```

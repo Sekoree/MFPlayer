@@ -30,8 +30,8 @@ internal static class DiagnosticHelper
             var openOpts = new FFmpegOpenOptions { InputUri = uri };
             Console.WriteLine($"OpenOptions: OpenAudio={openOpts.OpenAudio}, OpenVideo={openOpts.OpenVideo}, UseShared={openOpts.UseSharedDecodeContext}");
 
-            using var media = FFMediaItem.Open(uri);
-            Console.WriteLine($"[OK] FFMediaItem.Open succeeded");
+            using var media = FFmpegMediaItem.Open(uri);
+            Console.WriteLine($"[OK] FFmpegMediaItem.Open succeeded");
             Console.WriteLine($"  AudioSource: {(media.AudioSource is not null ? "present" : "null")}");
             Console.WriteLine($"  VideoSource: {(media.VideoSource is not null ? "present" : "null")}");
 

@@ -8,8 +8,31 @@ public sealed record VideoOutputConfig
 
     public int QueueCapacity { get; init; } = 2;
 
+    /// <summary>
+    /// Multiplier applied to the effective frame duration to derive the maximum wait time
+    /// when <see cref="BackpressureMode"/> is <see cref="VideoOutputBackpressureMode.Wait"/>
+    /// and <see cref="BackpressureTimeout"/> is <see langword="null"/>.
+    /// </summary>
+    /// <remarks>
+    /// Only used when <see cref="BackpressureMode"/> is <see cref="VideoOutputBackpressureMode.Wait"/>
+    /// <b>and</b> no explicit <see cref="BackpressureTimeout"/> is set. In that case the
+    /// effective frame duration must be provided externally (the <c>hasEffectiveFrameDuration</c>
+    /// flag in <see cref="Validate"/>). If neither condition is met, <c>Validate</c> returns
+    /// <see cref="S.Media.Core.Errors.MediaErrorCode.MediaInvalidArgument"/>.
+    /// </remarks>
     public double BackpressureWaitFrameMultiplier { get; init; } = 1.0;
 
+    /// <summary>
+    /// Explicit timeout for back-pressure waits when
+    /// <see cref="BackpressureMode"/> is <see cref="VideoOutputBackpressureMode.Wait"/>.
+    /// </summary>
+    /// <remarks>
+    /// When set, this value takes precedence over <see cref="BackpressureWaitFrameMultiplier"/>.
+    /// When <see langword="null"/> and <see cref="BackpressureMode"/> is
+    /// <see cref="VideoOutputBackpressureMode.Wait"/>, a frame duration must be supplied
+    /// to <see cref="Validate"/> via <c>hasEffectiveFrameDuration = true</c>; otherwise
+    /// validation fails with <see cref="S.Media.Core.Errors.MediaErrorCode.MediaInvalidArgument"/>.
+    /// </remarks>
     public TimeSpan? BackpressureTimeout { get; init; }
 
     /// <summary>

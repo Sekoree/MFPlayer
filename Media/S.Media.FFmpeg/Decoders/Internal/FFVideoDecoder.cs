@@ -28,8 +28,6 @@ internal sealed class FFVideoDecoder : IDisposable
         return MediaResult.Success;
     }
 
-    public int Decode() => _disposed || !_initialized ? (int)MediaErrorCode.FFmpegVideoDecodeFailed : MediaResult.Success;
-
     /// <summary>
     /// Decodes a video packet. Returns <see cref="MediaResult.Success"/> when a frame is produced,
     /// <c>EAGAIN</c> (via <see cref="MediaErrorCode.FFmpegVideoDecodeNeedMoreData"/>) when the
@@ -60,6 +58,12 @@ internal sealed class FFVideoDecoder : IDisposable
             default:
                 return (int)MediaErrorCode.FFmpegVideoDecodeFailed;
         }
+    }
+
+    /// <summary>Flushes the native codec context after a seek to discard stale B-frame / reference state.</summary>
+    public void FlushCodecBuffers()
+    {
+        _nativeBackend?.FlushCodecBuffers();
     }
 
     public void Dispose()
@@ -160,6 +164,8 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
 {
     private AVCodecContext* _codecContext;
     private AVFrame* _frame;
+    // N5: pre-allocated packet reused across TryDecode calls to avoid per-call native heap allocation.
+    private AVPacket* _packet;
     private AVCodecID? _codecId;
     private bool _disposed;
 
@@ -213,6 +219,14 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
             return false;
         }
 
+        // N5: allocate the reusable packet once after the codec context is fully initialised.
+        _packet = ffmpeg.av_packet_alloc();
+        if (_packet is null)
+        {
+            DisposeCodecContext();
+            return false;
+        }
+
         _codecId = requestedCodecId;
         return true;
     }
@@ -244,82 +258,80 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
         plane2Stride = 0;
         needMoreData = false;
 
-        if (_disposed || _codecContext is null || _frame is null)
+        if (_disposed || _codecContext is null || _frame is null || _packet is null)
         {
             return false;
         }
 
-        AVPacket* packet = ffmpeg.av_packet_alloc();
-        if (packet is null)
+        // N5: reuse the pre-allocated packet — unref first so av_grow_packet starts from a clean state.
+        ffmpeg.av_packet_unref(_packet);
+        if (ffmpeg.av_grow_packet(_packet, packetData.Length) < 0)
         {
             return false;
         }
 
-        try
+        Marshal.Copy(packetData, 0, (IntPtr)_packet->data, packetData.Length);
+        _packet->flags = packetFlags;
+
+        if (ffmpeg.avcodec_send_packet(_codecContext, _packet) < 0)
         {
-            if (ffmpeg.av_new_packet(packet, packetData.Length) < 0)
-            {
-                return false;
-            }
-
-            Marshal.Copy(packetData, 0, (IntPtr)packet->data, packetData.Length);
-            packet->flags = packetFlags;
-
-            if (ffmpeg.avcodec_send_packet(_codecContext, packet) < 0)
-            {
-                return false;
-            }
-
-            var receiveCode = ffmpeg.avcodec_receive_frame(_codecContext, _frame);
-            if (receiveCode == 0)
-            {
-                width = _frame->width;
-                height = _frame->height;
-                isKeyFrame = (_frame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
-                pixelFormat = _frame->format;
-                plane0Stride = Math.Max(1, Math.Abs(_frame->linesize[0]));
-                var copySize = Math.Max(1, plane0Stride * Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 0)));
-                var copied = new byte[copySize];
-                if (_frame->data[0] is not null)
-                {
-                    Marshal.Copy((IntPtr)_frame->data[0], copied, 0, copySize);
-                }
-
-                plane0 = copied;
-
-                if (_frame->data[1] is not null)
-                {
-                    plane1Stride = Math.Max(1, Math.Abs(_frame->linesize[1]));
-                    var plane1Height = Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 1));
-                    var plane1Bytes = new byte[Math.Max(1, plane1Stride * plane1Height)];
-                    Marshal.Copy((IntPtr)_frame->data[1], plane1Bytes, 0, plane1Bytes.Length);
-                    plane1 = plane1Bytes;
-                }
-
-                if (_frame->data[2] is not null)
-                {
-                    plane2Stride = Math.Max(1, Math.Abs(_frame->linesize[2]));
-                    var plane2Height = Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 2));
-                    var plane2Bytes = new byte[Math.Max(1, plane2Stride * plane2Height)];
-                    Marshal.Copy((IntPtr)_frame->data[2], plane2Bytes, 0, plane2Bytes.Length);
-                    plane2 = plane2Bytes;
-                }
-
-                ffmpeg.av_frame_unref(_frame);
-                return true;
-            }
-
-            if (receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN))
-            {
-                needMoreData = true;
-                return false;
-            }
-
             return false;
         }
-        finally
+
+        var receiveCode = ffmpeg.avcodec_receive_frame(_codecContext, _frame);
+        if (receiveCode == 0)
         {
-            ffmpeg.av_packet_free(&packet);
+            width = _frame->width;
+            height = _frame->height;
+            isKeyFrame = (_frame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+            pixelFormat = _frame->format;
+            plane0Stride = Math.Max(1, Math.Abs(_frame->linesize[0]));
+            var copySize = Math.Max(1, plane0Stride * Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 0)));
+            var copied = new byte[copySize];
+            if (_frame->data[0] is not null)
+            {
+                Marshal.Copy((IntPtr)_frame->data[0], copied, 0, copySize);
+            }
+
+            plane0 = copied;
+
+            if (_frame->data[1] is not null)
+            {
+                plane1Stride = Math.Max(1, Math.Abs(_frame->linesize[1]));
+                var plane1Height = Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 1));
+                var plane1Bytes = new byte[Math.Max(1, plane1Stride * plane1Height)];
+                Marshal.Copy((IntPtr)_frame->data[1], plane1Bytes, 0, plane1Bytes.Length);
+                plane1 = plane1Bytes;
+            }
+
+            if (_frame->data[2] is not null)
+            {
+                plane2Stride = Math.Max(1, Math.Abs(_frame->linesize[2]));
+                var plane2Height = Math.Max(1, GetPlaneHeight((AVPixelFormat)pixelFormat, height, 2));
+                var plane2Bytes = new byte[Math.Max(1, plane2Stride * plane2Height)];
+                Marshal.Copy((IntPtr)_frame->data[2], plane2Bytes, 0, plane2Bytes.Length);
+                plane2 = plane2Bytes;
+            }
+
+            ffmpeg.av_frame_unref(_frame);
+            return true;
+        }
+
+        if (receiveCode == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+        {
+            needMoreData = true;
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>Flushes stale codec state after a seek. Must be called while the pipeline gate is held.</summary>
+    public void FlushCodecBuffers()
+    {
+        if (_codecContext is not null)
+        {
+            ffmpeg.avcodec_flush_buffers(_codecContext);
         }
     }
 
@@ -341,6 +353,14 @@ internal unsafe sealed class FFNativeVideoDecoderBackend : IDisposable
             var frame = _frame;
             ffmpeg.av_frame_free(&frame);
             _frame = null;
+        }
+
+        // N5: free the pre-allocated packet alongside the codec context.
+        if (_packet is not null)
+        {
+            var pkt = _packet;
+            ffmpeg.av_packet_free(&pkt);
+            _packet = null;
         }
 
         if (_codecContext is not null)

@@ -36,11 +36,11 @@ internal static class Program
 
         try
         {
-            using var media1 = new FFMediaItem(new FFmpegOpenOptions
+            using var media1 = new FFmpegMediaItem(new FFmpegOpenOptions
             {
                 InputUri = uri1, OpenAudio = true, OpenVideo = false, UseSharedDecodeContext = true,
             });
-            using var media2 = new FFMediaItem(new FFmpegOpenOptions
+            using var media2 = new FFmpegMediaItem(new FFmpegOpenOptions
             {
                 InputUri = uri2, OpenAudio = true, OpenVideo = false, UseSharedDecodeContext = true,
             });

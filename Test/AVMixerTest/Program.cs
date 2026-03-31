@@ -30,7 +30,7 @@ internal static class Program
 
         try
         {
-            using var media = FFMediaItem.Open(uri);
+            using var media = FFmpegMediaItem.Open(uri);
 
             var audioSource = media.AudioSource;
             var videoSource = media.VideoSource;

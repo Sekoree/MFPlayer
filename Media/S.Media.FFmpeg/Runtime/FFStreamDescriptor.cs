@@ -1,6 +1,6 @@
 namespace S.Media.FFmpeg.Runtime;
 
-public readonly record struct FFStreamDescriptor
+internal readonly record struct FFStreamDescriptor
 {
     public int StreamIndex { get; init; }
 

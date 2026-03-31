@@ -5,7 +5,7 @@ namespace S.Media.FFmpeg.Config;
 
 public static class FFmpegConfigValidator
 {
-    public static int Validate(FFmpegOpenOptions openOptions, FFAudioSourceOptions? audioOptions = null)
+    public static int Validate(FFmpegOpenOptions openOptions, FFmpegAudioSourceOptions? audioOptions = null)
     {
         return Validate(openOptions, decodeOptions: null, audioOptions);
     }
@@ -13,7 +13,7 @@ public static class FFmpegConfigValidator
     public static int Validate(
         FFmpegOpenOptions openOptions,
         FFmpegDecodeOptions? decodeOptions,
-        FFAudioSourceOptions? audioOptions = null)
+        FFmpegAudioSourceOptions? audioOptions = null)
     {
         ArgumentNullException.ThrowIfNull(openOptions);
 
@@ -24,6 +24,14 @@ public static class FFmpegConfigValidator
         }
 
         if (!openOptions.OpenAudio && !openOptions.OpenVideo)
+        {
+            return (int)MediaErrorCode.FFmpegInvalidConfig;
+        }
+
+        // UseSharedDecodeContext = false is not yet implemented: sources would be constructed
+        // with a null session and silently return stub data. Reject until a non-shared decode
+        // path exists.
+        if (!openOptions.UseSharedDecodeContext)
         {
             return (int)MediaErrorCode.FFmpegInvalidConfig;
         }
@@ -61,18 +69,13 @@ public static class FFmpegConfigValidator
             return (int)MediaErrorCode.FFmpegInvalidConfig;
         }
 
-        if (hasUri && !string.IsNullOrWhiteSpace(openOptions.InputFormatHint))
-        {
-            return (int)MediaErrorCode.FFmpegInvalidConfig;
-        }
-
         if (hasUri && !openOptions.LeaveInputStreamOpen)
         {
             return (int)MediaErrorCode.FFmpegInvalidConfig;
         }
 
         if (audioOptions is not null &&
-            audioOptions.MappingPolicy == FFAudioChannelMappingPolicy.ApplyExplicitRouteMap &&
+            audioOptions.MappingPolicy == FFmpegAudioChannelMappingPolicy.ApplyExplicitRouteMap &&
             audioOptions.ExplicitChannelMap is null)
         {
             return (int)MediaErrorCode.FFmpegInvalidAudioChannelMap;

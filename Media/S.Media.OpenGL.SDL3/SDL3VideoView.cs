@@ -7,15 +7,13 @@ using SDL3;
 
 namespace S.Media.OpenGL.SDL3;
 
-public sealed class SDL3VideoView : IVideoOutput
+public sealed class SDL3VideoView : OpenGLWrapperVideoOutput
 {
     private const int MinStandaloneWindowWidth = 320;
     private const int MinStandaloneWindowHeight = 180;
 
     private readonly Lock _gate = new();
-    private readonly Dictionary<Guid, SDL3VideoView> _clones = [];
-    private readonly OpenGLVideoOutput _output;
-    private readonly OpenGLVideoEngine _engine;
+    // _clones removed (3.1): topology is now owned exclusively by OpenGLVideoEngine.
     private readonly SDL3HudRenderer _hudRenderer = new();
     private readonly SDL3ShaderPipeline _shaderPipeline = new();
     private bool _disposed;
@@ -35,6 +33,7 @@ public sealed class SDL3VideoView : IVideoOutput
     private int _glProgram;
     private int _glYuvProgram;
     private int _glYuvPixelFormatLocation = -1;
+    private int _glYuvFullRangeLocation = -1;   // B6
     private int _glVao;
     private int _glVbo;
     private int _glTexture;
@@ -142,30 +141,44 @@ public sealed class SDL3VideoView : IVideoOutput
     {
     }
 
-    private SDL3VideoView(OpenGLVideoOutput output, OpenGLVideoEngine engine, bool isClone)
+    /// <summary>
+    /// Creates a new standalone <see cref="SDL3VideoView"/> without throwing on failure.
+    /// Preferred over the public constructor for code that follows the framework's
+    /// integer-return-code convention.
+    /// </summary>
+    public static int Create(out SDL3VideoView? result)
     {
-        _output = output;
-        _engine = engine;
-        IsClone = isClone;
-
-        var add = _engine.AddOutput(_output);
+        result = null;
+        var output = new OpenGLVideoOutput();
+        var engine = new OpenGLVideoEngine();
+        var add = engine.AddOutput(output);
         if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
         {
-            throw new InvalidOperationException($"Failed to register SDL3 output in OpenGL engine. Code={add}.");
+            output.Dispose();
+            engine.Dispose();
+            return add;
         }
+
+        result = new SDL3VideoView(output, engine, isClone: false);
+        return MediaResult.Success;
     }
 
-    public Guid Id => _output.Id;
+    private SDL3VideoView(OpenGLVideoOutput output, OpenGLVideoEngine engine, bool isClone)
+        : base(output, engine, isClone)
+    {
+    }
 
-    public VideoOutputState State => _output.State;
+    /// <summary>
+    /// The underlying <see cref="OpenGLVideoOutput"/> managed by this view.
+    /// Intended for diagnostics only — do not call <c>Start</c>, <c>Stop</c>, or
+    /// <c>PushFrame</c> directly on this object.
+    /// </summary>
+    public OpenGLVideoOutput InternalOutput => Output;
 
     public bool EnableHudOverlay { get; set; }
 
     public SDL3HudRenderer HudRenderer => _hudRenderer;
 
-    public bool IsClone { get; private set; }
-
-    public Guid? CloneParentOutputId => _output.CloneParentOutputId;
 
     public int Initialize(SDL3VideoViewOptions options)
     {
@@ -258,14 +271,14 @@ public sealed class SDL3VideoView : IVideoOutput
         }
     }
 
-    public int Start(VideoOutputConfig config)
+    public override int Start(VideoOutputConfig config)
     {
         lock (_gate)
         {
             if (_parentLost)   return (int)MediaErrorCode.SDL3EmbedParentLost;
             if (!_initialized) return (int)MediaErrorCode.SDL3EmbedNotInitialized;
 
-            var outStart = _output.Start(config);
+            var outStart = Output.Start(config);
             if (outStart != MediaResult.Success) return outStart;
 
             _renderConfig = config;
@@ -300,7 +313,7 @@ public sealed class SDL3VideoView : IVideoOutput
         return Start(new VideoOutputConfig());
     }
 
-    public int Stop()
+    public override int Stop()
     {
         Thread? renderThread;
         lock (_gate)
@@ -313,22 +326,21 @@ public sealed class SDL3VideoView : IVideoOutput
         if (renderThread is not null && !ReferenceEquals(Thread.CurrentThread, renderThread))
             renderThread.Join(TimeSpan.FromSeconds(3));
 
-        // Drain any queued frames.
         lock (_renderQueueLock)
         {
             while (_renderQueue.TryDequeue(out var item))
                 item.Frame.Dispose();
         }
 
-        return _output.Stop();
+        return Output.Stop();
     }
 
-    public int PushFrame(VideoFrame frame)
+    public override int PushFrame(VideoFrame frame)
     {
         return PushFrame(frame, frame.PresentationTime);
     }
 
-    public int PushFrame(VideoFrame frame, TimeSpan presentationTime)
+    public override int PushFrame(VideoFrame frame, TimeSpan presentationTime)
     {
         bool embedded;
         lock (_gate)
@@ -338,15 +350,17 @@ public sealed class SDL3VideoView : IVideoOutput
             embedded = _embedded;
         }
 
-        // ── Embedded path (e.g. Avalonia): synchronous on calling thread ───────
         if (embedded)
         {
+            var push = Output.PushFrame(frame, presentationTime);
+            if (push != MediaResult.Success) return push;
+
             lock (_gate)
             {
-                var push = _output.PushFrame(frame, presentationTime);
-                if (push != MediaResult.Success) return push;
+                if (_disposed)   return (int)MediaErrorCode.SDL3EmbedTeardownFailed;
+                if (!_initialized) return (int)MediaErrorCode.SDL3EmbedNotInitialized;
 
-                var generation = _output.Surface.LastPresentedFrameGeneration;
+                var generation = Output.Surface.LastPresentedFrameGeneration;
                 if (generation == _lastPresentedGeneration)
                 {
                     if (EnableHudOverlay && _hudDirty) { _ = _hudRenderer.Render(); _hudDirty = false; }
@@ -567,13 +581,13 @@ public sealed class SDL3VideoView : IVideoOutput
                 return (int)MediaErrorCode.OpenGLCloneParentDisposed;
             }
 
-            var create = _engine.CreateCloneOutput(Id, ToOpenGlCloneOptions(options), out var cloneBaseOutput);
+            var create = Engine.CreateCloneOutput(Id, ToOpenGlCloneOptions(options), out var cloneBaseOutput);
             if (create != MediaResult.Success || cloneBaseOutput is not OpenGLVideoOutput glClone)
             {
                 return create != MediaResult.Success ? create : (int)MediaErrorCode.OpenGLCloneCreationFailed;
             }
 
-            cloneView = new SDL3VideoView(glClone, _engine, isClone: true);
+            cloneView = new SDL3VideoView(glClone, Engine, isClone: true);
             var cloneInit = _embedded
                 ? cloneView.InitializeEmbedded(_platformHandle, 1, 1)
                 : cloneView.Initialize(new SDL3VideoViewOptions
@@ -584,21 +598,19 @@ public sealed class SDL3VideoView : IVideoOutput
                 });
             if (cloneInit != MediaResult.Success)
             {
-                _ = _engine.RemoveOutput(cloneView.Id);
+                _ = Engine.RemoveOutput(cloneView.Id);
                 cloneView.Dispose();
                 cloneView = null;
                 return cloneInit;
             }
 
-            _clones[cloneView.Id] = cloneView;
+            // Clone registered; topology tracked exclusively in the engine (3.1).
             return MediaResult.Success;
         }
     }
 
     public int AttachClone(SDL3VideoView? cloneView, in SDL3CloneOptions options)
     {
-        _ = options;
-
         if (cloneView is null)
         {
             return (int)MediaErrorCode.MediaInvalidArgument;
@@ -611,63 +623,49 @@ public sealed class SDL3VideoView : IVideoOutput
                 return (int)MediaErrorCode.OpenGLCloneSelfAttachRejected;
             }
 
-            var add = _engine.AddOutput(cloneView._output);
+            var add = Engine.AddOutput(cloneView.Output);
             if (add is not MediaResult.Success and not (int)MediaErrorCode.OpenGLCloneAlreadyAttached)
             {
                 return add;
             }
 
-            var attach = _engine.AttachCloneOutput(Id, cloneView.Id);
-            if (attach != MediaResult.Success)
+            // B7 fix: forward options to the engine rather than discarding them.
+            var attachCode = Engine.AttachCloneOutput(Id, cloneView.Id, ToOpenGlCloneOptions(options));
+            if (attachCode != MediaResult.Success)
             {
-                return attach;
+                return attachCode;
             }
 
             cloneView.IsClone = true;
-            _clones[cloneView.Id] = cloneView;
+            // Topology tracked exclusively in the engine (3.1).
             return MediaResult.Success;
         }
     }
 
     public int DetachClone(Guid cloneViewId)
     {
-        lock (_gate)
-        {
-            var detach = _engine.DetachCloneOutput(Id, cloneViewId);
-            if (detach != MediaResult.Success)
-            {
-                return detach;
-            }
-
-            _clones.Remove(cloneViewId, out _);
-
-            return MediaResult.Success;
-        }
+        return Engine.DetachCloneOutput(Id, cloneViewId);
     }
 
     public void SimulateEmbeddedParentLost()
     {
-        SDL3VideoView[] clonesToDispose;
+        Guid[] cloneIds;
 
         lock (_gate)
         {
-            if (_embedded)
-            {
-                clonesToDispose = ApplyParentLossTeardownLocked();
-            }
-            else
-            {
-                clonesToDispose = [];
-            }
+            if (!_embedded)
+                return;
+            cloneIds = Engine.GetCloneIds(Id).ToArray();
+            ApplyParentLossTeardownLocked();
         }
 
-        foreach (var clone in clonesToDispose)
-        {
-            clone.Dispose();
-        }
+        // Detach all clone outputs from the engine; their SDL3VideoView instances
+        // become orphaned and will fail on the next operation (3.1 — no _clones dict).
+        foreach (var id in cloneIds)
+            _ = Engine.RemoveOutput(id);
     }
 
-    public void Dispose()
+    protected override void OnBeforeDispose()
     {
         // Stop the render thread first so it releases the GL context before we destroy the window.
         _ = Stop();
@@ -677,13 +675,9 @@ public sealed class SDL3VideoView : IVideoOutput
         lock (_gate)
         {
             if (_disposed)
-            {
                 return;
-            }
 
             _disposed = true;
-
-            _clones.Clear();
             _platformHandle = nint.Zero;
             _platformDescriptor = string.Empty;
             _initialized = false;
@@ -700,18 +694,10 @@ public sealed class SDL3VideoView : IVideoOutput
         }
 
         if (releaseSdl)
-        {
             SDL.Quit();
-        }
 
         _shaderPipeline.Dispose();
-        _ = _engine.RemoveOutput(Id);
-        if (!IsClone)
-        {
-            _engine.Dispose();
-        }
-
-        _output.Dispose();
+        // base.Dispose() will call Engine.RemoveOutput(Id) and Engine.Dispose() (if !IsClone).
     }
 
     private static OpenGLCloneOptions ToOpenGlCloneOptions(in SDL3CloneOptions options)
@@ -745,20 +731,22 @@ public sealed class SDL3VideoView : IVideoOutput
 
     private static string ResolveDefaultDescriptor()
     {
-        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
-        {
-            return "wayland-surface";
-        }
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return "win32-hwnd";
 
-        return "x11-window";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            return "cocoa-nsview";
+
+        // Linux: prefer Wayland when the compositor is running, otherwise X11.
+        return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"))
+            ? "wayland-surface"
+            : "x11-window";
     }
 
-    private SDL3VideoView[] ApplyParentLossTeardownLocked()
+    private void ApplyParentLossTeardownLocked()
     {
         if (_parentLost)
-        {
-            return [];
-        }
+            return;
 
         _parentLost = true;
         _initialized = false;
@@ -769,10 +757,7 @@ public sealed class SDL3VideoView : IVideoOutput
         _hudDirty = false;
         _windowFlags = SDL.WindowFlags.OpenGL;
         _bringToFrontOnShow = false;
-
-        var clones = _clones.Values.ToArray();
-        _clones.Clear();
-        return clones;
+        // Clone topology cleanup is handled in SimulateEmbeddedParentLost via engine (3.1).
     }
 
     private static SDL.WindowFlags NormalizeWindowFlags(SDL.WindowFlags requestedFlags)
@@ -1056,6 +1041,10 @@ public sealed class SDL3VideoView : IVideoOutput
         {
             _glUniform1I!(_glYuvPixelFormatLocation, plan.ModeId);
         }
+        if (_glYuvFullRangeLocation >= 0)
+        {
+            _glUniform1I!(_glYuvFullRangeLocation, frame.IsFullRange ? 1 : 0); // B6
+        }
 
         _glActiveTexture!(0x84C0);
         _glBindTexture!(0x0DE1, _glTextureY);
@@ -1266,20 +1255,20 @@ public sealed class SDL3VideoView : IVideoOutput
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
 
-        var vertexShader = CompileShader(0x8B31, VertexShaderSource); // GL_VERTEX_SHADER
+        var vertexShader = CompileShader(0x8B31, GlslShaders.VertexCore); // GL_VERTEX_SHADER
         if (vertexShader == 0)
         {
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
 
-        var fragmentShader = CompileShader(0x8B30, FragmentShaderSource); // GL_FRAGMENT_SHADER
+        var fragmentShader = CompileShader(0x8B30, GlslShaders.FragmentRgbaCore); // GL_FRAGMENT_SHADER
         if (fragmentShader == 0)
         {
             _glDeleteShader!(vertexShader);
             return (int)MediaErrorCode.SDL3EmbedInitializeFailed;
         }
 
-        var yuvFragmentShader = CompileShader(0x8B30, YuvFragmentShaderSource); // GL_FRAGMENT_SHADER
+        var yuvFragmentShader = CompileShader(0x8B30, GlslShaders.FragmentYuvCore); // GL_FRAGMENT_SHADER
         if (yuvFragmentShader == 0)
         {
             _glDeleteShader!(vertexShader);
@@ -1333,6 +1322,7 @@ public sealed class SDL3VideoView : IVideoOutput
         var uTextureU = _glGetUniformLocation!(_glYuvProgram, "uTextureU");
         var uTextureV = _glGetUniformLocation!(_glYuvProgram, "uTextureV");
         _glYuvPixelFormatLocation = _glGetUniformLocation!(_glYuvProgram, "uPixelFormat");
+        _glYuvFullRangeLocation   = _glGetUniformLocation!(_glYuvProgram, "uFullRange"); // B6
         if (uTextureY >= 0)
         {
             _glUniform1I!(uTextureY, 0);
@@ -1575,6 +1565,7 @@ public sealed class SDL3VideoView : IVideoOutput
         }
 
         _glYuvPixelFormatLocation = -1;
+        _glYuvFullRangeLocation = -1;
         _rgbaUploadState = default;
         _yUploadState = default;
         _uUploadState = default;
@@ -1586,9 +1577,7 @@ public sealed class SDL3VideoView : IVideoOutput
         _glInitialized = false;
     }
 
-    private const string VertexShaderSource = "#version 330 core\nlayout(location=0) in vec2 aPosition;\nlayout(location=1) in vec2 aTexCoord;\nout vec2 vTexCoord;\nvoid main(){ gl_Position = vec4(aPosition, 0.0, 1.0); vTexCoord = aTexCoord; }";
-    private const string FragmentShaderSource = "#version 330 core\nin vec2 vTexCoord;\nout vec4 FragColor;\nuniform sampler2D uTexture;\nvoid main(){ FragColor = texture(uTexture, vTexCoord); }";
-    private const string YuvFragmentShaderSource = "#version 330 core\nin vec2 vTexCoord;\nuniform sampler2D uTextureY;\nuniform sampler2D uTextureU;\nuniform sampler2D uTextureV;\nuniform int uPixelFormat;\nout vec4 FragColor;\nvec3 yuvToRgb(float y, float u, float v){ float r=y+1.5748*v; float g=y-0.1873*u-0.4681*v; float b=y+1.8556*u; return clamp(vec3(r,g,b),0.0,1.0); }\nvoid main(){ float scale=(uPixelFormat==4)?(65535.0/1023.0):1.0; float y=texture(uTextureY,vTexCoord).r*scale; float u; float v; if(uPixelFormat==1 || uPixelFormat==3){ vec2 uv=texture(uTextureU,vTexCoord).rg*scale; u=uv.r-0.5; v=uv.g-0.5; } else { u=texture(uTextureU,vTexCoord).r*scale-0.5; v=texture(uTextureV,vTexCoord).r*scale-0.5; } FragColor=vec4(yuvToRgb(y,u,v),1.0); }";
+    // Shader sources are in GlslShaders.cs (S.Media.OpenGL) — single source of truth.
 
     private static void PumpSdlEvents()
     {
@@ -1708,16 +1697,13 @@ public sealed class SDL3VideoView : IVideoOutput
 
     private void RenderFrameOnRenderThread(VideoFrame frame, TimeSpan pts, nint wnd)
     {
-        // Delegate timing (Thread.Sleep) + surface metadata update to OpenGLVideoOutput.
-        // This sleep now happens on the render thread, not the calling thread.
-        var push = _output.PushFrame(frame, pts);
+        var push = Output.PushFrame(frame, pts);
         if (push != MediaResult.Success) return;
 
-        var generation = _output.LastPresentedFrameGeneration;
+        var generation = Output.LastPresentedFrameGeneration;
         if (generation == _lastPresentedGeneration) return;
         _lastPresentedGeneration = generation;
 
-        // Shader pipeline upload (used by clone/Avalonia consumers sharing this engine).
         bool pipelineReady;
         lock (_gate) { pipelineReady = _pipelineReady; }
         if (pipelineReady)
@@ -1726,19 +1712,27 @@ public sealed class SDL3VideoView : IVideoOutput
             _ = _shaderPipeline.Draw();
         }
 
-        // Standalone window rendering – no lock needed; render thread exclusively owns GL.
         if (SDL.GetWindowSizeInPixels(wnd, out var pw, out var ph))
             ApplyViewportForFrame(frame.Width, frame.Height, pw, ph);
 
+        var uploadStart = System.Diagnostics.Stopwatch.GetTimestamp();
         int renderCode;
         if (frame.PixelFormat is VideoPixelFormat.Rgba32 or VideoPixelFormat.Bgra32)
             renderCode = RenderRgbaFrameLocked(frame);
         else
             renderCode = RenderYuvFrameLocked(frame);
+        var uploadMs = System.Diagnostics.Stopwatch.GetElapsedTime(uploadStart).TotalMilliseconds;
 
         if (renderCode != MediaResult.Success) return;
 
+        var swapStart = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!SDL.GLSwapWindow(wnd))
+        {
             Console.Error.WriteLine("[SDL3VideoView] GLSwapWindow failed – " + SDL.GetError());
+            return;
+        }
+        var presentMs = System.Diagnostics.Stopwatch.GetElapsedTime(swapStart).TotalMilliseconds;
+
+        Output.UpdateTimings(uploadMs, presentMs);
     }
 }

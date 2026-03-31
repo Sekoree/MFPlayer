@@ -9,13 +9,14 @@ namespace S.Media.OpenGL;
 public sealed class OpenGLVideoOutput : IVideoOutput
 {
     private readonly Lock _gate = new();
-    private readonly List<Guid> _cloneOutputIds = [];
     private bool _disposed;
     private bool _running;
     private OpenGLDiagnosticsEvents? _diagnostics;
     private long _framesPresented;
     private long _framesDropped;
     private long _framesCloned;
+    private double _lastUploadMs;
+    private double _lastPresentMs;
     private VideoOutputConfig _config = new();
     private bool _hasTimelineAnchor;
     private double _anchorPtsSeconds;
@@ -23,14 +24,13 @@ public sealed class OpenGLVideoOutput : IVideoOutput
     private double _lastNormalizedPtsSeconds = double.NaN;
     private long _lastPresentTicks;
 
-    internal OpenGLVideoOutput(Guid id, bool isClone)
+    internal OpenGLVideoOutput(Guid id)
     {
         Id = id;
-        IsClone = isClone;
         Surface = OpenGLSurfaceMetadata.Empty;
     }
 
-    public OpenGLVideoOutput() : this(Guid.NewGuid(), isClone: false)
+    public OpenGLVideoOutput() : this(Guid.NewGuid())
     {
     }
 
@@ -38,20 +38,13 @@ public sealed class OpenGLVideoOutput : IVideoOutput
 
     public VideoOutputState State => _running ? VideoOutputState.Running : VideoOutputState.Stopped;
 
-    public bool IsClone { get; }
-
-    public Guid? CloneParentOutputId { get; internal set; }
-
-    public IReadOnlyList<Guid> CloneOutputIds
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _cloneOutputIds.ToArray();
-            }
-        }
-    }
+    /// <summary>
+    /// The ID of the parent output this output was attached to as a clone, or
+    /// <see langword="null"/> if not attached as a clone.
+    /// Topology is managed by <see cref="OpenGLVideoEngine"/>; this field is
+    /// set/cleared by the engine via <see cref="SetCloneParent"/>.
+    /// </summary>
+    public Guid? CloneParentOutputId { get; private set; }
 
     public long LastPresentedFrameGeneration { get; private set; }
 
@@ -364,7 +357,6 @@ public sealed class OpenGLVideoOutput : IVideoOutput
             }
 
             _running = false;
-            _cloneOutputIds.Clear();
             CloneParentOutputId = null;
             _disposed = true;
             Surface = OpenGLSurfaceMetadata.Empty;
@@ -375,37 +367,30 @@ public sealed class OpenGLVideoOutput : IVideoOutput
         diagnostics?.PublishSurfaceChanged(OpenGLSurfaceMetadata.Empty);
     }
 
-    internal int AddClone(Guid cloneId)
+    /// <summary>
+    /// Sets or clears the parent clone ID. Called exclusively by <see cref="OpenGLVideoEngine"/>
+    /// when attaching or detaching this output as a clone.
+    /// </summary>
+    internal void SetCloneParent(Guid? parentId)
     {
         lock (_gate)
         {
-            if (_disposed)
-            {
-                return (int)MediaErrorCode.OpenGLCloneParentDisposed;
-            }
-
-            if (_cloneOutputIds.Contains(cloneId))
-            {
-                return (int)MediaErrorCode.OpenGLCloneAlreadyAttached;
-            }
-
-            _cloneOutputIds.Add(cloneId);
-            return MediaResult.Success;
+            CloneParentOutputId = parentId;
         }
     }
 
-    internal int RemoveClone(Guid cloneId)
+    /// <summary>
+    /// Records the most recent GPU upload and present timings so
+    /// <see cref="BuildDiagnosticsSnapshotLocked"/> can include real metrics.
+    /// Called by the rendering backend (SDL3 render loop / Avalonia GL render pass)
+    /// after each frame is uploaded and drawn.
+    /// </summary>
+    internal void UpdateTimings(double lastUploadMs, double lastPresentMs)
     {
         lock (_gate)
         {
-            if (_disposed)
-            {
-                return (int)MediaErrorCode.OpenGLCloneParentDisposed;
-            }
-
-            return _cloneOutputIds.Remove(cloneId)
-                ? MediaResult.Success
-                : (int)MediaErrorCode.OpenGLCloneNotAttached;
+            _lastUploadMs = lastUploadMs;
+            _lastPresentMs = lastPresentMs;
         }
     }
 
@@ -438,8 +423,8 @@ public sealed class OpenGLVideoOutput : IVideoOutput
             FramesPresented: _framesPresented,
             FramesDropped: _framesDropped,
             FramesCloned: _framesCloned,
-            LastUploadMs: 0,
-            LastPresentMs: 0,
+            LastUploadMs: _lastUploadMs,
+            LastPresentMs: _lastPresentMs,
             Surface: Surface);
     }
 
