@@ -194,6 +194,11 @@ public sealed class MIDIOutput : IMIDIDevice
             return errorCode;
         }
 
+        // P3.12: honour the grace period before starting reconnection attempts.
+        var grace = ReconnectOptions.DisconnectGracePeriod;
+        if (grace > TimeSpan.Zero)
+            Thread.Sleep(grace);
+
         PublishStatus(MIDIConnectionStatus.Reconnecting);
         if (!TryReconnectNative(out var reconnectCode))
         {

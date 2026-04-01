@@ -1,5 +1,5 @@
-using S.Media.NDI.Diagnostics;
 using S.Media.Core.Errors;
+using NDILib;
 
 namespace S.Media.NDI.Config;
 
@@ -35,6 +35,19 @@ public sealed record NDISourceOptions
     /// Takes precedence over <see cref="NDILimitsOptions.AudioJitterBufferMs"/>.
     /// </summary>
     public int AudioJitterBufferMs { get; init; } = 90;
+
+    /// <summary>
+    /// Receiver bandwidth selection for the NDI connection.
+    /// Controls whether the receiver requests the highest quality stream, a lower-bandwidth
+    /// proxy, audio-only, or metadata-only from the sender.
+    /// <para>
+    /// <b>Note:</b> This setting is applied at <see cref="NDILib.NDIReceiver"/> creation time
+    /// via <see cref="NDILib.NDIReceiverSettings.Bandwidth"/>. When creating sources through
+    /// <c>NDIEngine.CreateAudioSource</c>/<c>CreateVideoSource</c> with a pre-created receiver,
+    /// this property is informational only — the bandwidth was already set on the receiver.
+    /// </para>
+    /// </summary>
+    public NdiRecvBandwidth ReceiverBandwidth { get; init; } = NdiRecvBandwidth.Highest;
 
     /// <summary>
     /// Minimal buffering for the lowest possible latency. May drop frames on jittery networks.

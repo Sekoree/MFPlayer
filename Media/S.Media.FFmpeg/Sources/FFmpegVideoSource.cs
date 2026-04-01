@@ -94,7 +94,7 @@ public sealed class FFmpegVideoSource : IVideoSource
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             State = VideoSourceState.Running;
@@ -108,7 +108,7 @@ public sealed class FFmpegVideoSource : IVideoSource
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             State = VideoSourceState.Stopped;
@@ -151,7 +151,7 @@ public sealed class FFmpegVideoSource : IVideoSource
                 if (_disposed)
                 {
                     frame = null!;
-                    return (int)MediaErrorCode.MediaInvalidArgument;
+                    return (int)MediaErrorCode.MediaObjectDisposed;
                 }
 
                 var mappedFormat = sessionFrame.PixelFormat == VideoPixelFormat.Unknown
@@ -217,7 +217,7 @@ public sealed class FFmpegVideoSource : IVideoSource
             if (_disposed)
             {
                 frame = null!;
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             frame = new VideoFrame(
@@ -266,7 +266,7 @@ public sealed class FFmpegVideoSource : IVideoSource
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             _positionSeconds = positionSeconds;
@@ -326,7 +326,7 @@ public sealed class FFmpegVideoSource : IVideoSource
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             _currentFrameIndex = frameIndex;

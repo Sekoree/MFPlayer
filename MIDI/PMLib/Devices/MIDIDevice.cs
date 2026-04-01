@@ -15,7 +15,17 @@ public abstract class MIDIDevice : IDisposable
     protected static readonly ILogger Logger = PMLibLogging.GetLogger("PMLib.Devices");
     private bool _disposed;
 
-    /// <summary>Native PortMidi stream handle. <see cref="nint.Zero"/> when not open.</summary>
+    /// <summary>
+    /// Native PortMidi stream handle. <see cref="nint.Zero"/> when not open.
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ <b>Thread safety:</b> This field is not <c>volatile</c> and is not protected by a lock.
+    /// Subclasses that read <see cref="Stream"/> from a background thread (e.g. a poll loop) must
+    /// ensure the thread is stopped <b>before</b> calling <see cref="Close"/>, which sets this
+    /// field to <see cref="nint.Zero"/>. <see cref="MIDIInputDevice"/> follows this pattern:
+    /// <c>Close()</c> sets <c>_polling = false</c> and joins the thread before calling
+    /// <c>base.Close()</c>.
+    /// </remarks>
     protected nint Stream;
 
     /// <summary>PortMidi device ID passed to the constructor.</summary>

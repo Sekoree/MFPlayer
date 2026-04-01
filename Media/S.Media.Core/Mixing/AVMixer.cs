@@ -25,6 +25,7 @@ public class AVMixer : IAVMixer
         private readonly Func<double>? _getClockSec; // N6: audio-led clock reference
         private readonly Queue<(VideoFrame Frame, TimeSpan Pts)> _queue = new();
         private readonly Lock _qLock = new();
+        private readonly ManualResetEventSlim _signal = new(false);
         private readonly Thread _thread;
         private volatile bool _stop;
 
@@ -59,6 +60,7 @@ public class AVMixer : IAVMixer
                 _queue.Enqueue((frame.AddRef(), pts));
             }
             drop?.Dispose();
+            _signal.Set(); // P2.15: wake the worker immediately
         }
 
         private void WorkerLoop()
@@ -68,7 +70,7 @@ public class AVMixer : IAVMixer
                 (VideoFrame Frame, TimeSpan Pts) item;
                 bool has;
                 lock (_qLock) { has = _queue.TryDequeue(out item); }
-                if (!has) { Thread.Sleep(1); continue; }
+                if (!has) { _signal.Wait(16); _signal.Reset(); continue; }
 
                 // N6: drop frames that are older than the stale threshold relative to the audio clock.
                 if (_getClockSec != null && _staleThreshold > TimeSpan.Zero && item.Pts > TimeSpan.Zero)
@@ -95,8 +97,10 @@ public class AVMixer : IAVMixer
         public void Stop()
         {
             _stop = true;
+            _signal.Set(); // wake the worker so it can exit
             if (!ReferenceEquals(Thread.CurrentThread, _thread))
                 _thread.Join(TimeSpan.FromSeconds(2));
+            _signal.Dispose();
         }
 
         public void Dispose() => Stop();
@@ -221,40 +225,34 @@ public class AVMixer : IAVMixer
 
     public int AddAudioRoutingRule(AudioRoutingRule rule)
     {
-        lock (_gate) _audioRoutingRules.Add(rule);
-        _audioRoutingRulesNeedsUpdate = true;
+        lock (_gate) { _audioRoutingRules.Add(rule); _audioRoutingRulesNeedsUpdate = true; }
         return MediaResult.Success;
     }
 
     public int RemoveAudioRoutingRule(AudioRoutingRule rule)
     {
-        lock (_gate) _audioRoutingRules.Remove(rule);
-        _audioRoutingRulesNeedsUpdate = true;
+        lock (_gate) { _audioRoutingRules.Remove(rule); _audioRoutingRulesNeedsUpdate = true; }
         return MediaResult.Success;
     }
 
     public int ClearAudioRoutingRules()
     {
-        lock (_gate) _audioRoutingRules.Clear();
-        _audioRoutingRulesNeedsUpdate = true;
+        lock (_gate) { _audioRoutingRules.Clear(); _audioRoutingRulesNeedsUpdate = true; }
         return MediaResult.Success;
     }
     public int AddVideoRoutingRule(VideoRoutingRule rule)
     {
-        lock (_gate) _videoRoutingRules.Add(rule);
-        _videoRoutingRulesNeedsUpdate = true;
+        lock (_gate) { _videoRoutingRules.Add(rule); _videoRoutingRulesNeedsUpdate = true; }
         return MediaResult.Success;
     }
     public int RemoveVideoRoutingRule(VideoRoutingRule rule)
     {
-        lock (_gate) _videoRoutingRules.Remove(rule);
-        _videoRoutingRulesNeedsUpdate = true;
+        lock (_gate) { _videoRoutingRules.Remove(rule); _videoRoutingRulesNeedsUpdate = true; }
         return MediaResult.Success;
     }
     public int ClearVideoRoutingRules()
     {
-        lock (_gate) _videoRoutingRules.Clear();
-        _videoRoutingRulesNeedsUpdate = true;
+        lock (_gate) { _videoRoutingRules.Clear(); _videoRoutingRulesNeedsUpdate = true; }
         return MediaResult.Success;
     }
 
@@ -364,8 +362,9 @@ public class AVMixer : IAVMixer
         lock (_gate)
         {
             if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
-            if (_audioSources.Any(x => x.Source.Id == source.Id))
-                return (int)MediaErrorCode.MixerSourceIdCollision;
+            foreach (var (existing, _) in _audioSources)
+                if (existing.Id == source.Id)
+                    return (int)MediaErrorCode.MixerSourceIdCollision;
             _audioSources.Add((source, Math.Max(0, startOffsetSeconds)));
             _audioSourcesNeedsUpdate = true;
         }
@@ -414,8 +413,9 @@ public class AVMixer : IAVMixer
         lock (_gate)
         {
             if (_disposed) return (int)MediaErrorCode.MediaObjectDisposed;
-            if (_videoSources.Any(x => x.Id == source.Id))
-                return (int)MediaErrorCode.MixerSourceIdCollision;
+            foreach (var v in _videoSources)
+                if (v.Id == source.Id)
+                    return (int)MediaErrorCode.MixerSourceIdCollision;
             _videoSources.Add(source);
             _activeVideoSourceId ??= source.Id;
         }
@@ -450,7 +450,10 @@ public class AVMixer : IAVMixer
         Guid? prev;
         lock (_gate)
         {
-            if (!_videoSources.Any(x => x.Id == source.Id))
+            var found = false;
+            foreach (var v in _videoSources)
+                if (v.Id == source.Id) { found = true; break; }
+            if (!found)
                 return (int)MediaErrorCode.MediaInvalidArgument;
             prev = _activeVideoSourceId;
             _activeVideoSourceId = source.Id;
@@ -463,24 +466,21 @@ public class AVMixer : IAVMixer
     public int AddAudioOutput(IAudioSink output)
     {
         ArgumentNullException.ThrowIfNull(output);
-        lock (_gate) _audioOutputs.Add(output);
-        _audioOutputsNeedsUpdate = true;
+        lock (_gate) { _audioOutputs.Add(output); _audioOutputsNeedsUpdate = true; }
         return MediaResult.Success;
     }
 
     public int RemoveAudioOutput(IAudioSink output)
     {
         ArgumentNullException.ThrowIfNull(output);
-        lock (_gate) _audioOutputs.Remove(output);
-        _audioOutputsNeedsUpdate = true;
+        lock (_gate) { _audioOutputs.Remove(output); _audioOutputsNeedsUpdate = true; }
         return MediaResult.Success;
     }
 
     public int AddVideoOutput(IVideoOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
-        lock (_gate) _videoOutputs.Add(output);
-        _videoOutputsNeedsUpdate = true;
+        lock (_gate) { _videoOutputs.Add(output); _videoOutputsNeedsUpdate = true; }
         return MediaResult.Success;
     }
 
@@ -491,8 +491,8 @@ public class AVMixer : IAVMixer
         {
             _videoOutputs.Remove(output);
             if (_videoWorkers.Remove(output.Id, out var w)) w.Dispose();
+            _videoOutputsNeedsUpdate = true;
         }
-        _videoOutputsNeedsUpdate = true;
         return MediaResult.Success;
     }
 
@@ -530,7 +530,17 @@ public class AVMixer : IAVMixer
         return MediaResult.Success;
     }
 
-    public int StopPlayback() { StopPlaybackThreads(); return MediaResult.Success; }
+    /// <summary>
+    /// Stops all playback threads and transitions the mixer to <see cref="AVMixerState.Stopped"/>.
+    /// <para><b>⚠️ Blocking:</b> This method joins up to three background threads (audio pump,
+    /// video decode, video present) with a timeout of ~4 seconds each. Do not call from a UI
+    /// thread without offloading to a background task.</para>
+    /// </summary>
+    public int StopPlayback()
+    {
+        StopPlaybackThreads();
+        return Stop(); // transitions _state → Stopped and stops the clock
+    }
 
     public int PausePlayback() => Pause();
 
@@ -752,10 +762,19 @@ public class AVMixer : IAVMixer
                 // G.4 — prune stale source buffers and resamplers.
                 var activeIds = new HashSet<Guid>(srcs.Length);
                 foreach (var (s, _) in srcs) activeIds.Add(s.Id);
-                foreach (var key in sourceBufs.Keys.Where(k => !activeIds.Contains(k)).ToList())
-                    sourceBufs.Remove(key);
-                foreach (var key in resamplers.Keys.Where(k => !activeIds.Contains(k)).ToList())
-                { resamplers[key].Dispose(); resamplers.Remove(key); }
+
+                // P4.2: iterate without LINQ to avoid closure + ToList allocation.
+                List<Guid>? staleKeys = null;
+                foreach (var key in sourceBufs.Keys)
+                    if (!activeIds.Contains(key)) (staleKeys ??= []).Add(key);
+                if (staleKeys is not null)
+                    foreach (var key in staleKeys) sourceBufs.Remove(key);
+
+                staleKeys?.Clear();
+                foreach (var key in resamplers.Keys)
+                    if (!activeIds.Contains(key)) (staleKeys ??= []).Add(key);
+                if (staleKeys is not null)
+                    foreach (var key in staleKeys) { resamplers[key].Dispose(); resamplers.Remove(key); }
             }
 
             // G.1 — refresh audio outputs cache.
@@ -764,11 +783,14 @@ public class AVMixer : IAVMixer
                 lock (_gate) { audioOutputsCache = [.. _audioOutputs]; }
                 _audioOutputsNeedsUpdate = false;
 
-                // G.4 — prune stale output mix buffers.
+                // G.4 — prune stale output mix buffers (no LINQ/ToList allocation).
                 var activeOutIds = new HashSet<Guid>(audioOutputsCache.Length);
                 foreach (var o in audioOutputsCache) activeOutIds.Add(o.Id);
-                foreach (var key in outputBufs.Keys.Where(k => !activeOutIds.Contains(k)).ToList())
-                    outputBufs.Remove(key);
+                List<Guid>? staleOutKeys = null;
+                foreach (var key in outputBufs.Keys)
+                    if (!activeOutIds.Contains(key)) (staleOutKeys ??= []).Add(key);
+                if (staleOutKeys is not null)
+                    foreach (var key in staleOutKeys) outputBufs.Remove(key);
             }
 
             // G.2 — refresh audio routing rules cache.
@@ -811,7 +833,10 @@ public class AVMixer : IAVMixer
                         if (config.ResamplerFactory != null && srcRate > 0 && srcRate != sampleRate)
                         {
                             if (!resamplers.TryGetValue(src.Id, out var resampler))
-                                resamplers[src.Id] = resampler = config.ResamplerFactory(srcRate, sampleRate);
+                            {
+                                var srcChans = src.StreamInfo.ChannelCount.GetValueOrDefault(sourceChannels);
+                                resamplers[src.Id] = resampler = config.ResamplerFactory(srcRate, srcChans, sampleRate, sourceChannels);
+                            }
 
                             // G.3 — use ArrayPool for the resampled buffer.
                             var needed = resampler.EstimateOutputFrameCount(fr) * sourceChannels;
@@ -850,10 +875,13 @@ public class AVMixer : IAVMixer
                 {
                     Interlocked.Increment(ref _audioEmptyReads);
                     // G.6 — if all audio sources are at end-of-stream, stop playback.
-                    if (srcs.Length > 0 && srcs.All(s => s.Source.State == AudioSourceState.EndOfStream))
+                    // P1.2: Do NOT call StopPlayback() directly — that would self-join the audio pump thread.
+                    // Instead, schedule the stop on a pool thread and break out of the loop.
+                    if (srcs.Length > 0)
                     {
-                        _ = StopPlayback();
-                        break;
+                        var allEos = true;
+                        foreach (var s in srcs) { if (s.Source.State != AudioSourceState.EndOfStream) { allEos = false; break; } }
+                        if (allEos) { ThreadPool.QueueUserWorkItem(_ => StopPlayback()); break; }
                     }
                     Thread.Sleep(1);
                     continue;
@@ -913,10 +941,12 @@ public class AVMixer : IAVMixer
                 {
                     Interlocked.Increment(ref _audioEmptyReads);
                     // G.6 — end-of-stream check for routing path.
-                    if (srcs.Length > 0 && srcs.All(s => s.Source.State == AudioSourceState.EndOfStream))
+                    // P1.2: Schedule stop on pool thread to avoid audio-pump self-join.
+                    if (srcs.Length > 0)
                     {
-                        _ = StopPlayback();
-                        break;
+                        var allEos = true;
+                        foreach (var s in srcs) { if (s.Source.State != AudioSourceState.EndOfStream) { allEos = false; break; } }
+                        if (allEos) { ThreadPool.QueueUserWorkItem(_ => StopPlayback()); break; }
                     }
                     Thread.Sleep(1);
                     continue;
@@ -1144,7 +1174,10 @@ public class AVMixer : IAVMixer
         lock (_gate)
         {
             var id = _activeVideoSourceId;
-            return id is null ? null : _videoSources.FirstOrDefault(s => s.Id == id);
+            if (id is null) return null;
+            foreach (var s in _videoSources)
+                if (s.Id == id) return s;
+            return null;
         }
     }
 

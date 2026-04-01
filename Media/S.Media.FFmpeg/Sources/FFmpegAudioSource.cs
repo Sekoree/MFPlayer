@@ -57,7 +57,12 @@ public sealed class FFmpegAudioSource : IAudioSource
     public AudioStreamInfo StreamInfo { get; }
 
     /// <inheritdoc/>
-    public float Volume { get; set; } = 1.0f;
+    public float Volume
+    {
+        get => _volume;
+        set => _volume = Math.Max(0f, value);
+    }
+    private float _volume = 1.0f;
 
     /// <inheritdoc/>
     public long? TotalSampleCount =>
@@ -69,6 +74,16 @@ public sealed class FFmpegAudioSource : IAudioSource
 
     public bool IsSeekable { get; }
 
+    /// <summary>
+    /// Approximate playback position in seconds.
+    /// <para>
+    /// <b>Accuracy note:</b> This value is accumulated by counting decoded frames
+    /// (<c>framesRead / sampleRate</c>) rather than reading the FFmpeg packet PTS.
+    /// This means it can drift from the true media timeline when gaps or skips occur
+    /// in the source stream. After a seek, the position is reset to the seek target.
+    /// For frame-accurate positioning, use the video source's PTS-based tracking.
+    /// </para>
+    /// </summary>
     public double PositionSeconds
     {
         get
@@ -87,7 +102,7 @@ public sealed class FFmpegAudioSource : IAudioSource
         lock (_gate)
         {
             if (_disposed)
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             State = AudioSourceState.Running;
             return MediaResult.Success;
         }
@@ -99,7 +114,7 @@ public sealed class FFmpegAudioSource : IAudioSource
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             State = AudioSourceState.Stopped;
@@ -120,7 +135,7 @@ public sealed class FFmpegAudioSource : IAudioSource
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             if (requestedFrameCount <= 0)
@@ -181,7 +196,7 @@ public sealed class FFmpegAudioSource : IAudioSource
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MediaInvalidArgument;
+                return (int)MediaErrorCode.MediaObjectDisposed;
             }
 
             _positionSeconds = positionSeconds;

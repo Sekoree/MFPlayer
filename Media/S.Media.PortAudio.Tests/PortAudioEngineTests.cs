@@ -116,7 +116,7 @@ public sealed class PortAudioEngineTests
         // (7.2) A second Initialize() without a prior Terminate() must be rejected.
         var code = engine.Initialize(new AudioEngineConfig());
 
-        Assert.Equal((int)MediaErrorCode.PortAudioInitializeFailed, code);
+        Assert.Equal((int)MediaErrorCode.PortAudioAlreadyInitialized, code);
     }
 
     [Fact]

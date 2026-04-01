@@ -124,6 +124,56 @@ public sealed class VideoFrame : IDisposable
             isFullRange: isFullRange);
     }
 
+    // ── P3.3: non-throwing TryCreate factory ──────────────────────────────────
+
+    /// <summary>
+    /// Creates a <see cref="VideoFrame"/> using the project's error-code convention.
+    /// Returns <see cref="MediaResult.Success"/> and populates <paramref name="frame"/> on success;
+    /// returns an error code and sets <paramref name="frame"/> to <see langword="null"/> on invalid arguments.
+    /// </summary>
+    public static int TryCreate(
+        int width,
+        int height,
+        VideoPixelFormat pixelFormat,
+        IPixelFormatData pixelFormatData,
+        TimeSpan presentationTime,
+        bool isKeyFrame,
+        ReadOnlyMemory<byte> plane0,
+        int plane0Stride,
+        out VideoFrame? frame,
+        ReadOnlyMemory<byte> plane1 = default,
+        int plane1Stride = 0,
+        ReadOnlyMemory<byte> plane2 = default,
+        int plane2Stride = 0,
+        ReadOnlyMemory<byte> plane3 = default,
+        int plane3Stride = 0,
+        Action<VideoFrame>? releaseAction = null,
+        bool isFullRange = false)
+    {
+        frame = null;
+
+        try
+        {
+            frame = new VideoFrame(
+                width, height, pixelFormat, pixelFormatData, presentationTime, isKeyFrame,
+                plane0, plane0Stride, plane1, plane1Stride, plane2, plane2Stride,
+                plane3, plane3Stride, releaseAction, isFullRange);
+            return MediaResult.Success;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
+        }
+        catch (ArgumentNullException)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
+        }
+        catch (ArgumentException)
+        {
+            return (int)MediaErrorCode.MediaInvalidArgument;
+        }
+    }
+
     private static void ValidatePlaneShape(
         int width,
         int height,

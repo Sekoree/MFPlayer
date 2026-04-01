@@ -121,13 +121,14 @@ public sealed class AVMixerConfig
     /// <summary>
     /// Optional factory for creating per-source resamplers when a source's sample rate
     /// differs from <see cref="OutputSampleRate"/>.
-    /// Parameters: <c>(sourceSampleRate, targetSampleRate)</c> → <see cref="IAudioResampler"/>.
+    /// Parameters: <c>(sourceSampleRate, sourceChannelCount, targetSampleRate, targetChannelCount)</c>
+    /// → <see cref="IAudioResampler"/>.
     /// <para>
     /// When <see langword="null"/> (default) the mixer assumes all sources already produce
     /// samples at <see cref="OutputSampleRate"/> and no resampling is performed.
     /// </para>
     /// </summary>
-    public Func<int, int, IAudioResampler>? ResamplerFactory { get; init; }
+    public Func<int, int, int, int, IAudioResampler>? ResamplerFactory { get; init; }
 
     // ── Factories ─────────────────────────────────────────────────────────────
 

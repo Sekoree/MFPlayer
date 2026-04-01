@@ -8,11 +8,16 @@ public enum MediaErrorCode
     MediaObjectDisposed = 10,
 
     /// <summary>
-    /// The operation was rejected because the source is not running.
-    /// Distinct from <see cref="MediaConcurrentOperationViolation"/> — the source is stopped,
-    /// not concurrently in use.
+    /// The operation was rejected because the source is not running (was previously stopped).
+    /// Distinct from <see cref="MediaSourceNotStarted"/> — the source ran before but has been stopped.
     /// </summary>
     MediaSourceNotRunning = 11,
+
+    /// <summary>
+    /// The operation was rejected because the source has never been started.
+    /// Distinct from <see cref="MediaSourceNotRunning"/> — the source has not yet had <c>Start()</c> called.
+    /// </summary>
+    MediaSourceNotStarted = 12,
 
     /// <summary>A concurrent read or write operation was attempted while another was in progress.</summary>
     MediaConcurrentOperationViolation = 950,
@@ -94,6 +99,11 @@ public enum MediaErrorCode
     /// runtime became unavailable after initialization.
     /// </summary>
     PortAudioNativeUnavailable = 4318,
+    /// <summary>
+    /// <c>Initialize()</c> was called on an engine that is already initialized.
+    /// Call <c>Terminate()</c> first, then re-initialize.
+    /// </summary>
+    PortAudioAlreadyInitialized = 4319,
 
     OpenGLCloneParentNotFound = 4400,
     OpenGLCloneAlreadyAttached = 4401,

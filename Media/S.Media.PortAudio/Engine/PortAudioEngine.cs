@@ -90,7 +90,7 @@ public sealed class PortAudioEngine : IAudioEngine
             // (7.2) Guard against re-initialization without a prior Terminate().
             if (State == AudioEngineState.Initialized || State == AudioEngineState.Running)
             {
-                return (int)MediaErrorCode.PortAudioInitializeFailed;
+                return (int)MediaErrorCode.PortAudioAlreadyInitialized;
             }
 
             // Lower-bound validation
@@ -141,6 +141,20 @@ public sealed class PortAudioEngine : IAudioEngine
         }
     }
 
+    /// <summary>
+    /// Stops all active audio outputs and inputs, then transitions the engine to
+    /// <see cref="AudioEngineState.Initialized"/>.
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ <b>All tracked outputs and inputs are stopped immediately.</b>
+    /// Callers holding <see cref="IAudioOutput"/> or <see cref="IAudioInput"/> references will
+    /// observe their state change to <c>Stopped</c>. Subsequent <c>PushFrame</c> calls on
+    /// stopped outputs return <see cref="MediaErrorCode.PortAudioStreamStartFailed"/>.
+    /// <para>
+    /// No per-output notification event is fired — callers must poll <c>output.State</c> or
+    /// re-create outputs after calling <see cref="Start"/> to resume audio processing.
+    /// </para>
+    /// </remarks>
     // (7.4) Stop() stops all active outputs in addition to transitioning state.
     public int Stop()
     {
@@ -835,7 +849,19 @@ public sealed class PortAudioEngine : IAudioEngine
         }
 
         var normalized = preferredHostApi.Trim();
-        return IsPulseAlias(normalized) ? "alsa" : normalized;
+        if (IsPulseAlias(normalized))
+        {
+            // PulseAudio is a Linux sound server; PortAudio's ALSA backend handles it.
+            // On non-Linux platforms, "pulse" is meaningless — fall back to system default.
+            if (!OperatingSystem.IsLinux())
+            {
+                return null;
+            }
+
+            return "alsa";
+        }
+
+        return normalized;
     }
 
     private static bool IsPulseAlias(string? hostApi)

@@ -118,7 +118,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
             if (hasAudio)
             {
-                var audioInit = _audioDecoder.Initialize();
+                var audioInit = _audioDecoder.Initialize(normalizedDecodeOptions);
                 if (audioInit != MediaResult.Success)
                 {
                     _context.Close();
@@ -135,7 +135,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
             if (hasVideo)
             {
-                var videoInit = _videoDecoder.Initialize();
+                var videoInit = _videoDecoder.Initialize(normalizedDecodeOptions);
                 if (videoInit != MediaResult.Success)
                 {
                     _context.Close();

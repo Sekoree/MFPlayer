@@ -21,6 +21,7 @@ public sealed class NDIVideoSource : IVideoSource
     private bool _disposed;
     private long _framesCaptured;
     private long _framesDropped;
+    private long _rejectedReads;  // P3.15: lifecycle rejection, distinct from actual data loss
     private long _repeatedTimestampFramesPresented;
     private long _lastTimestamp100ns;
     private long _firstTimestamp100ns;
@@ -104,6 +105,7 @@ public sealed class NDIVideoSource : IVideoSource
                 return new NDIVideoSourceDebugInfo(
                     _framesCaptured,
                     _framesDropped,
+                    _rejectedReads,
                     _repeatedTimestampFramesPresented,
                     _fallbackFramesPresented,
                     _lastReadMs,
@@ -154,7 +156,7 @@ public sealed class NDIVideoSource : IVideoSource
         {
             lock (_gate)
             {
-                _framesDropped++;
+                _rejectedReads++;  // P3.15: lifecycle rejection, not actual data loss
             }
 
             // §5.4: source is stopped — not a concurrent-read violation.

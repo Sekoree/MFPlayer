@@ -219,6 +219,37 @@ public sealed class FFmpegMediaItem : IMediaItem, IMediaPlaybackSourceBinding, I
     }
 
     /// <summary>
+    /// Creates a media item from a <see cref="Stream"/> without throwing.
+    /// </summary>
+    /// <param name="inputStream">The input stream to read from.</param>
+    /// <param name="item">On success, the opened media item. <see langword="null"/> on failure.</param>
+    /// <param name="leaveInputStreamOpen">
+    /// When <see langword="true"/> (the default), the stream is not disposed when the media item is disposed.
+    /// </param>
+    /// <param name="inputFormatHint">Optional FFmpeg format hint (e.g. <c>"mp4"</c>).</param>
+    /// <param name="decodeOptions">Optional decode options.</param>
+    /// <param name="audioOptions">Optional audio source options.</param>
+    /// <returns><c>0</c> on success; a <see cref="MediaErrorCode"/> value on failure.</returns>
+    public static int Create(
+        Stream inputStream,
+        out FFmpegMediaItem? item,
+        bool leaveInputStreamOpen = true,
+        string? inputFormatHint = null,
+        FFmpegDecodeOptions? decodeOptions = null,
+        FFmpegAudioSourceOptions? audioOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(inputStream);
+        return Create(
+            new FFmpegOpenOptions
+            {
+                InputStream = inputStream,
+                LeaveInputStreamOpen = leaveInputStreamOpen,
+                InputFormatHint = inputFormatHint,
+            },
+            out item);
+    }
+
+    /// <summary>
     /// Opens a media item from a URI, returning both audio and video sources via shared decode context.
     /// </summary>
     /// <remarks>
@@ -529,8 +560,27 @@ public sealed class FFmpegMediaItem : IMediaItem, IMediaPlaybackSourceBinding, I
             return null;
         }
 
-        var ordered = metadata.AdditionalMetadata.OrderBy(kvp => kvp.Key, StringComparer.Ordinal);
-        return string.Join("|", ordered.Select(kvp => $"{kvp.Key}={kvp.Value}"));
+        var entries = metadata.AdditionalMetadata;
+        if (entries.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        // Sort keys without LINQ to avoid per-call allocations.
+        var keys = new string[entries.Count];
+        var i = 0;
+        foreach (var kvp in entries)
+            keys[i++] = kvp.Key;
+        Array.Sort(keys, StringComparer.Ordinal);
+
+        var sb = new System.Text.StringBuilder(entries.Count * 32);
+        for (var k = 0; k < keys.Length; k++)
+        {
+            if (k > 0) sb.Append('|');
+            sb.Append(keys[k]).Append('=').Append(entries[keys[k]]);
+        }
+
+        return sb.ToString();
     }
 
     private void OnStreamDescriptorsRefreshed(object? sender, FFStreamDescriptorSnapshot snapshot)

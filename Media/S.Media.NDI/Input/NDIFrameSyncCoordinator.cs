@@ -1,5 +1,6 @@
 using System.Buffers;
 using NDILib;
+using S.Media.Core.Errors;
 using S.Media.Core.Video;
 
 namespace S.Media.NDI.Input;
@@ -50,14 +51,14 @@ internal sealed class NDIFrameSyncCoordinator : INDICaptureCoordinator
     public static int Create(out NDIFrameSyncCoordinator? coordinator, NDIReceiver receiver)
     {
         var result = NDIFrameSync.Create(out var frameSync, receiver);
-        if (result != 0 || frameSync is null)
+        if (result != MediaResult.Success || frameSync is null)
         {
             coordinator = null;
             return result;
         }
 
         coordinator = new NDIFrameSyncCoordinator(frameSync);
-        return 0;
+        return MediaResult.Success;
     }
 
     // ------------------------------------------------------------------

@@ -133,7 +133,9 @@ internal static class Program
                             SampleRate: sampleRate,
                             PresentationTime: audioPts);
 
-                        ndiAudioSink.PushFrame(in audioFrame);
+                        var audioPush = ndiAudioSink.PushFrame(in audioFrame);
+                        if (audioPush != MediaResult.Success)
+                            Console.WriteLine($"Audio PushFrame failed: code={audioPush}");
                         audioPts += TimeSpan.FromSeconds((double)totalRead / sampleRate);
                         audioPushed++;
                     }

@@ -39,6 +39,12 @@ public sealed class OSCServer : IOSCServer
 
     public OSCServerOptions Options { get; }
 
+    /// <summary>Number of oversized packets dropped since construction (or last <see cref="ResetOversizeDropCount"/>).</summary>
+    public long OversizeDropCount => Interlocked.Read(ref _oversizeDrops);
+
+    /// <summary>Resets the oversize-drop counter to zero.</summary>
+    public void ResetOversizeDropCount() => Interlocked.Exchange(ref _oversizeDrops, 0);
+
     public bool IsRunning => _loopTask is { IsCompleted: false };
 
     public IDisposable RegisterHandler(string addressPattern, OSCMessageHandler handler)
@@ -132,16 +138,20 @@ public sealed class OSCServer : IOSCServer
             if (_logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("Decoded OSC packet {Kind} from {Remote}", packet!.Kind, received.RemoteEndPoint);
 
-            await DispatchPacketAsync(packet!, received.RemoteEndPoint, null, receivedAt, cancellationToken).ConfigureAwait(false);
+            await DispatchPacketAsync(packet!, received.RemoteEndPoint, null, receivedAt, cancellationToken, depth: 0).ConfigureAwait(false);
         }
     }
+
+    /// <summary>Maximum nesting depth for OSC bundles. Prevents stack overflow from malicious payloads.</summary>
+    private const int MaxBundleDepth = 32;
 
     private async Task DispatchPacketAsync(
         OSCPacket packet,
         IPEndPoint remote,
         OSCTimeTag? bundleTimeTag,
         DateTimeOffset receivedAt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int depth)
     {
         if (packet.Kind == OSCPacketKind.Message)
         {
@@ -150,27 +160,71 @@ public sealed class OSCServer : IOSCServer
             return;
         }
 
+        if (depth >= MaxBundleDepth)
+        {
+            _logger.LogWarning("OSC bundle nesting depth {Depth} exceeds limit {Max} — dropping bundle from {Remote}.", depth, MaxBundleDepth, remote);
+            return;
+        }
+
         var bundle = packet.Bundle!;
         foreach (var child in bundle.Elements)
-            await DispatchPacketAsync(child, remote, bundle.TimeTag, receivedAt, cancellationToken).ConfigureAwait(false);
+            await DispatchPacketAsync(child, remote, bundle.TimeTag, receivedAt, cancellationToken, depth + 1).ConfigureAwait(false);
     }
 
     private void HandleOversizePacket(int packetLength)
     {
         _oversizeDrops++;
-        if (Options.OversizePolicy == OSCOversizePolicy.Throw)
-            throw new InvalidOperationException($"OSC packet size {packetLength} exceeds configured max {Options.MaxPacketBytes}.");
 
+        // P2.9: Previously, OversizePolicy.Throw would throw inside the receive loop,
+        // killing it entirely. Now we always log and drop; the Throw policy escalates
+        // to Error-level logging so monitoring can alert.
         var now = DateTimeOffset.UtcNow;
         if (now - _lastOversizeLogUtc < Options.OversizeLogInterval)
             return;
 
         _lastOversizeLogUtc = now;
-        _logger.LogWarning(
-            "Dropped oversized OSC datagram {Length}B (> {MaxPacketBytes}B). Total dropped: {DroppedCount}",
-            packetLength,
-            Options.MaxPacketBytes,
-            _oversizeDrops);
+
+        if (Options.OversizePolicy == OSCOversizePolicy.Throw)
+        {
+            _logger.LogError(
+                "OSC packet size {Length}B exceeds configured max {MaxPacketBytes}B (OversizePolicy=Throw). Total dropped: {DroppedCount}",
+                packetLength,
+                Options.MaxPacketBytes,
+                _oversizeDrops);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Dropped oversized OSC datagram {Length}B (> {MaxPacketBytes}B). Total dropped: {DroppedCount}",
+                packetLength,
+                Options.MaxPacketBytes,
+                _oversizeDrops);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        try
+        {
+            _loopCts?.Cancel();
+            _loopTask?.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // best-effort
+        }
+        finally
+        {
+            _loopCts?.Dispose();
+            _loopCts = null;
+            _loopTask = null;
+        }
+
+        _udpClient.Dispose();
+        _disposed = true;
     }
 
     public async ValueTask DisposeAsync()

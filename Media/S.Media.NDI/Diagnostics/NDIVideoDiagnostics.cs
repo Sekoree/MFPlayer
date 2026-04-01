@@ -3,6 +3,7 @@ namespace S.Media.NDI.Diagnostics;
 public readonly record struct NDIVideoSourceDebugInfo(
     long FramesCaptured,
     long FramesDropped,
+    long RejectedReads,
     long RepeatedTimestampFramesPresented,
     long FallbackFramesPresented,
     double LastReadMs,

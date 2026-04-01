@@ -4,6 +4,23 @@ namespace S.Media.Core.Mixing;
 
 public static class VideoSyncPolicy
 {
+    /// <summary>
+    /// Selects the next frame to present based on the current sync mode and clock position.
+    /// <para>
+    /// <b>Mode behaviors:</b>
+    /// <list type="bullet">
+    ///   <item><see cref="AVSyncMode.Realtime"/>: Drops all queued frames except the newest
+    ///     ("drop all but latest"). This is ideal for live sources (NDI, cameras) where latency
+    ///     matters more than frame continuity. Stale frames (behind clock by more than
+    ///     <see cref="VideoSyncOptions.StaleFrameDropThreshold"/>) are discarded entirely.</item>
+    ///   <item><see cref="AVSyncMode.AudioLed"/>: Audio is the master clock. Video frames wait
+    ///     until the audio clock reaches their PTS. Late frames are dropped; early frames cause
+    ///     a bounded wait.</item>
+    ///   <item><see cref="AVSyncMode.Synced"/>: Clock-aligned presentation with configurable
+    ///     early tolerance and stale-frame dropping.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
     public static VideoPresenterSyncDecision SelectNextFrame(
         Queue<VideoFrame> queuedVideoFrames,
         AVSyncMode syncMode,

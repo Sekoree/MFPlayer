@@ -15,8 +15,21 @@ public interface IAudioSink : IDisposable
 
     int Stop();
 
+    /// <summary>
+    /// Pushes an audio frame to this sink using the specified channel route-map.
+    /// </summary>
+    /// <remarks>
+    /// <b>Buffer ownership:</b> The implementation must not hold a reference to
+    /// <see cref="AudioFrame.Samples"/> beyond this call. The caller (typically the mixer)
+    /// reuses the underlying buffer on the next pump iteration, so any data needed after
+    /// <c>PushFrame</c> returns must be copied into an internal buffer.
+    /// </remarks>
     int PushFrame(in AudioFrame frame, ReadOnlySpan<int> sourceChannelByOutputIndex);
 
+    /// <inheritdoc cref="PushFrame(in AudioFrame, ReadOnlySpan{int})"/>
+    /// <param name="frame">The audio frame to push.</param>
+    /// <param name="sourceChannelByOutputIndex">Maps each output channel index to a source channel index.</param>
+    /// <param name="sourceChannelCount">The number of channels in the source frame.</param>
     int PushFrame(in AudioFrame frame, ReadOnlySpan<int> sourceChannelByOutputIndex, int sourceChannelCount);
 
     /// <summary>

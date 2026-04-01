@@ -1,5 +1,6 @@
 using FFmpeg.AutoGen;
 using S.Media.Core.Errors;
+using S.Media.FFmpeg.Config;
 using System.Runtime.InteropServices;
 
 namespace S.Media.FFmpeg.Decoders.Internal;
@@ -11,10 +12,12 @@ internal sealed class FFAudioDecoder : IDisposable
     private bool _initialized;
     private bool _nativeDecodeEnabled = true;
     private FFNativeAudioDecoderBackend? _nativeBackend;
+    private int _threadCount;
+    private bool _lowLatency;
 
     internal bool IsNativeDecodeEnabled => _nativeDecodeEnabled;
 
-    public int Initialize()
+    public int Initialize(FFmpegDecodeOptions? decodeOptions = null)
     {
         if (_disposed)
         {
@@ -24,6 +27,8 @@ internal sealed class FFAudioDecoder : IDisposable
         _nativeBackend?.Dispose();
         _nativeBackend = null;
         _nativeDecodeEnabled = true;
+        _threadCount = decodeOptions?.DecodeThreadCount ?? 0;
+        _lowLatency = decodeOptions?.LowLatencyMode ?? false;
         _initialized = true;
         return MediaResult.Success;
     }
@@ -90,7 +95,7 @@ internal sealed class FFAudioDecoder : IDisposable
         try
         {
             _nativeBackend ??= new FFNativeAudioDecoderBackend();
-            if (!_nativeBackend.TryEnsureInitialized(packet.NativeCodecId.Value, packet.NativeCodecParametersPtr))
+            if (!_nativeBackend.TryEnsureInitialized(packet.NativeCodecId.Value, packet.NativeCodecParametersPtr, _threadCount, _lowLatency))
             {
                 _nativeDecodeEnabled = false;
                 return false;
@@ -159,7 +164,7 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
     private AVCodecID? _codecId;
     private bool _disposed;
 
-    public bool TryEnsureInitialized(int codecId, nint? codecParametersPtr)
+    public bool TryEnsureInitialized(int codecId, nint? codecParametersPtr, int threadCount = 0, bool lowLatency = false)
     {
         if (_disposed)
         {
@@ -194,6 +199,19 @@ internal unsafe sealed class FFNativeAudioDecoderBackend : IDisposable
                 DisposeCodecContext();
                 return false;
             }
+        }
+
+        // Wire DecodeThreadCount: 0 = let FFmpeg auto-detect.
+        if (threadCount > 0)
+        {
+            _codecContext->thread_count = threadCount;
+            _codecContext->thread_type = ffmpeg.FF_THREAD_FRAME | ffmpeg.FF_THREAD_SLICE;
+        }
+
+        // Wire LowLatencyMode: disable B-frame reordering for lower latency.
+        if (lowLatency)
+        {
+            _codecContext->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY;
         }
 
         if (ffmpeg.avcodec_open2(_codecContext, codec, null) < 0)

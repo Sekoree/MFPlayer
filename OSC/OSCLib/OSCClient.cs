@@ -84,8 +84,7 @@ public sealed class OSCClient : IOSCClient
             _logger.LogWarning(
                 "OSC packet size {Size}B exceeds configured max {Max}B — send aborted.",
                 encoded.Length, Options.MaxPacketBytes);
-            throw new InvalidOperationException(
-                $"OSC packet size {encoded.Length} exceeds configured max {Options.MaxPacketBytes}.");
+            return; // P3.22: silently drop instead of throwing — consistent with server-side policy.
         }
 
         _logger.LogDebug(
@@ -98,6 +97,16 @@ public sealed class OSCClient : IOSCClient
 
     public ValueTask SendMessageAsync(string address, IReadOnlyList<OSCArgument>? arguments = null, CancellationToken cancellationToken = default)
         => SendAsync(OSCPacket.FromMessage(new OSCMessage(address, arguments)), cancellationToken);
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _udpClient.Dispose();
+        _disposed = true;
+        _logger.LogDebug("OSC client disposed (sync) for {RemoteEndPoint}", _remoteEndPoint);
+    }
 
     public ValueTask DisposeAsync()
     {

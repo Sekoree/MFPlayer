@@ -27,7 +27,12 @@ public interface IMIDIDevice : IDisposable
     /// </summary>
     int Close();
 
-    /// <summary>Raised when the connection status changes (opening, open, closing, closed, error).</summary>
+    /// <summary>
+    /// Raised when the connection status changes. Possible states:
+    /// <see cref="MIDIConnectionStatus.Opening"/>, <see cref="MIDIConnectionStatus.Open"/>,
+    /// <see cref="MIDIConnectionStatus.Closed"/>, <see cref="MIDIConnectionStatus.Disconnected"/>,
+    /// <see cref="MIDIConnectionStatus.Reconnecting"/>, <see cref="MIDIConnectionStatus.ReconnectFailed"/>.
+    /// </summary>
     event EventHandler<MIDIConnectionStatusEventArgs>? StatusChanged;
 }
 

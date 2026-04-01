@@ -59,7 +59,7 @@ public sealed class AudioResampler : IAudioResampler
         int sourceChannelCount,
         int targetSampleRate,
         int targetChannelCount,
-        out AudioResampler? resampler,
+        out IAudioResampler? resampler,
         AudioResamplerMode mode = AudioResamplerMode.Sinc,
         ChannelMismatchPolicy channelPolicy = ChannelMismatchPolicy.Drop)
     {

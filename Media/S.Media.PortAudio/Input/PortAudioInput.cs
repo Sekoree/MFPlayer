@@ -69,7 +69,12 @@ public sealed unsafe class PortAudioInput : IAudioInput
 
     public Guid Id { get; }
     public AudioSourceState State { get; private set; } = AudioSourceState.Stopped;
-    public float Volume { get; set; } = 1.0f;
+    public float Volume
+    {
+        get => _volume;
+        set => _volume = Math.Max(0f, value);
+    }
+    private float _volume = 1.0f;
     public long? TotalSampleCount => null;
     public AudioInputConfig Config { get; private set; }
     public AudioDeviceInfo Device { get; private set; }
@@ -180,9 +185,8 @@ public sealed unsafe class PortAudioInput : IAudioInput
             if (read == PaError.paNoError)
             {
                 var writtenSamples = framesRead * config.ChannelCount;
-                var vol = Volume;
-                if (vol != 1.0f && writtenSamples > 0)
-                    for (var i = 0; i < writtenSamples; i++) destination[i] *= vol;
+                // P1.4: Volume is NOT applied here — the mixer applies src.Volume during
+                // AudioMixUtils.MixInto, so applying it in both places would double-scale.
                 if (writtenSamples < destination.Length) destination[writtenSamples..].Fill(0f);
                 // B.4 — update PositionSeconds without holding _gate (diagnostic counter only).
                 var prevBits = Interlocked.Read(ref _positionSamplesBits);

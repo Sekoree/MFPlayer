@@ -177,5 +177,13 @@ public static class PMUtil
     /// PMUtil.SetChannelMask(stream, PMUtil.ChannelMask(0) | PMUtil.ChannelMask(9));
     /// </code>
     /// </example>
-    public static int ChannelMask(int channel) => 1 << channel;
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="channel"/> is not in the range 0–15.
+    /// </exception>
+    public static int ChannelMask(int channel)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(channel, 0);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(channel, 15);
+        return 1 << channel;
+    }
 }

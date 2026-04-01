@@ -1,3 +1,4 @@
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;
@@ -19,7 +20,11 @@ public interface IVideoSource : IDisposable
 
     int Seek(double positionSeconds);
 
-    int SeekToFrame(long frameIndex);
+    /// <summary>
+    /// Seeks to the specified frame index. Non-seekable sources return
+    /// <see cref="MediaErrorCode.MediaSourceNonSeekable"/> by default.
+    /// </summary>
+    int SeekToFrame(long frameIndex) => (int)MediaErrorCode.MediaSourceNonSeekable;
 
     double PositionSeconds { get; }
 

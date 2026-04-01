@@ -25,6 +25,7 @@ public sealed class NDIAudioSource : IAudioSource
     private bool _disposed;
     private long _framesCaptured;
     private long _framesDropped;
+    private long _rejectedReads;  // P3.15: lifecycle rejection, distinct from actual data loss
     private double _lastReadMs;
 
     public NDIAudioSource(NDIMediaItem mediaItem, NDISourceOptions sourceOptions)
@@ -55,7 +56,12 @@ public sealed class NDIAudioSource : IAudioSource
     public AudioSourceState State { get; private set; }
 
     /// <inheritdoc/>
-    public float Volume { get; set; } = 1.0f;
+    public float Volume
+    {
+        get => _volume;
+        set => _volume = Math.Max(0f, value);
+    }
+    private float _volume = 1.0f;
 
     /// <inheritdoc/>
     public long? TotalSampleCount => null; // live source — no known duration
@@ -76,7 +82,7 @@ public sealed class NDIAudioSource : IAudioSource
         {
             lock (_gate)
             {
-                return new NDIAudioDiagnostics(_framesCaptured, _framesDropped, _lastReadMs);
+                return new NDIAudioDiagnostics(_framesCaptured, _framesDropped, _rejectedReads, _lastReadMs);
             }
         }
     }
@@ -117,7 +123,7 @@ public sealed class NDIAudioSource : IAudioSource
         {
             lock (_gate)
             {
-                _framesDropped++;
+                _rejectedReads++;  // P3.15: lifecycle rejection, not actual data loss
             }
 
             // §5.4: source is stopped — not a concurrent-read violation.

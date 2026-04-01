@@ -6,33 +6,44 @@ namespace S.Media.FFmpeg.Config;
 public sealed record FFmpegDecodeOptions
 {
     /// <summary>
-    /// Reserved for future hardware-accelerated decode support (VAAPI, DXVA2, VideoToolbox).
-    /// <b>Not yet implemented</b> — setting this has no effect on the current decode pipeline.
+    /// When <see langword="true"/>, attempts hardware-accelerated decode (VAAPI on Linux,
+    /// DXVA2/D3D11VA on Windows, VideoToolbox on macOS) with automatic software fallback.
     /// </summary>
     public bool EnableHardwareDecode { get; init; }
 
     /// <summary>
-    /// Reserved for low-latency / live-stream mode (e.g. disabling B-frame reorder buffers).
-    /// <b>Not yet implemented</b> — setting this has no effect on the current decode pipeline.
+    /// When <see langword="true"/>, enables low-latency decode flags
+    /// (e.g. <c>AV_CODEC_FLAG_LOW_DELAY</c>, disabling B-frame reorder buffers).
+    /// Useful for live/real-time streams.
     /// </summary>
     public bool LowLatencyMode { get; init; }
 
     /// <summary>
-    /// Reserved for configuring the number of libavcodec decode threads.
-    /// Currently validated (negative values are rejected) and normalised (clamped to CPU count),
-    /// but the clamped value is not yet passed to the native codec context.
+    /// Number of libavcodec decode threads. <c>0</c> = auto (let FFmpeg decide).
+    /// Validated (negative values rejected) and normalised (clamped to CPU count).
+    /// Passed to <c>AVCodecContext.thread_count</c>.
     /// </summary>
     public int DecodeThreadCount { get; init; }
 
     /// <summary>
-    /// Reserved for splitting demux and decode onto separate OS threads.
-    /// <b>Not yet implemented</b> — setting this has no effect on the current decode pipeline.
+    /// When <see langword="true"/>, demux and decode run on separate OS threads,
+    /// connected by a bounded packet queue (<see cref="MaxQueuedPackets"/>).
     /// </summary>
     public bool UseDedicatedDecodeThread { get; init; } = true;
 
-    public int MaxQueuedPackets { get; init; } = 4;
+    /// <summary>
+    /// Maximum number of demuxed packets buffered between demux and decode.
+    /// Higher values improve throughput at the cost of memory.
+    /// Clamped to a minimum of 1 during <see cref="Normalize"/>.
+    /// </summary>
+    public int MaxQueuedPackets { get; init; } = 16;
 
-    public int MaxQueuedFrames { get; init; } = 4;
+    /// <summary>
+    /// Maximum number of decoded frames buffered before consumption.
+    /// Higher values smooth out decode jitter; lower values reduce latency.
+    /// Clamped to a minimum of 1 during <see cref="Normalize"/>.
+    /// </summary>
+    public int MaxQueuedFrames { get; init; } = 8;
 
     /// <summary>
     /// Preferred output pixel format for the software pixel converter fallback (sws_scale).

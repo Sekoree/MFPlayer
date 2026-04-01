@@ -201,7 +201,7 @@ public sealed class OpenGLVideoEngine : IDisposable
     public int PushFrame(VideoFrame frame, TimeSpan presentationTime)
     {
         OpenGLVideoOutput? parent;
-        OpenGLVideoOutput[] clones;
+        List<OpenGLVideoOutput> clones;
 
         lock (_gate)
         {
@@ -212,11 +212,12 @@ public sealed class OpenGLVideoEngine : IDisposable
                 return (int)MediaErrorCode.OpenGLCloneParentNotFound;
 
             var cloneIds = _childrenByParent.TryGetValue(ActiveOutputId.Value, out var ids) ? ids : [];
-            clones = cloneIds
-                .Select(id => _outputs.TryGetValue(id, out var candidate) ? candidate : null)
-                .Where(c => c is not null)
-                .Cast<OpenGLVideoOutput>()
-                .ToArray();
+            // P4.4: manual loop instead of LINQ to avoid per-frame closure + ToArray allocation.
+            var cloneList = new List<OpenGLVideoOutput>(cloneIds.Count);
+            foreach (var id in cloneIds)
+                if (_outputs.TryGetValue(id, out var candidate))
+                    cloneList.Add(candidate);
+            clones = cloneList;
         }
 
         var push = parent.PushFrame(frame, presentationTime);

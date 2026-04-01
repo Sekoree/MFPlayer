@@ -397,7 +397,10 @@ public static class OSCPacketCodec
         if (packet.Kind == OSCPacketKind.Message)
         {
             var message = packet.Message!;
-            var size = PaddedStringByteCount(message.Address) + PaddedStringByteCount(BuildTypeTagString(message.Arguments));
+            // P4.15: compute type-tag byte count inline to avoid allocating the string twice
+            // (WriteMessage will build the actual string during encode).
+            var typeTagCharCount = 1 + CountTypeTags(message.Arguments); // ',' + tags
+            var size = PaddedStringByteCount(message.Address) + Pad4(typeTagCharCount + 1);
             foreach (var arg in message.Arguments)
                 size += EstimateArgumentSize(arg);
             return size;
@@ -407,6 +410,26 @@ public static class OSCPacketCodec
         foreach (var element in packet.Bundle!.Elements)
             bundleSize += 4 + EstimatePacketSize(element);
         return bundleSize;
+    }
+
+    private static int CountTypeTags(IReadOnlyList<OSCArgument> arguments)
+    {
+        var count = 0;
+        foreach (var arg in arguments)
+            count += CountTypeTag(arg);
+        return count;
+    }
+
+    private static int CountTypeTag(OSCArgument argument)
+    {
+        if (argument.Type == OSCArgumentType.Array)
+        {
+            var inner = 2; // '[' + ']'
+            foreach (var nested in argument.AsArray())
+                inner += CountTypeTag(nested);
+            return inner;
+        }
+        return 1;
     }
 
     private static int EstimateArgumentSize(OSCArgument argument)

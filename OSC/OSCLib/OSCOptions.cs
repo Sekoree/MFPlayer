@@ -88,19 +88,20 @@ public sealed class OSCServerOptions
     public bool EnableTraceHexDump { get; init; }
 
     /// <summary>
-    /// When <see langword="true"/> (the default), OSC bundles are dispatched immediately
-    /// regardless of their timetag value. This is the OSC 1.0 "deliver now if in the past"
-    /// interpretation adopted by most real-world implementations (Max/MSP, TouchOSC, etc.).
+    /// <b>Currently not consumed.</b> All bundles are dispatched immediately regardless of this flag.
+    /// <para>
+    /// This property is reserved for a future server-side timetag scheduler. When implemented,
+    /// setting this to <see langword="true"/> (the default) will dispatch bundles immediately
+    /// regardless of their timetag — the OSC 1.0 "deliver now if in the past" interpretation
+    /// adopted by most real-world implementations (Max/MSP, TouchOSC, etc.).
+    /// Setting it to <see langword="false"/> will enable deferred delivery for future-dated bundles.
+    /// </para>
     /// <para>
     /// The <see cref="OSCMessageContext.BundleTimeTag"/> property is always populated and
     /// available for application-level scheduling inside message handlers.
     /// </para>
-    /// <para>
-    /// Set to <see langword="false"/> only if your handler code implements its own
-    /// timetag-based scheduling. Future versions of OSCLib may provide a built-in
-    /// server-side scheduler that observes this flag.
-    /// </para>
     /// </summary>
+    [Obsolete("This property is not yet consumed by the server dispatch pipeline. All bundles are dispatched immediately. Reserved for future timetag scheduling support.")]
     public bool IgnoreTimeTagScheduling { get; init; } = true;
 
     /// <summary>
@@ -127,8 +128,10 @@ public sealed class OSCClientOptions
     public int MaxPacketBytes { get; init; } = 8192;
 
     /// <summary>
-    /// Reserved for symmetry with server-side decode settings.
+    /// Reserved for potential future use (e.g. response-packet decoding).
+    /// Currently not consumed by <see cref="OSCClient"/> — setting it has no effect.
     /// </summary>
+    [Obsolete("This property is not consumed by OSCClient. It exists for forward compatibility only.")]
     public OSCDecodeOptions DecodeOptions { get; init; } = new();
 
     /// <summary>
@@ -155,7 +158,7 @@ public delegate ValueTask OSCMessageHandler(OSCMessageContext context, Cancellat
 /// <summary>
 /// UDP OSC client contract.
 /// </summary>
-public interface IOSCClient : IAsyncDisposable
+public interface IOSCClient : IAsyncDisposable, IDisposable
 {
     /// <summary>
     /// Encodes and sends an OSC packet.
@@ -171,7 +174,7 @@ public interface IOSCClient : IAsyncDisposable
 /// <summary>
 /// UDP OSC server contract.
 /// </summary>
-public interface IOSCServer : IAsyncDisposable
+public interface IOSCServer : IAsyncDisposable, IDisposable
 {
     /// <summary>
     /// Active server options.
@@ -192,9 +195,21 @@ public interface IOSCServer : IAsyncDisposable
     /// Starts the UDP receive loop.
     /// </summary>
     /// <remarks>
-    /// Bundle timetag scheduling is controlled by <see cref="OSCServerOptions.IgnoreTimeTagScheduling"/>.
-    /// When <see langword="true"/> (the default), all bundles are dispatched immediately.
+    /// <para>
+    /// The <paramref name="cancellationToken"/> controls the lifetime of the receive loop.
+    /// When cancelled, the server stops receiving datagrams and the returned task completes.
+    /// This is equivalent to calling <see cref="StopAsync"/>.
+    /// </para>
+    /// <para>
+    /// The token is linked internally — disposing the server also cancels any active receive loop.
+    /// Callers may pass a scoped <see cref="CancellationToken"/> to limit the server's
+    /// lifetime without explicitly calling <see cref="StopAsync"/>.
+    /// </para>
     /// </remarks>
+    /// <param name="cancellationToken">
+    /// Token that stops the receive loop when cancelled. Passing <see cref="CancellationToken.None"/>
+    /// runs until <see cref="StopAsync"/> or <see cref="IAsyncDisposable.DisposeAsync"/> is called.
+    /// </param>
     Task StartAsync(CancellationToken cancellationToken = default);
 
     /// <summary>

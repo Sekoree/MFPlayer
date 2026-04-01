@@ -9,6 +9,17 @@ namespace S.Media.NDI.Input;
 /// into separate, bounded queues. Prefer <see cref="NDIFrameSyncCoordinator"/> for live-playback;
 /// this implementation is retained for recording workflows and as a fallback.
 /// </summary>
+/// <remarks>
+/// <b>Thread safety:</b> Concurrent calls to <see cref="TryReadVideo"/> and <see cref="TryReadAudio"/>
+/// from separate threads are safe — a <see cref="SemaphoreSlim"/> serializes access to the native
+/// capture call. However, because each <c>NDIlib_recv_capture_v3</c> invocation returns either an
+/// audio <em>or</em> a video frame (not both), simultaneous polling from two threads means one
+/// thread's capture call may "steal" a frame intended for the other media type. The stolen frame
+/// is enqueued in its correct typed queue and will be returned on the next call, but the caller
+/// that triggered the capture will see a timeout for its own media type. For best results when
+/// using this coordinator for simultaneous audio+video, poll from a single thread or use
+/// <see cref="NDIFrameSyncCoordinator"/> which handles this internally.
+/// </remarks>
 internal sealed class NDICaptureCoordinator : INDICaptureCoordinator
 {
     // Semaphore ensures only one thread calls the native capture API at a time (Issue 5.5).

@@ -34,8 +34,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
     private volatile bool _nativeStreaming;     // (10.6) volatile: read lock-free in PushFrame hot-path
     private volatile bool _disposed;            // (10.6) volatile: read lock-free in PushFrame hot-path
     // C.1 — volatile so a PushFrame thread reading _resampler sees the null written by Start() under _gate.
-    private volatile AudioResampler? _resampler;
+    private volatile IAudioResampler? _resampler;
     private AudioOutputConfig _outputConfig = new();
+    // P2.8: volatile backing field — State is read lock-free in PushFrame hot-path.
+    private volatile AudioOutputState _state = AudioOutputState.Stopped;
 
     public PortAudioOutput(
         AudioDeviceInfo device,
@@ -58,7 +60,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
 
     public Guid Id { get; }
 
-    public AudioOutputState State { get; private set; } = AudioOutputState.Stopped;
+    public AudioOutputState State { get => _state; private set => _state = value; }
 
     public AudioDeviceInfo Device { get; private set; }
 

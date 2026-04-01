@@ -1,5 +1,6 @@
 using NDILib;
 using S.Media.Core.Errors;
+using S.Media.Core.Runtime;
 using S.Media.NDI.Config;
 using S.Media.NDI.Diagnostics;
 using S.Media.NDI.Input;
@@ -8,10 +9,11 @@ using S.Media.NDI.Output;
 
 namespace S.Media.NDI.Runtime;
 
-public sealed class NDIEngine : IDisposable
+public sealed class NDIEngine : IMediaEngine
 {
     private readonly Lock _gate = new();
     private readonly AutoResetEvent _diagnosticsStopSignal = new(false);
+    private readonly List<NDIMediaItem> _mediaItems = [];       // P2.14: track intermediate items
     private readonly List<NDIAudioSource> _audioSources = [];
     private readonly List<NDIVideoSource> _videoSources = [];
     private readonly List<NDIVideoOutput> _outputs = [];
@@ -68,6 +70,11 @@ public sealed class NDIEngine : IDisposable
         return startCode;
     }
 
+    /// <summary>
+    /// Terminates the NDI engine, stopping all sources/outputs and disposing coordinators.
+    /// <para><b>⚠️ Blocking:</b> Joins the diagnostics thread with a 1-second timeout.
+    /// Avoid calling from a UI thread.</para>
+    /// </summary>
     public int Terminate()
     {
         Thread? diagnosticsThread;
@@ -89,6 +96,7 @@ public sealed class NDIEngine : IDisposable
             _audioSources.Clear();
             _videoSources.Clear();
             _outputs.Clear();
+            _mediaItems.Clear();
 
             // Issue 5.9: dispose coordinators so their SemaphoreSlim is released.
             foreach (var coordinator in _captureCoordinators.Values)
@@ -122,6 +130,7 @@ public sealed class NDIEngine : IDisposable
 
             var coordinator = GetOrCreateCaptureCoordinatorLocked(receiver);
             item = new NDIMediaItem(receiver, _integrationOptions, coordinator);
+            _mediaItems.Add(item);  // P2.14: track item
             return MediaResult.Success;
         }
     }
@@ -131,6 +140,7 @@ public sealed class NDIEngine : IDisposable
     public int CreateAudioSource(NDIReceiver receiver, in NDISourceOptions sourceOptions, out NDIAudioSource? source)
     {
         source = null;
+        ArgumentNullException.ThrowIfNull(receiver);
 
         lock (_gate)
         {
@@ -145,6 +155,7 @@ public sealed class NDIEngine : IDisposable
 
             var coordinator = GetOrCreateCaptureCoordinatorLocked(receiver);
             var item = new NDIMediaItem(receiver, _integrationOptions, coordinator);
+            _mediaItems.Add(item);  // P2.14: track intermediate item
             _ = item.CreateAudioSource(normalized, out source);
             if (source is null)
                 return (int)MediaErrorCode.NDIReceiverCreateFailed;
@@ -159,6 +170,7 @@ public sealed class NDIEngine : IDisposable
     public int CreateVideoSource(NDIReceiver receiver, in NDISourceOptions sourceOptions, out NDIVideoSource? source)
     {
         source = null;
+        ArgumentNullException.ThrowIfNull(receiver);
 
         lock (_gate)
         {
@@ -173,6 +185,7 @@ public sealed class NDIEngine : IDisposable
 
             var coordinator = GetOrCreateCaptureCoordinatorLocked(receiver);
             var item = new NDIMediaItem(receiver, _integrationOptions, coordinator);
+            _mediaItems.Add(item);  // P2.14: track intermediate item
             _ = item.CreateVideoSource(normalized, out source);
             if (source is null)
                 return (int)MediaErrorCode.NDIReceiverCreateFailed;
@@ -234,6 +247,10 @@ public sealed class NDIEngine : IDisposable
         {
             if (_disposed) return;
 
+            // P2.2: Set _disposed immediately so concurrent callers see it
+            // before we release the lock to join the diagnostics thread.
+            _disposed = true;
+
             diagnosticsThread = _diagnosticsThread;
             _diagnosticsRunning = false;
             _diagnosticsThread = null;
@@ -245,7 +262,6 @@ public sealed class NDIEngine : IDisposable
 
         lock (_gate)
         {
-            _disposed = true;
             DiagnosticsUpdated = null;
         }
 
@@ -318,17 +334,18 @@ public sealed class NDIEngine : IDisposable
 
     private NDIEngineDiagnostics BuildDiagnosticsSnapshotLocked()
     {
-        long audioCaptured = 0, audioDropped = 0;
+        long audioCaptured = 0, audioDropped = 0, audioRejected = 0;
         double maxAudioReadMs = 0;
         foreach (var source in _audioSources)
         {
             var d = source.Diagnostics;
             audioCaptured += d.FramesCaptured;
             audioDropped  += d.FramesDropped;
+            audioRejected += d.RejectedReads;
             maxAudioReadMs = Math.Max(maxAudioReadMs, d.LastReadMs);
         }
 
-        long videoCaptured = 0, videoDropped = 0, repeatedFrames = 0, fallbackFrames = 0;
+        long videoCaptured = 0, videoDropped = 0, videoRejected = 0, repeatedFrames = 0, fallbackFrames = 0;
         int queueDepth = 0, jitterBufferFrames = 0;
         string incomingPixelFormat = "none", outputPixelFormat = "none", conversionPath = "none";
         double maxVideoReadMs = 0;
@@ -337,6 +354,7 @@ public sealed class NDIEngine : IDisposable
             var d = source.Diagnostics;
             videoCaptured   += d.FramesCaptured;
             videoDropped    += d.FramesDropped;
+            videoRejected   += d.RejectedReads;
             repeatedFrames  += d.RepeatedTimestampFramesPresented;
             fallbackFrames  += d.FallbackFramesPresented;
             queueDepth       = Math.Max(queueDepth, d.QueueDepth);
@@ -363,9 +381,9 @@ public sealed class NDIEngine : IDisposable
         }
 
         return new NDIEngineDiagnostics(
-            Audio: new NDIAudioDiagnostics(audioCaptured, audioDropped, maxAudioReadMs),
+            Audio: new NDIAudioDiagnostics(audioCaptured, audioDropped, audioRejected, maxAudioReadMs),
             VideoSource: new NDIVideoSourceDebugInfo(
-                videoCaptured, videoDropped, repeatedFrames, fallbackFrames,
+                videoCaptured, videoDropped, videoRejected, repeatedFrames, fallbackFrames,
                 maxVideoReadMs, jitterBufferFrames, queueDepth,
                 incomingPixelFormat, outputPixelFormat, conversionPath),
             VideoOutput: new NDIVideoOutputDebugInfo(vPushOk, vPushFail, aPushOk, aPushFail, maxOutputPushMs),

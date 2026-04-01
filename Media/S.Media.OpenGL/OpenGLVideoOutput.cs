@@ -430,33 +430,34 @@ public sealed class OpenGLVideoOutput : IVideoOutput
 
     private static OpenGLSurfaceMetadata BuildSurfaceMetadata(VideoFrame frame, long generation)
     {
-        var strides = new List<int>(4);
+        var count = 0;
+        var strides = new int[4];
         if (frame.Plane0.Length > 0)
         {
-            strides.Add(frame.Plane0Stride);
+            strides[count++] = frame.Plane0Stride;
         }
 
         if (frame.Plane1.Length > 0)
         {
-            strides.Add(frame.Plane1Stride);
+            strides[count++] = frame.Plane1Stride;
         }
 
         if (frame.Plane2.Length > 0)
         {
-            strides.Add(frame.Plane2Stride);
+            strides[count++] = frame.Plane2Stride;
         }
 
         if (frame.Plane3.Length > 0)
         {
-            strides.Add(frame.Plane3Stride);
+            strides[count++] = frame.Plane3Stride;
         }
 
         return new OpenGLSurfaceMetadata(
             SurfaceWidth: frame.Width,
             SurfaceHeight: frame.Height,
             PixelFormat: frame.PixelFormat,
-            PlaneCount: strides.Count,
-            PlaneStrides: strides,
+            PlaneCount: count,
+            PlaneStrides: count == strides.Length ? strides : strides[..count],
             LastPresentedFrameGeneration: generation);
     }
 }

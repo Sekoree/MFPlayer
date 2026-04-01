@@ -21,6 +21,19 @@ public sealed class MIDIEngine : IMediaEngine
 
     public bool IsInitialized { get; private set; }
 
+    /// <summary>
+    /// <see langword="true"/> if the native PortMidi backend was loaded successfully during
+    /// <see cref="Initialize"/>. When <see langword="false"/>, the engine falls back to
+    /// synthetic (no-op) devices — <see cref="IsInitialized"/> is still <see langword="true"/>
+    /// so callers can use the MIDI API without crashing, but no real hardware is available.
+    /// </summary>
+    public bool NativeBackendAvailable { get; private set; }
+
+    /// <summary>
+    /// Initializes the MIDI engine. If the native PortMidi runtime is not available
+    /// (DLL missing or CPU unsupported), the engine initializes successfully with
+    /// synthetic fallback devices (see <see cref="NativeBackendAvailable"/>).
+    /// </summary>
     public int Initialize(MIDIReconnectOptions? reconnectOptions = null)
     {
         lock (_gate)
@@ -36,6 +49,7 @@ public sealed class MIDIEngine : IMediaEngine
             }
 
             var nativeAvailable = TryInitializeNativeRuntime();
+            NativeBackendAvailable = nativeAvailable;
             _defaultReconnectOptions = (reconnectOptions ?? new MIDIReconnectOptions()).Normalize();
             RefreshCatalog(nativeAvailable);
             IsInitialized = true;
@@ -173,14 +187,13 @@ public sealed class MIDIEngine : IMediaEngine
             {
                 return;
             }
+
+            // P2.2: Set _disposed immediately so concurrent callers see it
+            // before we release the lock to call Terminate().
+            _disposed = true;
         }
 
         _ = Terminate();
-
-        lock (_gate)
-        {
-            _disposed = true;
-        }
     }
 
     private static bool TryInitializeNativeRuntime()

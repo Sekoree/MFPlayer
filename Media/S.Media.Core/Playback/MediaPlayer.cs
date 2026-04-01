@@ -19,6 +19,12 @@ public sealed class MediaPlayer : AVMixer, IMediaPlayer
     }
 
     /// <summary>
+    /// The currently loaded media item, or <see langword="null"/> if nothing is loaded.
+    /// Set by <see cref="Play"/> and cleared by <see cref="DetachCurrentMediaSources"/>.
+    /// </summary>
+    public IMediaItem? ActiveMedia { get { lock (Gate) return _activeMedia; } }
+
+    /// <summary>
     /// Consumer-facing playback config. When set, <see cref="Play"/> will call
     /// <see cref="IAVMixer.StartPlayback"/> with this config automatically.
     /// </summary>
@@ -47,13 +53,18 @@ public sealed class MediaPlayer : AVMixer, IMediaPlayer
 
     private int DetachCurrentMediaSources()
     {
-        List<IAudioSource> audioToRemove;
-        List<IVideoSource> videoToRemove;
+        IAudioSource[] audioToRemove;
+        IVideoSource[] videoToRemove;
 
         lock (Gate)
         {
-            audioToRemove = [.. _attachedAudioSources];
-            videoToRemove = [.. _attachedVideoSources];
+            audioToRemove = _attachedAudioSources.Count > 0
+                ? [.. _attachedAudioSources] : [];
+            videoToRemove = _attachedVideoSources.Count > 0
+                ? [.. _attachedVideoSources] : [];
+            _attachedAudioSources.Clear();
+            _attachedVideoSources.Clear();
+            _activeMedia = null;
         }
 
         var firstError = MediaResult.Success;
@@ -62,34 +73,19 @@ public sealed class MediaPlayer : AVMixer, IMediaPlayer
         {
             var code = RemoveAudioSource(source);
             if (code != MediaResult.Success && firstError == MediaResult.Success)
-            {
                 firstError = code;
-            }
         }
 
         foreach (var source in videoToRemove)
         {
             var code = RemoveVideoSource(source);
             if (code != MediaResult.Success && firstError == MediaResult.Success)
-            {
                 firstError = code;
-            }
         }
 
-        if (firstError != MediaResult.Success)
-        {
-            return firstError;
-        }
-
-        lock (Gate)
-        {
-            _attachedAudioSources.Clear();
-            _attachedVideoSources.Clear();
-            _activeMedia = null;
-        }
-
-        return MediaResult.Success;
+        return firstError;
     }
+
 
     private int AttachBoundSources(IMediaPlaybackSourceBinding binding)
     {
@@ -141,10 +137,16 @@ public sealed class MediaPlayer : AVMixer, IMediaPlayer
         return MediaResult.Success;
     }
 
-    private static AVMixerConfig BuildDefaultConfig(IMediaPlaybackSourceBinding binding)    {
-        var firstAudio = binding.PlaybackAudioSources.FirstOrDefault();
-        var channels = firstAudio?.StreamInfo.ChannelCount.GetValueOrDefault(2) ?? 2;
-        return AVMixerConfig.ForSourceToStereo(Math.Max(1, channels));
+    private static AVMixerConfig BuildDefaultConfig(IMediaPlaybackSourceBinding binding)
+    {
+        var maxChannels = 2;
+        foreach (var source in binding.PlaybackAudioSources)
+        {
+            var ch = source.StreamInfo.ChannelCount.GetValueOrDefault(2);
+            if (ch > maxChannels) maxChannels = ch;
+        }
+
+        return AVMixerConfig.ForSourceToStereo(Math.Max(1, maxChannels));
     }
 
     private void RollbackAdded(IEnumerable<IAudioSource> addedAudio, IEnumerable<IVideoSource> addedVideo)

@@ -78,6 +78,10 @@ public sealed class NDIVideoOutput : IVideoOutput, IAudioSink
             if (_disposed)
                 return (int)MediaErrorCode.MediaObjectDisposed;   // Issue 5.2: was NDIOutputPushVideoFailed
 
+            // P2.10: validate EnableVideo at Start() rather than on every PushFrame.
+            if (!Options.EnableVideo)
+                return (int)MediaErrorCode.NDIInvalidOutputOptions;
+
             var outputValidate = Options.Validate();
             if (outputValidate != MediaResult.Success)
                 return outputValidate;

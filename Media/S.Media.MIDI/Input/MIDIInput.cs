@@ -159,7 +159,15 @@ public sealed class MIDIInput : IMIDIDevice
                 for (var i = 0; i < count; i++)
                 {
                     var message = MIDIMessage.FromPmEvent(buffer[i]);
-                    MessageReceived?.Invoke(this, new MIDIMessageEventArgs(message, Device, DateTimeOffset.UtcNow, buffer[i].Timestamp));
+                    try
+                    {
+                        MessageReceived?.Invoke(this, new MIDIMessageEventArgs(message, Device, DateTimeOffset.UtcNow, buffer[i].Timestamp));
+                    }
+                    catch
+                    {
+                        // P2.7: Swallow handler exceptions so a misbehaving subscriber
+                        // does not kill the poll thread and silently disconnect the device.
+                    }
                 }
             }
 
@@ -209,6 +217,11 @@ public sealed class MIDIInput : IMIDIDevice
             PublishStatus(MIDIConnectionStatus.ReconnectFailed, errorCode);
             return;
         }
+
+        // P3.12: honour the grace period before starting reconnection attempts.
+        var grace = ReconnectOptions.DisconnectGracePeriod;
+        if (grace > TimeSpan.Zero)
+            Thread.Sleep(grace);
 
         PublishStatus(MIDIConnectionStatus.Reconnecting);
         if (!TryReconnectNative(out var reconnectCode))

@@ -155,7 +155,7 @@ public class MIDIInputDevice : MIDIDevice
             if (MIDIMessageParser.IsRealTime(status))
             {
                 var rt = MIDIMessageParser.Decode(ev);
-                if (rt != null) MessageReceived?.Invoke(this, rt);
+                if (rt != null) try { MessageReceived?.Invoke(this, rt); } catch { /* P2.7: swallow handler exceptions */ }
                 return;
             }
             AccumulateSysEx(ev.Message, startByte: 0);
@@ -168,7 +168,7 @@ public class MIDIInputDevice : MIDIDevice
         else
         {
             var msg = MIDIMessageParser.Decode(ev);
-            if (msg != null) MessageReceived?.Invoke(this, msg);
+            if (msg != null) try { MessageReceived?.Invoke(this, msg); } catch { /* P2.7: swallow handler exceptions */ }
         }
     }
 
@@ -185,7 +185,7 @@ public class MIDIInputDevice : MIDIDevice
             if (by == 0xF7)
             {
                 _sysExBuffer!.Add(0xF7);
-                SysExReceived?.Invoke(this, new SysEx([.. _sysExBuffer]));
+                try { SysExReceived?.Invoke(this, new SysEx([.. _sysExBuffer])); } catch { /* P2.7 */ }
                 _sysExBuffer = null;
                 return;
             }
