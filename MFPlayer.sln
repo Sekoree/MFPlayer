@@ -19,6 +19,11 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoStress", "Test\VideoStress\VideoStress.csproj", "{136BC955-3AB3-42D8-8E46-C8680F94B4E7}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB0-47AE-A212-5084CFA63CEC}"
+	ProjectSection(SolutionItems) = preProject
+		Doc\Review01.md = Doc\Review01.md
+		Doc\Review02.md = Doc\Review02.md
+		Doc\Review03.md = Doc\Review03.md
+	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"
 EndProject
