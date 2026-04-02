@@ -15,7 +15,7 @@ public sealed class ErrorCodeRangesTests
 
         Assert.Equal(
             (int)MediaErrorCode.MediaConcurrentOperationViolation,
-            ErrorCodeRanges.ResolveSharedSemantic((int)MediaErrorCode.MIDIConcurrentOperationRejected));
+            ErrorCodeRanges.ResolveSharedSemantic((int)MediaErrorCode.MIDIConcurrentOperationRejected_V2));
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public sealed class ErrorCodeRangesTests
     [Fact]
     public void ResolveSharedSemantic_LeavesNonMappedCodeUnchanged()
     {
-        var code = (int)MediaErrorCode.MIDIOutputNotOpen;
+        var code = (int)MediaErrorCode.MIDIOutputNotOpen_V2;
 
         Assert.Equal(code, ErrorCodeRanges.ResolveSharedSemantic(code));
     }

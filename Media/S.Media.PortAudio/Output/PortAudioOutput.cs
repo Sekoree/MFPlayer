@@ -555,7 +555,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput
         }
     }
 
-    private AudioResampler? EnsureResampler(int sourceSampleRate, int sourceChannelCount)
+    private IAudioResampler? EnsureResampler(int sourceSampleRate, int sourceChannelCount)
     {
         if (_resampler is not null
             && _resampler.SourceSampleRate == sourceSampleRate

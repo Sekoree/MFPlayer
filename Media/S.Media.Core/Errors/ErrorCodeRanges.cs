@@ -23,7 +23,7 @@ public static class ErrorCodeRanges
         return code switch
         {
             (int)MediaErrorCode.FFmpegConcurrentReadViolation    => (int)MediaErrorCode.MediaConcurrentOperationViolation,
-            (int)MediaErrorCode.MIDIConcurrentOperationRejected  => (int)MediaErrorCode.MediaConcurrentOperationViolation,
+            (int)MediaErrorCode.MIDIConcurrentOperationRejected_V2  => (int)MediaErrorCode.MediaConcurrentOperationViolation,
             // NDI*ReadRejected intentionally NOT remapped here (§5.4 fix):
             // Both codes fire when the source is stopped *and* during a concurrent read.
             // Callers should check source.State to distinguish MediaSourceNotRunning from
@@ -47,6 +47,7 @@ public static class ErrorCodeRanges
             >= 3000 and <= 3999 => true,
             >= 4000 and <= 4999 => true,
             >= 5000 and <= 5199 => true,
+            >= 6000 and <= 6099 => true,
             _ => false,
         };
     }
@@ -55,8 +56,6 @@ public static class ErrorCodeRanges
     {
         if (code >= 0 && code <= 999)
         {
-            // MIDI lives in the GenericCommon band — check it first.
-            if (code >= 900 && code <= 949) return MediaErrorArea.MIDI;
             return MediaErrorArea.GenericCommon;
         }
 
@@ -87,6 +86,11 @@ public static class ErrorCodeRanges
         if (code >= 5000 && code <= 5199)
         {
             return MediaErrorArea.NDI;
+        }
+
+        if (code >= 6000 && code <= 6099)
+        {
+            return MediaErrorArea.MIDI;
         }
 
         return MediaErrorArea.Unknown;

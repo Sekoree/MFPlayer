@@ -645,4 +645,33 @@ public sealed class NDIVideoSource : IVideoSource
         string IncomingPixelFormat,
         VideoPixelFormat OutputPixelFormat,
         string ConversionPath);
+
+    // ── Internal test hooks (P4.30) ─────────────────────────────────────────────
+    // These replace the reflection-based access in NDISourceAndMediaItemTests.
+
+    /// <summary>Enqueues a synthetic video frame for testing the jitter buffer.</summary>
+    internal void TestEnqueueCapturedFrame(byte[] rgba, int validLength, int width, int height, long timestamp100Ns, string incomingPixelFormat, VideoPixelFormat outputPixelFormat, string conversionPath)
+    {
+        EnqueueCapturedFrame(rgba, validLength, width, height, timestamp100Ns, incomingPixelFormat, outputPixelFormat, conversionPath);
+    }
+
+    /// <summary>Attempts to dequeue a buffered frame (respects jitter priming).</summary>
+    internal bool TestTryDequeueBufferedFrame(out byte[]? rgba)
+    {
+        var result = TryDequeueBufferedFrame(out var frame);
+        rgba = result ? frame.Rgba : null;
+        return result;
+    }
+
+    /// <summary>Returns the current count of frames in the jitter queue.</summary>
+    internal int TestGetJitterQueueCount()
+    {
+        lock (_gate) { return _videoJitterQueue.Count; }
+    }
+
+    /// <summary>Returns the marker byte of the front frame in the jitter queue without dequeuing.</summary>
+    internal byte TestPeekBufferedFrameMarker()
+    {
+        lock (_gate) { return _videoJitterQueue.Peek().Rgba[0]; }
+    }
 }

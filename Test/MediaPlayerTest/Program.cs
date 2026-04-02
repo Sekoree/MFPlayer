@@ -28,7 +28,9 @@ internal static class Program
 
         try
         {
-            using var media = FFmpegMediaItem.Open(uri);
+            var createCode = FFmpegMediaItem.Create(uri, out var mediaOut);
+            if (createCode != MediaResult.Success) { Console.Error.WriteLine($"FFmpegMediaItem.Create failed: {createCode}"); return 3; }
+            using var media = mediaOut!;
 
             var (audioEngine, audioOutput) = TestHelpers.InitAudioOutput(a.HostApi, a.DeviceIndex);
             using var _ae = audioEngine;

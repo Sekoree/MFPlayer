@@ -127,12 +127,6 @@ public sealed class OSCClientOptions
     /// </summary>
     public int MaxPacketBytes { get; init; } = 8192;
 
-    /// <summary>
-    /// Reserved for potential future use (e.g. response-packet decoding).
-    /// Currently not consumed by <see cref="OSCClient"/> — setting it has no effect.
-    /// </summary>
-    [Obsolete("This property is not consumed by OSCClient. It exists for forward compatibility only.")]
-    public OSCDecodeOptions DecodeOptions { get; init; } = new();
 
     /// <summary>
     /// Enables sending to broadcast addresses (255.255.255.255 or subnet-directed broadcast).

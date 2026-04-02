@@ -80,5 +80,29 @@ public interface IAudioEngine : IMediaEngine
     /// <summary>All inputs currently created by this engine (including stopped ones).</summary>
     IReadOnlyList<IAudioInput> Inputs { get; }
 
+    // ── Device monitoring ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Suppresses device-change handling (e.g. hot-plug refresh) until
+    /// <see cref="ResumeDeviceMonitoring"/> is called.
+    /// Useful for live-performance scenarios where device-change notifications
+    /// during playback can trigger unwanted device switches.
+    /// Calls nest — each <c>Pause</c> must be balanced by a matching <c>Resume</c>.
+    /// </summary>
+    void PauseDeviceMonitoring();
+
+    /// <summary>
+    /// Re-enables device-change handling after a previous <see cref="PauseDeviceMonitoring"/> call.
+    /// If monitoring was paused and changes occurred, implementations may optionally
+    /// refresh the device list on resume.
+    /// </summary>
+    void ResumeDeviceMonitoring();
+
+    /// <summary>
+    /// <c>true</c> when device monitoring is currently paused via
+    /// <see cref="PauseDeviceMonitoring"/>.
+    /// </summary>
+    bool IsDeviceMonitoringPaused { get; }
+
     event EventHandler<AudioEngineStateChangedEventArgs>? StateChanged;
 }

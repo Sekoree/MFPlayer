@@ -27,6 +27,16 @@ internal sealed class FFSharedDemuxSession : IDisposable
     private int _videoQueueCapacity;
     private bool _disposed;
 
+    // ── I.2: Dedicated decode thread state ──────────────────────────────────────
+    private bool _useDedicatedDecodeThread;
+    private int _packetQueueCapacity;
+    private Thread? _demuxThread;
+    private Thread? _decodeThread;
+    private readonly AutoResetEvent _demuxSignal = new(false);
+    private readonly AutoResetEvent _decodeSignal = new(false);
+    private readonly Queue<DemuxedPacket> _audioPacketQueue = new();
+    private readonly Queue<DemuxedPacket> _videoPacketQueue = new();
+
     internal event EventHandler<FFStreamDescriptorSnapshot>? StreamDescriptorsRefreshed;
 
     public FFStreamDescriptor? AudioStream => _context.AudioStream;
@@ -81,6 +91,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
             _audioQueueCapacity = normalizedDecodeOptions.MaxQueuedPackets;
             _videoQueueCapacity = normalizedDecodeOptions.MaxQueuedFrames;
+            _packetQueueCapacity = normalizedDecodeOptions.MaxQueuedPackets;
+            _useDedicatedDecodeThread = normalizedDecodeOptions.UseDedicatedDecodeThread;
 
             var hasAudio = _context.AudioStream is not null;
             var hasVideo = _context.VideoStream is not null;
@@ -157,12 +169,35 @@ internal sealed class FFSharedDemuxSession : IDisposable
 
             _isOpen = true;
             _running = true;
-            _workerThread = new Thread(WorkerLoop)
+
+            // I.2: Choose between single-thread (legacy) and dual-thread (demux + decode) modes.
+            if (_useDedicatedDecodeThread)
             {
-                IsBackground = true,
-                Name = "S.Media.FFmpeg.SharedDemuxSession",
-            };
-            _workerThread.Start();
+                _audioPacketQueue.Clear();
+                _videoPacketQueue.Clear();
+
+                _demuxThread = new Thread(DemuxLoop)
+                {
+                    IsBackground = true,
+                    Name = "S.Media.FFmpeg.SharedDemuxSession.Demux",
+                };
+                _decodeThread = new Thread(DecodeLoop)
+                {
+                    IsBackground = true,
+                    Name = "S.Media.FFmpeg.SharedDemuxSession.Decode",
+                };
+                _demuxThread.Start();
+                _decodeThread.Start();
+            }
+            else
+            {
+                _workerThread = new Thread(WorkerLoop)
+                {
+                    IsBackground = true,
+                    Name = "S.Media.FFmpeg.SharedDemuxSession",
+                };
+                _workerThread.Start();
+            }
 
             publishDescriptors = publishDescriptors || _context.AudioStream is not null || _context.VideoStream is not null;
         }
@@ -178,6 +213,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
     public int Close()
     {
         Thread? thread;
+        Thread? demux;
+        Thread? decode;
 
         lock (_gate)
         {
@@ -191,19 +228,30 @@ internal sealed class FFSharedDemuxSession : IDisposable
             _audioQueue.Clear();
             _videoQueue.Clear();
             _pendingAudioChunk = null;
+            _audioPacketQueue.Clear();
+            _videoPacketQueue.Clear();
             _workerSignal.Set();
+            _demuxSignal.Set();
+            _decodeSignal.Set();
 
             thread = _workerThread;
             _workerThread = null;
+            demux = _demuxThread;
+            _demuxThread = null;
+            decode = _decodeThread;
+            _decodeThread = null;
         }
 
         thread?.Join();
+        demux?.Join();
+        decode?.Join();
         return _context.Close();
     }
 
-    public int ReadAudioSamples(Span<float> destination, int requestedFrameCount, int channelCount, out int framesRead)
+    public int ReadAudioSamples(Span<float> destination, int requestedFrameCount, int channelCount, out int framesRead, out TimeSpan chunkPresentationTime)
     {
         framesRead = 0;
+        chunkPresentationTime = TimeSpan.Zero;
 
         if (requestedFrameCount <= 0)
         {
@@ -259,6 +307,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
         }
 
         framesRead = Math.Min(requestedFrameCount, Math.Min(chunk.FrameCount, writableFrames));
+        chunkPresentationTime = chunk.PresentationTime;
         var sampleCount = framesRead * channelCount;
         var sourceSamples = chunk.Samples.Span;
         var copyCount = Math.Min(sampleCount, sourceSamples.Length);
@@ -284,11 +333,14 @@ internal sealed class FFSharedDemuxSession : IDisposable
             if (remainingFrames > 0)
             {
                 var sampleOffset = Math.Max(0, Math.Min(chunk.Samples.Length, sampleCount));
+                var sampleRate = _context.AudioStream?.SampleRate.GetValueOrDefault(48_000) ?? 48_000;
+                var consumedDuration = TimeSpan.FromSeconds((double)framesRead / Math.Max(1, sampleRate));
                 _pendingAudioChunk = new QueuedAudioChunk(
                     chunk.Generation,
                     remainingFrames,
                     chunk.SampleValue,
-                    chunk.Samples[sampleOffset..]);
+                    chunk.Samples[sampleOffset..],
+                    chunk.PresentationTime + consumedDuration);
             }
 
             _workerSignal.Set();
@@ -410,9 +462,14 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 _audioQueue.Clear();
                 _videoQueue.Clear();
                 _pendingAudioChunk = null;
+                // I.2: flush packet queues on seek
+                _audioPacketQueue.Clear();
+                _videoPacketQueue.Clear();
 
                 publishDescriptors = _context.AudioStream is not null || _context.VideoStream is not null;
                 _workerSignal.Set();
+                _demuxSignal.Set();
+                _decodeSignal.Set();
             }
         }
 
@@ -444,6 +501,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
         }
 
         _workerSignal.Dispose();
+        _demuxSignal.Dispose();
+        _decodeSignal.Dispose();
         _packetReader.Dispose();
         _audioDecoder.Dispose();
         _videoDecoder.Dispose();
@@ -451,6 +510,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
         _pixelConverter.Dispose();
         _context.Dispose();
     }
+
+    // ── Single-thread mode (UseDedicatedDecodeThread = false) ────────────────────
 
     private void WorkerLoop()
     {
@@ -508,6 +569,223 @@ internal sealed class FFSharedDemuxSession : IDisposable
         }
     }
 
+    // ── Dual-thread mode (UseDedicatedDecodeThread = true) ──────────────────────
+
+    /// <summary>
+    /// I.2: Demux thread — reads packets from the container and enqueues them
+    /// into bounded per-stream packet queues. Runs ahead of decode so the decoder
+    /// always has packets ready.
+    /// </summary>
+    private void DemuxLoop()
+    {
+        while (true)
+        {
+            bool needAudio, needVideo;
+
+            lock (_gate)
+            {
+                if (_disposed || !_running || !_isOpen)
+                    return;
+
+                needAudio = _context.AudioStream is not null && _audioPacketQueue.Count < _packetQueueCapacity;
+                needVideo = _context.VideoStream is not null && _videoPacketQueue.Count < _packetQueueCapacity;
+            }
+
+            var produced = false;
+
+            if (needAudio)
+            {
+                var code = _packetReader.ReadAudioPacket(out var packet);
+                if (code == MediaResult.Success)
+                {
+                    lock (_gate)
+                    {
+                        if (!_disposed && _running && _isOpen && _audioPacketQueue.Count < _packetQueueCapacity)
+                        {
+                            _audioPacketQueue.Enqueue(new DemuxedPacket(packet, true));
+                            produced = true;
+                            _decodeSignal.Set();
+                        }
+                    }
+                }
+            }
+
+            if (needVideo)
+            {
+                var code = _packetReader.ReadVideoPacket(out var packet);
+                if (code == MediaResult.Success)
+                {
+                    lock (_gate)
+                    {
+                        if (!_disposed && _running && _isOpen && _videoPacketQueue.Count < _packetQueueCapacity)
+                        {
+                            _videoPacketQueue.Enqueue(new DemuxedPacket(packet, false));
+                            produced = true;
+                            _decodeSignal.Set();
+                        }
+                    }
+                }
+            }
+
+            if (!produced)
+            {
+                _demuxSignal.WaitOne(20);
+            }
+            else
+            {
+                Thread.Yield();
+            }
+        }
+    }
+
+    /// <summary>
+    /// I.2: Decode thread — drains the packet queues, decodes + converts, and
+    /// enqueues finished audio chunks / video frames for consumer threads.
+    /// </summary>
+    private void DecodeLoop()
+    {
+        while (true)
+        {
+            bool wantAudio, wantVideo;
+            FFPacket? audioPacket = null, videoPacket = null;
+
+            lock (_gate)
+            {
+                if (_disposed || !_running || !_isOpen)
+                    return;
+
+                // Dequeue packets when the frame queues have room.
+                wantAudio = _context.AudioStream is not null
+                            && _audioQueue.Count < _audioQueueCapacity
+                            && _audioPacketQueue.Count > 0;
+                wantVideo = _context.VideoStream is not null
+                            && _videoQueue.Count < _videoQueueCapacity
+                            && _videoPacketQueue.Count > 0;
+
+                if (wantAudio)
+                    audioPacket = _audioPacketQueue.Dequeue().Packet;
+                if (wantVideo)
+                    videoPacket = _videoPacketQueue.Dequeue().Packet;
+            }
+
+            var produced = false;
+
+            if (audioPacket is not null)
+            {
+                if (TryDecodeAudioPacket(audioPacket.Value, out var chunk))
+                {
+                    lock (_gate)
+                    {
+                        if (!_disposed && _running && _isOpen && _audioQueue.Count < _audioQueueCapacity)
+                        {
+                            _audioQueue.Enqueue(chunk);
+                            produced = true;
+                            _demuxSignal.Set(); // room freed in packet queue
+                        }
+                    }
+                }
+                else
+                {
+                    // Signal demux that we consumed the packet regardless.
+                    _demuxSignal.Set();
+                }
+            }
+
+            if (videoPacket is not null)
+            {
+                if (TryDecodeVideoPacket(videoPacket.Value, out var frame))
+                {
+                    lock (_gate)
+                    {
+                        if (!_disposed && _running && _isOpen && _videoQueue.Count < _videoQueueCapacity)
+                        {
+                            _videoQueue.Enqueue(frame);
+                            produced = true;
+                            _demuxSignal.Set();
+                        }
+                    }
+                }
+                else
+                {
+                    _demuxSignal.Set();
+                }
+            }
+
+            if (!produced)
+            {
+                _decodeSignal.WaitOne(20);
+            }
+            else
+            {
+                _workerSignal.Set(); // wake consumers
+                Thread.Yield();
+            }
+        }
+    }
+
+    /// <summary>I.2: Decodes a single audio packet into a <see cref="QueuedAudioChunk"/>.</summary>
+    private bool TryDecodeAudioPacket(FFPacket packet, out QueuedAudioChunk chunk)
+    {
+        lock (_pipelineGate)
+        {
+            chunk = default;
+
+            var decodeCode = _audioDecoder.Decode(packet, out var decoded);
+            if (decodeCode != MediaResult.Success || decoded.FrameCount <= 0)
+                return false;
+
+            var resampleCode = _resampler.Resample(decoded, out var resampled);
+            if (resampleCode != MediaResult.Success || resampled.FrameCount <= 0)
+                return false;
+
+            chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue, resampled.Samples, resampled.PresentationTime);
+            return true;
+        }
+    }
+
+    /// <summary>I.2: Decodes a single video packet into a <see cref="QueuedVideoFrame"/>.</summary>
+    private bool TryDecodeVideoPacket(FFPacket packet, out QueuedVideoFrame frame)
+    {
+        lock (_pipelineGate)
+        {
+            frame = default;
+
+            var decodeCode = _videoDecoder.Decode(packet, out var decoded);
+            if (decodeCode == (int)MediaErrorCode.FFmpegVideoDecodeNeedMoreData)
+                return false;
+            if (decodeCode != MediaResult.Success)
+                return false;
+
+            var convertCode = _pixelConverter.Convert(decoded, out var converted);
+            if (convertCode != MediaResult.Success)
+                return false;
+
+            frame = new QueuedVideoFrame(
+                converted.Generation,
+                converted.FrameIndex,
+                converted.PresentationTime,
+                converted.IsKeyFrame,
+                converted.Width,
+                converted.Height,
+                converted.Plane0,
+                converted.Plane0Stride,
+                converted.Plane1,
+                converted.Plane1Stride,
+                converted.Plane2,
+                converted.Plane2Stride,
+                converted.MappedPixelFormat,
+                converted.NativeTimeBaseNumerator,
+                converted.NativeTimeBaseDenominator,
+                converted.NativeFrameRateNumerator,
+                converted.NativeFrameRateDenominator,
+                converted.NativePixelFormat);
+            return true;
+        }
+    }
+
+    /// <summary>I.2: Holds a demuxed packet and its stream type for the inter-thread packet queue.</summary>
+    private readonly record struct DemuxedPacket(FFPacket Packet, bool IsAudio);
+
     private bool TryCreateQueuedAudioChunk(out QueuedAudioChunk chunk)
     {
         lock (_pipelineGate)
@@ -527,7 +805,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 var decodeCode = _audioDecoder.Decode(packet, out var decoded);
                 if (decodeCode != MediaResult.Success)
                 {
-                    return false;
+                    // Individual packet decode failure — skip and try next packet.
+                    continue;
                 }
 
                 if (decoded.FrameCount <= 0)
@@ -538,7 +817,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 var resampleCode = _resampler.Resample(decoded, out var resampled);
                 if (resampleCode != MediaResult.Success)
                 {
-                    return false;
+                    // Resample failure for this chunk — skip and try next packet.
+                    continue;
                 }
 
                 if (resampled.FrameCount <= 0)
@@ -546,7 +826,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
                     continue;
                 }
 
-                chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue, resampled.Samples);
+                chunk = new QueuedAudioChunk(resampled.Generation, resampled.FrameCount, resampled.SampleValue, resampled.Samples, resampled.PresentationTime);
                 return true;
             }
 
@@ -564,6 +844,8 @@ internal sealed class FFSharedDemuxSession : IDisposable
             // producing the first frame. Loop feeding packets until a frame is produced
             // or an unrecoverable error occurs.
             const int maxPacketsBeforeFrame = 256;
+            const int maxConsecutiveDecodeErrors = 3;
+            var consecutiveErrors = 0;
             for (var attempt = 0; attempt < maxPacketsBeforeFrame; attempt++)
             {
                 var packetCode = _packetReader.ReadVideoPacket(out var packet);
@@ -576,18 +858,31 @@ internal sealed class FFSharedDemuxSession : IDisposable
                 if (decodeCode == (int)MediaErrorCode.FFmpegVideoDecodeNeedMoreData)
                 {
                     // Decoder buffered the packet but needs more before it can output a frame.
+                    consecutiveErrors = 0;
                     continue;
                 }
 
                 if (decodeCode != MediaResult.Success)
                 {
-                    return false;
+                    // Individual packet decode failure (e.g. corrupt H.264 reference frames).
+                    // Flush immediately after each failure to clear corrupt reference state
+                    // and prevent native heap corruption from accumulating.
+                    _videoDecoder.FlushCodecBuffers();
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= maxConsecutiveDecodeErrors)
+                    {
+                        return false;
+                    }
+                    continue;
                 }
+
+                consecutiveErrors = 0;
 
                 var convertCode = _pixelConverter.Convert(decoded, out var converted);
                 if (convertCode != MediaResult.Success)
                 {
-                    return false;
+                    // Pixel conversion failure for this frame — skip and try next packet.
+                    continue;
                 }
 
                 frame = new QueuedVideoFrame(
@@ -616,7 +911,7 @@ internal sealed class FFSharedDemuxSession : IDisposable
         }
     }
 
-    private readonly record struct QueuedAudioChunk(long Generation, int FrameCount, float SampleValue, ReadOnlyMemory<float> Samples);
+    private readonly record struct QueuedAudioChunk(long Generation, int FrameCount, float SampleValue, ReadOnlyMemory<float> Samples, TimeSpan PresentationTime);
 
     private readonly record struct QueuedVideoFrame(
         long Generation,

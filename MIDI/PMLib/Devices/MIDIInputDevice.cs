@@ -13,6 +13,7 @@ public class MIDIInputDevice : MIDIDevice
 {
     private Thread?   _pollThread;
     private volatile bool _polling;
+    private readonly ManualResetEventSlim _pollWakeSignal = new(false);
 
     // Partial SysEx accumulator
     private List<byte>? _sysExBuffer;
@@ -141,7 +142,10 @@ public class MIDIInputDevice : MIDIDevice
                 Logger.LogWarning("MIDIInputDevice buffer overflow (deviceId={DeviceId}, name={Name})", DeviceId, Name);
             }
 
-            Thread.Sleep(PollIntervalMs);
+            // Use ManualResetEventSlim instead of Thread.Sleep(1) to avoid
+            // 10–15 ms sleep resolution on Windows (P4.6).
+            _pollWakeSignal.Wait(TimeSpan.FromMilliseconds(PollIntervalMs));
+            _pollWakeSignal.Reset();
         }
     }
 

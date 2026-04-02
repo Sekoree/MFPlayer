@@ -17,6 +17,7 @@ public static class MediaErrorAllocations
     public static ErrorCodeAllocationRange Mixing        { get; } = new(3000, 3999, nameof(Mixing));
     public static ErrorCodeAllocationRange OutputRender  { get; } = new(4000, 4999, nameof(OutputRender));
     public static ErrorCodeAllocationRange NDI           { get; } = new(5000, 5199, nameof(NDI));
+    public static ErrorCodeAllocationRange MIDI          { get; } = new(6000, 6099, nameof(MIDI));
 
     // ── Sub-ranges ────────────────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ public static class MediaErrorAllocations
     public static ErrorCodeAllocationRange OpenGLActive          { get; } = new(4400, 4499, nameof(OpenGLActive));
     public static ErrorCodeAllocationRange NDIActiveNearTerm     { get; } = new(5000, 5079, nameof(NDIActiveNearTerm));
     public static ErrorCodeAllocationRange NDIFutureReserve      { get; } = new(5080, 5199, nameof(NDIFutureReserve));
-    public static ErrorCodeAllocationRange MIDIReserve           { get; } = new(900, 949, nameof(MIDIReserve));
+    public static ErrorCodeAllocationRange MIDIActive          { get; } = new(6000, 6099, nameof(MIDIActive));
 
     // ── Aggregate ─────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ public static class MediaErrorAllocations
             Mixing,
             OutputRender,
             NDI,
+            MIDI,
             FFmpegActive,
             FFmpegRuntimeReserve,
             FFmpegMappingReserve,
@@ -51,6 +53,6 @@ public static class MediaErrorAllocations
             OpenGLActive,
             NDIActiveNearTerm,
             NDIFutureReserve,
-            MIDIReserve,
+            MIDIActive,
         ]);
 }

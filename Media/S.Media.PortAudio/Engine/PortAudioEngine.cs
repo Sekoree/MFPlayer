@@ -4,6 +4,7 @@ using PALib.Types.Core;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Errors;
+using S.Media.Core.Runtime;
 using S.Media.PortAudio.Input;
 using S.Media.PortAudio.Output;
 
@@ -26,6 +27,7 @@ public sealed class PortAudioEngine : IAudioEngine
     private AudioDeviceInfo? _defaultInputDevice;
     private bool _nativeInitialized;
     private bool _disposed;
+    private int _deviceMonitoringPauseDepth;
 
     public PortAudioEngine()
     {
@@ -108,6 +110,10 @@ public sealed class PortAudioEngine : IAudioEngine
             }
 
             Config = config;
+
+            // A.3: Propagate unified logging to the native PALib layer.
+            PALibLogging.Configure(MediaLogging.Factory);
+
             var (discoveryOk, nativeFailed) = TryInitializeNativeRuntimeAndRefreshDevices();
             if (!discoveryOk)
             {
@@ -454,6 +460,36 @@ public sealed class PortAudioEngine : IAudioEngine
             return RefreshNativeDevices()
                 ? MediaResult.Success
                 : (int)MediaErrorCode.PortAudioInvalidConfig;
+        }
+    }
+
+    // ── Device monitoring (P3.13) ─────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public bool IsDeviceMonitoringPaused
+    {
+        get
+        {
+            lock (_gate) { return _deviceMonitoringPauseDepth > 0; }
+        }
+    }
+
+    /// <inheritdoc/>
+    public void PauseDeviceMonitoring()
+    {
+        lock (_gate)
+        {
+            _deviceMonitoringPauseDepth++;
+        }
+    }
+
+    /// <inheritdoc/>
+    public void ResumeDeviceMonitoring()
+    {
+        lock (_gate)
+        {
+            if (_deviceMonitoringPauseDepth > 0)
+                _deviceMonitoringPauseDepth--;
         }
     }
 

@@ -162,4 +162,44 @@ public sealed class FFmpegAudioSourceTests
 
         Assert.Equal(MediaErrorCode.FFmpegInvalidConfig, ex.ErrorCode);
     }
+
+    [Fact]
+    public void DisposedSource_Start_ReturnsMediaObjectDisposed()
+    {
+        var source = new FFmpegAudioSource();
+        source.Dispose();
+
+        Assert.Equal((int)MediaErrorCode.MediaObjectDisposed, source.Start());
+    }
+
+    [Fact]
+    public void DisposedSource_Stop_ReturnsMediaObjectDisposed()
+    {
+        var source = new FFmpegAudioSource();
+        source.Dispose();
+
+        Assert.Equal((int)MediaErrorCode.MediaObjectDisposed, source.Stop());
+    }
+
+    [Fact]
+    public void DisposedSource_ReadSamples_ReturnsMediaObjectDisposed()
+    {
+        var source = new FFmpegAudioSource();
+        source.Dispose();
+
+        var buffer = new float[64 * 2];
+        var code = source.ReadSamples(buffer, 64, out var framesRead);
+
+        Assert.Equal((int)MediaErrorCode.MediaObjectDisposed, code);
+        Assert.Equal(0, framesRead);
+    }
+
+    [Fact]
+    public void DisposedSource_Seek_ReturnsMediaObjectDisposed()
+    {
+        var source = new FFmpegAudioSource();
+        source.Dispose();
+
+        Assert.Equal((int)MediaErrorCode.MediaObjectDisposed, source.Seek(1.0));
+    }
 }

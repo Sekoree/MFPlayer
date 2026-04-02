@@ -10,9 +10,9 @@ internal static class MIDIPortMidiErrorMapper
         return error switch
         {
             PmError.NoError => MediaResult.Success,
-            PmError.InvalidDeviceId => (int)MediaErrorCode.MIDIDeviceNotFound,
-            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected,
-            _ => (int)MediaErrorCode.MIDIInputOpenFailed,
+            PmError.InvalidDeviceId => (int)MediaErrorCode.MIDIDeviceNotFound_V2,
+            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected_V2,
+            _ => (int)MediaErrorCode.MIDIInputOpenFailed_V2,
         };
     }
 
@@ -21,20 +21,20 @@ internal static class MIDIPortMidiErrorMapper
         return error switch
         {
             PmError.NoError => MediaResult.Success,
-            PmError.InvalidDeviceId => (int)MediaErrorCode.MIDIDeviceNotFound,
-            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected,
-            _ => (int)MediaErrorCode.MIDIOutputOpenFailed,
+            PmError.InvalidDeviceId => (int)MediaErrorCode.MIDIDeviceNotFound_V2,
+            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected_V2,
+            _ => (int)MediaErrorCode.MIDIOutputOpenFailed_V2,
         };
     }
 
     public static int MapCloseInput(PmError error)
     {
-        return error == PmError.NoError || error == PmError.BadPtr ? MediaResult.Success : (int)MediaErrorCode.MIDIInputCloseFailed;
+        return error == PmError.NoError || error == PmError.BadPtr ? MediaResult.Success : (int)MediaErrorCode.MIDIInputCloseFailed_V2;
     }
 
     public static int MapCloseOutput(PmError error)
     {
-        return error == PmError.NoError || error == PmError.BadPtr ? MediaResult.Success : (int)MediaErrorCode.MIDIOutputCloseFailed;
+        return error == PmError.NoError || error == PmError.BadPtr ? MediaResult.Success : (int)MediaErrorCode.MIDIOutputCloseFailed_V2;
     }
 
     public static int MapSend(PmError error)
@@ -42,9 +42,9 @@ internal static class MIDIPortMidiErrorMapper
         return error switch
         {
             PmError.NoError => MediaResult.Success,
-            PmError.BadData => (int)MediaErrorCode.MIDIInvalidMessage,
-            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected,
-            _ => (int)MediaErrorCode.MIDIOutputSendFailed,
+            PmError.BadData => (int)MediaErrorCode.MIDIInvalidMessage_V2,
+            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected_V2,
+            _ => (int)MediaErrorCode.MIDIOutputSendFailed_V2,
         };
     }
 
@@ -52,9 +52,9 @@ internal static class MIDIPortMidiErrorMapper
     {
         return error switch
         {
-            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected,
-            PmError.BufferOverflow => (int)MediaErrorCode.MIDIDeviceDisconnected,
-            _ => (int)MediaErrorCode.MIDIInputNotOpen,
+            PmError.DeviceRemoved => (int)MediaErrorCode.MIDIDeviceDisconnected_V2,
+            PmError.BufferOverflow => (int)MediaErrorCode.MIDIDeviceDisconnected_V2,
+            _ => (int)MediaErrorCode.MIDIInputNotOpen_V2,
         };
     }
 }

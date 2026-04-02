@@ -370,4 +370,25 @@ public sealed class NDIAudioSource : IAudioSource
 
         _ringSampleCount += needed;
     }
+
+    // ── Internal test hooks (P4.30) ─────────────────────────────────────────────
+    // These replace the reflection-based access in NDISourceAndMediaItemTests.
+
+    /// <summary>
+    /// Primes the audio ring buffer with pre-built interleaved samples.
+    /// For test use only — the ring must be empty or the caller accepts overwrite.
+    /// </summary>
+    internal void TestPrimeAudioRing(float[] interleavedSamples)
+    {
+        lock (_gate)
+        {
+            EnsureRingCapacityLocked(interleavedSamples.Length);
+            _ringReadIndex = 0;
+            _ringWriteIndex = 0;
+            _ringSampleCount = 0;
+            interleavedSamples.CopyTo(_audioRing, 0);
+            _ringWriteIndex = interleavedSamples.Length;
+            _ringSampleCount = interleavedSamples.Length;
+        }
+    }
 }

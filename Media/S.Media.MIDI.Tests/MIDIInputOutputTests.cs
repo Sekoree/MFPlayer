@@ -31,7 +31,7 @@ public sealed class MIDIInputOutputTests
         using var output = new MIDIOutput(device);
         var message = MIDIMessage.Create(0x90, 60, 100);
 
-        Assert.Equal((int)MediaErrorCode.MIDIOutputNotOpen, output.Send(message));
+        Assert.Equal((int)MediaErrorCode.MIDIOutputNotOpen_V2, output.Send(message));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public sealed class MIDIInputOutputTests
         output.Dispose();
 
         Assert.False(output.IsOpen);
-        Assert.Equal((int)MediaErrorCode.MIDIOutputNotOpen, output.Send(message));
+        Assert.Equal((int)MediaErrorCode.MIDIOutputNotOpen_V2, output.Send(message));
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public sealed class MIDIInputOutputTests
         var invalid = MIDIMessage.Create(0x00, 60, 100);
 
         Assert.Equal(MediaResult.Success, output.Open());
-        Assert.Equal((int)MediaErrorCode.MIDIInvalidMessage, output.Send(invalid));
+        Assert.Equal((int)MediaErrorCode.MIDIInvalidMessage_V2, output.Send(invalid));
     }
 
     [Fact]
@@ -116,6 +116,29 @@ public sealed class MIDIInputOutputTests
 
         input.Dispose();
 
+        Assert.False(input.IsOpen);
+    }
+
+    [Fact]
+    public void Input_HandlerException_DoesNotKillInput()
+    {
+        var device = new MIDIDeviceInfo(-1, "Synthetic MIDI Input", IsInput: true, IsOutput: false, IsNative: false);
+        using var input = new MIDIInput(device, new MIDIReconnectOptions());
+
+        // Attach a handler that throws
+        var callCount = 0;
+        input.MessageReceived += (_, _) =>
+        {
+            Interlocked.Increment(ref callCount);
+            throw new InvalidOperationException("Test handler fault");
+        };
+
+        Assert.Equal(MediaResult.Success, input.Open());
+
+        // The input should still be open and closeable even if a handler throws.
+        // (P2.7 ensures handler exceptions are caught by the polling thread.)
+        Assert.True(input.IsOpen);
+        Assert.Equal(MediaResult.Success, input.Close());
         Assert.False(input.IsOpen);
     }
 }

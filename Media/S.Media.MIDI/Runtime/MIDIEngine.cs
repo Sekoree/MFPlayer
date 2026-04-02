@@ -1,4 +1,5 @@
 using PMLib;
+using PMLib.Runtime;
 using PMLib.Types;
 using S.Media.Core.Errors;
 using S.Media.Core.Runtime;
@@ -40,7 +41,7 @@ public sealed class MIDIEngine : IMediaEngine
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MIDIInitializeFailed;
+                return (int)MediaErrorCode.MIDIInitializeFailed_V2;
             }
 
             if (IsInitialized)
@@ -50,6 +51,10 @@ public sealed class MIDIEngine : IMediaEngine
 
             var nativeAvailable = TryInitializeNativeRuntime();
             NativeBackendAvailable = nativeAvailable;
+
+            // A.3: Propagate unified logging to the native PMLib layer.
+            PMLibLogging.Configure(MediaLogging.Factory);
+
             _defaultReconnectOptions = (reconnectOptions ?? new MIDIReconnectOptions()).Normalize();
             RefreshCatalog(nativeAvailable);
             IsInitialized = true;
@@ -131,18 +136,18 @@ public sealed class MIDIEngine : IMediaEngine
         {
             if (_disposed || !IsInitialized)
             {
-                return (int)MediaErrorCode.MIDINotInitialized;
+                return (int)MediaErrorCode.MIDINotInitialized_V2;
             }
 
             if (!device.IsInput)
             {
-                return (int)MediaErrorCode.MIDIInvalidConfig;
+                return (int)MediaErrorCode.MIDIInvalidConfig_V2;
             }
 
             var resolvedDevice = ResolveCatalogDevice(device.DeviceId, _inputCatalog);
             if (!resolvedDevice.HasValue)
             {
-                return (int)MediaErrorCode.MIDIDeviceNotFound;
+                return (int)MediaErrorCode.MIDIDeviceNotFound_V2;
             }
 
             input = new MIDIInput(resolvedDevice.Value, _defaultReconnectOptions);
@@ -159,18 +164,18 @@ public sealed class MIDIEngine : IMediaEngine
         {
             if (_disposed || !IsInitialized)
             {
-                return (int)MediaErrorCode.MIDINotInitialized;
+                return (int)MediaErrorCode.MIDINotInitialized_V2;
             }
 
             if (!device.IsOutput)
             {
-                return (int)MediaErrorCode.MIDIInvalidConfig;
+                return (int)MediaErrorCode.MIDIInvalidConfig_V2;
             }
 
             var resolvedDevice = ResolveCatalogDevice(device.DeviceId, _outputCatalog);
             if (!resolvedDevice.HasValue)
             {
-                return (int)MediaErrorCode.MIDIDeviceNotFound;
+                return (int)MediaErrorCode.MIDIDeviceNotFound_V2;
             }
 
             output = new MIDIOutput(resolvedDevice.Value, _defaultReconnectOptions);

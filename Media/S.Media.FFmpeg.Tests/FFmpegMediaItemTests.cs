@@ -459,49 +459,59 @@ public sealed class FFmpegMediaItemTests
     // ── Convenience factory tests ──────────────────────────────────────────────
 
     [Fact]
-    public void Open_Uri_CreatesMediaItem_WithAudioAndVideo()
+    public void Create_Uri_CreatesMediaItem_WithAudioAndVideo()
     {
-        using var item = FFmpegMediaItem.Open("file:///tmp/fake.mp4");
+        var code = FFmpegMediaItem.Create("file:///tmp/fake.mp4", out var item);
 
-        Assert.NotNull(item.AudioSource);
-        Assert.NotNull(item.VideoSource);
-        Assert.NotNull(item.ResolvedOpenOptions);
-        Assert.Equal("file:///tmp/fake.mp4", item.ResolvedOpenOptions!.InputUri);
-        Assert.True(item.ResolvedOpenOptions.OpenAudio);
-        Assert.True(item.ResolvedOpenOptions.OpenVideo);
-        Assert.True(item.ResolvedOpenOptions.UseSharedDecodeContext);
+        Assert.Equal(MediaResult.Success, code);
+        Assert.NotNull(item);
+        using (item)
+        {
+            Assert.NotNull(item!.AudioSource);
+            Assert.NotNull(item.VideoSource);
+            Assert.NotNull(item.ResolvedOpenOptions);
+            Assert.Equal("file:///tmp/fake.mp4", item.ResolvedOpenOptions!.InputUri);
+            Assert.True(item.ResolvedOpenOptions.OpenAudio);
+            Assert.True(item.ResolvedOpenOptions.OpenVideo);
+            Assert.True(item.ResolvedOpenOptions.UseSharedDecodeContext);
+        }
     }
 
     [Fact]
-    public void Open_Uri_ThrowsForNullOrWhitespace()
+    public void Create_Uri_ThrowsForNullOrWhitespace()
     {
-        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Open((string)null!));
-        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Open(""));
-        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Open("   "));
+        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Create((string)null!, out _));
+        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Create("", out _));
+        Assert.ThrowsAny<ArgumentException>(() => FFmpegMediaItem.Create("   ", out _));
     }
 
     [Fact]
-    public void Open_Stream_CreatesMediaItem()
+    public void Create_Stream_CreatesMediaItem()
     {
         using var stream = new MemoryStream([1, 2, 3]);
-        using var item = FFmpegMediaItem.Open(stream);
+        var code = FFmpegMediaItem.Create(stream, out var item);
 
-        Assert.NotNull(item.ResolvedOpenOptions);
-        Assert.Same(stream, item.ResolvedOpenOptions!.InputStream);
+        Assert.Equal(MediaResult.Success, code);
+        Assert.NotNull(item);
+        using (item)
+        {
+            Assert.NotNull(item!.ResolvedOpenOptions);
+            Assert.Same(stream, item.ResolvedOpenOptions!.InputStream);
+        }
     }
 
     [Fact]
-    public void Open_Stream_ThrowsForNull()
+    public void Create_Stream_ThrowsForNull()
     {
-        Assert.Throws<ArgumentNullException>(() => FFmpegMediaItem.Open((Stream)null!));
+        Assert.Throws<ArgumentNullException>(() => FFmpegMediaItem.Create((Stream)null!, out _));
     }
 
     [Fact]
-    public void TryOpen_Uri_ReturnsTrueForValidUri()
+    public void Create_Uri_ReturnsSuccessForValidUri()
     {
-        var result = FFmpegMediaItem.TryOpen("file:///tmp/fake.mp4", out var item);
+        var code = FFmpegMediaItem.Create("file:///tmp/fake.mp4", out var item);
 
-        Assert.True(result);
+        Assert.Equal(MediaResult.Success, code);
         Assert.NotNull(item);
         Assert.NotNull(item!.AudioSource);
         Assert.NotNull(item.VideoSource);
@@ -509,35 +519,16 @@ public sealed class FFmpegMediaItemTests
     }
 
     [Fact]
-    public void TryOpen_Uri_ReturnsFalseForNullOrWhitespace()
-    {
-        Assert.False(FFmpegMediaItem.TryOpen((string)null!, out var item1));
-        Assert.Null(item1);
-
-        Assert.False(FFmpegMediaItem.TryOpen("", out var item2));
-        Assert.Null(item2);
-
-        Assert.False(FFmpegMediaItem.TryOpen("   ", out var item3));
-        Assert.Null(item3);
-    }
-
-    [Fact]
-    public void TryOpen_Stream_ReturnsTrueForValidStream()
+    public void Create_Stream_ReturnsSuccessForValidStream()
     {
         using var stream = new MemoryStream([1, 2, 3]);
-        var result = FFmpegMediaItem.TryOpen(stream, out var item);
+        var code = FFmpegMediaItem.Create(stream, out var item);
 
-        Assert.True(result);
+        Assert.Equal(MediaResult.Success, code);
         Assert.NotNull(item);
         item!.Dispose();
     }
 
-    [Fact]
-    public void TryOpen_Stream_ReturnsFalseForNull()
-    {
-        Assert.False(FFmpegMediaItem.TryOpen((Stream?)null, out var item));
-        Assert.Null(item);
-    }
 
     private sealed class TrackingMemoryStream : MemoryStream
     {

@@ -43,7 +43,7 @@ public sealed class MIDIEngineTests
 
         var code = engine.CreateInput(missing, out var input);
 
-        Assert.Equal((int)MediaErrorCode.MIDIDeviceNotFound, code);
+        Assert.Equal((int)MediaErrorCode.MIDIDeviceNotFound_V2, code);
         Assert.Null(input);
     }
 
@@ -58,7 +58,7 @@ public sealed class MIDIEngineTests
 
         var code = engine.CreateOutput(inputOnly.Value, out var output);
 
-        Assert.Equal((int)MediaErrorCode.MIDIInvalidConfig, code);
+        Assert.Equal((int)MediaErrorCode.MIDIInvalidConfig_V2, code);
         Assert.Null(output);
     }
 

@@ -249,61 +249,6 @@ public sealed class FFmpegMediaItem : IMediaItem, IMediaPlaybackSourceBinding, I
             out item);
     }
 
-    /// <summary>
-    /// Opens a media item from a URI, returning both audio and video sources via shared decode context.
-    /// </summary>
-    /// <remarks>
-    /// <b>Prefer <see cref="Create(string,out FFmpegMediaItem?)"/></b> — it returns an integer error
-    /// code instead of throwing. This overload is kept for compatibility.
-    /// </remarks>
-    [Obsolete("Use FFmpegMediaItem.Create(uri, out item) which returns an int error code instead of throwing.")]
-    public static FFmpegMediaItem Open(string uri)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(uri);
-        return new FFmpegMediaItem(new FFmpegOpenOptions { InputUri = uri });
-    }
-
-    /// <summary>
-    /// Opens a media item from a <see cref="Stream"/>.
-    /// </summary>
-    /// <remarks>
-    /// <b>Prefer <see cref="Create(FFmpegOpenOptions,out FFmpegMediaItem?)"/></b> — it returns an
-    /// integer error code instead of throwing. This overload is kept for compatibility.
-    /// </remarks>
-    [Obsolete("Use FFmpegMediaItem.Create(options, out item) which returns an int error code instead of throwing.")]
-    public static FFmpegMediaItem Open(Stream stream, bool leaveOpen = true)
-    {
-        ArgumentNullException.ThrowIfNull(stream);
-        return new FFmpegMediaItem(stream, leaveOpen);
-    }
-
-    /// <summary>
-    /// Attempts to open a media item from a URI without throwing.
-    /// Returns <c>true</c> on success; <paramref name="item"/> is <c>null</c> on failure.
-    /// </summary>
-    /// <remarks>Prefer <see cref="Create(string,out FFmpegMediaItem?)"/> for consistent error-code semantics.</remarks>
-    [Obsolete("Use FFmpegMediaItem.Create(uri, out item) which returns an int error code.")]
-    public static bool TryOpen(string uri, out FFmpegMediaItem? item)
-    {
-        item = null;
-        if (string.IsNullOrWhiteSpace(uri))
-            return false;
-        return Create(uri, out item) == MediaResult.Success;
-    }
-
-    /// <summary>
-    /// Attempts to open a media item from a <see cref="Stream"/> without throwing.
-    /// Returns <c>true</c> on success; <paramref name="item"/> is <c>null</c> on failure.
-    /// </summary>
-    /// <remarks>Prefer <see cref="Create(FFmpegOpenOptions,out FFmpegMediaItem?)"/> for consistent error-code semantics.</remarks>
-    [Obsolete("Use FFmpegMediaItem.Create(options, out item) which returns an int error code.")]
-    public static bool TryOpen(Stream? stream, out FFmpegMediaItem? item, bool leaveOpen = true)
-    {
-        item = null;
-        if (stream is null)
-            return false;
-        return Create(new FFmpegOpenOptions { InputStream = stream, LeaveInputStreamOpen = leaveOpen }, out item) == MediaResult.Success;
-    }
 
     /// <summary>
     /// Seeks all playback sources to <paramref name="positionSeconds"/> via the shared demux

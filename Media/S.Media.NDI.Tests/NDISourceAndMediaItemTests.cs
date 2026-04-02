@@ -1,9 +1,10 @@
-using NDILib;
 using System.Buffers;
+using NDILib;
 using S.Media.Core.Errors;
 using S.Media.Core.Media;
+using S.Media.Core.Video;
+using S.Media.NDI.Input;
 using S.Media.NDI.Media;
-using System.Reflection;
 using Xunit;
 
 namespace S.Media.NDI.Tests;
@@ -225,71 +226,33 @@ public sealed class NDISourceAndMediaItemTests
         dropOldestSource!.Dispose();
     }
 
-    private static void PrimeAudioRing(object audioSource, float[] interleavedSamples)
+    private static void PrimeAudioRing(NDIAudioSource audioSource, float[] interleavedSamples)
     {
-        var type = audioSource.GetType();
-        var ringField = type.GetField("_audioRing", BindingFlags.Instance | BindingFlags.NonPublic);
-        var writeField = type.GetField("_ringWriteIndex", BindingFlags.Instance | BindingFlags.NonPublic);
-        var countField = type.GetField("_ringSampleCount", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(ringField);
-        Assert.NotNull(writeField);
-        Assert.NotNull(countField);
-
-        var ring = (float[])ringField!.GetValue(audioSource)!;
-        Assert.True(interleavedSamples.Length <= ring.Length);
-        interleavedSamples.CopyTo(ring, 0);
-        writeField!.SetValue(audioSource, interleavedSamples.Length);
-        countField!.SetValue(audioSource, interleavedSamples.Length);
+        audioSource.TestPrimeAudioRing(interleavedSamples);
     }
 
-    private static void EnqueueTestVideoFrame(object videoSource, byte marker)
+    private static void EnqueueTestVideoFrame(NDIVideoSource videoSource, byte marker)
     {
-        var enqueueMethod = videoSource.GetType().GetMethod("EnqueueCapturedFrame", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(enqueueMethod);
-
         var buffer = ArrayPool<byte>.Shared.Rent(4);
         buffer[0] = marker;
         buffer[1] = (byte)(marker + 1);
         buffer[2] = (byte)(marker + 2);
         buffer[3] = (byte)(marker + 3);
-        // DateTime capturedUtc removed from EnqueueCapturedFrame in Issue 5.7 fix.
-        _ = enqueueMethod!.Invoke(videoSource, [buffer, 4, 1, 1, 0L, "test", S.Media.Core.Video.VideoPixelFormat.Rgba32, "test"]);
+        videoSource.TestEnqueueCapturedFrame(buffer, 4, 1, 1, 0L, "test", VideoPixelFormat.Rgba32, "test");
     }
 
-    private static bool TryDequeueBufferedFrame(object videoSource, out object? frame)
+    private static bool TryDequeueBufferedFrame(NDIVideoSource videoSource, out byte[]? rgba)
     {
-        var dequeueMethod = videoSource.GetType().GetMethod("TryDequeueBufferedFrame", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(dequeueMethod);
-
-        var args = new object?[] { null };
-        var result = (bool)dequeueMethod!.Invoke(videoSource, args)!;
-        frame = args[0];
-        return result;
+        return videoSource.TestTryDequeueBufferedFrame(out rgba);
     }
 
-    private static int GetJitterQueueCount(object videoSource)
+    private static int GetJitterQueueCount(NDIVideoSource videoSource)
     {
-        var queueField = videoSource.GetType().GetField("_videoJitterQueue", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(queueField);
-        var queue = queueField!.GetValue(videoSource)!;
-        var countProperty = queue.GetType().GetProperty("Count");
-        Assert.NotNull(countProperty);
-        return (int)countProperty!.GetValue(queue)!;
+        return videoSource.TestGetJitterQueueCount();
     }
 
-    private static byte PeekBufferedFrameMarker(object videoSource)
+    private static byte PeekBufferedFrameMarker(NDIVideoSource videoSource)
     {
-        var queueField = videoSource.GetType().GetField("_videoJitterQueue", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(queueField);
-        var queue = queueField!.GetValue(videoSource)!;
-        var peekMethod = queue.GetType().GetMethod("Peek");
-        Assert.NotNull(peekMethod);
-        var front = peekMethod!.Invoke(queue, null)!;
-
-        var rgbaProperty = front.GetType().GetProperty("Rgba");
-        Assert.NotNull(rgbaProperty);
-        var rgba = (byte[])rgbaProperty!.GetValue(front)!;
-        return rgba[0];
+        return videoSource.TestPeekBufferedFrameMarker();
     }
 }

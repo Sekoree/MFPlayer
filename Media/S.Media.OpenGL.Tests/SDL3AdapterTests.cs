@@ -130,6 +130,29 @@ public sealed class SDL3AdapterTests
         Assert.Equal("RENDER:60.0 VIDEO:59.9 NV12/RGBA\nQ:2 UP:0.25 AV:0.6 GPU:1 DROP:3", text);
     }
 
+    [Fact]
+    public void PushFrame_BackpressureWait_TimesOut_WhenQueueFull()
+    {
+        using var view = new SDL3VideoView();
+        Assert.Equal(MediaResult.Success, view.Initialize(new SDL3VideoViewOptions()));
+        Assert.Equal(MediaResult.Success, view.Start(new VideoOutputConfig
+        {
+            BackpressureMode = VideoOutputBackpressureMode.Wait,
+            BackpressureTimeout = TimeSpan.FromMilliseconds(10),
+            QueueCapacity = 1,
+        }));
+
+        // Fill the queue without a render thread draining it
+        using var frame1 = CreateFrame();
+        var push1 = view.PushFrame(frame1, TimeSpan.Zero);
+        Assert.Equal(MediaResult.Success, push1);
+
+        // Second push should timeout since queue is full and no render thread is running
+        using var frame2 = CreateFrame();
+        var push2 = view.PushFrame(frame2, TimeSpan.Zero);
+        Assert.Equal((int)MediaErrorCode.VideoOutputBackpressureTimeout, push2);
+    }
+
     private static VideoFrame CreateFrame()
     {
         var rgba = new byte[16];

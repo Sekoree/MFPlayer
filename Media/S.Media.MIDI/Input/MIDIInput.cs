@@ -40,7 +40,7 @@ public sealed class MIDIInput : IMIDIDevice
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MIDIInputOpenFailed;
+                return (int)MediaErrorCode.MIDIInputOpenFailed_V2;
             }
 
             if (IsOpen)
@@ -173,7 +173,7 @@ public sealed class MIDIInput : IMIDIDevice
 
             if (count == (int)PmError.BufferOverflow)
             {
-                HandleDisconnected((int)MediaErrorCode.MIDIDeviceDisconnected);
+                HandleDisconnected((int)MediaErrorCode.MIDIDeviceDisconnected_V2);
                 return;
             }
 
@@ -245,7 +245,7 @@ public sealed class MIDIInput : IMIDIDevice
             {
                 if (_disposed)
                 {
-                    reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+                    reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
                     return false;
                 }
             }
@@ -263,7 +263,7 @@ public sealed class MIDIInput : IMIDIDevice
                     if (_disposed)
                     {
                         _ = MIDIPortMidiErrorMapper.MapCloseInput(PMUtil.Close(stream));
-                        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+                        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
                         return false;
                     }
 
@@ -283,14 +283,14 @@ public sealed class MIDIInput : IMIDIDevice
 
             if (attempt == ReconnectOptions.MaxReconnectAttempts || DateTime.UtcNow >= deadlineUtc)
             {
-                reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+                reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
                 return false;
             }
 
             Thread.Sleep(ReconnectOptions.ReconnectAttemptDelay);
         }
 
-        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
         return false;
     }
 

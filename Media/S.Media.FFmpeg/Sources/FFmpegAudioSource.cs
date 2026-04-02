@@ -77,11 +77,11 @@ public sealed class FFmpegAudioSource : IAudioSource
     /// <summary>
     /// Approximate playback position in seconds.
     /// <para>
-    /// <b>Accuracy note:</b> This value is accumulated by counting decoded frames
-    /// (<c>framesRead / sampleRate</c>) rather than reading the FFmpeg packet PTS.
-    /// This means it can drift from the true media timeline when gaps or skips occur
-    /// in the source stream. After a seek, the position is reset to the seek target.
-    /// For frame-accurate positioning, use the video source's PTS-based tracking.
+    /// <b>Accuracy note (P3.16):</b> When a valid presentation timestamp (PTS) is available
+    /// from the FFmpeg packet, this value is set directly from the PTS, providing frame-accurate
+    /// positioning. When no PTS is available (e.g. raw PCM streams), it falls back to
+    /// frame-count accumulation (<c>framesRead / sampleRate</c>).
+    /// After a seek, the position is reset to the seek target.
     /// </para>
     /// </summary>
     public double PositionSeconds
@@ -146,12 +146,21 @@ public sealed class FFmpegAudioSource : IAudioSource
             if (_sharedDemuxSession is not null)
             {
                 var channelCount = StreamInfo.ChannelCount.GetValueOrDefault(2);
-                var readCode = _sharedDemuxSession.ReadAudioSamples(destination, requestedFrameCount, channelCount, out framesRead);
+                var readCode = _sharedDemuxSession.ReadAudioSamples(destination, requestedFrameCount, channelCount, out framesRead, out var chunkPts);
                 if (readCode == MediaResult.Success && framesRead > 0)
                 {
                     lock (_gate)
                     {
-                        _positionSeconds += (double)framesRead / Math.Max(1, StreamInfo.SampleRate.GetValueOrDefault(48_000));
+                        // P3.16: Use PTS-based tracking when a valid PTS is available;
+                        // fall back to frame-count accumulation otherwise.
+                        if (chunkPts > TimeSpan.Zero)
+                        {
+                            _positionSeconds = chunkPts.TotalSeconds;
+                        }
+                        else
+                        {
+                            _positionSeconds += (double)framesRead / Math.Max(1, StreamInfo.SampleRate.GetValueOrDefault(48_000));
+                        }
                     }
                 }
                 else if (framesRead == 0 && readCode == MediaResult.Success)

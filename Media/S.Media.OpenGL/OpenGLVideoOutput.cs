@@ -161,7 +161,7 @@ public sealed class OpenGLVideoOutput : IVideoOutput
 
         if (delay > TimeSpan.Zero)
         {
-            Thread.Sleep(delay);
+            PrecisionWait(delay);
         }
 
         lock (_gate)
@@ -459,5 +459,38 @@ public sealed class OpenGLVideoOutput : IVideoOutput
             PlaneCount: count,
             PlaneStrides: count == strides.Length ? strides : strides[..count],
             LastPresentedFrameGeneration: generation);
+    }
+
+    /// <summary>
+    /// Hybrid precision wait that avoids the ~15 ms <c>Thread.Sleep</c> floor on Windows.
+    /// For delays above the spin threshold, yields the time slice with <c>Thread.Sleep(1)</c>;
+    /// the remaining sub-threshold portion uses a <see cref="SpinWait"/> loop with
+    /// <see cref="Stopwatch.GetTimestamp()"/> for microsecond-level accuracy.
+    /// </summary>
+    private static void PrecisionWait(TimeSpan delay)
+    {
+        // Spin threshold: on Windows Thread.Sleep(1) can overshoot by 10–15 ms,
+        // so we switch to spinning when < 2 ms remains.  On Linux/macOS the
+        // sleep resolution is already ~1 ms but spinning the last stretch still
+        // improves jitter.
+        const double spinThresholdSeconds = 0.002; // 2 ms
+
+        var targetTicks = Stopwatch.GetTimestamp() + (long)(delay.TotalSeconds * Stopwatch.Frequency);
+
+        // Coarse phase: yield CPU while we have time to spare.
+        while (true)
+        {
+            var remainingSeconds = (targetTicks - Stopwatch.GetTimestamp()) / (double)Stopwatch.Frequency;
+            if (remainingSeconds <= spinThresholdSeconds)
+                break;
+            Thread.Sleep(1);
+        }
+
+        // Fine phase: spin until the target time.
+        var sw = new SpinWait();
+        while (Stopwatch.GetTimestamp() < targetTicks)
+        {
+            sw.SpinOnce(sleep1Threshold: -1); // never degrade to Thread.Sleep inside SpinWait
+        }
     }
 }

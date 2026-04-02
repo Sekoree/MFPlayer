@@ -30,21 +30,27 @@ internal static class DiagnosticHelper
             var openOpts = new FFmpegOpenOptions { InputUri = uri };
             Console.WriteLine($"OpenOptions: OpenAudio={openOpts.OpenAudio}, OpenVideo={openOpts.OpenVideo}, UseShared={openOpts.UseSharedDecodeContext}");
 
-            using var media = FFmpegMediaItem.Open(uri);
-            Console.WriteLine($"[OK] FFmpegMediaItem.Open succeeded");
-            Console.WriteLine($"  AudioSource: {(media.AudioSource is not null ? "present" : "null")}");
-            Console.WriteLine($"  VideoSource: {(media.VideoSource is not null ? "present" : "null")}");
-
-            if (media.AudioSource is not null)
+            var openCode = FFmpegMediaItem.Create(uri, out var media);
+            if (openCode != MediaResult.Success)
             {
-                var info = media.AudioSource.StreamInfo;
+                Console.Error.WriteLine($"[FAIL] FFmpegMediaItem.Create returned {openCode}");
+                return;
+            }
+            using var _media = media!;
+            Console.WriteLine($"[OK] FFmpegMediaItem.Create succeeded");
+            Console.WriteLine($"  AudioSource: {(_media.AudioSource is not null ? "present" : "null")}");
+            Console.WriteLine($"  VideoSource: {(_media.VideoSource is not null ? "present" : "null")}");
+
+            if (_media.AudioSource is not null)
+            {
+                var info = _media.AudioSource.StreamInfo;
                 Console.WriteLine($"  Audio: channels={info.ChannelCount}, rate={info.SampleRate}, codec={info.Codec}, duration={info.Duration}");
 
-                var startResult = media.AudioSource.Start();
+                var startResult = _media.AudioSource.Start();
                 Console.WriteLine($"  Start: {startResult}");
 
                 var buf = new float[4096];
-                var readResult = media.AudioSource.ReadSamples(buf, 1024, out var framesRead);
+                var readResult = _media.AudioSource.ReadSamples(buf, 1024, out var framesRead);
                 Console.WriteLine($"  ReadSamples: result={readResult}, framesRead={framesRead}");
 
                 if (readResult == MediaResult.Success && framesRead > 0)

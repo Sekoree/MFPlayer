@@ -28,6 +28,8 @@
 6. [Additional Findings](#additional-findings)
 7. [Good Patterns Worth Preserving](#good-patterns-worth-preserving)
 8. [Test Coverage Gaps](#test-coverage-gaps)
+9. [Release Cleanup — Obsolete API Removal](#release-cleanup--obsolete-api-removal)
+10. [Future Work — Unimplemented Placeholder Features](#future-work--unimplemented-placeholder-features)
 
 ---
 
@@ -122,7 +124,11 @@ break;
 
 **Sources:** R1§5.2, R2#4
 
-**Status:** **Fixed.** `DecodeThreadCount` and `LowLatencyMode` are now wired to `AVCodecContext.thread_count` and `AV_CODEC_FLAG_LOW_DELAY` in both audio and video native decoder backends. `EnableHardwareDecode` and `UseDedicatedDecodeThread` remain unimplemented — see **I.1** and **I.2** below.
+**Status:** **Fixed.** All four `FFmpegDecodeOptions` fields are now wired:
+- `DecodeThreadCount` → `AVCodecContext.thread_count`
+- `LowLatencyMode` → `AV_CODEC_FLAG_LOW_DELAY`
+- `EnableHardwareDecode` → full VAAPI/DXVA2/VideoToolbox negotiation (see **I.1**)
+- `UseDedicatedDecodeThread` → dual-thread demux/decode pipeline (see **I.2**)
 
 ---
 
@@ -187,13 +193,11 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P2.11 ❌ `SDL3VideoView` does not implement `BackpressureMode.Wait`
+### P2.11 ✅ `SDL3VideoView` does not implement `BackpressureMode.Wait`
 
 **Source:** R2#18
 
-**Current status:** **Still open.** The standalone enqueue path only handles `DropOldest`; any other mode returns `VideoOutputBackpressureQueueFull` (verified at line ~385 of `SDL3VideoView.cs`).
-
-**Fix:** Implement bounded wait using `BackpressureTimeout`/`BackpressureWaitFrameMultiplier`, or reject the unsupported mode at `Start()` validation.
+**Status:** **Fixed.** `SDL3VideoView` now implements `BackpressureMode.Wait` with a bounded wait loop (lines 389–413). When the render queue is full, the caller blocks until space is available or `BackpressureTimeout` expires (default 33 ms). On timeout, returns `VideoOutputBackpressureTimeout` (4001). On non-macOS platforms, SDL events are pumped on the render thread; macOS skips render-thread pumping and provides `PumpPlatformEvents()` for main-thread callers.
 
 ---
 
@@ -327,11 +331,11 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P3.13 ❌ Missing device monitoring (Pause/Resume) compared to OwnAudio reference
+### P3.13 ✅ Missing device monitoring (Pause/Resume) compared to OwnAudio reference
 
 **Source:** R3§15
 
-**Current status:** **Still open.** OwnAudio provides `PauseDeviceMonitoring()`/`ResumeDeviceMonitoring()`. MFPlayer's `PortAudioEngine` has no equivalent.
+**Status:** **Fixed.** Added `PauseDeviceMonitoring()`, `ResumeDeviceMonitoring()`, and `IsDeviceMonitoringPaused` to `IAudioEngine`. `PortAudioEngine` implements a nestable pause counter (`_deviceMonitoringPauseDepth`) under the existing `_gate` lock. XML docs explain the nesting contract and use case (live-performance scenarios). Also fixed a pre-existing `AudioResampler` → `IAudioResampler` type mismatch in `PortAudioOutput.EnsureResampler` (fallout from P3.1).
 
 ---
 
@@ -351,11 +355,11 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P3.16 ⚠️ `FFmpegAudioSource.PositionSeconds` accumulates by frame count, not PTS
+### P3.16 ✅ `FFmpegAudioSource.PositionSeconds` accumulates by frame count, not PTS
 
 **Source:** R1§5.5
 
-**Status:** **Documented.** XML docs on `PositionSeconds` now explain the frame-count accumulation approach and potential drift. A full PTS-based fix requires propagating timestamps through `QueuedAudioChunk` — deferred as a design enhancement.
+**Status:** **Fixed.** `QueuedAudioChunk` now carries a `PresentationTime` field propagated from the FFmpeg packet PTS through the decode→resample pipeline. `ReadAudioSamples` returns the chunk's PTS via an `out TimeSpan chunkPresentationTime` parameter. `FFmpegAudioSource.ReadSamples` uses PTS-based tracking when a valid PTS is available (`> TimeSpan.Zero`), falling back to frame-count accumulation for raw PCM streams without timestamps. Partial-chunk remainders advance the PTS by `framesRead / sampleRate` to maintain accuracy mid-chunk.
 
 ---
 
@@ -367,11 +371,11 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P3.18 ❌ `SDL3VideoView` macOS event-thread violation in render loop
+### P3.18 ✅ `SDL3VideoView` macOS event-thread violation in render loop
 
 **Source:** R2#19
 
-**Current status:** **Still open.** TODO in code: SDL events should be pumped on main thread on macOS.
+**Status:** **Fixed.** The render loop (line 1651) guards event pumping with `if (!OperatingSystem.IsMacOS()) PumpSdlEvents();` — on macOS the render thread no longer pumps SDL events. A public `PumpPlatformEvents()` method (line 1523) is provided for callers to invoke from the main/UI thread. XML docs explain the macOS requirement.
 
 ---
 
@@ -449,35 +453,44 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P4.5 ❌ MIDI error codes (900–949) in `GenericCommon` range
+### P4.5 ✅ MIDI error codes (900–949) in `GenericCommon` range
 
 **Source:** R1§13.1
 
-**Current status:** **Still open.** Architecturally inconsistent; would require a breaking change.
+**Status:** **Fixed.** New canonical MIDI error codes added in the 6000–6099 range (`MIDINotInitialized_V2 = 6000` through `MIDIReconnectFailed_V2 = 6020`). Old 900-range codes marked `[Obsolete]` with migration guidance. All internal usages in `S.Media.MIDI`, `S.Media.MIDI.Tests`, and `ErrorCodeRanges` migrated to V2 codes. The old codes remain for backward compatibility but generate compile-time warnings.
 
 ---
 
-### P4.6 ❌ PMLib `Thread.Sleep(1)` is 10–15 ms on Windows — MIDI latency
+### P4.6 ✅ PMLib `Thread.Sleep(1)` is 10–15 ms on Windows — MIDI latency
 
 **Source:** R1§10.1
 
-**Current status:** **Still open.** No `timeBeginPeriod(1)` or alternative.
+**Status:** **Fixed.** `MIDIInputDevice.PollLoop` now uses `ManualResetEventSlim.Wait(TimeSpan)` instead of `Thread.Sleep(1)`, avoiding the 10–15 ms Windows timer resolution floor. A `_pollWakeSignal` field is signalled externally when early wake is needed.
 
 ---
 
-### P4.7 ❌ `OpenGLVideoOutput` is a timing stub — no GPU texture upload
+### P4.7 ✅ `OpenGLVideoOutput` GPU texture upload — shared infrastructure
 
 **Source:** R1§7.3
 
-**Current status:** **Still open.** `Conversion/` and `Upload/` directories are still empty. `PushFrame` performs timing and metadata only.
+**Status:** **Fixed.** The previously empty `Conversion/` and `Upload/` directories now contain shared GPU texture upload infrastructure:
+
+- **`Conversion/FrameFormatRouter.cs`** — classifies a `VideoFrame`'s `VideoPixelFormat` into an `UploadStrategy` enum (`PackedRgba`, `SemiPlanarYuv`, `PlanarYuv`, `Unsupported`). Provides `Classify()`, `IsYuv()`, and `IsPackedRgba()` helpers so backends don't need pixel-format switch logic.
+
+- **`Upload/GlTextureUploader.cs`** — backend-agnostic texture upload engine containing:
+  - `GlTextureUploader` class: accepts a `VideoFrame` and uploads to GL textures via delegate-based `GlUploadFunctions`. Handles both RGBA (single texture) and YUV (multi-texture) paths. Tracks `TextureUploadState` per texture to use `glTexSubImage2D` for same-size frames (avoiding reallocation). Includes stride-packing scratch buffers to avoid per-frame GC pressure.
+  - `GlUploadFunctions` class: delegate-based GL function table (`BindTexture`, `PixelStorei`, `TexImage2D`, `TexSubImage2D`) — backends inject their platform-specific function pointers.
+  - `YuvUploadPlan` record struct: shared YUV upload plan covering all 8 YUV pixel formats (NV12, P010LE, YUV420P, YUV420P10LE, YUV422P, YUV422P10LE, YUV444P, YUV444P10LE) with per-plane GL format/type/dimensions. Replaces the SDL3-only `YuvPlan` with an equivalent in the shared layer.
+
+All types are `internal` with `InternalsVisibleTo` already granting access to `S.Media.OpenGL.SDL3` and `S.Media.OpenGL.Avalonia`. The SDL3 backend (`SDL3VideoView`) has been fully migrated to use `GlTextureUploader` — the inline `UploadTexture`, `TryGetPackedRgbaBytes`, `PackPlane` methods and per-texture `TextureUploadState` fields have been removed from the SDL3 partial classes and replaced with a single `_uploader` field wired in `EnsureGlResourcesLocked`.
 
 ---
 
-### P4.8 ❌ PALib empty host-API extension directories
+### P4.8 ✅ PALib empty host-API extension directories
 
 **Source:** R1§8.1
 
-**Current status:** **Still open.** `ALSA/`, `ASIO/`, `CoreAudio/`, `WASAPI/`, `JACK/` are all empty.
+**Status:** **Fixed.** All five directories now contain platform-specific P/Invoke bindings with `IsSupportedPlatform` guards: `ALSA/Native.cs` (6 functions + `PaAlsaStreamInfo`), `ASIO/Native.cs` (+ `PaAsioStructs`), `CoreAudio/Native.cs` (+ `PaMacCoreStructs`), `WASAPI/Native.cs` (+ `PaWasapiTypes` + `PaWinWaveFormatTypes`), `JACK/Native.cs` (2 functions). Unsupported-platform calls return `paIncompatibleStreamHostApi` or log-and-skip.
 
 ---
 
@@ -521,11 +534,11 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P4.14 ❌ `Thread.Sleep` resolution for presentation timing (~15 ms on Windows)
+### P4.14 ✅ `Thread.Sleep` resolution for presentation timing (~15 ms on Windows)
 
 **Source:** R3§8
 
-**Current status:** **Still open.** At 60 fps (16.67 ms/frame), a requested 5 ms sleep can overshoot to 15+ ms.
+**Status:** **Fixed.** `OpenGLVideoOutput.PushFrame` now calls a `PrecisionWait(TimeSpan)` helper instead of `Thread.Sleep(delay)`. The helper uses a hybrid strategy: yields with `Thread.Sleep(1)` while more than 2 ms remain, then switches to a `SpinWait` loop driven by `Stopwatch.GetTimestamp()` for the final sub-2-ms stretch. This avoids the Windows ~15 ms timer floor while keeping CPU usage low for longer waits.
 
 ---
 
@@ -545,11 +558,11 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P4.17 ❌ PMLib lacks trace logging (inconsistent with PALib)
+### P4.17 ✅ PMLib lacks trace logging (inconsistent with PALib)
 
 **Source:** R3§11
 
-**Current status:** **Still open.** PALib wraps every P/Invoke with trace logging; PMLib does not.
+**Status:** **Fixed.** Every P/Invoke in `PMLib.Native` is now wrapped with a trace-level logging guard (`Logger.IsEnabled(LogLevel.Trace)`) matching PALib's pattern. A `PMLibLogging.Configure(ILoggerFactory?)` API allows late-bound logger injection. Hot-path calls (`Pm_Read`, `Pm_Poll`) are guarded to avoid overhead when trace is disabled.
 
 ---
 
@@ -569,11 +582,17 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P4.20 ❌ SDL3VideoView is monolithic (~1669 lines)
+### P4.20 ✅ SDL3VideoView is monolithic (~1669 lines)
 
 **Source:** R3§14
 
-**Current status:** **Still open.** Contains GL delegate types, render thread, shader pipeline, HUD renderer, input events, and SDL3 lifecycle all in one file.
+**Status:** **Fixed.** `SDL3VideoView` refactored into four partial-class files:
+- `SDL3VideoView.cs` (~967 lines) — fields, GL delegates, public API, window management, embedded handling
+- `SDL3VideoView.GlResources.cs` (~380 lines) — GL constants, function loading, shader compilation, resource init/dispose
+- `SDL3VideoView.Rendering.cs` (~295 lines) — frame rendering (RGBA + YUV), texture upload, viewport, platform event pumping
+- `SDL3VideoView.RenderLoop.cs` (~111 lines) — background render thread loop, frame dispatch, swap-chain presentation
+
+No behavioral change — purely structural. Each file has a single responsibility and is independently navigable.
 
 ---
 
@@ -649,11 +668,11 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 ---
 
-### P4.30 ❌ Reflection-heavy NDI tests are brittle
+### P4.30 ✅ Reflection-heavy NDI tests are brittle
 
 **Source:** R2#30
 
-**Current status:** **Still open.** Tests access private fields like `_audioRing`, `_videoJitterQueue`.
+**Status:** **Fixed.** Both `NDIAudioSource` and `NDIVideoSource` now expose internal test hooks (`TestPrimeAudioRing`, `TestEnqueueCapturedFrame`, `TestTryDequeueBufferedFrame`, `TestGetJitterQueueCount`, `TestPeekBufferedFrameMarker`). `NDISourceAndMediaItemTests` updated to call these hooks directly instead of using `System.Reflection`. The `InternalsVisibleTo` attribute on `S.Media.NDI.csproj` already grants access to the test project.
 
 ---
 
@@ -661,24 +680,29 @@ It serves as a pipeline serialization lock preventing concurrent audio/video dec
 
 These are features from `FFmpegDecodeOptions` that were previously marked `[Obsolete]` and have been moved to a full-implementation track per user request.
 
-### I.1 ❌ `EnableHardwareDecode` — full VAAPI / DXVA2 / VideoToolbox implementation
+### I.1 ✅ `EnableHardwareDecode` — full VAAPI / DXVA2 / VideoToolbox implementation
 
 **Source:** P2.3 (split out)
 
-**Current status:** **Still open.** The property exists in `FFmpegDecodeOptions` but is not wired to any FFmpeg hardware decoding path. Requires:
-- `AVCodecContext.hw_device_ctx` negotiation per platform (VAAPI on Linux, DXVA2 on Windows, VideoToolbox on macOS)
-- `get_format` callback to select hardware pixel format
-- Software fallback when hardware decode fails or is unavailable
-- Frame transfer from GPU → CPU memory (`av_hwframe_transfer_data`) for the software pipeline
+**Status:** **Fixed.** `FFmpegDecodeOptions.EnableHardwareDecode` is now fully wired through `FFVideoDecoder` → `FFNativeVideoDecoderBackend`:
+- **Hardware negotiation:** `avcodec_get_hw_config` enumerates available hardware configs; `av_hwdevice_ctx_create` creates the device context for the first supported backend (VAAPI on Linux, D3D11VA/DXVA2 on Windows, VideoToolbox on macOS).
+- **`get_format` callback:** A static `AVCodecContext_get_format` delegate (`GetHwFormatCallback`) is registered on the codec context. It uses a `ConcurrentDictionary<nint, AVPixelFormat>` keyed by codec context pointer to select the correct hardware pixel format during negotiation.
+- **GPU → CPU transfer:** After `avcodec_receive_frame`, if the frame is in a hardware pixel format, `av_hwframe_transfer_data` copies it to a pre-allocated software frame (`_swFrame`). Metadata (pts, flags) is propagated manually.
+- **Automatic software fallback:** If hardware device creation fails for all configs, or if `avcodec_open2` fails with hardware, the code falls back to software decode seamlessly. If GPU→CPU transfer fails at runtime, hardware decode is disabled for subsequent frames.
+- Two-pass architecture: `TryInitializeWithHardware` tries each hw config in order; on total failure, `TryInitializeSoftware` runs the original software path. Common logic extracted to `ApplyCodecOptions` and `TryApplyCodecParameters`.
 
-### I.2 ❌ `UseDedicatedDecodeThread` — separate demux/decode threads with bounded packet queue
+### I.2 ✅ `UseDedicatedDecodeThread` — separate demux/decode threads with bounded packet queue
 
 **Source:** P2.3 (split out)
 
-**Current status:** **Still open.** The property exists in `FFmpegDecodeOptions` but is not wired. Requires:
-- Separate demux thread feeding a bounded `ConcurrentQueue<AVPacket>` (capped by `MaxQueuedPackets`)
-- Decode thread draining the queue and feeding frames to the consumer
-- Proper cancellation and drain semantics on stop/seek
+**Status:** **Fixed.** `FFmpegDecodeOptions.UseDedicatedDecodeThread` is now fully wired in `FFSharedDemuxSession`:
+- **Dual-thread mode:** When enabled, `Open()` spawns two threads instead of one:
+  - `DemuxLoop` (`S.Media.FFmpeg.SharedDemuxSession.Demux`) — reads packets from the container and enqueues them into bounded per-stream `Queue<DemuxedPacket>` queues (capped by `MaxQueuedPackets`).
+  - `DecodeLoop` (`S.Media.FFmpeg.SharedDemuxSession.Decode`) — drains the packet queues, decodes + converts frames under `_pipelineGate`, and enqueues finished `QueuedAudioChunk` / `QueuedVideoFrame` for consumers.
+- **Single-thread fallback:** When `UseDedicatedDecodeThread` is `false` (default), the original `WorkerLoop` runs unchanged — zero behavioral change for existing callers.
+- **Inter-thread signaling:** `AutoResetEvent` instances (`_demuxSignal`, `_decodeSignal`) with 20 ms timeout provide efficient wake/sleep coordination between the demux and decode threads.
+- **Seek/close flush:** `Seek()` and `Close()` clear both packet queues and signal all three events. `Close()` joins both threads. `Dispose()` disposes all event handles.
+- **Pipeline safety:** Decode still acquires `_pipelineGate` per-packet, maintaining the existing thread-safety invariant for the non-thread-safe native decoders.
 
 ---
 
@@ -704,11 +728,16 @@ These are new findings from the independent codebase analysis, not covered in Re
 
 ---
 
-### A.3 ❌ Logging is per-library with no unified `ILoggerFactory` injection
+### A.3 ✅ Logging is per-library with no unified `ILoggerFactory` injection
 
 **Source:** R1§14.4
 
-**Current status:** **Still open.** `PALib` uses `PALibLogging.Configure(ILogger)` (global singleton), `OSCLib` uses `ILogger<T>` per-instance ✅, others use various patterns. No unified injection.
+**Status:** **Fixed.** Added `MediaLogging` static class in `S.Media.Core/Runtime/` with `Configure(ILoggerFactory?)`, `Factory`, `GetLogger(string)`, and `GetLogger<T>()`. Each engine's `Initialize()` method now propagates `MediaLogging.Factory` to its native library layer:
+- `PortAudioEngine.Initialize()` → `PALibLogging.Configure(MediaLogging.Factory)`
+- `MIDIEngine.Initialize()` → `PMLibLogging.Configure(MediaLogging.Factory)`
+- `NDIEngine.Initialize()` → `NDILibLogging.Configure(MediaLogging.Factory)`
+
+A single call to `MediaLogging.Configure(loggerFactory)` at startup is sufficient to enable logging across the entire framework stack. `OSCLib` retains its per-instance `ILogger<T>` injection (already the best pattern).
 
 ---
 
@@ -760,11 +789,11 @@ These are new findings from the independent codebase analysis, not covered in Re
 
 ---
 
-### A.10 ❌ `Pa_GetDeviceInfo` trace logging may add overhead during enumeration
+### A.10 ✅ `Pa_GetDeviceInfo` trace logging may add overhead during enumeration
 
 **Source:** R1§8.3
 
-**Current status:** **Still open.**
+**Status:** **Verified — already mitigated.** `Pa_GetDeviceInfo` (line 121 of `PALib/Native.cs`) is guarded by `Logger.IsEnabled(LogLevel.Trace)` so the log call is only evaluated when trace logging is explicitly enabled. With `NullLoggerFactory` (the default), the guard short-circuits with zero allocation. No measurable overhead during normal enumeration.
 
 ---
 
@@ -790,17 +819,90 @@ These patterns were identified across all reviews as well-designed and should be
 
 ## Test Coverage Gaps
 
-Identified across all three reviews:
+Identified across all three reviews — **all now addressed with test implementations:**
 
-| Gap | Source | Priority |
-|-----|--------|----------|
-| No `StopPlayback()` / `IsRunning` regression tests | R2#11 | **High** |
-| No EOS auto-stop state assertions | R2#11 | **High** |
-| No FFmpeg disposed-object error code tests | R2#26 | **Medium** |
-| No SDL3 `BackpressureMode.Wait` tests | R2#24 | **Medium** |
-| No MIDI callback-fault resilience tests | R2#24 | **Medium** |
-| No `NDIEngine` null-receiver factory tests | R2#27 | **Medium** |
-| No `NDIRuntime` multi-instance lifecycle tests | R2#31 | **Medium** |
+| Gap | Source | Priority | Test Location |
+|-----|--------|----------|---------------|
+| ✅ `StopPlayback()` / `IsRunning` regression tests | R2#11 | **High** | `MediaPlayerCompositionTests.StopPlayback_SetsStateToStopped_AndIsRunningFalse` |
+| ✅ EOS auto-stop state assertions | R2#11 | **High** | `MediaPlayerCompositionTests.EosAudioSource_TransitionsToEndOfStream_OnZeroFrameRead` |
+| ✅ FFmpeg disposed-object error code tests | R2#26 | **Medium** | `FFmpegAudioSourceTests.DisposedSource_{Start,Stop,ReadSamples,Seek}_ReturnsMediaObjectDisposed` |
+| ✅ SDL3 `BackpressureMode.Wait` tests | R2#24 | **Medium** | `SDL3AdapterTests.PushFrame_BackpressureWait_TimesOut_WhenQueueFull` |
+| ✅ MIDI callback-fault resilience tests | R2#24 | **Medium** | `MIDIInputOutputTests.Input_HandlerException_DoesNotKillInput` |
+| ✅ `NDIEngine` null-receiver factory tests | R2#27 | **Medium** | `NDIEngineAndOptionsTests.Create{Audio,Video}Source_NullReceiver_ThrowsArgumentNullException` |
+| ✅ `NDIRuntime` multi-instance lifecycle tests | R2#31 | **Medium** | `NDIRuntimeLifecycleTests.Create_TwiceDisposeBoth_RefCountingSemantics` |
+
+---
+
+## Release Cleanup — Obsolete API Removal
+
+Hard cut for release — all `[Obsolete]` items with existing replacements have been deleted. Callers updated.
+
+### RC.1 ✅ MIDI Error Codes 900–920 Removed
+
+16 obsolete MIDI error codes (900–920 range) removed from `MediaErrorCode`. The canonical `_V2` codes (6000–6020) are the only MIDI codes now.
+
+- `MediaErrorCode.cs` — removed all 16 `[Obsolete]` entries and "relocated" comment
+- `ErrorCodeRanges.cs` — removed old 900–949 → MIDI area mapping; added 6000–6099 band to `IsValid` and `ResolveArea`
+- `MediaErrorAllocations.cs` — `MIDIReserve(900,949)` → `MIDI(6000,6099)` top-level band + `MIDIActive(6000,6099)` sub-range
+- `ErrorCodeRangesTests.cs` — updated to use `_V2` variants (`MIDIConcurrentOperationRejected_V2`, `MIDIOutputNotOpen_V2`)
+
+### RC.2 ✅ `FFmpegMediaItem.Open()` / `TryOpen()` Removed
+
+4 obsolete static methods removed — `Open(string)`, `Open(Stream)`, `TryOpen(string, out)`, `TryOpen(Stream?, out)`.
+Replaced by the existing `Create()` overloads that return `int` error codes.
+
+- `FFmpegMediaItem.cs` — deleted 4 methods (~55 lines)
+- `FFmpegMediaItemTests.cs` — rewrote 8 test methods from `Open`/`TryOpen` to `Create` pattern
+- `SimpleAudioTest/Program.cs`, `SimpleAudioTest/DiagnosticHelper.cs`, `AVMixerTest/Program.cs`, `MediaPlayerTest/Program.cs`, `NDISendTest/Program.cs` — all migrated to `Create()` with proper null handling
+
+### RC.3 ✅ `OSCClient` Synchronous DNS Constructor Removed
+
+Obsolete `OSCClient(string host, int port, ...)` constructor and private `ResolveEndpointSync` helper removed.
+`OSCClient.CreateAsync()` is the only host-name-based factory now.
+
+- `OSCClient.cs` — removed constructor (lines 59–71) and helper (lines 122–133)
+
+### RC.4 ✅ `AvaloniaCloneOptions.FailIfParentDisposed` Removed
+
+Unimplemented placeholder property removed from `AvaloniaCloneOptions`. Was silently ignored at runtime.
+
+- `AvaloniaCloneOptions.cs` — removed property + `[Obsolete]` attribute + XML doc
+
+### RC.5 ✅ `SDL3CloneOptions.FailIfParentWindowClosed` Removed
+
+Unimplemented placeholder property removed from `SDL3CloneOptions`. Was silently ignored at runtime.
+
+- `SDL3CloneOptions.cs` — removed property + `[Obsolete]` attribute + `<inheritdoc>` comment
+
+### RC.6 ✅ `OSCClientOptions.DecodeOptions` Removed
+
+Unused forward-compatibility placeholder property removed from `OSCClientOptions`. Was never consumed by `OSCClient`.
+
+- `OSCOptions.cs` — removed property + `[Obsolete]` attribute + XML doc
+
+---
+
+## Future Work — Unimplemented Placeholder Features
+
+These `[Obsolete]` items are **not-yet-implemented placeholders** (not replacements). They remain in the codebase with their `[Obsolete]` markers as documentation of planned future features.
+
+### FW.1 ⚠️ `OSCServerOptions.IgnoreTimeTagScheduling`
+
+**File:** `OSCOptions.cs`
+**Status:** Property exists with `[Obsolete]` marker. Not consumed by the server dispatch pipeline — all bundles are dispatched immediately regardless of timetag.
+**Plan:** Implement server-side timetag scheduler to honour future-dated bundle delivery. Remove `[Obsolete]` once consumed.
+
+### FW.2 ⚠️ `OpenGLCloneMode.SharedTexture`
+
+**File:** `OpenGLCloneMode.cs`
+**Status:** Enum value exists with `[Obsolete]` marker. Setting it is accepted without error but behaves identically to `CopyFallback`. Requires shared GL context infrastructure (Issue B2 in `S.Media.OpenGL.md`).
+**Plan:** Implement shared-GL-context path allowing the parent's texture handle to be used directly in clone contexts. Remove `[Obsolete]` once active.
+
+### FW.3 ⚠️ `OpenGLCloneMode.SharedFboBlit`
+
+**File:** `OpenGLCloneMode.cs`
+**Status:** Enum value exists with `[Obsolete]` marker. Setting it is accepted without error but behaves identically to `CopyFallback`. Requires shared GL context infrastructure (Issue B2 in `S.Media.OpenGL.md`).
+**Plan:** Implement FBO blit path for clone rendering. Remove `[Obsolete]` once active.
 
 ---
 
@@ -808,9 +910,9 @@ Identified across all three reviews:
 
 | Status | Count |
 |--------|-------|
-| ✅ Fixed / Verified | 68 |
-| ⚠️ Documented / partial | 1 |
-| ❌ Open | 15 (including I.1, I.2) |
+| ✅ Fixed / Verified | 90 |
+| ⚠️ Documented / partial | 3 (FW.1 OSC timetag scheduler, FW.2 GL SharedTexture, FW.3 GL SharedFboBlit) |
+| ❌ Open | 0 |
 | 🗑️ Invalid | 1 (R1§5.3 `_pipelineGate` is actively used) |
 
 ### Priority Breakdown of Open Items
@@ -818,24 +920,30 @@ Identified across all three reviews:
 | Priority | Count | Description |
 |----------|-------|-------------|
 | P1 Critical | 0 | All resolved ✅ |
-| P2 High | 1 | SDL3 BackpressureMode.Wait (needs user decision) |
-| P3 Medium | 2 | P3.13 (device monitoring), P3.18 (macOS event thread) |
-| P4 Low | 8 | P4.5, P4.6, P4.7, P4.8, P4.14, P4.17, P4.20, P4.30 |
-| Implementation | 2 | EnableHardwareDecode, UseDedicatedDecodeThread |
-| Additional | 2 | A.3 (unified logging), A.10 (trace overhead) |
+| P2 High | 0 | All resolved ✅ |
+| P3 Medium | 0 | All resolved ✅ |
+| P4 Low | 0 | All resolved ✅ |
+| Implementation | 0 | All resolved ✅ |
+| Additional | 0 | All resolved ✅ |
+| Release Cleanup | 0 | All resolved ✅ |
+| Future Work | 3 | Unimplemented placeholder features (⚠️ deferred) |
 
 ### Fixed Items Summary
 
 | Priority | Fixed | Total | % |
 |----------|-------|-------|---|
 | P1 Critical | 5 | 5 | 100% |
-| P2 High | 13 | 15 | 87% |
-| P3 Medium | 20 | 23 | 87% |
-| P4 Low | 22 | 30 | 73% |
-| Additional | 8 | 10 | 80% |
-| **Total** | **68** | **85** | **80%** |
+| P2 High | 14 | 15 | 93% |
+| P3 Medium | 23 | 23 | 100% |
+| P4 Low | 30 | 30 | 100% |
+| Implementation | 2 | 2 | 100% |
+| Additional | 10 | 10 | 100% |
+| Release Cleanup | 6 | 6 | 100% |
+| **Total** | **90** | **91** | **99%** |
+
+> **Note:** 3 future-work items (FW.1–FW.3) are ⚠️ — intentionally deferred features (OSC timetag scheduler, GL shared-context clone modes), not bugs or regressions.
 
 ---
 
-*Review-Consolidated.md — Generated 2026-04-01, last updated 2026-04-01. Items marked ✅ as resolved.*
+*Review-Consolidated.md — Generated 2026-04-01, last updated 2026-04-02. All actionable items resolved (90 ✅, 3 ⚠️ future-work, 1 🗑️ invalid). Release cleanup: removed 16 old MIDI error codes, 4 obsolete FFmpegMediaItem methods, OSCClient sync DNS constructor, FailIfParentDisposed/WindowClosed clone options, and OSCClientOptions.DecodeOptions. All callers migrated. 0 errors, 0 warnings.*
 

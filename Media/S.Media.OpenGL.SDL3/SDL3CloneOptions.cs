@@ -10,9 +10,6 @@ public sealed record SDL3CloneOptions
 
     public OpenGLHUDCloneMode HudMode { get; init; } = OpenGLHUDCloneMode.Independent;
 
-    /// <inheritdoc cref="AvaloniaCloneOptions.FailIfParentDisposed"/>
-    [Obsolete("FailIfParentWindowClosed is not yet implemented and is silently ignored. It will be wired in a future release.")]
-    public bool FailIfParentWindowClosed { get; init; } = true;
 
     public int? MaxCloneDepth { get; init; }
 }

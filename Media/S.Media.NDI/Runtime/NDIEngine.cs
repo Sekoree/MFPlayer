@@ -1,4 +1,5 @@
 using NDILib;
+using NDILib.Runtime;
 using S.Media.Core.Errors;
 using S.Media.Core.Runtime;
 using S.Media.NDI.Config;
@@ -58,6 +59,10 @@ public sealed class NDIEngine : IMediaEngine
             _integrationOptions = integrationOptions;
             _limitsOptions = limitsOptions.Normalize();
             _diagnosticsOptions = diagnosticsOptions.Normalize();
+
+            // A.3: Propagate unified logging to the native NDILib layer.
+            NDILibLogging.Configure(MediaLogging.Factory);
+
             IsInitialized = true;
         }
 

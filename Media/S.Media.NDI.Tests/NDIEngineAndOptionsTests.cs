@@ -308,6 +308,26 @@ public sealed class NDIEngineAndOptionsTests
         Assert.Equal(MediaResult.Success, engine.Terminate());
     }
 
+    [Fact]
+    public void CreateAudioSource_NullReceiver_ThrowsArgumentNullException()
+    {
+        using var engine = new NDIEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize());
+
+        Assert.Throws<ArgumentNullException>(() =>
+            engine.CreateAudioSource(null!, new NDISourceOptions(), out _));
+    }
+
+    [Fact]
+    public void CreateVideoSource_NullReceiver_ThrowsArgumentNullException()
+    {
+        using var engine = new NDIEngine();
+        Assert.Equal(MediaResult.Success, engine.Initialize());
+
+        Assert.Throws<ArgumentNullException>(() =>
+            engine.CreateVideoSource(null!, new NDISourceOptions(), out _));
+    }
+
     private static VideoFrame CreateVideoFrame()
     {
         var rgba = new byte[2 * 2 * 4];

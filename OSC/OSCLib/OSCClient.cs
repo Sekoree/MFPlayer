@@ -56,19 +56,6 @@ public sealed class OSCClient : IOSCClient
         return new OSCClient(new IPEndPoint(address, port), options, logger);
     }
 
-    /// <summary>
-    /// Creates an <see cref="OSCClient"/> by resolving <paramref name="host"/> synchronously.
-    /// </summary>
-    /// <remarks>
-    /// <b>Warning:</b> This constructor performs synchronous DNS resolution which may block the
-    /// calling thread for the full DNS timeout (up to 30 seconds). Use
-    /// <see cref="CreateAsync"/> for host-name resolution in asynchronous code.
-    /// </remarks>
-    [Obsolete("Synchronous DNS resolution can block the thread pool. Use OSCClient.CreateAsync() to resolve host names asynchronously.")]
-    public OSCClient(string host, int port, OSCClientOptions? options = null, ILogger<OSCClient>? logger = null)
-        : this(ResolveEndpointSync(host, port), options, logger)
-    {
-    }
 
     public OSCClientOptions Options { get; }
 
@@ -119,16 +106,4 @@ public sealed class OSCClient : IOSCClient
         return ValueTask.CompletedTask;
     }
 
-    private static IPEndPoint ResolveEndpointSync(string host, int port)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(host);
-        if (port < IPEndPoint.MinPort || port > IPEndPoint.MaxPort)
-            throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be between 0 and 65535.");
-
-        var address = Dns.GetHostAddresses(host).FirstOrDefault();
-        if (address is null)
-            throw new InvalidOperationException($"No IP addresses were resolved for host '{host}'.");
-
-        return new IPEndPoint(address, port);
-    }
 }

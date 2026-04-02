@@ -36,7 +36,7 @@ public sealed class MIDIOutput : IMIDIDevice
         {
             if (_disposed)
             {
-                return (int)MediaErrorCode.MIDIOutputOpenFailed;
+                return (int)MediaErrorCode.MIDIOutputOpenFailed_V2;
             }
 
             if (IsOpen)
@@ -96,7 +96,7 @@ public sealed class MIDIOutput : IMIDIDevice
     {
         if (message.Status < 0x80)
         {
-            return (int)MediaErrorCode.MIDIInvalidMessage;
+            return (int)MediaErrorCode.MIDIInvalidMessage_V2;
         }
 
         nint stream;
@@ -104,7 +104,7 @@ public sealed class MIDIOutput : IMIDIDevice
         {
             if (!IsOpen)
             {
-                return (int)MediaErrorCode.MIDIOutputNotOpen;
+                return (int)MediaErrorCode.MIDIOutputNotOpen_V2;
             }
 
             if (!_nativeEnabled)
@@ -117,7 +117,7 @@ public sealed class MIDIOutput : IMIDIDevice
 
         var send = PMUtil.WriteShort(stream, message.Timestamp, message.RawMessage);
         var sendCode = MIDIPortMidiErrorMapper.MapSend(send);
-        if (sendCode != (int)MediaErrorCode.MIDIDeviceDisconnected)
+        if (sendCode != (int)MediaErrorCode.MIDIDeviceDisconnected_V2)
         {
             return sendCode;
         }
@@ -132,7 +132,7 @@ public sealed class MIDIOutput : IMIDIDevice
         {
             if (!IsOpen)
             {
-                return (int)MediaErrorCode.MIDIOutputNotOpen;
+                return (int)MediaErrorCode.MIDIOutputNotOpen_V2;
             }
 
             stream = _stream;
@@ -140,7 +140,7 @@ public sealed class MIDIOutput : IMIDIDevice
 
         var retry = PMUtil.WriteShort(stream, message.Timestamp, message.RawMessage);
         var retryCode = MIDIPortMidiErrorMapper.MapSend(retry);
-        return retryCode == (int)MediaErrorCode.MIDIDeviceDisconnected
+        return retryCode == (int)MediaErrorCode.MIDIDeviceDisconnected_V2
             ? HandleDisconnected(retryCode)
             : retryCode;
     }
@@ -233,7 +233,7 @@ public sealed class MIDIOutput : IMIDIDevice
             {
                 if (_disposed)
                 {
-                    reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+                    reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
                     return false;
                 }
             }
@@ -246,7 +246,7 @@ public sealed class MIDIOutput : IMIDIDevice
                     if (_disposed)
                     {
                         _ = MIDIPortMidiErrorMapper.MapCloseOutput(PMUtil.Close(stream));
-                        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+                        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
                         return false;
                     }
 
@@ -259,14 +259,14 @@ public sealed class MIDIOutput : IMIDIDevice
 
             if (attempt == ReconnectOptions.MaxReconnectAttempts || DateTime.UtcNow >= deadlineUtc)
             {
-                reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+                reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
                 return false;
             }
 
             Thread.Sleep(ReconnectOptions.ReconnectAttemptDelay);
         }
 
-        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed;
+        reconnectCode = (int)MediaErrorCode.MIDIReconnectFailed_V2;
         return false;
     }
 }
