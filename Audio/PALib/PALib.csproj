@@ -15,6 +15,7 @@
     <ItemGroup>
         <!-- Intentional: S.Media.PortAudio is the primary managed wrapper for PALib. -->
         <InternalsVisibleTo Include="S.Media.PortAudio" />
+        <InternalsVisibleTo Include="S.Media.PortAudio.Tests" />
         <!-- Development tools: smoke test and unit tests need low-level access. -->
         <InternalsVisibleTo Include="PALib.Smoke" />
         <InternalsVisibleTo Include="PALib.Tests" />

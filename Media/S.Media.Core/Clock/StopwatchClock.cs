@@ -1,0 +1,53 @@
+using System.Diagnostics;
+
+namespace S.Media.Core.Clock;
+
+/// <summary>
+/// Pure software clock backed by a <see cref="Stopwatch"/>.
+/// Use when no hardware time source is available (offline render, unit tests, network sources).
+/// </summary>
+public sealed class StopwatchClock : MediaClockBase
+{
+    private readonly Stopwatch _sw = new();
+    private readonly double    _sampleRate;
+    private TimeSpan           _offset; // accumulated time from previous Start/Stop cycles
+    private volatile bool      _running;
+
+    /// <param name="sampleRate">Nominal sample rate for this clock.</param>
+    /// <param name="tickInterval">How often Tick fires. Defaults to 20 ms.</param>
+    public StopwatchClock(double sampleRate, TimeSpan? tickInterval = null)
+        : base(tickInterval ?? TimeSpan.FromMilliseconds(20))
+    {
+        _sampleRate = sampleRate;
+    }
+
+    // ── IMediaClock ────────────────────────────────────────────────────────
+
+    public override double   SampleRate => _sampleRate;
+    public override bool     IsRunning  => _running;
+    public override TimeSpan Position   => _offset + _sw.Elapsed;
+
+    public override void Start()
+    {
+        _sw.Start();
+        _running = true;
+        base.Start();
+    }
+
+    public override void Stop()
+    {
+        _running = false;
+        _sw.Stop();
+        _offset += _sw.Elapsed;
+        _sw.Reset();
+        base.Stop();
+    }
+
+    public override void Reset()
+    {
+        _sw.Reset();
+        _offset  = TimeSpan.Zero;
+        _running = false;
+    }
+}
+

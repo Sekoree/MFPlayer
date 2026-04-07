@@ -8,17 +8,11 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.Core.Tests" />
+        <InternalsVisibleTo Include="S.Media.PortAudio" />
     </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Audio\" />
-      <Folder Include="Errors\" />
-      <Folder Include="Media\" />
-      <Folder Include="Mixing\" />
     </ItemGroup>
 
 </Project>
