@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using S.Media.Core.Media;
@@ -14,13 +15,16 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
     private readonly int                          _streamIndex;
     private readonly AVStream*                    _stream;
     private readonly ChannelReader<EncodedPacket> _packetReader;
+    private readonly AVBufferRef*                 _hwDeviceCtx;   // null = sw only
+    private readonly int                          _threadCount;
 
     private AVCodecContext* _codecCtx;
     private SwsContext*     _sws;
     private AVFrame*        _frame;
     private AVFrame*        _rgbFrame;
+    private AVFrame*        _swFrame;   // temporary CPU-side frame when using hw decode
     private AVPacket*       _pkt;
-    private byte[]          _frameBuffer = [];
+    private int             _swsBufSize; // byte size of one converted frame
 
     private Thread?                  _decodeThread;
     private CancellationTokenSource  _cts = new();
@@ -36,19 +40,23 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
     public bool  CanSeek => true;
 
     /// <summary>Target pixel format. Defaults to Bgra32.</summary>
-    public Core.Media.PixelFormat TargetPixelFormat { get; }
+    public PixelFormat TargetPixelFormat { get; }
 
     /// <summary>Video format of the stream (may be updated after first decoded frame).</summary>
     public VideoFormat Format { get; private set; }
 
     internal FFmpegVideoChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
-                                 Core.Media.PixelFormat targetPixelFormat = Core.Media.PixelFormat.Bgra32,
-                                 int bufferDepth = 4)
+                                 AVBufferRef*   hwDeviceCtx       = null,
+                                 PixelFormat    targetPixelFormat = PixelFormat.Bgra32,
+                                 int            threadCount       = 0,
+                                 int            bufferDepth       = 4)
     {
         _streamIndex        = streamIndex;
         _stream             = stream;
         _packetReader       = packetReader;
+        _hwDeviceCtx        = hwDeviceCtx;
+        _threadCount        = threadCount;
         TargetPixelFormat   = targetPixelFormat;
 
         var cp = stream->codecpar;
@@ -75,11 +83,19 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
 
         _codecCtx = ffmpeg.avcodec_alloc_context3(codec);
         ffmpeg.avcodec_parameters_to_context(_codecCtx, _stream->codecpar);
+        if (_threadCount >= 0)
+            _codecCtx->thread_count = _threadCount;
+
+        // Attach hardware device context if provided.
+        if (_hwDeviceCtx != null)
+            _codecCtx->hw_device_ctx = ffmpeg.av_buffer_ref(_hwDeviceCtx);
+
         int ret = ffmpeg.avcodec_open2(_codecCtx, codec, null);
         if (ret < 0) throw new InvalidOperationException($"avcodec_open2 failed: {ret}");
 
         _frame    = ffmpeg.av_frame_alloc();
         _rgbFrame = ffmpeg.av_frame_alloc();
+        _swFrame  = ffmpeg.av_frame_alloc();
         _pkt      = ffmpeg.av_packet_alloc();
     }
 
@@ -91,8 +107,7 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
             2 /* SWS_BILINEAR */, null, null, null);
         if (_sws == null) throw new InvalidOperationException("sws_getContext failed.");
 
-        int bufSize = ffmpeg.av_image_get_buffer_size(dstFmt, w, h, 1);
-        _frameBuffer = new byte[bufSize];
+        _swsBufSize = ffmpeg.av_image_get_buffer_size(dstFmt, w, h, 1);
         return _sws;
     }
 
@@ -135,47 +150,92 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
 
             while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
             {
-                var vf = ConvertFrame();
+                // If the frame is in hw memory, transfer to CPU before converting.
+                AVFrame* decodedFrame = _frame;
+                bool transferred = false;
+                if (_hwDeviceCtx != null && _frame->hw_frames_ctx != null)
+                {
+                    if (ffmpeg.av_hwframe_transfer_data(_swFrame, _frame, 0) >= 0)
+                    {
+                        _swFrame->pts = _frame->pts;
+                        decodedFrame  = _swFrame;
+                        transferred   = true;
+                    }
+                }
+
+                var vf = ConvertFrame(decodedFrame);
                 if (vf.HasValue)
-                    _ringWriter.WriteAsync(vf.Value, token).AsTask().GetAwaiter().GetResult();
+                {
+                    var w = _ringWriter.WriteAsync(vf.Value, token);
+                    if (!w.IsCompletedSuccessfully)
+                    {
+                        try { w.AsTask().GetAwaiter().GetResult(); }
+                        catch (OperationCanceledException) { break; }
+                    }
+                }
                 ffmpeg.av_frame_unref(_frame);
+                if (transferred) ffmpeg.av_frame_unref(_swFrame);
             }
         }
         _ringWriter.TryComplete();
     }
 
-    private VideoFrame? ConvertFrame()
+    private VideoFrame? ConvertFrame(AVFrame* frame)
     {
-        int w = _frame->width, h = _frame->height;
+        int w = frame->width, h = frame->height;
         if (w == 0 || h == 0) return null;
 
-        var sws = GetSws(w, h, (AVPixelFormat)_frame->format);
-        var buf = new byte[_frameBuffer.Length];
-
-        // Build managed arrays for sws_scale (AutoGen expects byte*[] and int[])
-        var srcData   = new byte*[4];
-        var srcStride = new int[4];
-        var dstData   = new byte*[4];
-        var dstStride = new int[4];
-
-        for (uint i = 0; i < 4; i++)
-        {
-            srcData[i]   = _frame->data[i];
-            srcStride[i] = _frame->linesize[i];
-        }
-
-        fixed (byte* pBuf = buf)
-        {
-            dstData[0]   = pBuf;
-            dstStride[0] = w * 4; // 4 bytes/pixel for BGRA/RGBA
-            ffmpeg.sws_scale(sws, srcData, srcStride, 0, h, dstData, dstStride);
-        }
+        var sws = GetSws(w, h, (AVPixelFormat)frame->format);
 
         double tbSeconds = _stream->time_base.num / (double)_stream->time_base.den;
-        var pts = TimeSpan.FromSeconds(_frame->pts * tbSeconds);
+        var pts = SafePts(frame->pts, tbSeconds);
 
-        return new VideoFrame(w, h, TargetPixelFormat, buf, pts);
+        // Rent a buffer from the pool. The VideoFrame carries an ArrayPoolOwner so
+        // the consumer can return it by calling frame.MemoryOwner?.Dispose().
+        var rented = ArrayPool<byte>.Shared.Rent(_swsBufSize);
+        var owner  = new ArrayPoolOwner<byte>(rented);
+
+        // Build source data/stride arrays from the AVFrame (native pointers — safe
+        // because FFmpeg owns the underlying allocation for the duration of this call).
+        var srcDataArr   = new byte*[4] { frame->data[0], frame->data[1], frame->data[2], frame->data[3] };
+        var srcStrideArr = new int[4]   { frame->linesize[0], frame->linesize[1], frame->linesize[2], frame->linesize[3] };
+
+        fixed (byte* pBuf = rented)
+        {
+            var dstDataArr   = new byte*[4] { pBuf, null, null, null };
+            var dstStrideArr = new int[4]   { w * BytesPerPixel(TargetPixelFormat), 0, 0, 0 };
+            ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstDataArr, dstStrideArr);
+        }
+
+        return new VideoFrame(w, h, TargetPixelFormat, rented.AsMemory(0, _swsBufSize), pts, owner);
     }
+
+    /// <summary>
+    /// Converts an FFmpeg PTS tick value to a <see cref="TimeSpan"/>, guarding against
+    /// <c>AV_NOPTS_VALUE</c> (long.MinValue) and values that would overflow TimeSpan.
+    /// </summary>
+    internal static TimeSpan SafePts(long pts, double tbSeconds)
+    {
+        // AV_NOPTS_VALUE == unchecked((long)0x8000000000000000) == long.MinValue
+        if (pts == long.MinValue || tbSeconds <= 0 || double.IsInfinity(tbSeconds))
+            return TimeSpan.Zero;
+
+        double seconds = pts * tbSeconds;
+        if (double.IsNaN(seconds) || seconds < 0)
+            return TimeSpan.Zero;
+        if (seconds > TimeSpan.MaxValue.TotalSeconds)
+            return TimeSpan.MaxValue;
+
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private static int BytesPerPixel(PixelFormat pf) => pf switch
+    {
+        PixelFormat.Yuv422p10 => 4, // packed as 2 bytes/component → stride = w*4 for luma plane
+        PixelFormat.Nv12      => 1, // multi-plane; stride applies to luma only
+        PixelFormat.Yuv420p   => 1,
+        _                     => 4  // BGRA32, RGBA32, UYVY422 all 4 bytes/px
+    };
 
     // ── IMediaChannel<VideoFrame> pull ────────────────────────────────────
 
@@ -204,14 +264,15 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
-    private static AVPixelFormat MapPixelFormat(Core.Media.PixelFormat pf) => pf switch
+    private static AVPixelFormat MapPixelFormat(PixelFormat pf) => pf switch
     {
-        Core.Media.PixelFormat.Bgra32  => AVPixelFormat.AV_PIX_FMT_BGRA,
-        Core.Media.PixelFormat.Rgba32  => AVPixelFormat.AV_PIX_FMT_RGBA,
-        Core.Media.PixelFormat.Nv12    => AVPixelFormat.AV_PIX_FMT_NV12,
-        Core.Media.PixelFormat.Yuv420p => AVPixelFormat.AV_PIX_FMT_YUV420P,
-        Core.Media.PixelFormat.Uyvy422 => AVPixelFormat.AV_PIX_FMT_UYVY422,
-        _                              => AVPixelFormat.AV_PIX_FMT_BGRA
+        PixelFormat.Bgra32    => AVPixelFormat.AV_PIX_FMT_BGRA,
+        PixelFormat.Rgba32    => AVPixelFormat.AV_PIX_FMT_RGBA,
+        PixelFormat.Nv12      => AVPixelFormat.AV_PIX_FMT_NV12,
+        PixelFormat.Yuv420p   => AVPixelFormat.AV_PIX_FMT_YUV420P,
+        PixelFormat.Uyvy422   => AVPixelFormat.AV_PIX_FMT_UYVY422,
+        PixelFormat.Yuv422p10 => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
+        _                     => AVPixelFormat.AV_PIX_FMT_BGRA
     };
 
     public void Dispose()
@@ -224,6 +285,7 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
 
         if (_frame    != null) fixed (AVFrame**        pp = &_frame)    ffmpeg.av_frame_free(pp);
         if (_rgbFrame != null) fixed (AVFrame**        pp = &_rgbFrame) ffmpeg.av_frame_free(pp);
+        if (_swFrame  != null) fixed (AVFrame**        pp = &_swFrame)  ffmpeg.av_frame_free(pp);
         if (_pkt      != null) fixed (AVPacket**       pp = &_pkt)      ffmpeg.av_packet_free(pp);
         if (_codecCtx != null) fixed (AVCodecContext** pp = &_codecCtx) ffmpeg.avcodec_free_context(pp);
         if (_sws      != null) ffmpeg.sws_freeContext(_sws);

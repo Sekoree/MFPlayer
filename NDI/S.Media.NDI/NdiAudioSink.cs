@@ -17,6 +17,8 @@ public sealed class NdiAudioSink : IAudioSink
     private readonly NDISender    _sender;
     private readonly AudioFormat  _targetFormat;
     private readonly int          _framesPerBuffer;
+    private readonly IAudioResampler? _resampler;
+    private readonly bool         _ownsResampler;
 
     private readonly ConcurrentQueue<float[]> _pool    = new();
     private readonly ConcurrentQueue<float[]> _pending = new();
@@ -30,15 +32,29 @@ public sealed class NdiAudioSink : IAudioSink
     public bool   IsRunning => _running;
 
     public NdiAudioSink(
-        NDISender   sender,
-        AudioFormat targetFormat,
-        int         framesPerBuffer = 512,
-        string?     name            = null)
+        NDISender        sender,
+        AudioFormat      targetFormat,
+        int              framesPerBuffer = 512,
+        string?          name            = null,
+        IAudioResampler? resampler       = null)
     {
         _sender          = sender;
         _targetFormat    = targetFormat;
         _framesPerBuffer = framesPerBuffer;
         Name             = name ?? "NdiAudioSink";
+
+        // Auto-create a LinearResampler if the caller didn't supply one and we may receive
+        // audio at a different rate (the actual check happens per buffer in ReceiveBuffer).
+        if (resampler == null)
+        {
+            _resampler     = new S.Media.Core.Audio.LinearResampler();
+            _ownsResampler = true;
+        }
+        else
+        {
+            _resampler     = resampler;
+            _ownsResampler = false;
+        }
 
         // Pre-allocate 8 interleaved buffers.
         for (int i = 0; i < 8; i++)
@@ -75,8 +91,16 @@ public sealed class NdiAudioSink : IAudioSink
         if (!_running) return;
         if (!_pool.TryDequeue(out var dest)) return; // pool exhausted — drop
 
-        int copy = Math.Min(buffer.Length, dest.Length);
-        buffer[..copy].CopyTo(dest.AsSpan());
+        bool needsResample = sourceFormat.SampleRate != _targetFormat.SampleRate;
+        if (needsResample && _resampler != null)
+        {
+            _resampler.Resample(buffer, dest.AsSpan(), sourceFormat, _targetFormat.SampleRate);
+        }
+        else
+        {
+            int copy = Math.Min(buffer.Length, dest.Length);
+            buffer[..copy].CopyTo(dest.AsSpan());
+        }
         _pending.Enqueue(dest);
     }
 
@@ -126,6 +150,7 @@ public sealed class NdiAudioSink : IAudioSink
         _running  = false;
         _cts?.Cancel();
         _writeThread?.Join(TimeSpan.FromSeconds(2));
+        if (_ownsResampler) _resampler?.Dispose();
     }
 }
 

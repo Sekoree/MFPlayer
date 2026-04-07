@@ -1,7 +1,7 @@
 # MFPlayer — Media Pipeline Architecture
 
 > **Status:** Design finalised / Ready for implementation  
-> **Last updated:** 2026-04-07
+> **Last updated:** 2026-04-07 (Q13–Q19 resolved; per-output/sink routing implemented)
 
 ---
 
@@ -18,7 +18,7 @@ The pipeline is split into three concern layers:
 │  S.Media.PortAudio     — IAudioEngine/IAudioOutput via PALib│
 │  S.Media.FFmpeg        — decoder channels + SwrResampler    │
 ├─────────────────────────────────────────────────────────────┤
-│  PALib / NDILib        — existing native P/Invoke wrappers  │
+│  PALib / JackLib / NDILib  — native P/Invoke wrappers        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -27,10 +27,12 @@ The pipeline is split into three concern layers:
 | Project | Location | Role |
 |---|---|---|
 | `PALib` | `Audio/PALib/` | PortAudio P/Invoke (existing) |
+| `JackLib` | `Audio/JackLib/` | JACK2 P/Invoke (new; port/connection management) |
 | `NDILib` | `NDI/NDILib/` | NDI SDK P/Invoke (existing) |
 | `S.Media.Core` | `Media/S.Media.Core/` | All interfaces & value types |
 | `S.Media.PortAudio` | `Audio/S.Media.PortAudio/` | PortAudio implementation of Core |
 | `S.Media.FFmpeg` | `Media/S.Media.FFmpeg/` | FFmpeg decoding + libswresample |
+| `S.Media.NDI` | `NDI/S.Media.NDI/` | NDI receive + send pipeline |
 
 ---
 
@@ -39,17 +41,18 @@ The pipeline is split into three concern layers:
 ```
 IAudioChannel.FillBuffer(srcSpan, srcFormat)
   │
-  ├─► IAudioResampler.Resample(srcRate → dstRate)   // rate-only; keeps srcChannels
+  ├─► IAudioResampler.Resample(srcRate → leaderRate)   // rate-only; keeps srcChannels
   │
-  ├─► ApplyChannelVolume(gain)                       // scalar multiply
+  ├─► ApplyChannelVolume(gain)                          // scalar multiply
   │
-  ├─► ChannelRouteMap.Scatter(srcCh → dstCh[], gain) // fan-out / cross-patch
+  ├─► ChannelRouteMap.Scatter → leader mix buffer       // fan-out / cross-patch
   │
-  └─► Sum into output buffer (dstChannels × dstFrames)
-
+  └─► ChannelRouteMap.Scatter → sink[0..N] mix buffers  // per-sink independent mixes
+                                                         // (explicit RouteTo or ChannelFallback)
 After all channels:
-  └─► ApplyMasterVolume()
-  └─► Write to IAudioOutput (PortAudio RT callback)
+  ├─► ApplyMasterVolume() on all buffers (leader + sinks)
+  ├─► Write leader mix buffer → IAudioOutput (PortAudio RT callback)
+  └─► Write each sink mix buffer → IAudioSink.ReceiveBuffer() [in-line, no hop]
 ```
 
 ---
@@ -103,7 +106,7 @@ public interface IMediaClock
 
 ```csharp
 public enum SampleType { Float32, Int16, Int24, Int32 }
-public enum PixelFormat { Bgra32, Nv12, Yuv420p, Uyvy422 }
+public enum PixelFormat { Bgra32, Rgba32, Nv12, Yuv420p, Uyvy422, Yuv422p10 }
 
 public readonly record struct AudioFormat(
     int        SampleRate,
@@ -175,6 +178,7 @@ public interface IAudioEngine : IDisposable
     IReadOnlyList<AudioHostApiInfo> GetHostApis();
     IReadOnlyList<AudioDeviceInfo>  GetDevices();
     AudioDeviceInfo?                GetDefaultOutputDevice();
+    AudioDeviceInfo?                GetDefaultInputDevice();
 }
 ```
 
@@ -187,6 +191,11 @@ public interface IAudioOutput : IMediaOutput
     IAudioMixer Mixer          { get; }
 
     void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer);
+
+    /// Replaces the mixer reference used by the RT callback.
+    /// Called by AggregateOutput so the callback invokes the aggregate mixer
+    /// instead of the local one, enabling fan-out without touching the RT thread.
+    void OverrideRtMixer(IAudioMixer mixer);
 }
 ```
 
@@ -313,6 +322,9 @@ Built-in fallback resampler used automatically by the mixer when `resampler: nul
 is passed to `AddChannel` and the source sample rate differs from the output.
 
 - **Algorithm:** linear interpolation (suitable for most playback use-cases).
+- **Cross-buffer continuity:** unconsumed tail frames from the end of each call are
+  saved internally and prepended to the next call's input, so the read-head is
+  seamless across `Resample()` call boundaries. Typical tail size: 1–3 frames.
 - **No external dependencies.**
 - For higher quality (e.g. professional audio, extreme rate ratios) inject a
   `SwrResampler` from `S.Media.FFmpeg` explicitly.
@@ -329,8 +341,9 @@ is passed to `AddChannel` and the source sample rate differs from the output.
 | Type | Implements | Notes |
 |---|---|---|
 | `PortAudioEngine` | `IAudioEngine` | Wraps `Pa_Initialize` / `Pa_Terminate`; builds device list from `PaHostApiInfo` + `PaDeviceInfo` |
-| `PortAudioOutput` | `IAudioOutput` | Opens PA stream in **callback mode**; callback calls `IAudioMixer.FillOutputBuffer` directly (zero allocation in RT path) |
+| `PortAudioOutput` | `IAudioOutput` | Opens PA stream in **callback mode**; callback calls `IAudioMixer.FillOutputBuffer` directly (zero allocation in RT path); `OverrideRtMixer` swaps the mixer reference atomically (`volatile`) |
 | `PortAudioClock` | `HardwareClock` | Constructed with `() => Native.Pa_GetStreamTime(stream)` |
+| `PortAudioSink` | `IAudioSink` | PA **blocking-write** mode; write thread; 8-buffer pool |
 
 ### Stream callback contract
 
@@ -373,19 +386,25 @@ The `swr_context` delay line is flushed on seek.
 
 ---
 
-## 6. Future: S.Media.NDI
+## 6. S.Media.NDI
 
-**Location:** `NDI/S.Media.NDI/` (planned, not yet scoped)
+**Location:** `NDI/S.Media.NDI/` ✅ implemented
 
 | Type | Implements | Notes |
 |---|---|---|
-| `NdiClock` | `MediaClockBase` | `TimeSpan.FromTicks(ndiTimestamp / 100)` (100 ns → `TimeSpan` ticks) |
-| `NdiAudioChannel` | `IAudioChannel` | Pulls from `NDIFrameSync.CaptureAudio`; FrameSync handles time-base correction |
-| `NdiVideoChannel` | `IMediaChannel<VideoFrame>` | Pulls from `NDIFrameSync.CaptureVideo` |
+| `NdiClock` | `MediaClockBase` | Stopwatch interpolation between NDI frame timestamps; `UpdateFromFrame(long)` |
+| `NdiAudioChannel` | `IAudioChannel` | Background capture via `NDIFrameSync.CaptureAudio`; FLTP→interleaved; pre-allocated `ConcurrentQueue<float[]>` pool; manual DropOldest returns buffers to pool |
+| `NdiVideoChannel` | `IMediaChannel<VideoFrame>` | Background capture via `NDIFrameSync.CaptureVideo`; `FreeVideo` called immediately after pixel copy |
+| `NdiAudioSink` | `IAudioSink` | Interleaved→planar on write thread; 8-buffer pool; optional `IAudioResampler` (auto-creates `LinearResampler` on rate mismatch) |
+| `NdiSource` | — | Lifecycle wrapper: `Open(source, options)` creates receiver + frame-sync + channels; `Start()` starts clock + capture threads; `Dispose()` tears down in order |
 
 NDI audio/video channels slot into the same `IAudioMixer` + `ChannelRouteMap`
 pipeline unchanged. The `NdiClock` can either drive the output clock directly, or
 slave to an existing `PortAudioClock` for A/V sync.
+
+NDI **input** source enumeration is handled by `NDIFinder` (from `NDILib`) — it is
+separate from `IAudioEngine`, which models hardware devices. `NdiSource.Open` accepts
+a `NdiDiscoveredSource` found by the application via `NDIFinder`.
 
 ---
 
@@ -421,4 +440,137 @@ slave to an existing `PortAudioClock` for A/V sync.
    parameter; it defaults to `LinearResampler` on mismatch. If the caller opens the
    output first (so the hardware rate is known), they can construct a `SwrResampler`
    directly and pass it in.
+
+---
+
+## 9. JackLib — `Audio/JackLib/`
+
+**Native library:** `libjack.so.0` (JACK2 on Linux; `libjack.dylib` on macOS)
+
+JackLib is a thin, self-contained P/Invoke wrapper around the JACK2 C API,
+analogous to `PALib` for PortAudio. Its primary role is **port and connection
+management** after a PortAudio/JACK stream has been opened — specifically:
+
+- Enumerating physical (hardware) output ports
+- Connecting our client's output ports to `system:playback_N`
+- Querying port metadata (name, flags, connection count)
+
+### Key types
+
+| Type | Access | Notes |
+|---|---|---|
+| `Native` | `internal` | Raw P/Invoke (libjack); `InternalsVisibleTo S.Media.PortAudio` |
+| `JackClient` | `public` | RAII wrapper: `Open()`, `Activate()`, `Dispose()`; manages callback delegate lifetimes |
+| `JackPortFlags` | `public enum` | `IsInput`, `IsOutput`, `IsPhysical`, `IsTerminal`, `CanMonitor` |
+| `JackOptions` | `public enum` | `NullOption`, `NoStartServer`, `UseExactName`, … |
+| `JackStatus` | `public enum` | `Failure`, `ServerStarted`, `NameNotUnique`, … |
+| `JackPortType` | `public static` | String constants: `DefaultAudio`, `DefaultMidi` |
+
+### JACK autoconnect workflow
+
+```
+1. Open PortAudio JACK stream (N channels).
+2. After Pa_StartStream(), create JackClient("my_app", JackOptions.NoStartServer).
+3. Query system playback:   GetPorts(flags: IsInput | IsPhysical)
+4. AutoConnectToPhysicalOutputs(ourPorts) — pairs ports 1→1, 2→2, etc.
+5. Dispose JackClient when the stream closes.
+```
+
+---
+
+## 10. Resolved design decisions (Q13–Q15)
+
+5. **`IAudioOutput` vs `IAudioSink` — keep separate (Q13 resolved)**  
+   `IAudioOutput` is clock-owning and RT-callback-driven.  
+   `IAudioSink` is clock-following and push-based (receives buffers from `AggregateOutput`).  
+   One `IAudioOutput` (leader) + N `IAudioSink` instances fan-out audio to multiple
+   devices/targets. Merging them would conflate RT and blocking-write threading contracts.
+
+6. **Channel count control (Q14 resolved)**  
+   `AudioDeviceInfo` already exposes `MaxOutputChannels` and `MaxInputChannels`
+   (populated from `PaDeviceInfo`). Helper methods `ClampOutputChannels(int)` and
+   `ClampInputChannels(int)` guard against out-of-range requests.  
+   `Open()` honours `requestedFormat.Channels` as-requested; callers should clamp first.  
+   JACK via PA reports its configured port limit as `MaxOutputChannels` — no special
+   JACK-specific code needed for channel count control.
+
+7. **JACK port management (Q15 resolved)**  
+   - **Flexible port count:** controlled via `requestedFormat.Channels` + `ClampOutputChannels`.
+   - **Autoconnect to hardware:** implemented in `JackLib.JackClient.AutoConnectToPhysicalOutputs()`.
+     Best-effort: if `libjack` is absent or PA host API is not JACK, `JackClient`
+     construction throws and the caller continues without autoconnect.
+   - **JackLib project:** `Audio/JackLib/` — thin P/Invoke wrapper analogous to `PALib`.
+
+---
+
+## 11. Per-output / per-sink channel routing ✅ Implemented
+
+### Architecture
+
+```
+IAudioChannel A ──┐  routeMap per target:
+IAudioChannel B ──┤→ AudioMixer ──→ [target 0 mix buffer] → IAudioOutput (leader)
+IAudioChannel C ──┘               ├─ [target 1 mix buffer] → Sink 1 (its own channels)
+                                  └─ [target 2 mix buffer] → Sink 2 (its own channels)
+```
+
+Each RT tick:
+1. **Pull** each channel's `FillBuffer` exactly **once** → `slot.ResampleBuf`
+2. **Resample** once (source rate → leader rate)
+3. **Scatter** into **N+1 independent mix buffers** — one per registered target — using
+   that target's per-channel `ChannelRouteMap` (or `ChannelFallback` policy if no route is set)
+4. **Write** leader mix buffer → hardware via `PortAudio` RT callback
+5. **Write** each sink's mix buffer → `sink.ReceiveBuffer(sinkBuf, ...)` directly from RT path
+
+### API
+
+```csharp
+// AudioMixer is now decoupled from IAudioOutput — constructed with just the format:
+var mixer = new AudioMixer(new AudioFormat(48000, 2));                    // default Silent
+var mixer = new AudioMixer(new AudioFormat(48000, 2), ChannelFallback.Broadcast);
+
+// VirtualAudioOutput: hardware-free clock master for pure-sink scenarios:
+var virtualOut = new VirtualAudioOutput(new AudioFormat(48000, 2), framesPerBuffer: 512);
+var agg        = new AggregateOutput(virtualOut);
+
+// Register sinks as routing targets:
+agg.AddSink(portAudioSink);   // channels = 0 → use leader channel count
+agg.AddSink(ndiAudioSink);
+
+// Route A exclusively to the PortAudio sink, B exclusively to NDI — shared clock:
+agg.Mixer.AddChannel(channelA, ChannelRouteMap.Silence());  // silent on leader mix
+agg.Mixer.AddChannel(channelB, ChannelRouteMap.Silence());
+agg.Mixer.RouteTo(channelA.Id, portAudioSink, ChannelRouteMap.Identity(2));
+agg.Mixer.RouteTo(channelB.Id, ndiAudioSink,  ChannelRouteMap.Identity(2));
+
+// Dynamic re-routing at runtime (no re-add required):
+agg.Mixer.UnrouteTo(channelA.Id, portAudioSink);
+agg.Mixer.RouteTo  (channelA.Id, ndiAudioSink, ChannelRouteMap.Identity(2));
+
+// Remove sink entirely (routes cleaned up automatically):
+agg.Mixer.UnregisterSink(ndiAudioSink);
+```
+
+### Components implemented
+
+| Component | Implementation |
+|---|---|
+| `Audio/ChannelFallback.cs` | `Silent` / `Broadcast` enum |
+| `IAudioMixer` | `LeaderFormat` (was `Output`), `DefaultFallback`, `RouteTo`, `UnrouteTo`, `RegisterSink`, `UnregisterSink` |
+| `AudioMixer` constructor | `AudioMixer(AudioFormat leaderFormat, ChannelFallback)` — no longer holds an `IAudioOutput` back-reference |
+| `AudioMixer` nested types | `SinkTarget` (per-sink mix buffer), `SinkRoute` (baked scatter table), `ChannelSlot` (volatile copy-on-write `SinkRoute[]`) |
+| `AudioMixer.FillOutputBuffer` | Pull-once → resample → scatter into leader buffer → scatter into N sink buffers → distribute |
+| `Audio/VirtualAudioOutput.cs` | Hardware-free `IAudioOutput`; `StopwatchClock` timer loop; enables pure-sink routing (A→C, B→D) with a shared clock and no physical device |
+| `Audio/Routing/ChannelRouteMap.Silence()` | Empty route map — channel contributes nothing to leader mix; use when routing exclusively via `RouteTo` |
+| `AggregateOutput.AddSink` | Calls `RegisterSink`; `RemoveSink` calls `UnregisterSink` |
+| `AggregateAudioMixer` | Delegates all new methods to inner `AudioMixer`; exposes `LeaderFormat` |
+
+### Resolved design decisions (Q16–Q19)
+
+| # | Question | Resolution |
+|---|---|---|
+| Q16 | Default fallback | `ChannelFallback.Silent` — channels are silent on sinks unless `RouteTo` is called. Configurable at `AudioMixer` construction. |
+| Q17 | API shape | **Option C** — `RouteTo` / `UnrouteTo` as separate post-`AddChannel` calls. Enables dynamic re-routing without re-adding the channel. |
+| Q18 | Channel data sharing | Fixed: `FillBuffer` called once per tick; `ResampleBuf` reused for all scatter passes. |
+| Q19 | Per-sink sample rate | Sinks receive audio at leader sample rate. Sinks needing a different rate apply their own internal resampler (e.g. `NdiAudioSink` already does this). |
 

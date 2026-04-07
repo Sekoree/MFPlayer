@@ -20,7 +20,11 @@ public sealed class PortAudioOutput : IAudioOutput
     private GCHandle        _gcHandle;
     private PortAudioClock? _clock;
     private AudioMixer?     _mixer;
+    // Normally null (falls back to _mixer); set by AggregateOutput.OverrideRtMixer
+    // to redirect the RT callback through the aggregate fan-out path.
+    private volatile IAudioMixer? _activeMixer;
     private AudioFormat     _hardwareFormat;
+    private int             _framesPerBuffer;
     private bool            _isRunning;
     private bool            _disposed;
 
@@ -30,6 +34,9 @@ public sealed class PortAudioOutput : IAudioOutput
     public IAudioMixer  Mixer          => _mixer  ?? throw new InvalidOperationException("Call Open() first.");
     public IMediaClock  Clock          => _clock  ?? throw new InvalidOperationException("Call Open() first.");
     public bool         IsRunning      => _isRunning;
+
+    /// <inheritdoc/>
+    public void OverrideRtMixer(IAudioMixer mixer) => _activeMixer = mixer;
 
     // ── Open ──────────────────────────────────────────────────────────────
 
@@ -72,13 +79,14 @@ public sealed class PortAudioOutput : IAudioOutput
         var info = Native.Pa_GetStreamInfo(_stream);
         double actualRate  = info?.sampleRate ?? requestedFormat.SampleRate;
         int    actualFrames = framesPerBuffer > 0 ? framesPerBuffer : 512; // sensible fallback
+        _framesPerBuffer = actualFrames;
         _hardwareFormat = requestedFormat with { SampleRate = (int)actualRate };
 
         // Build clock and mixer.
         _clock = PortAudioClock.Create(actualRate);
         _clock.SetStreamHandle(_stream, actualFrames);
 
-        _mixer = new AudioMixer(this);
+        _mixer = new AudioMixer(_hardwareFormat);
     }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
@@ -93,6 +101,8 @@ public sealed class PortAudioOutput : IAudioOutput
             throw new InvalidOperationException(
                 $"Pa_StartStream failed: {Native.Pa_GetErrorText(err)} ({err})");
 
+        // Pre-allocate mixer scratch buffers before the RT callback can fire.
+        _mixer!.PrepareBuffers(_framesPerBuffer > 0 ? _framesPerBuffer : 512);
         _clock!.Start();
         _isRunning = true;
         return Task.CompletedTask;
@@ -126,12 +136,15 @@ public sealed class PortAudioOutput : IAudioOutput
         nint                  userData)
     {
         var self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
-        if (self?._mixer is null) return (int)PaStreamCallbackResult.paAbort;
+        if (self is null) return (int)PaStreamCallbackResult.paAbort;
+
+        var mixer = self._activeMixer ?? self._mixer;
+        if (mixer is null) return (int)PaStreamCallbackResult.paAbort;
 
         int totalSamples = (int)frameCount * self._hardwareFormat.Channels;
         var dest = new Span<float>((void*)output, totalSamples);
 
-        self._mixer.FillOutputBuffer(dest, (int)frameCount, self._hardwareFormat);
+        mixer.FillOutputBuffer(dest, (int)frameCount, self._hardwareFormat);
         return (int)PaStreamCallbackResult.paContinue;
     }
 

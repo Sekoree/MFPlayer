@@ -97,5 +97,13 @@ public sealed class ChannelRouteMap
         for (int i = 0; i < srcChannels; i++) b.Route(i, dstChannel, gainPerChannel);
         return b.Build();
     }
+
+    /// <summary>
+    /// A route map with no entries — all source channels produce silence in the destination.
+    /// Use when you want a channel to appear in the mixer (for bookkeeping) but not contribute
+    /// to a specific mix buffer. Typically passed as the leader route when routing a channel
+    /// exclusively to sinks via <see cref="IAudioMixer.RouteTo"/>.
+    /// </summary>
+    public static ChannelRouteMap Silence() => new([]);
 }
 

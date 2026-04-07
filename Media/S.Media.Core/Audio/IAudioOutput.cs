@@ -29,5 +29,12 @@ public interface IAudioOutput : IMediaOutput
     /// Requested hardware buffer size in frames. Pass 0 to let the driver choose.
     /// </param>
     void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0);
-}
 
+    /// <summary>
+    /// Replaces the <see cref="IAudioMixer"/> invoked by the RT callback.
+    /// Called by <see cref="AggregateOutput"/> to intercept the fill path so it can
+    /// distribute audio to additional sinks after the primary buffer is filled.
+    /// Not intended for direct use by application code.
+    /// </summary>
+    void OverrideRtMixer(IAudioMixer mixer);
+}

@@ -8,51 +8,81 @@ using S.Media.Core.Audio;
 
 /// <summary>
 /// Concrete implementation of <see cref="IAudioMixer"/>.
-/// Thread-safe channel management; RT-safe (allocation-free) <see cref="FillOutputBuffer"/>.
+///
+/// <para>
+/// Each registered <see cref="IAudioSink"/> gets its own independent mix buffer built from
+/// only the channels explicitly routed to it via <see cref="RouteTo"/> (or all channels when
+/// <see cref="ChannelFallback.Broadcast"/> is configured). <see cref="IAudioSink.ReceiveBuffer"/>
+/// is called directly from inside <see cref="FillOutputBuffer"/> on the RT thread.
+/// </para>
+/// <para>
+/// Sample-rate conversion is always source → leader rate (one pass per channel, shared across all
+/// sinks). Sinks that require a different sample rate should use an internal resampler.
+/// </para>
 /// </summary>
 public sealed class AudioMixer : IAudioMixer
 {
-    // ── Channel slot ──────────────────────────────────────────────────────
+    // ── Nested types ──────────────────────────────────────────────────────
+
+    private sealed class SinkTarget
+    {
+        public readonly IAudioSink Sink;
+        public          int        Channels;   // 0 = resolve lazily from leader channel count
+        public          float[]    MixBuffer = [];
+        public SinkTarget(IAudioSink sink, int channels) { Sink = sink; Channels = channels; }
+    }
+
+    private sealed class SinkRoute
+    {
+        public readonly SinkTarget           Target;
+        public readonly (int dst, float gain)[][] BakedRoutes;
+        public SinkRoute(SinkTarget target, (int dst, float gain)[][] baked)
+        { Target = target; BakedRoutes = baked; }
+    }
 
     private sealed class ChannelSlot
     {
-        public readonly IAudioChannel          Channel;
-        public readonly IAudioResampler        Resampler;
-        public readonly (int dst, float gain)[][] BakedRoutes; // [srcCh][routeIdx]
-        public readonly bool                   OwnsResampler;
+        public readonly IAudioChannel              Channel;
+        public readonly IAudioResampler?           Resampler;         // src→leader; null if same rate
+        public readonly (int dst, float gain)[][]  LeaderBakedRoutes;
+        public readonly bool                       OwnsResampler;
 
-        // Pre-allocated scratch buffers (sized on first FillOutputBuffer call)
         public float[] SrcBuf      = [];
         public float[] ResampleBuf = [];
 
-        public ChannelSlot(IAudioChannel ch, IAudioResampler rs,
-                           (int, float)[][] baked, bool ownsRs)
+        // Copy-on-write; volatile so RT path gets a consistent snapshot without locking.
+        public volatile SinkRoute[] SinkRoutes = [];
+
+        public ChannelSlot(IAudioChannel ch, IAudioResampler? rs,
+                           (int dst, float gain)[][] leaderBaked, bool ownsRs)
         {
-            Channel       = ch;
-            Resampler     = rs;
-            BakedRoutes   = baked;
-            OwnsResampler = ownsRs;
+            Channel           = ch;
+            Resampler         = rs;
+            LeaderBakedRoutes = leaderBaked;
+            OwnsResampler     = ownsRs;
         }
     }
 
     // ── State ─────────────────────────────────────────────────────────────
 
-    // Snapshot array — replaced atomically on Add/Remove; never mutated in-place.
-    private volatile ChannelSlot[] _slots = [];
-    private readonly object        _editLock = new();
+    private volatile ChannelSlot[] _slots       = [];
+    private volatile SinkTarget[]  _sinkTargets = [];
+    private readonly object        _editLock    = new();
 
-    private float[] _mixBuffer   = [];
-    private float[] _peakLevels  = [];
-    private float[] _peakSnapshot= [];  // exposed via PeakLevels (avoids array allocation on get)
+    private float[] _mixBuffer    = [];
+    private float[] _peakLevels   = [];
+    private float[] _peakSnapshot = [];
 
+    private int  _framesPerBuffer;
     private bool _disposed;
+    private volatile float _masterVolume = 1.0f;
 
     // ── IAudioMixer ───────────────────────────────────────────────────────
 
-    public IAudioOutput Output       { get; }
-    public int          ChannelCount => _slots.Length;
+    public AudioFormat     LeaderFormat    { get; }
+    public int             ChannelCount    => _slots.Length;
+    public ChannelFallback DefaultFallback { get; }
 
-    private volatile float _masterVolume = 1.0f;
     public float MasterVolume
     {
         get => _masterVolume;
@@ -61,41 +91,100 @@ public sealed class AudioMixer : IAudioMixer
 
     public IReadOnlyList<float> PeakLevels => _peakSnapshot;
 
-    public AudioMixer(IAudioOutput output)
+    /// <param name="leaderFormat">
+    /// Audio format of the leader output (sample rate + channel count).
+    /// Used for resampler decisions and mix-buffer sizing.
+    /// </param>
+    /// <param name="defaultFallback">
+    /// Routing policy for channels that have no explicit sink route.
+    /// Defaults to <see cref="ChannelFallback.Silent"/>.
+    /// </param>
+    public AudioMixer(AudioFormat leaderFormat, ChannelFallback defaultFallback = ChannelFallback.Silent)
     {
-        Output = output ?? throw new ArgumentNullException(nameof(output));
+        LeaderFormat    = leaderFormat;
+        DefaultFallback = defaultFallback;
     }
 
-    // ── Channel management (user thread) ─────────────────────────────────
+    // ── Pre-allocation ────────────────────────────────────────────────────
 
-    public void AddChannel(
-        IAudioChannel    channel,
-        ChannelRouteMap  routeMap,
-        IAudioResampler? resampler = null)
+    public void PrepareBuffers(int framesPerBuffer)
+    {
+        if (framesPerBuffer <= 0) return;
+        _framesPerBuffer = framesPerBuffer;
+        int outCh = LeaderFormat.Channels;
+        EnsureWorkBuffers(framesPerBuffer * outCh, outCh);
+
+        foreach (var slot in _slots)
+            AllocateSlotBuffers(slot, framesPerBuffer);
+
+        foreach (var st in _sinkTargets)
+        {
+            int ch = ResolvedSinkChannels(st, outCh);
+            st.Channels  = ch;
+            st.MixBuffer = new float[framesPerBuffer * ch];
+        }
+    }
+
+    private void AllocateSlotBuffers(ChannelSlot slot, int framesPerBuffer)
+    {
+        var srcFmt    = slot.Channel.SourceFormat;
+        int srcCh     = srcFmt.Channels;
+        bool sameRate = slot.Resampler == null;
+
+        int srcFrames = sameRate
+            ? framesPerBuffer
+            : (int)Math.Ceiling(framesPerBuffer * ((double)srcFmt.SampleRate / LeaderFormat.SampleRate)) + 1;
+
+        slot.SrcBuf      = new float[srcFrames * srcCh];
+        slot.ResampleBuf = new float[framesPerBuffer * srcCh];
+    }
+
+    private static int ResolvedSinkChannels(SinkTarget st, int leaderChannels)
+        => st.Channels > 0 ? st.Channels : leaderChannels;
+
+    // ── Channel management ────────────────────────────────────────────────
+
+    public void AddChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(routeMap);
 
         bool ownsResampler = false;
-        if (resampler == null &&
-            channel.SourceFormat.SampleRate != Output.HardwareFormat.SampleRate)
+        bool sameRate = channel.SourceFormat.SampleRate == LeaderFormat.SampleRate;
+
+        if (resampler == null && !sameRate)
         {
             resampler     = new LinearResampler();
             ownsResampler = true;
         }
-        resampler ??= new LinearResampler(); // identity path (rates match → fast copy)
 
         var baked = routeMap.BakeRoutes(channel.SourceFormat.Channels);
         var slot  = new ChannelSlot(channel, resampler, baked, ownsResampler);
+
+        if (_framesPerBuffer > 0)
+            AllocateSlotBuffers(slot, _framesPerBuffer);
+
+        // Broadcast: pre-create default sink routes for all already-registered sinks.
+        if (DefaultFallback == ChannelFallback.Broadcast)
+        {
+            var sinkTargets = _sinkTargets;
+            if (sinkTargets.Length > 0)
+            {
+                var initialRoutes = new SinkRoute[sinkTargets.Length];
+                for (int i = 0; i < sinkTargets.Length; i++)
+                    initialRoutes[i] = new SinkRoute(sinkTargets[i], baked);
+                slot.SinkRoutes = initialRoutes;
+            }
+        }
 
         lock (_editLock)
         {
             var old = _slots;
             var neo = new ChannelSlot[old.Length + 1];
             old.CopyTo(neo, 0);
-            neo[^1]  = slot;
-            _slots   = neo; // volatile write — RT thread sees new array atomically
+            neo[^1] = slot;
+            _slots  = neo;
         }
     }
 
@@ -112,14 +201,90 @@ public sealed class AudioMixer : IAudioMixer
             var neo = new ChannelSlot[old.Length - 1];
             for (int i = 0, j = 0; i < old.Length; i++)
             {
-                if (i == idx)
-                {
-                    if (old[i].OwnsResampler) old[i].Resampler.Dispose();
-                    continue;
-                }
+                if (i == idx) { if (old[i].OwnsResampler) old[i].Resampler?.Dispose(); continue; }
                 neo[j++] = old[i];
             }
             _slots = neo;
+        }
+    }
+
+    // ── Per-sink routing ──────────────────────────────────────────────────
+
+    public void RouteTo(Guid channelId, IAudioSink sink, ChannelRouteMap routeMap)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(routeMap);
+        lock (_editLock)
+        {
+            var slot = FindSlot(channelId);
+            if (slot == null) return;
+
+            var target = FindTarget(sink)
+                ?? throw new InvalidOperationException(
+                    "Sink is not registered. Call AggregateOutput.AddSink (or Mixer.RegisterSink) first.");
+
+            var baked = routeMap.BakeRoutes(slot.Channel.SourceFormat.Channels);
+            SetSinkRouteOnSlot(slot, target, baked);
+        }
+    }
+
+    public void UnrouteTo(Guid channelId, IAudioSink sink)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        lock (_editLock)
+        {
+            var slot   = FindSlot(channelId);   if (slot   == null) return;
+            var target = FindTarget(sink);       if (target == null) return;
+            RemoveSinkRouteFromSlot(slot, target);
+        }
+    }
+
+    // ── Sink registration ─────────────────────────────────────────────────
+
+    public void RegisterSink(IAudioSink sink, int channels = 0)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        lock (_editLock)
+        {
+            if (FindTarget(sink) != null) return; // idempotent
+
+            int ch = channels > 0 ? channels : TryGetLeaderChannels();
+            var target = new SinkTarget(sink, ch);
+
+            if (_framesPerBuffer > 0 && ch > 0)
+                target.MixBuffer = new float[_framesPerBuffer * ch];
+
+            if (DefaultFallback == ChannelFallback.Broadcast)
+                foreach (var slot in _slots)
+                    SetSinkRouteOnSlot(slot, target, slot.LeaderBakedRoutes);
+
+            var old = _sinkTargets;
+            var neo = new SinkTarget[old.Length + 1];
+            old.CopyTo(neo, 0);
+            neo[^1] = target;
+            _sinkTargets = neo;
+        }
+    }
+
+    public void UnregisterSink(IAudioSink sink)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        lock (_editLock)
+        {
+            var old = _sinkTargets;
+            int idx = -1;
+            for (int i = 0; i < old.Length; i++)
+                if (ReferenceEquals(old[i].Sink, sink)) { idx = i; break; }
+            if (idx < 0) return;
+
+            var target = old[idx];
+            foreach (var slot in _slots)
+                RemoveSinkRouteFromSlot(slot, target);
+
+            var neo = new SinkTarget[old.Length - 1];
+            for (int i = 0, j = 0; i < old.Length; i++)
+                if (i != idx) neo[j++] = old[i];
+            _sinkTargets = neo;
         }
     }
 
@@ -130,24 +295,31 @@ public sealed class AudioMixer : IAudioMixer
         int outCh      = outputFormat.Channels;
         int outSamples = frameCount * outCh;
 
-        // One-time lazy allocation (first call only; PA always uses same frameCount).
         EnsureWorkBuffers(outSamples, outCh);
-
-        // Zero mix buffer
         _mixBuffer.AsSpan(0, outSamples).Clear();
 
-        // Snapshot — no lock; volatile read is atomic for reference types.
-        var slots = _slots;
+        var sinkTargets = _sinkTargets;
+        for (int si = 0; si < sinkTargets.Length; si++)
+        {
+            var st     = sinkTargets[si];
+            int sinkCh = ResolvedSinkChannels(st, outCh);
+            int sinkN  = frameCount * sinkCh;
+            if (st.MixBuffer.Length < sinkN)
+                st.MixBuffer = new float[sinkN];
+            st.MixBuffer.AsSpan(0, sinkN).Clear();
+        }
 
+        var slots = _slots;
         foreach (var slot in slots)
         {
-            var srcFmt     = slot.Channel.SourceFormat;
-            int srcCh      = srcFmt.Channels;
-            double ratio   = (double)srcFmt.SampleRate / outputFormat.SampleRate;
-            int srcFrames  = (int)Math.Ceiling(frameCount * ratio) + 1;
+            var srcFmt    = slot.Channel.SourceFormat;
+            int srcCh     = srcFmt.Channels;
+            bool sameRate = slot.Resampler == null;
+
+            int srcFrames  = sameRate ? frameCount
+                : (int)Math.Ceiling(frameCount * ((double)srcFmt.SampleRate / outputFormat.SampleRate)) + 1;
             int srcSamples = srcFrames * srcCh;
 
-            // Ensure per-slot scratch buffers
             if (slot.SrcBuf.Length < srcSamples)
                 slot.SrcBuf = new float[srcSamples];
             if (slot.ResampleBuf.Length < frameCount * srcCh)
@@ -156,34 +328,132 @@ public sealed class AudioMixer : IAudioMixer
             // 1. Pull
             slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, srcSamples), srcFrames);
 
-            // 2. Resample (rate only; channels preserved)
-            slot.Resampler.Resample(
-                slot.SrcBuf.AsSpan(0, srcSamples),
-                slot.ResampleBuf.AsSpan(0, frameCount * srcCh),
-                srcFmt, outputFormat.SampleRate);
+            // 2. Resample to leader rate (or direct copy)
+            if (sameRate)
+                slot.SrcBuf.AsSpan(0, frameCount * srcCh)
+                    .CopyTo(slot.ResampleBuf.AsSpan(0, frameCount * srcCh));
+            else
+                slot.Resampler!.Resample(
+                    slot.SrcBuf.AsSpan(0, srcSamples),
+                    slot.ResampleBuf.AsSpan(0, frameCount * srcCh),
+                    srcFmt, outputFormat.SampleRate);
 
-            // 3. Apply channel volume
+            // 3. Per-channel volume
             float vol = slot.Channel.Volume;
             if (Math.Abs(vol - 1.0f) > 1e-5f)
                 MultiplyInPlace(slot.ResampleBuf.AsSpan(0, frameCount * srcCh), vol);
 
-            // 4. Scatter via route map
-            ScatterIntoMix(_mixBuffer, slot.ResampleBuf, frameCount, srcCh, outCh, slot.BakedRoutes);
+            // 4. Scatter into leader mix buffer
+            ScatterIntoMix(_mixBuffer, slot.ResampleBuf, frameCount, srcCh, outCh, slot.LeaderBakedRoutes);
+
+            // 5. Scatter into each sink's mix buffer
+            var sinkRoutes = slot.SinkRoutes;
+            for (int si = 0; si < sinkTargets.Length; si++)
+            {
+                var st     = sinkTargets[si];
+                int sinkCh = ResolvedSinkChannels(st, outCh);
+
+                SinkRoute? route = null;
+                for (int ri = 0; ri < sinkRoutes.Length; ri++)
+                    if (ReferenceEquals(sinkRoutes[ri].Target, st)) { route = sinkRoutes[ri]; break; }
+
+                if (route != null)
+                    ScatterIntoMix(st.MixBuffer, slot.ResampleBuf, frameCount, srcCh, sinkCh, route.BakedRoutes);
+                else if (DefaultFallback == ChannelFallback.Broadcast)
+                    ScatterIntoMix(st.MixBuffer, slot.ResampleBuf, frameCount, srcCh, sinkCh, slot.LeaderBakedRoutes);
+            }
         }
 
-        // 5. Master volume
-        float mv = _masterVolume;
-        if (Math.Abs(mv - 1.0f) > 1e-5f)
+        // 6. Master volume (leader + all sinks)
+        float mv    = _masterVolume;
+        bool applyMv = Math.Abs(mv - 1.0f) > 1e-5f;
+        if (applyMv)
+        {
             MultiplyInPlace(_mixBuffer.AsSpan(0, outSamples), mv);
+            for (int si = 0; si < sinkTargets.Length; si++)
+            {
+                var st     = sinkTargets[si];
+                int sinkCh = ResolvedSinkChannels(st, outCh);
+                MultiplyInPlace(st.MixBuffer.AsSpan(0, frameCount * sinkCh), mv);
+            }
+        }
 
-        // 6. Update peak levels
+        // 7. Peak levels (leader)
         UpdatePeaks(_mixBuffer.AsSpan(0, outSamples), outCh);
 
-        // 7. Copy to output
+        // 8. Copy leader mix to hardware buffer
         _mixBuffer.AsSpan(0, outSamples).CopyTo(dest);
+
+        // 9. Distribute per-sink mixes (RT-safe: no alloc, no lock)
+        for (int si = 0; si < sinkTargets.Length; si++)
+        {
+            var st = sinkTargets[si];
+            if (!st.Sink.IsRunning) continue;
+            int sinkCh  = ResolvedSinkChannels(st, outCh);
+            var sinkFmt = new AudioFormat(outputFormat.SampleRate, sinkCh);
+            st.Sink.ReceiveBuffer(st.MixBuffer.AsSpan(0, frameCount * sinkCh), frameCount, sinkFmt);
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
+
+    private ChannelSlot? FindSlot(Guid channelId)
+    {
+        foreach (var s in _slots)
+            if (s.Channel.Id == channelId) return s;
+        return null;
+    }
+
+    private SinkTarget? FindTarget(IAudioSink sink)
+    {
+        foreach (var st in _sinkTargets)
+            if (ReferenceEquals(st.Sink, sink)) return st;
+        return null;
+    }
+
+    private int TryGetLeaderChannels()
+    {
+        try   { return LeaderFormat.Channels; }
+        catch { return 0; }
+    }
+
+    private static void SetSinkRouteOnSlot(ChannelSlot slot, SinkTarget target,
+                                           (int dst, float gain)[][] baked)
+    {
+        var old = slot.SinkRoutes;
+        int existingIdx = -1;
+        for (int i = 0; i < old.Length; i++)
+            if (ReferenceEquals(old[i].Target, target)) { existingIdx = i; break; }
+
+        SinkRoute[] neo;
+        if (existingIdx >= 0)
+        {
+            neo = new SinkRoute[old.Length];
+            old.CopyTo(neo, 0);
+            neo[existingIdx] = new SinkRoute(target, baked);
+        }
+        else
+        {
+            neo = new SinkRoute[old.Length + 1];
+            old.CopyTo(neo, 0);
+            neo[^1] = new SinkRoute(target, baked);
+        }
+        slot.SinkRoutes = neo;
+    }
+
+    private static void RemoveSinkRouteFromSlot(ChannelSlot slot, SinkTarget target)
+    {
+        var old = slot.SinkRoutes;
+        int idx = -1;
+        for (int i = 0; i < old.Length; i++)
+            if (ReferenceEquals(old[i].Target, target)) { idx = i; break; }
+        if (idx < 0) return;
+
+        var neo = new SinkRoute[old.Length - 1];
+        for (int i = 0, j = 0; i < old.Length; i++)
+            if (i != idx) neo[j++] = old[i];
+        slot.SinkRoutes = neo;
+    }
 
     private void EnsureWorkBuffers(int outSamples, int outCh)
     {
@@ -196,8 +466,7 @@ public sealed class AudioMixer : IAudioMixer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void MultiplyInPlace(Span<float> buf, float gain)
     {
-        for (int i = 0; i < buf.Length; i++)
-            buf[i] *= gain;
+        for (int i = 0; i < buf.Length; i++) buf[i] *= gain;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -207,50 +476,40 @@ public sealed class AudioMixer : IAudioMixer
         (int dst, float gain)[][] bakedRoutes)
     {
         for (int f = 0; f < frameCount; f++)
-        {
             for (int sc = 0; sc < srcCh; sc++)
             {
                 float sample = src[f * srcCh + sc];
                 var routes   = bakedRoutes[sc];
                 for (int r = 0; r < routes.Length; r++)
                 {
-                    int   dc   = routes[r].dst;
-                    float gain = routes[r].gain;
+                    int dc = routes[r].dst;
                     if (dc < dstCh)
-                        mix[f * dstCh + dc] += sample * gain;
+                        mix[f * dstCh + dc] += sample * routes[r].gain;
                 }
             }
-        }
     }
 
     private void UpdatePeaks(Span<float> buf, int outCh)
     {
-        // Reset peaks each tick
         Array.Clear(_peakLevels);
-
         for (int i = 0; i < buf.Length; i++)
         {
-            int ch  = i % outCh;
             float a = Math.Abs(buf[i]);
-            if (a > _peakLevels[ch]) _peakLevels[ch] = a;
+            if (a > _peakLevels[i % outCh]) _peakLevels[i % outCh] = a;
         }
-
-        // Publish snapshot (copy so callers reading PeakLevels get a stable array)
         _peakLevels.AsSpan().CopyTo(_peakSnapshot);
     }
-
-    // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-
         lock (_editLock)
         {
             foreach (var s in _slots)
-                if (s.OwnsResampler) s.Resampler.Dispose();
-            _slots = [];
+                if (s.OwnsResampler) s.Resampler?.Dispose();
+            _slots       = [];
+            _sinkTargets = [];
         }
     }
 }

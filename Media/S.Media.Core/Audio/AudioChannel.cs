@@ -19,6 +19,7 @@ public sealed class AudioChannel : IAudioChannel
     private int      _currentOffset;
 
     private long     _framesConsumed;
+    private long     _framesInRing;   // tracks frames currently in the ring buffer
     private volatile bool _disposed;
 
     public Guid        Id           { get; } = Guid.NewGuid();
@@ -31,15 +32,7 @@ public sealed class AudioChannel : IAudioChannel
     public TimeSpan Position =>
         TimeSpan.FromSeconds((double)Interlocked.Read(ref _framesConsumed) / SourceFormat.SampleRate);
 
-    public int BufferAvailable
-    {
-        get
-        {
-            // Approximate: count chunks × frames-per-chunk is not tracked here;
-            // expose the channel's count as a best-effort estimate.
-            try { return _reader.Count; } catch { return 0; }
-        }
-    }
+    public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
@@ -67,12 +60,15 @@ public sealed class AudioChannel : IAudioChannel
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         await _writer.WriteAsync(frames.ToArray(), ct).ConfigureAwait(false);
+        Interlocked.Add(ref _framesInRing, frames.Length / SourceFormat.Channels);
     }
 
     public bool TryWrite(ReadOnlySpan<float> frames)
     {
         if (_disposed) return false;
-        return _writer.TryWrite(frames.ToArray());
+        if (!_writer.TryWrite(frames.ToArray())) return false;
+        Interlocked.Add(ref _framesInRing, frames.Length / SourceFormat.Channels);
+        return true;
     }
 
     // ── Pull (called from RT thread — no allocation, no blocking) ─────────
@@ -88,6 +84,11 @@ public sealed class AudioChannel : IAudioChannel
             // Refill current chunk if exhausted
             if (_currentChunk == null || _currentOffset >= _currentChunk.Length)
             {
+                if (_currentChunk != null)
+                {
+                    // Fully consumed — account for any remaining frames already subtracted sample-by-sample
+                    _currentChunk = null;
+                }
                 if (!_reader.TryRead(out _currentChunk))
                 {
                     // Underrun — fill remainder with silence
@@ -110,6 +111,7 @@ public sealed class AudioChannel : IAudioChannel
         }
 
         Interlocked.Add(ref _framesConsumed, frameCount);
+        Interlocked.Add(ref _framesInRing, -frameCount);
         return frameCount;
     }
 
@@ -119,6 +121,7 @@ public sealed class AudioChannel : IAudioChannel
         _currentChunk  = null;
         _currentOffset = 0;
         while (_reader.TryRead(out _)) { }
+        Interlocked.Exchange(ref _framesInRing, 0);
         Interlocked.Exchange(ref _framesConsumed,
             (long)(position.TotalSeconds * SourceFormat.SampleRate));
     }

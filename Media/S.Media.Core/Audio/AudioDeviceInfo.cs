@@ -32,5 +32,18 @@ public sealed record AudioDeviceInfo(
     int    MaxOutputChannels,
     double DefaultSampleRate,
     double DefaultLowOutputLatency,
-    double DefaultHighOutputLatency);
+    double DefaultHighOutputLatency)
+{
+    /// <summary>
+    /// Returns <c>Math.Min(requested, <see cref="MaxOutputChannels"/>)</c>.
+    /// Useful for clamping a channel request to what the device actually supports,
+    /// including JACK (which may report up to 256 output ports).
+    /// </summary>
+    public int ClampOutputChannels(int requested) => Math.Min(requested, MaxOutputChannels);
+
+    /// <summary>
+    /// Returns <c>Math.Min(requested, <see cref="MaxInputChannels"/>)</c>.
+    /// </summary>
+    public int ClampInputChannels(int requested) => Math.Min(requested, MaxInputChannels);
+}
 

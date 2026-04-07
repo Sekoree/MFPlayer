@@ -63,10 +63,14 @@ public sealed class NdiVideoChannel : IMediaChannel<VideoFrame>
 
             _clock.UpdateFromFrame(frame.Timestamp);
 
-            // NDI BGRA is already BGRA32 — copy the data.
+            // Copy pixel data into a managed buffer.
+            // Note: per-frame allocation is unavoidable here while VideoFrame.Data is
+            // ReadOnlyMemory<byte> — pooling requires making VideoFrame IDisposable.
             int size = frame.Xres * frame.Yres * 4;
             var buf  = new byte[size];
             System.Runtime.InteropServices.Marshal.Copy(frame.PData, buf, 0, size);
+
+            _frameSync.FreeVideo(frame); // release NDI buffer as soon as data is copied
 
             double tsSecs = frame.Timestamp / 10_000_000.0;
             var vf = new VideoFrame(

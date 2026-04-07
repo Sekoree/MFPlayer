@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using NDILib;
@@ -9,8 +10,12 @@ namespace S.Media.NDI;
 /// <summary>
 /// <see cref="IAudioChannel"/> that pulls audio from an NDI source via
 /// <see cref="NDIFrameSync.CaptureAudio"/>.
-/// Runs a background capture thread that writes interleaved Float32 samples
-/// into a bounded ring buffer; the mixer reads via <see cref="FillBuffer"/>.
+/// Runs a background capture thread that writes interleaved Float32 samples into a
+/// bounded ring buffer; the mixer reads via <see cref="FillBuffer"/>.
+/// <para>
+/// A pre-allocated pool of <c>float[]</c> arrays avoids per-frame heap allocations.
+/// Fully consumed buffers are returned to the pool immediately after the RT pull.
+/// </para>
 /// </summary>
 public sealed class NdiAudioChannel : IAudioChannel
 {
@@ -22,13 +27,19 @@ public sealed class NdiAudioChannel : IAudioChannel
     private Thread?                  _captureThread;
     private CancellationTokenSource  _cts = new();
 
+    // Ring uses Wait mode so we can implement DropOldest manually and return buffers to pool.
     private readonly Channel<float[]>       _ring;
     private readonly ChannelReader<float[]> _ringReader;
     private readonly ChannelWriter<float[]> _ringWriter;
 
+    // Pre-allocated buffer pool: bufferDepth + 4 arrays, each sized for one NDI capture block.
+    private readonly ConcurrentQueue<float[]> _pool = new();
+    private const int FramesPerCapture = 1024;
+
     private float[]? _currentChunk;
     private int      _currentOffset;
     private long     _framesConsumed;
+    private long     _framesInRing;   // accurate frame count (not chunk count)
     private bool     _disposed;
 
     public Guid        Id           { get; } = Guid.NewGuid();
@@ -39,7 +50,7 @@ public sealed class NdiAudioChannel : IAudioChannel
     public int         BufferDepth  { get; }
     public TimeSpan    Position =>
         TimeSpan.FromSeconds((double)Interlocked.Read(ref _framesConsumed) / SourceFormat.SampleRate);
-    public int         BufferAvailable => _ringReader.Count;
+    public int         BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
@@ -65,12 +76,17 @@ public sealed class NdiAudioChannel : IAudioChannel
         _ring = Channel.CreateBounded<float[]>(
             new BoundedChannelOptions(bufferDepth)
             {
-                FullMode = BoundedChannelFullMode.DropOldest, // NDI is live — drop oldest on overflow
+                FullMode     = BoundedChannelFullMode.Wait, // we do manual DropOldest below
                 SingleReader = true,
                 SingleWriter = true
             });
         _ringReader = _ring.Reader;
         _ringWriter = _ring.Writer;
+
+        // Pre-allocate pool: bufferDepth + 4 to cover ring capacity + in-flight captures.
+        int poolBufSize = FramesPerCapture * channels;
+        for (int i = 0; i < bufferDepth + 4; i++)
+            _pool.Enqueue(new float[poolBufSize]);
     }
 
     // ── Capture thread ────────────────────────────────────────────────────
@@ -88,41 +104,54 @@ public sealed class NdiAudioChannel : IAudioChannel
 
     private void CaptureLoop()
     {
-        const int framesPerCapture = 1024;
         var token = _cts.Token;
         while (!token.IsCancellationRequested)
         {
             _frameSync.CaptureAudio(out var frame,
-                _requestedSampleRate, _requestedChannels, framesPerCapture);
+                _requestedSampleRate, _requestedChannels, FramesPerCapture);
 
             if (frame.NoSamples <= 0) { Thread.Sleep(1); continue; }
 
             _clock.UpdateFromFrame(frame.Timestamp);
 
-            // NDI audio is FLTP (planar float). Convert to interleaved Float32.
-            var interleaved = PlanarToInterleaved(frame);
-            _ringWriter.TryWrite(interleaved);
+            // Borrow from pool (fallback to new alloc on pool exhaustion).
+            int totalSamples = frame.NoSamples * frame.NoChannels;
+            if (!_pool.TryDequeue(out var buf) || buf.Length < totalSamples)
+                buf = new float[totalSamples];
+
+            PlanarToInterleaved(frame, buf);
+            _frameSync.FreeAudio(frame); // release NDI buffer as soon as data is copied
+
+            // Manual DropOldest: evict and return old buffers if ring is full.
+            while (_ringReader.Count >= BufferDepth)
+            {
+                if (_ringReader.TryRead(out var old))
+                {
+                    Interlocked.Add(ref _framesInRing, -(old.Length / _requestedChannels));
+                    _pool.Enqueue(old);
+                }
+            }
+            _ringWriter.TryWrite(buf);
+            Interlocked.Add(ref _framesInRing, frame.NoSamples);
         }
     }
 
-    private static unsafe float[] PlanarToInterleaved(NdiAudioFrameV3 frame)
+    private static unsafe void PlanarToInterleaved(NdiAudioFrameV3 frame, float[] dest)
     {
-        int channels   = frame.NoChannels;
-        int samples    = frame.NoSamples;
-        int stride     = frame.ChannelStrideInBytes / sizeof(float);
-        var result     = new float[samples * channels];
-        float* pBase   = (float*)frame.PData;
+        int channels = frame.NoChannels;
+        int samples  = frame.NoSamples;
+        int stride   = frame.ChannelStrideInBytes / sizeof(float);
+        float* pBase = (float*)frame.PData;
 
         for (int ch = 0; ch < channels; ch++)
         {
             float* pCh = pBase + ch * stride;
             for (int s = 0; s < samples; s++)
-                result[s * channels + ch] = pCh[s];
+                dest[s * channels + ch] = pCh[s];
         }
-        return result;
     }
 
-    // ── IAudioChannel pull ────────────────────────────────────────────────
+    // ── IAudioChannel pull (RT thread) ────────────────────────────────────
 
     public int FillBuffer(Span<float> dest, int frameCount)
     {
@@ -134,6 +163,12 @@ public sealed class NdiAudioChannel : IAudioChannel
         {
             if (_currentChunk == null || _currentOffset >= _currentChunk.Length)
             {
+                // Return fully consumed chunk to pool before fetching next.
+                if (_currentChunk != null)
+                {
+                    _pool.Enqueue(_currentChunk);
+                    _currentChunk = null;
+                }
                 if (!_ringReader.TryRead(out _currentChunk))
                 {
                     dest[filled..].Clear();
@@ -154,10 +189,11 @@ public sealed class NdiAudioChannel : IAudioChannel
         }
 
         Interlocked.Add(ref _framesConsumed, frameCount);
+        Interlocked.Add(ref _framesInRing, -frameCount);
         return frameCount;
     }
 
-    // ── Push (not applicable for NDI receive, provided for interface compat) ──
+    // ── Push (not applicable for NDI receive — provided for interface compat) ──
 
     public ValueTask WriteAsync(ReadOnlyMemory<float> frames, CancellationToken ct = default)
         => _ringWriter.WriteAsync(frames.ToArray(), ct);

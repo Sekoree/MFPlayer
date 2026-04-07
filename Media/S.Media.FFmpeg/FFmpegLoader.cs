@@ -10,7 +10,7 @@ namespace S.Media.FFmpeg;
 public static class FFmpegLoader
 {
     private static bool _loaded;
-    private static readonly object _lock = new();
+    private static readonly Lock _lock = new();
 
     /// <summary>
     /// Resolves FFmpeg shared libraries. On Linux/macOS the OS loader handles this
@@ -25,6 +25,7 @@ public static class FFmpegLoader
             if (_loaded) return;
             if (!string.IsNullOrEmpty(searchPath))
                 ffmpeg.RootPath = searchPath;
+            DynamicallyLoadedBindings.Initialize();
             // Force a cheap FFmpeg call to trigger native library load and surface errors early.
             _ = ffmpeg.avformat_version();
             _loaded = true;

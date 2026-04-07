@@ -15,6 +15,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     private readonly int                       _streamIndex;
     private readonly AVStream*                 _stream;
     private readonly ChannelReader<EncodedPacket> _packetReader;
+    private readonly int                       _threadCount;
 
     private AVCodecContext* _codecCtx;
     private SwrContext*     _swr;          // normalises codec output → AV_SAMPLE_FMT_FLT
@@ -52,12 +53,14 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     internal FFmpegAudioChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
-                                 int bufferDepth = 16)
+                                 int threadCount  = 0,
+                                 int bufferDepth  = 16)
     {
         _streamIndex  = streamIndex;
         _stream       = stream;
         _packetReader = packetReader;
         BufferDepth   = bufferDepth;
+        _threadCount  = threadCount;
 
         var cp = stream->codecpar;
         SourceFormat = new AudioFormat(cp->sample_rate, cp->ch_layout.nb_channels);
@@ -84,6 +87,8 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
         _codecCtx = ffmpeg.avcodec_alloc_context3(codec);
         ffmpeg.avcodec_parameters_to_context(_codecCtx, _stream->codecpar);
+        if (_threadCount >= 0)
+            _codecCtx->thread_count = _threadCount; // 0 = FFmpeg auto
         int ret = ffmpeg.avcodec_open2(_codecCtx, codec, null);
         if (ret < 0) throw new InvalidOperationException($"avcodec_open2 failed: {ret}");
 
@@ -144,7 +149,14 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
             var converted = DecodePacket(ep);
             if (converted != null)
-                _ringWriter.WriteAsync(converted, token).AsTask().GetAwaiter().GetResult();
+            {
+                var w = _ringWriter.WriteAsync(converted, token);
+                if (!w.IsCompletedSuccessfully)
+                {
+                    try { w.AsTask().GetAwaiter().GetResult(); }
+                    catch (OperationCanceledException) { break; }
+                }
+            }
         }
         _ringWriter.TryComplete();
     }
@@ -258,7 +270,6 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     internal void FlushAfterSeek()
     {
-        _ringWriter.TryWrite(EncodedPacket.Flush() is var _ ? Array.Empty<float>() : Array.Empty<float>());
         ffmpeg.avcodec_flush_buffers(_codecCtx);
         Seek(TimeSpan.Zero);
     }
