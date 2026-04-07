@@ -1,16 +1,6 @@
 namespace S.Media.Core.Clock;
 
-public interface IMediaClock
+public class IMediaClock
 {
-    double CurrentSeconds { get; }
-
-    bool IsRunning { get; }
-
-    int Start();
-
-    int Pause();
-
-    int Stop();
-
-    int Seek(double positionSeconds);
+    
 }
