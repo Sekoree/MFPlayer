@@ -119,18 +119,30 @@ public sealed class PortAudioSink : IAudioSink
     {
         if (!_running) return;
 
-        // Try to get a pre-allocated buffer from the pool.
-        if (!_pool.TryDequeue(out var dest)) return; // pool exhausted — drop this block
+        int outCh = _targetFormat.Channels;
+
+        // Compute rate-adjusted output frame count.
+        // When the sink's hardware rate differs from the leader's, writing the wrong number of
+        // frames to Pa_WriteStream causes the secondary stream to drift (or stall):
+        //   leader 48 kHz / 1024 frames → 21.33 ms; sink at 44.1 kHz needs 941 frames for the same window.
+        int writeFrames = sourceFormat.SampleRate == _targetFormat.SampleRate
+            ? frameCount
+            : (int)Math.Round((double)frameCount * _targetFormat.SampleRate / sourceFormat.SampleRate);
+        int writeSamples = writeFrames * outCh;
+
+        // Borrow a pool buffer. If the pooled buffer is too small (rate-mismatch first call),
+        // allocate a new one — subsequent calls reuse the correctly-sized buffer from the pool.
+        if (!_pool.TryDequeue(out var dest) || dest.Length < writeSamples)
+            dest = new float[writeSamples];
 
         if (_resampler != null && sourceFormat.SampleRate != _targetFormat.SampleRate)
         {
-            // Resample into dest (dest is sized for target frames × channels).
-            _resampler.Resample(buffer, dest.AsSpan(), sourceFormat, _targetFormat.SampleRate);
+            _resampler.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _targetFormat.SampleRate);
         }
         else
         {
-            int copy = Math.Min(buffer.Length, dest.Length);
-            buffer[..copy].CopyTo(dest.AsSpan());
+            int copy = Math.Min(buffer.Length, writeSamples);
+            buffer[..copy].CopyTo(dest.AsSpan(0, copy));
         }
 
         _pending.Enqueue(dest);
@@ -145,14 +157,17 @@ public sealed class PortAudioSink : IAudioSink
         {
             if (_pending.TryDequeue(out var buf))
             {
+                // Use actual buffer length as the frame count so rate-adjusted writes are
+                // correct even when writeFrames ≠ _framesPerBuffer.
+                int framesToWrite = buf.Length / _targetFormat.Channels;
                 fixed (float* ptr = buf)
-                    Native.Pa_WriteStream(_stream, (nint)ptr, (nuint)_framesPerBuffer);
+                    Native.Pa_WriteStream(_stream, (nint)ptr, (nuint)framesToWrite);
 
                 _pool.Enqueue(buf); // return buffer to pool
             }
             else
             {
-                Thread.SpinWait(100);
+                Thread.Yield(); // nothing pending — yield rather than spin-burn CPU
             }
         }
     }

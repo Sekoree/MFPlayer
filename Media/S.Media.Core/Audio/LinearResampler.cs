@@ -23,6 +23,11 @@ public sealed class LinearResampler : IAudioResampler
     private float[] _pendingBuf    = [];
     private int     _pendingFrames;
 
+    // Pre-allocated scratch buffer for the [pending ++ input] splice.
+    // Grown lazily; never shrunk. Avoids a heap allocation on every RT call when
+    // _pendingFrames > 0 (previously "float[]? tmp = new float[totalFrames * channels]").
+    private float[] _combinedBuf = [];
+
     private bool _disposed;
 
     public int Resample(
@@ -55,15 +60,17 @@ public sealed class LinearResampler : IAudioResampler
         int totalFrames  = pendingCount + inputFrames;
 
         ReadOnlySpan<float> effective;
-        float[]? tmp = null;
 
         if (pendingCount > 0)
         {
-            // Small allocation: pendingCount is typically 1-3 frames.
-            tmp = new float[totalFrames * channels];
-            _pendingBuf.AsSpan(0, pendingCount * channels).CopyTo(tmp);
-            input.CopyTo(tmp.AsSpan(pendingCount * channels));
-            effective = tmp;
+            // Grow the combined buffer lazily (typically 1-3 pending frames — stays small).
+            // Reusing _combinedBuf avoids a heap allocation on every RT call.
+            int need = totalFrames * channels;
+            if (_combinedBuf.Length < need)
+                _combinedBuf = new float[need + channels]; // +1-frame slack
+            _pendingBuf.AsSpan(0, pendingCount * channels).CopyTo(_combinedBuf);
+            input.CopyTo(_combinedBuf.AsSpan(pendingCount * channels));
+            effective = _combinedBuf.AsSpan(0, need);
         }
         else
         {

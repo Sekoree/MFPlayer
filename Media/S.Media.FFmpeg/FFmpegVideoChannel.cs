@@ -139,14 +139,18 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
 
             fixed (byte* p = ep.Data)
             {
-                _pkt->data     = ep.Data.Length > 0 ? p : null;
-                _pkt->size     = ep.Data.Length;
+                _pkt->data     = ep.ActualLength > 0 ? p : null;
+                _pkt->size     = ep.ActualLength;
                 _pkt->pts      = ep.Pts;
                 _pkt->dts      = ep.Dts;
                 _pkt->duration = ep.Duration;
             }
 
             if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) continue;
+
+            // Return the rented packet buffer now that it's been handed to the codec.
+            if (ep.IsPooled)
+                ArrayPool<byte>.Shared.Return(ep.Data);
 
             while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
             {

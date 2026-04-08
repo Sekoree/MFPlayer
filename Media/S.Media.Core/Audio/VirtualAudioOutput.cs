@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
@@ -107,21 +108,30 @@ public sealed class VirtualAudioOutput : IAudioOutput
 
     private async Task TickLoopAsync(CancellationToken ct)
     {
-        var fmt      = HardwareFormat;
-        var buf      = _silentBuf;
-        double intervalMs = _framesPerBuffer * 1000.0 / fmt.SampleRate;
+        var  fmt           = HardwareFormat;
+        var  buf           = _silentBuf;
+        // Tick-accurate absolute scheduler — same pattern as NDIAudioChannel.CaptureLoop.
+        // DateTime.UtcNow has ~15 ms resolution on Windows; Stopwatch has ~100 ns resolution.
+        var  sw            = Stopwatch.StartNew();
+        long intervalTicks = (long)((double)Stopwatch.Frequency * _framesPerBuffer / fmt.SampleRate);
+        long expectedTicks = 0L;
 
         while (!ct.IsCancellationRequested)
         {
-            var before = DateTime.UtcNow;
-            var mixer  = _activeMixer ?? _mixer;
+            var mixer = _activeMixer ?? _mixer;
             if (mixer != null)
                 mixer.FillOutputBuffer(buf.AsSpan(), _framesPerBuffer, fmt);
 
-            var elapsed = (DateTime.UtcNow - before).TotalMilliseconds;
-            var delay   = intervalMs - elapsed;
-            if (delay > 0)
-                await Task.Delay(TimeSpan.FromMilliseconds(delay), ct).ConfigureAwait(false);
+            expectedTicks += intervalTicks;
+            long nowTicks  = sw.ElapsedTicks;
+            long remTicks  = expectedTicks - nowTicks;
+            if (remTicks > 0)
+            {
+                int remMs = (int)(remTicks * 1000L / Stopwatch.Frequency);
+                if (remMs > 1)
+                    try { await Task.Delay(remMs, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
+            }
         }
     }
 

@@ -93,10 +93,17 @@ public sealed class AudioChannel : IAudioChannel
                 {
                     // Underrun — fill remainder with silence
                     dest[filled..].Clear();
-                    int dropped = (totalSamples - filled) / channels;
+                    int consumed = filled / channels;
+                    int dropped  = (totalSamples - filled) / channels;
+                    // Update tracking for frames that were consumed before the underrun.
+                    if (consumed > 0)
+                    {
+                        Interlocked.Add(ref _framesConsumed, consumed);
+                        Interlocked.Add(ref _framesInRing, -consumed);
+                    }
                     if (dropped > 0)
                         RaiseUnderrun(dropped);
-                    return filled / channels;
+                    return consumed;
                 }
                 _currentOffset = 0;
             }

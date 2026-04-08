@@ -1,6 +1,6 @@
 # MFPlayer — Implementation Status
 
-> **Last updated:** 2026-04-07 (Q1–Q19 resolved; `IAudioMixer.Output` → `LeaderFormat`; `VirtualAudioOutput` + `ChannelRouteMap.Silence()` added; 122 tests passing)
+> **Last updated:** 2026-04-08 (Q1–Q19 resolved; video architecture §13.1–§13.8 resolved; `IAudioMixer.Output` → `LeaderFormat`; `VirtualAudioOutput` + `ChannelRouteMap.Silence()` added; 122 tests passing)
 
 ---
 
@@ -300,7 +300,8 @@ Both pure-C# and FFmpeg-native tests. The `FfmpegFixture` collection fixture loa
 
 ## Pending design decisions 🔷
 
-All Q1–Q19 resolved.
+All audio pipeline decisions (Q1–Q19) resolved.  
+All video pipeline design questions (§13.1–§13.8) resolved — see `VideoPlaybackArchitecture.md §12`.
 
 ---
 

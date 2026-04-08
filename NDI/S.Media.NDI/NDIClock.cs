@@ -6,7 +6,7 @@ namespace S.Media.NDI;
 /// <see cref="MediaClockBase"/> backed by NDI frame timestamps (100 ns ticks).
 /// Falls back gracefully to elapsed time between frames for the sub-tick position.
 /// </summary>
-public sealed class NdiClock : MediaClockBase
+public sealed class NDIClock : MediaClockBase
 {
     private readonly System.Diagnostics.Stopwatch _sw         = new();
     private TimeSpan   _lastFramePosition;
@@ -22,7 +22,7 @@ public sealed class NdiClock : MediaClockBase
 
     /// <param name="sampleRate">Nominal sample rate (used by consumers; NDI frame sync handles actual timing).</param>
     /// <param name="tickIntervalMs">How often the base Tick event fires (default 10 ms).</param>
-    public NdiClock(double sampleRate = 48000, double tickIntervalMs = 10)
+    public NDIClock(double sampleRate = 48000, double tickIntervalMs = 10)
         : base(TimeSpan.FromMilliseconds(tickIntervalMs))
     {
         _sampleRate = sampleRate;
@@ -58,7 +58,8 @@ public sealed class NdiClock : MediaClockBase
     /// </summary>
     public void UpdateFromFrame(long ndiTimestamp)
     {
-        if (ndiTimestamp <= 0) return;
+        // Guard: skip zero/negative and NDIlib_recv_timestamp_undefined (INT64_MAX = long.MaxValue).
+        if (ndiTimestamp <= 0 || ndiTimestamp == long.MaxValue) return;
         _lastFramePosition = TimeSpan.FromTicks(ndiTimestamp);
         _swAtLastFrame     = _sw.Elapsed;
     }

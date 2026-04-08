@@ -77,16 +77,18 @@ public sealed class PortAudioOutput : IAudioOutput
 
         // Read back the negotiated format.
         var info = Native.Pa_GetStreamInfo(_stream);
-        double actualRate  = info?.sampleRate ?? requestedFormat.SampleRate;
+        double actualRate   = info?.sampleRate ?? requestedFormat.SampleRate;
         int    actualFrames = framesPerBuffer > 0 ? framesPerBuffer : 512; // sensible fallback
         _framesPerBuffer = actualFrames;
         _hardwareFormat = requestedFormat with { SampleRate = (int)actualRate };
 
-        // Build clock and mixer.
+        // Build clock and mixer, then pre-allocate buffers NOW so the RT callback
+        // never has to allocate managed memory from a native thread (which can fast-fail).
         _clock = PortAudioClock.Create(actualRate);
         _clock.SetStreamHandle(_stream, actualFrames);
 
         _mixer = new AudioMixer(_hardwareFormat);
+        _mixer.PrepareBuffers(actualFrames);
     }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
@@ -101,7 +103,10 @@ public sealed class PortAudioOutput : IAudioOutput
             throw new InvalidOperationException(
                 $"Pa_StartStream failed: {Native.Pa_GetErrorText(err)} ({err})");
 
-        // Pre-allocate mixer scratch buffers before the RT callback can fire.
+        // Buffers were pre-allocated during Open() so the RT callback never has to
+        // allocate managed memory from a native thread.  Calling PrepareBuffers here
+        // is only needed if channels were added after Open(); do it for safety but it
+        // is a no-op when buffers are already the right size.
         _mixer!.PrepareBuffers(_framesPerBuffer > 0 ? _framesPerBuffer : 512);
         _clock!.Start();
         _isRunning = true;
@@ -135,17 +140,27 @@ public sealed class PortAudioOutput : IAudioOutput
         PaStreamCallbackFlags flags,
         nint                  userData)
     {
-        var self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
-        if (self is null) return (int)PaStreamCallbackResult.paAbort;
+        // Wrap in try/catch: any managed exception escaping an [UnmanagedCallersOnly]
+        // method causes a runtime fast-fail, killing the process silently.
+        try
+        {
+            var self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
+            if (self is null) return (int)PaStreamCallbackResult.paAbort;
 
-        var mixer = self._activeMixer ?? self._mixer;
-        if (mixer is null) return (int)PaStreamCallbackResult.paAbort;
+            var mixer = self._activeMixer ?? self._mixer;
+            if (mixer is null) return (int)PaStreamCallbackResult.paAbort;
 
-        int totalSamples = (int)frameCount * self._hardwareFormat.Channels;
-        var dest = new Span<float>((void*)output, totalSamples);
+            int totalSamples = (int)frameCount * self._hardwareFormat.Channels;
+            var dest = new Span<float>((void*)output, totalSamples);
 
-        mixer.FillOutputBuffer(dest, (int)frameCount, self._hardwareFormat);
-        return (int)PaStreamCallbackResult.paContinue;
+            mixer.FillOutputBuffer(dest, (int)frameCount, self._hardwareFormat);
+            return (int)PaStreamCallbackResult.paContinue;
+        }
+        catch
+        {
+            // Output silence and keep going rather than aborting the stream.
+            return (int)PaStreamCallbackResult.paContinue;
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

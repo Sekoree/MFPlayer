@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
@@ -36,27 +38,34 @@ public sealed class FFmpegDecoderOptions
 
 /// <summary>
 /// Internal data passed from the demux thread to a per-stream decode thread.
+/// When <see cref="IsPooled"/> is true, <see cref="Data"/> was rented from
+/// <see cref="ArrayPool{T}.Shared"/> and MUST be returned by the decode thread after use.
+/// <see cref="ActualLength"/> holds the valid byte count (<see cref="Data"/>.Length may be larger).
 /// </summary>
 internal sealed class EncodedPacket
 {
     public byte[]  Data;
+    public int     ActualLength;  // valid bytes in Data (may be < Data.Length when pooled)
+    public bool    IsPooled;      // true → decode thread must return Data to ArrayPool<byte>.Shared
     public long    Pts;
     public long    Dts;
     public long    Duration;
     public int     Flags;
     public bool    IsFlush; // sentinel to signal seek flush
 
-    public EncodedPacket(byte[] data, long pts, long dts, long duration, int flags)
+    public EncodedPacket(byte[] data, int actualLength, long pts, long dts, long duration, int flags, bool isPooled)
     {
-        Data     = data;
-        Pts      = pts;
-        Dts      = dts;
-        Duration = duration;
-        Flags    = flags;
-        IsFlush  = false;
+        Data         = data;
+        ActualLength = actualLength;
+        Pts          = pts;
+        Dts          = dts;
+        Duration     = duration;
+        Flags        = flags;
+        IsFlush      = false;
+        IsPooled     = isPooled;
     }
 
-    public static EncodedPacket Flush() => new([], 0, 0, 0, 0) { IsFlush = true };
+    public static EncodedPacket Flush() => new([], 0, 0, 0, 0, 0, false) { IsFlush = true };
 }
 
 /// <summary>
@@ -220,12 +229,25 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
                 if (_queues.TryGetValue(pkt->stream_index, out var q))
                 {
-                    // Copy data so we can unref the packet immediately.
-                    byte[] data = new byte[pkt->size];
-                    if (pkt->size > 0)
-                        System.Runtime.InteropServices.Marshal.Copy((nint)pkt->data, data, 0, pkt->size);
+                    // Rent from ArrayPool to avoid a per-packet heap allocation.
+                    // The decode thread returns the rental after consuming the data.
+                    byte[] data;
+                    bool   isPooled;
+                    int    actualLen = pkt->size;
+                    if (actualLen > 0)
+                    {
+                        data     = ArrayPool<byte>.Shared.Rent(actualLen);
+                        isPooled = true;
+                        Marshal.Copy((nint)pkt->data, data, 0, actualLen);
+                    }
+                    else
+                    {
+                        data     = [];
+                        isPooled = false;
+                        actualLen = 0;
+                    }
 
-                    var ep = new EncodedPacket(data, pkt->pts, pkt->dts, pkt->duration, pkt->flags);
+                    var ep = new EncodedPacket(data, actualLen, pkt->pts, pkt->dts, pkt->duration, pkt->flags, isPooled);
 
                     // Apply back-pressure via async write — no silent packet drops.
                     var write = q.Writer.WriteAsync(ep, token);

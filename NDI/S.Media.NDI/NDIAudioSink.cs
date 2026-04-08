@@ -12,7 +12,7 @@ namespace S.Media.NDI;
 /// <see cref="ReceiveBuffer"/> is allocation-free on the RT thread.
 /// Data is converted from interleaved Float32 to NDI planar float (FLTP) on the write thread.
 /// </summary>
-public sealed class NdiAudioSink : IAudioSink
+public sealed class NDIAudioSink : IAudioSink
 {
     private readonly NDISender    _sender;
     private readonly AudioFormat  _targetFormat;
@@ -31,7 +31,7 @@ public sealed class NdiAudioSink : IAudioSink
     public string Name      { get; }
     public bool   IsRunning => _running;
 
-    public NdiAudioSink(
+    public NDIAudioSink(
         NDISender        sender,
         AudioFormat      targetFormat,
         int              framesPerBuffer = 512,
@@ -41,7 +41,7 @@ public sealed class NdiAudioSink : IAudioSink
         _sender          = sender;
         _targetFormat    = targetFormat;
         _framesPerBuffer = framesPerBuffer;
-        Name             = name ?? "NdiAudioSink";
+        Name             = name ?? "NDIAudioSink";
 
         // Auto-create a LinearResampler if the caller didn't supply one and we may receive
         // audio at a different rate (the actual check happens per buffer in ReceiveBuffer).
@@ -89,17 +89,24 @@ public sealed class NdiAudioSink : IAudioSink
     public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
     {
         if (!_running) return;
-        if (!_pool.TryDequeue(out var dest)) return; // pool exhausted — drop
 
-        bool needsResample = sourceFormat.SampleRate != _targetFormat.SampleRate;
-        if (needsResample && _resampler != null)
-        {
-            _resampler.Resample(buffer, dest.AsSpan(), sourceFormat, _targetFormat.SampleRate);
-        }
+        int outCh = _targetFormat.Channels;
+
+        // Compute rate-adjusted output frame count (same logic as PortAudioSink).
+        int writeFrames = sourceFormat.SampleRate == _targetFormat.SampleRate
+            ? frameCount
+            : (int)Math.Round((double)frameCount * _targetFormat.SampleRate / sourceFormat.SampleRate);
+        int writeSamples = writeFrames * outCh;
+
+        if (!_pool.TryDequeue(out var dest) || dest.Length < writeSamples)
+            dest = new float[writeSamples];
+
+        if (_resampler != null && sourceFormat.SampleRate != _targetFormat.SampleRate)
+            _resampler.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _targetFormat.SampleRate);
         else
         {
-            int copy = Math.Min(buffer.Length, dest.Length);
-            buffer[..copy].CopyTo(dest.AsSpan());
+            int copy = Math.Min(buffer.Length, writeSamples);
+            buffer[..copy].CopyTo(dest.AsSpan(0, copy));
         }
         _pending.Enqueue(dest);
     }
@@ -110,14 +117,18 @@ public sealed class NdiAudioSink : IAudioSink
     {
         var token    = _cts!.Token;
         int channels = _targetFormat.Channels;
-        int samples  = _framesPerBuffer;
-        // Planar buffer: one plane per channel
-        var planar   = new float[channels * samples];
+        // Planar scratch buffer; grown lazily when writeFrames changes (rate-mismatch scenario).
+        var planar   = new float[_framesPerBuffer * channels];
 
         while (!token.IsCancellationRequested)
         {
             if (!_pending.TryDequeue(out var interleaved))
-            { Thread.SpinWait(100); continue; }
+            { Thread.Yield(); continue; }
+
+            int samples    = interleaved.Length / channels;
+            int planarNeed = channels * samples;
+            if (planar.Length < planarNeed)
+                planar = new float[planarNeed];
 
             // Deinterleave: interleaved[s*ch+c] → planar[c*samples+s]
             for (int c = 0; c < channels; c++)
@@ -153,4 +164,3 @@ public sealed class NdiAudioSink : IAudioSink
         if (_ownsResampler) _resampler?.Dispose();
     }
 }
-

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
@@ -33,6 +34,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     private float[]? _currentChunk;
     private int      _currentOffset;
     private long     _framesConsumed;
+    private long     _framesInRing;   // frame-accurate ring occupancy (not chunk count)
 
     // ── IAudioChannel ─────────────────────────────────────────────────────
     public Guid        Id           { get; } = Guid.NewGuid();
@@ -45,7 +47,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     public TimeSpan Position =>
         TimeSpan.FromSeconds((double)Interlocked.Read(ref _framesConsumed) / SourceFormat.SampleRate);
 
-    public int BufferAvailable => _ringReader.Count;
+    public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
@@ -150,6 +152,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
             var converted = DecodePacket(ep);
             if (converted != null)
             {
+                Interlocked.Add(ref _framesInRing, converted.Length / SourceFormat.Channels);
                 var w = _ringWriter.WriteAsync(converted, token);
                 if (!w.IsCompletedSuccessfully)
                 {
@@ -165,25 +168,34 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     private unsafe float[]? DecodePacket(EncodedPacket ep)
     {
-        fixed (byte* p = ep.Data)
+        try
         {
-            _pkt->data     = ep.Data.Length > 0 ? p : null;
-            _pkt->size     = ep.Data.Length;
-            _pkt->pts      = ep.Pts;
-            _pkt->dts      = ep.Dts;
-            _pkt->duration = ep.Duration;
-            _pkt->flags    = ep.Flags;
+            fixed (byte* p = ep.Data)
+            {
+                _pkt->data     = ep.ActualLength > 0 ? p : null;
+                _pkt->size     = ep.ActualLength;
+                _pkt->pts      = ep.Pts;
+                _pkt->dts      = ep.Dts;
+                _pkt->duration = ep.Duration;
+                _pkt->flags    = ep.Flags;
+            }
+
+            if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) return null;
+
+            float[]? last = null;
+            while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
+            {
+                last = ConvertFrame();
+                ffmpeg.av_frame_unref(_frame);
+            }
+            return last;
         }
-
-        if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) return null;
-
-        float[]? last = null;
-        while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
+        finally
         {
-            last = ConvertFrame();
-            ffmpeg.av_frame_unref(_frame);
+            // Return the rented packet buffer now that it's been handed to the codec.
+            if (ep.IsPooled)
+                ArrayPool<byte>.Shared.Return(ep.Data);
         }
-        return last;
     }
 
     private float[]? ConvertFrame()
@@ -226,7 +238,10 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
                 if (!_ringReader.TryRead(out _currentChunk))
                 {
                     dest[filled..].Clear();
-                    int dropped = (totalSamples - filled) / channels;
+                    int consumed = filled / channels;
+                    int dropped  = (totalSamples - filled) / channels;
+                    if (consumed > 0)
+                        Interlocked.Add(ref _framesInRing, -consumed);
                     if (dropped > 0)
                         ThreadPool.QueueUserWorkItem(_ =>
                             BufferUnderrun?.Invoke(this,
@@ -246,16 +261,23 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
         }
 
         Interlocked.Add(ref _framesConsumed, frameCount);
+        Interlocked.Add(ref _framesInRing, -frameCount);
         return frameCount;
     }
 
-    // ── Push mode ─────────────────────────────────────────────────────────
+    // ── Push mode (not supported — data comes from the internal decode thread) ──
 
+    /// <summary>Not supported. <see cref="FFmpegAudioChannel"/> is fed by its internal decode
+    /// thread; external writes would race with it and violate the <c>SingleWriter = true</c>
+    /// contract on the ring.</summary>
     public ValueTask WriteAsync(ReadOnlyMemory<float> frames, CancellationToken ct = default)
-        => _ringWriter.WriteAsync(frames.ToArray(), ct);
+        => throw new NotSupportedException(
+            "FFmpegAudioChannel is decode-driven and does not accept external writes.");
 
+    /// <inheritdoc cref="WriteAsync"/>
     public bool TryWrite(ReadOnlySpan<float> frames)
-        => _ringWriter.TryWrite(frames.ToArray());
+        => throw new NotSupportedException(
+            "FFmpegAudioChannel is decode-driven and does not accept external writes.");
 
     // ── Seek ──────────────────────────────────────────────────────────────
 
