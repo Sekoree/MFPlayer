@@ -1,14 +1,15 @@
 using System.Buffers;
 using NDILib;
 using S.Media.Core.Media;
+using S.Media.Core.Video;
 
 namespace S.Media.NDI;
 
 /// <summary>
-/// <see cref="IMediaChannel{VideoFrame}"/> that pulls video from an NDI source via
+/// <see cref="IVideoChannel"/> that pulls video from an NDI source via
 /// <see cref="NDIFrameSync.CaptureVideo"/>. Frames are exposed as BGRA32 <see cref="VideoFrame"/> records.
 /// </summary>
-public sealed class NDIVideoChannel : IMediaChannel<VideoFrame>
+public sealed class NDIVideoChannel : IVideoChannel
 {
     private readonly NDIFrameSync  _frameSync;
     private readonly NDIClock      _clock;
@@ -21,10 +22,19 @@ public sealed class NDIVideoChannel : IMediaChannel<VideoFrame>
     private readonly System.Threading.Channels.ChannelWriter<VideoFrame> _ringWriter;
 
     private bool _disposed;
+    private VideoFormat _sourceFormat;
+    private readonly object _formatLock = new();
+    private long _positionTicks;
 
     public Guid  Id      { get; } = Guid.NewGuid();
     public bool  IsOpen  => !_disposed;
     public bool  CanSeek => false;
+
+    /// <inheritdoc/>
+    public VideoFormat SourceFormat { get { lock (_formatLock) return _sourceFormat; } }
+
+    /// <inheritdoc/>
+    public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
 
     public NDIVideoChannel(NDIFrameSync frameSync, NDIClock clock, int bufferDepth = 4)
     {
@@ -120,6 +130,12 @@ public sealed class NDIVideoChannel : IMediaChannel<VideoFrame>
                     TimeSpan.FromSeconds(tsSecs),
                     owner);
 
+                // Update source format from the live stream dimensions / pixel format.
+                int fpsNum = frame.FrameRateN > 0 ? frame.FrameRateN : 30000;
+                int fpsDen = frame.FrameRateD > 0 ? frame.FrameRateD : 1001;
+                lock (_formatLock)
+                    _sourceFormat = new VideoFormat(frame.Xres, frame.Yres, pixFmt, fpsNum, fpsDen);
+
                 _ringWriter.TryWrite(vf);
 
                 // Throttle to avoid calling CaptureVideo thousands of times per second.
@@ -142,6 +158,7 @@ public sealed class NDIVideoChannel : IMediaChannel<VideoFrame>
         {
             if (!_ringReader.TryRead(out var vf)) break;
             dest[i] = vf;
+            Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
             filled++;
         }
         return filled;

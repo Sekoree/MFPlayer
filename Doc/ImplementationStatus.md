@@ -1,6 +1,6 @@
 # MFPlayer — Implementation Status
 
-> **Last updated:** 2026-04-08 (Q1–Q19 resolved; video architecture §13.1–§13.8 resolved; `IAudioMixer.Output` → `LeaderFormat`; `VirtualAudioOutput` + `ChannelRouteMap.Silence()` added; 122 tests passing)
+> **Last updated:** 2026-04-09 (Video pipeline implemented: S.Media.Core video interfaces + VideoMixer + VideoPtsClock; S.Media.SDL3 with SDL3VideoOutput + GLRenderer; FFmpegVideoChannel + NDIVideoChannel implement IVideoChannel; MFPlayer.VideoPlayer test app; 122 tests passing)
 
 ---
 
@@ -15,6 +15,7 @@
 | `Clock/MediaClockBase.cs` | Abstract | Owns `System.Timers.Timer`; fires `Tick` off the RT thread |
 | `Clock/HardwareClock.cs` | Class | `Func<double>` provider; Stopwatch fallback on ≤ 0 |
 | `Clock/StopwatchClock.cs` | Class | Pure software clock for offline/test/NDI |
+| `Clock/VideoPtsClock.cs` | Class | PTS-driven video clock; Stopwatch interpolation between frames; `UpdateFromFrame(TimeSpan pts)` |
 
 #### Media types
 | File | Type | Notes |
@@ -58,6 +59,26 @@
 | `Errors/AudioEngineException.cs` | Exception | Wraps native error codes |
 | `Errors/BufferException.cs` | Exception | Underrun/overflow with `FramesAffected` |
 
+#### Video
+| File | Type | Notes |
+|---|---|---|
+| `Video/IVideoChannel.cs` | Interface | Sub-interface of `IMediaChannel<VideoFrame>`; adds `SourceFormat`, `Position` |
+| `Video/IVideoOutput.cs` | Interface | `IMediaOutput` + `OutputFormat`, `Mixer`, `Open(title, w, h, format)` |
+| `Video/IVideoMixer.cs` | Interface | `AddChannel`, `RemoveChannel`, `SetActiveChannel`, `PresentNextFrame`; single-channel v1 |
+| `Video/IPixelFormatConverter.cs` | Interface | `Convert(VideoFrame, PixelFormat)` — shaped for future use |
+| `Video/IVideoSink.cs` | Interface | `ReceiveFrame` — shaped for future NDI send / recording (no impl in v1) |
+| `Video/VideoMixer.cs` | Class | Backend-agnostic `IVideoMixer`; copy-on-write channel array; holds `_lastFrame` for re-display; auto-activates first channel; pre-allocated single-frame pull buffer |
+
+---
+
+### `S.Media.SDL3` (`Video/S.Media.SDL3/`)
+
+| File | Type | Notes |
+|---|---|---|
+| `S.Media.SDL3.csproj` | Project | Refs `S.Media.Core`, `SDL3-CS`, `SDL3-CS.Native`; `AllowUnsafeBlocks` |
+| `SDL3VideoOutput.cs` | Class | `IVideoOutput`; SDL3 + OpenGL 3.3 core-profile; `Open()` creates window + GL context + `GLRenderer` + `VideoMixer` + `VideoPtsClock`; `StartAsync()` launches render thread; vsync-paced render loop with event pump (quit, resize); `WindowClosed` event; `Dispose()` tears down GL → window → SDL in order |
+| `GLRenderer.cs` | Class | ~30 GL functions loaded via `SDL_GL_GetProcAddress`; passthrough vertex+fragment shaders; BGRA32 texture upload; `glTexSubImage2D` fast path on same-resolution frames; fullscreen quad VAO |
+
 ---
 
 ### `S.Media.PortAudio` (`Audio/S.Media.PortAudio/`)
@@ -79,7 +100,7 @@
 | `FFmpegDecoderOptions.cs` | Class | PacketQueueDepth, AudioBufferDepth, VideoBufferDepth, **DecoderThreadCount**, **HardwareDeviceType** |
 | `FFmpegDecoder.cs` | Class | `avformat_open_input`; demux thread uses `WriteAsync` for back-pressure (no silent drops); optional hw device ctx via `av_hwdevice_ctx_create`; **skips `AV_DISPOSITION_ATTACHED_PIC` streams** (e.g. FLAC cover art) to avoid spurious video channels; demux loop catches `OperationCanceledException` on graceful stop |
 | `FFmpegAudioChannel.cs` | Class | `IAudioChannel`; background decode thread; `thread_count` applied to codec ctx; SWR → Float32; bounded ring; **decode loop catches `OperationCanceledException`** on graceful stop |
-| `FFmpegVideoChannel.cs` | Class | `IMediaChannel<VideoFrame>`; background decode; hw→CPU transfer via `av_hwframe_transfer_data`; SWS pixel conversion; Yuv422p10 mapped to `AV_PIX_FMT_YUV422P10LE`; **`SafePts()` guards against `AV_NOPTS_VALUE` (long.MinValue) overflow**; **decode loop catches `OperationCanceledException`** on graceful stop; **`ConvertFrame` rents from `ArrayPool<byte>` via `ArrayPoolOwner<T>`; `VideoFrame.MemoryOwner` allows consumer to return rental** |
+| `FFmpegVideoChannel.cs` | Class | **`IVideoChannel`**; background decode; hw→CPU transfer via `av_hwframe_transfer_data`; SWS pixel conversion; Yuv422p10 mapped to `AV_PIX_FMT_YUV422P10LE`; **`SafePts()` guards against `AV_NOPTS_VALUE` (long.MinValue) overflow**; **decode loop catches `OperationCanceledException`** on graceful stop; **`ConvertFrame` rents from `ArrayPool<byte>` via `ArrayPoolOwner<T>`; `VideoFrame.MemoryOwner` allows consumer to return rental**; `Position` via `Volatile.Read/Write` on ticks |
 | `ArrayPoolOwner.cs` | Class | `internal` `IDisposable` wrapper around `ArrayPool<T>` rentals; idempotent via `Interlocked.Exchange` |
 | `SwrResampler.cs` | Class | `IAudioResampler`; libswresample sinc; stateful; reinitialises on param change |
 
@@ -92,7 +113,7 @@
 | `S.Media.NDI.csproj` | Project | Refs `NDILib`, `S.Media.Core`; `AllowUnsafeBlocks` |
 | `NdiClock.cs` | Class | `MediaClockBase`; Stopwatch interpolates between NDI frame timestamps; `UpdateFromFrame(long)` |
 | `NdiAudioChannel.cs` | Class | `IAudioChannel`; background capture via `NDIFrameSync.CaptureAudio`; FLTP→interleaved; pre-allocated `ConcurrentQueue<float[]>` pool; manual DropOldest returns buffers to pool; **`_framesInRing` Interlocked counter for accurate `BufferAvailable` frame count** |
-| `NdiVideoChannel.cs` | Class | `IMediaChannel<VideoFrame>`; background capture; BGRA32 copy; `FreeVideo` called immediately after pixel copy |
+| `NdiVideoChannel.cs` | Class | **`IVideoChannel`**; background capture; BGRA32 copy; `FreeVideo` called immediately after pixel copy; `SourceFormat` via lock; `Position` via `Volatile.Read/Write` on ticks |
 | `NdiAudioSink.cs` | Class | `IAudioSink`; interleaved→planar on write thread; 8-buffer pool; optional `IAudioResampler` (auto-creates `LinearResampler` on rate mismatch) |
 | `NdiSource.cs` | Class | **New** — lifecycle wrapper: creates `NDIReceiver` + `NDIFrameSync`, constructs `NdiAudioChannel` + `NdiVideoChannel`, `Start()` starts clock + capture threads, `Dispose()` tears down in order |
 
@@ -305,6 +326,18 @@ All video pipeline design questions (§13.1–§13.8) resolved — see `VideoPla
 
 ---
 
+## Test Apps
+
+| App | Location | Notes |
+|---|---|---|
+| `MFPlayer.SimplePlayer` | `Test/MFPlayer.SimplePlayer/` | Audio-only; PortAudio host/device selection; FFmpeg decode; EOF via underrun |
+| `MFPlayer.MultiOutputPlayer` | `Test/MFPlayer.MultiOutputPlayer/` | Multi-output audio with AggregateOutput + sinks |
+| `MFPlayer.NDIPlayer` | `Test/MFPlayer.NDIPlayer/` | NDI source receive + audio playback |
+| `MFPlayer.NDISender` | `Test/MFPlayer.NDISender/` | NDI audio send |
+| `MFPlayer.VideoPlayer` | `Test/MFPlayer.VideoPlayer/` | **New** — Video-only; FFmpeg decode → SDL3VideoOutput; window close / Ctrl+C / Enter to stop |
+
+---
+
 
 ## Missing / TODO 🔲
 
@@ -314,6 +347,7 @@ All video pipeline design questions (§13.1–§13.8) resolved — see `VideoPla
 |---|---|---|
 | `S.Media.PortAudio.Tests` | Medium | Smoke tests (requires audio hardware or virtual device) |
 | `S.Media.NDI.Tests` | Low | Requires NDI runtime |
+| `SDL3VideoMixer.Tests` | Medium | VideoMixer unit tests (channel add/remove, active channel, frame pull) |
 
 ### Technical debt
 

@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using S.Media.Core.Media;
+using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg;
 
@@ -10,7 +11,7 @@ namespace S.Media.FFmpeg;
 /// thread. Each frame is pixel-format-converted to <see cref="Core.Media.PixelFormat.Bgra32"/>
 /// by default. Frames are exposed through the <see cref="IMediaChannel{VideoFrame}"/> pull interface.
 /// </summary>
-public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
+public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 {
     private readonly int                          _streamIndex;
     private readonly AVStream*                    _stream;
@@ -44,6 +45,13 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
 
     /// <summary>Video format of the stream (may be updated after first decoded frame).</summary>
     public VideoFormat Format { get; private set; }
+
+    /// <inheritdoc/>
+    public VideoFormat SourceFormat => Format;
+
+    /// <inheritdoc/>
+    public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
+    private long _positionTicks;
 
     internal FFmpegVideoChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
@@ -250,6 +258,7 @@ public sealed unsafe class FFmpegVideoChannel : IMediaChannel<VideoFrame>
         {
             if (!_ringReader.TryRead(out var vf)) break;
             dest[i] = vf;
+            Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
             filled++;
         }
         return filled;
