@@ -3,7 +3,12 @@
 //   1. Pick a PortAudio host API
 //   2. Pick an output device
 //   3. Enter an audio file path
-//   4. Play — press Enter or Ctrl+C to stop; auto-stops at EOF
+//   4. Play with controls:
+//        Space = pause/play
+//        Left/Right = seek -/+5 s
+//        Up/Down = volume -/+0.05
+//        Enter / Q / Esc / Ctrl+C = stop
+//      auto-stops at EOF
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using System.Diagnostics;
@@ -93,9 +98,13 @@ using (decoder)
     var audioChannel = decoder.AudioChannels[0];
     var srcFmt       = audioChannel.SourceFormat;
 
-    // Cap output to stereo; use file's native sample rate to avoid resampling.
+    // Cap output to stereo; prefer device default sample rate for robust realtime pacing.
+    // The mixer will resample source audio to the hardware rate when needed.
     int outChannels = Math.Min(srcFmt.Channels, Math.Min(device.MaxOutputChannels, 2));
-    var hwFmt       = new AudioFormat(srcFmt.SampleRate, outChannels);
+    int outRate     = device.DefaultSampleRate > 0
+        ? (int)Math.Round(device.DefaultSampleRate)
+        : srcFmt.SampleRate;
+    var hwFmt       = new AudioFormat(outRate, outChannels);
     var routeMap    = BuildRouteMap(srcFmt.Channels, outChannels);
 
     Console.WriteLine("OK");
@@ -118,17 +127,34 @@ using (decoder)
     Console.WriteLine("OK");
 
     output.Mixer.AddChannel(audioChannel, routeMap);
+    audioChannel.Volume = 1.0f;
+
+    Console.WriteLine($"  Device default rate: {device.DefaultSampleRate:0} Hz");
+    Console.WriteLine($"  Negotiated output:   {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch");
 
     // ── 7. EOF detection via BufferUnderrun ──────────────────────────────────
 
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
+    long lastSeekTicks = 0;
+    TimeSpan seekAnchor = TimeSpan.Zero;
+    long lastSeekCommandTicks = 0;
+    TimeSpan lastSeekTarget = TimeSpan.MinValue;
+
     var sw = Stopwatch.StartNew();
     audioChannel.BufferUnderrun += (_, _) =>
     {
         // Ignore underruns during the first 2 s (buffer warm-up).
-        if (sw.Elapsed.TotalSeconds > 2 && !cts.IsCancellationRequested)
+        if (sw.Elapsed.TotalSeconds <= 2) return;
+        if (cts.IsCancellationRequested) return;
+
+        // Seeking temporarily drains/flushes buffers; do not interpret that as EOF.
+        long ticksSinceSeek = Stopwatch.GetTimestamp() - Interlocked.Read(ref lastSeekTicks);
+        double secondsSinceSeek = ticksSinceSeek / (double)Stopwatch.Frequency;
+        if (secondsSinceSeek < 1.2) return;
+
+        if (audioChannel.BufferAvailable == 0)
         {
             Console.WriteLine("\n[EOF reached]");
             cts.Cancel();
@@ -139,14 +165,100 @@ using (decoder)
 
     decoder.Start();
     await output.StartAsync();
+    var clockBase = output.Clock.Position;
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
-    Console.WriteLine("Press [Enter] or [Ctrl+C] to stop.\n");
+    Console.WriteLine("Controls: [Space]=pause/play  [Left/Right]=-+5s seek  [Up/Down]=-+0.05 vol  [Enter/Q/Esc]=stop\n");
 
-    // Wait for Ctrl+C, Enter, or auto-EOF.
-    _ = Task.Run(() => { Console.ReadLine(); cts.Cancel(); });
-    try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); }
-    catch (OperationCanceledException) { }
+    bool paused = false;
+    float volume = 1.0f;
+    var statsSw = Stopwatch.StartNew();
+    string peaksText = "-";
+    int peaksRefreshCounter = 0;
+
+    // Main control loop: non-blocking key handling + periodic stats.
+    while (!cts.IsCancellationRequested)
+    {
+        while (Console.KeyAvailable)
+        {
+            var key = Console.ReadKey(intercept: true).Key;
+            switch (key)
+            {
+                case ConsoleKey.Enter:
+                case ConsoleKey.Escape:
+                case ConsoleKey.Q:
+                    cts.Cancel();
+                    break;
+
+                case ConsoleKey.Spacebar:
+                    if (paused)
+                    {
+                        await output.StartAsync();
+                        paused = false;
+                        Console.WriteLine("[play]");
+                    }
+                    else
+                    {
+                        await output.StopAsync();
+                        paused = true;
+                        Console.WriteLine("[pause]");
+                    }
+                    break;
+
+                case ConsoleKey.LeftArrow:
+                {
+                    if (TrySeekBy(TimeSpan.FromSeconds(-5), audioChannel, decoder,
+                        ref seekAnchor, ref lastSeekTicks, ref lastSeekCommandTicks, ref lastSeekTarget, out var target))
+                        Console.WriteLine($"[seek] {FormatTime(target)}");
+                    break;
+                }
+
+                case ConsoleKey.RightArrow:
+                {
+                    if (TrySeekBy(TimeSpan.FromSeconds(5), audioChannel, decoder,
+                        ref seekAnchor, ref lastSeekTicks, ref lastSeekCommandTicks, ref lastSeekTarget, out var target))
+                        Console.WriteLine($"[seek] {FormatTime(target)}");
+                    break;
+                }
+
+                case ConsoleKey.UpArrow:
+                    volume = Math.Clamp(volume + 0.05f, 0.0f, 2.0f);
+                    audioChannel.Volume = volume;
+                    Console.WriteLine($"[volume] {volume:0.00}");
+                    break;
+
+                case ConsoleKey.DownArrow:
+                    volume = Math.Clamp(volume - 0.05f, 0.0f, 2.0f);
+                    audioChannel.Volume = volume;
+                    Console.WriteLine($"[volume] {volume:0.00}");
+                    break;
+            }
+        }
+
+        if (statsSw.ElapsedMilliseconds >= 250)
+        {
+            statsSw.Restart();
+            var clockPos = output.Clock.Position - clockBase;
+            if (clockPos < TimeSpan.Zero) clockPos = TimeSpan.Zero;
+            var chPos = audioChannel.Position;
+
+            // Peaks formatting allocates; refresh less often in debug UI.
+            if (++peaksRefreshCounter >= 4)
+            {
+                peaksRefreshCounter = 0;
+                peaksText = FormatPeaks(output.Mixer.PeakLevels);
+            }
+
+            Console.Write("\r" +
+                $"[stats] state={(paused ? "paused" : "playing"),7}  " +
+                $"clock={FormatTime(clockPos)}  src={FormatTime(chPos)}  " +
+                $"buffer={audioChannel.BufferAvailable,6}f  vol={audioChannel.Volume:0.00}  " +
+                $"peaks={peaksText}");
+        }
+
+        try { await Task.Delay(20, cts.Token); }
+        catch (OperationCanceledException) { }
+    }
 
     // ── 9. Stop ──────────────────────────────────────────────────────────────
 
@@ -187,5 +299,63 @@ static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
         for (int i = 0; i < common; i++) b.Route(i, i);
     }
     return b.Build();
+}
+
+static string FormatPeaks(IReadOnlyList<float> peaks)
+{
+    if (peaks.Count == 0) return "-";
+    return string.Join(",", peaks.Select(p => p.ToString("0.00")));
+}
+
+static string FormatTime(TimeSpan ts)
+{
+    if (ts < TimeSpan.Zero) ts = TimeSpan.Zero;
+    return ts.ToString(@"hh\:mm\:ss\.fff");
+}
+
+static bool TrySeekBy(
+    TimeSpan delta,
+    IAudioChannel audioChannel,
+    FFmpegDecoder decoder,
+    ref TimeSpan seekAnchor,
+    ref long lastSeekTicks,
+    ref long lastSeekCommandTicks,
+    ref TimeSpan lastSeekTarget,
+    out TimeSpan target)
+{
+    long nowTicks = Stopwatch.GetTimestamp();
+
+    // During rapid key bursts, anchor on the most recently requested seek target
+    // so each step is deterministic and not based on lagging decode position.
+    double sinceLastCommand = (nowTicks - lastSeekCommandTicks) / (double)Stopwatch.Frequency;
+    TimeSpan basePos = sinceLastCommand <= 0.75 ? seekAnchor : audioChannel.Position;
+
+    target = basePos + delta;
+    if (target < TimeSpan.Zero)
+        target = TimeSpan.Zero;
+
+    // When we're already clamped at start, additional back-seek commands are
+    // semantically no-ops; suppress them to avoid creating redundant seek epochs.
+    if (target == TimeSpan.Zero && lastSeekTarget == TimeSpan.Zero)
+        return false;
+
+    // Ignore repeated identical targets from key auto-repeat noise.
+    // Guard the sentinel to avoid TimeSpan overflow on the first seek.
+    if (lastSeekTarget != TimeSpan.MinValue)
+    {
+        long deltaTicks = target.Ticks >= lastSeekTarget.Ticks
+            ? target.Ticks - lastSeekTarget.Ticks
+            : lastSeekTarget.Ticks - target.Ticks;
+
+        if (deltaTicks < TimeSpan.FromMilliseconds(20).Ticks)
+            return false;
+    }
+
+    decoder.Seek(target);
+    seekAnchor = target;
+    lastSeekTarget = target;
+    lastSeekCommandTicks = nowTicks;
+    Interlocked.Exchange(ref lastSeekTicks, nowTicks);
+    return true;
 }
 

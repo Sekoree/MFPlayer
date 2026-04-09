@@ -2,8 +2,6 @@ using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
-using S.Media.Core.Audio;
-using S.Media.Core.Media;
 
 namespace S.Media.FFmpeg;
 
@@ -25,7 +23,7 @@ public sealed class FFmpegDecoderOptions
     /// Number of codec threads per stream. 0 = FFmpeg auto-detect (recommended).
     /// Set to 1 to disable multithreaded decoding.
     /// </summary>
-    public int DecoderThreadCount { get; init; } = 0;
+    public int DecoderThreadCount { get; init; }
 
     /// <summary>
     /// Hardware device type for accelerated video decoding.
@@ -33,7 +31,7 @@ public sealed class FFmpegDecoderOptions
     /// <c>"dxva2"</c>/<c>"d3d11va"</c> (Windows), <c>"videotoolbox"</c> (macOS).
     /// <see langword="null"/> or empty disables hardware acceleration.
     /// </summary>
-    public string? HardwareDeviceType { get; init; } = null;
+    public string? HardwareDeviceType { get; init; }
 }
 
 /// <summary>
@@ -51,9 +49,12 @@ internal sealed class EncodedPacket
     public long    Dts;
     public long    Duration;
     public int     Flags;
+    public int     SeekEpoch;
+    public long    SeekPositionTicks;
     public bool    IsFlush; // sentinel to signal seek flush
 
-    public EncodedPacket(byte[] data, int actualLength, long pts, long dts, long duration, int flags, bool isPooled)
+    public EncodedPacket(byte[] data, int actualLength, long pts, long dts, long duration, int flags,
+                         bool isPooled, int seekEpoch = 0, long seekPositionTicks = 0)
     {
         Data         = data;
         ActualLength = actualLength;
@@ -61,11 +62,14 @@ internal sealed class EncodedPacket
         Dts          = dts;
         Duration     = duration;
         Flags        = flags;
+        SeekEpoch    = seekEpoch;
+        SeekPositionTicks = seekPositionTicks;
         IsFlush      = false;
         IsPooled     = isPooled;
     }
 
-    public static EncodedPacket Flush() => new([], 0, 0, 0, 0, 0, false) { IsFlush = true };
+    public static EncodedPacket Flush(int seekEpoch, long seekPositionTicks)
+        => new([], 0, 0, 0, 0, 0, false, seekEpoch, seekPositionTicks) { IsFlush = true };
 }
 
 /// <summary>
@@ -76,12 +80,24 @@ internal sealed class EncodedPacket
 /// </summary>
 public sealed unsafe class FFmpegDecoder : IDisposable
 {
+    internal enum DemuxReadResult
+    {
+        Packet,
+        Retry,
+        Eof,
+        Cancelled
+    }
+
     private AVFormatContext*         _fmt;
     private AVBufferRef*             _hwDeviceCtx;  // null when sw-only
-    private Thread?                  _demuxThread;
+    private Task?                    _demuxTask;
     private CancellationTokenSource  _cts = new();
     private bool                     _disposed;
     private FFmpegDecoderOptions     _options = new();
+    private int                      _seekEpoch;
+    private long                     _seekPositionTicks;
+    private int                      _started;
+    private readonly object          _formatIoGate = new();
 
     // Per stream-index → bounded packet channel
     private readonly Dictionary<int, Channel<EncodedPacket>> _queues = new();
@@ -137,7 +153,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
                 {
                     FullMode     = BoundedChannelFullMode.Wait,
                     SingleReader = true,
-                    SingleWriter = true
+                    SingleWriter = false
                 });
             _queues[i] = q;
 
@@ -187,87 +203,149 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     /// </summary>
     public void Start()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (Interlocked.Exchange(ref _started, 1) != 0)
+            return; // idempotent start
+
         foreach (var ch in AudioChannels) ch.StartDecoding();
         foreach (var ch in VideoChannels) ch.StartDecoding();
 
-        _demuxThread = new Thread(DemuxLoop)
-        {
-            Name         = "FFmpegDecoder.Demux",
-            IsBackground = true,
-            Priority     = ThreadPriority.Normal
-        };
-        _demuxThread.Start();
+        _demuxTask = FFmpegDemuxWorker.RunAsync(this, _cts.Token);
     }
 
     /// <summary>Seeks all streams to <paramref name="position"/>.</summary>
     public void Seek(TimeSpan position)
     {
         long ts = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
-        ffmpeg.av_seek_frame(_fmt, -1, ts, ffmpeg.AVSEEK_FLAG_BACKWARD);
+        int epoch;
 
-        // Flush all queues and signal channels.
+        // av_seek_frame and av_read_frame share AVFormatContext internals.
+        // Serialize them to avoid rapid-seek races against the demux loop.
+        lock (_formatIoGate)
+        {
+            int ret = ffmpeg.av_seek_frame(_fmt, -1, ts, ffmpeg.AVSEEK_FLAG_BACKWARD);
+            if (ret < 0)
+            {
+                Console.Error.WriteLine($"[FFmpegDecoder] av_seek_frame failed ({ret}) at {position}.");
+                return;
+            }
+
+            epoch = Interlocked.Increment(ref _seekEpoch);
+
+            // Publish seek target so regular packets in this epoch still carry the
+            // correct position if a best-effort flush control packet is dropped.
+            Volatile.Write(ref _seekPositionTicks, position.Ticks);
+        }
+
+        // In-band flush packet: decode threads perform avcodec_flush_buffers on their own context.
+        var flush = EncodedPacket.Flush(epoch, position.Ticks);
+        int droppedControlPackets = 0;
         foreach (var (_, q) in _queues)
-            while (q.Reader.TryRead(out _)) { }
+            if (!WriteControlPacket(q.Writer, flush))
+                droppedControlPackets++;
 
-        foreach (var ch in AudioChannels) ch.FlushAfterSeek();
-        foreach (var ch in VideoChannels) ch.FlushAfterSeek();
+        if (droppedControlPackets > 0)
+            Console.Error.WriteLine($"[FFmpegDecoder] Seek control packet dropped for {droppedControlPackets} stream(s).");
+
+        // Clear already-decoded channel buffers immediately on the caller thread.
+        foreach (var ch in AudioChannels) ch.Seek(position);
+        foreach (var ch in VideoChannels) ch.Seek(position);
     }
 
-    // ── Demux thread ──────────────────────────────────────────────────────
-
-    private void DemuxLoop()
+    private bool WriteControlPacket(ChannelWriter<EncodedPacket> writer, EncodedPacket packet)
     {
-        var token = _cts.Token;
-        var pkt   = ffmpeg.av_packet_alloc();
         try
         {
-            while (!token.IsCancellationRequested)
-            {
-                int ret = ffmpeg.av_read_frame(_fmt, pkt);
-                if (ret == ffmpeg.AVERROR_EOF) break;
-                if (ret < 0) continue;
-
-                if (_queues.TryGetValue(pkt->stream_index, out var q))
-                {
-                    // Rent from ArrayPool to avoid a per-packet heap allocation.
-                    // The decode thread returns the rental after consuming the data.
-                    byte[] data;
-                    bool   isPooled;
-                    int    actualLen = pkt->size;
-                    if (actualLen > 0)
-                    {
-                        data     = ArrayPool<byte>.Shared.Rent(actualLen);
-                        isPooled = true;
-                        Marshal.Copy((nint)pkt->data, data, 0, actualLen);
-                    }
-                    else
-                    {
-                        data     = [];
-                        isPooled = false;
-                        actualLen = 0;
-                    }
-
-                    var ep = new EncodedPacket(data, actualLen, pkt->pts, pkt->dts, pkt->duration, pkt->flags, isPooled);
-
-                    // Apply back-pressure via async write — no silent packet drops.
-                    var write = q.Writer.WriteAsync(ep, token);
-                    if (!write.IsCompletedSuccessfully)
-                    {
-                        try { write.AsTask().GetAwaiter().GetResult(); }
-                        catch (OperationCanceledException) { break; }
-                    }
-                }
-
-                ffmpeg.av_packet_unref(pkt);
-            }
+            // Keep seek control-path non-blocking: best effort only.
+            return writer.TryWrite(packet);
         }
-        finally
+        catch (ChannelClosedException) { return false; }
+    }
+
+    internal void ReportDemuxLoopError(Exception ex)
+    {
+        Console.Error.WriteLine($"[FFmpegDecoder] demux-loop error: {ex}");
+    }
+
+    // ── Demux helpers used by FFmpegDemuxWorker ───────────────────────────
+
+    internal unsafe nint AllocateDemuxPacket() => (nint)ffmpeg.av_packet_alloc();
+
+    internal unsafe void FreeDemuxPacket(nint pktHandle)
+    {
+        if (pktHandle == nint.Zero) return;
+        var pkt = (AVPacket*)pktHandle;
+        ffmpeg.av_packet_free(&pkt);
+    }
+
+    internal unsafe DemuxReadResult TryReadNextPacket(
+        nint pktHandle,
+        out ChannelWriter<EncodedPacket>? writer,
+        out EncodedPacket? packet,
+        CancellationToken token)
+    {
+        writer = null;
+        packet = null;
+
+        if (token.IsCancellationRequested)
+            return DemuxReadResult.Cancelled;
+
+        if (pktHandle == nint.Zero)
+            return DemuxReadResult.Eof;
+
+        var pkt = (AVPacket*)pktHandle;
+        int packetEpoch;
+        long seekPositionTicks;
+        lock (_formatIoGate)
         {
-            ffmpeg.av_packet_free(&pkt);
-            // Signal EOF to all queues.
-            foreach (var (_, q) in _queues)
-                q.Writer.TryComplete();
+            int ret = ffmpeg.av_read_frame(_fmt, pkt);
+            if (ret == ffmpeg.AVERROR_EOF)
+                return DemuxReadResult.Eof;
+            if (ret < 0)
+                return DemuxReadResult.Retry;
+
+            packetEpoch = Volatile.Read(ref _seekEpoch);
+            seekPositionTicks = Volatile.Read(ref _seekPositionTicks);
         }
+
+        if (!_queues.TryGetValue(pkt->stream_index, out var q))
+        {
+            ffmpeg.av_packet_unref(pkt);
+            return DemuxReadResult.Retry;
+        }
+
+        byte[] data;
+        bool isPooled;
+        int actualLen = pkt->size;
+        long pts = pkt->pts;
+        long dts = pkt->dts;
+        long duration = pkt->duration;
+        int flags = pkt->flags;
+        if (actualLen > 0)
+        {
+            data = ArrayPool<byte>.Shared.Rent(actualLen);
+            isPooled = true;
+            Marshal.Copy((nint)pkt->data, data, 0, actualLen);
+        }
+        else
+        {
+            data = [];
+            isPooled = false;
+            actualLen = 0;
+        }
+
+        ffmpeg.av_packet_unref(pkt);
+
+        packet = new EncodedPacket(data, actualLen, pts, dts, duration, flags,
+                                   isPooled, packetEpoch, seekPositionTicks);
+        writer = q.Writer;
+        return DemuxReadResult.Packet;
+    }
+
+    internal void CompletePacketQueues()
+    {
+        foreach (var (_, q) in _queues)
+            q.Writer.TryComplete();
     }
 
     public void Dispose()
@@ -279,7 +357,14 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         foreach (var ch in AudioChannels) ch.Dispose();
         foreach (var ch in VideoChannels) ch.Dispose();
 
-        _demuxThread?.Join(TimeSpan.FromSeconds(3));
+        if (_demuxTask != null)
+        {
+            try { _demuxTask.Wait(TimeSpan.FromSeconds(3)); }
+            catch (AggregateException ex)
+            {
+                ReportDemuxLoopError(ex.Flatten());
+            }
+        }
 
         if (_hwDeviceCtx != null)
             fixed (AVBufferRef** pp = &_hwDeviceCtx)

@@ -46,12 +46,16 @@ public sealed class PortAudioOutput : IAudioOutput
         if (_stream != nint.Zero)
             throw new InvalidOperationException("Output is already open. Close it before re-opening.");
 
+        double suggestedLatency = framesPerBuffer > 0 && requestedFormat.SampleRate > 0
+            ? framesPerBuffer / (double)requestedFormat.SampleRate
+            : device.DefaultLowOutputLatency;
+
         var outParams = new PaStreamParameters
         {
             device                    = device.Index,
             channelCount              = requestedFormat.Channels,
             sampleFormat              = PaSampleFormat.paFloat32,
-            suggestedLatency          = device.DefaultLowOutputLatency,
+            suggestedLatency          = suggestedLatency,
             hostApiSpecificStreamInfo = nint.Zero
         };
 
@@ -142,6 +146,7 @@ public sealed class PortAudioOutput : IAudioOutput
     {
         // Wrap in try/catch: any managed exception escaping an [UnmanagedCallersOnly]
         // method causes a runtime fast-fail, killing the process silently.
+        Span<float> dest = default;
         try
         {
             var self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
@@ -151,7 +156,7 @@ public sealed class PortAudioOutput : IAudioOutput
             if (mixer is null) return (int)PaStreamCallbackResult.paAbort;
 
             int totalSamples = (int)frameCount * self._hardwareFormat.Channels;
-            var dest = new Span<float>((void*)output, totalSamples);
+            dest = new Span<float>((void*)output, totalSamples);
 
             mixer.FillOutputBuffer(dest, (int)frameCount, self._hardwareFormat);
             return (int)PaStreamCallbackResult.paContinue;
@@ -159,6 +164,8 @@ public sealed class PortAudioOutput : IAudioOutput
         catch
         {
             // Output silence and keep going rather than aborting the stream.
+            if (!dest.IsEmpty)
+                dest.Clear();
             return (int)PaStreamCallbackResult.paContinue;
         }
     }

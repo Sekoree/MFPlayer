@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
 using PALib;
 using PALib.Types.Core;
 using S.Media.Core.Audio;
@@ -14,30 +13,50 @@ namespace S.Media.PortAudio;
 /// </summary>
 public sealed class PortAudioSink : IAudioSink
 {
+    private readonly struct PendingWrite
+    {
+        public readonly float[] Buffer;
+        public readonly int Samples;
+
+        public PendingWrite(float[] buffer, int samples)
+        {
+            Buffer = buffer;
+            Samples = samples;
+        }
+    }
+
     private readonly nint              _stream;
     private readonly AudioFormat       _targetFormat;
-    private readonly int               _framesPerBuffer;
-    private readonly IAudioResampler?  _resampler;
+    private IAudioResampler?           _resampler;
+    private bool                       _ownsResampler;
+    private readonly int               _poolBufferSamples;
 
     // Lock-free pool: RT thread takes a buffer, write thread returns it.
     private readonly ConcurrentQueue<float[]> _pool    = new();
-    private readonly ConcurrentQueue<float[]> _pending = new();
+    private readonly ConcurrentQueue<PendingWrite> _pending = new();
 
     private Thread?                   _writeThread;
     private CancellationTokenSource?  _cts;
     private volatile bool             _running;
     private bool                      _disposed;
+    private long                      _poolMissDrops;
+    private long                      _capacityMissDrops;
+    private long                      _resamplerMissDrops;
 
     public string Name      { get; }
     public bool   IsRunning => _running;
+    public long PoolMissDrops => Interlocked.Read(ref _poolMissDrops);
+    public long CapacityMissDrops => Interlocked.Read(ref _capacityMissDrops);
+    public long ResamplerMissDrops => Interlocked.Read(ref _resamplerMissDrops);
 
     /// <param name="device">Target output device.</param>
     /// <param name="targetFormat">Hardware format this sink will write at.</param>
     /// <param name="framesPerBuffer">PA write block size (should match the leader's buffer size).</param>
     /// <param name="name">Optional display name for diagnostics.</param>
     /// <param name="resampler">
-    /// Optional rate converter. When <see langword="null"/> and source rate differs from
-    /// <paramref name="targetFormat"/>.SampleRate, a <see cref="LinearResampler"/> is used.
+    /// Optional rate converter used when source rate differs from
+    /// <paramref name="targetFormat"/>.SampleRate. To keep <see cref="ReceiveBuffer"/> allocation-free,
+    /// mismatched-rate buffers are dropped when this is <see langword="null"/>.
     /// </param>
     public unsafe PortAudioSink(
         AudioDeviceInfo  device,
@@ -47,16 +66,20 @@ public sealed class PortAudioSink : IAudioSink
         IAudioResampler? resampler      = null)
     {
         _targetFormat    = targetFormat;
-        _framesPerBuffer = framesPerBuffer;
         _resampler       = resampler;
+        _ownsResampler   = false;
         Name             = name ?? $"PortAudioSink({device.Name})";
+
+        double suggestedLatency = framesPerBuffer > 0 && targetFormat.SampleRate > 0
+            ? framesPerBuffer / (double)targetFormat.SampleRate
+            : device.DefaultLowOutputLatency;
 
         var outParams = new PaStreamParameters
         {
             device                    = device.Index,
             channelCount              = targetFormat.Channels,
             sampleFormat              = PaSampleFormat.paFloat32,
-            suggestedLatency          = device.DefaultLowOutputLatency,
+            suggestedLatency          = suggestedLatency,
             hostApiSpecificStreamInfo = nint.Zero
         };
 
@@ -75,10 +98,11 @@ public sealed class PortAudioSink : IAudioSink
             throw new InvalidOperationException(
                 $"PortAudioSink Pa_OpenStream failed: {Native.Pa_GetErrorText(err)} ({err})");
 
-        // Pre-allocate 8 buffers (enough for ~170 ms at 48 kHz / 512 frames).
+        // Keep enough headroom for common rate-conversion ratios without resizing on the RT path.
         int bufSize = framesPerBuffer * targetFormat.Channels;
+        _poolBufferSamples = Math.Max(1, bufSize * 2);
         for (int i = 0; i < 8; i++)
-            _pool.Enqueue(new float[bufSize]);
+            _pool.Enqueue(new float[_poolBufferSamples]);
     }
 
     // ── IAudioSink lifecycle ──────────────────────────────────────────────
@@ -130,14 +154,31 @@ public sealed class PortAudioSink : IAudioSink
             : (int)Math.Round((double)frameCount * _targetFormat.SampleRate / sourceFormat.SampleRate);
         int writeSamples = writeFrames * outCh;
 
-        // Borrow a pool buffer. If the pooled buffer is too small (rate-mismatch first call),
-        // allocate a new one — subsequent calls reuse the correctly-sized buffer from the pool.
-        if (!_pool.TryDequeue(out var dest) || dest.Length < writeSamples)
-            dest = new float[writeSamples];
-
-        if (_resampler != null && sourceFormat.SampleRate != _targetFormat.SampleRate)
+        // Borrow a pool buffer. RT path never allocates: drop when no capacity is available.
+        if (!_pool.TryDequeue(out var dest))
         {
-            _resampler.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _targetFormat.SampleRate);
+            Interlocked.Increment(ref _poolMissDrops);
+            return;
+        }
+
+        if (dest.Length < writeSamples)
+        {
+            _pool.Enqueue(dest);
+            Interlocked.Increment(ref _capacityMissDrops);
+            return;
+        }
+
+        if (sourceFormat.SampleRate != _targetFormat.SampleRate)
+        {
+            var rs = _resampler;
+            if (rs == null)
+            {
+                _pool.Enqueue(dest);
+                Interlocked.Increment(ref _resamplerMissDrops);
+                return;
+            }
+
+            rs.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _targetFormat.SampleRate);
         }
         else
         {
@@ -145,7 +186,7 @@ public sealed class PortAudioSink : IAudioSink
             buffer[..copy].CopyTo(dest.AsSpan(0, copy));
         }
 
-        _pending.Enqueue(dest);
+        _pending.Enqueue(new PendingWrite(dest, writeSamples));
     }
 
     // ── Write thread — calls Pa_WriteStream (blocking) ────────────────────
@@ -155,15 +196,15 @@ public sealed class PortAudioSink : IAudioSink
         var token = _cts!.Token;
         while (!token.IsCancellationRequested)
         {
-            if (_pending.TryDequeue(out var buf))
+            if (_pending.TryDequeue(out var pending))
             {
                 // Use actual buffer length as the frame count so rate-adjusted writes are
                 // correct even when writeFrames ≠ _framesPerBuffer.
-                int framesToWrite = buf.Length / _targetFormat.Channels;
-                fixed (float* ptr = buf)
+                int framesToWrite = pending.Samples / _targetFormat.Channels;
+                fixed (float* ptr = pending.Buffer)
                     Native.Pa_WriteStream(_stream, (nint)ptr, (nuint)framesToWrite);
 
-                _pool.Enqueue(buf); // return buffer to pool
+                _pool.Enqueue(pending.Buffer); // return buffer to pool
             }
             else
             {
@@ -183,7 +224,8 @@ public sealed class PortAudioSink : IAudioSink
         _writeThread?.Join(TimeSpan.FromSeconds(2));
         Native.Pa_AbortStream(_stream);
         Native.Pa_CloseStream(_stream);
-        _resampler?.Dispose();
+        if (_ownsResampler)
+            _resampler?.Dispose();
     }
 }
 

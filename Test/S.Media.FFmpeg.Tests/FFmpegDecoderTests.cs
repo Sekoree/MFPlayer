@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using S.Media.FFmpeg.Tests.Helpers;
 using Xunit;
 
@@ -87,11 +88,17 @@ public sealed class FFmpegDecoderTests
             var ch = dec.AudioChannels[0];
             dec.Start();
 
-            // Give decode thread time to buffer some data.
-            Thread.Sleep(200);
-
             var buf = new float[1024 * 2];
-            int filled = ch.FillBuffer(buf, 1024);
+            int filled = 0;
+
+            // Allow startup jitter in worker scheduling.
+            var deadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 1.0);
+            while (Stopwatch.GetTimestamp() < deadline)
+            {
+                filled = ch.FillBuffer(buf, 1024);
+                if (filled > 0) break;
+                Thread.Sleep(20);
+            }
 
             Assert.True(filled > 0, "FillBuffer should return decoded frames.");
             Assert.True(buf.Any(s => s != 0f), "Output should contain non-zero audio from the sine tone.");
@@ -110,6 +117,88 @@ public sealed class FFmpegDecoderTests
             Thread.Sleep(50);
             var ex = Record.Exception(() => dec.Dispose());
             Assert.Null(ex);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Start_CalledTwice_DoesNotThrow()
+    {
+        string path = WavFileGenerator.CreateTempSineWav(48000, 2, 440f, 0.3f);
+        try
+        {
+            using var dec = FFmpegDecoder.Open(path);
+            var ex = Record.Exception(() =>
+            {
+                dec.Start();
+                dec.Start();
+            });
+            Assert.Null(ex);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Start_Seek_DoesNotThrow()
+    {
+        string path = WavFileGenerator.CreateTempSineWav(48000, 2, 440f, 1.0f);
+        try
+        {
+            using var dec = FFmpegDecoder.Open(path);
+            dec.Start();
+
+            var ex = Record.Exception(() => dec.Seek(TimeSpan.FromMilliseconds(250)));
+            Assert.Null(ex);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void RapidSeeks_DoNotSnapAudioPositionBackToZero()
+    {
+        string path = WavFileGenerator.CreateTempSineWav(48000, 2, 440f, 3.0f);
+        try
+        {
+            using var dec = FFmpegDecoder.Open(path);
+            var ch = dec.AudioChannels[0];
+            dec.Start();
+
+            var buf = new float[256 * 2];
+
+            // Warm up decode.
+            var warmupDeadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.5);
+            while (Stopwatch.GetTimestamp() < warmupDeadline)
+            {
+                ch.FillBuffer(buf, 256);
+                Thread.Sleep(5);
+            }
+
+            dec.Seek(TimeSpan.FromSeconds(1.5));
+            TimeSpan minAfterForward = TimeSpan.MaxValue;
+            var forwardDeadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.5);
+            while (Stopwatch.GetTimestamp() < forwardDeadline)
+            {
+                ch.FillBuffer(buf, 256);
+                var pos = ch.Position;
+                if (pos < minAfterForward) minAfterForward = pos;
+                Thread.Sleep(5);
+            }
+
+            dec.Seek(TimeSpan.FromSeconds(0.8));
+            TimeSpan minAfterBackward = TimeSpan.MaxValue;
+            var backwardDeadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.5);
+            while (Stopwatch.GetTimestamp() < backwardDeadline)
+            {
+                ch.FillBuffer(buf, 256);
+                var pos = ch.Position;
+                if (pos < minAfterBackward) minAfterBackward = pos;
+                Thread.Sleep(5);
+            }
+
+            Assert.True(minAfterForward > TimeSpan.FromSeconds(1.0),
+                $"Position regressed too far after forward seek. min={minAfterForward}");
+            Assert.True(minAfterBackward > TimeSpan.FromSeconds(0.4),
+                $"Position regressed too far after backward seek. min={minAfterBackward}");
         }
         finally { File.Delete(path); }
     }

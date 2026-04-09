@@ -79,6 +79,24 @@ public sealed class AudioMixerTests
         return (output, (AudioMixer)output.Mixer);
     }
 
+    private sealed class CapturingSink : IAudioSink
+    {
+        public string Name => nameof(CapturingSink);
+        public bool IsRunning => true;
+        public AudioFormat? LastSourceFormat { get; private set; }
+        public int Calls { get; private set; }
+
+        public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
+        {
+            Calls++;
+            LastSourceFormat = sourceFormat;
+        }
+
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public void Dispose() { }
+    }
+
     // ── AddChannel / FillOutputBuffer ────────────────────────────────────
 
     [Fact]
@@ -321,6 +339,46 @@ public sealed class AudioMixerTests
             float[] dest = new float[512];
             mixer.FillOutputBuffer(dest, 512, Mono48k);
             Assert.All(dest, s => Assert.Equal(0.5f, s, precision: 5));
+        }
+    }
+
+    [Fact]
+    public void FillOutputBuffer_BufferLargerThanPrepared_IncrementsLeaderCapacityMisses()
+    {
+        var (_, mixer) = MakeMixer(Mono48k);
+        using (mixer)
+        {
+            mixer.PrepareBuffers(64);
+            float[] dest = new float[2048];
+
+            mixer.FillOutputBuffer(dest, 2048, Mono48k);
+
+            Assert.Equal(1, mixer.RtLeaderCapacityMisses);
+            Assert.All(dest, s => Assert.Equal(0f, s));
+        }
+    }
+
+    [Fact]
+    public void FillOutputBuffer_RegisteredSink_ReceivesCachedLeaderFormat()
+    {
+        var (_, mixer) = MakeMixer(Stereo48k);
+        using (mixer)
+        {
+            var sink = new CapturingSink();
+            mixer.RegisterSink(sink, channels: 1);
+
+            var ch = new ConstantChannel(Stereo48k, 0.4f);
+            mixer.AddChannel(ch, ChannelRouteMap.Identity(2));
+            mixer.PrepareBuffers(32);
+
+            float[] dest = new float[64];
+            mixer.FillOutputBuffer(dest, 32, Stereo48k);
+
+            Assert.Equal(1, sink.Calls);
+            Assert.True(sink.LastSourceFormat.HasValue);
+            var sinkFormat = sink.LastSourceFormat.Value;
+            Assert.Equal(Stereo48k.SampleRate, sinkFormat.SampleRate);
+            Assert.Equal(1, sinkFormat.Channels);
         }
     }
 

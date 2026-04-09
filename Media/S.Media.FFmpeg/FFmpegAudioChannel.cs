@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
@@ -13,8 +12,8 @@ namespace S.Media.FFmpeg;
 public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 {
     // ── Decode pipeline ───────────────────────────────────────────────────
-    private readonly int                       _streamIndex;
     private readonly AVStream*                 _stream;
+    private readonly int                       _streamIndex;
     private readonly ChannelReader<EncodedPacket> _packetReader;
     private readonly int                       _threadCount;
 
@@ -23,11 +22,10 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     private AVFrame*        _frame;
     private AVPacket*       _pkt;
 
-    private Thread?                  _decodeThread;
+    private Task?                    _decodeTask;
     private CancellationTokenSource  _cts = new();
 
     // ── Sample ring buffer ────────────────────────────────────────────────
-    private readonly Channel<float[]>       _ring;
     private readonly ChannelReader<float[]> _ringReader;
     private readonly ChannelWriter<float[]> _ringWriter;
 
@@ -38,7 +36,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     // ── IAudioChannel ─────────────────────────────────────────────────────
     public Guid        Id           { get; } = Guid.NewGuid();
-    public AudioFormat SourceFormat { get; }
+    public AudioFormat SourceFormat { get; private set; }
     public bool        IsOpen       => !_disposed;
     public bool        CanSeek      => true;
     public float       Volume       { get; set; } = 1.0f;
@@ -65,19 +63,28 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
         _threadCount  = threadCount;
 
         var cp = stream->codecpar;
+        // Seed from codecpar; OpenCodec() will refine from the opened codec context.
         SourceFormat = new AudioFormat(cp->sample_rate, cp->ch_layout.nb_channels);
 
-        _ring = Channel.CreateBounded<float[]>(
+        var ring = Channel.CreateBounded<float[]>(
             new BoundedChannelOptions(bufferDepth)
             {
                 FullMode     = BoundedChannelFullMode.Wait,
-                SingleReader = true,
+                SingleReader = false,
                 SingleWriter = true
             });
-        _ringReader = _ring.Reader;
-        _ringWriter = _ring.Writer;
+        _ringReader = ring.Reader;
+        _ringWriter = ring.Writer;
 
         OpenCodec();
+    }
+
+    internal int StreamIndex => _streamIndex;
+
+    internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
+    {
+        Console.Error.WriteLine(
+            $"[FFmpegAudioChannel] stream={_streamIndex} epoch={currentEpoch} packetEpoch={ep.SeekEpoch} packetBytes={ep.ActualLength} decode-loop error: {ex}");
     }
 
     // ── Codec init ────────────────────────────────────────────────────────
@@ -93,6 +100,11 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
             _codecCtx->thread_count = _threadCount; // 0 = FFmpeg auto
         int ret = ffmpeg.avcodec_open2(_codecCtx, codec, null);
         if (ret < 0) throw new InvalidOperationException($"avcodec_open2 failed: {ret}");
+
+        // Use negotiated decoder values (more reliable than container codecpar on some formats).
+        int rate = _codecCtx->sample_rate > 0 ? _codecCtx->sample_rate : SourceFormat.SampleRate;
+        int ch   = _codecCtx->ch_layout.nb_channels > 0 ? _codecCtx->ch_layout.nb_channels : SourceFormat.Channels;
+        SourceFormat = new AudioFormat(rate, ch);
 
         _frame = ffmpeg.av_frame_alloc();
         _pkt   = ffmpeg.av_packet_alloc();
@@ -114,7 +126,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
         ffmpeg.av_opt_set_int(_swr, "in_sample_rate",  _codecCtx->sample_rate, 0);
         ffmpeg.av_opt_set_int(_swr, "out_sample_rate", _codecCtx->sample_rate, 0);
         ffmpeg.av_opt_set_sample_fmt(_swr, "in_sample_fmt",
-            (AVSampleFormat)_codecCtx->sample_fmt, 0);
+            _codecCtx->sample_fmt, 0);
         ffmpeg.av_opt_set_sample_fmt(_swr, "out_sample_fmt",
             AVSampleFormat.AV_SAMPLE_FMT_FLT, 0);
 
@@ -125,77 +137,51 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     internal void StartDecoding()
     {
-        _decodeThread = new Thread(DecodeLoop)
-        {
-            Name         = $"FFmpegAudio[{_streamIndex}].Decode",
-            IsBackground = true,
-            Priority     = ThreadPriority.BelowNormal
-        };
-        _decodeThread.Start();
+        _decodeTask = FFmpegDecodeWorkers.RunAudioAsync(this, _packetReader, _cts.Token);
     }
 
-    private void DecodeLoop()
+    internal void ApplySeekEpoch(long seekPositionTicks)
     {
-        var token = _cts.Token;
-        while (!token.IsCancellationRequested)
-        {
-            EncodedPacket? ep;
-            try { ep = _packetReader.ReadAsync(token).AsTask().GetAwaiter().GetResult(); }
-            catch { break; }
+        ffmpeg.avcodec_flush_buffers(_codecCtx);
+        _currentChunk  = null;
+        _currentOffset = 0;
+        while (_ringReader.TryRead(out _)) { }
+        Interlocked.Exchange(ref _framesInRing, 0);
+    }
 
-            if (ep.IsFlush)
-            {
-                FlushCodec();
+    internal unsafe bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
+    {
+        fixed (byte* p = ep.Data)
+        {
+            _pkt->data     = ep.ActualLength > 0 ? p : null;
+            _pkt->size     = ep.ActualLength;
+            _pkt->pts      = ep.Pts;
+            _pkt->dts      = ep.Dts;
+            _pkt->duration = ep.Duration;
+            _pkt->flags    = ep.Flags;
+        }
+
+        if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) return true;
+
+        while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
+        {
+            var converted = ConvertFrame();
+            ffmpeg.av_frame_unref(_frame);
+
+            if (converted == null)
                 continue;
-            }
 
-            var converted = DecodePacket(ep);
-            if (converted != null)
+            var w = _ringWriter.WriteAsync(converted, token);
+            if (!w.IsCompletedSuccessfully)
             {
-                Interlocked.Add(ref _framesInRing, converted.Length / SourceFormat.Channels);
-                var w = _ringWriter.WriteAsync(converted, token);
-                if (!w.IsCompletedSuccessfully)
-                {
-                    try { w.AsTask().GetAwaiter().GetResult(); }
-                    catch (OperationCanceledException) { break; }
-                }
-            }
-        }
-        _ringWriter.TryComplete();
-    }
-
-    private unsafe void FlushCodec() => ffmpeg.avcodec_flush_buffers(_codecCtx);
-
-    private unsafe float[]? DecodePacket(EncodedPacket ep)
-    {
-        try
-        {
-            fixed (byte* p = ep.Data)
-            {
-                _pkt->data     = ep.ActualLength > 0 ? p : null;
-                _pkt->size     = ep.ActualLength;
-                _pkt->pts      = ep.Pts;
-                _pkt->dts      = ep.Dts;
-                _pkt->duration = ep.Duration;
-                _pkt->flags    = ep.Flags;
+                try { w.AsTask().GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { return false; }
             }
 
-            if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) return null;
+            Interlocked.Add(ref _framesInRing, converted.Length / SourceFormat.Channels);
+        }
 
-            float[]? last = null;
-            while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
-            {
-                last = ConvertFrame();
-                ffmpeg.av_frame_unref(_frame);
-            }
-            return last;
-        }
-        finally
-        {
-            // Return the rented packet buffer now that it's been handed to the codec.
-            if (ep.IsPooled)
-                ArrayPool<byte>.Shared.Return(ep.Data);
-        }
+        return true;
     }
 
     private float[]? ConvertFrame()
@@ -241,12 +227,15 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
                     int consumed = filled / channels;
                     int dropped  = (totalSamples - filled) / channels;
                     if (consumed > 0)
+                    {
+                        Interlocked.Add(ref _framesConsumed, consumed);
                         Interlocked.Add(ref _framesInRing, -consumed);
+                    }
                     if (dropped > 0)
                         ThreadPool.QueueUserWorkItem(_ =>
                             BufferUnderrun?.Invoke(this,
                                 new BufferUnderrunEventArgs(Position, dropped)));
-                    return filled / channels;
+                    return consumed;
                 }
                 _currentOffset = 0;
             }
@@ -286,15 +275,11 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
         _currentChunk  = null;
         _currentOffset = 0;
         while (_ringReader.TryRead(out _)) { }
+        Interlocked.Exchange(ref _framesInRing, 0);
         Interlocked.Exchange(ref _framesConsumed,
             (long)(position.TotalSeconds * SourceFormat.SampleRate));
     }
 
-    internal void FlushAfterSeek()
-    {
-        ffmpeg.avcodec_flush_buffers(_codecCtx);
-        Seek(TimeSpan.Zero);
-    }
 
     // ── Dispose ───────────────────────────────────────────────────────────
 
@@ -303,13 +288,22 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
         if (_disposed) return;
         _disposed = true;
         _cts.Cancel();
-        _decodeThread?.Join(TimeSpan.FromSeconds(2));
-        _ringWriter.TryComplete();
+        if (_decodeTask != null)
+        {
+            try { _decodeTask.Wait(TimeSpan.FromSeconds(2)); }
+            catch (AggregateException ex)
+            {
+                Console.Error.WriteLine($"[FFmpegAudioChannel] stream={_streamIndex} decode task fault during dispose: {ex.Flatten()}");
+            }
+        }
+        CompleteDecodeLoop();
 
         if (_frame != null)    fixed (AVFrame**   pp = &_frame)    ffmpeg.av_frame_free(pp);
         if (_pkt != null)      fixed (AVPacket**  pp = &_pkt)      ffmpeg.av_packet_free(pp);
         if (_codecCtx != null) fixed (AVCodecContext** pp = &_codecCtx) ffmpeg.avcodec_free_context(pp);
         if (_swr != null)      fixed (SwrContext** pp = &_swr)     ffmpeg.swr_free(pp);
     }
+
+    internal void CompleteDecodeLoop() => _ringWriter.TryComplete();
 }
 

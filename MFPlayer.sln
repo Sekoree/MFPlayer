@@ -18,7 +18,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB
 	ProjectSection(SolutionItems) = preProject
 		Doc\MediaPipelineArchitecture.md = Doc\MediaPipelineArchitecture.md
 		Doc\ImplementationStatus.md = Doc\ImplementationStatus.md
-		Doc\VideoPlaybackArchitecture.md = Doc\VideoPlaybackArchitecture.md
+		Doc\AudioRobustnessFindings.md = Doc\AudioRobustnessFindings.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"

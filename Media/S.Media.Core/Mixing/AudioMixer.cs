@@ -22,14 +22,22 @@ using S.Media.Core.Audio;
 /// </summary>
 public sealed class AudioMixer : IAudioMixer
 {
+    private const int DefaultPreallocatedFrames = 1024;
+
     // ── Nested types ──────────────────────────────────────────────────────
 
     private sealed class SinkTarget
     {
         public readonly IAudioSink Sink;
         public          int        Channels;   // 0 = resolve lazily from leader channel count
+        public          AudioFormat SinkFormat;
         public          float[]    MixBuffer = [];
-        public SinkTarget(IAudioSink sink, int channels) { Sink = sink; Channels = channels; }
+        public SinkTarget(IAudioSink sink, int channels, int sampleRate)
+        {
+            Sink = sink;
+            Channels = channels;
+            SinkFormat = new AudioFormat(sampleRate, channels > 0 ? channels : 1);
+        }
     }
 
     private sealed class SinkRoute
@@ -76,6 +84,9 @@ public sealed class AudioMixer : IAudioMixer
     private int  _framesPerBuffer;
     private bool _disposed;
     private volatile float _masterVolume = 1.0f;
+    private long _rtLeaderCapacityMisses;
+    private long _rtSinkCapacityMisses;
+    private long _rtSlotCapacityMisses;
 
     // ── IAudioMixer ───────────────────────────────────────────────────────
 
@@ -90,6 +101,9 @@ public sealed class AudioMixer : IAudioMixer
     }
 
     public IReadOnlyList<float> PeakLevels => _peakSnapshot;
+    public long RtLeaderCapacityMisses => Interlocked.Read(ref _rtLeaderCapacityMisses);
+    public long RtSinkCapacityMisses   => Interlocked.Read(ref _rtSinkCapacityMisses);
+    public long RtSlotCapacityMisses   => Interlocked.Read(ref _rtSlotCapacityMisses);
 
     /// <param name="leaderFormat">
     /// Audio format of the leader output (sample rate + channel count).
@@ -103,6 +117,11 @@ public sealed class AudioMixer : IAudioMixer
     {
         LeaderFormat    = leaderFormat;
         DefaultFallback = defaultFallback;
+
+        // Keep RT path allocation-free even before explicit PrepareBuffers()
+        // by provisioning a conservative startup capacity.
+        _framesPerBuffer = DefaultPreallocatedFrames;
+        EnsureWorkBuffers(_framesPerBuffer * LeaderFormat.Channels, LeaderFormat.Channels);
     }
 
     // ── Pre-allocation ────────────────────────────────────────────────────
@@ -121,6 +140,7 @@ public sealed class AudioMixer : IAudioMixer
         {
             int ch = ResolvedSinkChannels(st, outCh);
             st.Channels  = ch;
+            st.SinkFormat = new AudioFormat(LeaderFormat.SampleRate, ch);
             st.MixBuffer = new float[framesPerBuffer * ch];
         }
     }
@@ -249,7 +269,7 @@ public sealed class AudioMixer : IAudioMixer
             if (FindTarget(sink) != null) return; // idempotent
 
             int ch = channels > 0 ? channels : TryGetLeaderChannels();
-            var target = new SinkTarget(sink, ch);
+            var target = new SinkTarget(sink, ch, LeaderFormat.SampleRate);
 
             if (_framesPerBuffer > 0 && ch > 0)
                 target.MixBuffer = new float[_framesPerBuffer * ch];
@@ -295,7 +315,13 @@ public sealed class AudioMixer : IAudioMixer
         int outCh      = outputFormat.Channels;
         int outSamples = frameCount * outCh;
 
-        EnsureWorkBuffers(outSamples, outCh);
+        if (_mixBuffer.Length < outSamples || _peakLevels.Length < outCh || _peakSnapshot.Length < outCh)
+        {
+            dest.Clear();
+            Interlocked.Increment(ref _rtLeaderCapacityMisses);
+            return;
+        }
+
         _mixBuffer.AsSpan(0, outSamples).Clear();
 
         var sinkTargets = _sinkTargets;
@@ -305,7 +331,11 @@ public sealed class AudioMixer : IAudioMixer
             int sinkCh = ResolvedSinkChannels(st, outCh);
             int sinkN  = frameCount * sinkCh;
             if (st.MixBuffer.Length < sinkN)
-                st.MixBuffer = new float[sinkN];
+            {
+                Interlocked.Increment(ref _rtSinkCapacityMisses);
+                continue;
+            }
+
             st.MixBuffer.AsSpan(0, sinkN).Clear();
         }
 
@@ -320,10 +350,11 @@ public sealed class AudioMixer : IAudioMixer
                 : (int)Math.Ceiling(frameCount * ((double)srcFmt.SampleRate / outputFormat.SampleRate)) + 1;
             int srcSamples = srcFrames * srcCh;
 
-            if (slot.SrcBuf.Length < srcSamples)
-                slot.SrcBuf = new float[srcSamples];
-            if (slot.ResampleBuf.Length < frameCount * srcCh)
-                slot.ResampleBuf = new float[frameCount * srcCh];
+            if (slot.SrcBuf.Length < srcSamples || slot.ResampleBuf.Length < frameCount * srcCh)
+            {
+                Interlocked.Increment(ref _rtSlotCapacityMisses);
+                continue;
+            }
 
             // 1. Pull
             slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, srcSamples), srcFrames);
@@ -352,6 +383,9 @@ public sealed class AudioMixer : IAudioMixer
             {
                 var st     = sinkTargets[si];
                 int sinkCh = ResolvedSinkChannels(st, outCh);
+                int sinkN  = frameCount * sinkCh;
+                if (st.MixBuffer.Length < sinkN)
+                    continue;
 
                 SinkRoute? route = null;
                 for (int ri = 0; ri < sinkRoutes.Length; ri++)
@@ -374,7 +408,11 @@ public sealed class AudioMixer : IAudioMixer
             {
                 var st     = sinkTargets[si];
                 int sinkCh = ResolvedSinkChannels(st, outCh);
-                MultiplyInPlace(st.MixBuffer.AsSpan(0, frameCount * sinkCh), mv);
+                int sinkN  = frameCount * sinkCh;
+                if (st.MixBuffer.Length < sinkN)
+                    continue;
+
+                MultiplyInPlace(st.MixBuffer.AsSpan(0, sinkN), mv);
             }
         }
 
@@ -390,8 +428,11 @@ public sealed class AudioMixer : IAudioMixer
             var st = sinkTargets[si];
             if (!st.Sink.IsRunning) continue;
             int sinkCh  = ResolvedSinkChannels(st, outCh);
-            var sinkFmt = new AudioFormat(outputFormat.SampleRate, sinkCh);
-            st.Sink.ReceiveBuffer(st.MixBuffer.AsSpan(0, frameCount * sinkCh), frameCount, sinkFmt);
+            int sinkN   = frameCount * sinkCh;
+            if (st.MixBuffer.Length < sinkN)
+                continue;
+
+            st.Sink.ReceiveBuffer(st.MixBuffer.AsSpan(0, sinkN), frameCount, st.SinkFormat);
         }
     }
 

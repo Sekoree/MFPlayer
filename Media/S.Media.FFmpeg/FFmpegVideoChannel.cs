@@ -13,8 +13,8 @@ namespace S.Media.FFmpeg;
 /// </summary>
 public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 {
-    private readonly int                          _streamIndex;
     private readonly AVStream*                    _stream;
+    private readonly int                          _streamIndex;
     private readonly ChannelReader<EncodedPacket> _packetReader;
     private readonly AVBufferRef*                 _hwDeviceCtx;   // null = sw only
     private readonly int                          _threadCount;
@@ -27,10 +27,9 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
     private AVPacket*       _pkt;
     private int             _swsBufSize; // byte size of one converted frame
 
-    private Thread?                  _decodeThread;
+    private Task?                    _decodeTask;
     private CancellationTokenSource  _cts = new();
 
-    private readonly Channel<VideoFrame>       _ring;
     private readonly ChannelReader<VideoFrame> _ringReader;
     private readonly ChannelWriter<VideoFrame> _ringWriter;
 
@@ -69,19 +68,27 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
         var cp = stream->codecpar;
         Format = new VideoFormat(cp->width, cp->height, targetPixelFormat,
-            (int)stream->r_frame_rate.num, (int)stream->r_frame_rate.den);
+            stream->r_frame_rate.num, stream->r_frame_rate.den);
 
-        _ring = Channel.CreateBounded<VideoFrame>(
+        var ring = Channel.CreateBounded<VideoFrame>(
             new BoundedChannelOptions(bufferDepth)
             {
                 FullMode     = BoundedChannelFullMode.Wait,
-                SingleReader = true,
+                SingleReader = false,
                 SingleWriter = true
             });
-        _ringReader = _ring.Reader;
-        _ringWriter = _ring.Writer;
+        _ringReader = ring.Reader;
+        _ringWriter = ring.Writer;
 
         OpenCodec();
+    }
+
+    internal int StreamIndex => _streamIndex;
+
+    internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
+    {
+        Console.Error.WriteLine(
+            $"[FFmpegVideoChannel] stream={_streamIndex} epoch={currentEpoch} packetEpoch={ep.SeekEpoch} packetBytes={ep.ActualLength} decode-loop error: {ex}");
     }
 
     private void OpenCodec()
@@ -121,75 +128,14 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
     internal void StartDecoding()
     {
-        _decodeThread = new Thread(DecodeLoop)
-        {
-            Name         = $"FFmpegVideo[{_streamIndex}].Decode",
-            IsBackground = true,
-            Priority     = ThreadPriority.BelowNormal
-        };
-        _decodeThread.Start();
+        _decodeTask = FFmpegDecodeWorkers.RunVideoAsync(this, _packetReader, _cts.Token);
     }
 
-    private void DecodeLoop()
+    internal void ApplySeekEpoch(long seekPositionTicks)
     {
-        var token = _cts.Token;
-        while (!token.IsCancellationRequested)
-        {
-            EncodedPacket? ep;
-            try { ep = _packetReader.ReadAsync(token).AsTask().GetAwaiter().GetResult(); }
-            catch { break; }
-
-            if (ep.IsFlush)
-            {
-                ffmpeg.avcodec_flush_buffers(_codecCtx);
-                continue;
-            }
-
-            fixed (byte* p = ep.Data)
-            {
-                _pkt->data     = ep.ActualLength > 0 ? p : null;
-                _pkt->size     = ep.ActualLength;
-                _pkt->pts      = ep.Pts;
-                _pkt->dts      = ep.Dts;
-                _pkt->duration = ep.Duration;
-            }
-
-            if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) continue;
-
-            // Return the rented packet buffer now that it's been handed to the codec.
-            if (ep.IsPooled)
-                ArrayPool<byte>.Shared.Return(ep.Data);
-
-            while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
-            {
-                // If the frame is in hw memory, transfer to CPU before converting.
-                AVFrame* decodedFrame = _frame;
-                bool transferred = false;
-                if (_hwDeviceCtx != null && _frame->hw_frames_ctx != null)
-                {
-                    if (ffmpeg.av_hwframe_transfer_data(_swFrame, _frame, 0) >= 0)
-                    {
-                        _swFrame->pts = _frame->pts;
-                        decodedFrame  = _swFrame;
-                        transferred   = true;
-                    }
-                }
-
-                var vf = ConvertFrame(decodedFrame);
-                if (vf.HasValue)
-                {
-                    var w = _ringWriter.WriteAsync(vf.Value, token);
-                    if (!w.IsCompletedSuccessfully)
-                    {
-                        try { w.AsTask().GetAwaiter().GetResult(); }
-                        catch (OperationCanceledException) { break; }
-                    }
-                }
-                ffmpeg.av_frame_unref(_frame);
-                if (transferred) ffmpeg.av_frame_unref(_swFrame);
-            }
-        }
-        _ringWriter.TryComplete();
+        ffmpeg.avcodec_flush_buffers(_codecCtx);
+        while (_ringReader.TryRead(out var vf))
+            vf.MemoryOwner?.Dispose();
     }
 
     private VideoFrame? ConvertFrame(AVFrame* frame)
@@ -209,13 +155,13 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
         // Build source data/stride arrays from the AVFrame (native pointers — safe
         // because FFmpeg owns the underlying allocation for the duration of this call).
-        var srcDataArr   = new byte*[4] { frame->data[0], frame->data[1], frame->data[2], frame->data[3] };
-        var srcStrideArr = new int[4]   { frame->linesize[0], frame->linesize[1], frame->linesize[2], frame->linesize[3] };
+        var srcDataArr   = new byte*[] { frame->data[0], frame->data[1], frame->data[2], frame->data[3] };
+        var srcStrideArr = new[] { frame->linesize[0], frame->linesize[1], frame->linesize[2], frame->linesize[3] };
 
         fixed (byte* pBuf = rented)
         {
-            var dstDataArr   = new byte*[4] { pBuf, null, null, null };
-            var dstStrideArr = new int[4]   { w * BytesPerPixel(TargetPixelFormat), 0, 0, 0 };
+            var dstDataArr   = new byte*[] { pBuf, null, null, null };
+            var dstStrideArr = new[] { w * BytesPerPixel(TargetPixelFormat), 0, 0, 0 };
             ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstDataArr, dstStrideArr);
         }
 
@@ -266,13 +212,9 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
     public void Seek(TimeSpan position)
     {
-        while (_ringReader.TryRead(out _)) { }
-    }
-
-    internal void FlushAfterSeek()
-    {
-        ffmpeg.avcodec_flush_buffers(_codecCtx);
-        Seek(TimeSpan.Zero);
+        while (_ringReader.TryRead(out var vf))
+            vf.MemoryOwner?.Dispose();
+        Volatile.Write(ref _positionTicks, position.Ticks);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -293,8 +235,15 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
         if (_disposed) return;
         _disposed = true;
         _cts.Cancel();
-        _decodeThread?.Join(TimeSpan.FromSeconds(2));
-        _ringWriter.TryComplete();
+        if (_decodeTask != null)
+        {
+            try { _decodeTask.Wait(TimeSpan.FromSeconds(2)); }
+            catch (AggregateException ex)
+            {
+                Console.Error.WriteLine($"[FFmpegVideoChannel] stream={_streamIndex} decode task fault during dispose: {ex.Flatten()}");
+            }
+        }
+        CompleteDecodeLoop();
 
         if (_frame    != null) fixed (AVFrame**        pp = &_frame)    ffmpeg.av_frame_free(pp);
         if (_rgbFrame != null) fixed (AVFrame**        pp = &_rgbFrame) ffmpeg.av_frame_free(pp);
@@ -303,5 +252,52 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
         if (_codecCtx != null) fixed (AVCodecContext** pp = &_codecCtx) ffmpeg.avcodec_free_context(pp);
         if (_sws      != null) ffmpeg.sws_freeContext(_sws);
     }
+
+    internal unsafe bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
+    {
+        fixed (byte* p = ep.Data)
+        {
+            _pkt->data     = ep.ActualLength > 0 ? p : null;
+            _pkt->size     = ep.ActualLength;
+            _pkt->pts      = ep.Pts;
+            _pkt->dts      = ep.Dts;
+            _pkt->duration = ep.Duration;
+        }
+
+        if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) return true;
+
+        while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
+        {
+            // If the frame is in hw memory, transfer to CPU before converting.
+            AVFrame* decodedFrame = _frame;
+            bool transferred = false;
+            if (_hwDeviceCtx != null && _frame->hw_frames_ctx != null)
+            {
+                if (ffmpeg.av_hwframe_transfer_data(_swFrame, _frame, 0) >= 0)
+                {
+                    _swFrame->pts = _frame->pts;
+                    decodedFrame  = _swFrame;
+                    transferred   = true;
+                }
+            }
+
+            var vf = ConvertFrame(decodedFrame);
+            if (vf.HasValue)
+            {
+                var w = _ringWriter.WriteAsync(vf.Value, token);
+                if (!w.IsCompletedSuccessfully)
+                {
+                    try { w.AsTask().GetAwaiter().GetResult(); }
+                    catch (OperationCanceledException) { return false; }
+                }
+            }
+            ffmpeg.av_frame_unref(_frame);
+            if (transferred) ffmpeg.av_frame_unref(_swFrame);
+        }
+
+        return true;
+    }
+
+    internal void CompleteDecodeLoop() => _ringWriter.TryComplete();
 }
 
