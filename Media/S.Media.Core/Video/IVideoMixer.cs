@@ -21,6 +21,9 @@ public interface IVideoMixer : IDisposable
     /// </summary>
     IVideoChannel? ActiveChannel { get; }
 
+    /// <summary>Number of registered secondary sinks.</summary>
+    int SinkCount { get; }
+
     /// <summary>Registers a video channel.</summary>
     void AddChannel(IVideoChannel channel);
 
@@ -34,10 +37,26 @@ public interface IVideoMixer : IDisposable
     void SetActiveChannel(Guid? channelId);
 
     /// <summary>
-    /// Called by the render loop to pull the next frame from the active channel
-    /// and present it. Returns the frame that was presented, or null if no frame
-    /// was available.
+    /// Registers a sink as an additional video target.
     /// </summary>
-    VideoFrame? PresentNextFrame();
+    void RegisterSink(IVideoSink sink);
+
+    /// <summary>
+    /// Removes a previously registered sink.
+    /// </summary>
+    void UnregisterSink(IVideoSink sink);
+
+    /// <summary>
+    /// Selects one active channel for a specific sink target.
+    /// Pass null to make the sink output black/no frame updates.
+    /// </summary>
+    void SetActiveChannelForSink(IVideoSink sink, Guid? channelId);
+
+    /// <summary>
+    /// Called by the render loop to pull the next frame from the active channel
+    /// and present it. The mixer uses <paramref name="clockPosition"/> for basic
+    /// PTS pacing (hold if early, advance when due).
+    /// </summary>
+    VideoFrame? PresentNextFrame(TimeSpan clockPosition);
 }
 

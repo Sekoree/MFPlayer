@@ -1,3 +1,4 @@
+using S.Media.Core.Media;
 using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
@@ -28,6 +29,18 @@ public sealed class FFmpegDecoderOptionsTests
         => Assert.Null(new FFmpegDecoderOptions().HardwareDeviceType);
 
     [Fact]
+    public void Defaults_EnableAudioAndVideo_AreTrue()
+    {
+        var opts = new FFmpegDecoderOptions();
+        Assert.True(opts.EnableAudio);
+        Assert.True(opts.EnableVideo);
+    }
+
+    [Fact]
+    public void Defaults_VideoTargetPixelFormat_IsBgra32()
+        => Assert.Equal(PixelFormat.Bgra32, new FFmpegDecoderOptions().VideoTargetPixelFormat);
+
+    [Fact]
     public void Init_OverridesAllDefaults()
     {
         var opts = new FFmpegDecoderOptions
@@ -36,7 +49,10 @@ public sealed class FFmpegDecoderOptionsTests
             AudioBufferDepth   = 32,
             VideoBufferDepth   = 8,
             DecoderThreadCount = 4,
-            HardwareDeviceType = "vaapi"
+            HardwareDeviceType = "vaapi",
+            EnableAudio        = false,
+            EnableVideo        = true,
+            VideoTargetPixelFormat = PixelFormat.Rgba32
         };
 
         Assert.Equal(128,     opts.PacketQueueDepth);
@@ -44,6 +60,8 @@ public sealed class FFmpegDecoderOptionsTests
         Assert.Equal(8,       opts.VideoBufferDepth);
         Assert.Equal(4,       opts.DecoderThreadCount);
         Assert.Equal("vaapi", opts.HardwareDeviceType);
+        Assert.False(opts.EnableAudio);
+        Assert.True(opts.EnableVideo);
+        Assert.Equal(PixelFormat.Rgba32, opts.VideoTargetPixelFormat);
     }
 }
-

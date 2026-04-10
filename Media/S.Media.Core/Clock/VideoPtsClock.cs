@@ -69,8 +69,21 @@ public sealed class VideoPtsClock : MediaClockBase
     public void UpdateFromFrame(TimeSpan pts)
     {
         if (pts <= TimeSpan.Zero) return;
-        _lastPts     = pts;
-        _swAtLastPts = _sw.Elapsed;
+
+        var swNow = _sw.Elapsed;
+        var predicted = _lastPts + (swNow - _swAtLastPts);
+
+        // Never pull the clock backwards/behind current wall-clock progression.
+        if (pts <= predicted)
+            return;
+
+        // Ignore tiny forward jitter; only apply a meaningful resync correction.
+        double fps = SampleRate > 1 ? SampleRate : 30.0;
+        var minCorrection = TimeSpan.FromSeconds(0.5 / fps);
+        if (pts - predicted < minCorrection)
+            return;
+
+        _lastPts = pts;
+        _swAtLastPts = swNow;
     }
 }
-

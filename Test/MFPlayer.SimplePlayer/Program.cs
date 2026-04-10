@@ -98,12 +98,13 @@ using (decoder)
     var audioChannel = decoder.AudioChannels[0];
     var srcFmt       = audioChannel.SourceFormat;
 
-    // Cap output to stereo; prefer device default sample rate for robust realtime pacing.
-    // The mixer will resample source audio to the hardware rate when needed.
+    // Cap output to stereo. Prefer source rate first to avoid extra host/backend
+    // resampling layers that can sometimes cause timing/pitch anomalies.
     int outChannels = Math.Min(srcFmt.Channels, Math.Min(device.MaxOutputChannels, 2));
-    int outRate     = device.DefaultSampleRate > 0
+    int defaultRate = device.DefaultSampleRate > 0
         ? (int)Math.Round(device.DefaultSampleRate)
         : srcFmt.SampleRate;
+    int outRate     = srcFmt.SampleRate;
     var hwFmt       = new AudioFormat(outRate, outChannels);
     var routeMap    = BuildRouteMap(srcFmt.Channels, outChannels);
 
@@ -117,12 +118,29 @@ using (decoder)
     using var output = new PortAudioOutput();
     try
     {
-        output.Open(device, hwFmt, framesPerBuffer: 512);
+        output.Open(device, hwFmt, framesPerBuffer: 0);
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"FAILED\n  {ex.Message}");
-        return;
+        // Fall back to the device default rate if opening at source rate fails.
+        if (defaultRate != outRate)
+        {
+            hwFmt = new AudioFormat(defaultRate, outChannels);
+            try
+            {
+                output.Open(device, hwFmt, framesPerBuffer: 0);
+            }
+            catch
+            {
+                Console.WriteLine($"FAILED\n  {ex.Message}");
+                return;
+            }
+        }
+        else
+        {
+            Console.WriteLine($"FAILED\n  {ex.Message}");
+            return;
+        }
     }
     Console.WriteLine("OK");
 
@@ -137,10 +155,7 @@ using (decoder)
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-    long lastSeekTicks = 0;
-    TimeSpan seekAnchor = TimeSpan.Zero;
-    long lastSeekCommandTicks = 0;
-    TimeSpan lastSeekTarget = TimeSpan.MinValue;
+    var seekState = new SeekUiState();
 
     var sw = Stopwatch.StartNew();
     audioChannel.BufferUnderrun += (_, _) =>
@@ -150,7 +165,7 @@ using (decoder)
         if (cts.IsCancellationRequested) return;
 
         // Seeking temporarily drains/flushes buffers; do not interpret that as EOF.
-        long ticksSinceSeek = Stopwatch.GetTimestamp() - Interlocked.Read(ref lastSeekTicks);
+        long ticksSinceSeek = Stopwatch.GetTimestamp() - Interlocked.Read(ref seekState.LastSeekTicks);
         double secondsSinceSeek = ticksSinceSeek / (double)Stopwatch.Frequency;
         if (secondsSinceSeek < 1.2) return;
 
@@ -173,8 +188,6 @@ using (decoder)
     bool paused = false;
     float volume = 1.0f;
     var statsSw = Stopwatch.StartNew();
-    string peaksText = "-";
-    int peaksRefreshCounter = 0;
 
     // Main control loop: non-blocking key handling + periodic stats.
     while (!cts.IsCancellationRequested)
@@ -208,7 +221,7 @@ using (decoder)
                 case ConsoleKey.LeftArrow:
                 {
                     if (TrySeekBy(TimeSpan.FromSeconds(-5), audioChannel, decoder,
-                        ref seekAnchor, ref lastSeekTicks, ref lastSeekCommandTicks, ref lastSeekTarget, out var target))
+                        ref seekState.SeekAnchor, ref seekState.LastSeekTicks, ref seekState.LastSeekCommandTicks, ref seekState.LastSeekTarget, out var target))
                         Console.WriteLine($"[seek] {FormatTime(target)}");
                     break;
                 }
@@ -216,7 +229,7 @@ using (decoder)
                 case ConsoleKey.RightArrow:
                 {
                     if (TrySeekBy(TimeSpan.FromSeconds(5), audioChannel, decoder,
-                        ref seekAnchor, ref lastSeekTicks, ref lastSeekCommandTicks, ref lastSeekTarget, out var target))
+                        ref seekState.SeekAnchor, ref seekState.LastSeekTicks, ref seekState.LastSeekCommandTicks, ref seekState.LastSeekTarget, out var target))
                         Console.WriteLine($"[seek] {FormatTime(target)}");
                     break;
                 }
@@ -242,18 +255,10 @@ using (decoder)
             if (clockPos < TimeSpan.Zero) clockPos = TimeSpan.Zero;
             var chPos = audioChannel.Position;
 
-            // Peaks formatting allocates; refresh less often in debug UI.
-            if (++peaksRefreshCounter >= 4)
-            {
-                peaksRefreshCounter = 0;
-                peaksText = FormatPeaks(output.Mixer.PeakLevels);
-            }
-
             Console.Write("\r" +
                 $"[stats] state={(paused ? "paused" : "playing"),7}  " +
                 $"clock={FormatTime(clockPos)}  src={FormatTime(chPos)}  " +
-                $"buffer={audioChannel.BufferAvailable,6}f  vol={audioChannel.Volume:0.00}  " +
-                $"peaks={peaksText}");
+                $"buffer={audioChannel.BufferAvailable,6}f  vol={audioChannel.Volume:0.00}");
         }
 
         try { await Task.Delay(20, cts.Token); }
@@ -281,9 +286,7 @@ static int PickNumber(string label, int min, int max)
     }
 }
 
-/// <summary>
-/// Builds a route map that handles mono→stereo fan-out and multi-channel→stereo clipping.
-/// </summary>
+// Builds a route map that handles mono->stereo fan-out and multi-channel->stereo clipping.
 static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
 {
     var b = new ChannelRouteMap.Builder();
@@ -301,11 +304,6 @@ static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
     return b.Build();
 }
 
-static string FormatPeaks(IReadOnlyList<float> peaks)
-{
-    if (peaks.Count == 0) return "-";
-    return string.Join(",", peaks.Select(p => p.ToString("0.00")));
-}
 
 static string FormatTime(TimeSpan ts)
 {
@@ -328,20 +326,21 @@ static bool TrySeekBy(
     // During rapid key bursts, anchor on the most recently requested seek target
     // so each step is deterministic and not based on lagging decode position.
     double sinceLastCommand = (nowTicks - lastSeekCommandTicks) / (double)Stopwatch.Frequency;
-    TimeSpan basePos = sinceLastCommand <= 0.75 ? seekAnchor : audioChannel.Position;
+    TimeSpan basePos = sinceLastCommand <= 0.075 ? seekAnchor : audioChannel.Position;
 
     target = basePos + delta;
     if (target < TimeSpan.Zero)
         target = TimeSpan.Zero;
 
-    // When we're already clamped at start, additional back-seek commands are
-    // semantically no-ops; suppress them to avoid creating redundant seek epochs.
-    if (target == TimeSpan.Zero && lastSeekTarget == TimeSpan.Zero)
+    // When already at start, repeated back-seeks are semantic no-ops.
+    // Still allow a real jump-to-zero from any non-zero base position.
+    if (target == TimeSpan.Zero && lastSeekTarget == TimeSpan.Zero && basePos <= TimeSpan.FromMilliseconds(20))
         return false;
 
-    // Ignore repeated identical targets from key auto-repeat noise.
+    // Ignore repeated identical targets from key auto-repeat noise during
+    // rapid command bursts; allow same-target seeks again after playback advances.
     // Guard the sentinel to avoid TimeSpan overflow on the first seek.
-    if (lastSeekTarget != TimeSpan.MinValue)
+    if (lastSeekTarget != TimeSpan.MinValue && sinceLastCommand <= 0.075)
     {
         long deltaTicks = target.Ticks >= lastSeekTarget.Ticks
             ? target.Ticks - lastSeekTarget.Ticks
@@ -357,5 +356,13 @@ static bool TrySeekBy(
     lastSeekCommandTicks = nowTicks;
     Interlocked.Exchange(ref lastSeekTicks, nowTicks);
     return true;
+}
+
+sealed class SeekUiState
+{
+    public long LastSeekTicks;
+    public TimeSpan SeekAnchor = TimeSpan.Zero;
+    public long LastSeekCommandTicks;
+    public TimeSpan LastSeekTarget = TimeSpan.MinValue;
 }
 

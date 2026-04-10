@@ -1,7 +1,5 @@
-using S.Media.Core.Audio.Routing;
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
 
 namespace S.Media.Core.Audio;
 
@@ -34,17 +32,20 @@ namespace S.Media.Core.Audio;
 /// </remarks>
 public sealed class AggregateOutput : IAudioOutput
 {
-    private readonly IAudioOutput        _leader;
-    private AggregateAudioMixer? _aggregateMixer;
+    private readonly record struct SinkRegistration(IAudioSink Sink, int Channels);
 
-    private volatile IAudioSink[] _sinks    = [];
-    private readonly object       _sinkLock = new();
+    private readonly IAudioOutput _leader;
+    private IAudioMixer? _mixer;
+
+    private volatile SinkRegistration[] _sinkRegistrations = [];
+    private volatile IAudioSink[]       _sinks             = [];
+    private readonly Lock _sinkLock = new();
 
     // ── IAudioOutput / IMediaOutput ───────────────────────────────────────
 
     public AudioFormat HardwareFormat => _leader.HardwareFormat;
 
-    public IAudioMixer Mixer => _aggregateMixer
+    public IAudioMixer Mixer => _mixer
         ?? throw new InvalidOperationException("Call Open() first, or pass an already-opened leader.");
 
     public IMediaClock Clock     => _leader.Clock;
@@ -57,12 +58,11 @@ public sealed class AggregateOutput : IAudioOutput
 
         try
         {
-            _aggregateMixer = new AggregateAudioMixer(leader.Mixer, this);
-            leader.OverrideRtMixer(_aggregateMixer);
+            _mixer = leader.Mixer;
         }
         catch (InvalidOperationException)
         {
-            // Leader not yet opened — Open() will complete the wiring.
+            // Leader not yet opened; Open() will bind _mixer.
         }
     }
 
@@ -83,14 +83,19 @@ public sealed class AggregateOutput : IAudioOutput
         ArgumentNullException.ThrowIfNull(sink);
         lock (_sinkLock)
         {
-            var old = _sinks;
-            var neo = new IAudioSink[old.Length + 1];
+            var old = _sinkRegistrations;
+            var neo = new SinkRegistration[old.Length + 1];
             old.CopyTo(neo, 0);
-            neo[^1] = sink;
-            _sinks  = neo;
+            neo[^1] = new SinkRegistration(sink, channels);
+            _sinkRegistrations = neo;
+
+            var sinkSnapshot = new IAudioSink[neo.Length];
+            for (int i = 0; i < neo.Length; i++)
+                sinkSnapshot[i] = neo[i].Sink;
+            _sinks = sinkSnapshot;
 
             // Register with mixer immediately if already available.
-            _aggregateMixer?.RegisterSink(sink, channels);
+            _mixer?.RegisterSink(sink, channels);
         }
     }
 
@@ -99,16 +104,23 @@ public sealed class AggregateOutput : IAudioOutput
     {
         lock (_sinkLock)
         {
-            var old = _sinks;
-            int idx = Array.IndexOf(old, sink);
+            var old = _sinkRegistrations;
+            int idx = -1;
+            for (int i = 0; i < old.Length; i++)
+                if (ReferenceEquals(old[i].Sink, sink)) { idx = i; break; }
             if (idx < 0) return;
 
-            var neo = new IAudioSink[old.Length - 1];
+            var neo = new SinkRegistration[old.Length - 1];
             for (int i = 0, j = 0; i < old.Length; i++)
                 if (i != idx) neo[j++] = old[i];
-            _sinks = neo;
+            _sinkRegistrations = neo;
 
-            _aggregateMixer?.UnregisterSink(sink);
+            var sinkSnapshot = new IAudioSink[neo.Length];
+            for (int i = 0; i < neo.Length; i++)
+                sinkSnapshot[i] = neo[i].Sink;
+            _sinks = sinkSnapshot;
+
+            _mixer?.UnregisterSink(sink);
         }
     }
 
@@ -120,12 +132,11 @@ public sealed class AggregateOutput : IAudioOutput
     public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0)
     {
         _leader.Open(device, requestedFormat, framesPerBuffer);
-        _aggregateMixer = new AggregateAudioMixer(_leader.Mixer, this);
-        _leader.OverrideRtMixer(_aggregateMixer);
+        _mixer = _leader.Mixer;
 
         // Register any sinks that were added before Open().
-        foreach (var sink in _sinks)
-            _aggregateMixer.RegisterSink(sink, 0); // 0 → leader channel count
+        foreach (var registration in _sinkRegistrations)
+            _mixer.RegisterSink(registration.Sink, registration.Channels);
     }
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -146,55 +157,8 @@ public sealed class AggregateOutput : IAudioOutput
 
     public void Dispose()
     {
-        _aggregateMixer?.Dispose();
         foreach (var s in _sinks) s.Dispose();
         _leader.Dispose();
     }
 }
 
-/// <summary>
-/// Internal thin mixer wrapper that overrides <see cref="Output"/> to point to the
-/// <see cref="AggregateOutput"/> rather than the leader, and delegates all operations
-/// (including the new sink-registration and routing methods) to the inner mixer.
-/// Distribution to sinks happens inside the inner <see cref="AudioMixer.FillOutputBuffer"/>.
-/// </summary>
-internal sealed class AggregateAudioMixer : IAudioMixer
-{
-    private readonly IAudioMixer     _inner;
-    private readonly AggregateOutput _owner;
-
-    public AggregateAudioMixer(IAudioMixer inner, AggregateOutput owner)
-    {
-        _inner = inner;
-        _owner = owner;
-    }
-
-    public AudioFormat          LeaderFormat    => _inner.LeaderFormat;
-    public float                MasterVolume    { get => _inner.MasterVolume; set => _inner.MasterVolume = value; }
-    public int                  ChannelCount    => _inner.ChannelCount;
-    public IReadOnlyList<float> PeakLevels      => _inner.PeakLevels;
-    public ChannelFallback      DefaultFallback => _inner.DefaultFallback;
-
-    public void AddChannel(IAudioChannel ch, ChannelRouteMap map, IAudioResampler? rs = null)
-        => _inner.AddChannel(ch, map, rs);
-
-    public void RemoveChannel(Guid id) => _inner.RemoveChannel(id);
-
-    public void RouteTo(Guid channelId, IAudioSink sink, ChannelRouteMap routeMap)
-        => _inner.RouteTo(channelId, sink, routeMap);
-
-    public void UnrouteTo(Guid channelId, IAudioSink sink)
-        => _inner.UnrouteTo(channelId, sink);
-
-    public void RegisterSink(IAudioSink sink, int channels = 0)
-        => _inner.RegisterSink(sink, channels);
-
-    public void UnregisterSink(IAudioSink sink)
-        => _inner.UnregisterSink(sink);
-
-    // Inner mixer now handles all sink distribution — this is a pure pass-through.
-    public void FillOutputBuffer(Span<float> dest, int frameCount, AudioFormat outputFormat)
-        => _inner.FillOutputBuffer(dest, frameCount, outputFormat);
-
-    public void Dispose() => _inner.Dispose();
-}

@@ -43,7 +43,7 @@
 | `Audio/IAudioSink.cs` | Interface | ReceiveBuffer (RT-safe); StartAsync/StopAsync |
 | `Audio/ChannelFallback.cs` | Enum | `Silent` / `Broadcast` |
 | `Audio/VirtualAudioOutput.cs` | Class | Hardware-free `IAudioOutput`; `StopwatchClock`-driven tick loop; use as clock master when all audio goes to sinks (no physical device needed) |
-| `Audio/AggregateOutput.cs` | Class | Leader + N sinks; `AddSink(sink, channels=0)` registers with mixer; RT distribution inside `AudioMixer.FillOutputBuffer`; internal `AggregateAudioMixer` wrapper |
+| `Audio/AggregateOutput.cs` | Class | Leader + N sinks lifecycle helper; `AddSink(sink, channels=0)` registers with mixer and preserves pre-open per-sink channel config |
 | `Audio/Routing/ChannelRoute.cs` | Record struct | SrcChannel, DstChannel, Gain |
 | `Audio/Routing/ChannelRouteMap.cs` | Class | Fluent Builder; Identity/StereoFanTo/StereoExpandTo/DownmixToMono/**Silence** |
 
@@ -78,6 +78,17 @@
 | `S.Media.SDL3.csproj` | Project | Refs `S.Media.Core`, `SDL3-CS`, `SDL3-CS.Native`; `AllowUnsafeBlocks` |
 | `SDL3VideoOutput.cs` | Class | `IVideoOutput`; SDL3 + OpenGL 3.3 core-profile; `Open()` creates window + GL context + `GLRenderer` + `VideoMixer` + `VideoPtsClock`; `StartAsync()` launches render thread; vsync-paced render loop with event pump (quit, resize); `WindowClosed` event; `Dispose()` tears down GL → window → SDL in order |
 | `GLRenderer.cs` | Class | ~30 GL functions loaded via `SDL_GL_GetProcAddress`; passthrough vertex+fragment shaders; BGRA32 texture upload; `glTexSubImage2D` fast path on same-resolution frames; fullscreen quad VAO |
+
+---
+
+### `S.Media.Avalonia` (`Video/S.Media.Avalonia/`)
+
+| File | Type | Notes |
+|---|---|---|
+| `S.Media.Avalonia.csproj` | Project | Refs `S.Media.Core`, `Avalonia`; `AllowUnsafeBlocks` |
+| `AvaloniaOpenGlVideoOutput.cs` | Class | `OpenGlControlBase` + `IVideoOutput`; embedded control output; uses `VideoMixer` + `VideoPtsClock`; calls `RequestNextFrameRendering()` while running; includes diagnostics snapshot counters |
+| `AvaloniaGlRenderer.cs` | Class | Minimal GL loader via `GlInterface.GetProcAddress`; BGRA texture upload + black clear path |
+| `README.md` | Doc | Usage notes for embedding in Avalonia visual tree |
 
 ---
 
@@ -335,6 +346,9 @@ All video pipeline design questions (§13.1–§13.8) resolved — see `VideoPla
 | `MFPlayer.NDIPlayer` | `Test/MFPlayer.NDIPlayer/` | NDI source receive + audio playback |
 | `MFPlayer.NDISender` | `Test/MFPlayer.NDISender/` | NDI audio send |
 | `MFPlayer.VideoPlayer` | `Test/MFPlayer.VideoPlayer/` | **New** — Video-only; FFmpeg decode → SDL3VideoOutput; window close / Ctrl+C / Enter to stop |
+| `MFPlayer.VideoMultiOutputPlayer` | `Test/MFPlayer.VideoMultiOutputPlayer/` | **New** — Video multi-output; SDL3 leader + optional `NDIVideoSink` secondary target; one input channel routed to multiple targets |
+| `MFPlayer.AvaloniaVideoPlayer` | `Test/MFPlayer.AvaloniaVideoPlayer/` | **New** — Avalonia desktop sample; FFmpeg video-only decode → embedded `AvaloniaOpenGlVideoOutput` |
+| `AvaloniaOpenGlVideoOutput` docs | `Video/S.Media.Avalonia/README.md` | Usage notes for embedding the control into custom Avalonia windows/views |
 
 ---
 

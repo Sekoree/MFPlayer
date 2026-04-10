@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
+using S.Media.Core.Media;
 
 namespace S.Media.FFmpeg;
 
@@ -32,6 +33,24 @@ public sealed class FFmpegDecoderOptions
     /// <see langword="null"/> or empty disables hardware acceleration.
     /// </summary>
     public string? HardwareDeviceType { get; init; }
+
+    /// <summary>
+    /// Whether audio streams are opened/decoded. Default: <see langword="true"/>.
+    /// Disable for video-only playback scenarios.
+    /// </summary>
+    public bool EnableAudio { get; init; } = true;
+
+    /// <summary>
+    /// Whether video streams are opened/decoded. Default: <see langword="true"/>.
+    /// Disable for audio-only playback scenarios.
+    /// </summary>
+    public bool EnableVideo { get; init; } = true;
+
+    /// <summary>
+    /// Output pixel format produced by video channels. Default is Bgra32.
+    /// Set to Rgba32 for renderers that use RGBA uploads to avoid extra swizzle in mixers.
+    /// </summary>
+    public PixelFormat VideoTargetPixelFormat { get; init; } = PixelFormat.Bgra32;
 }
 
 /// <summary>
@@ -96,6 +115,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private FFmpegDecoderOptions     _options = new();
     private int                      _seekEpoch;
     private long                     _seekPositionTicks;
+    private long                     _seekControlDropLogCount;
     private int                      _started;
     private readonly object          _formatIoGate = new();
 
@@ -116,9 +136,24 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     {
         FFmpegLoader.EnsureLoaded();
         var dec = new FFmpegDecoder();
-        dec._options = options ?? new FFmpegDecoderOptions();
+        dec._options = NormalizeOptions(options ?? new FFmpegDecoderOptions());
         dec.Initialise(path);
         return dec;
+    }
+
+    private static FFmpegDecoderOptions NormalizeOptions(FFmpegDecoderOptions options)
+    {
+        return new FFmpegDecoderOptions
+        {
+            PacketQueueDepth = options.PacketQueueDepth,
+            AudioBufferDepth = options.AudioBufferDepth,
+            VideoBufferDepth = options.VideoBufferDepth,
+            DecoderThreadCount = options.DecoderThreadCount < 0 ? 0 : options.DecoderThreadCount,
+            HardwareDeviceType = options.HardwareDeviceType,
+            EnableAudio = options.EnableAudio,
+            EnableVideo = options.EnableVideo,
+            VideoTargetPixelFormat = options.VideoTargetPixelFormat
+        };
     }
 
     private void Initialise(string path)
@@ -148,27 +183,45 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             if ((stream->disposition & ffmpeg.AV_DISPOSITION_ATTACHED_PIC) != 0)
                 continue;
 
-            var q = Channel.CreateBounded<EncodedPacket>(
-                new BoundedChannelOptions(_options.PacketQueueDepth)
-                {
-                    FullMode     = BoundedChannelFullMode.Wait,
-                    SingleReader = true,
-                    SingleWriter = false
-                });
-            _queues[i] = q;
-
             if (codecPars->codec_type == AVMediaType.AVMEDIA_TYPE_AUDIO)
             {
+                if (!_options.EnableAudio)
+                    continue;
+
+                var q = Channel.CreateBounded<EncodedPacket>(
+                    new BoundedChannelOptions(_options.PacketQueueDepth)
+                    {
+                        FullMode     = BoundedChannelFullMode.Wait,
+                        SingleReader = true,
+                        SingleWriter = false
+                    });
+                _queues[i] = q;
+
                 audio.Add(new FFmpegAudioChannel(i, stream, q.Reader,
                     threadCount: _options.DecoderThreadCount,
-                    bufferDepth: _options.AudioBufferDepth));
+                    bufferDepth: _options.AudioBufferDepth,
+                    latestSeekEpochProvider: () => Volatile.Read(ref _seekEpoch)));
             }
             else if (codecPars->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
             {
+                if (!_options.EnableVideo)
+                    continue;
+
+                var q = Channel.CreateBounded<EncodedPacket>(
+                    new BoundedChannelOptions(_options.PacketQueueDepth)
+                    {
+                        FullMode     = BoundedChannelFullMode.Wait,
+                        SingleReader = true,
+                        SingleWriter = false
+                    });
+                _queues[i] = q;
+
                 video.Add(new FFmpegVideoChannel(i, stream, q.Reader,
                     hwDeviceCtx: _hwDeviceCtx,
+                    targetPixelFormat: _options.VideoTargetPixelFormat,
                     threadCount: _options.DecoderThreadCount,
-                    bufferDepth: _options.VideoBufferDepth));
+                    bufferDepth: _options.VideoBufferDepth,
+                    latestSeekEpochProvider: () => Volatile.Read(ref _seekEpoch)));
             }
         }
 
@@ -245,7 +298,11 @@ public sealed unsafe class FFmpegDecoder : IDisposable
                 droppedControlPackets++;
 
         if (droppedControlPackets > 0)
-            Console.Error.WriteLine($"[FFmpegDecoder] Seek control packet dropped for {droppedControlPackets} stream(s).");
+        {
+            long warnCount = Interlocked.Increment(ref _seekControlDropLogCount);
+            if (warnCount <= 3 || warnCount % 100 == 0)
+                Console.Error.WriteLine($"[FFmpegDecoder] Seek control packet dropped for {droppedControlPackets} stream(s) (count={warnCount}).");
+        }
 
         // Clear already-decoded channel buffers immediately on the caller thread.
         foreach (var ch in AudioChannels) ch.Seek(position);
@@ -269,16 +326,16 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
     // ── Demux helpers used by FFmpegDemuxWorker ───────────────────────────
 
-    internal unsafe nint AllocateDemuxPacket() => (nint)ffmpeg.av_packet_alloc();
+    internal nint AllocateDemuxPacket() => (nint)ffmpeg.av_packet_alloc();
 
-    internal unsafe void FreeDemuxPacket(nint pktHandle)
+    internal void FreeDemuxPacket(nint pktHandle)
     {
         if (pktHandle == nint.Zero) return;
         var pkt = (AVPacket*)pktHandle;
         ffmpeg.av_packet_free(&pkt);
     }
 
-    internal unsafe DemuxReadResult TryReadNextPacket(
+    internal DemuxReadResult TryReadNextPacket(
         nint pktHandle,
         out ChannelWriter<EncodedPacket>? writer,
         out EncodedPacket? packet,

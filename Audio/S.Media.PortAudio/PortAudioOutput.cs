@@ -147,18 +147,35 @@ public sealed class PortAudioOutput : IAudioOutput
         // Wrap in try/catch: any managed exception escaping an [UnmanagedCallersOnly]
         // method causes a runtime fast-fail, killing the process silently.
         Span<float> dest = default;
+        PortAudioOutput? self = null;
         try
         {
-            var self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
+            self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
             if (self is null) return (int)PaStreamCallbackResult.paAbort;
 
             var mixer = self._activeMixer ?? self._mixer;
             if (mixer is null) return (int)PaStreamCallbackResult.paAbort;
 
-            int totalSamples = (int)frameCount * self._hardwareFormat.Channels;
+            int channels = self._hardwareFormat.Channels;
+            int totalFrames = (int)frameCount;
+            int totalSamples = totalFrames * channels;
             dest = new Span<float>((void*)output, totalSamples);
 
-            mixer.FillOutputBuffer(dest, (int)frameCount, self._hardwareFormat);
+            // Some backends can request larger callback blocks than the stream was
+            // opened/prepared for. Mix in bounded chunks to stay allocation-free.
+            int maxChunkFrames = self._framesPerBuffer > 0 ? self._framesPerBuffer : 512;
+            int offsetFrames = 0;
+            while (offsetFrames < totalFrames)
+            {
+                int chunkFrames = Math.Min(maxChunkFrames, totalFrames - offsetFrames);
+                int chunkOffsetSamples = offsetFrames * channels;
+                int chunkSamples = chunkFrames * channels;
+                mixer.FillOutputBuffer(
+                    dest.Slice(chunkOffsetSamples, chunkSamples),
+                    chunkFrames,
+                    self._hardwareFormat);
+                offsetFrames += chunkFrames;
+            }
             return (int)PaStreamCallbackResult.paContinue;
         }
         catch

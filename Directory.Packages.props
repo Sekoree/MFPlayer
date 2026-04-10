@@ -2,6 +2,7 @@
   <!-- https://learn.microsoft.com/en-us/nuget/consume-packages/central-package-management -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
     <!-- Avalonia packages -->
@@ -14,6 +15,7 @@
     <PackageVersion Include="Avalonia.iOS" Version="11.3.12" />
     <PackageVersion Include="Avalonia.Browser" Version="11.3.12" />
     <PackageVersion Include="Avalonia.Android" Version="11.3.12" />
+    <PackageVersion Include="Tmds.DBus.Protocol" Version="0.21.3" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.0.0" />
     <PackageVersion Include="SDL3-CS" Version="3.4.2" />

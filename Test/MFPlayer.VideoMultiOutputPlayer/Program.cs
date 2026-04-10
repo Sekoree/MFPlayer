@@ -1,8 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// MFPlayer.VideoPlayer
+// MFPlayer.VideoMultiOutputPlayer
 //   1. Enter a video file path
-//   2. Opens an SDL3 window and plays the video
-//   3. Close the window, press Enter, or Ctrl+C to stop
+//   2. Opens SDL3 video output (leader target)
+//   3. Optionally enables NDI video sink (secondary target)
+//   4. One input channel routed to both targets (no blending)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using FFmpeg.AutoGen;
@@ -12,48 +13,21 @@ using S.Media.NDI;
 using S.Media.Core.Video;
 using S.Media.SDL3;
 
-static (int Width, int Height) FitWithin(int srcWidth, int srcHeight, int maxWidth, int maxHeight)
-{
-    srcWidth = srcWidth > 0 ? srcWidth : 1280;
-    srcHeight = srcHeight > 0 ? srcHeight : 720;
-
-    double scale = Math.Min((double)maxWidth / srcWidth, (double)maxHeight / srcHeight);
-    scale = Math.Min(1.0, scale);
-
-    int width = Math.Max(320, (int)Math.Round(srcWidth * scale));
-    int height = Math.Max(180, (int)Math.Round(srcHeight * scale));
-    return (width, height);
-}
-
-static string Fmt(TimeSpan ts)
-{
-    if (ts < TimeSpan.Zero) ts = TimeSpan.Zero;
-    int hours = (int)ts.TotalHours;
-    return hours > 0
-        ? $"{hours:00}:{ts.Minutes:00}:{ts.Seconds:00}.{ts.Milliseconds:000}"
-        : $"{ts.Minutes:00}:{ts.Seconds:00}.{ts.Milliseconds:000}";
-}
-
-Console.WriteLine("╔═══════════════════════════════╗");
-Console.WriteLine("║   MFPlayer  —  Video Player   ║");
-Console.WriteLine("╚═══════════════════════════════╝\n");
+Console.WriteLine("╔══════════════════════════════════════════╗");
+Console.WriteLine("║ MFPlayer — Video Multi-Output Player    ║");
+Console.WriteLine("╚══════════════════════════════════════════╝\n");
 
 ffmpeg.RootPath = "/lib";
 
-// ── 1. Enter file path ───────────────────────────────────────────────────────
-
 Console.Write("Video file path: ");
 string filePath = (Console.ReadLine() ?? "").Trim('"', ' ');
-
 if (!File.Exists(filePath))
 {
     Console.WriteLine("File not found.");
     return;
 }
 
-// ── 2. Open decoder ──────────────────────────────────────────────────────────
-
-Console.Write("Opening decoder… ");
+Console.Write("Opening decoder... ");
 FFmpegDecoder decoder;
 try
 {
@@ -79,23 +53,19 @@ if (decoder.VideoChannels.Count == 0)
 using (decoder)
 {
     var videoChannel = decoder.VideoChannels[0];
-    var srcFmt       = videoChannel.SourceFormat;
+    var srcFmt = videoChannel.SourceFormat;
 
     Console.WriteLine("OK");
     Console.WriteLine($"  Video: {srcFmt}");
 
-    var initialWindow = FitWithin(srcFmt.Width, srcFmt.Height, maxWidth: 1920, maxHeight: 1080);
-    Console.WriteLine($"  Window: {initialWindow.Width}x{initialWindow.Height} (fit)");
-
-    // ── 3. Open video output ─────────────────────────────────────────────
-
-    Console.Write("Creating SDL3 video output… ");
     using var videoOutput = new SDL3VideoOutput();
+    Console.Write("Opening SDL3 video output... ");
     try
     {
-        videoOutput.Open("MFPlayer — Video Player",
-            initialWindow.Width,
-            initialWindow.Height,
+        videoOutput.Open(
+            "MFPlayer - Video Multi-Output",
+            srcFmt.Width > 0 ? srcFmt.Width : 1280,
+            srcFmt.Height > 0 ? srcFmt.Height : 720,
             srcFmt);
     }
     catch (Exception ex)
@@ -105,12 +75,9 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    // ── 4. Wire up ───────────────────────────────────────────────────────
-
     videoOutput.Mixer.AddChannel(videoChannel);
     videoOutput.Mixer.SetActiveChannel(videoChannel.Id);
 
-    // Optional: route the same active channel to an NDI video sink.
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
     NDIVideoSink? ndiSink = null;
@@ -155,8 +122,6 @@ using (decoder)
         }
     }
 
-    // ── 5. Auto-stop on window close ─────────────────────────────────────
-
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -166,13 +131,12 @@ using (decoder)
         if (!cts.IsCancellationRequested) cts.Cancel();
     };
 
-    // ── 6. Start playback ────────────────────────────────────────────────
-
     decoder.Start();
     await videoOutput.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
-    Console.WriteLine("Close the window or press [Ctrl+C] to stop.");
+    Console.WriteLine("Targets: SDL3 leader" + (ndiSink != null ? " + NDI sink" : string.Empty));
+    Console.WriteLine("Close window or press [Ctrl+C] to stop.");
     if (!Console.IsInputRedirected)
         Console.WriteLine("Press [Enter] to stop.");
     Console.WriteLine();
@@ -183,10 +147,6 @@ using (decoder)
     var mixerForStats = mixer;
     var statsTask = Task.Run(async () =>
     {
-        VideoMixer.DiagnosticsSnapshot? prevMixer = null;
-        SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
-        double expectedFps = srcFmt.FrameRate > 0 ? srcFmt.FrameRate : 30.0;
-
         while (!cts.IsCancellationRequested)
         {
             try
@@ -201,59 +161,39 @@ using (decoder)
             if (cts.IsCancellationRequested)
                 break;
 
+            string diag = mixerForStats == null
+                ? string.Empty
+                : $"  held={mixerForStats.HeldFrameCount} drop={mixerForStats.DroppedStaleFrameCount} fallback={mixerForStats.FallbackConversionCount}";
             var ms = mixerForStats?.GetDiagnosticsSnapshot();
             var os = outputForStats.GetDiagnosticsSnapshot();
-
-            if (ms.HasValue && prevMixer.HasValue && prevOutput.HasValue)
-            {
-                var m0 = prevMixer.Value;
-                var m1 = ms.Value;
-                var o0 = prevOutput.Value;
-                var o1 = os;
-
-                long renderDelta = o1.LoopIterations - o0.LoopIterations;
-                long presentDelta = o1.PresentedFrames - o0.PresentedFrames;
-                long blackDelta = o1.BlackFrames - o0.BlackFrames;
-                long exDelta = o1.RenderExceptions - o0.RenderExceptions;
-                long holdDelta = m1.Held - m0.Held;
-                long dropDelta = m1.Dropped - m0.Dropped;
-                long pullDelta = m1.PullHits - m0.PullHits;
-                long pullAttemptDelta = m1.PullAttempts - m0.PullAttempts;
-
-                string speedMark = presentDelta < Math.Max(1, (long)Math.Round(expectedFps * 0.75)) ? " slow" : "";
-                string dropMark = dropDelta > 0 ? " drop" : "";
-                string exMark = exDelta > 0 ? " ex" : "";
-
-                Console.WriteLine(
-                    $"[vstats] clock={Fmt(outputForStats.Clock.Position)} src={Fmt(channelForStats.Position)} " +
-                    $"fps={presentDelta,3}/{expectedFps,5:F1} r={renderDelta,4} p={presentDelta,4} b={blackDelta,3} " +
-                    $"held={holdDelta,4} drop={dropDelta,3} pull={pullDelta,3}/{pullAttemptDelta,3} ex={exDelta,2}{speedMark}{dropMark}{exMark}");
-            }
-
-            prevMixer = ms;
-            prevOutput = os;
+            string mixerDiag = ms.HasValue
+                ? $"  m(present={ms.Value.PresentCalls} leader={ms.Value.LeaderPresented}/{ms.Value.LeaderReturnedNull} pull={ms.Value.PullHits}/{ms.Value.PullAttempts})"
+                : string.Empty;
+            string outDiag = $"  o(loop={os.LoopIterations} draw={os.PresentedFrames} black={os.BlackFrames} swap={os.SwapCalls} ex={os.RenderExceptions} glFail={os.GlMakeCurrentFailures})";
+            Console.WriteLine($"[vstats] clock={outputForStats.Clock.Position:mm\\:ss\\.fff} src={channelForStats.Position:mm\\:ss\\.fff}{diag}{mixerDiag}{outDiag}");
         }
     }, cts.Token);
 
-    // Wait for Ctrl+C, Enter (interactive only), window close, or cancellation.
     if (!Console.IsInputRedirected)
         _ = Task.Run(() => { Console.ReadLine(); cts.Cancel(); });
     try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); }
     catch (OperationCanceledException) { }
 
-    // ── 7. Stop ──────────────────────────────────────────────────────────
-
-    Console.Write("\nStopping… ");
+    Console.Write("\nStopping... ");
     cts.Cancel();
     try { await statsTask; } catch (OperationCanceledException) { }
     await videoOutput.StopAsync();
+
     if (ndiSink != null)
     {
         await ndiSink.StopAsync();
         videoOutput.Mixer.UnregisterSink(ndiSink);
         ndiSink.Dispose();
     }
+
     ndiSender?.Dispose();
     ndiRuntime?.Dispose();
+
     Console.WriteLine("Done.");
 }
+

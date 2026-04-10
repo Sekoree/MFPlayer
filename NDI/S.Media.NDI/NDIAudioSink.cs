@@ -27,9 +27,13 @@ public sealed class NDIAudioSink : IAudioSink
     private CancellationTokenSource? _cts;
     private volatile bool            _running;
     private bool                     _disposed;
+    private long                     _poolMissDrops;
+    private long                     _capacityMissDrops;
 
     public string Name      { get; }
     public bool   IsRunning => _running;
+    public long PoolMissDrops => Interlocked.Read(ref _poolMissDrops);
+    public long CapacityMissDrops => Interlocked.Read(ref _capacityMissDrops);
 
     public NDIAudioSink(
         NDISender        sender,
@@ -56,9 +60,9 @@ public sealed class NDIAudioSink : IAudioSink
             _ownsResampler = false;
         }
 
-        // Pre-allocate 8 interleaved buffers.
+        // Pre-allocate 8 interleaved buffers with headroom for common rate ratios.
         for (int i = 0; i < 8; i++)
-            _pool.Enqueue(new float[framesPerBuffer * targetFormat.Channels]);
+            _pool.Enqueue(new float[framesPerBuffer * targetFormat.Channels * 2]);
     }
 
     public Task StartAsync(CancellationToken ct = default)
@@ -98,8 +102,18 @@ public sealed class NDIAudioSink : IAudioSink
             : (int)Math.Round((double)frameCount * _targetFormat.SampleRate / sourceFormat.SampleRate);
         int writeSamples = writeFrames * outCh;
 
-        if (!_pool.TryDequeue(out var dest) || dest.Length < writeSamples)
-            dest = new float[writeSamples];
+        if (!_pool.TryDequeue(out var dest))
+        {
+            Interlocked.Increment(ref _poolMissDrops);
+            return;
+        }
+
+        if (dest.Length < writeSamples)
+        {
+            _pool.Enqueue(dest);
+            Interlocked.Increment(ref _capacityMissDrops);
+            return;
+        }
 
         if (_resampler != null && sourceFormat.SampleRate != _targetFormat.SampleRate)
             _resampler.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _targetFormat.SampleRate);

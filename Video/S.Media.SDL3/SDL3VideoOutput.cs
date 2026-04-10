@@ -13,6 +13,15 @@ namespace S.Media.SDL3;
 /// </summary>
 public sealed class SDL3VideoOutput : IVideoOutput
 {
+    public readonly record struct DiagnosticsSnapshot(
+        long LoopIterations,
+        long PresentedFrames,
+        long BlackFrames,
+        long SwapCalls,
+        long ResizeEvents,
+        long RenderExceptions,
+        long GlMakeCurrentFailures);
+
     // ── SDL / GL state ────────────────────────────────────────────────────
 
     private nint         _window;
@@ -29,6 +38,22 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private volatile bool            _isRunning;
     private volatile bool            _closeRequested;
     private bool                     _disposed;
+    private long                     _loopIterations;
+    private long                     _presentedFrames;
+    private long                     _blackFrames;
+    private long                     _swapCalls;
+    private long                     _resizeEvents;
+    private long                     _renderExceptions;
+    private long                     _glMakeCurrentFailures;
+
+    public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
+        LoopIterations: Interlocked.Read(ref _loopIterations),
+        PresentedFrames: Interlocked.Read(ref _presentedFrames),
+        BlackFrames: Interlocked.Read(ref _blackFrames),
+        SwapCalls: Interlocked.Read(ref _swapCalls),
+        ResizeEvents: Interlocked.Read(ref _resizeEvents),
+        RenderExceptions: Interlocked.Read(ref _renderExceptions),
+        GlMakeCurrentFailures: Interlocked.Read(ref _glMakeCurrentFailures));
 
     // ── IVideoOutput / IMediaOutput ───────────────────────────────────────
 
@@ -108,10 +133,10 @@ public sealed class SDL3VideoOutput : IVideoOutput
         SDL.GLMakeCurrent(_window, nint.Zero);
 
         // ── Pipeline objects ──────────────────────────────────────────────
-        _outputFormat = format;
-        _mixer = new VideoMixer(format);
+        _outputFormat = format with { PixelFormat = PixelFormat.Bgra32 };
+        _mixer = new VideoMixer(_outputFormat);
         _clock = new VideoPtsClock(
-            sampleRate: format.FrameRate > 0 ? format.FrameRate : 30);
+            sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
     }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
@@ -157,51 +182,72 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private void RenderLoop()
     {
         // Claim the GL context on this thread.
-        SDL.GLMakeCurrent(_window, _glContext);
+        if (!SDL.GLMakeCurrent(_window, _glContext))
+        {
+            Interlocked.Increment(ref _glMakeCurrentFailures);
+            Console.Error.WriteLine($"[SDL3VideoOutput] SDL_GL_MakeCurrent failed: {SDL.GetError()}");
+            _isRunning = false;
+            return;
+        }
 
         var token = _cts!.Token;
 
         while (!token.IsCancellationRequested && !_closeRequested)
         {
-            // ── Event pump ────────────────────────────────────────────────
-            while (SDL.PollEvent(out var evt))
+            Interlocked.Increment(ref _loopIterations);
+
+            try
             {
-                var eventType = (SDL.EventType)evt.Type;
-
-                switch (eventType)
+                // ── Event pump ────────────────────────────────────────────
+                while (SDL.PollEvent(out var evt))
                 {
-                    case SDL.EventType.Quit:
-                    case SDL.EventType.WindowCloseRequested:
-                        _closeRequested = true;
-                        break;
+                    var eventType = (SDL.EventType)evt.Type;
 
-                    case SDL.EventType.WindowResized:
-                    case SDL.EventType.WindowPixelSizeChanged:
-                        SDL.GetWindowSize(_window, out int w, out int h);
-                        _renderer!.SetViewport(w, h);
-                        break;
+                    switch (eventType)
+                    {
+                        case SDL.EventType.Quit:
+                        case SDL.EventType.WindowCloseRequested:
+                            _closeRequested = true;
+                            break;
+
+                        case SDL.EventType.WindowResized:
+                        case SDL.EventType.WindowPixelSizeChanged:
+                            SDL.GetWindowSize(_window, out int w, out int h);
+                            _renderer!.SetViewport(w, h);
+                            Interlocked.Increment(ref _resizeEvents);
+                            break;
+                    }
+
+                    if (_closeRequested) break;
                 }
 
                 if (_closeRequested) break;
+
+                // ── Present frame ─────────────────────────────────────────
+                var frame = _mixer!.PresentNextFrame(_clock!.Position);
+
+                if (frame.HasValue)
+                {
+                    _renderer!.UploadAndDraw(frame.Value);
+                    _clock!.UpdateFromFrame(frame.Value.Pts);
+                    Interlocked.Increment(ref _presentedFrames);
+                }
+                else
+                {
+                    _renderer!.DrawBlack();
+                    Interlocked.Increment(ref _blackFrames);
+                }
+
+                // ── Swap (paced by vsync) ─────────────────────────────────
+                SDL.GLSwapWindow(_window);
+                Interlocked.Increment(ref _swapCalls);
             }
-
-            if (_closeRequested) break;
-
-            // ── Present frame ─────────────────────────────────────────────
-            var frame = _mixer!.PresentNextFrame();
-
-            if (frame.HasValue)
+            catch (Exception ex)
             {
-                _renderer!.UploadAndDraw(frame.Value);
-                _clock!.UpdateFromFrame(frame.Value.Pts);
+                long ec = Interlocked.Increment(ref _renderExceptions);
+                if (ec <= 3 || ec % 100 == 0)
+                    Console.Error.WriteLine($"[SDL3VideoOutput] render-loop exception (count={ec}): {ex}");
             }
-            else
-            {
-                _renderer!.DrawBlack();
-            }
-
-            // ── Swap (paced by vsync) ─────────────────────────────────────
-            SDL.GLSwapWindow(_window);
         }
 
         // Release GL context from this thread.

@@ -235,6 +235,22 @@ public sealed class FFmpegDecoderTests
         finally { File.Delete(path); }
     }
 
+    [Fact]
+    public void Open_WithOptions_NegativeThreadCount_IsNormalizedAndDoesNotThrow()
+    {
+        string path = WavFileGenerator.CreateTempSineWav(48000, 2, 440f, 0.1f);
+        try
+        {
+            var opts = new FFmpegDecoderOptions { DecoderThreadCount = -8 };
+            var ex = Record.Exception(() =>
+            {
+                using var dec = FFmpegDecoder.Open(path, opts);
+            });
+            Assert.Null(ex);
+        }
+        finally { File.Delete(path); }
+    }
+
     // ── VideoFrame pooling ───────────────────────────────────────────────────
 
     [Fact]

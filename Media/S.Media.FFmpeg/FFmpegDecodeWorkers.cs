@@ -27,7 +27,7 @@ internal static class FFmpegDecodeWorkers
 
                 try
                 {
-                    if (ep.SeekEpoch < currentEpoch)
+                    if (ep.SeekEpoch < owner.LatestSeekEpoch)
                         continue;
 
                     if (ep.IsFlush)
@@ -94,7 +94,7 @@ internal static class FFmpegDecodeWorkers
 
                 try
                 {
-                    if (ep.SeekEpoch < currentEpoch)
+                    if (ep.SeekEpoch < owner.LatestSeekEpoch)
                         continue;
 
                     if (ep.IsFlush)

@@ -18,6 +18,7 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
     private readonly ChannelReader<EncodedPacket> _packetReader;
     private readonly AVBufferRef*                 _hwDeviceCtx;   // null = sw only
     private readonly int                          _threadCount;
+    private readonly Func<int>                    _latestSeekEpochProvider;
 
     private AVCodecContext* _codecCtx;
     private SwsContext*     _sws;
@@ -57,13 +58,15 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
                                  AVBufferRef*   hwDeviceCtx       = null,
                                  PixelFormat    targetPixelFormat = PixelFormat.Bgra32,
                                  int            threadCount       = 0,
-                                 int            bufferDepth       = 4)
+                                 int            bufferDepth       = 4,
+                                 Func<int>?     latestSeekEpochProvider = null)
     {
         _streamIndex        = streamIndex;
         _stream             = stream;
         _packetReader       = packetReader;
         _hwDeviceCtx        = hwDeviceCtx;
         _threadCount        = threadCount;
+        _latestSeekEpochProvider = latestSeekEpochProvider ?? (() => 0);
         TargetPixelFormat   = targetPixelFormat;
 
         var cp = stream->codecpar;
@@ -85,6 +88,8 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
     internal int StreamIndex => _streamIndex;
 
+    internal int LatestSeekEpoch => _latestSeekEpochProvider();
+
     internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
     {
         Console.Error.WriteLine(
@@ -98,8 +103,13 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
         _codecCtx = ffmpeg.avcodec_alloc_context3(codec);
         ffmpeg.avcodec_parameters_to_context(_codecCtx, _stream->codecpar);
+
         if (_threadCount >= 0)
             _codecCtx->thread_count = _threadCount;
+
+        // Prefer both frame + slice threading for heavy software decode workloads.
+        if (_hwDeviceCtx == null && _threadCount != 1)
+            _codecCtx->thread_type = ffmpeg.FF_THREAD_FRAME | ffmpeg.FF_THREAD_SLICE;
 
         // Attach hardware device context if provided.
         if (_hwDeviceCtx != null)
@@ -107,6 +117,11 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
         int ret = ffmpeg.avcodec_open2(_codecCtx, codec, null);
         if (ret < 0) throw new InvalidOperationException($"avcodec_open2 failed: {ret}");
+
+        string codecName = ffmpeg.avcodec_get_name(_codecCtx->codec_id);
+        Console.WriteLine(
+            $"[FFmpegVideoChannel] stream={_streamIndex} codec={codecName} " +
+            $"threads(req={_threadCount}, eff={_codecCtx->thread_count}) type(req={_codecCtx->thread_type}, active={_codecCtx->active_thread_type})");
 
         _frame    = ffmpeg.av_frame_alloc();
         _rgbFrame = ffmpeg.av_frame_alloc();
@@ -155,12 +170,12 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
 
         // Build source data/stride arrays from the AVFrame (native pointers — safe
         // because FFmpeg owns the underlying allocation for the duration of this call).
-        var srcDataArr   = new byte*[] { frame->data[0], frame->data[1], frame->data[2], frame->data[3] };
+        var srcDataArr   = new[] { frame->data[0], frame->data[1], frame->data[2], frame->data[3] };
         var srcStrideArr = new[] { frame->linesize[0], frame->linesize[1], frame->linesize[2], frame->linesize[3] };
 
         fixed (byte* pBuf = rented)
         {
-            var dstDataArr   = new byte*[] { pBuf, null, null, null };
+            var dstDataArr   = new[] { pBuf, null, null, null };
             var dstStrideArr = new[] { w * BytesPerPixel(TargetPixelFormat), 0, 0, 0 };
             ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstDataArr, dstStrideArr);
         }
@@ -253,8 +268,9 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
         if (_sws      != null) ffmpeg.sws_freeContext(_sws);
     }
 
-    internal unsafe bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
+    internal bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
     {
+        int sendRet;
         fixed (byte* p = ep.Data)
         {
             _pkt->data     = ep.ActualLength > 0 ? p : null;
@@ -262,9 +278,20 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
             _pkt->pts      = ep.Pts;
             _pkt->dts      = ep.Dts;
             _pkt->duration = ep.Duration;
+
+            // Keep ep.Data pinned while libavcodec reads the packet.
+            sendRet = ffmpeg.avcodec_send_packet(_codecCtx, _pkt);
         }
 
-        if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) return true;
+        if (sendRet == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+            return true;
+        if (sendRet == ffmpeg.AVERROR_EOF)
+            return false;
+        if (sendRet < 0)
+        {
+            Console.Error.WriteLine($"[FFmpegVideoChannel] stream={_streamIndex} avcodec_send_packet failed: {sendRet}");
+            return true;
+        }
 
         while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
         {

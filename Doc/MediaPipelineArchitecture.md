@@ -193,8 +193,7 @@ public interface IAudioOutput : IMediaOutput
     void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer);
 
     /// Replaces the mixer reference used by the RT callback.
-    /// Called by AggregateOutput so the callback invokes the aggregate mixer
-    /// instead of the local one, enabling fan-out without touching the RT thread.
+    /// Optional advanced hook for wrappers/composite outputs.
     void OverrideRtMixer(IAudioMixer mixer);
 }
 ```
@@ -341,7 +340,7 @@ is passed to `AddChannel` and the source sample rate differs from the output.
 | Type | Implements | Notes |
 |---|---|---|
 | `PortAudioEngine` | `IAudioEngine` | Wraps `Pa_Initialize` / `Pa_Terminate`; builds device list from `PaHostApiInfo` + `PaDeviceInfo` |
-| `PortAudioOutput` | `IAudioOutput` | Opens PA stream in **callback mode**; callback calls `IAudioMixer.FillOutputBuffer` directly (zero allocation in RT path); `OverrideRtMixer` swaps the mixer reference atomically (`volatile`) |
+| `PortAudioOutput` | `IAudioOutput` | Opens PA stream in **callback mode**; callback calls `IAudioMixer.FillOutputBuffer` directly (zero allocation in RT path); callback safely handles oversized host blocks by chunking |
 | `PortAudioClock` | `HardwareClock` | Constructed with `() => Native.Pa_GetStreamTime(stream)` |
 | `PortAudioSink` | `IAudioSink` | PA **blocking-write** mode; write thread; 8-buffer pool |
 
@@ -562,8 +561,7 @@ agg.Mixer.UnregisterSink(ndiAudioSink);
 | `AudioMixer.FillOutputBuffer` | Pull-once → resample → scatter into leader buffer → scatter into N sink buffers → distribute |
 | `Audio/VirtualAudioOutput.cs` | Hardware-free `IAudioOutput`; `StopwatchClock` timer loop; enables pure-sink routing (A→C, B→D) with a shared clock and no physical device |
 | `Audio/Routing/ChannelRouteMap.Silence()` | Empty route map — channel contributes nothing to leader mix; use when routing exclusively via `RouteTo` |
-| `AggregateOutput.AddSink` | Calls `RegisterSink`; `RemoveSink` calls `UnregisterSink` |
-| `AggregateAudioMixer` | Delegates all new methods to inner `AudioMixer`; exposes `LeaderFormat` |
+| `AggregateOutput` | Lifecycle/orchestration helper for leader + sinks; stores pre-open sink registrations (including per-sink channels) and replays them on `Open` |
 
 ### Resolved design decisions (Q16–Q19)
 

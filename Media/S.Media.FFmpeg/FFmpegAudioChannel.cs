@@ -16,6 +16,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     private readonly int                       _streamIndex;
     private readonly ChannelReader<EncodedPacket> _packetReader;
     private readonly int                       _threadCount;
+    private readonly Func<int>                 _latestSeekEpochProvider;
 
     private AVCodecContext* _codecCtx;
     private SwrContext*     _swr;          // normalises codec output → AV_SAMPLE_FMT_FLT
@@ -54,13 +55,15 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     internal FFmpegAudioChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
                                  int threadCount  = 0,
-                                 int bufferDepth  = 16)
+                                 int bufferDepth  = 16,
+                                 Func<int>? latestSeekEpochProvider = null)
     {
         _streamIndex  = streamIndex;
         _stream       = stream;
         _packetReader = packetReader;
         BufferDepth   = bufferDepth;
         _threadCount  = threadCount;
+        _latestSeekEpochProvider = latestSeekEpochProvider ?? (() => 0);
 
         var cp = stream->codecpar;
         // Seed from codecpar; OpenCodec() will refine from the opened codec context.
@@ -80,6 +83,8 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     }
 
     internal int StreamIndex => _streamIndex;
+
+    internal int LatestSeekEpoch => _latestSeekEpochProvider();
 
     internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
     {
@@ -149,8 +154,9 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
         Interlocked.Exchange(ref _framesInRing, 0);
     }
 
-    internal unsafe bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
+    internal bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
     {
+        int sendRet;
         fixed (byte* p = ep.Data)
         {
             _pkt->data     = ep.ActualLength > 0 ? p : null;
@@ -159,9 +165,20 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
             _pkt->dts      = ep.Dts;
             _pkt->duration = ep.Duration;
             _pkt->flags    = ep.Flags;
+
+            // Keep ep.Data pinned while libavcodec reads the packet.
+            sendRet = ffmpeg.avcodec_send_packet(_codecCtx, _pkt);
         }
 
-        if (ffmpeg.avcodec_send_packet(_codecCtx, _pkt) < 0) return true;
+        if (sendRet == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+            return true;
+        if (sendRet == ffmpeg.AVERROR_EOF)
+            return false;
+        if (sendRet < 0)
+        {
+            Console.Error.WriteLine($"[FFmpegAudioChannel] stream={_streamIndex} avcodec_send_packet failed: {sendRet}");
+            return true;
+        }
 
         while (ffmpeg.avcodec_receive_frame(_codecCtx, _frame) >= 0)
         {
