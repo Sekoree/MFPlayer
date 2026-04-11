@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using S.Media.Core.Media;
+using S.Media.Core.Video;
 
 namespace S.Media.SDL3;
 
@@ -21,8 +22,16 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const uint GL_LINEAR              = 0x2601;
     private const uint GL_CLAMP_TO_EDGE       = 0x812F;
     private const uint GL_RGBA8               = 0x8058;
+    private const uint GL_R8                  = 0x8229;
+    private const uint GL_RG8                 = 0x822B;
+    private const uint GL_R16UI               = 0x8234;
+    private const uint GL_RED                 = 0x1903;
+    private const uint GL_RED_INTEGER         = 0x8D94;
+    private const uint GL_RG                  = 0x8227;
+    private const uint GL_RGBA                = 0x1908;
     private const uint GL_BGRA                = 0x80E1;
     private const uint GL_UNSIGNED_BYTE       = 0x1401;
+    private const uint GL_UNSIGNED_SHORT      = 0x1403;
     private const uint GL_FLOAT               = 0x1406;
     private const uint GL_TRIANGLES           = 0x0004;
     private const uint GL_ARRAY_BUFFER        = 0x8892;
@@ -34,6 +43,9 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const uint GL_COLOR_BUFFER_BIT    = 0x4000;
     private const uint GL_FALSE               = 0;
     private const uint GL_TRUE                = 1;
+    private const uint GL_TEXTURE0            = 0x84C0;
+    private const uint GL_TEXTURE1            = 0x84C1;
+    private const uint GL_TEXTURE2            = 0x84C2;
 
     // ── GL function pointers ──────────────────────────────────────────────
 
@@ -71,6 +83,7 @@ internal sealed unsafe class GLRenderer : IDisposable
     private delegate void   GlEnableVertexAttribArray(uint index);
     private delegate void   GlVertexAttribPointer(uint index, int size, uint type, byte normalized, int stride, void* pointer);
     private delegate void   GlDrawArrays(uint mode, int first, int count);
+    private delegate void   GlActiveTexture(uint texture);
 
     // Instances
     private GlViewport                _glViewport = null!;
@@ -107,39 +120,85 @@ internal sealed unsafe class GLRenderer : IDisposable
     private GlEnableVertexAttribArray _glEnableVertexAttribArray = null!;
     private GlVertexAttribPointer     _glVertexAttribPointer = null!;
     private GlDrawArrays              _glDrawArrays = null!;
+    private GlActiveTexture           _glActiveTexture = null!;
 
     // ── GL state ──────────────────────────────────────────────────────────
 
     private uint _texture;
+    private uint _textureY;
+    private uint _textureUv;
+    private uint _textureU;
+    private uint _textureV;
+    private uint _textureY422P10;
+    private uint _textureU422P10;
+    private uint _textureV422P10;
     private uint _program;
+    private uint _programNv12;
+    private uint _programI420;
+    private uint _programI422P10;
     private uint _vao;
     private uint _vbo;
     private int  _texWidth;
     private int  _texHeight;
+    private int  _texWidthNv12;
+    private int  _texHeightNv12;
+    private int  _texWidthI420;
+    private int  _texHeightI420;
+    private int  _texWidthI422P10;
+    private int  _texHeightI422P10;
+    private int  _uNv12LimitedRangeLoc = -1;
+    private int  _uNv12ColorMatrixLoc = -1;
+    private int  _uI420LimitedRangeLoc = -1;
+    private int  _uI420ColorMatrixLoc = -1;
+    private int  _uI422P10LimitedRangeLoc = -1;
+    private int  _uI422P10ColorMatrixLoc = -1;
+    private YuvColorRange _i422P10ColorRange = YuvColorRange.Auto;
+    private YuvColorMatrix _i422P10ColorMatrix = YuvColorMatrix.Auto;
     private bool _disposed;
+
+    public YuvColorRange YuvColorRange
+    {
+        get => _i422P10ColorRange;
+        set => _i422P10ColorRange = NormalizeColorRange(value);
+    }
+
+    public YuvColorMatrix YuvColorMatrix
+    {
+        get => _i422P10ColorMatrix;
+        set => _i422P10ColorMatrix = NormalizeColorMatrix(value);
+    }
+
+    public bool I422P10LimitedRange
+    {
+        get => _i422P10ColorRange == YuvColorRange.Limited;
+        set => _i422P10ColorRange = value ? YuvColorRange.Limited : YuvColorRange.Full;
+    }
+
+    public YuvColorRange I422P10ColorRange
+    {
+        get => YuvColorRange;
+        set => YuvColorRange = value;
+    }
+
+    public YuvColorMatrix I422P10ColorMatrix
+    {
+        get => YuvColorMatrix;
+        set => YuvColorMatrix = value;
+    }
+
+    public bool I422P10UseBt709Matrix
+    {
+        get => _i422P10ColorMatrix == YuvColorMatrix.Bt709;
+        set => _i422P10ColorMatrix = value ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
+    }
 
     // ── Shaders ───────────────────────────────────────────────────────────
 
-    private const string VertexShaderSource = """
-        #version 330 core
-        layout(location = 0) in vec2 aPos;
-        layout(location = 1) in vec2 aUV;
-        out vec2 vUV;
-        void main() {
-            gl_Position = vec4(aPos, 0.0, 1.0);
-            vUV = aUV;
-        }
-        """;
-
-    private const string FragmentShaderSource = """
-        #version 330 core
-        in vec2 vUV;
-        out vec4 fragColor;
-        uniform sampler2D uTexture;
-        void main() {
-            fragColor = texture(uTexture, vUV);
-        }
-        """;
+    private const string VertexShaderSource = GlShaderSources.VertexPassthrough;
+    private const string FragmentShaderSource = GlShaderSources.FragmentPassthrough;
+    private const string FragmentShaderSourceNv12 = GlShaderSources.FragmentNv12;
+    private const string FragmentShaderSourceI420 = GlShaderSources.FragmentI420;
+    private const string FragmentShaderSourceI422P10 = GlShaderSources.FragmentI422P10;
 
     // ── Initialisation ────────────────────────────────────────────────────
 
@@ -155,8 +214,33 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glAttachShader(_program, fs);
         _glLinkProgram(_program);
         CheckProgram(_program);
+
+        uint fsNv12 = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSourceNv12);
+        _programNv12 = _glCreateProgram();
+        _glAttachShader(_programNv12, vs);
+        _glAttachShader(_programNv12, fsNv12);
+        _glLinkProgram(_programNv12);
+        CheckProgram(_programNv12);
+
+        uint fsI420 = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSourceI420);
+        _programI420 = _glCreateProgram();
+        _glAttachShader(_programI420, vs);
+        _glAttachShader(_programI420, fsI420);
+        _glLinkProgram(_programI420);
+        CheckProgram(_programI420);
+
+        uint fsI422P10 = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSourceI422P10);
+        _programI422P10 = _glCreateProgram();
+        _glAttachShader(_programI422P10, vs);
+        _glAttachShader(_programI422P10, fsI422P10);
+        _glLinkProgram(_programI422P10);
+        CheckProgram(_programI422P10);
+
         _glDeleteShader(vs);
         _glDeleteShader(fs);
+        _glDeleteShader(fsNv12);
+        _glDeleteShader(fsI420);
+        _glDeleteShader(fsI422P10);
 
         // Set texture uniform to unit 0
         _glUseProgram(_program);
@@ -166,18 +250,91 @@ internal sealed unsafe class GLRenderer : IDisposable
             _glUniform1i(loc, 0);
         }
 
+        _glUseProgram(_programNv12);
+        fixed (byte* nameY = "uTexY\0"u8)
+        {
+            int locY = _glGetUniformLocation(_programNv12, nameY);
+            _glUniform1i(locY, 0);
+        }
+        fixed (byte* nameUv = "uTexUV\0"u8)
+        {
+            int locUv = _glGetUniformLocation(_programNv12, nameUv);
+            _glUniform1i(locUv, 1);
+        }
+        fixed (byte* nameLimited = "uLimitedRange\0"u8)
+        {
+            _uNv12LimitedRangeLoc = _glGetUniformLocation(_programNv12, nameLimited);
+            if (_uNv12LimitedRangeLoc >= 0)
+                _glUniform1i(_uNv12LimitedRangeLoc, 0);
+        }
+        fixed (byte* nameMatrix = "uColorMatrix\0"u8)
+        {
+            _uNv12ColorMatrixLoc = _glGetUniformLocation(_programNv12, nameMatrix);
+            if (_uNv12ColorMatrixLoc >= 0)
+                _glUniform1i(_uNv12ColorMatrixLoc, 0);
+        }
+
+        _glUseProgram(_programI420);
+        fixed (byte* nameY = "uTexY\0"u8)
+        {
+            int locY = _glGetUniformLocation(_programI420, nameY);
+            _glUniform1i(locY, 0);
+        }
+        fixed (byte* nameU = "uTexU\0"u8)
+        {
+            int locU = _glGetUniformLocation(_programI420, nameU);
+            _glUniform1i(locU, 1);
+        }
+        fixed (byte* nameV = "uTexV\0"u8)
+        {
+            int locV = _glGetUniformLocation(_programI420, nameV);
+            _glUniform1i(locV, 2);
+        }
+        fixed (byte* nameLimited = "uLimitedRange\0"u8)
+        {
+            _uI420LimitedRangeLoc = _glGetUniformLocation(_programI420, nameLimited);
+            if (_uI420LimitedRangeLoc >= 0)
+                _glUniform1i(_uI420LimitedRangeLoc, 0);
+        }
+        fixed (byte* nameMatrix = "uColorMatrix\0"u8)
+        {
+            _uI420ColorMatrixLoc = _glGetUniformLocation(_programI420, nameMatrix);
+            if (_uI420ColorMatrixLoc >= 0)
+                _glUniform1i(_uI420ColorMatrixLoc, 0);
+        }
+
+        _glUseProgram(_programI422P10);
+        fixed (byte* nameY = "uTexY\0"u8)
+        {
+            int locY = _glGetUniformLocation(_programI422P10, nameY);
+            _glUniform1i(locY, 0);
+        }
+        fixed (byte* nameU = "uTexU\0"u8)
+        {
+            int locU = _glGetUniformLocation(_programI422P10, nameU);
+            _glUniform1i(locU, 1);
+        }
+        fixed (byte* nameV = "uTexV\0"u8)
+        {
+            int locV = _glGetUniformLocation(_programI422P10, nameV);
+            _glUniform1i(locV, 2);
+        }
+        fixed (byte* nameLimited = "uLimitedRange\0"u8)
+        {
+            _uI422P10LimitedRangeLoc = _glGetUniformLocation(_programI422P10, nameLimited);
+            if (_uI422P10LimitedRangeLoc >= 0)
+                _glUniform1i(_uI422P10LimitedRangeLoc, 0);
+        }
+        fixed (byte* nameMatrix = "uColorMatrix\0"u8)
+        {
+            _uI422P10ColorMatrixLoc = _glGetUniformLocation(_programI422P10, nameMatrix);
+            if (_uI422P10ColorMatrixLoc >= 0)
+                _glUniform1i(_uI422P10ColorMatrixLoc, 0);
+        }
+
         // Fullscreen quad (2 triangles): position (x,y) + UV (u,v)
         // Note: UV y is flipped (1→0) so the image isn't upside-down.
-        float[] quadVerts =
-        [
-            // pos        uv
-            -1f, -1f,   0f, 1f,
-             1f, -1f,   1f, 1f,
-             1f,  1f,   1f, 0f,
-            -1f, -1f,   0f, 1f,
-             1f,  1f,   1f, 0f,
-            -1f,  1f,   0f, 0f,
-        ];
+        var quadVerts = GlShaderSources.FullscreenQuadVerts;
 
         fixed (uint* pVao = &_vao) _glGenVertexArrays(1, pVao);
         fixed (uint* pVbo = &_vbo) _glGenBuffers(1, pVbo);
@@ -206,6 +363,55 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+        fixed (uint* pTex = &_textureY) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureY);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureUv) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureUv);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureU) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureU);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureV) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureV);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureY422P10) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureY422P10);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureU422P10) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureU422P10);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureV422P10) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureV422P10);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
         _glViewport(0, 0, viewportWidth, viewportHeight);
         _glClearColor(0f, 0f, 0f, 1f);
     }
@@ -214,8 +420,33 @@ internal sealed unsafe class GLRenderer : IDisposable
 
     public void UploadAndDraw(VideoFrame frame)
     {
+        if (frame.PixelFormat == PixelFormat.Nv12)
+        {
+            UploadAndDrawNv12(frame);
+            return;
+        }
+
+        if (frame.PixelFormat == PixelFormat.Yuv420p)
+        {
+            UploadAndDrawI420(frame);
+            return;
+        }
+
+        if (frame.PixelFormat == PixelFormat.Yuv422p10)
+        {
+            UploadAndDrawI422P10(frame);
+            return;
+        }
+
+        if (frame.PixelFormat != PixelFormat.Bgra32 && frame.PixelFormat != PixelFormat.Rgba32)
+        {
+            DrawBlack();
+            return;
+        }
+
         int w = frame.Width;
         int h = frame.Height;
+        uint uploadFormat = frame.PixelFormat == PixelFormat.Rgba32 ? GL_RGBA : GL_BGRA;
 
         _glBindTexture(GL_TEXTURE_2D, _texture);
 
@@ -225,12 +456,12 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (w == _texWidth && h == _texHeight)
         {
             // Same resolution → fast sub-image update (no GPU realloc).
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, pin.Pointer);
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, uploadFormat, GL_UNSIGNED_BYTE, pin.Pointer);
         }
         else
         {
             // Resolution changed → re-allocate the texture.
-            _glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, pin.Pointer);
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, uploadFormat, GL_UNSIGNED_BYTE, pin.Pointer);
             _texWidth  = w;
             _texHeight = h;
         }
@@ -240,6 +471,193 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+    }
+
+    private void UploadAndDrawNv12(VideoFrame frame)
+    {
+        int w = frame.Width;
+        int h = frame.Height;
+        if (w <= 0 || h <= 0)
+            return;
+
+        int ySize = w * h;
+        int uvSize = w * ((h + 1) / 2);
+        int required = ySize + uvSize;
+        if (frame.Data.Length < required)
+        {
+            DrawBlack();
+            return;
+        }
+
+        using var pin = frame.Data.Pin();
+        nint yPtr = (nint)pin.Pointer;
+        nint uvPtr = yPtr + ySize;
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY);
+        if (w == _texWidthNv12 && h == _texHeightNv12)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureUv);
+        if (w == _texWidthNv12 && h == _texHeightNv12)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Math.Max(1, w / 2), Math.Max(1, h / 2), GL_RG, GL_UNSIGNED_BYTE, (void*)uvPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, Math.Max(1, w / 2), Math.Max(1, h / 2), 0, GL_RG, GL_UNSIGNED_BYTE, (void*)uvPtr);
+
+        _texWidthNv12 = w;
+        _texHeightNv12 = h;
+
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programNv12);
+        if (_uNv12LimitedRangeLoc >= 0)
+            _glUniform1i(_uNv12LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
+        if (_uNv12ColorMatrixLoc >= 0)
+            _glUniform1i(_uNv12ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    private void UploadAndDrawI420(VideoFrame frame)
+    {
+        int w = frame.Width;
+        int h = frame.Height;
+        if (w <= 0 || h <= 0)
+            return;
+
+        int cw = Math.Max(1, (w + 1) / 2);
+        int ch = Math.Max(1, (h + 1) / 2);
+        int ySize = w * h;
+        int uSize = cw * ch;
+        int required = ySize + uSize + uSize;
+        if (frame.Data.Length < required)
+        {
+            DrawBlack();
+            return;
+        }
+
+        using var pin = frame.Data.Pin();
+        nint yPtr = (nint)pin.Pointer;
+        nint uPtr = yPtr + ySize;
+        nint vPtr = uPtr + uSize;
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY);
+        if (w == _texWidthI420 && h == _texHeightI420)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureU);
+        if (w == _texWidthI420 && h == _texHeightI420)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, cw, ch, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
+
+        _glActiveTexture(GL_TEXTURE2);
+        _glBindTexture(GL_TEXTURE_2D, _textureV);
+        if (w == _texWidthI420 && h == _texHeightI420)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, cw, ch, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
+
+        _texWidthI420 = w;
+        _texHeightI420 = h;
+
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programI420);
+        if (_uI420LimitedRangeLoc >= 0)
+            _glUniform1i(_uI420LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
+        if (_uI420ColorMatrixLoc >= 0)
+            _glUniform1i(_uI420ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    private void UploadAndDrawI422P10(VideoFrame frame)
+    {
+        int w = frame.Width;
+        int h = frame.Height;
+        if (w <= 0 || h <= 0)
+            return;
+
+        int cw = Math.Max(1, (w + 1) / 2);
+        int ySamples = w * h;
+        int uvSamples = cw * h;
+        int required = (ySamples + uvSamples + uvSamples) * sizeof(ushort);
+        if (frame.Data.Length < required)
+        {
+            DrawBlack();
+            return;
+        }
+
+        using var pin = frame.Data.Pin();
+        nint yPtr = (nint)pin.Pointer;
+        nint uPtr = yPtr + (ySamples * sizeof(ushort));
+        nint vPtr = uPtr + (uvSamples * sizeof(ushort));
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY422P10);
+        if (w == _texWidthI422P10 && h == _texHeightI422P10)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, w, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
+
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureU422P10);
+        if (w == _texWidthI422P10 && h == _texHeightI422P10)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)uPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, cw, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)uPtr);
+
+        _glActiveTexture(GL_TEXTURE2);
+        _glBindTexture(GL_TEXTURE_2D, _textureV422P10);
+        if (w == _texWidthI422P10 && h == _texHeightI422P10)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)vPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, cw, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)vPtr);
+
+        _texWidthI422P10 = w;
+        _texHeightI422P10 = h;
+
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programI422P10);
+        if (_uI422P10LimitedRangeLoc >= 0)
+            _glUniform1i(_uI422P10LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
+        if (_uI422P10ColorMatrixLoc >= 0)
+            _glUniform1i(_uI422P10ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    private bool ShouldUseBt709MatrixForYuv(int width, int height)
+    {
+        return YuvAutoPolicy.ResolveMatrix(_i422P10ColorMatrix, width, height) == YuvColorMatrix.Bt709;
+    }
+
+    private bool ShouldUseLimitedRangeForYuv()
+    {
+        return YuvAutoPolicy.ResolveRange(_i422P10ColorRange) == YuvColorRange.Limited;
+    }
+
+    private static YuvColorRange NormalizeColorRange(YuvColorRange value)
+    {
+        return value is YuvColorRange.Auto or YuvColorRange.Full or YuvColorRange.Limited
+            ? value
+            : YuvColorRange.Auto;
+    }
+
+    private static YuvColorMatrix NormalizeColorMatrix(YuvColorMatrix value)
+    {
+        return value is YuvColorMatrix.Auto or YuvColorMatrix.Bt601 or YuvColorMatrix.Bt709
+            ? value
+            : YuvColorMatrix.Auto;
     }
 
     public void DrawBlack()
@@ -298,6 +716,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glEnableVertexAttribArray = LoadGL<GlEnableVertexAttribArray>("glEnableVertexAttribArray");
         _glVertexAttribPointer     = LoadGL<GlVertexAttribPointer>("glVertexAttribPointer");
         _glDrawArrays              = LoadGL<GlDrawArrays>("glDrawArrays");
+        _glActiveTexture           = LoadGL<GlActiveTexture>("glActiveTexture");
     }
 
     private uint CompileShader(uint type, string source)
@@ -346,9 +765,19 @@ internal sealed unsafe class GLRenderer : IDisposable
         _disposed = true;
 
         fixed (uint* p = &_texture)      _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureY)     _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureUv)    _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureU)     _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureV)     _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureY422P10) _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureU422P10) _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureV422P10) _glDeleteTextures(1, p);
         fixed (uint* p = &_vbo)          _glDeleteBuffers(1, p);
         fixed (uint* p = &_vao)          _glDeleteVertexArrays(1, p);
         _glDeleteProgram(_program);
+        _glDeleteProgram(_programNv12);
+        _glDeleteProgram(_programI420);
+        _glDeleteProgram(_programI422P10);
     }
 }
 

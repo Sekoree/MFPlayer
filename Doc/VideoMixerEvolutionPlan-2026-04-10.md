@@ -1,100 +1,87 @@
 # Video Mixer Evolution Plan (2026-04-10)
 
 Goal:
-Bring the video pipeline closer to audio parity while keeping complexity low:
-- multiple input channels,
-- multiple outputs/sinks,
-- one active input per target (no blending/compositing),
-- basic pixel conversion (any -> `Rgba32` baseline),
-- basic framerate/PTS pacing so playback speed is correct.
+Evolve current mixers into an end-user friendly, format-agnostic, many-to-many AV router while preserving compatibility.
 
-## Principles
+Target outcomes:
+- Mixer core is not tied to fixed audio/video output formats.
+- Conversion happens at endpoint boundaries (output/sink adapters), not inside mixer core.
+- Routing and timing are decoupled from concrete output classes.
+- Simple decoder -> endpoint flows remain trivial.
+- Advanced many-to-many routing and multi-clock glue is available via `AVMixer`.
 
-1. Keep hot path simple and deterministic.
-2. Avoid introducing heavy conversion stacks now.
-3. Keep public API incremental and source-compatible where possible.
-4. Build in phases with tests after each phase.
+## Design Principles
 
-## Current baseline
+1. Keep mixer core format-agnostic and endpoint-agnostic.
+2. Move conversion/resampling/pixel adaptation to endpoint side.
+3. Preserve old APIs during migration; add new APIs beside them.
+4. Keep simple workflows first-class with sensible defaults.
+5. Build in small phases with measurable diagnostics.
 
-- `VideoMixer` currently supports many channels but one global active channel.
-- `SDL3VideoOutput` presents one stream.
-- `IVideoSink` exists but had no routing orchestration in the mixer.
-- `FFmpegVideoChannel` already outputs `Bgra32` by default.
+## Updated Architecture Direction
 
-## Phase A (implemented in-progress)
+### 1) Core routing
 
-### A1. Mixer API extension
+- `VideoMixer` and `AudioMixer` evolve toward pure routing + pacing + buffering.
+- `AVMixer` becomes the orchestration layer for many-to-many audio/video routing.
+- Mixer does not need `Output`/`Sink` objects as hard dependencies.
 
-- Extend `IVideoMixer` with:
-  - `RegisterSink(IVideoSink sink)`
-  - `UnregisterSink(IVideoSink sink)`
-  - `SetActiveChannelForSink(IVideoSink sink, Guid? channelId)`
-  - `SinkCount`
-  - `PresentNextFrame(TimeSpan clockPosition)` (clock-aware)
+### 2) Endpoint model (migration)
 
-### A2. Multi-target routing model
+- Introduce endpoint adapters that can be used by both outputs and sinks.
+- Keep `Output` and `Sink` for now, but converge behavior toward a common endpoint contract.
+- Candidate unified model:
+  - push mode: endpoint accepts frames/buffers,
+  - pull mode: endpoint requests frames/buffers via delegate.
 
-- Keep one global leader target (for `IVideoOutput`).
-- Add N sink targets, each with exactly one active channel.
-- No blending: each target independently selects one channel.
+### 3) Conversion boundary
 
-### A3. Basic pacing
+- Endpoint decides whether incoming media format is directly supported.
+- If unsupported, endpoint performs conversion using available converters/shaders/libyuv/resamplers.
+- Mixer should prefer route format passthrough when possible.
 
-- Use `clockPosition` + frame `Pts`:
-  - hold frame if early,
-  - advance when due,
-  - drop overly stale queued frame.
+### 4) Cloning and fan-out
 
-### A4. Basic conversion
+- Add output cloning for video: one decoded channel can feed multiple render surfaces.
+- Example: main Avalonia OGL control + monitoring preview control without extra decode.
 
-- Convert all pulled frames to canonical `Rgba32`.
-- Convert leader frame to `OutputFormat.PixelFormat` when needed.
-- Keep sink output in `Rgba32` for now.
-- For unsupported source formats in v1 converter, emit black RGBA frame to preserve timing.
+### 5) Presets and defaults
 
-## Phase B (next)
+- Add end-user profiles for outputs/sinks: `Safe`, `Balanced`, `LowLatency`.
+- Start with NDI-oriented defaults (buffer sizing, queue depth, drop policy, pacing).
+- Keep automatic hardware decode enabled by default.
 
-1. Add explicit metrics/counters in `VideoMixer`:
-   - held frames,
-   - dropped stale frames,
-   - conversion fallbacks-to-black.
-2. Add optional target policy knobs:
-   - lead tolerance,
-   - stale-drop threshold.
-3. Add first sink implementation candidate (`NDIVideoSink` or test sink adapter).
+## Phased Checklist
 
-## Phase C (audio/video alignment)
+### Phase A - Foundation (completed/ongoing)
+- [x] Basic multi-target video routing.
+- [x] Sink format preferences and capabilities.
+- [x] Initial `IAVMixer`/`AVMixer` facade.
 
-1. Define a shared A/V sync policy:
-   - audio master by default,
-   - optional video master for video-only scenarios.
-2. Add an integration harness with FFmpeg audio+video channels:
-   - assert drift bounds over time,
-   - assert behavior across seeks.
+### Phase B - Mixer decoupling (next)
+- [ ] Remove format assumptions from mixer internals where possible.
+- [ ] Move remaining conversion logic from mixer into endpoint adapters.
+- [ ] Keep compatibility shims for existing `IVideoOutput.Mixer` / `IAudioOutput.Mixer` usage.
 
-## API shape summary
+### Phase C - Endpoint unification
+- [x] Introduce common endpoint abstraction (push + optional pull delegate).
+- [x] Implement adapters for existing `Output` and `Sink` APIs.
+- [ ] Decide long-term API: keep both concepts or converge on endpoint type.
 
-- Keep `IVideoOutput` unchanged for now.
-- Keep `VideoMixer` as orchestration center for channel->target selection.
-- Keep `IVideoSink.ReceiveFrame` non-blocking contract.
+### Phase D - AV router power features
+- [~] Expand `AVMixer` into full many-to-many router (audio + video + clock links).
+- [x] Add explicit clock-master policies (audio/video/external).
+- [x] Add route groups for simple decoder->endpoint one-liners.
 
-## Risks and mitigations
+### Phase E - Cloning and profiles
+- [x] Add video output cloning primitives and sample app usage.
+- [x] Add `Safe` / `Balanced` / `LowLatency` endpoint presets (NDI first).
+- [x] Add diagnostics snapshots for route format passthrough vs conversion.
 
-- Risk: conversion coverage is incomplete.
-  - Mitigation: keep fallback-to-black explicit and measurable.
-- Risk: memory ownership bugs across targets.
-  - Mitigation: deterministic dispose rules in `VideoMixer` and tests around owner handoff.
-- Risk: framerate jitter under vsync mismatch.
-  - Mitigation: basic PTS pacing now; policy knobs in Phase B.
+## Acceptance Criteria for Next Milestone
 
-## Acceptance criteria for current phase
-
-1. Build passes for `S.Media.Core` and `S.Media.SDL3`.
-2. Existing video sample (`MFPlayer.VideoPlayer`) still runs with current FFmpeg output path.
-3. New `VideoMixer` unit tests cover:
-   - sink registration,
-   - per-sink active channel selection,
-   - pacing hold-until-due,
-   - basic BGRA->RGBA conversion path.
+1. Build passes for `S.Media.Core`, `S.Media.SDL3`, `S.Media.Avalonia`, and test projects.
+2. One sample demonstrates `AVMixer` in simple decoder->endpoint flow. (Implemented in `MFPlayer.VideoPlayer`)
+3. Mixer diagnostics clearly separate routing from conversion statistics. (Implemented via `VideoMixer.DiagnosticsSnapshot.SameFormatPassthrough` / `RawMarkerPassthrough` / `Converted`)
+4. At least one endpoint preset set is implemented and documented.
 

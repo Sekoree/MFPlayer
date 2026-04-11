@@ -20,7 +20,10 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         long BlackFrames,
         long RenderExceptions,
         long InitCalls,
-        long DeinitCalls);
+        long DeinitCalls,
+        long TextureUploads,
+        long TextureReuseDraws,
+        long CatchupSkips);
 
     private readonly object _stateLock = new();
     private AvaloniaGlRenderer? _renderer;
@@ -37,6 +40,18 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private long _renderExceptions;
     private long _initCalls;
     private long _deinitCalls;
+    private long _textureUploads;
+    private long _textureReuseDraws;
+    private long _catchupSkips;
+
+    private bool _hasUploadedFrame;
+    private int _lastUploadedWidth;
+    private int _lastUploadedHeight;
+    private TimeSpan _lastUploadedPts;
+    private ReadOnlyMemory<byte> _lastUploadedData;
+
+    private TimeSpan _catchupLagThreshold = TimeSpan.FromMilliseconds(45);
+    private int _maxCatchupPullsPerRender = 6;
 
     public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
         RenderCalls: Interlocked.Read(ref _renderCalls),
@@ -44,7 +59,10 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         BlackFrames: Interlocked.Read(ref _blackFrames),
         RenderExceptions: Interlocked.Read(ref _renderExceptions),
         InitCalls: Interlocked.Read(ref _initCalls),
-        DeinitCalls: Interlocked.Read(ref _deinitCalls));
+        DeinitCalls: Interlocked.Read(ref _deinitCalls),
+        TextureUploads: Interlocked.Read(ref _textureUploads),
+        TextureReuseDraws: Interlocked.Read(ref _textureReuseDraws),
+        CatchupSkips: Interlocked.Read(ref _catchupSkips));
 
     public VideoFormat OutputFormat => _outputFormat;
 
@@ -53,6 +71,26 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
 
     public bool IsRunning => _isRunning;
+
+    /// <summary>
+    /// Frames older than (clock - threshold) are eligible for per-render catch-up skipping.
+    /// Defaults to 45 ms.
+    /// </summary>
+    public TimeSpan CatchupLagThreshold
+    {
+        get => _catchupLagThreshold;
+        set => _catchupLagThreshold = value <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : value;
+    }
+
+    /// <summary>
+    /// Maximum additional mixer pulls per render call when trying to catch up.
+    /// Defaults to 6.
+    /// </summary>
+    public int MaxCatchupPullsPerRender
+    {
+        get => _maxCatchupPullsPerRender;
+        set => _maxCatchupPullsPerRender = value < 0 ? 0 : value;
+    }
 
     /// <summary>
     /// Opens the output pipeline. The title parameter is ignored for embedded controls.
@@ -104,6 +142,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         Interlocked.Increment(ref _initCalls);
         _renderer ??= new AvaloniaGlRenderer();
         _renderer.Initialise(gl);
+        _hasUploadedFrame = false;
+        _lastUploadedData = default;
     }
 
     protected override void OnOpenGlDeinit(GlInterface gl)
@@ -111,12 +151,16 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         Interlocked.Increment(ref _deinitCalls);
         _renderer?.Dispose();
         _renderer = null;
+        _hasUploadedFrame = false;
+        _lastUploadedData = default;
     }
 
     protected override void OnOpenGlLost()
     {
         _renderer?.Dispose();
         _renderer = null;
+        _hasUploadedFrame = false;
+        _lastUploadedData = default;
         base.OnOpenGlLost();
     }
 
@@ -140,12 +184,56 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                 return;
             }
 
-            var frame = _mixer.PresentNextFrame(_clock.Position);
+            var clockPosition = _clock.Position;
+            var frame = _mixer.PresentNextFrame(clockPosition);
             if (frame.HasValue)
             {
-                _renderer.UploadAndDraw(frame.Value, fb, viewportWidth, viewportHeight);
-                _clock.UpdateFromFrame(frame.Value.Pts);
-                frame.Value.MemoryOwner?.Dispose();
+                var vf = frame.Value;
+
+                // If decode/render falls behind, skip stale frames up to a bounded budget.
+                for (int i = 0; i < _maxCatchupPullsPerRender; i++)
+                {
+                    if (vf.Pts + _catchupLagThreshold >= clockPosition)
+                        break;
+
+                    var next = _mixer.PresentNextFrame(clockPosition);
+                    if (!next.HasValue)
+                        break;
+
+                    var nvf = next.Value;
+                    if (nvf.Pts == vf.Pts &&
+                        nvf.Width == vf.Width &&
+                        nvf.Height == vf.Height &&
+                        nvf.Data.Equals(vf.Data))
+                        break;
+
+                    vf = nvf;
+                    Interlocked.Increment(ref _catchupSkips);
+                }
+
+                bool sameAsUploaded = _hasUploadedFrame &&
+                                      vf.Width == _lastUploadedWidth &&
+                                      vf.Height == _lastUploadedHeight &&
+                                      vf.Pts == _lastUploadedPts &&
+                                      vf.Data.Equals(_lastUploadedData);
+
+                if (sameAsUploaded)
+                {
+                    _renderer.DrawLastTexture(fb, viewportWidth, viewportHeight);
+                    Interlocked.Increment(ref _textureReuseDraws);
+                }
+                else
+                {
+                    _renderer.UploadAndDraw(vf, fb, viewportWidth, viewportHeight);
+                    _hasUploadedFrame = true;
+                    _lastUploadedWidth = vf.Width;
+                    _lastUploadedHeight = vf.Height;
+                    _lastUploadedPts = vf.Pts;
+                    _lastUploadedData = vf.Data;
+                    Interlocked.Increment(ref _textureUploads);
+                }
+
+                _clock.UpdateFromFrame(vf.Pts);
                 Interlocked.Increment(ref _presentedFrames);
             }
             else

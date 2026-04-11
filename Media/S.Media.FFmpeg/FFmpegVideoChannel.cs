@@ -11,7 +11,7 @@ namespace S.Media.FFmpeg;
 /// thread. Each frame is pixel-format-converted to <see cref="Core.Media.PixelFormat.Bgra32"/>
 /// by default. Frames are exposed through the <see cref="IMediaChannel{VideoFrame}"/> pull interface.
 /// </summary>
-public sealed unsafe class FFmpegVideoChannel : IVideoChannel
+public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrixHint
 {
     private readonly AVStream*                    _stream;
     private readonly int                          _streamIndex;
@@ -50,6 +50,12 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
     public VideoFormat SourceFormat => Format;
 
     /// <inheritdoc/>
+    public YuvColorMatrix SuggestedYuvColorMatrix { get; }
+
+    /// <inheritdoc/>
+    public YuvColorRange SuggestedYuvColorRange { get; }
+
+    /// <inheritdoc/>
     public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
     private long _positionTicks;
 
@@ -72,6 +78,8 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
         var cp = stream->codecpar;
         Format = new VideoFormat(cp->width, cp->height, targetPixelFormat,
             stream->r_frame_rate.num, stream->r_frame_rate.den);
+        SuggestedYuvColorMatrix = MapSuggestedYuvColorMatrix((AVColorSpace)cp->color_space);
+        SuggestedYuvColorRange = MapSuggestedYuvColorRange((AVColorRange)cp->color_range);
 
         var ring = Channel.CreateBounded<VideoFrame>(
             new BoundedChannelOptions(bufferDepth)
@@ -87,6 +95,10 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
     }
 
     internal int StreamIndex => _streamIndex;
+
+    internal bool IsHardwareAccelerated => _codecCtx != null && _codecCtx->hw_device_ctx != null;
+
+    internal string DecoderName => ffmpeg.avcodec_get_name(_codecCtx != null ? _codecCtx->codec_id : _stream->codecpar->codec_id);
 
     internal int LatestSeekEpoch => _latestSeekEpochProvider();
 
@@ -243,6 +255,22 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel
         PixelFormat.Uyvy422   => AVPixelFormat.AV_PIX_FMT_UYVY422,
         PixelFormat.Yuv422p10 => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
         _                     => AVPixelFormat.AV_PIX_FMT_BGRA
+    };
+
+    internal static YuvColorMatrix MapSuggestedYuvColorMatrix(AVColorSpace colorSpace) => colorSpace switch
+    {
+        AVColorSpace.AVCOL_SPC_BT709 => YuvColorMatrix.Bt709,
+        AVColorSpace.AVCOL_SPC_BT470BG => YuvColorMatrix.Bt601,
+        AVColorSpace.AVCOL_SPC_SMPTE170M => YuvColorMatrix.Bt601,
+        AVColorSpace.AVCOL_SPC_FCC => YuvColorMatrix.Bt601,
+        _ => YuvColorMatrix.Auto
+    };
+
+    internal static YuvColorRange MapSuggestedYuvColorRange(AVColorRange colorRange) => colorRange switch
+    {
+        AVColorRange.AVCOL_RANGE_JPEG => YuvColorRange.Full,
+        AVColorRange.AVCOL_RANGE_MPEG => YuvColorRange.Limited,
+        _ => YuvColorRange.Auto
     };
 
     public void Dispose()

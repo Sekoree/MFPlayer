@@ -29,6 +29,10 @@ public sealed class FFmpegDecoderOptionsTests
         => Assert.Null(new FFmpegDecoderOptions().HardwareDeviceType);
 
     [Fact]
+    public void Defaults_PreferHardwareDecoding_IsTrue()
+        => Assert.True(new FFmpegDecoderOptions().PreferHardwareDecoding);
+
+    [Fact]
     public void Defaults_EnableAudioAndVideo_AreTrue()
     {
         var opts = new FFmpegDecoderOptions();
@@ -50,6 +54,7 @@ public sealed class FFmpegDecoderOptionsTests
             VideoBufferDepth   = 8,
             DecoderThreadCount = 4,
             HardwareDeviceType = "vaapi",
+            PreferHardwareDecoding = false,
             EnableAudio        = false,
             EnableVideo        = true,
             VideoTargetPixelFormat = PixelFormat.Rgba32
@@ -60,6 +65,7 @@ public sealed class FFmpegDecoderOptionsTests
         Assert.Equal(8,       opts.VideoBufferDepth);
         Assert.Equal(4,       opts.DecoderThreadCount);
         Assert.Equal("vaapi", opts.HardwareDeviceType);
+        Assert.False(opts.PreferHardwareDecoding);
         Assert.False(opts.EnableAudio);
         Assert.True(opts.EnableVideo);
         Assert.Equal(PixelFormat.Rgba32, opts.VideoTargetPixelFormat);

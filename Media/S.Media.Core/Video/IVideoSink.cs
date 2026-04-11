@@ -23,5 +23,10 @@ public interface IVideoSink : IDisposable
     /// (copy the data and return immediately).
     /// </summary>
     void ReceiveFrame(in VideoFrame frame);
+
+    /// <summary>
+    /// Optional endpoint diagnostics snapshot. Implementations may override.
+    /// </summary>
+    VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot() => VideoEndpointDiagnosticsSnapshot.Empty;
 }
 

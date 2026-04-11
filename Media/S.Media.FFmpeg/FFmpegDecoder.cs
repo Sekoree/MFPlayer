@@ -35,6 +35,13 @@ public sealed class FFmpegDecoderOptions
     public string? HardwareDeviceType { get; init; }
 
     /// <summary>
+    /// Enables automatic hardware decode device probing when
+    /// <see cref="HardwareDeviceType"/> is not explicitly set.
+    /// Default: <see langword="true"/>.
+    /// </summary>
+    public bool PreferHardwareDecoding { get; init; } = true;
+
+    /// <summary>
     /// Whether audio streams are opened/decoded. Default: <see langword="true"/>.
     /// Disable for video-only playback scenarios.
     /// </summary>
@@ -99,6 +106,19 @@ internal sealed class EncodedPacket
 /// </summary>
 public sealed unsafe class FFmpegDecoder : IDisposable
 {
+    public readonly record struct VideoChannelDiagnostics(
+        int StreamIndex,
+        string DecoderName,
+        bool IsHardwareAccelerated,
+        PixelFormat TargetPixelFormat);
+
+    public readonly record struct DiagnosticsSnapshot(
+        bool PreferHardwareDecoding,
+        string? ActiveHardwareDeviceType,
+        int VideoChannelCount,
+        int HardwareAcceleratedVideoChannelCount,
+        IReadOnlyList<VideoChannelDiagnostics> VideoChannels);
+
     internal enum DemuxReadResult
     {
         Packet,
@@ -118,6 +138,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private long                     _seekControlDropLogCount;
     private int                      _started;
     private readonly object          _formatIoGate = new();
+    private string?                  _activeHwDeviceType;
 
     // Per stream-index → bounded packet channel
     private readonly Dictionary<int, Channel<EncodedPacket>> _queues = new();
@@ -149,7 +170,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             AudioBufferDepth = options.AudioBufferDepth,
             VideoBufferDepth = options.VideoBufferDepth,
             DecoderThreadCount = options.DecoderThreadCount < 0 ? 0 : options.DecoderThreadCount,
-            HardwareDeviceType = options.HardwareDeviceType,
+            HardwareDeviceType = string.IsNullOrWhiteSpace(options.HardwareDeviceType) ? null : options.HardwareDeviceType.Trim(),
+            PreferHardwareDecoding = options.PreferHardwareDecoding,
             EnableAudio = options.EnableAudio,
             EnableVideo = options.EnableVideo,
             VideoTargetPixelFormat = options.VideoTargetPixelFormat
@@ -169,6 +191,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         // Optionally create a hardware device context for video decoding.
         if (!string.IsNullOrEmpty(_options.HardwareDeviceType))
             TryCreateHwDevice(_options.HardwareDeviceType);
+        else if (_options.PreferHardwareDecoding)
+            TryCreateDefaultHwDevice();
 
         var audio = new List<FFmpegAudioChannel>();
         var video = new List<FFmpegVideoChannel>();
@@ -248,6 +272,69 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             return;
         }
         _hwDeviceCtx = ctx;
+        _activeHwDeviceType = deviceType;
+    }
+
+    private void TryCreateDefaultHwDevice()
+    {
+        var available = GetAvailableHwDeviceTypes();
+        if (available.Count == 0)
+            return;
+
+        string[] preferredDevices;
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            preferredDevices = ["vaapi", "vdpau", "cuda"];
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            preferredDevices = ["d3d11va", "dxva2", "cuda", "qsv"];
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            preferredDevices = ["videotoolbox"];
+        else
+            preferredDevices = ["vaapi", "d3d11va", "videotoolbox", "cuda", "qsv"];
+
+        foreach (var device in preferredDevices)
+        {
+            if (_hwDeviceCtx != null)
+                break;
+
+            if (!available.Contains(device))
+                continue;
+
+            TryCreateHwDevice(device);
+            if (_hwDeviceCtx != null)
+                Console.WriteLine($"[FFmpegDecoder] using hw device '{device}'.");
+        }
+
+        if (_hwDeviceCtx == null)
+        {
+            // Try any other discovered backend as a final fallback.
+            foreach (var device in available)
+            {
+                TryCreateHwDevice(device);
+                if (_hwDeviceCtx != null)
+                {
+                    Console.WriteLine($"[FFmpegDecoder] using hw device '{device}'.");
+                    break;
+                }
+            }
+        }
+    }
+
+    private static HashSet<string> GetAvailableHwDeviceTypes()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var type = ffmpeg.av_hwdevice_iterate_types(AVHWDeviceType.AV_HWDEVICE_TYPE_NONE);
+        while (type != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
+        {
+            var name = ffmpeg.av_hwdevice_get_type_name(type);
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(name);
+
+            type = ffmpeg.av_hwdevice_iterate_types(type);
+        }
+
+        return names;
     }
 
     /// <summary>
@@ -403,6 +490,32 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     {
         foreach (var (_, q) in _queues)
             q.Writer.TryComplete();
+    }
+
+    public DiagnosticsSnapshot GetDiagnosticsSnapshot()
+    {
+        var channels = new VideoChannelDiagnostics[VideoChannels.Count];
+        int hwCount = 0;
+
+        for (int i = 0; i < VideoChannels.Count; i++)
+        {
+            var ch = VideoChannels[i];
+            bool isHw = ch.IsHardwareAccelerated;
+            if (isHw) hwCount++;
+
+            channels[i] = new VideoChannelDiagnostics(
+                StreamIndex: ch.StreamIndex,
+                DecoderName: ch.DecoderName,
+                IsHardwareAccelerated: isHw,
+                TargetPixelFormat: ch.TargetPixelFormat);
+        }
+
+        return new DiagnosticsSnapshot(
+            PreferHardwareDecoding: _options.PreferHardwareDecoding,
+            ActiveHardwareDeviceType: _activeHwDeviceType,
+            VideoChannelCount: channels.Length,
+            HardwareAcceleratedVideoChannelCount: hwCount,
+            VideoChannels: channels);
     }
 
     public void Dispose()

@@ -7,6 +7,13 @@ namespace S.Media.Core.Tests;
 public sealed class VideoMixerTests
 {
     private static VideoFormat FmtRgba30 => new(640, 360, PixelFormat.Rgba32, 30, 1);
+    private static VideoFormat FmtBgra30 => new(640, 360, PixelFormat.Bgra32, 30, 1);
+
+    private sealed class SpyOwner : IDisposable
+    {
+        public int DisposeCalls { get; private set; }
+        public void Dispose() => DisposeCalls++;
+    }
 
     private sealed class QueueVideoChannel : IVideoChannel
     {
@@ -52,6 +59,54 @@ public sealed class VideoMixerTests
             LastFrame = frame;
         }
 
+        public void Dispose() { }
+    }
+
+    private sealed class SpyPreferredFormatSink : IVideoSink, IVideoSinkFormatPreference
+    {
+        public string Name => nameof(SpyPreferredFormatSink);
+        public bool IsRunning { get; set; } = true;
+        public PixelFormat PreferredPixelFormat { get; }
+        public VideoFrame? LastFrame { get; private set; }
+
+        public SpyPreferredFormatSink(PixelFormat preferredPixelFormat)
+            => PreferredPixelFormat = preferredPixelFormat;
+
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public void ReceiveFrame(in VideoFrame frame) => LastFrame = frame;
+
+        public void Dispose() { }
+    }
+
+    private sealed class SpyFormatCapabilitiesSink : IVideoSink, IVideoSinkFormatCapabilities
+    {
+        public string Name => nameof(SpyFormatCapabilitiesSink);
+        public bool IsRunning { get; set; } = true;
+        public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; }
+        public VideoFrame? LastFrame { get; private set; }
+
+        public SpyFormatCapabilitiesSink(params PixelFormat[] formats)
+            => PreferredPixelFormats = formats;
+
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public void ReceiveFrame(in VideoFrame frame) => LastFrame = frame;
+        public void Dispose() { }
+    }
+
+    private sealed class SpyRawPassthroughSink : IVideoSink, IVideoSinkFormatCapabilities
+    {
+        public string Name => nameof(SpyRawPassthroughSink);
+        public bool IsRunning { get; set; } = true;
+        public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; } = [PixelFormat.Rgba32];
+        public bool PreferRawFramePassthrough => true;
+        public VideoFrame? LastFrame { get; private set; }
+
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public void ReceiveFrame(in VideoFrame frame) => LastFrame = frame;
         public void Dispose() { }
     }
 
@@ -200,6 +255,157 @@ public sealed class VideoMixerTests
         Assert.Equal(20, s[1]);
         Assert.Equal(10, s[2]);
         Assert.Equal(255, s[3]);
+    }
+
+    [Fact]
+    public void PresentNextFrame_LeaderBgraOutput_DoesNotRoundTripConvert()
+    {
+        using var mixer = new VideoMixer(FmtBgra30);
+        var ch = new QueueVideoChannel(FmtBgra30);
+        var owner = new SpyOwner();
+        var data = new byte[] { 1, 2, 3, 4 };
+        ch.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, data, TimeSpan.FromMilliseconds(10), owner));
+
+        mixer.AddChannel(ch);
+        mixer.SetActiveChannel(ch.Id);
+
+        var frame = mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+
+        Assert.True(frame.HasValue);
+        Assert.Equal(PixelFormat.Bgra32, frame.Value.PixelFormat);
+        Assert.Same(owner, frame.Value.MemoryOwner);
+        Assert.Equal(0, owner.DisposeCalls);
+    }
+
+    [Fact]
+    public void PresentNextFrame_SinkPreferredFormat_IsHonored()
+    {
+        using var mixer = new VideoMixer(FmtRgba30);
+        var chLeader = new QueueVideoChannel(FmtRgba30);
+        chLeader.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        var chSink = new QueueVideoChannel(new VideoFormat(1, 1, PixelFormat.Bgra32, 30, 1));
+        chSink.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, new byte[] { 10, 20, 30, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        mixer.AddChannel(chLeader);
+        mixer.AddChannel(chSink);
+        mixer.SetActiveChannel(chLeader.Id);
+
+        var sink = new SpyPreferredFormatSink(PixelFormat.Bgra32);
+        mixer.RegisterSink(sink);
+        mixer.SetActiveChannelForSink(sink, chSink.Id);
+
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+
+        Assert.True(sink.LastFrame.HasValue);
+        Assert.Equal(PixelFormat.Bgra32, sink.LastFrame.Value.PixelFormat);
+    }
+
+    [Fact]
+    public void PresentNextFrame_SinkCapabilities_FallsBackToFirstSupportedFormat()
+    {
+        using var mixer = new VideoMixer(FmtRgba30);
+
+        var chLeader = new QueueVideoChannel(FmtRgba30);
+        chLeader.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        var chSink = new QueueVideoChannel(new VideoFormat(1, 1, PixelFormat.Bgra32, 30, 1));
+        chSink.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, new byte[] { 10, 20, 30, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        mixer.AddChannel(chLeader);
+        mixer.AddChannel(chSink);
+        mixer.SetActiveChannel(chLeader.Id);
+
+        var sink = new SpyFormatCapabilitiesSink(PixelFormat.Nv12, PixelFormat.Bgra32);
+        mixer.RegisterSink(sink);
+        mixer.SetActiveChannelForSink(sink, chSink.Id);
+
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+
+        Assert.True(sink.LastFrame.HasValue);
+        Assert.Equal(PixelFormat.Bgra32, sink.LastFrame.Value.PixelFormat);
+    }
+
+    [Fact]
+    public void PresentNextFrame_SinkFormatDiagnostics_CountsHitAndMiss()
+    {
+        using var mixer = new VideoMixer(FmtRgba30);
+
+        var chLeader = new QueueVideoChannel(FmtRgba30);
+        chLeader.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        var chSink = new QueueVideoChannel(new VideoFormat(1, 1, PixelFormat.Bgra32, 30, 1));
+        chSink.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, new byte[] { 10, 20, 30, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        mixer.AddChannel(chLeader);
+        mixer.AddChannel(chSink);
+        mixer.SetActiveChannel(chLeader.Id);
+
+        var sink = new SpyPreferredFormatSink(PixelFormat.Bgra32);
+        mixer.RegisterSink(sink);
+        mixer.SetActiveChannelForSink(sink, chSink.Id);
+
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+
+        var snap = mixer.GetDiagnosticsSnapshot();
+        Assert.Equal(1, snap.SinkFormatHits);
+        Assert.Equal(0, snap.SinkFormatMisses);
+
+        chSink.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 10, 20, 30, 255 }, TimeSpan.FromMilliseconds(40)));
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(60));
+
+        snap = mixer.GetDiagnosticsSnapshot();
+        Assert.True(snap.SinkFormatMisses > 0);
+    }
+
+    [Fact]
+    public void PresentNextFrame_RouteDiagnostics_CountsPassthroughAndConverted()
+    {
+        using var mixer = new VideoMixer(FmtRgba30);
+
+        var ch = new QueueVideoChannel(new VideoFormat(1, 1, PixelFormat.Bgra32, 30, 1));
+        ch.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, new byte[] { 10, 20, 30, 255 }, TimeSpan.FromMilliseconds(10)));
+        ch.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 30, 20, 10, 255 }, TimeSpan.FromMilliseconds(40)));
+
+        mixer.AddChannel(ch);
+        mixer.SetActiveChannel(ch.Id);
+
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(60));
+
+        var snap = mixer.GetDiagnosticsSnapshot();
+        Assert.True(snap.Converted > 0);
+        Assert.True(snap.SameFormatPassthrough > 0);
+        Assert.Equal(0, snap.RawMarkerPassthrough);
+    }
+
+    [Fact]
+    public void PresentNextFrame_SinkRawPassthroughMarker_SkipsMixerConversion()
+    {
+        using var mixer = new VideoMixer(FmtRgba30);
+
+        var chLeader = new QueueVideoChannel(FmtRgba30);
+        chLeader.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        var chSink = new QueueVideoChannel(new VideoFormat(2, 2, PixelFormat.Nv12, 30, 1));
+        chSink.Enqueue(new VideoFrame(2, 2, PixelFormat.Nv12, new byte[] { 10, 20, 30, 40, 128, 64 }, TimeSpan.FromMilliseconds(10)));
+
+        mixer.AddChannel(chLeader);
+        mixer.AddChannel(chSink);
+        mixer.SetActiveChannel(chLeader.Id);
+
+        var sink = new SpyRawPassthroughSink();
+        mixer.RegisterSink(sink);
+        mixer.SetActiveChannelForSink(sink, chSink.Id);
+
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+
+        Assert.True(sink.LastFrame.HasValue);
+        Assert.Equal(PixelFormat.Nv12, sink.LastFrame.Value.PixelFormat);
+
+        var snap = mixer.GetDiagnosticsSnapshot();
+        Assert.True(snap.RawMarkerPassthrough > 0);
+        Assert.Equal(0, snap.Converted);
     }
 }
 

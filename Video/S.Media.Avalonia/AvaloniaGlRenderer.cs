@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Avalonia.OpenGL;
 using S.Media.Core.Media;
+using S.Media.Core.Video;
 
 namespace S.Media.Avalonia;
 
@@ -121,26 +122,9 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     private bool _initialised;
     private bool _disposed;
 
-    private const string VertexShaderSource = """
-        #version 330 core
-        layout(location = 0) in vec2 aPos;
-        layout(location = 1) in vec2 aUV;
-        out vec2 vUV;
-        void main() {
-            gl_Position = vec4(aPos, 0.0, 1.0);
-            vUV = aUV;
-        }
-        """;
+    private const string VertexShaderSource = GlShaderSources.VertexPassthrough;
 
-    private const string FragmentShaderSource = """
-        #version 330 core
-        in vec2 vUV;
-        out vec4 fragColor;
-        uniform sampler2D uTexture;
-        void main() {
-            fragColor = texture(uTexture, vUV);
-        }
-        """;
+    private const string FragmentShaderSource = GlShaderSources.FragmentPassthrough;
 
     public void Initialise(GlInterface gl)
     {
@@ -203,15 +187,7 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
             _glUniform1i(loc, 0);
         }
 
-        float[] quadVerts =
-        [
-            -1f, -1f, 0f, 1f,
-             1f, -1f, 1f, 1f,
-             1f,  1f, 1f, 0f,
-            -1f, -1f, 0f, 1f,
-             1f,  1f, 1f, 0f,
-            -1f,  1f, 0f, 0f,
-        ];
+        var quadVerts = GlShaderSources.FullscreenQuadVerts;
 
         fixed (uint* pVao = &_vao)
             _glGenVertexArrays(1, pVao);
@@ -276,6 +252,22 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
             _texHeight = frame.Height;
         }
 
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glDisable(GL_BLEND);
+        _glUseProgram(_program);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    public void DrawLastTexture(int framebuffer, int viewportWidth, int viewportHeight)
+    {
+        if (!_initialised || _texture == 0) return;
+
+        _glBindFramebuffer(GL_FRAMEBUFFER, (uint)framebuffer);
+        _glViewport(0, 0, viewportWidth, viewportHeight);
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _texture);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glDisable(GL_BLEND);
         _glUseProgram(_program);

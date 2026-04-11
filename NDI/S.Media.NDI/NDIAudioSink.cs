@@ -17,6 +17,7 @@ public sealed class NDIAudioSink : IAudioSink
     private readonly NDISender    _sender;
     private readonly AudioFormat  _targetFormat;
     private readonly int          _framesPerBuffer;
+    private readonly int          _maxPendingBuffers;
     private readonly IAudioResampler? _resampler;
     private readonly bool         _ownsResampler;
 
@@ -29,22 +30,38 @@ public sealed class NDIAudioSink : IAudioSink
     private bool                     _disposed;
     private long                     _poolMissDrops;
     private long                     _capacityMissDrops;
+    private long                     _queueDrops;
+    private int                      _pendingBuffers;
 
     public string Name      { get; }
     public bool   IsRunning => _running;
     public long PoolMissDrops => Interlocked.Read(ref _poolMissDrops);
     public long CapacityMissDrops => Interlocked.Read(ref _capacityMissDrops);
+    public long QueueDrops => Interlocked.Read(ref _queueDrops);
 
     public NDIAudioSink(
         NDISender        sender,
         AudioFormat      targetFormat,
         int              framesPerBuffer = 512,
+        int              poolCount       = 0,
+        int              maxPendingBuffers = 0,
+        NdiEndpointPreset preset         = NdiEndpointPreset.Balanced,
         string?          name            = null,
         IAudioResampler? resampler       = null)
     {
         _sender          = sender;
         _targetFormat    = targetFormat;
+
+        var presetOptions = NdiAudioPresetOptions.For(preset);
+        if (framesPerBuffer <= 0)
+            framesPerBuffer = 512;
+        if (poolCount <= 0)
+            poolCount = presetOptions.PoolCount;
+        if (maxPendingBuffers <= 0)
+            maxPendingBuffers = presetOptions.MaxPendingBuffers;
+
         _framesPerBuffer = framesPerBuffer;
+        _maxPendingBuffers = maxPendingBuffers;
         Name             = name ?? "NDIAudioSink";
 
         // Auto-create a LinearResampler if the caller didn't supply one and we may receive
@@ -60,9 +77,9 @@ public sealed class NDIAudioSink : IAudioSink
             _ownsResampler = false;
         }
 
-        // Pre-allocate 8 interleaved buffers with headroom for common rate ratios.
-        for (int i = 0; i < 8; i++)
-            _pool.Enqueue(new float[framesPerBuffer * targetFormat.Channels * 2]);
+        int headroom = Math.Max(1, presetOptions.BufferHeadroomMultiplier);
+        for (int i = 0; i < poolCount; i++)
+            _pool.Enqueue(new float[framesPerBuffer * targetFormat.Channels * headroom]);
     }
 
     public Task StartAsync(CancellationToken ct = default)
@@ -122,7 +139,16 @@ public sealed class NDIAudioSink : IAudioSink
             int copy = Math.Min(buffer.Length, writeSamples);
             buffer[..copy].CopyTo(dest.AsSpan(0, copy));
         }
+
+        if (Volatile.Read(ref _pendingBuffers) >= _maxPendingBuffers)
+        {
+            _pool.Enqueue(dest);
+            Interlocked.Increment(ref _queueDrops);
+            return;
+        }
+
         _pending.Enqueue(dest);
+        Interlocked.Increment(ref _pendingBuffers);
     }
 
     // ── Write thread — interleaved → planar, then SendAudio ───────────────
@@ -138,6 +164,8 @@ public sealed class NDIAudioSink : IAudioSink
         {
             if (!_pending.TryDequeue(out var interleaved))
             { Thread.Yield(); continue; }
+
+            Interlocked.Decrement(ref _pendingBuffers);
 
             int samples    = interleaved.Length / channels;
             int planarNeed = channels * samples;

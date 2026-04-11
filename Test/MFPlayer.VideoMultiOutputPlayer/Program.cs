@@ -10,8 +10,21 @@ using FFmpeg.AutoGen;
 using NDILib;
 using S.Media.FFmpeg;
 using S.Media.NDI;
+using S.Media.Core.Audio;
+using S.Media.Core.Media;
+using S.Media.Core.Mixing;
 using S.Media.Core.Video;
 using S.Media.SDL3;
+
+static NdiEndpointPreset ParseNdiPreset(string? text)
+{
+    var s = (text ?? string.Empty).Trim();
+    if (s.Equals("safe", StringComparison.OrdinalIgnoreCase) || s.Equals("s", StringComparison.OrdinalIgnoreCase))
+        return NdiEndpointPreset.Safe;
+    if (s.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) || s.Equals("low", StringComparison.OrdinalIgnoreCase) || s.Equals("l", StringComparison.OrdinalIgnoreCase))
+        return NdiEndpointPreset.LowLatency;
+    return NdiEndpointPreset.Balanced;
+}
 
 Console.WriteLine("╔══════════════════════════════════════════╗");
 Console.WriteLine("║ MFPlayer — Video Multi-Output Player    ║");
@@ -75,8 +88,12 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    videoOutput.Mixer.AddChannel(videoChannel);
-    videoOutput.Mixer.SetActiveChannel(videoChannel.Id);
+    using var avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), videoOutput.Mixer, ownsAudio: true, ownsVideo: false)
+    {
+        MasterPolicy = IAVMixer.ClockMasterPolicy.Video
+    };
+    avMixer.AddVideoChannel(videoChannel);
+    avMixer.SetActiveVideoChannel(videoChannel.Id);
 
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
@@ -103,6 +120,9 @@ using (decoder)
                 string senderName = (Console.ReadLine() ?? string.Empty).Trim();
                 if (string.IsNullOrEmpty(senderName)) senderName = "MFPlayer NDI Video";
 
+                Console.Write("NDI preset [Safe/Balanced/LowLatency] (default Balanced): ");
+                var preset = ParseNdiPreset(Console.ReadLine());
+
                 int sret = NDISender.Create(out ndiSender, senderName, clockVideo: false, clockAudio: false);
                 if (sret != 0 || ndiSender == null)
                 {
@@ -112,11 +132,17 @@ using (decoder)
                 }
                 else
                 {
-                    ndiSink = new NDIVideoSink(ndiSender, videoOutput.OutputFormat, name: $"NDIVideoSink({senderName})");
-                    videoOutput.Mixer.RegisterSink(ndiSink);
-                    videoOutput.Mixer.SetActiveChannelForSink(ndiSink, videoChannel.Id);
+                    ndiSink = new NDIVideoSink(
+                        ndiSender,
+                        videoOutput.OutputFormat,
+                        poolCount: 0,
+                        maxPendingFrames: 0,
+                        preset: preset,
+                        name: $"NDIVideoSink({senderName})");
+                    avMixer.RegisterVideoSink(ndiSink);
+                    avMixer.RouteVideoChannelToSink(videoChannel.Id, ndiSink);
                     await ndiSink.StartAsync();
-                    Console.WriteLine($"  NDI sink enabled: {senderName}");
+                    Console.WriteLine($"  NDI sink enabled: {senderName} ({preset})");
                 }
             }
         }
@@ -147,6 +173,7 @@ using (decoder)
     var mixerForStats = mixer;
     var statsTask = Task.Run(async () =>
     {
+        BasicPixelFormatConverter.DiagnosticsSnapshot? prevConv = null;
         while (!cts.IsCancellationRequested)
         {
             try
@@ -166,11 +193,20 @@ using (decoder)
                 : $"  held={mixerForStats.HeldFrameCount} drop={mixerForStats.DroppedStaleFrameCount} fallback={mixerForStats.FallbackConversionCount}";
             var ms = mixerForStats?.GetDiagnosticsSnapshot();
             var os = outputForStats.GetDiagnosticsSnapshot();
+            var cs = BasicPixelFormatConverter.GetDiagnosticsSnapshot();
             string mixerDiag = ms.HasValue
                 ? $"  m(present={ms.Value.PresentCalls} leader={ms.Value.LeaderPresented}/{ms.Value.LeaderReturnedNull} pull={ms.Value.PullHits}/{ms.Value.PullAttempts})"
                 : string.Empty;
             string outDiag = $"  o(loop={os.LoopIterations} draw={os.PresentedFrames} black={os.BlackFrames} swap={os.SwapCalls} ex={os.RenderExceptions} glFail={os.GlMakeCurrentFailures})";
-            Console.WriteLine($"[vstats] clock={outputForStats.Clock.Position:mm\\:ss\\.fff} src={channelForStats.Position:mm\\:ss\\.fff}{diag}{mixerDiag}{outDiag}");
+            string convDiag = prevConv.HasValue
+                ? $"  cvt({cs.LibYuvSuccesses - prevConv.Value.LibYuvSuccesses}/{cs.LibYuvAttempts - prevConv.Value.LibYuvAttempts}/{cs.ManagedFallbacks - prevConv.Value.ManagedFallbacks})"
+                : "";
+            var es = ndiSink?.GetDiagnosticsSnapshot();
+            string endpointDiag = es.HasValue
+                ? $"  ep(pass={es.Value.PassthroughFrames} conv={es.Value.ConvertedFrames} drop={es.Value.DroppedFrames} q={es.Value.QueueDepth} qdrop={es.Value.QueueDrops})"
+                : string.Empty;
+            Console.WriteLine($"[vstats] clock={outputForStats.Clock.Position:mm\\:ss\\.fff} src={channelForStats.Position:mm\\:ss\\.fff}{diag}{mixerDiag}{outDiag}{convDiag}{endpointDiag}");
+            prevConv = cs;
         }
     }, cts.Token);
 
@@ -187,7 +223,7 @@ using (decoder)
     if (ndiSink != null)
     {
         await ndiSink.StopAsync();
-        videoOutput.Mixer.UnregisterSink(ndiSink);
+        avMixer.UnregisterVideoSink(ndiSink);
         ndiSink.Dispose();
     }
 

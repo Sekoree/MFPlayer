@@ -17,6 +17,12 @@ public sealed class SDL3VideoOutput : IVideoOutput
         long LoopIterations,
         long PresentedFrames,
         long BlackFrames,
+        long BgraFrames,
+        long RgbaFrames,
+        long Nv12Frames,
+        long Yuv420pFrames,
+        long Yuv422p10Frames,
+        long OtherFrames,
         long SwapCalls,
         long ResizeEvents,
         long RenderExceptions,
@@ -41,15 +47,85 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private long                     _loopIterations;
     private long                     _presentedFrames;
     private long                     _blackFrames;
+    private long                     _bgraFrames;
+    private long                     _rgbaFrames;
+    private long                     _nv12Frames;
+    private long                     _yuv420pFrames;
+    private long                     _yuv422p10Frames;
+    private long                     _otherFrames;
     private long                     _swapCalls;
     private long                     _resizeEvents;
     private long                     _renderExceptions;
     private long                     _glMakeCurrentFailures;
+    private volatile int             _yuvColorRange = (int)YuvColorRange.Auto;
+    private volatile int             _yuvColorMatrix = (int)YuvColorMatrix.Auto;
+
+    public YuvColorRange YuvColorRange
+    {
+        get => (YuvColorRange)_yuvColorRange;
+        set
+        {
+            var normalized = NormalizeColorRange(value);
+            _yuvColorRange = (int)normalized;
+            if (_renderer != null)
+                _renderer.YuvColorRange = normalized;
+        }
+    }
+
+    public YuvColorMatrix YuvColorMatrix
+    {
+        get => (YuvColorMatrix)_yuvColorMatrix;
+        set
+        {
+            var normalized = NormalizeColorMatrix(value);
+            _yuvColorMatrix = (int)normalized;
+            if (_renderer != null)
+                _renderer.YuvColorMatrix = normalized;
+        }
+    }
+
+    public YuvColorRange Yuv422p10ColorRange
+    {
+        get => YuvColorRange;
+        set => YuvColorRange = value;
+    }
+
+    /// <summary>
+    /// Controls YUV422P10 shader normalization mode.
+    /// False = full range, true = limited/studio range.
+    /// </summary>
+    public bool Yuv422p10LimitedRange
+    {
+        get => Yuv422p10ColorRange == YuvColorRange.Limited;
+        set => Yuv422p10ColorRange = value ? YuvColorRange.Limited : YuvColorRange.Full;
+    }
+
+    public YuvColorMatrix Yuv422p10ColorMatrix
+    {
+        get => YuvColorMatrix;
+        set => YuvColorMatrix = value;
+    }
+
+    /// <summary>
+    /// Legacy bool view for matrix selection.
+    /// False = BT.601, true = BT.709.
+    /// </summary>
+    public bool Yuv422p10UseBt709Matrix
+    {
+        get => Yuv422p10ColorMatrix == YuvColorMatrix.Bt709;
+        set => Yuv422p10ColorMatrix = value ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
+    }
 
     public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
         LoopIterations: Interlocked.Read(ref _loopIterations),
         PresentedFrames: Interlocked.Read(ref _presentedFrames),
         BlackFrames: Interlocked.Read(ref _blackFrames),
+        BgraFrames: Interlocked.Read(ref _bgraFrames),
+        RgbaFrames: Interlocked.Read(ref _rgbaFrames),
+        Nv12Frames: Interlocked.Read(ref _nv12Frames),
+        Yuv420pFrames: Interlocked.Read(ref _yuv420pFrames),
+        Yuv422p10Frames: Interlocked.Read(ref _yuv422p10Frames),
+        OtherFrames: Interlocked.Read(ref _otherFrames),
         SwapCalls: Interlocked.Read(ref _swapCalls),
         ResizeEvents: Interlocked.Read(ref _resizeEvents),
         RenderExceptions: Interlocked.Read(ref _renderExceptions),
@@ -126,6 +202,8 @@ public sealed class SDL3VideoOutput : IVideoOutput
 
         // ── GL renderer (context is current on this thread) ───────────────
         _renderer = new GLRenderer();
+        _renderer.YuvColorRange = YuvColorRange;
+        _renderer.YuvColorMatrix = YuvColorMatrix;
         _renderer.Initialise(width, height);
 
         // Release the GL context from the calling thread so the render thread
@@ -133,7 +211,13 @@ public sealed class SDL3VideoOutput : IVideoOutput
         SDL.GLMakeCurrent(_window, nint.Zero);
 
         // ── Pipeline objects ──────────────────────────────────────────────
-        _outputFormat = format with { PixelFormat = PixelFormat.Bgra32 };
+        var leaderPixelFormat = LocalVideoOutputRoutingPolicy.SelectLeaderPixelFormat(
+            format,
+            supportsNv12: true,
+            supportsYuv420p: true,
+            supportsYuv422p10: true,
+            fallback: PixelFormat.Bgra32);
+        _outputFormat = format with { PixelFormat = leaderPixelFormat };
         _mixer = new VideoMixer(_outputFormat);
         _clock = new VideoPtsClock(
             sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
@@ -228,6 +312,28 @@ public sealed class SDL3VideoOutput : IVideoOutput
 
                 if (frame.HasValue)
                 {
+                    switch (frame.Value.PixelFormat)
+                    {
+                        case PixelFormat.Bgra32:
+                            Interlocked.Increment(ref _bgraFrames);
+                            break;
+                        case PixelFormat.Rgba32:
+                            Interlocked.Increment(ref _rgbaFrames);
+                            break;
+                        case PixelFormat.Nv12:
+                            Interlocked.Increment(ref _nv12Frames);
+                            break;
+                        case PixelFormat.Yuv420p:
+                            Interlocked.Increment(ref _yuv420pFrames);
+                            break;
+                        case PixelFormat.Yuv422p10:
+                            Interlocked.Increment(ref _yuv422p10Frames);
+                            break;
+                        default:
+                            Interlocked.Increment(ref _otherFrames);
+                            break;
+                    }
+
                     _renderer!.UploadAndDraw(frame.Value);
                     _clock!.UpdateFromFrame(frame.Value.Pts);
                     Interlocked.Increment(ref _presentedFrames);
@@ -298,6 +404,20 @@ public sealed class SDL3VideoOutput : IVideoOutput
         _cts?.Dispose();
 
         SDL.Quit();
+    }
+
+    private static YuvColorRange NormalizeColorRange(YuvColorRange value)
+    {
+        return value is YuvColorRange.Auto or YuvColorRange.Full or YuvColorRange.Limited
+            ? value
+            : YuvColorRange.Auto;
+    }
+
+    private static YuvColorMatrix NormalizeColorMatrix(YuvColorMatrix value)
+    {
+        return value is YuvColorMatrix.Auto or YuvColorMatrix.Bt601 or YuvColorMatrix.Bt709
+            ? value
+            : YuvColorMatrix.Auto;
     }
 }
 

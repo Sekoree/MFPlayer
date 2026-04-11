@@ -1,6 +1,6 @@
 # MFPlayer — Implementation Status
 
-> **Last updated:** 2026-04-09 (Video pipeline implemented: S.Media.Core video interfaces + VideoMixer + VideoPtsClock; S.Media.SDL3 with SDL3VideoOutput + GLRenderer; FFmpegVideoChannel + NDIVideoChannel implement IVideoChannel; MFPlayer.VideoPlayer test app; 122 tests passing)
+> **Last updated:** 2026-04-11 (Includes SDL3 YUV shader paths (`Nv12`/`Yuv420p`/`Yuv422p10`) with shared enum-based `YuvColorRange`/`YuvColorMatrix` controls, FFmpeg metadata hints for matrix+range defaults, split mixer route diagnostics, and expanded shader regression coverage.)
 
 ---
 
@@ -22,6 +22,8 @@
 |---|---|---|
 | `Media/SampleType.cs` | Enum | Float32 / Int16 / Int24 / Int32 |
 | `Media/PixelFormat.cs` | Enum | Bgra32, Rgba32, Nv12, Yuv420p, Uyvy422, **Yuv422p10** |
+| `Video/YuvColorRange.cs` | Enum | `Auto` / `Full` / `Limited` for YUV shader normalization policy |
+| `Video/YuvColorMatrix.cs` | Enum | `Auto` / `Bt601` / `Bt709` for YUV shader matrix policy |
 | `Media/AudioFormat.cs` | Record struct | SampleRate, Channels, SampleType |
 | `Media/VideoFormat.cs` | Record struct | Width, Height, PixelFormat, FrameRate rational |
 | `Media/VideoFrame.cs` | Record struct | Width, Height, PixelFormat, Data, Pts, **`IDisposable? MemoryOwner`** (pool rental, consumer disposes) |
@@ -41,6 +43,9 @@
 | `Audio/LinearResampler.cs` | Class | Linear interp; pending-tail cross-buffer continuity; zero dependencies |
 | `Audio/IAudioMixer.cs` | Interface | AddChannel, RemoveChannel, FillOutputBuffer, PeakLevels; **`RouteTo`, `UnrouteTo`, `RegisterSink`, `UnregisterSink`, `DefaultFallback`**; `LeaderFormat` (replaces old `Output` back-reference) |
 | `Audio/IAudioSink.cs` | Interface | ReceiveBuffer (RT-safe); StartAsync/StopAsync |
+| `Audio/IAudioBufferEndpoint.cs` | Interface | Unified push endpoint contract for audio buffer consumers |
+| `Audio/AudioSinkEndpointAdapter.cs` | Class | Adapter from `IAudioSink` to `IAudioBufferEndpoint` |
+| `Audio/AudioOutputEndpointAdapter.cs` | Class | Adapter from `IAudioOutput` to `IAudioBufferEndpoint` via injected internal channel |
 | `Audio/ChannelFallback.cs` | Enum | `Silent` / `Broadcast` |
 | `Audio/VirtualAudioOutput.cs` | Class | Hardware-free `IAudioOutput`; `StopwatchClock`-driven tick loop; use as clock master when all audio goes to sinks (no physical device needed) |
 | `Audio/AggregateOutput.cs` | Class | Leader + N sinks lifecycle helper; `AddSink(sink, channels=0)` registers with mixer and preserves pre-open per-sink channel config |
@@ -51,6 +56,8 @@
 | File | Type | Notes |
 |---|---|---|
 | `Mixing/AudioMixer.cs` | Class | `AudioFormat LeaderFormat` (decoupled from `IAudioOutput`); copy-on-write slot array; null resampler on rate match; `PrepareBuffers(int)`; per-sink `SinkTarget`/`SinkRoute`/`ChannelSlot` nested types; pull-once-scatter-N RT path; in-line sink distribution |
+| `Mixing/IAVMixer.cs` | Interface | Unified AV facade over existing mixers; includes clock policy and many-to-many routing helpers |
+| `Mixing/AVMixer.cs` | Class | Composition wrapper around `IAudioMixer` + `IVideoMixer`; non-breaking migration path |
 
 #### Errors
 | File | Type | Notes |
@@ -65,9 +72,21 @@
 | `Video/IVideoChannel.cs` | Interface | Sub-interface of `IMediaChannel<VideoFrame>`; adds `SourceFormat`, `Position` |
 | `Video/IVideoOutput.cs` | Interface | `IMediaOutput` + `OutputFormat`, `Mixer`, `Open(title, w, h, format)` |
 | `Video/IVideoMixer.cs` | Interface | `AddChannel`, `RemoveChannel`, `SetActiveChannel`, `PresentNextFrame`; single-channel v1 |
+| `Video/IVideoFrameEndpoint.cs` | Interface | New endpoint-unification push contract for video frame consumers |
+| `Video/IVideoFramePullSource.cs` | Interface | Pull-oriented frame source contract |
+| `Video/IVideoColorMatrixHint.cs` | Interface | Optional source hint for YUV matrix selection (`Auto`/`Bt601`/`Bt709`) and range default (`Auto`/`Full`/`Limited`) |
+| `Video/IVideoSinkFormatCapabilities.cs` | Interface | Ordered acceptable sink pixel formats (fallback negotiation) |
 | `Video/IPixelFormatConverter.cs` | Interface | `Convert(VideoFrame, PixelFormat)` — shaped for future use |
 | `Video/IVideoSink.cs` | Interface | `ReceiveFrame` — shaped for future NDI send / recording (no impl in v1) |
-| `Video/VideoMixer.cs` | Class | Backend-agnostic `IVideoMixer`; copy-on-write channel array; holds `_lastFrame` for re-display; auto-activates first channel; pre-allocated single-frame pull buffer |
+| `Video/YuvAutoPolicy.cs` | Class | Shared auto-policy resolver for YUV range/matrix defaults (`Auto` -> resolved based on policy + dimensions) |
+| `Video/VideoEndpointDiagnosticsSnapshot.cs` | Record struct | Standard endpoint diagnostics (`Passthrough`, `Converted`, `Dropped`, `QueueDepth`, `QueueDrops`) |
+| `Video/VideoMixer.cs` | Class | Backend-agnostic `IVideoMixer`; copy-on-write channel array; holds `_lastFrame` for re-display; auto-activates first channel; pre-allocated single-frame pull buffer; split route diagnostics (`SameFormatPassthrough` / `RawMarkerPassthrough` / `Converted`) |
+| `Video/VideoSinkEndpointAdapter.cs` | Class | Adapter from `IVideoSink` to endpoint contract; endpoint-side conversion boundary |
+| `Video/VideoOutputEndpointAdapter.cs` | Class | Adapter from `IVideoOutput` to endpoint contract via injected internal video channel |
+| `Video/VideoMixerPullSource.cs` | Class | Adapter from `IVideoMixer` + `IMediaClock` to pull-source contract |
+| `Video/VideoOutputPullSourceAdapter.cs` | Class | Adapter from `IVideoOutput` to pull-source contract |
+| `Video/BufferedVideoFrameEndpoint.cs` | Class | Bounded push/pull endpoint implementation for endpoint-requested flows |
+| `Video/GlShaderSources.cs` | Class | Shared GLSL source + fullscreen quad data reused by SDL3/Avalonia renderers |
 
 ---
 
@@ -76,8 +95,8 @@
 | File | Type | Notes |
 |---|---|---|
 | `S.Media.SDL3.csproj` | Project | Refs `S.Media.Core`, `SDL3-CS`, `SDL3-CS.Native`; `AllowUnsafeBlocks` |
-| `SDL3VideoOutput.cs` | Class | `IVideoOutput`; SDL3 + OpenGL 3.3 core-profile; `Open()` creates window + GL context + `GLRenderer` + `VideoMixer` + `VideoPtsClock`; `StartAsync()` launches render thread; vsync-paced render loop with event pump (quit, resize); `WindowClosed` event; `Dispose()` tears down GL → window → SDL in order |
-| `GLRenderer.cs` | Class | ~30 GL functions loaded via `SDL_GL_GetProcAddress`; passthrough vertex+fragment shaders; BGRA32 texture upload; `glTexSubImage2D` fast path on same-resolution frames; fullscreen quad VAO |
+| `SDL3VideoOutput.cs` | Class | `IVideoOutput`; SDL3 + OpenGL 3.3 core-profile; `Open()` creates window + GL context + `GLRenderer` + `VideoMixer` + `VideoPtsClock`; `StartAsync()` launches render thread; vsync-paced render loop with event pump (quit, resize); `WindowClosed` event; `Dispose()` tears down GL → window → SDL in order; local routing can preserve shader paths (`Nv12`, `Yuv420p`, `Yuv422p10`); exposes shared `YuvColorRange`/`YuvColorMatrix` controls with legacy `Yuv422p10*` compatibility aliases |
+| `GLRenderer.cs` | Class | ~30 GL functions loaded via `SDL_GL_GetProcAddress`; shared shader sources; shader paths for `Nv12`, `Yuv420p`, and `Yuv422p10` (planar 16-bit upload); shared YUV full/limited normalization + BT.601/BT.709 matrix uniforms across YUV shader paths; RGBA/BGRA texture upload path with `glTexSubImage2D` fast path; fullscreen quad VAO |
 
 ---
 
@@ -88,6 +107,7 @@
 | `S.Media.Avalonia.csproj` | Project | Refs `S.Media.Core`, `Avalonia`; `AllowUnsafeBlocks` |
 | `AvaloniaOpenGlVideoOutput.cs` | Class | `OpenGlControlBase` + `IVideoOutput`; embedded control output; uses `VideoMixer` + `VideoPtsClock`; calls `RequestNextFrameRendering()` while running; includes diagnostics snapshot counters |
 | `AvaloniaGlRenderer.cs` | Class | Minimal GL loader via `GlInterface.GetProcAddress`; BGRA texture upload + black clear path |
+| `AvaloniaOpenGlVideoCloneSink.cs` | Class | `OpenGlControlBase` + `IVideoSink`; clone/preview sink that mirrors frames without extra decoder instances |
 | `README.md` | Doc | Usage notes for embedding in Avalonia visual tree |
 
 ---
@@ -111,7 +131,7 @@
 | `FFmpegDecoderOptions.cs` | Class | PacketQueueDepth, AudioBufferDepth, VideoBufferDepth, **DecoderThreadCount**, **HardwareDeviceType** |
 | `FFmpegDecoder.cs` | Class | `avformat_open_input`; demux thread uses `WriteAsync` for back-pressure (no silent drops); optional hw device ctx via `av_hwdevice_ctx_create`; **skips `AV_DISPOSITION_ATTACHED_PIC` streams** (e.g. FLAC cover art) to avoid spurious video channels; demux loop catches `OperationCanceledException` on graceful stop |
 | `FFmpegAudioChannel.cs` | Class | `IAudioChannel`; background decode thread; `thread_count` applied to codec ctx; SWR → Float32; bounded ring; **decode loop catches `OperationCanceledException`** on graceful stop |
-| `FFmpegVideoChannel.cs` | Class | **`IVideoChannel`**; background decode; hw→CPU transfer via `av_hwframe_transfer_data`; SWS pixel conversion; Yuv422p10 mapped to `AV_PIX_FMT_YUV422P10LE`; **`SafePts()` guards against `AV_NOPTS_VALUE` (long.MinValue) overflow**; **decode loop catches `OperationCanceledException`** on graceful stop; **`ConvertFrame` rents from `ArrayPool<byte>` via `ArrayPoolOwner<T>`; `VideoFrame.MemoryOwner` allows consumer to return rental**; `Position` via `Volatile.Read/Write` on ticks |
+| `FFmpegVideoChannel.cs` | Class | **`IVideoChannel`**; background decode; hw→CPU transfer via `av_hwframe_transfer_data`; SWS pixel conversion; Yuv422p10 mapped to `AV_PIX_FMT_YUV422P10LE`; exposes `IVideoColorMatrixHint` from FFmpeg colorspace + range metadata; **`SafePts()` guards against `AV_NOPTS_VALUE` (long.MinValue) overflow**; **decode loop catches `OperationCanceledException`** on graceful stop; **`ConvertFrame` rents from `ArrayPool<byte>` via `ArrayPoolOwner<T>`; `VideoFrame.MemoryOwner` allows consumer to return rental**; `Position` via `Volatile.Read/Write` on ticks |
 | `ArrayPoolOwner.cs` | Class | `internal` `IDisposable` wrapper around `ArrayPool<T>` rentals; idempotent via `Interlocked.Exchange` |
 | `SwrResampler.cs` | Class | `IAudioResampler`; libswresample sinc; stateful; reinitialises on param change |
 
@@ -125,7 +145,8 @@
 | `NdiClock.cs` | Class | `MediaClockBase`; Stopwatch interpolates between NDI frame timestamps; `UpdateFromFrame(long)` |
 | `NdiAudioChannel.cs` | Class | `IAudioChannel`; background capture via `NDIFrameSync.CaptureAudio`; FLTP→interleaved; pre-allocated `ConcurrentQueue<float[]>` pool; manual DropOldest returns buffers to pool; **`_framesInRing` Interlocked counter for accurate `BufferAvailable` frame count** |
 | `NdiVideoChannel.cs` | Class | **`IVideoChannel`**; background capture; BGRA32 copy; `FreeVideo` called immediately after pixel copy; `SourceFormat` via lock; `Position` via `Volatile.Read/Write` on ticks |
-| `NdiAudioSink.cs` | Class | `IAudioSink`; interleaved→planar on write thread; 8-buffer pool; optional `IAudioResampler` (auto-creates `LinearResampler` on rate mismatch) |
+| `NdiAudioSink.cs` | Class | `IAudioSink`; interleaved→planar on write thread; preset-aware pool/pending limits (`Safe`/`Balanced`/`LowLatency`); optional `IAudioResampler` (auto-creates `LinearResampler` on rate mismatch) |
+| `NdiEndpointPreset.cs` | Types | User-facing endpoint presets (`Safe`, `Balanced`, `LowLatency`) and preset options |
 | `NdiSource.cs` | Class | **New** — lifecycle wrapper: creates `NDIReceiver` + `NDIFrameSync`, constructs `NdiAudioChannel` + `NdiVideoChannel`, `Start()` starts clock + capture threads, `Dispose()` tears down in order |
 
 ---
