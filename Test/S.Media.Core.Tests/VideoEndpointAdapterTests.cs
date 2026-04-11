@@ -39,7 +39,7 @@ public sealed class VideoEndpointAdapterTests
         public string Name => nameof(SpyRawEndpoint);
         public bool IsRunning { get; private set; }
         public IReadOnlyList<PixelFormat> SupportedPixelFormats { get; } = [PixelFormat.Rgba32];
-        public bool PreferRawFramePassthrough => true;
+        public bool BypassMixerConversion => true;
         public VideoFrame? LastFrame { get; private set; }
 
         public Task StartAsync(CancellationToken ct = default)
@@ -133,7 +133,7 @@ public sealed class VideoEndpointAdapterTests
         using var endpoint = new SpyRawEndpoint();
         using var sink = new VideoEndpointSinkAdapter(endpoint);
 
-        Assert.True(sink.PreferRawFramePassthrough);
+        Assert.True(sink.BypassMixerConversion);
 
         await sink.StartAsync();
 

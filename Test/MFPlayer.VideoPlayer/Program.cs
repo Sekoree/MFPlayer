@@ -107,7 +107,10 @@ try
     decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions
     {
         EnableAudio = false,
-        EnableVideo = true
+        EnableVideo = true,
+        // null = auto-detect: decoder outputs frames in the source's native pixel format
+        // so the routing policy can select an efficient YUV shader path (no CPU conversion).
+        VideoTargetPixelFormat = null
     });
 }
 catch (Exception ex)

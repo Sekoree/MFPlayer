@@ -6,17 +6,10 @@ namespace S.Media.Core.Audio;
 /// Unified push endpoint contract for audio buffers.
 /// Implemented by sink/output adapters during API unification.
 /// </summary>
-public interface IAudioBufferEndpoint : IDisposable
+public interface IAudioBufferEndpoint : IMediaEndpoint
 {
-    string Name { get; }
-    bool IsRunning { get; }
-
-    Task StartAsync(CancellationToken ct = default);
-    Task StopAsync(CancellationToken ct = default);
-
     /// <summary>
     /// Pushes one interleaved audio buffer into the endpoint.
     /// </summary>
     void WriteBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format);
 }
-

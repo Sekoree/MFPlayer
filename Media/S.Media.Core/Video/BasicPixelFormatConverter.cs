@@ -16,19 +16,6 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         long LibYuvSuccesses,
         long ManagedFallbacks);
 
-    private sealed class ArrayPoolByteOwner : IDisposable
-    {
-        private byte[]? _buffer;
-
-        public ArrayPoolByteOwner(byte[] buffer) => _buffer = buffer;
-
-        public void Dispose()
-        {
-            var buf = Interlocked.Exchange(ref _buffer, null);
-            if (buf != null)
-                ArrayPool<byte>.Shared.Return(buf);
-        }
-    }
 
     private bool _disposed;
     private static long _libYuvAttempts;
@@ -59,7 +46,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         {
             int bytes = source.Width * source.Height * 4;
             var rented = ArrayPool<byte>.Shared.Rent(bytes);
-            var owner = new ArrayPoolByteOwner(rented);
+            var owner = new ArrayPoolOwner<byte>(rented);
 
             bool usedLibYuv = LibYuvRuntime.TrySwapBgraRgba(source.Data, rented, source.Width, source.Height);
             Interlocked.Increment(ref _libYuvAttempts);
@@ -85,19 +72,21 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
             return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
         }
 
-        if ((source.PixelFormat == PixelFormat.Nv12 || source.PixelFormat == PixelFormat.Yuv420p || source.PixelFormat == PixelFormat.Uyvy422) &&
+        if ((source.PixelFormat == PixelFormat.Nv12 || source.PixelFormat == PixelFormat.Yuv420p ||
+             source.PixelFormat == PixelFormat.Uyvy422 || source.PixelFormat == PixelFormat.Yuv422p10) &&
             (dstFormat == PixelFormat.Rgba32 || dstFormat == PixelFormat.Bgra32))
         {
             int bytes = source.Width * source.Height * 4;
             var rented = ArrayPool<byte>.Shared.Rent(bytes);
-            var owner = new ArrayPoolByteOwner(rented);
+            var owner = new ArrayPoolOwner<byte>(rented);
 
             bool dstRgba = dstFormat == PixelFormat.Rgba32;
             bool converted = source.PixelFormat switch
             {
-                PixelFormat.Nv12 => LibYuvRuntime.TryConvertNv12(source.Data, rented, source.Width, source.Height, dstRgba),
-                PixelFormat.Yuv420p => LibYuvRuntime.TryConvertI420(source.Data, rented, source.Width, source.Height, dstRgba),
-                PixelFormat.Uyvy422 => LibYuvRuntime.TryConvertUyvy(source.Data, rented, source.Width, source.Height, dstRgba),
+                PixelFormat.Nv12      => LibYuvRuntime.TryConvertNv12(source.Data, rented, source.Width, source.Height, dstRgba),
+                PixelFormat.Yuv420p   => LibYuvRuntime.TryConvertI420(source.Data, rented, source.Width, source.Height, dstRgba),
+                PixelFormat.Uyvy422   => LibYuvRuntime.TryConvertUyvy(source.Data, rented, source.Width, source.Height, dstRgba),
+                PixelFormat.Yuv422p10 => LibYuvRuntime.TryConvertI210(source.Data, rented, source.Width, source.Height, dstRgba),
                 _ => false
             };
 
@@ -122,7 +111,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         {
             int bytes = source.Width * source.Height * 4;
             var rented = ArrayPool<byte>.Shared.Rent(bytes);
-            var owner = new ArrayPoolByteOwner(rented);
+            var owner = new ArrayPoolOwner<byte>(rented);
             rented.AsSpan(0, bytes).Clear();
             return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
         }

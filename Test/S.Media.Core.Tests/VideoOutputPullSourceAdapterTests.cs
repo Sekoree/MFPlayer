@@ -72,8 +72,7 @@ public sealed class VideoOutputPullSourceAdapterTests
             NextFrame = new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 255 }, TimeSpan.FromMilliseconds(10))
         };
         var clock = new StubClock { Position = TimeSpan.FromMilliseconds(123) };
-        using var output = new StubOutput(mixer, clock);
-        var adapter = new VideoOutputPullSourceAdapter(output);
+        var adapter = new VideoFramePullSource(mixer, clock);
 
         var frame = await adapter.ReadFrameAsync();
 
@@ -82,4 +81,3 @@ public sealed class VideoOutputPullSourceAdapterTests
         Assert.Equal(PixelFormat.Rgba32, frame.Value.PixelFormat);
     }
 }
-

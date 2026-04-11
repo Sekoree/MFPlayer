@@ -13,7 +13,7 @@ public sealed class VideoEndpointSinkAdapter : IVideoSink, IVideoSinkFormatCapab
     public string Name => _endpoint.Name;
     public bool IsRunning => _endpoint.IsRunning;
     public IReadOnlyList<PixelFormat> PreferredPixelFormats => _endpoint.SupportedPixelFormats;
-    public bool PreferRawFramePassthrough => _endpoint.PreferRawFramePassthrough;
+    public bool BypassMixerConversion => _endpoint.BypassMixerConversion;
 
     public VideoEndpointSinkAdapter(IVideoFrameEndpoint endpoint)
         => _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));

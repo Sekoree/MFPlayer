@@ -47,7 +47,9 @@ try
     decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions
     {
         EnableAudio = false,
-        EnableVideo = true
+        EnableVideo = true,
+        // null = auto-detect: decoder outputs frames in the source's native pixel format.
+        VideoTargetPixelFormat = null
     });
 }
 catch (Exception ex)

@@ -6,13 +6,13 @@ using S.Media.Core.Video;
 namespace S.Media.NDI;
 
 /// <summary>
-/// Minimal NDI video sink skeleton for the multi-target video mixer path.
-/// ReceiveFrame is non-blocking and allocation-free on the hot path by using
-/// a preallocated byte-buffer pool and a background sender thread.
+/// NDI video sink that sends frames to an <see cref="NDISender"/> on a background thread.
+/// Supports all NDI-native pixel formats: BGRA32, RGBA32, NV12, UYVY422, and YUV420p (sent
+/// as NDI I420). BGRA/RGBA are converted by the mixer if needed; YUV formats are forwarded
+/// raw (<see cref="BypassMixerConversion"/> is true), so the source channel must already
+/// produce the requested YUV format.
 /// </summary>
-public sealed class NDIVideoSink : IVideoSink
-    , IVideoSinkFormatPreference
-    , IVideoSinkFormatCapabilities
+public sealed class NDIVideoSink : IVideoSink, IVideoSinkFormatCapabilities
 {
     private readonly struct PendingFrame
     {
@@ -20,15 +20,21 @@ public sealed class NDIVideoSink : IVideoSink
         public readonly int Width;
         public readonly int Height;
         public readonly long PtsTicks;
+        public readonly PixelFormat PixelFormat;
 
-        public PendingFrame(byte[] buffer, int width, int height, long ptsTicks)
+        public PendingFrame(byte[] buffer, int width, int height, long ptsTicks, PixelFormat pixelFormat)
         {
-            Buffer = buffer;
-            Width = width;
-            Height = height;
-            PtsTicks = ptsTicks;
+            Buffer = buffer; Width = width; Height = height;
+            PtsTicks = ptsTicks; PixelFormat = pixelFormat;
         }
     }
+
+    // Supported pixel formats in descending preference per target type.
+    private static readonly IReadOnlyList<PixelFormat> s_bgraPrefs  = [PixelFormat.Bgra32,  PixelFormat.Rgba32];
+    private static readonly IReadOnlyList<PixelFormat> s_rgbaPrefs  = [PixelFormat.Rgba32,  PixelFormat.Bgra32];
+    private static readonly IReadOnlyList<PixelFormat> s_nv12Prefs  = [PixelFormat.Nv12];
+    private static readonly IReadOnlyList<PixelFormat> s_uyvyPrefs  = [PixelFormat.Uyvy422];
+    private static readonly IReadOnlyList<PixelFormat> s_i420Prefs  = [PixelFormat.Yuv420p];
 
     private readonly NDISender _sender;
     private readonly VideoFormat _targetFormat;
@@ -50,30 +56,45 @@ public sealed class NDIVideoSink : IVideoSink
 
     public string Name { get; }
     public bool IsRunning => _running;
-    public PixelFormat PreferredPixelFormat => _targetFormat.PixelFormat;
-    public IReadOnlyList<PixelFormat> PreferredPixelFormats =>
-        _targetFormat.PixelFormat == PixelFormat.Bgra32
-            ? [PixelFormat.Bgra32, PixelFormat.Rgba32]
-            : [PixelFormat.Rgba32, PixelFormat.Bgra32];
-    public long PoolMissDrops => Interlocked.Read(ref _poolMissDrops);
+
+    /// <inheritdoc cref="IVideoSinkFormatCapabilities.PreferredPixelFormats"/>
+    public IReadOnlyList<PixelFormat> PreferredPixelFormats => _targetFormat.PixelFormat switch
+    {
+        PixelFormat.Bgra32   => s_bgraPrefs,
+        PixelFormat.Rgba32   => s_rgbaPrefs,
+        PixelFormat.Nv12     => s_nv12Prefs,
+        PixelFormat.Uyvy422  => s_uyvyPrefs,
+        PixelFormat.Yuv420p  => s_i420Prefs,
+        _                    => s_rgbaPrefs,
+    };
+
+    /// <summary>
+    /// True for YUV target formats: the mixer bypasses its own conversion and delivers
+    /// raw source frames. The source channel must already be in the requested YUV format.
+    /// False for BGRA32/RGBA32: the mixer converts between the two as needed.
+    /// </summary>
+    public bool BypassMixerConversion => _targetFormat.PixelFormat
+        is not (PixelFormat.Bgra32 or PixelFormat.Rgba32);
+
+    public long PoolMissDrops     => Interlocked.Read(ref _poolMissDrops);
     public long CapacityMissDrops => Interlocked.Read(ref _capacityMissDrops);
-    public long FormatDrops => Interlocked.Read(ref _formatDrops);
-    public long QueueDrops => Interlocked.Read(ref _queueDrops);
+    public long FormatDrops       => Interlocked.Read(ref _formatDrops);
+    public long QueueDrops        => Interlocked.Read(ref _queueDrops);
 
     public VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot()
     {
         long queueDrops = Interlocked.Read(ref _queueDrops);
-        long dropped = Interlocked.Read(ref _poolMissDrops)
-                     + Interlocked.Read(ref _capacityMissDrops)
-                     + Interlocked.Read(ref _formatDrops)
-                     + queueDrops;
+        long dropped    = Interlocked.Read(ref _poolMissDrops)
+                        + Interlocked.Read(ref _capacityMissDrops)
+                        + Interlocked.Read(ref _formatDrops)
+                        + queueDrops;
 
         return new VideoEndpointDiagnosticsSnapshot(
             PassthroughFrames: Interlocked.Read(ref _passthroughFrames),
-            ConvertedFrames: 0,
-            DroppedFrames: dropped,
-            QueueDepth: Volatile.Read(ref _pendingFrames),
-            QueueDrops: queueDrops);
+            ConvertedFrames:   0,
+            DroppedFrames:     dropped,
+            QueueDepth:        Volatile.Read(ref _pendingFrames),
+            QueueDrops:        queueDrops);
     }
 
     public NDIVideoSink(
@@ -86,26 +107,60 @@ public sealed class NDIVideoSink : IVideoSink
     {
         _sender = sender;
 
-        var sinkPixelFormat = targetFormat.PixelFormat is PixelFormat.Bgra32 or PixelFormat.Rgba32
-            ? targetFormat.PixelFormat
-            : PixelFormat.Rgba32;
-        _targetFormat = targetFormat with { PixelFormat = sinkPixelFormat };
+        // Accept all NDI-native formats; normalise unsupported formats to RGBA32.
+        var px = targetFormat.PixelFormat is
+            PixelFormat.Bgra32 or PixelFormat.Rgba32 or
+            PixelFormat.Nv12   or PixelFormat.Uyvy422 or PixelFormat.Yuv420p
+                ? targetFormat.PixelFormat
+                : PixelFormat.Rgba32;
+        _targetFormat = targetFormat with { PixelFormat = px };
 
         var presetOptions = NdiVideoPresetOptions.For(preset);
-        if (poolCount <= 0)
-            poolCount = presetOptions.PoolCount;
-        if (maxPendingFrames <= 0)
-            maxPendingFrames = presetOptions.MaxPendingFrames;
+        if (poolCount <= 0)       poolCount       = presetOptions.PoolCount;
+        if (maxPendingFrames <= 0) maxPendingFrames = presetOptions.MaxPendingFrames;
         _maxPendingFrames = maxPendingFrames;
 
         Name = name ?? "NDIVideoSink";
 
-        int width = _targetFormat.Width > 0 ? _targetFormat.Width : 1280;
-        int height = _targetFormat.Height > 0 ? _targetFormat.Height : 720;
-        int bytes = width * height * 4;
+        int w = _targetFormat.Width  > 0 ? _targetFormat.Width  : 1280;
+        int h = _targetFormat.Height > 0 ? _targetFormat.Height : 720;
+        int bytes = BytesPerFrame(px, w, h);
         for (int i = 0; i < Math.Max(1, poolCount); i++)
             _pool.Enqueue(new byte[bytes]);
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    /// <summary>Total byte count for one frame of the given format.</summary>
+    private static int BytesPerFrame(PixelFormat fmt, int w, int h) => fmt switch
+    {
+        PixelFormat.Bgra32  or PixelFormat.Rgba32  => w * h * 4,
+        PixelFormat.Uyvy422                         => w * h * 2,
+        PixelFormat.Nv12    or PixelFormat.Yuv420p  => w * h * 3 / 2,
+        _                                           => w * h * 4,
+    };
+
+    /// <summary>Y-plane (or packed-plane) line stride in bytes.</summary>
+    private static int LineStride(PixelFormat fmt, int w) => fmt switch
+    {
+        PixelFormat.Bgra32  or PixelFormat.Rgba32  => w * 4,
+        PixelFormat.Uyvy422                         => w * 2,
+        PixelFormat.Nv12    or PixelFormat.Yuv420p  => w,      // Y plane stride; chroma follows
+        _                                           => w * 4,
+    };
+
+    /// <summary>Maps our PixelFormat to the NDI FourCC. Yuv420p is sent as I420.</summary>
+    private static NdiFourCCVideoType ToFourCC(PixelFormat fmt) => fmt switch
+    {
+        PixelFormat.Bgra32  => NdiFourCCVideoType.Bgra,
+        PixelFormat.Rgba32  => NdiFourCCVideoType.Rgba,
+        PixelFormat.Nv12    => NdiFourCCVideoType.Nv12,
+        PixelFormat.Uyvy422 => NdiFourCCVideoType.Uyvy,
+        PixelFormat.Yuv420p => NdiFourCCVideoType.I420,  // NDI I420 == planar YUV 4:2:0
+        _                   => NdiFourCCVideoType.Rgba,
+    };
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────
 
     public Task StartAsync(CancellationToken ct = default)
     {
@@ -116,9 +171,9 @@ public sealed class NDIVideoSink : IVideoSink
         _running = true;
         _writeThread = new Thread(WriteLoop)
         {
-            Name = $"{Name}.WriteThread",
+            Name         = $"{Name}.WriteThread",
             IsBackground = true,
-            Priority = ThreadPriority.AboveNormal
+            Priority     = ThreadPriority.AboveNormal
         };
         _writeThread.Start();
         return Task.CompletedTask;
@@ -128,11 +183,13 @@ public sealed class NDIVideoSink : IVideoSink
     {
         _running = false;
         _cts?.Cancel();
-        _writeThread?.Join(TimeSpan.FromSeconds(3));
-        return Task.CompletedTask;
+        var t = _writeThread;
+        if (t == null) return Task.CompletedTask;
+        return Task.Run(() => t.Join(TimeSpan.FromSeconds(3)), ct);
     }
 
-    // RT/non-blocking path
+    // ── ReceiveFrame — RT thread, must not block or allocate ──────────────
+
     public void ReceiveFrame(in VideoFrame frame)
     {
         if (!_running) return;
@@ -143,7 +200,7 @@ public sealed class NDIVideoSink : IVideoSink
             return;
         }
 
-        int bytes = frame.Width * frame.Height * 4;
+        int bytes = BytesPerFrame(frame.PixelFormat, frame.Width, frame.Height);
         if (bytes <= 0)
         {
             Interlocked.Increment(ref _capacityMissDrops);
@@ -163,7 +220,7 @@ public sealed class NDIVideoSink : IVideoSink
             return;
         }
 
-        var src = frame.Data.Span;
+        var src  = frame.Data.Span;
         int copy = Math.Min(src.Length, bytes);
         src[..copy].CopyTo(dst.AsSpan(0, copy));
 
@@ -174,15 +231,17 @@ public sealed class NDIVideoSink : IVideoSink
             return;
         }
 
-        _pending.Enqueue(new PendingFrame(dst, frame.Width, frame.Height, frame.Pts.Ticks));
+        _pending.Enqueue(new PendingFrame(dst, frame.Width, frame.Height, frame.Pts.Ticks, frame.PixelFormat));
         Interlocked.Increment(ref _pendingFrames);
         Interlocked.Increment(ref _passthroughFrames);
     }
 
+    // ── Write thread ──────────────────────────────────────────────────────
+
     private unsafe void WriteLoop()
     {
-        var token = _cts!.Token;
-        int fpsNum = _targetFormat.FrameRateNumerator > 0 ? _targetFormat.FrameRateNumerator : 30000;
+        var token  = _cts!.Token;
+        int fpsNum = _targetFormat.FrameRateNumerator   > 0 ? _targetFormat.FrameRateNumerator   : 30000;
         int fpsDen = _targetFormat.FrameRateDenominator > 0 ? _targetFormat.FrameRateDenominator : 1001;
 
         while (!token.IsCancellationRequested)
@@ -195,30 +254,41 @@ public sealed class NDIVideoSink : IVideoSink
 
             Interlocked.Decrement(ref _pendingFrames);
 
-            fixed (byte* p = pf.Buffer)
+            try
             {
-                var vf = new NdiVideoFrameV2
+                fixed (byte* p = pf.Buffer)
                 {
-                    Xres = pf.Width,
-                    Yres = pf.Height,
-                    FourCC = _targetFormat.PixelFormat == PixelFormat.Bgra32
-                        ? NdiFourCCVideoType.Bgra
-                        : NdiFourCCVideoType.Rgba,
-                    FrameRateN = fpsNum,
-                    FrameRateD = fpsDen,
-                    PictureAspectRatio = pf.Height > 0 ? (float)pf.Width / pf.Height : 1f,
-                    FrameFormatType = NdiFrameFormatType.Progressive,
-                    Timecode = pf.PtsTicks,
-                    PData = (nint)p,
-                    LineStrideInBytes = pf.Width * 4,
-                    PMetadata = nint.Zero,
-                    Timestamp = pf.PtsTicks
-                };
+                    var vf = new NdiVideoFrameV2
+                    {
+                        Xres               = pf.Width,
+                        Yres               = pf.Height,
+                        FourCC             = ToFourCC(pf.PixelFormat),
+                        FrameRateN         = fpsNum,
+                        FrameRateD         = fpsDen,
+                        PictureAspectRatio = pf.Height > 0 ? (float)pf.Width / pf.Height : 1f,
+                        FrameFormatType    = NdiFrameFormatType.Progressive,
+                        Timecode           = pf.PtsTicks,
+                        PData              = (nint)p,
+                        LineStrideInBytes  = LineStride(pf.PixelFormat, pf.Width),
+                        PMetadata          = nint.Zero,
+                        Timestamp          = pf.PtsTicks
+                    };
 
-                _sender.SendVideo(vf);
+                    _sender.SendVideo(vf);
+                }
             }
-
-            _pool.Enqueue(pf.Buffer);
+            catch (Exception ex)
+            {
+                // Log and continue — do not let a native NDI exception propagate up
+                // to terminate the process (unhandled exception on a background thread).
+                if (!(ex is OperationCanceledException))
+                    Console.Error.WriteLine($"[{Name}] NDI SendVideo exception: {ex.Message}");
+            }
+            finally
+            {
+                // Always return the send buffer so the pool does not starve.
+                _pool.Enqueue(pf.Buffer);
+            }
         }
     }
 
@@ -226,7 +296,7 @@ public sealed class NDIVideoSink : IVideoSink
     {
         if (_disposed) return;
         _disposed = true;
-        _running = false;
+        _running  = false;
         _cts?.Cancel();
         _writeThread?.Join(TimeSpan.FromSeconds(2));
     }

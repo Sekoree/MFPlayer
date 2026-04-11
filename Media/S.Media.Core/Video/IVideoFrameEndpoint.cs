@@ -6,20 +6,15 @@ namespace S.Media.Core.Video;
 /// Unified push endpoint contract for video frames.
 /// Implemented by sink/output adapters during API unification.
 /// </summary>
-public interface IVideoFrameEndpoint : IDisposable
+public interface IVideoFrameEndpoint : IMediaEndpoint
 {
-    string Name { get; }
-    bool IsRunning { get; }
     IReadOnlyList<PixelFormat> SupportedPixelFormats { get; }
-    
-    /// <summary>
-    /// Signals that callers may push source/raw frames and let the endpoint
-    /// perform any required conversion at the boundary.
-    /// </summary>
-    bool PreferRawFramePassthrough => false;
 
-    Task StartAsync(CancellationToken ct = default);
-    Task StopAsync(CancellationToken ct = default);
+    /// <summary>
+    /// When true, the mixer skips its own conversion and passes source/raw frames
+    /// directly, letting the endpoint handle any required conversion at its boundary.
+    /// </summary>
+    bool BypassMixerConversion => false;
 
     /// <summary>
     /// Pushes one video frame into the endpoint.
@@ -27,4 +22,3 @@ public interface IVideoFrameEndpoint : IDisposable
     /// </summary>
     void WriteFrame(in VideoFrame frame);
 }
-

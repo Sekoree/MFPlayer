@@ -155,6 +155,10 @@ internal sealed unsafe class GLRenderer : IDisposable
     private YuvColorRange _i422P10ColorRange = YuvColorRange.Auto;
     private YuvColorMatrix _i422P10ColorMatrix = YuvColorMatrix.Auto;
     private bool _disposed;
+    private int _windowWidth;
+    private int _windowHeight;
+    private int _videoWidth;
+    private int _videoHeight;
 
     public YuvColorRange YuvColorRange
     {
@@ -413,6 +417,8 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
         _glViewport(0, 0, viewportWidth, viewportHeight);
+        _windowWidth  = viewportWidth;
+        _windowHeight = viewportHeight;
         _glClearColor(0f, 0f, 0f, 1f);
     }
 
@@ -665,9 +671,68 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glClear(GL_COLOR_BUFFER_BIT);
     }
 
-    public void SetViewport(int w, int h)
+    /// <summary>
+    /// Called when the SDL window is resized.  Recomputes the letterbox/pillarbox
+    /// viewport so the video is always displayed with its correct aspect ratio.
+    /// </summary>
+    public void SetViewport(int windowWidth, int windowHeight)
     {
-        _glViewport(0, 0, w, h);
+        _windowWidth  = windowWidth;
+        _windowHeight = windowHeight;
+        UpdateViewportLetterbox();
+    }
+
+    /// <summary>
+    /// Informs the renderer of the video's native pixel dimensions so that it can
+    /// compute the correct letterbox/pillarbox viewport on every window resize.
+    /// Call this once after the output format is determined (before the first frame).
+    /// </summary>
+    public void SetVideoSize(int videoWidth, int videoHeight)
+    {
+        if (_videoWidth == videoWidth && _videoHeight == videoHeight)
+            return;
+        _videoWidth  = videoWidth;
+        _videoHeight = videoHeight;
+        UpdateViewportLetterbox();
+    }
+
+    /// <summary>
+    /// Computes a letterboxed/pillarboxed GL viewport that preserves the video aspect ratio
+    /// within the current window, with black bars filling any remaining space.
+    /// </summary>
+    private void UpdateViewportLetterbox()
+    {
+        int winW = _windowWidth  > 0 ? _windowWidth  : 1;
+        int winH = _windowHeight > 0 ? _windowHeight : 1;
+
+        if (_videoWidth <= 0 || _videoHeight <= 0)
+        {
+            _glViewport(0, 0, winW, winH);
+            return;
+        }
+
+        double vidAspect = (double)_videoWidth  / _videoHeight;
+        double winAspect = (double)winW / winH;
+
+        int vpX, vpY, vpW, vpH;
+        if (winAspect > vidAspect)
+        {
+            // Window is wider than the video: pillarbox (black bars on left/right)
+            vpH = winH;
+            vpW = (int)Math.Round(vpH * vidAspect);
+            vpX = (winW - vpW) / 2;
+            vpY = 0;
+        }
+        else
+        {
+            // Window is taller than the video (or exactly equal): letterbox (black bars top/bottom)
+            vpW = winW;
+            vpH = (int)Math.Round(vpW / vidAspect);
+            vpX = 0;
+            vpY = (winH - vpH) / 2;
+        }
+
+        _glViewport(vpX, vpY, Math.Max(1, vpW), Math.Max(1, vpH));
     }
 
     // ── GL loading helpers ────────────────────────────────────────────────

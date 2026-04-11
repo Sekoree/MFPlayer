@@ -7,10 +7,13 @@ namespace S.Media.Core.Mixing;
 
 /// <summary>
 /// Composition-based AV mixer that wraps existing audio/video mixers.
-/// This enables incremental migration to a unified pipeline API.
 /// </summary>
 public sealed class AVMixer : IAVMixer
 {
+    // Tracks endpoint→adapter pairs so we can unregister cleanly.
+    private readonly Dictionary<IVideoFrameEndpoint, IVideoSink> _videoEndpointAdapters = new();
+    private readonly Dictionary<IAudioBufferEndpoint, IAudioSink> _audioEndpointAdapters = new();
+
     private readonly bool _ownsAudio;
     private readonly bool _ownsVideo;
     private bool _disposed;
@@ -32,6 +35,8 @@ public sealed class AVMixer : IAVMixer
     {
     }
 
+    // ── Channel management ────────────────────────────────────────────────
+
     public void AddAudioChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null)
         => Audio.AddChannel(channel, routeMap, resampler);
 
@@ -46,6 +51,8 @@ public sealed class AVMixer : IAVMixer
 
     public void SetActiveVideoChannel(Guid? channelId)
         => Video.SetActiveChannel(channelId);
+
+    // ── Sink registration ─────────────────────────────────────────────────
 
     public void RegisterAudioSink(IAudioSink sink, int channels = 0)
         => Audio.RegisterSink(sink, channels);
@@ -71,6 +78,50 @@ public sealed class AVMixer : IAVMixer
     public void UnrouteVideoChannelFromSink(IVideoSink sink)
         => Video.SetActiveChannelForSink(sink, null);
 
+    // ── Endpoint registration ─────────────────────────────────────────────
+
+    public void RegisterVideoEndpoint(IVideoFrameEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (_videoEndpointAdapters.ContainsKey(endpoint)) return;
+        var adapter = new VideoEndpointSinkAdapter(endpoint);
+        _videoEndpointAdapters[endpoint] = adapter;
+        Video.RegisterSink(adapter);
+    }
+
+    public void UnregisterVideoEndpoint(IVideoFrameEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (!_videoEndpointAdapters.Remove(endpoint, out var adapter)) return;
+        Video.UnregisterSink(adapter);
+    }
+
+    public void RouteVideoChannelToEndpoint(Guid channelId, IVideoFrameEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (!_videoEndpointAdapters.TryGetValue(endpoint, out var adapter))
+            throw new InvalidOperationException("Endpoint is not registered. Call RegisterVideoEndpoint first.");
+        Video.SetActiveChannelForSink(adapter, channelId);
+    }
+
+    public void RegisterAudioEndpoint(IAudioBufferEndpoint endpoint, int channels = 0)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (_audioEndpointAdapters.ContainsKey(endpoint)) return;
+        var adapter = new AudioEndpointSinkAdapter(endpoint);
+        _audioEndpointAdapters[endpoint] = adapter;
+        Audio.RegisterSink(adapter, channels);
+    }
+
+    public void UnregisterAudioEndpoint(IAudioBufferEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (!_audioEndpointAdapters.Remove(endpoint, out var adapter)) return;
+        Audio.UnregisterSink(adapter);
+    }
+
+    // ── Batch helpers ─────────────────────────────────────────────────────
+
     public void RouteVideoChannelToSinks(Guid channelId, IReadOnlyList<IVideoSink> sinks)
     {
         ArgumentNullException.ThrowIfNull(sinks);
@@ -85,16 +136,7 @@ public sealed class AVMixer : IAVMixer
             RouteAudioChannelToSink(channelId, sinkRoutes[i].Sink, sinkRoutes[i].RouteMap);
     }
 
-    public TimeSpan ResolveMasterPosition(TimeSpan audioPosition, TimeSpan videoPosition, TimeSpan? externalPosition = null)
-    {
-        return MasterPolicy switch
-        {
-            IAVMixer.ClockMasterPolicy.Audio => audioPosition,
-            IAVMixer.ClockMasterPolicy.Video => videoPosition,
-            IAVMixer.ClockMasterPolicy.External => externalPosition ?? audioPosition,
-            _ => audioPosition
-        };
-    }
+    // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
     {

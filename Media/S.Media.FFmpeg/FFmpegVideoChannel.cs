@@ -19,6 +19,7 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
     private readonly AVBufferRef*                 _hwDeviceCtx;   // null = sw only
     private readonly int                          _threadCount;
     private readonly Func<int>                    _latestSeekEpochProvider;
+    private readonly VideoFormat                  _nativeSourceFormat;
 
     private AVCodecContext* _codecCtx;
     private SwsContext*     _sws;
@@ -47,7 +48,13 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
     public VideoFormat Format { get; private set; }
 
     /// <inheritdoc/>
-    public VideoFormat SourceFormat => Format;
+    /// <remarks>
+    /// Returns the <em>native</em> codec pixel format read from the stream parameters,
+    /// independent of <see cref="TargetPixelFormat"/> (which controls what format decoded
+    /// frames are actually converted to).  Use this value to drive routing policy decisions
+    /// such as <c>LocalVideoOutputRoutingPolicy.SelectLeaderPixelFormat</c>.
+    /// </remarks>
+    public VideoFormat SourceFormat => _nativeSourceFormat;
 
     /// <inheritdoc/>
     public YuvColorMatrix SuggestedYuvColorMatrix { get; }
@@ -62,7 +69,7 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
     internal FFmpegVideoChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
                                  AVBufferRef*   hwDeviceCtx       = null,
-                                 PixelFormat    targetPixelFormat = PixelFormat.Bgra32,
+                                 PixelFormat?   targetPixelFormat = PixelFormat.Bgra32,
                                  int            threadCount       = 0,
                                  int            bufferDepth       = 4,
                                  Func<int>?     latestSeekEpochProvider = null)
@@ -73,11 +80,21 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
         _hwDeviceCtx        = hwDeviceCtx;
         _threadCount        = threadCount;
         _latestSeekEpochProvider = latestSeekEpochProvider ?? (() => 0);
-        TargetPixelFormat   = targetPixelFormat;
 
         var cp = stream->codecpar;
-        Format = new VideoFormat(cp->width, cp->height, targetPixelFormat,
+
+        // Native source format: the pixel format stored in the container/codec parameters.
+        // This is used by SourceFormat (routing decisions) and is independent of TargetPixelFormat.
+        var nativeAvFmt     = (AVPixelFormat)cp->format;
+        var nativePixelFmt  = MapNativePixelFormat(nativeAvFmt);
+        _nativeSourceFormat = new VideoFormat(cp->width, cp->height, nativePixelFmt,
             stream->r_frame_rate.num, stream->r_frame_rate.den);
+
+        // Resolved target: null means "use native format" (no software conversion).
+        TargetPixelFormat = targetPixelFormat ?? nativePixelFmt;
+        Format = new VideoFormat(cp->width, cp->height, TargetPixelFormat,
+            stream->r_frame_rate.num, stream->r_frame_rate.den);
+
         SuggestedYuvColorMatrix = MapSuggestedYuvColorMatrix((AVColorSpace)cp->color_space);
         SuggestedYuvColorRange = MapSuggestedYuvColorRange((AVColorRange)cp->color_range);
 
@@ -187,9 +204,51 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
 
         fixed (byte* pBuf = rented)
         {
-            var dstDataArr   = new[] { pBuf, null, null, null };
-            var dstStrideArr = new[] { w * BytesPerPixel(TargetPixelFormat), 0, 0, 0 };
-            ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstDataArr, dstStrideArr);
+            // Planar formats require separate data pointers for each plane.
+            // Packed formats (Bgra32, Rgba32, Uyvy422) use a single plane pointer.
+            switch (TargetPixelFormat)
+            {
+                case PixelFormat.Yuv420p:
+                {
+                    // Plane layout: [Y (w×h)] [U (w/2 × h/2)] [V (w/2 × h/2)]
+                    int ySize  = w * h;
+                    int uvSize = (w / 2) * (h / 2);
+                    var dstData   = new byte*[] { pBuf, pBuf + ySize, pBuf + ySize + uvSize, null };
+                    var dstStride = new[] { w, w / 2, w / 2, 0 };
+                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    break;
+                }
+                case PixelFormat.Nv12:
+                {
+                    // Plane layout: [Y (w×h)] [UV interleaved (w × h/2)]
+                    int ySize = w * h;
+                    var dstData   = new byte*[] { pBuf, pBuf + ySize, null, null };
+                    var dstStride = new[] { w, w, 0, 0 };
+                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    break;
+                }
+                case PixelFormat.Yuv422p10:
+                {
+                    // Each luma/chroma sample is 2 bytes (10-bit stored in 16-bit LE).
+                    // Plane layout: [Y (w×2 × h)] [U ((w/2)×2 × h)] [V ((w/2)×2 × h)]
+                    int yStride  = w * 2;             // 2 bytes per Y sample
+                    int uvStride = w;                 // (w/2) samples × 2 bytes = w bytes
+                    int ySize    = yStride  * h;
+                    int uvSize   = uvStride * h;
+                    var dstData   = new byte*[] { pBuf, pBuf + ySize, pBuf + ySize + uvSize, null };
+                    var dstStride = new[] { yStride, uvStride, uvStride, 0 };
+                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    break;
+                }
+                default:
+                {
+                    // Packed formats: Bgra32, Rgba32, Uyvy422 — all data in one plane.
+                    var dstData   = new byte*[] { pBuf, null, null, null };
+                    var dstStride = new[] { w * BytesPerPixel(TargetPixelFormat), 0, 0, 0 };
+                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    break;
+                }
+            }
         }
 
         return new VideoFrame(w, h, TargetPixelFormat, rented.AsMemory(0, _swsBufSize), pts, owner);
@@ -255,6 +314,23 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
         PixelFormat.Uyvy422   => AVPixelFormat.AV_PIX_FMT_UYVY422,
         PixelFormat.Yuv422p10 => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
         _                     => AVPixelFormat.AV_PIX_FMT_BGRA
+    };
+
+    /// <summary>
+    /// Maps a native FFmpeg pixel format to the nearest <see cref="PixelFormat"/> enum value.
+    /// Used to populate <see cref="SourceFormat"/> from codec parameters so that routing
+    /// policies can select efficient pipeline formats without any test decoding.
+    /// Unknown formats fall back to <see cref="PixelFormat.Bgra32"/>.
+    /// </summary>
+    private static PixelFormat MapNativePixelFormat(AVPixelFormat avFmt) => avFmt switch
+    {
+        AVPixelFormat.AV_PIX_FMT_YUV420P     => PixelFormat.Yuv420p,
+        AVPixelFormat.AV_PIX_FMT_NV12        => PixelFormat.Nv12,
+        AVPixelFormat.AV_PIX_FMT_YUV422P10LE => PixelFormat.Yuv422p10,
+        AVPixelFormat.AV_PIX_FMT_UYVY422     => PixelFormat.Uyvy422,
+        AVPixelFormat.AV_PIX_FMT_BGRA        => PixelFormat.Bgra32,
+        AVPixelFormat.AV_PIX_FMT_RGBA        => PixelFormat.Rgba32,
+        _                                    => PixelFormat.Bgra32
     };
 
     internal static YuvColorMatrix MapSuggestedYuvColorMatrix(AVColorSpace colorSpace) => colorSpace switch

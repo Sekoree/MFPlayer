@@ -27,17 +27,11 @@ public sealed class FFmpegDecoderOptions
     public int DecoderThreadCount { get; init; }
 
     /// <summary>
-    /// Hardware device type for accelerated video decoding.
-    /// Examples: <c>"vaapi"</c> (Linux), <c>"cuda"</c>/<c>"nvdec"</c> (NVIDIA),
-    /// <c>"dxva2"</c>/<c>"d3d11va"</c> (Windows), <c>"videotoolbox"</c> (macOS).
-    /// <see langword="null"/> or empty disables hardware acceleration.
-    /// </summary>
-    public string? HardwareDeviceType { get; init; }
-
-    /// <summary>
-    /// Enables automatic hardware decode device probing when
-    /// <see cref="HardwareDeviceType"/> is not explicitly set.
-    /// Default: <see langword="true"/>.
+    /// Enables automatic hardware decode device probing.
+    /// When <see langword="true"/> (default), the decoder probes the OS-preferred hardware
+    /// acceleration device (e.g. VAAPI on Linux, D3D11VA on Windows, VideoToolbox on macOS)
+    /// and falls back to software decode if none is available.
+    /// Set to <see langword="false"/> to force software-only decoding.
     /// </summary>
     public bool PreferHardwareDecoding { get; init; } = true;
 
@@ -55,9 +49,11 @@ public sealed class FFmpegDecoderOptions
 
     /// <summary>
     /// Output pixel format produced by video channels. Default is Bgra32.
-    /// Set to Rgba32 for renderers that use RGBA uploads to avoid extra swizzle in mixers.
+    /// Set to <see langword="null"/> to use the source's native pixel format automatically
+    /// (no software conversion in the decoder — the pipeline operates in the source format).
+    /// Set to <see cref="PixelFormat.Rgba32"/> for renderers that use RGBA uploads.
     /// </summary>
-    public PixelFormat VideoTargetPixelFormat { get; init; } = PixelFormat.Bgra32;
+    public PixelFormat? VideoTargetPixelFormat { get; init; } = PixelFormat.Bgra32;
 }
 
 /// <summary>
@@ -170,7 +166,6 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             AudioBufferDepth = options.AudioBufferDepth,
             VideoBufferDepth = options.VideoBufferDepth,
             DecoderThreadCount = options.DecoderThreadCount < 0 ? 0 : options.DecoderThreadCount,
-            HardwareDeviceType = string.IsNullOrWhiteSpace(options.HardwareDeviceType) ? null : options.HardwareDeviceType.Trim(),
             PreferHardwareDecoding = options.PreferHardwareDecoding,
             EnableAudio = options.EnableAudio,
             EnableVideo = options.EnableVideo,
@@ -189,9 +184,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         if (ret < 0) throw new InvalidOperationException($"avformat_find_stream_info failed: {ret}");
 
         // Optionally create a hardware device context for video decoding.
-        if (!string.IsNullOrEmpty(_options.HardwareDeviceType))
-            TryCreateHwDevice(_options.HardwareDeviceType);
-        else if (_options.PreferHardwareDecoding)
+        if (_options.PreferHardwareDecoding)
             TryCreateDefaultHwDevice();
 
         var audio = new List<FFmpegAudioChannel>();

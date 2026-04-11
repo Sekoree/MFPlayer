@@ -101,8 +101,9 @@ public sealed class NDIAudioSink : IAudioSink
     {
         _running = false;
         _cts?.Cancel();
-        _writeThread?.Join(TimeSpan.FromSeconds(3));
-        return Task.CompletedTask;
+        var t = _writeThread;
+        if (t == null) return Task.CompletedTask;
+        return Task.Run(() => t.Join(TimeSpan.FromSeconds(3)), ct);
     }
 
     // ── ReceiveBuffer — RT thread, must not block or allocate ─────────────

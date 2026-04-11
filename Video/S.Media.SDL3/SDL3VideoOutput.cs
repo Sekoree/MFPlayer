@@ -60,60 +60,48 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private volatile int             _yuvColorRange = (int)YuvColorRange.Auto;
     private volatile int             _yuvColorMatrix = (int)YuvColorMatrix.Auto;
 
+    // ── SDL init ref-counting ─────────────────────────────────────────────
+    // Multiple SDL3VideoOutput instances may coexist; only the last Dispose
+    // call should invoke SDL.Quit.
+    private static int _sdlRefCount;
+    private bool _sdlInitOwned;
+
+    // ── YUV shader config ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Combined YUV color-range and color-matrix hint used by the GL shader.
+    /// Updating this property is thread-safe; the render thread picks up the
+    /// new values on the next frame.
+    /// </summary>
+    public YuvShaderConfig YuvConfig
+    {
+        get => new((YuvColorRange)_yuvColorRange, (YuvColorMatrix)_yuvColorMatrix);
+        set
+        {
+            var range  = NormalizeColorRange(value.Range);
+            var matrix = NormalizeColorMatrix(value.Matrix);
+            _yuvColorRange  = (int)range;
+            _yuvColorMatrix = (int)matrix;
+            if (_renderer != null)
+            {
+                _renderer.YuvColorRange  = range;
+                _renderer.YuvColorMatrix = matrix;
+            }
+        }
+    }
+
+    /// <summary>YUV color range used by the GL shader. Shortcut for <see cref="YuvConfig"/>.</summary>
     public YuvColorRange YuvColorRange
     {
         get => (YuvColorRange)_yuvColorRange;
-        set
-        {
-            var normalized = NormalizeColorRange(value);
-            _yuvColorRange = (int)normalized;
-            if (_renderer != null)
-                _renderer.YuvColorRange = normalized;
-        }
+        set => YuvConfig = new(value, (YuvColorMatrix)_yuvColorMatrix);
     }
 
+    /// <summary>YUV color matrix used by the GL shader. Shortcut for <see cref="YuvConfig"/>.</summary>
     public YuvColorMatrix YuvColorMatrix
     {
         get => (YuvColorMatrix)_yuvColorMatrix;
-        set
-        {
-            var normalized = NormalizeColorMatrix(value);
-            _yuvColorMatrix = (int)normalized;
-            if (_renderer != null)
-                _renderer.YuvColorMatrix = normalized;
-        }
-    }
-
-    public YuvColorRange Yuv422p10ColorRange
-    {
-        get => YuvColorRange;
-        set => YuvColorRange = value;
-    }
-
-    /// <summary>
-    /// Controls YUV422P10 shader normalization mode.
-    /// False = full range, true = limited/studio range.
-    /// </summary>
-    public bool Yuv422p10LimitedRange
-    {
-        get => Yuv422p10ColorRange == YuvColorRange.Limited;
-        set => Yuv422p10ColorRange = value ? YuvColorRange.Limited : YuvColorRange.Full;
-    }
-
-    public YuvColorMatrix Yuv422p10ColorMatrix
-    {
-        get => YuvColorMatrix;
-        set => YuvColorMatrix = value;
-    }
-
-    /// <summary>
-    /// Legacy bool view for matrix selection.
-    /// False = BT.601, true = BT.709.
-    /// </summary>
-    public bool Yuv422p10UseBt709Matrix
-    {
-        get => Yuv422p10ColorMatrix == YuvColorMatrix.Bt709;
-        set => Yuv422p10ColorMatrix = value ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
+        set => YuvConfig = new((YuvColorRange)_yuvColorRange, value);
     }
 
     public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
@@ -161,12 +149,17 @@ public sealed class SDL3VideoOutput : IVideoOutput
         if (_window != nint.Zero)
             throw new InvalidOperationException("Output is already open. Dispose first.");
 
-        // ── SDL init ──────────────────────────────────────────────────────
-        if (!SDL.Init(SDL.InitFlags.Video))
+        // ── SDL init (ref-counted across instances) ───────────────────────
+        if (Interlocked.Increment(ref _sdlRefCount) == 1)
         {
-            var err = SDL.GetError();
-            throw new InvalidOperationException($"SDL_Init failed: {err}");
+            if (!SDL.Init(SDL.InitFlags.Video))
+            {
+                Interlocked.Decrement(ref _sdlRefCount);
+                var err = SDL.GetError();
+                throw new InvalidOperationException($"SDL_Init failed: {err}");
+            }
         }
+        _sdlInitOwned = true;
 
         // ── GL attributes (must be set before window creation) ────────────
         SDL.GLSetAttribute(SDL.GLAttr.ContextMajorVersion, 3);
@@ -202,8 +195,8 @@ public sealed class SDL3VideoOutput : IVideoOutput
 
         // ── GL renderer (context is current on this thread) ───────────────
         _renderer = new GLRenderer();
-        _renderer.YuvColorRange = YuvColorRange;
-        _renderer.YuvColorMatrix = YuvColorMatrix;
+        _renderer.YuvColorRange  = (YuvColorRange)_yuvColorRange;
+        _renderer.YuvColorMatrix = (YuvColorMatrix)_yuvColorMatrix;
         _renderer.Initialise(width, height);
 
         // Release the GL context from the calling thread so the render thread
@@ -219,8 +212,19 @@ public sealed class SDL3VideoOutput : IVideoOutput
             fallback: PixelFormat.Bgra32);
         _outputFormat = format with { PixelFormat = leaderPixelFormat };
         _mixer = new VideoMixer(_outputFormat);
+
+        // YUV formats are decoded natively by the GL shader — the mixer does not
+        // need to perform any software conversion on the leader path.
+        _mixer.LeaderBypassConversion = leaderPixelFormat
+            is PixelFormat.Nv12 or PixelFormat.Yuv420p or PixelFormat.Yuv422p10;
+
         _clock = new VideoPtsClock(
             sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
+
+        // Inform the renderer of the video dimensions so resize events produce
+        // a correctly letterboxed/pillarboxed viewport from the start.
+        if (_outputFormat.Width > 0 && _outputFormat.Height > 0)
+            _renderer.SetVideoSize(_outputFormat.Width, _outputFormat.Height);
     }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
@@ -403,7 +407,9 @@ public sealed class SDL3VideoOutput : IVideoOutput
         _clock?.Dispose();
         _cts?.Dispose();
 
-        SDL.Quit();
+        // Release SDL only when the last instance has been disposed.
+        if (_sdlInitOwned && Interlocked.Decrement(ref _sdlRefCount) == 0)
+            SDL.Quit();
     }
 
     private static YuvColorRange NormalizeColorRange(YuvColorRange value)

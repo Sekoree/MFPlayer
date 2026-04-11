@@ -134,17 +134,5 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoSink
         _converter.Dispose();
     }
 
-    private sealed class ArrayPoolOwner<T> : IDisposable
-    {
-        private T[]? _buffer;
-        public ArrayPoolOwner(T[] buffer) => _buffer = buffer;
-
-        public void Dispose()
-        {
-            var b = Interlocked.Exchange(ref _buffer, null);
-            if (b != null)
-                ArrayPool<T>.Shared.Return(b);
-        }
-    }
 }
 

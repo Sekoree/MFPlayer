@@ -62,15 +62,15 @@ public sealed class VideoMixerTests
         public void Dispose() { }
     }
 
-    private sealed class SpyPreferredFormatSink : IVideoSink, IVideoSinkFormatPreference
+    private sealed class SpyPreferredFormatSink : IVideoSink, IVideoSinkFormatCapabilities
     {
         public string Name => nameof(SpyPreferredFormatSink);
         public bool IsRunning { get; set; } = true;
-        public PixelFormat PreferredPixelFormat { get; }
+        public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; }
         public VideoFrame? LastFrame { get; private set; }
 
         public SpyPreferredFormatSink(PixelFormat preferredPixelFormat)
-            => PreferredPixelFormat = preferredPixelFormat;
+            => PreferredPixelFormats = [preferredPixelFormat];
 
         public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -101,7 +101,7 @@ public sealed class VideoMixerTests
         public string Name => nameof(SpyRawPassthroughSink);
         public bool IsRunning { get; set; } = true;
         public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; } = [PixelFormat.Rgba32];
-        public bool PreferRawFramePassthrough => true;
+        public bool BypassMixerConversion => true;
         public VideoFrame? LastFrame { get; private set; }
 
         public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;

@@ -4,15 +4,13 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// A video output display surface. Owns a window/render context and a clock.
-/// Analogous to <see cref="Audio.IAudioOutput"/> for the video pipeline.
+/// Routing is managed externally via <see cref="IVideoMixer"/> — the output itself
+/// does not expose a mixer; wire channels through <see cref="Mixing.IAVMixer"/> instead.
 /// </summary>
 public interface IVideoOutput : IMediaOutput
 {
     /// <summary>Format describing the current output surface (resolution, pixel format, frame rate).</summary>
     VideoFormat OutputFormat { get; }
-
-    /// <summary>The video mixer that manages channels and drives frame presentation.</summary>
-    IVideoMixer Mixer { get; }
 
     /// <summary>
     /// Opens the output surface (creates a window / render context).
@@ -23,4 +21,3 @@ public interface IVideoOutput : IMediaOutput
     /// <param name="format">Requested output format (pixel format, frame rate hint).</param>
     void Open(string title, int width, int height, VideoFormat format);
 }
-

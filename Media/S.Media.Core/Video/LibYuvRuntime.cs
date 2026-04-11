@@ -43,7 +43,24 @@ internal static class LibYuvRuntime
         int width,
         int height);
 
-    private static readonly object Gate = new();
+    /// <summary>
+    /// Delegate for libyuv I210ToARGB / I210ToABGR.
+    /// Converts 10-bit planar 4:2:2 (I210 / yuv422p10le) to packed ARGB or ABGR.
+    /// Strides are in bytes; each src plane pointer is a uint16_t* cast to nint.
+    /// </summary>
+    private delegate int I210ToArgbDelegate(
+        nint srcY,
+        int srcStrideY,
+        nint srcU,
+        int srcStrideU,
+        nint srcV,
+        int srcStrideV,
+        nint dstArgb,
+        int dstStrideArgb,
+        int width,
+        int height);
+
+    private static readonly Lock Gate = new();
     private static bool _initialised;
     private static bool _available;
     private static volatile bool _enabled = true;
@@ -55,6 +72,8 @@ internal static class LibYuvRuntime
     private static I420ToArgbDelegate? _i420ToAbgr;
     private static UyvyToArgbDelegate? _uyvyToArgb;
     private static UyvyToArgbDelegate? _uyvyToAbgr;
+    private static I210ToArgbDelegate? _i210ToArgb;
+    private static I210ToArgbDelegate? _i210ToAbgr;
 
     // ARGBShuffle mask to convert BGRA <-> RGBA.
     // dst[0]=src[2], dst[1]=src[1], dst[2]=src[0], dst[3]=src[3]
@@ -230,6 +249,62 @@ internal static class LibYuvRuntime
         }
     }
 
+    /// <summary>
+    /// Converts 10-bit planar 4:2:2 (Yuv422p10 / I210 / yuv422p10le) to BGRA32 or RGBA32.
+    /// Data layout: Y plane (width*2*height bytes), U plane ((width/2)*2*height bytes),
+    /// V plane ((width/2)*2*height bytes) — each sample stored as 16-bit LE.
+    /// Uses libyuv I210ToARGB / I210ToABGR which accept byte strides for 16-bit planes.
+    /// </summary>
+    internal static bool TryConvertI210(ReadOnlyMemory<byte> source, byte[] destination, int width, int height, bool dstRgba)
+    {
+        EnsureLoaded();
+        if (!_enabled)
+            return false;
+        var converter = dstRgba ? _i210ToAbgr : _i210ToArgb;
+        if (!_available || converter == null)
+            return false;
+
+        if (!MemoryMarshal.TryGetArray(source, out ArraySegment<byte> srcSeg) || srcSeg.Array == null)
+            return false;
+
+        // Each Y sample is 2 bytes; each chroma sample is 2 bytes at half horizontal resolution.
+        int yStride  = width * 2;   // bytes per row for Y plane
+        int uvStride = width;       // bytes per row for U/V plane: (width/2) * 2 = width
+        int ySize    = yStride  * height;
+        int uvSize   = uvStride * height;
+        int srcRequired = ySize + uvSize * 2;
+        int dstRequired = width * height * 4;
+
+        if (width <= 0 || height <= 0 || srcSeg.Count < srcRequired || destination.Length < dstRequired)
+            return false;
+
+        var srcHandle = default(GCHandle);
+        var dstHandle = default(GCHandle);
+        try
+        {
+            srcHandle = GCHandle.Alloc(srcSeg.Array, GCHandleType.Pinned);
+            dstHandle = GCHandle.Alloc(destination, GCHandleType.Pinned);
+
+            nint basePtr = srcHandle.AddrOfPinnedObject() + srcSeg.Offset;
+            nint srcY = basePtr;
+            nint srcU = basePtr + ySize;
+            nint srcV = basePtr + ySize + uvSize;
+            nint dst  = dstHandle.AddrOfPinnedObject();
+
+            int ret = converter(srcY, yStride, srcU, uvStride, srcV, uvStride, dst, width * 4, width, height);
+            return ret == 0;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (srcHandle.IsAllocated) srcHandle.Free();
+            if (dstHandle.IsAllocated) dstHandle.Free();
+        }
+    }
+
     private static void EnsureLoaded()
     {
         if (_initialised)
@@ -266,10 +341,13 @@ internal static class LibYuvRuntime
                 _i420ToAbgr = TryGetDelegate<I420ToArgbDelegate>("I420ToABGR");
                 _uyvyToArgb = TryGetDelegate<UyvyToArgbDelegate>("UYVYToARGB");
                 _uyvyToAbgr = TryGetDelegate<UyvyToArgbDelegate>("UYVYToABGR");
+                _i210ToArgb = TryGetDelegate<I210ToArgbDelegate>("I210ToARGB");
+                _i210ToAbgr = TryGetDelegate<I210ToArgbDelegate>("I210ToABGR");
 
                 _available = _argbShuffle != null || _nv12ToArgb != null || _nv12ToAbgr != null ||
                              _i420ToArgb != null || _i420ToAbgr != null ||
-                             _uyvyToArgb != null || _uyvyToAbgr != null;
+                             _uyvyToArgb != null || _uyvyToAbgr != null ||
+                             _i210ToArgb != null || _i210ToAbgr != null;
                 if (!_available)
                     continue;
 
@@ -338,4 +416,3 @@ internal static class LibYuvRuntime
         }
     }
 }
-

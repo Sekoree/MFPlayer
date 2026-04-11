@@ -4,35 +4,44 @@ using S.Media.Core.Media;
 namespace S.Media.Core.Audio;
 
 /// <summary>
-/// Bridges existing <see cref="IAudioOutput"/> to the unified <see cref="IAudioBufferEndpoint"/> contract
-/// by injecting an internal channel into the output's mixer.
+/// Bridges an existing <see cref="IAudioOutput"/> to the unified <see cref="IAudioBufferEndpoint"/>
+/// contract by injecting an internal channel into the provided mixer.
 /// </summary>
 public sealed class AudioOutputEndpointAdapter : IAudioBufferEndpoint
 {
     private readonly IAudioOutput _output;
+    private readonly IAudioMixer _mixer;
     private readonly AudioChannel _channel;
     private readonly AudioFormat _format;
     private readonly IAudioResampler _resampler;
     private readonly bool _ownsResampler;
+    private float[] _scratch = [];
     private bool _disposed;
 
     public string Name { get; }
     public bool IsRunning => _output.IsRunning;
 
+    /// <param name="output">The audio output that owns the hardware clock.</param>
+    /// <param name="mixer">
+    /// The mixer to inject the internal channel into. Typically the mixer owned by
+    /// <paramref name="output"/> (e.g. <c>portAudioOutput.Mixer</c>).
+    /// </param>
     public AudioOutputEndpointAdapter(
         IAudioOutput output,
+        IAudioMixer mixer,
         string? name = null,
         IAudioResampler? resampler = null,
         int bufferDepth = 8)
     {
         _output = output ?? throw new ArgumentNullException(nameof(output));
+        _mixer  = mixer  ?? throw new ArgumentNullException(nameof(mixer));
         _format = output.HardwareFormat;
-        Name = name ?? "AudioOutputEndpoint";
+        Name    = name ?? "AudioOutputEndpoint";
 
         _channel = new AudioChannel(_format, bufferDepth: Math.Max(1, bufferDepth));
-        _output.Mixer.AddChannel(_channel, ChannelRouteMap.Identity(_format.Channels));
+        _mixer.AddChannel(_channel, ChannelRouteMap.Identity(_format.Channels));
 
-        _resampler = resampler ?? new LinearResampler();
+        _resampler    = resampler ?? new LinearResampler();
         _ownsResampler = resampler == null;
     }
 
@@ -61,10 +70,12 @@ public sealed class AudioOutputEndpointAdapter : IAudioBufferEndpoint
             return;
 
         int outSamples = outFrames * _format.Channels;
-        var tmp = new float[outSamples];
+        // Grow scratch buffer once and reuse; never shrinks (bounded by max frame count seen).
+        if (_scratch.Length < outSamples)
+            _scratch = new float[outSamples];
 
-        _resampler.Resample(buffer[..srcSamples], tmp, format, _format.SampleRate);
-        _channel.TryWrite(tmp);
+        _resampler.Resample(buffer[..srcSamples], _scratch.AsSpan(0, outSamples), format, _format.SampleRate);
+        _channel.TryWrite(_scratch.AsSpan(0, outSamples));
     }
 
     public void Dispose()
@@ -72,10 +83,9 @@ public sealed class AudioOutputEndpointAdapter : IAudioBufferEndpoint
         if (_disposed) return;
         _disposed = true;
 
-        _output.Mixer.RemoveChannel(_channel.Id);
+        _mixer.RemoveChannel(_channel.Id);
         _channel.Dispose();
         if (_ownsResampler)
             _resampler.Dispose();
     }
 }
-

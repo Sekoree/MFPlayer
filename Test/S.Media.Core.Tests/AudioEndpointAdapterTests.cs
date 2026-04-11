@@ -88,7 +88,7 @@ public sealed class AudioEndpointAdapterTests
     public void AudioOutputEndpointAdapter_InsertsChannelIntoOutputMixer()
     {
         using var output = new StubAudioOutput(new AudioFormat(48000, 2));
-        using var adapter = new AudioOutputEndpointAdapter(output);
+        using var adapter = new AudioOutputEndpointAdapter(output, output.Mixer);
 
         adapter.WriteBuffer(new float[] { 0.5f, -0.5f, 0.25f, -0.25f }, frameCount: 2, new AudioFormat(48000, 2));
 

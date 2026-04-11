@@ -158,6 +158,56 @@ public sealed class BasicPixelFormatConverterTests
     }
 
     [Fact]
+    public void Convert_Yuv422p10ToRgba_WithLibYuvDisabled_ReturnsBlackFrame()
+    {
+        WithLibYuvDisabled(() =>
+        {
+            using var converter = new BasicPixelFormatConverter();
+            // 2×2 Yuv422p10 layout:
+            //   Y plane  = w*2*h = 2*2*2 = 8 bytes
+            //   U plane  = (w/2)*2*h = 1*2*2 = 4 bytes
+            //   V plane  = same = 4 bytes  → total 16 bytes
+            var source = new VideoFrame(
+                2,
+                2,
+                PixelFormat.Yuv422p10,
+                new byte[16],
+                TimeSpan.FromMilliseconds(100));
+
+            var converted = converter.Convert(source, PixelFormat.Rgba32);
+            var s = converted.Data.Span;
+
+            Assert.Equal(PixelFormat.Rgba32, converted.PixelFormat);
+            Assert.Equal(2, converted.Width);
+            Assert.Equal(2, converted.Height);
+            Assert.Equal(source.Pts, converted.Pts);
+            Assert.Equal(2 * 2 * 4, converted.Data.Length); // w*h*4
+            Assert.All(s.ToArray(), b => Assert.Equal(0, b));
+        });
+    }
+
+    [Fact]
+    public void Convert_Yuv422p10ToBgra_WithLibYuvDisabled_ReturnsBlackFrame()
+    {
+        WithLibYuvDisabled(() =>
+        {
+            using var converter = new BasicPixelFormatConverter();
+            var source = new VideoFrame(
+                2,
+                2,
+                PixelFormat.Yuv422p10,
+                new byte[16],
+                TimeSpan.FromMilliseconds(200));
+
+            var converted = converter.Convert(source, PixelFormat.Bgra32);
+
+            Assert.Equal(PixelFormat.Bgra32, converted.PixelFormat);
+            Assert.Equal(2 * 2 * 4, converted.Data.Length);
+            Assert.All(converted.Data.Span.ToArray(), b => Assert.Equal(0, b));
+        });
+    }
+
+    [Fact]
     public void Convert_SameFormat_ReturnsSourceFrame()
     {
         using var converter = new BasicPixelFormatConverter();

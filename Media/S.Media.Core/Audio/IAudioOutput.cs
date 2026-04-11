@@ -3,8 +3,8 @@ using S.Media.Core.Media;
 namespace S.Media.Core.Audio;
 
 /// <summary>
-/// An audio output device stream. Owns the hardware clock and an <see cref="IAudioMixer"/>.
-/// Open the stream first, then add channels to the mixer.
+/// An audio output device stream. Owns the hardware clock.
+/// Routing is managed externally — wire channels through <see cref="Mixing.IAVMixer"/>.
 /// </summary>
 public interface IAudioOutput : IMediaOutput
 {
@@ -13,9 +13,6 @@ public interface IAudioOutput : IMediaOutput
     /// Fixed for the lifetime of the stream.
     /// </summary>
     AudioFormat HardwareFormat { get; }
-
-    /// <summary>The mixer attached to this output. Available after <see cref="Open"/>.</summary>
-    IAudioMixer Mixer { get; }
 
     /// <summary>
     /// Opens the hardware stream.
@@ -32,8 +29,7 @@ public interface IAudioOutput : IMediaOutput
 
     /// <summary>
     /// Replaces the <see cref="IAudioMixer"/> invoked by the RT callback.
-    /// Called by <see cref="AggregateOutput"/> to intercept the fill path so it can
-    /// distribute audio to additional sinks after the primary buffer is filled.
+    /// Called by <see cref="AggregateOutput"/> to intercept the fill path.
     /// Not intended for direct use by application code.
     /// </summary>
     void OverrideRtMixer(IAudioMixer mixer);

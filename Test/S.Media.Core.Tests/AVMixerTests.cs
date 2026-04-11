@@ -88,24 +88,6 @@ public sealed class AVMixerTests
         Assert.Equal(2, audio.RouteToCalls);
     }
 
-    [Fact]
-    public void ResolveMasterPosition_UsesSelectedPolicy()
-    {
-        using var av = new AVMixer(new AudioFormat(48000, 2), new VideoFormat(640, 360, PixelFormat.Rgba32, 30, 1));
-
-        var audioPos = TimeSpan.FromSeconds(1);
-        var videoPos = TimeSpan.FromSeconds(2);
-        var extPos = TimeSpan.FromSeconds(3);
-
-        av.MasterPolicy = IAVMixer.ClockMasterPolicy.Audio;
-        Assert.Equal(audioPos, av.ResolveMasterPosition(audioPos, videoPos, extPos));
-
-        av.MasterPolicy = IAVMixer.ClockMasterPolicy.Video;
-        Assert.Equal(videoPos, av.ResolveMasterPosition(audioPos, videoPos, extPos));
-
-        av.MasterPolicy = IAVMixer.ClockMasterPolicy.External;
-        Assert.Equal(extPos, av.ResolveMasterPosition(audioPos, videoPos, extPos));
-    }
 
     private sealed class DummyAudioChannel : IAudioChannel
     {

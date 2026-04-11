@@ -73,6 +73,7 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
     }
 
     private readonly IVideoOutput _output;
+    private readonly IVideoMixer _mixer;
     private readonly EndpointVideoChannel _channel;
     private readonly IPixelFormatConverter _converter;
     private readonly bool _ownsConverter;
@@ -83,13 +84,20 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
     public bool IsRunning => _output.IsRunning;
     public IReadOnlyList<PixelFormat> SupportedPixelFormats { get; }
 
+    /// <param name="output">The video output surface.</param>
+    /// <param name="mixer">
+    /// The mixer to inject the internal channel into — typically the mixer
+    /// owned by <paramref name="output"/> (e.g. <c>sdl3Output.Mixer</c>).
+    /// </param>
     public VideoOutputEndpointAdapter(
         IVideoOutput output,
+        IVideoMixer mixer,
         string? name = null,
         IPixelFormatConverter? converter = null,
         int bufferDepth = 4)
     {
         _output = output ?? throw new ArgumentNullException(nameof(output));
+        _mixer  = mixer  ?? throw new ArgumentNullException(nameof(mixer));
         Name = name ?? "VideoOutputEndpoint";
 
         _converter = converter ?? new BasicPixelFormatConverter();
@@ -98,9 +106,9 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
         SupportedPixelFormats = [_output.OutputFormat.PixelFormat];
         _channel = new EndpointVideoChannel(_output.OutputFormat, bufferDepth);
 
-        _previousActiveChannelId = _output.Mixer.ActiveChannel?.Id;
-        _output.Mixer.AddChannel(_channel);
-        _output.Mixer.SetActiveChannel(_channel.Id);
+        _previousActiveChannelId = _mixer.ActiveChannel?.Id;
+        _mixer.AddChannel(_channel);
+        _mixer.SetActiveChannel(_channel.Id);
     }
 
     public Task StartAsync(CancellationToken ct = default) => _output.StartAsync(ct);
@@ -129,8 +137,8 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
         if (_disposed) return;
         _disposed = true;
 
-        _output.Mixer.RemoveChannel(_channel.Id);
-        _output.Mixer.SetActiveChannel(_previousActiveChannelId);
+        _mixer.RemoveChannel(_channel.Id);
+        _mixer.SetActiveChannel(_previousActiveChannelId);
         _channel.Dispose();
 
         if (_ownsConverter)

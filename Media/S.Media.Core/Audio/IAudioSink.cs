@@ -4,20 +4,11 @@ namespace S.Media.Core.Audio;
 
 /// <summary>
 /// A secondary destination that receives copies of the master mixed buffer.
-/// Used by <see cref="AggregateOutput"/> to fan-out audio to additional targets
-/// (e.g. a second hardware device, an NDI sender, a file recorder).
+/// Used to fan-out audio to additional targets (e.g. a second hardware device,
+/// an NDI sender, a file recorder).
 /// </summary>
-public interface IAudioSink : IDisposable
+public interface IAudioSink : IMediaEndpoint
 {
-    /// <summary>Human-readable label for diagnostics.</summary>
-    string Name { get; }
-
-    /// <summary>Whether this sink is currently accepting data.</summary>
-    bool IsRunning { get; }
-
-    Task StartAsync(CancellationToken ct = default);
-    Task StopAsync(CancellationToken ct = default);
-
     /// <summary>
     /// Called once per mixed buffer, from the leader's RT callback thread.
     /// Implementations MUST be non-blocking — copy to a ring buffer and return immediately.
@@ -25,4 +16,3 @@ public interface IAudioSink : IDisposable
     /// </summary>
     void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat);
 }
-

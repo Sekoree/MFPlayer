@@ -80,7 +80,6 @@ public sealed class MainWindow : Window
                 DecoderThreadCount = decoderThreads, // 0 = FFmpeg auto threading.
                 VideoBufferDepth = videoBufferDepth,
                 PreferHardwareDecoding = !forceSoftwareDecode,
-                HardwareDeviceType = string.IsNullOrWhiteSpace(hardwareDeviceType) ? null : hardwareDeviceType,
                 VideoTargetPixelFormat = PixelFormat.Rgba32
             });
 
@@ -95,8 +94,9 @@ public sealed class MainWindow : Window
             }
 
             Console.WriteLine(
-                $"[MFPlayer.AvaloniaVideoPlayer] hw={(forceSoftwareDecode ? "sw-forced" : string.IsNullOrWhiteSpace(hardwareDeviceType) ? "auto" : hardwareDeviceType)} " +
+                $"[MFPlayer.AvaloniaVideoPlayer] hw={(forceSoftwareDecode ? "sw-forced" : "auto")} " +
                 $"threads={decoderThreads} videoBuffer={videoBufferDepth} catchupLagMs={catchupLagMs} maxCatchupPulls={maxCatchupPulls}");
+            _ = hardwareDeviceType; // suppress unused-variable warning (--hw flag kept for backward compat but no longer used)
 
             if (_decoder.VideoChannels.Count == 0)
                 throw new InvalidOperationException("No video streams in file.");

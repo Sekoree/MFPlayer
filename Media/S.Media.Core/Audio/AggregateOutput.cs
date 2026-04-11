@@ -1,5 +1,6 @@
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
+using S.Media.Core.Mixing;
 
 namespace S.Media.Core.Audio;
 
@@ -35,7 +36,7 @@ public sealed class AggregateOutput : IAudioOutput
     private readonly record struct SinkRegistration(IAudioSink Sink, int Channels);
 
     private readonly IAudioOutput _leader;
-    private IAudioMixer? _mixer;
+    private AudioMixer? _mixer;
 
     private volatile SinkRegistration[] _sinkRegistrations = [];
     private volatile IAudioSink[]       _sinks             = [];
@@ -56,14 +57,20 @@ public sealed class AggregateOutput : IAudioOutput
         ArgumentNullException.ThrowIfNull(leader);
         _leader = leader;
 
-        try
-        {
-            _mixer = leader.Mixer;
-        }
-        catch (InvalidOperationException)
-        {
-            // Leader not yet opened; Open() will bind _mixer.
-        }
+        // If the leader is already open (non-zero sample rate), bind our mixer immediately.
+        if (leader.HardwareFormat.SampleRate > 0)
+            InitMixer(leader.HardwareFormat);
+    }
+
+    // Creates the aggregate AudioMixer and redirects the leader's RT callback through it.
+    private void InitMixer(AudioFormat format)
+    {
+        _mixer = new AudioMixer(format);
+        _leader.OverrideRtMixer(_mixer);
+
+        // Register any sinks added before Open().
+        foreach (var reg in _sinkRegistrations)
+            _mixer.RegisterSink(reg.Sink, reg.Channels);
     }
 
     // ── Sink management ────────────────────────────────────────────────────
@@ -132,11 +139,7 @@ public sealed class AggregateOutput : IAudioOutput
     public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0)
     {
         _leader.Open(device, requestedFormat, framesPerBuffer);
-        _mixer = _leader.Mixer;
-
-        // Register any sinks that were added before Open().
-        foreach (var registration in _sinkRegistrations)
-            _mixer.RegisterSink(registration.Sink, registration.Channels);
+        InitMixer(_leader.HardwareFormat);
     }
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -161,4 +164,3 @@ public sealed class AggregateOutput : IAudioOutput
         _leader.Dispose();
     }
 }
-

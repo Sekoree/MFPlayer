@@ -55,7 +55,7 @@ public sealed class VideoOutputEndpointAdapterTests
     {
         var fmt = new VideoFormat(1, 1, PixelFormat.Rgba32, 30, 1);
         using var output = new StubOutput(fmt);
-        using var adapter = new VideoOutputEndpointAdapter(output);
+        using var adapter = new VideoOutputEndpointAdapter(output, output.Mixer);
 
         adapter.WriteFrame(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 255 }, TimeSpan.FromMilliseconds(10)));
 
@@ -69,7 +69,7 @@ public sealed class VideoOutputEndpointAdapterTests
     {
         var fmt = new VideoFormat(1, 1, PixelFormat.Bgra32, 30, 1);
         using var output = new StubOutput(fmt);
-        using var adapter = new VideoOutputEndpointAdapter(output);
+        using var adapter = new VideoOutputEndpointAdapter(output, output.Mixer);
 
         adapter.WriteFrame(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 9, 8, 7, 255 }, TimeSpan.FromMilliseconds(10)));
 
