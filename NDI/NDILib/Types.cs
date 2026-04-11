@@ -7,18 +7,18 @@ namespace NDILib;
 // ------------------------------------------------------------------
 
 /// <summary>Named constants mirroring the NDI SDK's compile-time defines.</summary>
-public static class NdiConstants
+public static class NDIConstants
 {
     /// <summary>
-    /// Pass as a frame's <see cref="NdiVideoFrameV2.Timecode"/>,
-    /// <see cref="NdiAudioFrameV3.Timecode"/>, or <see cref="NdiMetadataFrame.Timecode"/>
+    /// Pass as a frame's <see cref="NDIVideoFrameV2.Timecode"/>,
+    /// <see cref="NDIAudioFrameV3.Timecode"/>, or <see cref="NDIMetadataFrame.Timecode"/>
     /// to have the NDI runtime synthesize the timecode automatically.
     /// Corresponds to <c>NDIlib_send_timecode_synthesize</c> (INT64_MAX).
     /// </summary>
     public const long TimecodeSynthesize = long.MaxValue;
 
     /// <summary>
-    /// A <see cref="NdiVideoFrameV2.Timestamp"/> / <see cref="NdiAudioFrameV3.Timestamp"/>
+    /// A <see cref="NDIVideoFrameV2.Timestamp"/> / <see cref="NDIAudioFrameV3.Timestamp"/>
     /// value that indicates the sender did not supply a timestamp (pre-SDK v2.5).
     /// Corresponds to <c>NDIlib_recv_timestamp_undefined</c> (INT64_MAX).
     /// </summary>
@@ -29,7 +29,7 @@ public static class NdiConstants
 // Enumerations
 // ------------------------------------------------------------------
 
-public enum NdiFrameType : int
+public enum NDIFrameType : int
 {
     None = 0,
     Video = 1,
@@ -41,7 +41,7 @@ public enum NdiFrameType : int
     Max = 0x7fffffff
 }
 
-public enum NdiRecvBandwidth : int
+public enum NDIRecvBandwidth : int
 {
     MetadataOnly = -10,
     AudioOnly = 10,
@@ -50,7 +50,7 @@ public enum NdiRecvBandwidth : int
     Max = 0x7fffffff
 }
 
-public enum NdiRecvColorFormat : int
+public enum NDIRecvColorFormat : int
 {
     BgrxBgra = 0,
     UyvyBgra = 1,
@@ -61,7 +61,7 @@ public enum NdiRecvColorFormat : int
     Max = 0x7fffffff
 }
 
-public enum NdiFrameFormatType : int
+public enum NDIFrameFormatType : int
 {
     Interleaved = 0,
     Progressive = 1,
@@ -70,7 +70,7 @@ public enum NdiFrameFormatType : int
     Max = 0x7fffffff
 }
 
-public enum NdiFourCCVideoType : uint
+public enum NDIFourCCVideoType : uint
 {
     Uyvy = ((uint)'U') | ((uint)'Y' << 8) | ((uint)'V' << 16) | ((uint)'Y' << 24),
     Uyva = ((uint)'U') | ((uint)'Y' << 8) | ((uint)'V' << 16) | ((uint)'A' << 24),
@@ -85,7 +85,7 @@ public enum NdiFourCCVideoType : uint
     Rgbx = ((uint)'R') | ((uint)'G' << 8) | ((uint)'B' << 16) | ((uint)'X' << 24)
 }
 
-public enum NdiFourCCAudioType : int
+public enum NDIFourCCAudioType : int
 {
     /// <summary>Planar 32-bit floating point (native NDI format). Specify channel stride in bytes.</summary>
     Fltp = ((int)'F') | ((int)'L' << 8) | ((int)'T' << 16) | ((int)'p' << 24),
@@ -97,13 +97,13 @@ public enum NdiFourCCAudioType : int
 // ------------------------------------------------------------------
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiFindCreate
+public struct NDIFindCreate
 {
     public byte ShowLocalSources;
     public nint PGroups;
     public nint PExtraIps;
 
-    public static NdiFindCreate CreateDefault() => new()
+    public static NDIFindCreate CreateDefault() => new()
     {
         ShowLocalSources = 1,
         PGroups = nint.Zero,
@@ -112,44 +112,44 @@ public struct NdiFindCreate
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiSource
+public struct NDISourceRef
 {
-    public nint PNdiName;
+    public nint PNDIName;
     public nint PUrlAddress;
 
-    public readonly string? NdiName    => Marshal.PtrToStringUTF8(PNdiName);
+    public readonly string? NDIName    => Marshal.PtrToStringUTF8(PNDIName);
     public readonly string? UrlAddress => Marshal.PtrToStringUTF8(PUrlAddress);
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiRecvCreateV3
+public struct NDIRecvCreateV3
 {
-    public NdiSource SourceToConnectTo;
-    public NdiRecvColorFormat ColorFormat;
-    public NdiRecvBandwidth Bandwidth;
+    public NDISourceRef SourceToConnectTo;
+    public NDIRecvColorFormat ColorFormat;
+    public NDIRecvBandwidth Bandwidth;
     public byte AllowVideoFields;
-    public nint PNdiRecvName;
+    public nint PNDIRecvName;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiSendCreate
+public struct NDISendCreate
 {
-    public nint PNdiName;
+    public nint PNDIName;
     public nint PGroups;
     public byte ClockVideo;
     public byte ClockAudio;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiVideoFrameV2
+public struct NDIVideoFrameV2
 {
     public int Xres;
     public int Yres;
-    public NdiFourCCVideoType FourCC;
+    public NDIFourCCVideoType FourCC;
     public int FrameRateN;
     public int FrameRateD;
     public float PictureAspectRatio;
-    public NdiFrameFormatType FrameFormatType;
+    public NDIFrameFormatType FrameFormatType;
     public long Timecode;
     public nint PData;
 
@@ -168,13 +168,13 @@ public struct NdiVideoFrameV2
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiAudioFrameV3
+public struct NDIAudioFrameV3
 {
     public int SampleRate;
     public int NoChannels;
     public int NoSamples;
     public long Timecode;
-    public NdiFourCCAudioType FourCC;
+    public NDIFourCCAudioType FourCC;
     public nint PData;
 
     /// <summary>
@@ -191,7 +191,7 @@ public struct NdiAudioFrameV3
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiMetadataFrame
+public struct NDIMetadataFrame
 {
     /// <summary>
     /// Length of the UTF-8 XML string in bytes including the null terminator.
@@ -212,7 +212,7 @@ public struct NdiMetadataFrame
 /// NDI tally state. Sent from receiver to sender to indicate on-program / on-preview status.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiTally
+public struct NDITally
 {
     /// <summary>Non-zero if this output is currently on program.</summary>
     public byte OnProgram;
@@ -226,7 +226,7 @@ public struct NdiTally
 
 /// <summary>Frame counts returned by <c>NDIlib_recv_get_performance</c>.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiRecvPerformance
+public struct NDIRecvPerformance
 {
     public long VideoFrames;
     public long AudioFrames;
@@ -235,7 +235,7 @@ public struct NdiRecvPerformance
 
 /// <summary>Current queue depths returned by <c>NDIlib_recv_get_queue</c>.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiRecvQueue
+public struct NDIRecvQueue
 {
     public int VideoFrames;
     public int AudioFrames;
@@ -247,9 +247,9 @@ public struct NdiRecvQueue
 // ------------------------------------------------------------------
 
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiRoutingCreate
+public struct NDIRoutingCreate
 {
-    public nint PNdiName;
+    public nint PNDIName;
     public nint PGroups;
 }
 
@@ -259,7 +259,7 @@ public struct NdiRoutingCreate
 
 /// <summary>Interleaved 16-bit signed integer audio frame, for use with the NDI utility conversion API.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiAudioInterleaved16s
+public struct NDIAudioInterleaved16s
 {
     public int SampleRate;
     public int NoChannels;
@@ -275,20 +275,20 @@ public struct NdiAudioInterleaved16s
 
 /// <summary>Interleaved 32-bit signed integer audio frame, for use with the NDI utility conversion API.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiAudioInterleaved32s
+public struct NDIAudioInterleaved32s
 {
     public int SampleRate;
     public int NoChannels;
     public int NoSamples;
     public long Timecode;
-    /// <inheritdoc cref="NdiAudioInterleaved16s.ReferenceLevel"/>
+    /// <inheritdoc cref="NDIAudioInterleaved16s.ReferenceLevel"/>
     public int ReferenceLevel;
     public nint PData;
 }
 
 /// <summary>Interleaved 32-bit floating-point audio frame, for use with the NDI utility conversion API.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct NdiAudioInterleaved32f
+public struct NDIAudioInterleaved32f
 {
     public int SampleRate;
     public int NoChannels;
@@ -301,4 +301,4 @@ public struct NdiAudioInterleaved32f
 // Discovery
 // ------------------------------------------------------------------
 
-public readonly record struct NdiDiscoveredSource(string Name, string? UrlAddress);
+public readonly record struct NDIDiscoveredSource(string Name, string? UrlAddress);

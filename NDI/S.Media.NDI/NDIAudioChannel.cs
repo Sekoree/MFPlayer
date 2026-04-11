@@ -194,7 +194,7 @@ public sealed class NDIAudioChannel : IAudioChannel
         }
     }
 
-    private static unsafe void PlanarToInterleaved(NdiAudioFrameV3 frame, float[] dest)
+    private static unsafe void PlanarToInterleaved(NDIAudioFrameV3 frame, float[] dest)
     {
         int channels = frame.NoChannels;
         int samples  = frame.NoSamples;

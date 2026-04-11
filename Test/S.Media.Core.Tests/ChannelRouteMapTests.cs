@@ -78,6 +78,21 @@ public sealed class ChannelRouteMapTests
         Assert.Equal(3, rightRoutes[1].dstCh);
     }
 
+    [Fact]
+    public void StereoFanTo_CanMapStereoToQuadAs_1_2_1_2()
+    {
+        // 0-based channel indices: src0->dst0,dst2 and src1->dst1,dst3.
+        // User-facing 1-based view: [ch1, ch2, ch1, ch2].
+        var map = ChannelRouteMap.StereoFanTo(dstL1: 0, dstL2: 2, dstR1: 1, dstR2: 3);
+        var baked = map.BakeRoutes(2);
+
+        var src0Dsts = baked[0].Select(r => r.dstCh).OrderBy(x => x).ToArray();
+        var src1Dsts = baked[1].Select(r => r.dstCh).OrderBy(x => x).ToArray();
+
+        Assert.Equal([0, 2], src0Dsts);
+        Assert.Equal([1, 3], src1Dsts);
+    }
+
     // ── StereoExpandTo ────────────────────────────────────────────────────
 
     [Fact]
@@ -207,4 +222,3 @@ public sealed class ChannelRouteMapTests
         Assert.Equal(3, baked[0].Length);
     }
 }
-

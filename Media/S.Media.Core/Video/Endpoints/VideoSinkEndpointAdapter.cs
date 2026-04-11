@@ -1,6 +1,6 @@
 using S.Media.Core.Media;
 
-namespace S.Media.Core.Video;
+namespace S.Media.Core.Video.Endpoints;
 
 /// <summary>
 /// Bridges existing <see cref="IVideoSink"/> to the new <see cref="IVideoFrameEndpoint"/> contract.
@@ -21,7 +21,6 @@ public sealed class VideoSinkEndpointAdapter : IVideoFrameEndpoint, IVideoSinkFo
     public bool IsRunning => _sink.IsRunning;
     public IReadOnlyList<PixelFormat> SupportedPixelFormats => _supported;
     public IReadOnlyList<PixelFormat> PreferredPixelFormats => _supported;
-    public bool BypassMixerConversion => true;
 
     public VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
         PassthroughFrames: Interlocked.Read(ref _passthroughFrames),

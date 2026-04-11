@@ -99,13 +99,18 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoSink
         else
         {
             var vf = frame.Value;
-            if (vf.PixelFormat == PixelFormat.Bgra32)
+            if (vf.PixelFormat != PixelFormat.Rgba32)
             {
-                // Convert quickly for renderer expectations.
                 var rgba = _converter.Convert(vf, PixelFormat.Rgba32);
-                _renderer.UploadAndDraw(rgba, fb, viewportWidth, viewportHeight);
-                if (!ReferenceEquals(rgba.MemoryOwner, vf.MemoryOwner))
-                    rgba.MemoryOwner?.Dispose();
+                try
+                {
+                    _renderer.UploadAndDraw(rgba, fb, viewportWidth, viewportHeight);
+                }
+                finally
+                {
+                    if (!ReferenceEquals(rgba.MemoryOwner, vf.MemoryOwner))
+                        rgba.MemoryOwner?.Dispose();
+                }
             }
             else
             {
@@ -135,4 +140,3 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoSink
     }
 
 }
-

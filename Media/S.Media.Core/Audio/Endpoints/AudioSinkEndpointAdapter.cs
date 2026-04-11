@@ -1,6 +1,6 @@
 using S.Media.Core.Media;
 
-namespace S.Media.Core.Audio;
+namespace S.Media.Core.Audio.Endpoints;
 
 /// <summary>
 /// Bridges existing <see cref="IAudioSink"/> to the unified <see cref="IAudioBufferEndpoint"/> contract.
@@ -24,4 +24,5 @@ public sealed class AudioSinkEndpointAdapter : IAudioBufferEndpoint
 
     public void Dispose() => _sink.Dispose();
 }
+
 

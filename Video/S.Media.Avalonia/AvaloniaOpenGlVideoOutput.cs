@@ -30,6 +30,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private VideoMixer? _mixer;
     private VideoPtsClock? _clock;
     private VideoFormat _outputFormat;
+    private readonly BasicPixelFormatConverter _converter = new();
     private bool _isOpen;
     private bool _isRunning;
     private bool _disposed;
@@ -211,11 +212,24 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                     Interlocked.Increment(ref _catchupSkips);
                 }
 
+                // Avalonia renderer expects RGBA8 texture uploads; convert at the output
+                // boundary so the mixer can stay raw-frame only.
+                VideoFrame renderFrame = vf;
+                IDisposable? tempOwner = null;
+                if (vf.PixelFormat != PixelFormat.Rgba32)
+                {
+                    var converted = _converter.Convert(vf, PixelFormat.Rgba32);
+                    renderFrame = converted;
+                    tempOwner = !ReferenceEquals(converted.MemoryOwner, vf.MemoryOwner)
+                        ? converted.MemoryOwner
+                        : null;
+                }
+
                 bool sameAsUploaded = _hasUploadedFrame &&
-                                      vf.Width == _lastUploadedWidth &&
-                                      vf.Height == _lastUploadedHeight &&
-                                      vf.Pts == _lastUploadedPts &&
-                                      vf.Data.Equals(_lastUploadedData);
+                                      renderFrame.Width == _lastUploadedWidth &&
+                                      renderFrame.Height == _lastUploadedHeight &&
+                                      renderFrame.Pts == _lastUploadedPts &&
+                                      renderFrame.Data.Equals(_lastUploadedData);
 
                 if (sameAsUploaded)
                 {
@@ -224,14 +238,16 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                 }
                 else
                 {
-                    _renderer.UploadAndDraw(vf, fb, viewportWidth, viewportHeight);
+                    _renderer.UploadAndDraw(renderFrame, fb, viewportWidth, viewportHeight);
                     _hasUploadedFrame = true;
-                    _lastUploadedWidth = vf.Width;
-                    _lastUploadedHeight = vf.Height;
-                    _lastUploadedPts = vf.Pts;
-                    _lastUploadedData = vf.Data;
+                    _lastUploadedWidth = renderFrame.Width;
+                    _lastUploadedHeight = renderFrame.Height;
+                    _lastUploadedPts = renderFrame.Pts;
+                    _lastUploadedData = renderFrame.Data;
                     Interlocked.Increment(ref _textureUploads);
                 }
+
+                tempOwner?.Dispose();
 
                 _clock.UpdateFromFrame(vf.Pts);
                 Interlocked.Increment(ref _presentedFrames);
@@ -278,5 +294,6 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         _renderer = null;
         _mixer?.Dispose();
         _clock?.Dispose();
+        _converter.Dispose();
     }
 }

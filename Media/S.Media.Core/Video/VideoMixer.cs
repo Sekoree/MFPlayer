@@ -55,26 +55,19 @@ public sealed class VideoMixer : IVideoMixer
     private VideoFrame? _stagedFrame;
     private bool _hasLeaderPtsOrigin;
     private long _leaderPtsOriginTicks;
-    private readonly IPixelFormatConverter _pixelConverter;
     private bool _disposed;
 
-    /// <summary>
-    /// When true, the leader output path skips mixer-side conversion and passes
-    /// raw source frames through. The render output endpoint then performs conversion.
-    /// Equivalent to <see cref="IVideoSinkFormatCapabilities.BypassMixerConversion"/> for sinks.
-    /// </summary>
-    public bool LeaderBypassConversion { get; set; }
     private long _heldFrameCount;
     private long _droppedStaleFrameCount;
-    private long _fallbackConversionCount;
+    private long _fallbackConversionCount = 0;
     private long _presentCallCount;
     private long _leaderPresentCount;
     private long _leaderNullCount;
     private long _pullAttemptCount;
     private long _pullHitCount;
-    private long _sameFormatPassthroughCount;
+    private long _sameFormatPassthroughCount = 0;
     private long _rawMarkerPassthroughCount;
-    private long _convertedCount;
+    private long _convertedCount = 0;
     private long _sinkFormatHitCount;
     private long _sinkFormatMissCount;
 
@@ -84,7 +77,6 @@ public sealed class VideoMixer : IVideoMixer
     public VideoMixer(VideoFormat outputFormat)
     {
         OutputFormat = outputFormat;
-        _pixelConverter = new BasicPixelFormatConverter();
 
         // Keep lag tolerance near 2 frame intervals so the mixer can catch up quickly
         // on heavy streams (for example 4K60 software decode) without over-dropping.
@@ -108,9 +100,6 @@ public sealed class VideoMixer : IVideoMixer
             lock (_lock) return _channels.Length;
         }
     }
-
-    /// <inheritdoc/>
-    public IVideoChannel? ActiveChannel => _activeChannel;
 
     /// <inheritdoc/>
     public int SinkCount => _sinkTargets.Length;
@@ -189,20 +178,13 @@ public sealed class VideoMixer : IVideoMixer
     }
 
     /// <inheritdoc/>
-    public void SetActiveChannel(Guid? channelId)
+    public void RouteChannelToPrimaryOutput(Guid channelId)
     {
-        if (channelId is null)
-        {
-            _activeChannel = null;
-            ResetLeaderState();
-            return;
-        }
-
         lock (_lock)
         {
             foreach (var ch in _channels)
             {
-                if (ch.Id == channelId.Value)
+                if (ch.Id == channelId)
                 {
                     _activeChannel = ch;
                     ResetLeaderState();
@@ -210,6 +192,15 @@ public sealed class VideoMixer : IVideoMixer
                 }
             }
         }
+
+        throw new InvalidOperationException("Channel is not registered.");
+    }
+
+    /// <inheritdoc/>
+    public void UnroutePrimaryOutput()
+    {
+        _activeChannel = null;
+        ResetLeaderState();
     }
 
     /// <inheritdoc/>
@@ -271,6 +262,11 @@ public sealed class VideoMixer : IVideoMixer
                 return;
             }
 
+            // Temporary guard: each sink can be routed to at most one source channel.
+            // Re-route requires explicit unroute first; multi-source blend/composite is not supported yet.
+            if (target.ActiveChannel is not null && target.ActiveChannel.Id != channelId.Value)
+                throw new InvalidOperationException("Sink already has a routed source channel. Unroute first before routing a different channel.");
+
             foreach (var ch in _channels)
                 if (ch.Id == channelId.Value)
                 {
@@ -292,8 +288,8 @@ public sealed class VideoMixer : IVideoMixer
         Interlocked.Increment(ref _presentCallCount);
         var leader = PresentForTarget(_activeChannel, ref _stagedFrame, ref _lastFrame,
             ref _hasLeaderPtsOrigin, ref _leaderPtsOriginTicks,
-            clockPosition, OutputFormat.PixelFormat,
-            bypassConversion: LeaderBypassConversion);
+            clockPosition,
+            countSinkFormatStats: false);
 
         if (leader.HasValue)
             Interlocked.Increment(ref _leaderPresentCount);
@@ -307,9 +303,7 @@ public sealed class VideoMixer : IVideoMixer
 
             // Fan-out: when a sink is routed to the same channel as the leader, derive
             // its frame from the leader's current frame (_lastFrame) rather than pulling
-            // another frame from the channel.  This guarantees leader and all co-routed
-            // sinks see exactly the same decoded frames, with per-sink format conversion
-            // (e.g. leader gets native Yuv422p10; NDI sink receives it as Rgba32).
+            // another frame from the channel. This keeps all co-routed targets frame-aligned.
             if (st.ActiveChannel != null
                 && _activeChannel   != null
                 && ReferenceEquals(st.ActiveChannel, _activeChannel))
@@ -319,12 +313,11 @@ public sealed class VideoMixer : IVideoMixer
                 continue;
             }
 
-            var sinkPixelFormat = ResolveSinkPixelFormat(st.Sink, out bool bypassConversion);
             var sinkFrame = PresentForTarget(st.ActiveChannel, ref st.StagedFrame, ref st.LastFrame,
                 ref st.HasPtsOrigin, ref st.PtsOriginTicks,
-                clockPosition, sinkPixelFormat,
+                clockPosition,
                 countSinkFormatStats: true,
-                bypassConversion: bypassConversion);
+                sink: st.Sink);
             if (sinkFrame.HasValue && st.Sink.IsRunning)
                 st.Sink.ReceiveFrame(sinkFrame.Value);
         }
@@ -334,9 +327,8 @@ public sealed class VideoMixer : IVideoMixer
 
     /// <summary>
     /// Delivers the leader's current frame to a sink that shares the leader's channel.
-    /// Converts if the sink's preferred pixel format differs from the raw leader frame.
-    /// The converted frame (if any) is disposed after delivery — sinks must copy data
-    /// inside <see cref="IVideoSink.ReceiveFrame"/> rather than holding references.
+    /// Conversion is intentionally not performed in the mixer; sinks are responsible
+    /// for converting to endpoint-specific formats.
     /// </summary>
     private void DeliverFanOutFrame(SinkTarget st)
     {
@@ -344,30 +336,28 @@ public sealed class VideoMixer : IVideoMixer
 
         Interlocked.Increment(ref _pullAttemptCount);
         Interlocked.Increment(ref _pullHitCount);
+        Interlocked.Increment(ref _rawMarkerPassthroughCount);
 
-        var sinkFormat = ResolveSinkPixelFormat(st.Sink, out bool bypass);
-
-        if (bypass || raw.PixelFormat == sinkFormat)
+        if (st.Sink is IVideoSinkFormatCapabilities caps)
+        {
+            bool hit = false;
+            for (int i = 0; i < caps.PreferredPixelFormats.Count; i++)
+            {
+                if (caps.PreferredPixelFormats[i] == raw.PixelFormat)
+                {
+                    hit = true;
+                    break;
+                }
+            }
+            if (hit) Interlocked.Increment(ref _sinkFormatHitCount);
+            else Interlocked.Increment(ref _sinkFormatMissCount);
+        }
+        else
         {
             Interlocked.Increment(ref _sinkFormatHitCount);
-            Interlocked.Increment(ref _rawMarkerPassthroughCount);
-            st.Sink.ReceiveFrame(raw);
-            return;
         }
 
-        // Conversion required (e.g. Yuv422p10 → Rgba32 for an NDI sink).
-        Interlocked.Increment(ref _sinkFormatMissCount);
-        if (raw.PixelFormat != PixelFormat.Rgba32 && raw.PixelFormat != PixelFormat.Bgra32)
-            Interlocked.Increment(ref _fallbackConversionCount);
-
-        var converted = _pixelConverter.Convert(raw, sinkFormat);
-        Interlocked.Increment(ref _convertedCount);
-
-        st.Sink.ReceiveFrame(converted);
-
-        // Free the temporary conversion buffer; the sink is required to have
-        // copied any data it needs during ReceiveFrame (e.g. NDIVideoSink does this).
-        converted.MemoryOwner?.Dispose();
+        st.Sink.ReceiveFrame(raw);
     }
 
     private VideoFrame? PresentForTarget(
@@ -377,15 +367,14 @@ public sealed class VideoMixer : IVideoMixer
         ref bool hasPtsOrigin,
         ref long ptsOriginTicks,
         TimeSpan clockPosition,
-        PixelFormat outputPixelFormat,
-        bool countSinkFormatStats = false,
-        bool bypassConversion = false)
+        bool countSinkFormatStats,
+        IVideoSink? sink = null)
     {
         if (channel is null)
             return last;
 
         if (!staged.HasValue)
-            staged = PullAndConvert(channel, outputPixelFormat, ref hasPtsOrigin, ref ptsOriginTicks, countSinkFormatStats, bypassConversion);
+            staged = PullRawFrame(channel, ref hasPtsOrigin, ref ptsOriginTicks, countSinkFormatStats, sink);
 
         // Bootstrap per-target playback: once we have any frame, present it immediately
         // so startup/decode latency cannot keep the output black indefinitely.
@@ -399,7 +388,7 @@ public sealed class VideoMixer : IVideoMixer
         while (staged.HasValue && staged.Value.Pts + _dropLagThreshold < clockPosition)
         {
             staged.Value.MemoryOwner?.Dispose();
-            staged = PullAndConvert(channel, outputPixelFormat, ref hasPtsOrigin, ref ptsOriginTicks, countSinkFormatStats, bypassConversion);
+            staged = PullRawFrame(channel, ref hasPtsOrigin, ref ptsOriginTicks, countSinkFormatStats, sink);
             Interlocked.Increment(ref _droppedStaleFrameCount);
         }
 
@@ -417,13 +406,12 @@ public sealed class VideoMixer : IVideoMixer
         return last;
     }
 
-    private VideoFrame? PullAndConvert(
+    private VideoFrame? PullRawFrame(
         IVideoChannel channel,
-        PixelFormat outputPixelFormat,
         ref bool hasPtsOrigin,
         ref long ptsOriginTicks,
         bool countSinkFormatStats,
-        bool bypassConversion)
+        IVideoSink? sink)
     {
         Interlocked.Increment(ref _pullAttemptCount);
         int got = channel.FillBuffer(_pullBuffer, 1);
@@ -433,58 +421,30 @@ public sealed class VideoMixer : IVideoMixer
         Interlocked.Increment(ref _pullHitCount);
 
         var raw = _pullBuffer[0];
+
         if (countSinkFormatStats)
         {
-            if (bypassConversion || raw.PixelFormat == outputPixelFormat)
-                Interlocked.Increment(ref _sinkFormatHitCount);
-            else
-                Interlocked.Increment(ref _sinkFormatMissCount);
+            bool hit = true;
+            if (sink is IVideoSinkFormatCapabilities caps)
+            {
+                hit = false;
+                for (int i = 0; i < caps.PreferredPixelFormats.Count; i++)
+                {
+                    if (caps.PreferredPixelFormats[i] == raw.PixelFormat)
+                    {
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hit) Interlocked.Increment(ref _sinkFormatHitCount);
+            else Interlocked.Increment(ref _sinkFormatMissCount);
         }
 
-        if (bypassConversion)
-        {
-            Interlocked.Increment(ref _rawMarkerPassthroughCount);
-            return NormalizePts(raw, ref hasPtsOrigin, ref ptsOriginTicks);
-        }
-
-        if (raw.PixelFormat != PixelFormat.Rgba32 && raw.PixelFormat != PixelFormat.Bgra32)
-            Interlocked.Increment(ref _fallbackConversionCount);
-
-        var converted = raw.PixelFormat == outputPixelFormat
-            ? raw
-            : _pixelConverter.Convert(raw, outputPixelFormat);
-
-        if (raw.PixelFormat == outputPixelFormat)
-            Interlocked.Increment(ref _sameFormatPassthroughCount);
-        else
-            Interlocked.Increment(ref _convertedCount);
-
-        if (!ReferenceEquals(raw.MemoryOwner, converted.MemoryOwner))
-            raw.MemoryOwner?.Dispose();
-
-        return NormalizePts(converted, ref hasPtsOrigin, ref ptsOriginTicks);
+        Interlocked.Increment(ref _rawMarkerPassthroughCount);
+        return NormalizePts(raw, ref hasPtsOrigin, ref ptsOriginTicks);
     }
-
-    private static PixelFormat ResolveSinkPixelFormat(IVideoSink sink, out bool bypassConversion)
-    {
-        bypassConversion = false;
-        if (sink is IVideoSinkFormatCapabilities caps)
-        {
-            bypassConversion = caps.BypassMixerConversion;
-            if (bypassConversion)
-                return PixelFormat.Rgba32;
-
-            foreach (var pf in caps.PreferredPixelFormats)
-                if (IsSupportedSinkTargetFormat(pf))
-                    return pf;
-        }
-
-
-        return PixelFormat.Rgba32;
-    }
-
-    private static bool IsSupportedSinkTargetFormat(PixelFormat pf)
-        => pf is PixelFormat.Rgba32 or PixelFormat.Bgra32;
 
     private static VideoFrame NormalizePts(VideoFrame frame, ref bool hasPtsOrigin, ref long ptsOriginTicks)
     {
@@ -517,7 +477,6 @@ public sealed class VideoMixer : IVideoMixer
     {
         if (_disposed) return;
         _disposed = true;
-        _pixelConverter.Dispose();
         ResetLeaderState();
         foreach (var st in _sinkTargets)
             st.ResetState();

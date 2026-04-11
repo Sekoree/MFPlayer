@@ -213,10 +213,6 @@ public sealed class SDL3VideoOutput : IVideoOutput
         _outputFormat = format with { PixelFormat = leaderPixelFormat };
         _mixer = new VideoMixer(_outputFormat);
 
-        // YUV formats are decoded natively by the GL shader — the mixer does not
-        // need to perform any software conversion on the leader path.
-        _mixer.LeaderBypassConversion = leaderPixelFormat
-            is PixelFormat.Nv12 or PixelFormat.Yuv420p or PixelFormat.Yuv422p10;
 
         _clock = new VideoPtsClock(
             sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);

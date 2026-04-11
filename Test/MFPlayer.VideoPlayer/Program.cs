@@ -10,10 +10,13 @@ using NDILib;
 using S.Media.FFmpeg;
 using S.Media.NDI;
 using S.Media.Core.Audio;
+using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
 using S.Media.Core.Video;
 using S.Media.SDL3;
+
+#pragma warning disable 300
 
 static (int Width, int Height) FitWithin(int srcWidth, int srcHeight, int maxWidth, int maxHeight)
 {
@@ -37,14 +40,35 @@ static string Fmt(TimeSpan ts)
         : $"{ts.Minutes:00}:{ts.Seconds:00}.{ts.Milliseconds:000}";
 }
 
-static NdiEndpointPreset ParseNdiPreset(string? text)
+static YuvColorMatrix GetSuggestedMatrix(IVideoChannel channel)
+    => channel is IVideoColorMatrixHint hint ? hint.SuggestedYuvColorMatrix : YuvColorMatrix.Auto;
+
+static YuvColorRange GetSuggestedRange(IVideoChannel channel)
+    => channel is IVideoColorMatrixHint hint ? hint.SuggestedYuvColorRange : YuvColorRange.Auto;
+
+static NDIEndpointPreset ParseNDIPreset(string? text)
 {
     var s = (text ?? string.Empty).Trim();
     if (s.Equals("safe", StringComparison.OrdinalIgnoreCase) || s.Equals("s", StringComparison.OrdinalIgnoreCase))
-        return NdiEndpointPreset.Safe;
+        return NDIEndpointPreset.Safe;
     if (s.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) || s.Equals("low", StringComparison.OrdinalIgnoreCase) || s.Equals("l", StringComparison.OrdinalIgnoreCase))
-        return NdiEndpointPreset.LowLatency;
-    return NdiEndpointPreset.Balanced;
+        return NDIEndpointPreset.LowLatency;
+    return NDIEndpointPreset.Balanced;
+}
+
+static ChannelRouteMap BuildAudioRouteMap(int srcChannels, int dstChannels)
+{
+    var b = new ChannelRouteMap.Builder();
+    if (srcChannels == 1 && dstChannels >= 2)
+    {
+        b.Route(0, 0).Route(0, 1);
+    }
+    else
+    {
+        int common = Math.Min(srcChannels, dstChannels);
+        for (int i = 0; i < common; i++) b.Route(i, i);
+    }
+    return b.Build();
 }
 
 static YuvColorMatrix ParseYuvColorMatrix(string? text)
@@ -81,6 +105,11 @@ static string RangeLabel(YuvColorRange r) => r switch
     _ => "auto"
 };
 
+await RunAsync();
+
+static async Task RunAsync()
+{
+
 Console.WriteLine("╔═══════════════════════════════╗");
 Console.WriteLine("║   MFPlayer  —  Video Player   ║");
 Console.WriteLine("╚═══════════════════════════════╝\n");
@@ -106,7 +135,7 @@ try
 {
     decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions
     {
-        EnableAudio = false,
+        EnableAudio = true,
         EnableVideo = true,
         // null = auto-detect: decoder outputs frames in the source's native pixel format
         // so the routing policy can select an efficient YUV shader path (no CPU conversion).
@@ -130,12 +159,13 @@ using (decoder)
 {
     var videoChannel = decoder.VideoChannels[0];
     var srcFmt       = videoChannel.SourceFormat;
-    var suggestedHint = videoChannel as IVideoColorMatrixHint;
-    var suggestedMatrix = suggestedHint?.SuggestedYuvColorMatrix ?? YuvColorMatrix.Auto;
-    var suggestedRange = suggestedHint?.SuggestedYuvColorRange ?? YuvColorRange.Auto;
+    var suggestedMatrix = GetSuggestedMatrix(videoChannel);
+    var suggestedRange = GetSuggestedRange(videoChannel);
 
     Console.WriteLine("OK");
     Console.WriteLine($"  Video: {srcFmt}");
+    if (decoder.AudioChannels.Count > 0)
+        Console.WriteLine($"  Audio: {decoder.AudioChannels[0].SourceFormat}");
 
     var initialWindow = FitWithin(srcFmt.Width, srcFmt.Height, maxWidth: 1920, maxHeight: 1080);
     Console.WriteLine($"  Window: {initialWindow.Width}x{initialWindow.Height} (fit)");
@@ -144,8 +174,8 @@ using (decoder)
 
     Console.Write("Creating SDL3 video output… ");
     using var videoOutput = new SDL3VideoOutput();
-    var selectedRange = suggestedRange;
-    var selectedMatrix = suggestedMatrix;
+    YuvColorRange selectedRange;
+    YuvColorMatrix selectedMatrix;
     try
     {
         videoOutput.Open("MFPlayer — Video Player",
@@ -180,17 +210,14 @@ using (decoder)
 
     // ── 4. Wire up ───────────────────────────────────────────────────────
 
-    using var avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), videoOutput.Mixer, ownsAudio: true, ownsVideo: false)
-    {
-        MasterPolicy = IAVMixer.ClockMasterPolicy.Video
-    };
+    using var avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), videoOutput.Mixer, ownsAudio: true, ownsVideo: false);
     avMixer.AddVideoChannel(videoChannel);
-    avMixer.SetActiveVideoChannel(videoChannel.Id);
 
-    // Optional: route the same active channel to an NDI video sink.
+    // Optional: route the same active channel to an NDI A/V sink.
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
-    NDIVideoSink? ndiSink = null;
+    NDIAVSink? ndiSink = null;
+    AggregateOutput? ndiAudioAggregate = null;
 
     Console.Write("Enable NDI video sink? [y/N]: ");
     bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
@@ -214,7 +241,14 @@ using (decoder)
                 if (string.IsNullOrEmpty(senderName)) senderName = "MFPlayer NDI Video";
 
                 Console.Write("NDI preset [Safe/Balanced/LowLatency] (default Balanced): ");
-                var preset = ParseNdiPreset(Console.ReadLine());
+                var preset = ParseNDIPreset(Console.ReadLine());
+
+                Console.Write("NDI mode [quality/performance] (default quality): ");
+                var ndiMode = (Console.ReadLine() ?? string.Empty).Trim();
+                bool preferPerformanceOverQuality =
+                    ndiMode.Equals("performance", StringComparison.OrdinalIgnoreCase)
+                    || ndiMode.Equals("perf", StringComparison.OrdinalIgnoreCase)
+                    || ndiMode.Equals("p", StringComparison.OrdinalIgnoreCase);
 
                 int sret = NDISender.Create(out ndiSender, senderName, clockVideo: false, clockAudio: false);
                 if (sret != 0 || ndiSender == null)
@@ -225,17 +259,44 @@ using (decoder)
                 }
                 else
                 {
-                    ndiSink = new NDIVideoSink(
+                    AudioFormat? ndiAudioFormat = null;
+                    ChannelRouteMap? routeMap = null;
+                    if (decoder.AudioChannels.Count > 0)
+                    {
+                        var sourceAudioChannel = decoder.AudioChannels[0];
+                        var srcAudio = sourceAudioChannel.SourceFormat;
+                        ndiAudioFormat = new AudioFormat(48000, Math.Min(srcAudio.Channels, 2));
+                        routeMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
+                    }
+
+                    ndiSink = new NDIAVSink(
                         ndiSender,
                         videoOutput.OutputFormat,
-                        poolCount: 0,
-                        maxPendingFrames: 0,
+                        audioTargetFormat: ndiAudioFormat,
                         preset: preset,
-                        name: $"NDIVideoSink({senderName})");
+                        name: $"NDIAVSink({senderName})",
+                        preferPerformanceOverQuality: preferPerformanceOverQuality,
+                        videoPoolCount: 0,
+                        videoMaxPendingFrames: 0,
+                        audioFramesPerBuffer: 1024);
                     avMixer.RegisterVideoSink(ndiSink);
                     avMixer.RouteVideoChannelToSink(videoChannel.Id, ndiSink);
                     await ndiSink.StartAsync();
-                    Console.WriteLine($"  NDI sink enabled: {senderName} ({preset})");
+
+                    if (decoder.AudioChannels.Count > 0 && routeMap != null)
+                    {
+                        var sourceAudioChannel = decoder.AudioChannels[0];
+                        var virtualOut = new VirtualAudioOutput(ndiAudioFormat!.Value, framesPerBuffer: 1024);
+
+                        ndiAudioAggregate = new AggregateOutput(virtualOut);
+                        ndiAudioAggregate.AddSink(ndiSink);
+                        ndiAudioAggregate.Mixer.AddChannel(sourceAudioChannel, routeMap);
+                        ndiAudioAggregate.Mixer.RouteTo(sourceAudioChannel.Id, ndiSink, routeMap);
+                    }
+
+                    Console.WriteLine($"  NDI sink enabled: {senderName} ({preset}, mode={(preferPerformanceOverQuality ? "perf" : "quality")})");
+                    if (decoder.AudioChannels.Count > 0)
+                        Console.WriteLine("  NDI audio enabled from source audio track.");
                 }
             }
         }
@@ -256,6 +317,8 @@ using (decoder)
 
     decoder.Start();
     await videoOutput.StartAsync();
+    if (ndiAudioAggregate != null)
+        await ndiAudioAggregate.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Close the window or press [Ctrl+C] to stop.");
@@ -273,7 +336,6 @@ using (decoder)
         VideoMixer.DiagnosticsSnapshot? prevMixer = null;
         SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
         VideoEndpointDiagnosticsSnapshot? prevEndpoint = null;
-        BasicPixelFormatConverter.DiagnosticsSnapshot? prevConv = null;
         double expectedFps = srcFmt.FrameRate > 0 ? srcFmt.FrameRate : 30.0;
 
         while (!cts.IsCancellationRequested)
@@ -293,7 +355,6 @@ using (decoder)
             var ms = mixerForStats?.GetDiagnosticsSnapshot();
             var os = outputForStats.GetDiagnosticsSnapshot();
             var es = endpointForStats?.GetDiagnosticsSnapshot();
-            var cs = BasicPixelFormatConverter.GetDiagnosticsSnapshot();
 
             if (ms.HasValue && prevMixer.HasValue && prevOutput.HasValue)
             {
@@ -309,7 +370,7 @@ using (decoder)
                 long rgbaDelta = o1.RgbaFrames - o0.RgbaFrames;
                 long nv12Delta = o1.Nv12Frames - o0.Nv12Frames;
                 long y420Delta = o1.Yuv420pFrames - o0.Yuv420pFrames;
-                long y422p10Delta = o1.Yuv422p10Frames - o0.Yuv422p10Frames;
+                long y422P10Delta = o1.Yuv422p10Frames - o0.Yuv422p10Frames;
                 long exDelta = o1.RenderExceptions - o0.RenderExceptions;
                 long holdDelta = m1.Held - m0.Held;
                 long dropDelta = m1.Dropped - m0.Dropped;
@@ -320,10 +381,6 @@ using (decoder)
                 long convDelta = m1.Converted - m0.Converted;
                 long sinkFmtHitDelta = m1.SinkFormatHits - m0.SinkFormatHits;
                 long sinkFmtMissDelta = m1.SinkFormatMisses - m0.SinkFormatMisses;
-                long convLibYuvAttemptsDelta = prevConv.HasValue ? cs.LibYuvAttempts - prevConv.Value.LibYuvAttempts : 0;
-                long convLibYuvSuccessDelta = prevConv.HasValue ? cs.LibYuvSuccesses - prevConv.Value.LibYuvSuccesses : 0;
-                long convFallbackDelta = prevConv.HasValue ? cs.ManagedFallbacks - prevConv.Value.ManagedFallbacks : 0;
-
                 string speedMark = presentDelta < Math.Max(1, (long)Math.Round(expectedFps * 0.75)) ? " slow" : "";
                 string dropMark = dropDelta > 0 ? " drop" : "";
                 string exMark = exDelta > 0 ? " ex" : "";
@@ -348,15 +405,14 @@ using (decoder)
                 Console.WriteLine(
                     $"[vstats] clock={Fmt(outputForStats.Clock.Position)} src={Fmt(channelForStats.Position)} " +
                     $"fps={presentDelta,3}/{expectedFps,5:F1} r={renderDelta,4} p={presentDelta,4} b={blackDelta,3} " +
-                    $"held={holdDelta,4} drop={dropDelta,3} pull={pullDelta,3}/{pullAttemptDelta,3} route={(samePassDelta + rawPassDelta),3}/{convDelta,3} (same/raw={samePassDelta,3}/{rawPassDelta,3}) sinkFmt={sinkFmtHitDelta,3}/{sinkFmtMissDelta,3} cvt={convLibYuvSuccessDelta,3}/{convLibYuvAttemptsDelta,3}/{convFallbackDelta,3} ex={exDelta,2}{speedMark}{dropMark}{exMark}");
-                Console.WriteLine($"         fmt=bgra:{bgraDelta,3} rgba:{rgbaDelta,3} nv12:{nv12Delta,3} y420:{y420Delta,3} y422p10:{y422p10Delta,3}");
+                    $"held={holdDelta,4} drop={dropDelta,3} pull={pullDelta,3}/{pullAttemptDelta,3} route={(samePassDelta + rawPassDelta),3}/{convDelta,3} (same/raw={samePassDelta,3}/{rawPassDelta,3}) sinkFmt={sinkFmtHitDelta,3}/{sinkFmtMissDelta,3} ex={exDelta,2}{speedMark}{dropMark}{exMark}");
+                Console.WriteLine($"         fmt=bgra:{bgraDelta,3} rgba:{rgbaDelta,3} nv12:{nv12Delta,3} y420:{y420Delta,3} y422p10:{y422P10Delta,3}");
                 Console.WriteLine($"         {endpointText}");
             }
 
             prevMixer = ms;
             prevOutput = os;
             prevEndpoint = es;
-            prevConv = cs;
         }
     }, cts.Token);
 
@@ -372,6 +428,11 @@ using (decoder)
     cts.Cancel();
     try { await statsTask; } catch (OperationCanceledException) { }
     await videoOutput.StopAsync();
+    if (ndiAudioAggregate != null)
+    {
+        await ndiAudioAggregate.StopAsync();
+        ndiAudioAggregate.Dispose();
+    }
     if (ndiSink != null)
     {
         await ndiSink.StopAsync();
@@ -382,3 +443,9 @@ using (decoder)
     ndiRuntime?.Dispose();
     Console.WriteLine("Done.");
 }
+
+}
+
+
+
+#pragma warning restore 300

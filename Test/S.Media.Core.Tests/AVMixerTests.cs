@@ -14,12 +14,15 @@ public sealed class AVMixerTests
     {
         using var av = new AVMixer(new AudioFormat(48000, 2), new VideoFormat(640, 360, PixelFormat.Rgba32, 30, 1));
 
-        Assert.Equal(2, av.Audio.LeaderFormat.Channels);
-        Assert.Equal(PixelFormat.Rgba32, av.Video.OutputFormat.PixelFormat);
+        var audioSink = new StubAudioSink("A");
+        var videoSink = new StubVideoSink("V");
+
+        av.RegisterAudioSink(audioSink, channels: 2);
+        av.RegisterVideoSink(videoSink);
     }
 
     [Fact]
-    public void Delegates_ToUnderlyingMixers()
+    public void Ctor_WithFormats_AllowsChannelRegistration()
     {
         using var av = new AVMixer(new AudioFormat(48000, 2), new VideoFormat(640, 360, PixelFormat.Rgba32, 30, 1));
 
@@ -28,17 +31,32 @@ public sealed class AVMixerTests
 
         av.AddAudioChannel(audioChannel, ChannelRouteMap.Identity(2));
         av.AddVideoChannel(videoChannel);
-        av.SetActiveVideoChannel(videoChannel.Id);
 
-        Assert.Equal(1, av.Audio.ChannelCount);
-        Assert.Equal(1, av.Video.ChannelCount);
-        Assert.Equal(videoChannel.Id, av.Video.ActiveChannel?.Id);
+        av.RemoveAudioChannel(audioChannel.Id);
+        av.RemoveVideoChannel(videoChannel.Id);
+    }
+
+    [Fact]
+    public void Delegates_ToUnderlyingMixers()
+    {
+        var audio = new SpyAudioMixer();
+        var video = new SpyVideoMixer();
+        using var av = new AVMixer(audio, video);
+
+        var audioChannel = new DummyAudioChannel();
+        var videoChannel = new DummyVideoChannel();
+
+        av.AddAudioChannel(audioChannel, ChannelRouteMap.Identity(2));
+        av.AddVideoChannel(videoChannel);
+
+        Assert.Equal(1, audio.AddChannelCalls);
+        Assert.Equal(1, video.AddChannelCalls);
 
         av.RemoveAudioChannel(audioChannel.Id);
         av.RemoveVideoChannel(videoChannel.Id);
 
-        Assert.Equal(0, av.Audio.ChannelCount);
-        Assert.Equal(0, av.Video.ChannelCount);
+        Assert.Equal(1, audio.RemoveChannelCalls);
+        Assert.Equal(1, video.RemoveChannelCalls);
     }
 
     [Fact]
@@ -88,6 +106,56 @@ public sealed class AVMixerTests
         Assert.Equal(2, audio.RouteToCalls);
     }
 
+    [Fact]
+    public void RouteVideoChannelToEndpoint_AndUnroute_DelegatesToVideoMixer()
+    {
+        var audio = new SpyAudioMixer();
+        var video = new SpyVideoMixer();
+        using var av = new AVMixer(audio, video);
+
+        var endpoint = new StubVideoEndpoint("VEP", [PixelFormat.Rgba32]);
+        var channelId = Guid.NewGuid();
+
+        av.RegisterVideoEndpoint(endpoint);
+        av.RouteVideoChannelToEndpoint(channelId, endpoint);
+        av.UnrouteVideoChannelFromEndpoint(endpoint);
+
+        Assert.Equal(2, video.SetActiveChannelForSinkCalls);
+        Assert.Equal(channelId, video.LastSinkRouteChannelId);
+        Assert.Null(video.LastSinkUnrouteChannelId);
+    }
+
+    [Fact]
+    public void RouteVideoChannelToEndpoint_UnregisteredEndpoint_Throws()
+    {
+        var audio = new SpyAudioMixer();
+        var video = new SpyVideoMixer();
+        using var av = new AVMixer(audio, video);
+
+        var endpoint = new StubVideoEndpoint("VEP", [PixelFormat.Rgba32]);
+
+        Assert.Throws<InvalidOperationException>(() => av.RouteVideoChannelToEndpoint(Guid.NewGuid(), endpoint));
+        Assert.Throws<InvalidOperationException>(() => av.UnrouteVideoChannelFromEndpoint(endpoint));
+    }
+
+    [Fact]
+    public void RouteVideoChannelToEndpoints_DelegatesForAllEndpoints()
+    {
+        var audio = new SpyAudioMixer();
+        var video = new SpyVideoMixer();
+        using var av = new AVMixer(audio, video);
+
+        var epA = new StubVideoEndpoint("A", [PixelFormat.Rgba32]);
+        var epB = new StubVideoEndpoint("B", [PixelFormat.Rgba32]);
+
+        av.RegisterVideoEndpoint(epA);
+        av.RegisterVideoEndpoint(epB);
+
+        av.RouteVideoChannelToEndpoints(Guid.NewGuid(), [epA, epB]);
+
+        Assert.Equal(2, video.SetActiveChannelForSinkCalls);
+    }
+
 
     private sealed class DummyAudioChannel : IAudioChannel
     {
@@ -131,14 +199,16 @@ public sealed class AVMixerTests
     private sealed class SpyAudioMixer : IAudioMixer
     {
         public bool Disposed { get; private set; }
+        public int AddChannelCalls { get; private set; }
+        public int RemoveChannelCalls { get; private set; }
         public int RouteToCalls { get; private set; }
         public AudioFormat LeaderFormat { get; } = new(48000, 2);
         public float MasterVolume { get; set; }
         public int ChannelCount => 0;
         public IReadOnlyList<float> PeakLevels { get; } = [0f, 0f];
         public ChannelFallback DefaultFallback => ChannelFallback.Silent;
-        public void AddChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null) { }
-        public void RemoveChannel(Guid channelId) { }
+        public void AddChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null) => AddChannelCalls++;
+        public void RemoveChannel(Guid channelId) => RemoveChannelCalls++;
         public void RouteTo(Guid channelId, IAudioSink sink, ChannelRouteMap routeMap) => RouteToCalls++;
         public void UnrouteTo(Guid channelId, IAudioSink sink) { }
         public void RegisterSink(IAudioSink sink, int channels = 0) { }
@@ -150,17 +220,30 @@ public sealed class AVMixerTests
     private sealed class SpyVideoMixer : IVideoMixer
     {
         public bool Disposed { get; private set; }
+        public int AddChannelCalls { get; private set; }
+        public int RemoveChannelCalls { get; private set; }
+        public int RoutePrimaryCalls { get; private set; }
+        public int UnroutePrimaryCalls { get; private set; }
         public int SetActiveChannelForSinkCalls { get; private set; }
+        public Guid? LastSinkRouteChannelId { get; private set; }
+        public Guid? LastSinkUnrouteChannelId { get; private set; }
         public VideoFormat OutputFormat { get; } = new(640, 360, PixelFormat.Rgba32, 30, 1);
         public int ChannelCount => 0;
-        public IVideoChannel? ActiveChannel => null;
         public int SinkCount => 0;
-        public void AddChannel(IVideoChannel channel) { }
-        public void RemoveChannel(Guid channelId) { }
-        public void SetActiveChannel(Guid? channelId) { }
+        public void AddChannel(IVideoChannel channel) => AddChannelCalls++;
+        public void RemoveChannel(Guid channelId) => RemoveChannelCalls++;
+        public void RouteChannelToPrimaryOutput(Guid channelId) => RoutePrimaryCalls++;
+        public void UnroutePrimaryOutput() => UnroutePrimaryCalls++;
         public void RegisterSink(IVideoSink sink) { }
         public void UnregisterSink(IVideoSink sink) { }
-        public void SetActiveChannelForSink(IVideoSink sink, Guid? channelId) => SetActiveChannelForSinkCalls++;
+        public void SetActiveChannelForSink(IVideoSink sink, Guid? channelId)
+        {
+            SetActiveChannelForSinkCalls++;
+            if (channelId.HasValue)
+                LastSinkRouteChannelId = channelId;
+            else
+                LastSinkUnrouteChannelId = channelId;
+        }
         public VideoFrame? PresentNextFrame(TimeSpan clockPosition) => null;
         public void Dispose() => Disposed = true;
     }
@@ -184,5 +267,15 @@ public sealed class AVMixerTests
         public void ReceiveFrame(in VideoFrame frame) { }
         public void Dispose() { }
     }
-}
 
+    private sealed class StubVideoEndpoint(string name, IReadOnlyList<PixelFormat> supportedPixelFormats) : IVideoFrameEndpoint
+    {
+        public string Name { get; } = name;
+        public bool IsRunning => true;
+        public IReadOnlyList<PixelFormat> SupportedPixelFormats { get; } = supportedPixelFormats;
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public void WriteFrame(in VideoFrame frame) { }
+        public void Dispose() { }
+    }
+}

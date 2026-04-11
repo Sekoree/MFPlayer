@@ -6,7 +6,7 @@
 //   4. Press Enter or Ctrl+C to stop; auto-stops at end of file
 //
 // Pipeline
-//   FFmpegDecoder ──► FFmpegAudioChannel ──► AudioMixer ──► NDIAudioSink ──► NDISender
+//   FFmpegDecoder ──► FFmpegAudioChannel ──► AudioMixer ──► NDIAVSink ──► NDISender
 //   VirtualAudioOutput drives the clock (Stopwatch-based, no hardware device needed)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -122,16 +122,20 @@ using (ndiRuntime)
             //
             //   VirtualAudioOutput (clock master, no hardware device)
             //       └─► AggregateOutput
-            //               └─► NDIAudioSink (interleaved→planar, SendAudio)
+            //               └─► NDIAVSink (audio path: interleaved→planar, SendAudio)
             //                       └─► NDISender ──► network
             //
             // The mixer inside VirtualAudioOutput pulls from FFmpegAudioChannel,
-            // and via RouteTo forwards that audio to NdiAudioSink on every tick.
+            // and via RouteTo forwards that audio to NDIAVSink on every tick.
 
             const int framesPerBuffer = 1024; // ~21 ms @ 48 kHz — matches NDIAudioChannel chunk size
 
             var virtualOut = new VirtualAudioOutput(ndiFormat, framesPerBuffer);
-            var ndiSink    = new NDIAudioSink(sender, ndiFormat, framesPerBuffer);
+            var ndiSink    = new NDIAVSink(
+                sender,
+                audioTargetFormat: ndiFormat,
+                audioFramesPerBuffer: framesPerBuffer,
+                name: $"NDIAVSink({senderName})");
 
             // AggregateOutput takes ownership: Dispose() will also dispose virtualOut and ndiSink.
             using var agg = new AggregateOutput(virtualOut);
@@ -210,9 +214,7 @@ using (ndiRuntime)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// <summary>
-/// Mono source → both stereo channels; multi-channel → straight-across up to min(src, dst).
-/// </summary>
+// Mono source -> both stereo channels; multi-channel -> straight-across up to min(src, dst).
 static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
 {
     var b = new ChannelRouteMap.Builder();

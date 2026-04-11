@@ -12,7 +12,7 @@ namespace S.Media.Core.Audio;
 ///
 /// <para>
 /// Useful when you want two or more <see cref="IAudioSink"/> instances (e.g. a
-/// <c>PortAudioSink</c> and an <c>NdiAudioSink</c>) with independent per-sink routing but a
+/// <c>PortAudioSink</c> and an <c>NDIAvSink</c>) with independent per-sink routing but a
 /// shared clock — the <see cref="VirtualAudioOutput"/> acts as the clock master and the sinks
 /// receive their own mix buffers via <see cref="AggregateOutput"/>.
 /// </para>

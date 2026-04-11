@@ -1,5 +1,6 @@
 using S.Media.Core.Media;
 using S.Media.Core.Video;
+using S.Media.Core.Video.Endpoints;
 using Xunit;
 
 namespace S.Media.Core.Tests;
@@ -39,7 +40,6 @@ public sealed class VideoEndpointAdapterTests
         public string Name => nameof(SpyRawEndpoint);
         public bool IsRunning { get; private set; }
         public IReadOnlyList<PixelFormat> SupportedPixelFormats { get; } = [PixelFormat.Rgba32];
-        public bool BypassMixerConversion => true;
         public VideoFrame? LastFrame { get; private set; }
 
         public Task StartAsync(CancellationToken ct = default)
@@ -128,12 +128,10 @@ public sealed class VideoEndpointAdapterTests
     }
 
     [Fact]
-    public async Task VideoEndpointSinkAdapter_ForwardsRawPassthroughMarkerAndFrames()
+    public async Task VideoEndpointSinkAdapter_ForwardsFrames()
     {
         using var endpoint = new SpyRawEndpoint();
         using var sink = new VideoEndpointSinkAdapter(endpoint);
-
-        Assert.True(sink.BypassMixerConversion);
 
         await sink.StartAsync();
 
@@ -144,4 +142,3 @@ public sealed class VideoEndpointAdapterTests
         Assert.Equal(PixelFormat.Nv12, endpoint.LastFrame.Value.PixelFormat);
     }
 }
-

@@ -101,7 +101,6 @@ public sealed class VideoMixerTests
         public string Name => nameof(SpyRawPassthroughSink);
         public bool IsRunning { get; set; } = true;
         public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; } = [PixelFormat.Rgba32];
-        public bool BypassMixerConversion => true;
         public VideoFrame? LastFrame { get; private set; }
 
         public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -139,7 +138,7 @@ public sealed class VideoMixerTests
         ch.Enqueue(new VideoFrame(640, 360, PixelFormat.Rgba32, new byte[640 * 360 * 4], TimeSpan.FromSeconds(2)));
 
         mixer.AddChannel(ch);
-        mixer.SetActiveChannel(ch.Id);
+        mixer.RouteChannelToPrimaryOutput(ch.Id);
 
         var first = mixer.PresentNextFrame(TimeSpan.FromMilliseconds(100));
         Assert.True(first.HasValue);
@@ -163,7 +162,7 @@ public sealed class VideoMixerTests
         ch.Enqueue(new VideoFrame(640, 360, PixelFormat.Rgba32, new byte[640 * 360 * 4], TimeSpan.FromMinutes(2)));
 
         mixer.AddChannel(ch);
-        mixer.SetActiveChannel(ch.Id);
+        mixer.RouteChannelToPrimaryOutput(ch.Id);
 
         var frame = mixer.PresentNextFrame(TimeSpan.FromMilliseconds(10));
 
@@ -179,7 +178,7 @@ public sealed class VideoMixerTests
         ch.Enqueue(new VideoFrame(640, 360, PixelFormat.Rgba32, new byte[640 * 360 * 4], TimeSpan.FromMilliseconds(0)));
 
         mixer.AddChannel(ch);
-        mixer.SetActiveChannel(ch.Id);
+        mixer.RouteChannelToPrimaryOutput(ch.Id);
 
         // Simulate decode/video startup lag where clock is already ahead.
         var frame = mixer.PresentNextFrame(TimeSpan.FromSeconds(2));
@@ -197,7 +196,7 @@ public sealed class VideoMixerTests
         ch.Enqueue(new VideoFrame(640, 360, PixelFormat.Rgba32, new byte[640 * 360 * 4], TimeSpan.FromMilliseconds(30)));
 
         mixer.AddChannel(ch);
-        mixer.SetActiveChannel(ch.Id);
+        mixer.RouteChannelToPrimaryOutput(ch.Id);
 
         // First frame is bootstrapped immediately by design.
         mixer.PresentNextFrame(TimeSpan.FromSeconds(1));
@@ -208,19 +207,20 @@ public sealed class VideoMixerTests
     }
 
     [Fact]
-    public void PresentNextFrame_UnsupportedSourceFormat_IncrementsFallbackCounter()
+    public void PresentNextFrame_UnsupportedSourceFormat_PassesThroughWithoutFallbackConversion()
     {
         using var mixer = new VideoMixer(FmtRgba30);
         var ch = new QueueVideoChannel(new VideoFormat(2, 2, PixelFormat.Nv12, 30, 1));
         ch.Enqueue(new VideoFrame(2, 2, PixelFormat.Nv12, new byte[8], TimeSpan.FromMilliseconds(10)));
 
         mixer.AddChannel(ch);
-        mixer.SetActiveChannel(ch.Id);
+        mixer.RouteChannelToPrimaryOutput(ch.Id);
 
         var frame = mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
 
         Assert.True(frame.HasValue);
-        Assert.True(mixer.FallbackConversionCount > 0);
+        Assert.Equal(PixelFormat.Nv12, frame.Value.PixelFormat);
+        Assert.Equal(0, mixer.FallbackConversionCount);
     }
 
     [Fact]
@@ -232,12 +232,12 @@ public sealed class VideoMixerTests
         chLeader.Enqueue(new VideoFrame(640, 360, PixelFormat.Rgba32, new byte[640 * 360 * 4], TimeSpan.FromMilliseconds(10)));
 
         var chSink = new QueueVideoChannel(new VideoFormat(640, 360, PixelFormat.Bgra32, 30, 1));
-        var bgra = new byte[] { 10, 20, 30, 255 }; // B,G,R,A -> should become R,G,B,A = 30,20,10,255
+        var bgra = new byte[] { 10, 20, 30, 255 };
         chSink.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, bgra, TimeSpan.FromMilliseconds(10)));
 
         mixer.AddChannel(chLeader);
         mixer.AddChannel(chSink);
-        mixer.SetActiveChannel(chLeader.Id);
+        mixer.RouteChannelToPrimaryOutput(chLeader.Id);
 
         var sink = new SpyVideoSink();
         mixer.RegisterSink(sink);
@@ -246,14 +246,14 @@ public sealed class VideoMixerTests
         var leader = mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
 
         Assert.True(leader.HasValue);
-        Assert.Equal(chLeader.Id, mixer.ActiveChannel!.Id);
+        Assert.Equal(PixelFormat.Rgba32, leader.Value.PixelFormat);
         Assert.Equal(1, sink.Calls);
         Assert.True(sink.LastFrame.HasValue);
-        Assert.Equal(PixelFormat.Rgba32, sink.LastFrame.Value.PixelFormat);
+        Assert.Equal(PixelFormat.Bgra32, sink.LastFrame.Value.PixelFormat);
         var s = sink.LastFrame.Value.Data.Span;
-        Assert.Equal(30, s[0]);
+        Assert.Equal(10, s[0]);
         Assert.Equal(20, s[1]);
-        Assert.Equal(10, s[2]);
+        Assert.Equal(30, s[2]);
         Assert.Equal(255, s[3]);
     }
 
@@ -267,7 +267,7 @@ public sealed class VideoMixerTests
         ch.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, data, TimeSpan.FromMilliseconds(10), owner));
 
         mixer.AddChannel(ch);
-        mixer.SetActiveChannel(ch.Id);
+        mixer.RouteChannelToPrimaryOutput(ch.Id);
 
         var frame = mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
 
@@ -289,7 +289,7 @@ public sealed class VideoMixerTests
 
         mixer.AddChannel(chLeader);
         mixer.AddChannel(chSink);
-        mixer.SetActiveChannel(chLeader.Id);
+        mixer.RouteChannelToPrimaryOutput(chLeader.Id);
 
         var sink = new SpyPreferredFormatSink(PixelFormat.Bgra32);
         mixer.RegisterSink(sink);
@@ -314,7 +314,7 @@ public sealed class VideoMixerTests
 
         mixer.AddChannel(chLeader);
         mixer.AddChannel(chSink);
-        mixer.SetActiveChannel(chLeader.Id);
+        mixer.RouteChannelToPrimaryOutput(chLeader.Id);
 
         var sink = new SpyFormatCapabilitiesSink(PixelFormat.Nv12, PixelFormat.Bgra32);
         mixer.RegisterSink(sink);
@@ -339,7 +339,7 @@ public sealed class VideoMixerTests
 
         mixer.AddChannel(chLeader);
         mixer.AddChannel(chSink);
-        mixer.SetActiveChannel(chLeader.Id);
+        mixer.RouteChannelToPrimaryOutput(chLeader.Id);
 
         var sink = new SpyPreferredFormatSink(PixelFormat.Bgra32);
         mixer.RegisterSink(sink);
@@ -359,7 +359,7 @@ public sealed class VideoMixerTests
     }
 
     [Fact]
-    public void PresentNextFrame_RouteDiagnostics_CountsPassthroughAndConverted()
+    public void PresentNextFrame_RouteDiagnostics_CountsRawPassthroughOnly()
     {
         using var mixer = new VideoMixer(FmtRgba30);
 
@@ -368,15 +368,15 @@ public sealed class VideoMixerTests
         ch.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 30, 20, 10, 255 }, TimeSpan.FromMilliseconds(40)));
 
         mixer.AddChannel(ch);
-        mixer.SetActiveChannel(ch.Id);
+        mixer.RouteChannelToPrimaryOutput(ch.Id);
 
         mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
         mixer.PresentNextFrame(TimeSpan.FromMilliseconds(60));
 
         var snap = mixer.GetDiagnosticsSnapshot();
-        Assert.True(snap.Converted > 0);
-        Assert.True(snap.SameFormatPassthrough > 0);
-        Assert.Equal(0, snap.RawMarkerPassthrough);
+        Assert.Equal(0, snap.Converted);
+        Assert.Equal(0, snap.SameFormatPassthrough);
+        Assert.True(snap.RawMarkerPassthrough > 0);
     }
 
     [Fact]
@@ -392,7 +392,7 @@ public sealed class VideoMixerTests
 
         mixer.AddChannel(chLeader);
         mixer.AddChannel(chSink);
-        mixer.SetActiveChannel(chLeader.Id);
+        mixer.RouteChannelToPrimaryOutput(chLeader.Id);
 
         var sink = new SpyRawPassthroughSink();
         mixer.RegisterSink(sink);
@@ -407,5 +407,22 @@ public sealed class VideoMixerTests
         Assert.True(snap.RawMarkerPassthrough > 0);
         Assert.Equal(0, snap.Converted);
     }
-}
 
+    [Fact]
+    public void SetActiveChannelForSink_RerouteWithoutUnroute_Throws()
+    {
+        using var mixer = new VideoMixer(FmtRgba30);
+        var sink = new SpyVideoSink();
+        var chA = new QueueVideoChannel(FmtRgba30);
+        var chB = new QueueVideoChannel(FmtRgba30);
+
+        mixer.AddChannel(chA);
+        mixer.AddChannel(chB);
+        mixer.RegisterSink(sink);
+
+        mixer.SetActiveChannelForSink(sink, chA.Id);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => mixer.SetActiveChannelForSink(sink, chB.Id));
+        Assert.Contains("Unroute first", ex.Message);
+    }
+}

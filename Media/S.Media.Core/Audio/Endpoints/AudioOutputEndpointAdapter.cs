@@ -1,7 +1,7 @@
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 
-namespace S.Media.Core.Audio;
+namespace S.Media.Core.Audio.Endpoints;
 
 /// <summary>
 /// Bridges an existing <see cref="IAudioOutput"/> to the unified <see cref="IAudioBufferEndpoint"/>
@@ -89,3 +89,4 @@ public sealed class AudioOutputEndpointAdapter : IAudioBufferEndpoint
             _resampler.Dispose();
     }
 }
+

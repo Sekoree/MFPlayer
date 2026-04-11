@@ -119,12 +119,8 @@ public sealed class MainWindow : Window
                 height: srcFmt.Height > 0 ? srcFmt.Height : 720,
                 format: srcFmt);
 
-            _avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), _videoOutput.Mixer, ownsAudio: true, ownsVideo: false)
-            {
-                MasterPolicy = IAVMixer.ClockMasterPolicy.Video
-            };
+            _avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), _videoOutput.Mixer, ownsAudio: true, ownsVideo: false);
             _avMixer.AddVideoChannel(channel);
-            _avMixer.SetActiveVideoChannel(channel.Id);
             _videoMixer = _videoOutput.Mixer as VideoMixer;
 
             _decoder.Start();

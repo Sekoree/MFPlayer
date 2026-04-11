@@ -15,12 +15,6 @@ public interface IVideoMixer : IDisposable
     /// <summary>Number of channels currently registered.</summary>
     int ChannelCount { get; }
 
-    /// <summary>
-    /// The channel currently being presented. Null if no channel is active.
-    /// Only one channel is rendered at a time in v1.
-    /// </summary>
-    IVideoChannel? ActiveChannel { get; }
-
     /// <summary>Number of registered secondary sinks.</summary>
     int SinkCount { get; }
 
@@ -31,10 +25,14 @@ public interface IVideoMixer : IDisposable
     void RemoveChannel(Guid channelId);
 
     /// <summary>
-    /// Sets which registered channel is actively being rendered.
-    /// Pass null to show a blank/black frame.
+    /// Routes a registered channel to the primary output path.
     /// </summary>
-    void SetActiveChannel(Guid? channelId);
+    void RouteChannelToPrimaryOutput(Guid channelId);
+
+    /// <summary>
+    /// Removes any channel route from the primary output path.
+    /// </summary>
+    void UnroutePrimaryOutput();
 
     /// <summary>
     /// Registers a sink as an additional video target.
@@ -59,4 +57,3 @@ public interface IVideoMixer : IDisposable
     /// </summary>
     VideoFrame? PresentNextFrame(TimeSpan clockPosition);
 }
-

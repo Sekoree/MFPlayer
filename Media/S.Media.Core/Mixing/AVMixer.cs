@@ -1,7 +1,9 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Audio.Endpoints;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
+using S.Media.Core.Video.Endpoints;
 
 namespace S.Media.Core.Mixing;
 
@@ -14,18 +16,16 @@ public sealed class AVMixer : IAVMixer
     private readonly Dictionary<IVideoFrameEndpoint, IVideoSink> _videoEndpointAdapters = new();
     private readonly Dictionary<IAudioBufferEndpoint, IAudioSink> _audioEndpointAdapters = new();
 
+    private readonly IAudioMixer _audio;
+    private readonly IVideoMixer _video;
     private readonly bool _ownsAudio;
     private readonly bool _ownsVideo;
     private bool _disposed;
 
-    public IAudioMixer Audio { get; }
-    public IVideoMixer Video { get; }
-    public IAVMixer.ClockMasterPolicy MasterPolicy { get; set; } = IAVMixer.ClockMasterPolicy.Audio;
-
     public AVMixer(IAudioMixer audioMixer, IVideoMixer videoMixer, bool ownsAudio = false, bool ownsVideo = false)
     {
-        Audio = audioMixer ?? throw new ArgumentNullException(nameof(audioMixer));
-        Video = videoMixer ?? throw new ArgumentNullException(nameof(videoMixer));
+        _audio = audioMixer ?? throw new ArgumentNullException(nameof(audioMixer));
+        _video = videoMixer ?? throw new ArgumentNullException(nameof(videoMixer));
         _ownsAudio = ownsAudio;
         _ownsVideo = ownsVideo;
     }
@@ -38,45 +38,42 @@ public sealed class AVMixer : IAVMixer
     // ── Channel management ────────────────────────────────────────────────
 
     public void AddAudioChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null)
-        => Audio.AddChannel(channel, routeMap, resampler);
+        => _audio.AddChannel(channel, routeMap, resampler);
 
     public void RemoveAudioChannel(Guid channelId)
-        => Audio.RemoveChannel(channelId);
+        => _audio.RemoveChannel(channelId);
 
     public void AddVideoChannel(IVideoChannel channel)
-        => Video.AddChannel(channel);
+        => _video.AddChannel(channel);
 
     public void RemoveVideoChannel(Guid channelId)
-        => Video.RemoveChannel(channelId);
-
-    public void SetActiveVideoChannel(Guid? channelId)
-        => Video.SetActiveChannel(channelId);
+        => _video.RemoveChannel(channelId);
 
     // ── Sink registration ─────────────────────────────────────────────────
 
     public void RegisterAudioSink(IAudioSink sink, int channels = 0)
-        => Audio.RegisterSink(sink, channels);
+        => _audio.RegisterSink(sink, channels);
 
     public void UnregisterAudioSink(IAudioSink sink)
-        => Audio.UnregisterSink(sink);
+        => _audio.UnregisterSink(sink);
 
     public void RouteAudioChannelToSink(Guid channelId, IAudioSink sink, ChannelRouteMap routeMap)
-        => Audio.RouteTo(channelId, sink, routeMap);
+        => _audio.RouteTo(channelId, sink, routeMap);
 
     public void UnrouteAudioChannelFromSink(Guid channelId, IAudioSink sink)
-        => Audio.UnrouteTo(channelId, sink);
+        => _audio.UnrouteTo(channelId, sink);
 
     public void RegisterVideoSink(IVideoSink sink)
-        => Video.RegisterSink(sink);
+        => _video.RegisterSink(sink);
 
     public void UnregisterVideoSink(IVideoSink sink)
-        => Video.UnregisterSink(sink);
+        => _video.UnregisterSink(sink);
 
     public void RouteVideoChannelToSink(Guid channelId, IVideoSink sink)
-        => Video.SetActiveChannelForSink(sink, channelId);
+        => _video.SetActiveChannelForSink(sink, channelId);
 
     public void UnrouteVideoChannelFromSink(IVideoSink sink)
-        => Video.SetActiveChannelForSink(sink, null);
+        => _video.SetActiveChannelForSink(sink, null);
 
     // ── Endpoint registration ─────────────────────────────────────────────
 
@@ -86,14 +83,14 @@ public sealed class AVMixer : IAVMixer
         if (_videoEndpointAdapters.ContainsKey(endpoint)) return;
         var adapter = new VideoEndpointSinkAdapter(endpoint);
         _videoEndpointAdapters[endpoint] = adapter;
-        Video.RegisterSink(adapter);
+        _video.RegisterSink(adapter);
     }
 
     public void UnregisterVideoEndpoint(IVideoFrameEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         if (!_videoEndpointAdapters.Remove(endpoint, out var adapter)) return;
-        Video.UnregisterSink(adapter);
+        _video.UnregisterSink(adapter);
     }
 
     public void RouteVideoChannelToEndpoint(Guid channelId, IVideoFrameEndpoint endpoint)
@@ -101,7 +98,15 @@ public sealed class AVMixer : IAVMixer
         ArgumentNullException.ThrowIfNull(endpoint);
         if (!_videoEndpointAdapters.TryGetValue(endpoint, out var adapter))
             throw new InvalidOperationException("Endpoint is not registered. Call RegisterVideoEndpoint first.");
-        Video.SetActiveChannelForSink(adapter, channelId);
+        _video.SetActiveChannelForSink(adapter, channelId);
+    }
+
+    public void UnrouteVideoChannelFromEndpoint(IVideoFrameEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (!_videoEndpointAdapters.TryGetValue(endpoint, out var adapter))
+            throw new InvalidOperationException("Endpoint is not registered. Call RegisterVideoEndpoint first.");
+        _video.SetActiveChannelForSink(adapter, null);
     }
 
     public void RegisterAudioEndpoint(IAudioBufferEndpoint endpoint, int channels = 0)
@@ -110,14 +115,14 @@ public sealed class AVMixer : IAVMixer
         if (_audioEndpointAdapters.ContainsKey(endpoint)) return;
         var adapter = new AudioEndpointSinkAdapter(endpoint);
         _audioEndpointAdapters[endpoint] = adapter;
-        Audio.RegisterSink(adapter, channels);
+        _audio.RegisterSink(adapter, channels);
     }
 
     public void UnregisterAudioEndpoint(IAudioBufferEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         if (!_audioEndpointAdapters.Remove(endpoint, out var adapter)) return;
-        Audio.UnregisterSink(adapter);
+        _audio.UnregisterSink(adapter);
     }
 
     // ── Batch helpers ─────────────────────────────────────────────────────
@@ -127,6 +132,13 @@ public sealed class AVMixer : IAVMixer
         ArgumentNullException.ThrowIfNull(sinks);
         for (int i = 0; i < sinks.Count; i++)
             RouteVideoChannelToSink(channelId, sinks[i]);
+    }
+
+    public void RouteVideoChannelToEndpoints(Guid channelId, IReadOnlyList<IVideoFrameEndpoint> endpoints)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        for (int i = 0; i < endpoints.Count; i++)
+            RouteVideoChannelToEndpoint(channelId, endpoints[i]);
     }
 
     public void RouteAudioChannelToSinks(Guid channelId, IReadOnlyList<(IAudioSink Sink, ChannelRouteMap RouteMap)> sinkRoutes)
@@ -144,9 +156,8 @@ public sealed class AVMixer : IAVMixer
         _disposed = true;
 
         if (_ownsAudio)
-            Audio.Dispose();
+            _audio.Dispose();
         if (_ownsVideo)
-            Video.Dispose();
+            _video.Dispose();
     }
 }
-

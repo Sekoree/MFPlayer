@@ -5,7 +5,7 @@ namespace S.Media.Core.Clock;
 /// <summary>
 /// Video clock driven by presented frame PTS values.
 /// Uses <see cref="Stopwatch"/> interpolation between frames
-/// (same pattern as <c>NdiClock.UpdateFromFrame</c>).
+/// (same pattern as <c>NDIClock.UpdateFromFrame</c>).
 /// </summary>
 public sealed class VideoPtsClock : MediaClockBase
 {

@@ -23,7 +23,6 @@ public sealed class VideoOutputPullSourceAdapterTests
     {
         public VideoFormat OutputFormat => new(640, 360, PixelFormat.Rgba32, 30, 1);
         public int ChannelCount => 0;
-        public IVideoChannel? ActiveChannel => null;
         public int SinkCount => 0;
 
         public TimeSpan LastClockPosition { get; private set; }
@@ -31,7 +30,8 @@ public sealed class VideoOutputPullSourceAdapterTests
 
         public void AddChannel(IVideoChannel channel) { }
         public void RemoveChannel(Guid channelId) { }
-        public void SetActiveChannel(Guid? channelId) { }
+        public void RouteChannelToPrimaryOutput(Guid channelId) { }
+        public void UnroutePrimaryOutput() { }
         public void RegisterSink(IVideoSink sink) { }
         public void UnregisterSink(IVideoSink sink) { }
         public void SetActiveChannelForSink(IVideoSink sink, Guid? channelId) { }

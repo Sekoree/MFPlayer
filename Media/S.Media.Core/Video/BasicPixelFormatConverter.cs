@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;
@@ -92,16 +93,23 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
 
             Interlocked.Increment(ref _libYuvAttempts);
 
-            if (!converted)
-            {
-                Interlocked.Increment(ref _managedFallbacks);
-                rented.AsSpan(0, bytes).Clear();
-            }
-            else
+            if (converted)
             {
                 Interlocked.Increment(ref _libYuvSuccesses);
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
             }
 
+            bool managedConverted = source.PixelFormat == PixelFormat.Yuv422p10
+                && TryConvertI210Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
+
+            if (managedConverted)
+            {
+                Interlocked.Increment(ref _managedFallbacks);
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            }
+
+            Interlocked.Increment(ref _managedFallbacks);
+            rented.AsSpan(0, bytes).Clear();
             return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
         }
 
@@ -119,6 +127,75 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         throw new NotSupportedException($"BasicPixelFormatConverter does not support {source.PixelFormat} -> {dstFormat}.");
     }
 
+    private static bool TryConvertI210Managed(ReadOnlySpan<byte> src, Span<byte> dst, int width, int height, bool dstRgba)
+    {
+        if (width <= 0 || height <= 0)
+            return false;
+
+        int yStride = width * 2;
+        int uvStride = width;
+        int ySize = yStride * height;
+        int uvSize = uvStride * height;
+        int srcRequired = ySize + (uvSize * 2);
+        int dstRequired = width * height * 4;
+
+        if (src.Length < srcRequired || dst.Length < dstRequired)
+            return false;
+
+        var yPlane = src[..ySize];
+        var uPlane = src.Slice(ySize, uvSize);
+        var vPlane = src.Slice(ySize + uvSize, uvSize);
+
+        for (int y = 0; y < height; y++)
+        {
+            int yRow = y * yStride;
+            int uvRow = y * uvStride;
+            int dstRow = y * width * 4;
+
+            for (int x = 0; x < width; x++)
+            {
+                int yOff = yRow + (x * 2);
+                int uvOff = uvRow + ((x >> 1) * 2);
+
+                int y10 = BinaryPrimitives.ReadUInt16LittleEndian(yPlane.Slice(yOff, 2)) & 0x03FF;
+                int u10 = BinaryPrimitives.ReadUInt16LittleEndian(uPlane.Slice(uvOff, 2)) & 0x03FF;
+                int v10 = BinaryPrimitives.ReadUInt16LittleEndian(vPlane.Slice(uvOff, 2)) & 0x03FF;
+
+                float yf = y10 / 1023f;
+                float uf = (u10 - 512f) / 512f;
+                float vf = (v10 - 512f) / 512f;
+
+                int r = ClampToByte((yf + (1.5748f * vf)) * 255f);
+                int g = ClampToByte((yf - (0.1873f * uf) - (0.4681f * vf)) * 255f);
+                int b = ClampToByte((yf + (1.8556f * uf)) * 255f);
+
+                int d = dstRow + (x * 4);
+                if (dstRgba)
+                {
+                    dst[d] = (byte)r;
+                    dst[d + 1] = (byte)g;
+                    dst[d + 2] = (byte)b;
+                    dst[d + 3] = 255;
+                }
+                else
+                {
+                    dst[d] = (byte)b;
+                    dst[d + 1] = (byte)g;
+                    dst[d + 2] = (byte)r;
+                    dst[d + 3] = 255;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static int ClampToByte(float v)
+    {
+        if (v <= 0f) return 0;
+        if (v >= 255f) return 255;
+        return (int)(v + 0.5f);
+    }
+
     public void Dispose() => _disposed = true;
 }
-

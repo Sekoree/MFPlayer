@@ -16,7 +16,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{4FC3071A-F
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB0-47AE-A212-5084CFA63CEC}"
 	ProjectSection(SolutionItems) = preProject
-		Doc\ImplementationStatus.md = Doc\ImplementationStatus.md
+		Doc\API-Implementation-Audit-2026-04-12.md = Doc\API-Implementation-Audit-2026-04-12.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"

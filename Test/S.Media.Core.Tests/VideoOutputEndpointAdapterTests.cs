@@ -1,6 +1,7 @@
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
+using S.Media.Core.Video.Endpoints;
 using Xunit;
 
 namespace S.Media.Core.Tests;

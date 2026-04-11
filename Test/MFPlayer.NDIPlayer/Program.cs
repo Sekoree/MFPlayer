@@ -93,7 +93,7 @@ using (ndiRuntime)
         return;
     }
 
-    NdiDiscoveredSource[] sources;
+    NDIDiscoveredSource[] sources;
     using (finder)
     {
         // Poll up to 5 s in 1 s increments; stop early if sources appear.

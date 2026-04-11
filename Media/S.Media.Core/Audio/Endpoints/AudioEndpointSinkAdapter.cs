@@ -1,6 +1,6 @@
 using S.Media.Core.Media;
 
-namespace S.Media.Core.Audio;
+namespace S.Media.Core.Audio.Endpoints;
 
 /// <summary>
 /// Adapts an <see cref="IAudioBufferEndpoint"/> to <see cref="IAudioSink"/> so
@@ -26,4 +26,5 @@ public sealed class AudioEndpointSinkAdapter : IAudioSink
 
     public void Dispose() => _endpoint.Dispose();
 }
+
 

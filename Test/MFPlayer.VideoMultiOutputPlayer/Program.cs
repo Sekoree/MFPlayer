@@ -11,19 +11,35 @@ using NDILib;
 using S.Media.FFmpeg;
 using S.Media.NDI;
 using S.Media.Core.Audio;
+using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
 using S.Media.Core.Video;
 using S.Media.SDL3;
 
-static NdiEndpointPreset ParseNdiPreset(string? text)
+static NDIEndpointPreset ParseNDIPreset(string? text)
 {
     var s = (text ?? string.Empty).Trim();
     if (s.Equals("safe", StringComparison.OrdinalIgnoreCase) || s.Equals("s", StringComparison.OrdinalIgnoreCase))
-        return NdiEndpointPreset.Safe;
+        return NDIEndpointPreset.Safe;
     if (s.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) || s.Equals("low", StringComparison.OrdinalIgnoreCase) || s.Equals("l", StringComparison.OrdinalIgnoreCase))
-        return NdiEndpointPreset.LowLatency;
-    return NdiEndpointPreset.Balanced;
+        return NDIEndpointPreset.LowLatency;
+    return NDIEndpointPreset.Balanced;
+}
+
+static ChannelRouteMap BuildAudioRouteMap(int srcChannels, int dstChannels)
+{
+    var b = new ChannelRouteMap.Builder();
+    if (srcChannels == 1 && dstChannels >= 2)
+    {
+        b.Route(0, 0).Route(0, 1);
+    }
+    else
+    {
+        int common = Math.Min(srcChannels, dstChannels);
+        for (int i = 0; i < common; i++) b.Route(i, i);
+    }
+    return b.Build();
 }
 
 Console.WriteLine("╔══════════════════════════════════════════╗");
@@ -46,7 +62,7 @@ try
 {
     decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions
     {
-        EnableAudio = false,
+        EnableAudio = true,
         EnableVideo = true,
         // null = auto-detect: decoder outputs frames in the source's native pixel format.
         VideoTargetPixelFormat = null
@@ -68,10 +84,13 @@ if (decoder.VideoChannels.Count == 0)
 using (decoder)
 {
     var videoChannel = decoder.VideoChannels[0];
+    var audioChannel = decoder.AudioChannels.Count > 0 ? decoder.AudioChannels[0] : null;
     var srcFmt = videoChannel.SourceFormat;
 
     Console.WriteLine("OK");
     Console.WriteLine($"  Video: {srcFmt}");
+    if (audioChannel != null)
+        Console.WriteLine($"  Audio: {audioChannel.SourceFormat}");
 
     using var videoOutput = new SDL3VideoOutput();
     Console.Write("Opening SDL3 video output... ");
@@ -90,16 +109,13 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    using var avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), videoOutput.Mixer, ownsAudio: true, ownsVideo: false)
-    {
-        MasterPolicy = IAVMixer.ClockMasterPolicy.Video
-    };
+    using var avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), videoOutput.Mixer, ownsAudio: true, ownsVideo: false);
     avMixer.AddVideoChannel(videoChannel);
-    avMixer.SetActiveVideoChannel(videoChannel.Id);
 
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
-    NDIVideoSink? ndiSink = null;
+    NDIAVSink? ndiSink = null;
+    AggregateOutput? ndiAudioAggregate = null;
 
     Console.Write("Enable NDI video sink? [y/N]: ");
     bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
@@ -123,7 +139,7 @@ using (decoder)
                 if (string.IsNullOrEmpty(senderName)) senderName = "MFPlayer NDI Video";
 
                 Console.Write("NDI preset [Safe/Balanced/LowLatency] (default Balanced): ");
-                var preset = ParseNdiPreset(Console.ReadLine());
+                var preset = ParseNDIPreset(Console.ReadLine());
 
                 int sret = NDISender.Create(out ndiSender, senderName, clockVideo: false, clockAudio: false);
                 if (sret != 0 || ndiSender == null)
@@ -134,17 +150,41 @@ using (decoder)
                 }
                 else
                 {
-                    ndiSink = new NDIVideoSink(
+                    AudioFormat? ndiAudioFormat = null;
+                    ChannelRouteMap? routeMap = null;
+                    if (audioChannel != null)
+                    {
+                        var srcAudio = audioChannel.SourceFormat;
+                        ndiAudioFormat = new AudioFormat(48000, Math.Min(srcAudio.Channels, 2));
+                        routeMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
+                    }
+
+                    ndiSink = new NDIAVSink(
                         ndiSender,
                         videoOutput.OutputFormat,
-                        poolCount: 0,
-                        maxPendingFrames: 0,
+                        audioTargetFormat: ndiAudioFormat,
                         preset: preset,
-                        name: $"NDIVideoSink({senderName})");
+                        name: $"NDIAVSink({senderName})",
+                        videoPoolCount: 0,
+                        videoMaxPendingFrames: 0,
+                        audioFramesPerBuffer: 1024);
                     avMixer.RegisterVideoSink(ndiSink);
                     avMixer.RouteVideoChannelToSink(videoChannel.Id, ndiSink);
                     await ndiSink.StartAsync();
+
+                    if (audioChannel != null && routeMap != null)
+                    {
+                        var virtualOut = new VirtualAudioOutput(ndiAudioFormat!.Value, framesPerBuffer: 1024);
+
+                        ndiAudioAggregate = new AggregateOutput(virtualOut);
+                        ndiAudioAggregate.AddSink(ndiSink);
+                        ndiAudioAggregate.Mixer.AddChannel(audioChannel, routeMap);
+                        ndiAudioAggregate.Mixer.RouteTo(audioChannel.Id, ndiSink, routeMap);
+                    }
+
                     Console.WriteLine($"  NDI sink enabled: {senderName} ({preset})");
+                    if (audioChannel != null)
+                        Console.WriteLine("  NDI audio enabled from source audio track.");
                 }
             }
         }
@@ -161,6 +201,8 @@ using (decoder)
 
     decoder.Start();
     await videoOutput.StartAsync();
+    if (ndiAudioAggregate != null)
+        await ndiAudioAggregate.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Targets: SDL3 leader" + (ndiSink != null ? " + NDI sink" : string.Empty));
@@ -173,9 +215,14 @@ using (decoder)
     var outputForStats = videoOutput;
     var channelForStats = videoChannel;
     var mixerForStats = mixer;
+    Func<VideoEndpointDiagnosticsSnapshot?> getEndpointSnapshot = static () => null;
+    if (ndiSink != null)
+    {
+        var sinkForStats = ndiSink;
+        getEndpointSnapshot = () => sinkForStats.GetDiagnosticsSnapshot();
+    }
     var statsTask = Task.Run(async () =>
     {
-        BasicPixelFormatConverter.DiagnosticsSnapshot? prevConv = null;
         while (!cts.IsCancellationRequested)
         {
             try
@@ -195,20 +242,15 @@ using (decoder)
                 : $"  held={mixerForStats.HeldFrameCount} drop={mixerForStats.DroppedStaleFrameCount} fallback={mixerForStats.FallbackConversionCount}";
             var ms = mixerForStats?.GetDiagnosticsSnapshot();
             var os = outputForStats.GetDiagnosticsSnapshot();
-            var cs = BasicPixelFormatConverter.GetDiagnosticsSnapshot();
             string mixerDiag = ms.HasValue
                 ? $"  m(present={ms.Value.PresentCalls} leader={ms.Value.LeaderPresented}/{ms.Value.LeaderReturnedNull} pull={ms.Value.PullHits}/{ms.Value.PullAttempts})"
                 : string.Empty;
             string outDiag = $"  o(loop={os.LoopIterations} draw={os.PresentedFrames} black={os.BlackFrames} swap={os.SwapCalls} ex={os.RenderExceptions} glFail={os.GlMakeCurrentFailures})";
-            string convDiag = prevConv.HasValue
-                ? $"  cvt({cs.LibYuvSuccesses - prevConv.Value.LibYuvSuccesses}/{cs.LibYuvAttempts - prevConv.Value.LibYuvAttempts}/{cs.ManagedFallbacks - prevConv.Value.ManagedFallbacks})"
-                : "";
-            var es = ndiSink?.GetDiagnosticsSnapshot();
+            var es = getEndpointSnapshot();
             string endpointDiag = es.HasValue
                 ? $"  ep(pass={es.Value.PassthroughFrames} conv={es.Value.ConvertedFrames} drop={es.Value.DroppedFrames} q={es.Value.QueueDepth} qdrop={es.Value.QueueDrops})"
                 : string.Empty;
-            Console.WriteLine($"[vstats] clock={outputForStats.Clock.Position:mm\\:ss\\.fff} src={channelForStats.Position:mm\\:ss\\.fff}{diag}{mixerDiag}{outDiag}{convDiag}{endpointDiag}");
-            prevConv = cs;
+            Console.WriteLine($"[vstats] clock={outputForStats.Clock.Position:mm\\:ss\\.fff} src={channelForStats.Position:mm\\:ss\\.fff}{diag}{mixerDiag}{outDiag}{endpointDiag}");
         }
     }, cts.Token);
 
@@ -222,6 +264,12 @@ using (decoder)
     try { await statsTask; } catch (OperationCanceledException) { }
     await videoOutput.StopAsync();
 
+    if (ndiAudioAggregate != null)
+    {
+        await ndiAudioAggregate.StopAsync();
+        ndiAudioAggregate.Dispose();
+    }
+
     if (ndiSink != null)
     {
         await ndiSink.StopAsync();
@@ -234,4 +282,3 @@ using (decoder)
 
     Console.WriteLine("Done.");
 }
-

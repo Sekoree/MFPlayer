@@ -73,7 +73,7 @@ public sealed class NDISource : IDisposable
     /// <param name="source">Discovered NDI source (from <see cref="NDIFinder"/>).</param>
     /// <param name="options">Options; <see langword="null"/> uses defaults.</param>
     /// <exception cref="InvalidOperationException">Thrown if the receiver or frame-sync cannot be created.</exception>
-    public static NDISource Open(NdiDiscoveredSource source, NDISourceOptions? options = null)
+    public static NDISource Open(NDIDiscoveredSource source, NDISourceOptions? options = null)
     {
         options ??= new NDISourceOptions();
 

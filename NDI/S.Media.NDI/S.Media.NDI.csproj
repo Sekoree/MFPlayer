@@ -13,6 +13,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
         <ProjectReference Include="..\NDILib\NDILib.csproj" />
     </ItemGroup>
 

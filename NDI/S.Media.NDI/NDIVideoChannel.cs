@@ -110,12 +110,12 @@ public sealed class NDIVideoChannel : IVideoChannel
                 // Map NDI FourCC to our PixelFormat enum.
                 var pixFmt = frame.FourCC switch
                 {
-                    NdiFourCCVideoType.Bgra => Core.Media.PixelFormat.Bgra32,
-                    NdiFourCCVideoType.Bgrx => Core.Media.PixelFormat.Bgra32,
-                    NdiFourCCVideoType.Rgba => Core.Media.PixelFormat.Rgba32,
-                    NdiFourCCVideoType.Rgbx => Core.Media.PixelFormat.Rgba32,
-                    NdiFourCCVideoType.Uyvy => Core.Media.PixelFormat.Uyvy422,
-                    NdiFourCCVideoType.Nv12 => Core.Media.PixelFormat.Nv12,
+                    NDIFourCCVideoType.Bgra => Core.Media.PixelFormat.Bgra32,
+                    NDIFourCCVideoType.Bgrx => Core.Media.PixelFormat.Bgra32,
+                    NDIFourCCVideoType.Rgba => Core.Media.PixelFormat.Rgba32,
+                    NDIFourCCVideoType.Rgbx => Core.Media.PixelFormat.Rgba32,
+                    NDIFourCCVideoType.Uyvy => Core.Media.PixelFormat.Uyvy422,
+                    NDIFourCCVideoType.Nv12 => Core.Media.PixelFormat.Nv12,
                     _                       => Core.Media.PixelFormat.Bgra32,
                 };
 

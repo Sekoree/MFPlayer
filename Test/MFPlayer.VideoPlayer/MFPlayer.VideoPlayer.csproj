@@ -16,5 +16,9 @@
         <ProjectReference Include="..\..\Video\S.Media.SDL3\S.Media.SDL3.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+        <Compile Update="Program.cs" NoWarn="300" />
+    </ItemGroup>
+
 </Project>
 

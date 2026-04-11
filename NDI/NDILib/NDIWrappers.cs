@@ -51,7 +51,7 @@ public sealed class NDIFinder : IDisposable
         using var groups   = Utf8Buffer.From(settings.Groups);
         using var extraIps = Utf8Buffer.From(settings.ExtraIps);
 
-        var create = new NdiFindCreate
+        var create = new NDIFindCreate
         {
             ShowLocalSources = settings.ShowLocalSources ? (byte)1 : (byte)0,
             PGroups   = groups.Pointer,
@@ -81,20 +81,20 @@ public sealed class NDIFinder : IDisposable
     public bool WaitForSources(uint timeoutMs) => Native.NDIlib_find_wait_for_sources(_instance, timeoutMs);
 
     /// <summary>Returns the current snapshot of discovered NDI sources.</summary>
-    public NdiDiscoveredSource[] GetCurrentSources()
+    public NDIDiscoveredSource[] GetCurrentSources()
     {
         var ptr = Native.NDIlib_find_get_current_sources(_instance, out var count);
         if (ptr == nint.Zero || count == 0)
             return [];
 
-        var sourceSize = Marshal.SizeOf<NdiSource>();
-        var result     = new NdiDiscoveredSource[count];
+        var sourceSize = Marshal.SizeOf<NDISourceRef>();
+        var result     = new NDIDiscoveredSource[count];
 
         for (var i = 0; i < count; i++)
         {
             var sourcePtr = nint.Add(ptr, i * sourceSize);
-            var source    = Marshal.PtrToStructure<NdiSource>(sourcePtr);
-            result[i]     = new NdiDiscoveredSource(source.NdiName ?? string.Empty, source.UrlAddress);
+            var source    = Marshal.PtrToStructure<NDISourceRef>(sourcePtr);
+            result[i]     = new NDIDiscoveredSource(source.NDIName ?? string.Empty, source.UrlAddress);
         }
 
         return result;
@@ -118,8 +118,8 @@ public sealed class NDIFinder : IDisposable
 
 public sealed class NDIReceiverSettings
 {
-    public NdiRecvColorFormat ColorFormat    { get; init; } = NdiRecvColorFormat.Fastest;
-    public NdiRecvBandwidth   Bandwidth      { get; init; } = NdiRecvBandwidth.Highest;
+    public NDIRecvColorFormat ColorFormat    { get; init; } = NDIRecvColorFormat.Fastest;
+    public NDIRecvBandwidth   Bandwidth      { get; init; } = NDIRecvBandwidth.Highest;
     public bool               AllowVideoFields { get; init; } = true;
     public string?            ReceiverName   { get; init; }
 }
@@ -154,13 +154,13 @@ public sealed class NDIReceiver : IDisposable
 
         using var recvName = Utf8Buffer.From(settings.ReceiverName);
 
-        var create = new NdiRecvCreateV3
+        var create = new NDIRecvCreateV3
         {
             SourceToConnectTo  = default,
             ColorFormat        = settings.ColorFormat,
             Bandwidth          = settings.Bandwidth,
             AllowVideoFields   = settings.AllowVideoFields ? (byte)1 : (byte)0,
-            PNdiRecvName       = recvName.Pointer
+            PNDIRecvName       = recvName.Pointer
         };
 
         var ptr = Native.NDIlib_recv_create_v3(create);
@@ -180,7 +180,7 @@ public sealed class NDIReceiver : IDisposable
     // ------------------------------------------------------------------
 
     /// <summary>Connects to the specified NDI source.</summary>
-    public void Connect(in NdiDiscoveredSource source)
+    public void Connect(in NDIDiscoveredSource source)
     {
         if (Logger.IsEnabled(LogLevel.Debug))
             Logger.LogDebug("NDIReceiver connecting to source={Name}", source.Name);
@@ -188,7 +188,7 @@ public sealed class NDIReceiver : IDisposable
         using var ndiName = Utf8Buffer.From(source.Name);
         using var url     = Utf8Buffer.From(source.UrlAddress);
 
-        var nativeSource = new NdiSource { PNdiName = ndiName.Pointer, PUrlAddress = url.Pointer };
+        var nativeSource = new NDISourceRef { PNDIName = ndiName.Pointer, PUrlAddress = url.Pointer };
         Native.NDIlib_recv_connect(_instance, nativeSource);
     }
 
@@ -206,15 +206,15 @@ public sealed class NDIReceiver : IDisposable
     // ------------------------------------------------------------------
 
     /// <summary>Captures the next available frame.</summary>
-    public NdiFrameType Capture(
-        out NdiVideoFrameV2  video,
-        out NdiAudioFrameV3  audio,
-        out NdiMetadataFrame metadata,
+    public NDIFrameType Capture(
+        out NDIVideoFrameV2  video,
+        out NDIAudioFrameV3  audio,
+        out NDIMetadataFrame metadata,
         uint                 timeoutMs)
     {
         var frameType = Native.NDIlib_recv_capture_v3(_instance, out video, out audio, out metadata, timeoutMs);
 
-        if (frameType == NdiFrameType.Error && Logger.IsEnabled(LogLevel.Debug))
+        if (frameType == NDIFrameType.Error && Logger.IsEnabled(LogLevel.Debug))
             Logger.LogDebug("NDIReceiver capture returned Error (ptr={Ptr}) — possible stream disconnect",
                 NDILibLogging.PtrMeta(_instance));
 
@@ -237,9 +237,9 @@ public sealed class NDIReceiver : IDisposable
     // Free buffers
     // ------------------------------------------------------------------
 
-    public void FreeVideo(in NdiVideoFrameV2    frame) => Native.NDIlib_recv_free_video_v2(_instance, frame);
-    public void FreeAudio(in NdiAudioFrameV3    frame) => Native.NDIlib_recv_free_audio_v3(_instance, frame);
-    public void FreeMetadata(in NdiMetadataFrame frame) => Native.NDIlib_recv_free_metadata(_instance, frame);
+    public void FreeVideo(in NDIVideoFrameV2    frame) => Native.NDIlib_recv_free_video_v2(_instance, frame);
+    public void FreeAudio(in NDIAudioFrameV3    frame) => Native.NDIlib_recv_free_audio_v3(_instance, frame);
+    public void FreeMetadata(in NDIMetadataFrame frame) => Native.NDIlib_recv_free_metadata(_instance, frame);
 
     // ------------------------------------------------------------------
     // Metadata upstream
@@ -247,7 +247,7 @@ public sealed class NDIReceiver : IDisposable
 
     /// <summary>Sends a metadata message upstream to the connected sender.</summary>
     /// <returns><see langword="true"/> if currently connected; <see langword="false"/> otherwise.</returns>
-    public bool SendMetadata(in NdiMetadataFrame frame)
+    public bool SendMetadata(in NDIMetadataFrame frame)
         => Native.NDIlib_recv_send_metadata(_instance, frame);
 
     // ------------------------------------------------------------------
@@ -260,7 +260,7 @@ public sealed class NDIReceiver : IDisposable
     /// <returns><see langword="true"/> if currently connected.</returns>
     public bool SetTally(bool onProgram, bool onPreview)
     {
-        var tally = new NdiTally
+        var tally = new NDITally
         {
             OnProgram = onProgram  ? (byte)1 : (byte)0,
             OnPreview = onPreview  ? (byte)1 : (byte)0
@@ -276,11 +276,11 @@ public sealed class NDIReceiver : IDisposable
     public int GetConnectionCount() => Native.NDIlib_recv_get_no_connections(_instance);
 
     /// <summary>Retrieves total and dropped frame counts since the receiver was created.</summary>
-    public void GetPerformance(out NdiRecvPerformance total, out NdiRecvPerformance dropped)
+    public void GetPerformance(out NDIRecvPerformance total, out NDIRecvPerformance dropped)
         => Native.NDIlib_recv_get_performance(_instance, out total, out dropped);
 
     /// <summary>Returns the current internal queue depths.</summary>
-    public NdiRecvQueue GetQueue()
+    public NDIRecvQueue GetQueue()
     {
         Native.NDIlib_recv_get_queue(_instance, out var queue);
         return queue;
@@ -298,7 +298,7 @@ public sealed class NDIReceiver : IDisposable
     /// Adds a connection metadata string sent automatically to every new connected sender.
     /// If a sender is already connected it receives this string immediately.
     /// </summary>
-    public void AddConnectionMetadata(in NdiMetadataFrame metadata)
+    public void AddConnectionMetadata(in NDIMetadataFrame metadata)
         => Native.NDIlib_recv_add_connection_metadata(_instance, metadata);
 
     // ------------------------------------------------------------------
@@ -307,7 +307,7 @@ public sealed class NDIReceiver : IDisposable
 
     /// <summary>
     /// Returns the web control URL for the connected source (e.g. a PTZ camera UI),
-    /// or <see langword="null"/> if none is available. Available after <see cref="NdiFrameType.StatusChange"/>.
+    /// or <see langword="null"/> if none is available. Available after <see cref="NDIFrameType.StatusChange"/>.
     /// </summary>
     public string? GetWebControl()
     {
@@ -362,11 +362,11 @@ public sealed class NDIReceiver : IDisposable
 /// <remarks>
 /// <b>Always</b> check <see cref="FrameType"/> before accessing frame data:
 /// <list type="bullet">
-///   <item><see cref="NdiFrameType.Video"/>    → <see cref="Video"/> is valid.</item>
-///   <item><see cref="NdiFrameType.Audio"/>    → <see cref="Audio"/> is valid.</item>
-///   <item><see cref="NdiFrameType.Metadata"/> → <see cref="Metadata"/> is valid.</item>
-///   <item><see cref="NdiFrameType.None"/>, <see cref="NdiFrameType.Error"/>,
-///         <see cref="NdiFrameType.StatusChange"/>, <see cref="NdiFrameType.SourceChange"/>
+///   <item><see cref="NDIFrameType.Video"/>    → <see cref="Video"/> is valid.</item>
+///   <item><see cref="NDIFrameType.Audio"/>    → <see cref="Audio"/> is valid.</item>
+///   <item><see cref="NDIFrameType.Metadata"/> → <see cref="Metadata"/> is valid.</item>
+///   <item><see cref="NDIFrameType.None"/>, <see cref="NDIFrameType.Error"/>,
+///         <see cref="NDIFrameType.StatusChange"/>, <see cref="NDIFrameType.SourceChange"/>
 ///         → no frame data; nothing to free.</item>
 /// </list>
 /// </remarks>
@@ -377,10 +377,10 @@ public sealed class NDICaptureScope : IDisposable
 
     internal NDICaptureScope(
         NDIReceiver    receiver,
-        NdiFrameType   frameType,
-        NdiVideoFrameV2  video,
-        NdiAudioFrameV3  audio,
-        NdiMetadataFrame metadata)
+        NDIFrameType   frameType,
+        NDIVideoFrameV2  video,
+        NDIAudioFrameV3  audio,
+        NDIMetadataFrame metadata)
     {
         _receiver  = receiver;
         FrameType  = frameType;
@@ -389,19 +389,19 @@ public sealed class NDICaptureScope : IDisposable
         Metadata   = metadata;
     }
 
-    public NdiFrameType      FrameType { get; }
-    public NdiVideoFrameV2   Video     { get; }
-    public NdiAudioFrameV3   Audio     { get; }
-    public NdiMetadataFrame  Metadata  { get; }
+    public NDIFrameType      FrameType { get; }
+    public NDIVideoFrameV2   Video     { get; }
+    public NDIAudioFrameV3   Audio     { get; }
+    public NDIMetadataFrame  Metadata  { get; }
 
     public void Dispose()
     {
         if (_disposed) return;
         switch (FrameType)
         {
-            case NdiFrameType.Video:    _receiver.FreeVideo(Video);       break;
-            case NdiFrameType.Audio:    _receiver.FreeAudio(Audio);       break;
-            case NdiFrameType.Metadata: _receiver.FreeMetadata(Metadata); break;
+            case NDIFrameType.Video:    _receiver.FreeVideo(Video);       break;
+            case NDIFrameType.Audio:    _receiver.FreeAudio(Audio);       break;
+            case NDIFrameType.Metadata: _receiver.FreeMetadata(Metadata); break;
         }
         _disposed = true;
     }
@@ -445,9 +445,9 @@ public sealed class NDISender : IDisposable
         using var ndiName   = Utf8Buffer.From(senderName);
         using var groupList = Utf8Buffer.From(groups);
 
-        var create = new NdiSendCreate
+        var create = new NDISendCreate
         {
-            PNdiName   = ndiName.Pointer,
+            PNDIName   = ndiName.Pointer,
             PGroups    = groupList.Pointer,
             ClockVideo = clockVideo ? (byte)1 : (byte)0,
             ClockAudio = clockAudio ? (byte)1 : (byte)0
@@ -470,14 +470,14 @@ public sealed class NDISender : IDisposable
     // ------------------------------------------------------------------
 
     /// <summary>Sends a video frame synchronously (blocks until clocked if <c>clockVideo</c> is set).</summary>
-    public void SendVideo(in NdiVideoFrameV2 frame) => Native.NDIlib_send_send_video_v2(_instance, frame);
+    public void SendVideo(in NDIVideoFrameV2 frame) => Native.NDIlib_send_send_video_v2(_instance, frame);
 
     /// <summary>
     /// Schedules a video frame for asynchronous sending. Returns immediately; the frame buffer
     /// must remain valid until the next call to <see cref="SendVideo"/>, <see cref="SendVideoAsync"/>,
     /// <see cref="FlushAsync"/>, or <see cref="Dispose"/>.
     /// </summary>
-    public void SendVideoAsync(in NdiVideoFrameV2 frame)
+    public void SendVideoAsync(in NDIVideoFrameV2 frame)
         => Native.NDIlib_send_send_video_async_v2(_instance, frame);
 
     /// <summary>Flushes any pending asynchronous video frame submitted via <see cref="SendVideoAsync"/>.</summary>
@@ -487,8 +487,8 @@ public sealed class NDISender : IDisposable
     // Send — audio / metadata
     // ------------------------------------------------------------------
 
-    public void SendAudio(in NdiAudioFrameV3    frame) => Native.NDIlib_send_send_audio_v3(_instance, frame);
-    public void SendMetadata(in NdiMetadataFrame frame) => Native.NDIlib_send_send_metadata(_instance, frame);
+    public void SendAudio(in NDIAudioFrameV3    frame) => Native.NDIlib_send_send_audio_v3(_instance, frame);
+    public void SendMetadata(in NDIMetadataFrame frame) => Native.NDIlib_send_send_metadata(_instance, frame);
 
     // ------------------------------------------------------------------
     // Receive metadata from connected receivers
@@ -497,11 +497,11 @@ public sealed class NDISender : IDisposable
     /// <summary>
     /// Receives a metadata message sent upstream by a connected receiver (e.g. PTZ commands).
     /// </summary>
-    public NdiFrameType CaptureMetadata(out NdiMetadataFrame metadata, uint timeoutMs)
+    public NDIFrameType CaptureMetadata(out NDIMetadataFrame metadata, uint timeoutMs)
         => Native.NDIlib_send_capture(_instance, out metadata, timeoutMs);
 
     /// <summary>Frees a metadata frame previously received via <see cref="CaptureMetadata"/>.</summary>
-    public void FreeMetadata(in NdiMetadataFrame frame) => Native.NDIlib_send_free_metadata(_instance, frame);
+    public void FreeMetadata(in NDIMetadataFrame frame) => Native.NDIlib_send_free_metadata(_instance, frame);
 
     // ------------------------------------------------------------------
     // Tally
@@ -513,7 +513,7 @@ public sealed class NDISender : IDisposable
     /// <param name="tally">The current tally state on return.</param>
     /// <param name="timeoutMs">Time to wait for a tally change. Use <c>0</c> to poll immediately.</param>
     /// <returns><see langword="true"/> if tally changed; <see langword="false"/> if it timed out.</returns>
-    public bool GetTally(out NdiTally tally, uint timeoutMs = 0)
+    public bool GetTally(out NDITally tally, uint timeoutMs = 0)
         => Native.NDIlib_send_get_tally(_instance, out tally, timeoutMs);
 
     // ------------------------------------------------------------------
@@ -536,8 +536,8 @@ public sealed class NDISender : IDisposable
     {
         var ptr = Native.NDIlib_send_get_source_name(_instance);
         if (ptr == nint.Zero) return null;
-        var source = Marshal.PtrToStructure<NdiSource>(ptr);
-        return source.NdiName;
+        var source = Marshal.PtrToStructure<NDISourceRef>(ptr);
+        return source.NDIName;
     }
 
     // ------------------------------------------------------------------
@@ -547,11 +547,11 @@ public sealed class NDISender : IDisposable
     /// <summary>
     /// Specifies a fallback NDI source that receivers switch to if this sender goes offline.
     /// </summary>
-    public void SetFailover(in NdiDiscoveredSource source)
+    public void SetFailover(in NDIDiscoveredSource source)
     {
         using var name = Utf8Buffer.From(source.Name);
         using var url  = Utf8Buffer.From(source.UrlAddress);
-        var s = new NdiSource { PNdiName = name.Pointer, PUrlAddress = url.Pointer };
+        var s = new NDISourceRef { PNDIName = name.Pointer, PUrlAddress = url.Pointer };
         Native.NDIlib_send_set_failover(_instance, s);
     }
 
@@ -570,7 +570,7 @@ public sealed class NDISender : IDisposable
     /// Adds a connection metadata string sent automatically to every new receiver.
     /// If a receiver is already connected it receives this string immediately.
     /// </summary>
-    public void AddConnectionMetadata(in NdiMetadataFrame metadata)
+    public void AddConnectionMetadata(in NDIMetadataFrame metadata)
         => Native.NDIlib_send_add_connection_metadata(_instance, metadata);
 
     // ------------------------------------------------------------------
@@ -634,12 +634,12 @@ public sealed class NDIFrameSync : IDisposable
 
     /// <summary>
     /// Pulls a video frame, always returning immediately.
-    /// If no frame has been received yet, returns an all-zero frame (check <see cref="NdiVideoFrameV2.Xres"/> == 0).
+    /// If no frame has been received yet, returns an all-zero frame (check <see cref="NDIVideoFrameV2.Xres"/> == 0).
     /// </summary>
-    public void CaptureVideo(out NdiVideoFrameV2 frame, NdiFrameFormatType fieldType = NdiFrameFormatType.Progressive)
+    public void CaptureVideo(out NDIVideoFrameV2 frame, NDIFrameFormatType fieldType = NDIFrameFormatType.Progressive)
         => Native.NDIlib_framesync_capture_video(_instance, out frame, fieldType);
 
-    public void FreeVideo(in NdiVideoFrameV2 frame)
+    public void FreeVideo(in NDIVideoFrameV2 frame)
         => Native.NDIlib_framesync_free_video(_instance, frame);
 
     // ------------------------------------------------------------------
@@ -651,10 +651,10 @@ public sealed class NDIFrameSync : IDisposable
     /// Always returns immediately, inserting silence if not enough data is available.
     /// Pass <c>0</c> for all parameters to query the current incoming audio format.
     /// </summary>
-    public void CaptureAudio(out NdiAudioFrameV3 frame, int sampleRate, int channels, int samples)
+    public void CaptureAudio(out NDIAudioFrameV3 frame, int sampleRate, int channels, int samples)
         => Native.NDIlib_framesync_capture_audio_v2(_instance, out frame, sampleRate, channels, samples);
 
-    public void FreeAudio(in NdiAudioFrameV3 frame)
+    public void FreeAudio(in NDIAudioFrameV3 frame)
         => Native.NDIlib_framesync_free_audio_v2(_instance, frame);
 
     /// <summary>
@@ -711,9 +711,9 @@ public sealed class NDIRouter : IDisposable
         using var ndiName   = Utf8Buffer.From(name);
         using var groupList = Utf8Buffer.From(groups);
 
-        var create = new NdiRoutingCreate
+        var create = new NDIRoutingCreate
         {
-            PNdiName = ndiName.Pointer,
+            PNDIName = ndiName.Pointer,
             PGroups  = groupList.Pointer
         };
 
@@ -736,11 +736,11 @@ public sealed class NDIRouter : IDisposable
     /// Redirects all connected receivers to <paramref name="source"/>.
     /// </summary>
     /// <returns><see langword="true"/> on success.</returns>
-    public bool Change(in NdiDiscoveredSource source)
+    public bool Change(in NDIDiscoveredSource source)
     {
         using var name = Utf8Buffer.From(source.Name);
         using var url  = Utf8Buffer.From(source.UrlAddress);
-        var s = new NdiSource { PNdiName = name.Pointer, PUrlAddress = url.Pointer };
+        var s = new NDISourceRef { PNDIName = name.Pointer, PUrlAddress = url.Pointer };
         return Native.NDIlib_routing_change(_instance, s);
     }
 
@@ -759,8 +759,8 @@ public sealed class NDIRouter : IDisposable
     {
         var ptr = Native.NDIlib_routing_get_source_name(_instance);
         if (ptr == nint.Zero) return null;
-        var source = Marshal.PtrToStructure<NdiSource>(ptr);
-        return source.NdiName;
+        var source = Marshal.PtrToStructure<NDISourceRef>(ptr);
+        return source.NDIName;
     }
 
     // ------------------------------------------------------------------
@@ -791,49 +791,49 @@ public static class NDIAudioUtils
 {
     // Sender convenience overloads — send interleaved directly without manual conversion
 
-    public static void SendInterleaved16s(NDISender sender, in NdiAudioInterleaved16s frame)
+    public static void SendInterleaved16s(NDISender sender, in NDIAudioInterleaved16s frame)
         => Native.NDIlib_util_send_send_audio_interleaved_16s(GetSenderInstance(sender), frame);
 
-    public static void SendInterleaved32s(NDISender sender, in NdiAudioInterleaved32s frame)
+    public static void SendInterleaved32s(NDISender sender, in NDIAudioInterleaved32s frame)
         => Native.NDIlib_util_send_send_audio_interleaved_32s(GetSenderInstance(sender), frame);
 
-    public static void SendInterleaved32f(NDISender sender, in NdiAudioInterleaved32f frame)
+    public static void SendInterleaved32f(NDISender sender, in NDIAudioInterleaved32f frame)
         => Native.NDIlib_util_send_send_audio_interleaved_32f(GetSenderInstance(sender), frame);
 
     // Conversion helpers
 
     /// <summary>Converts a planar FLTP audio frame to interleaved 16-bit signed integer.</summary>
-    public static bool ToInterleaved16s(in NdiAudioFrameV3 src, ref NdiAudioInterleaved16s dst)
+    public static bool ToInterleaved16s(in NDIAudioFrameV3 src, ref NDIAudioInterleaved16s dst)
         => Native.NDIlib_util_audio_to_interleaved_16s_v3(src, ref dst);
 
-    /// <summary>Converts an interleaved 16-bit frame to planar FLTP. Destination <c>FourCC</c> must be <see cref="NdiFourCCAudioType.Fltp"/>.</summary>
-    public static bool FromInterleaved16s(in NdiAudioInterleaved16s src, ref NdiAudioFrameV3 dst)
+    /// <summary>Converts an interleaved 16-bit frame to planar FLTP. Destination <c>FourCC</c> must be <see cref="NDIFourCCAudioType.Fltp"/>.</summary>
+    public static bool FromInterleaved16s(in NDIAudioInterleaved16s src, ref NDIAudioFrameV3 dst)
         => Native.NDIlib_util_audio_from_interleaved_16s_v3(src, ref dst);
 
     /// <summary>Converts a planar FLTP audio frame to interleaved 32-bit signed integer.</summary>
-    public static bool ToInterleaved32s(in NdiAudioFrameV3 src, ref NdiAudioInterleaved32s dst)
+    public static bool ToInterleaved32s(in NDIAudioFrameV3 src, ref NDIAudioInterleaved32s dst)
         => Native.NDIlib_util_audio_to_interleaved_32s_v3(src, ref dst);
 
     /// <summary>Converts an interleaved 32-bit frame to planar FLTP.</summary>
-    public static bool FromInterleaved32s(in NdiAudioInterleaved32s src, ref NdiAudioFrameV3 dst)
+    public static bool FromInterleaved32s(in NDIAudioInterleaved32s src, ref NDIAudioFrameV3 dst)
         => Native.NDIlib_util_audio_from_interleaved_32s_v3(src, ref dst);
 
     /// <summary>Converts a planar FLTP audio frame to interleaved 32-bit float.</summary>
-    public static bool ToInterleaved32f(in NdiAudioFrameV3 src, ref NdiAudioInterleaved32f dst)
+    public static bool ToInterleaved32f(in NDIAudioFrameV3 src, ref NDIAudioInterleaved32f dst)
         => Native.NDIlib_util_audio_to_interleaved_32f_v3(src, ref dst);
 
     /// <summary>Converts an interleaved 32-bit float frame to planar FLTP.</summary>
-    public static bool FromInterleaved32f(in NdiAudioInterleaved32f src, ref NdiAudioFrameV3 dst)
+    public static bool FromInterleaved32f(in NDIAudioInterleaved32f src, ref NDIAudioFrameV3 dst)
         => Native.NDIlib_util_audio_from_interleaved_32f_v3(src, ref dst);
 
     // Video format conversions
 
     /// <summary>Converts a 10-bit packed V210 video frame to 16-bit semi-planar P216.</summary>
-    public static void V210ToP216(in NdiVideoFrameV2 src, ref NdiVideoFrameV2 dst)
+    public static void V210ToP216(in NDIVideoFrameV2 src, ref NDIVideoFrameV2 dst)
         => Native.NDIlib_util_V210_to_P216(src, ref dst);
 
     /// <summary>Converts a 16-bit semi-planar P216 video frame to 10-bit packed V210.</summary>
-    public static void P216ToV210(in NdiVideoFrameV2 src, ref NdiVideoFrameV2 dst)
+    public static void P216ToV210(in NDIVideoFrameV2 src, ref NDIVideoFrameV2 dst)
         => Native.NDIlib_util_P216_to_V210(src, ref dst);
 
     // Internal helper to extract the native instance pointer from an NDISender

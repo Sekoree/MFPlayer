@@ -9,18 +9,11 @@ namespace S.Media.Core.Mixing;
 /// </summary>
 public interface IAVMixer : IDisposable
 {
-    public enum ClockMasterPolicy { Audio, Video, External }
-
-    IAudioMixer Audio { get; }
-    IVideoMixer Video { get; }
-    ClockMasterPolicy MasterPolicy { get; set; }
-
     void AddAudioChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null);
     void RemoveAudioChannel(Guid channelId);
 
     void AddVideoChannel(IVideoChannel channel);
     void RemoveVideoChannel(Guid channelId);
-    void SetActiveVideoChannel(Guid? channelId);
 
     // ── Sink registration ──────────────────────────────────────────────────
 
@@ -42,6 +35,7 @@ public interface IAVMixer : IDisposable
     void RegisterVideoEndpoint(IVideoFrameEndpoint endpoint);
     void UnregisterVideoEndpoint(IVideoFrameEndpoint endpoint);
     void RouteVideoChannelToEndpoint(Guid channelId, IVideoFrameEndpoint endpoint);
+    void UnrouteVideoChannelFromEndpoint(IVideoFrameEndpoint endpoint);
 
     /// <summary>
     /// Registers an audio buffer endpoint. The adapter wrapping is handled internally.
@@ -52,5 +46,6 @@ public interface IAVMixer : IDisposable
     // ── Batch helpers ──────────────────────────────────────────────────────
 
     void RouteVideoChannelToSinks(Guid channelId, IReadOnlyList<IVideoSink> sinks);
+    void RouteVideoChannelToEndpoints(Guid channelId, IReadOnlyList<IVideoFrameEndpoint> endpoints);
     void RouteAudioChannelToSinks(Guid channelId, IReadOnlyList<(IAudioSink Sink, ChannelRouteMap RouteMap)> sinkRoutes);
 }

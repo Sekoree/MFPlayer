@@ -1,6 +1,6 @@
 using S.Media.Core.Media;
 
-namespace S.Media.Core.Video;
+namespace S.Media.Core.Video.Endpoints;
 
 /// <summary>
 /// Bridges existing <see cref="IVideoOutput"/> to the unified <see cref="IVideoFrameEndpoint"/> contract
@@ -77,7 +77,6 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
     private readonly EndpointVideoChannel _channel;
     private readonly IPixelFormatConverter _converter;
     private readonly bool _ownsConverter;
-    private readonly Guid? _previousActiveChannelId;
     private bool _disposed;
 
     public string Name { get; }
@@ -106,9 +105,8 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
         SupportedPixelFormats = [_output.OutputFormat.PixelFormat];
         _channel = new EndpointVideoChannel(_output.OutputFormat, bufferDepth);
 
-        _previousActiveChannelId = _mixer.ActiveChannel?.Id;
         _mixer.AddChannel(_channel);
-        _mixer.SetActiveChannel(_channel.Id);
+        _mixer.RouteChannelToPrimaryOutput(_channel.Id);
     }
 
     public Task StartAsync(CancellationToken ct = default) => _output.StartAsync(ct);
@@ -137,8 +135,8 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
         if (_disposed) return;
         _disposed = true;
 
+        _mixer.UnroutePrimaryOutput();
         _mixer.RemoveChannel(_channel.Id);
-        _mixer.SetActiveChannel(_previousActiveChannelId);
         _channel.Dispose();
 
         if (_ownsConverter)
