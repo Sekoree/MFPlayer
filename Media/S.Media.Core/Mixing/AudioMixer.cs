@@ -1,4 +1,6 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 
@@ -62,6 +64,14 @@ internal sealed class AudioMixer : IAudioMixer
         public volatile SinkRoute[] SinkRoutes = [];
         public volatile SinkRoute?[] SinkRouteBySinkIndex = [];
 
+        // ── Per-channel time offset ────────────────────────────────────
+        // Positive = delay (insert silence), negative = advance (discard frames).
+        // Written under _editLock; read on RT path via Volatile.Read.
+        public TimeSpan TimeOffset;
+        // Remaining frames of silence to insert (>0) or frames to discard (<0).
+        // Decremented on the RT path. Atomic long for RT safety.
+        public long OffsetFramesRemaining;
+
         public ChannelSlot(IAudioChannel ch, IAudioResampler? rs,
                            (int dst, float gain)[][] leaderBaked, bool ownsRs)
         {
@@ -88,6 +98,8 @@ internal sealed class AudioMixer : IAudioMixer
     private long _rtLeaderCapacityMisses;
     private long _rtSinkCapacityMisses;
     private long _rtSlotCapacityMisses;
+
+    private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(AudioMixer));
 
     // ── IAudioMixer ───────────────────────────────────────────────────────
 
@@ -123,6 +135,8 @@ internal sealed class AudioMixer : IAudioMixer
         // by provisioning a conservative startup capacity.
         _framesPerBuffer = DefaultPreallocatedFrames;
         EnsureWorkBuffers(_framesPerBuffer * LeaderFormat.Channels, LeaderFormat.Channels);
+        Log.LogInformation("AudioMixer created: {SampleRate}Hz, {Channels}ch, fallback={Fallback}",
+            leaderFormat.SampleRate, leaderFormat.Channels, defaultFallback);
     }
 
     // ── Pre-allocation ────────────────────────────────────────────────────
@@ -156,8 +170,9 @@ internal sealed class AudioMixer : IAudioMixer
             ? framesPerBuffer
             : (int)Math.Ceiling(framesPerBuffer * ((double)srcFmt.SampleRate / LeaderFormat.SampleRate)) + 1;
 
-        slot.SrcBuf      = new float[srcFrames * srcCh];
-        slot.ResampleBuf = new float[framesPerBuffer * srcCh];
+        slot.SrcBuf = new float[srcFrames * srcCh];
+        // ResampleBuf is only needed when resampling; same-rate slots use SrcBuf directly.
+        slot.ResampleBuf = sameRate ? [] : new float[framesPerBuffer * srcCh];
     }
 
     private static int ResolvedSinkChannels(SinkTarget st, int leaderChannels)
@@ -179,6 +194,9 @@ internal sealed class AudioMixer : IAudioMixer
             resampler     = new LinearResampler();
             ownsResampler = true;
         }
+
+        Log.LogDebug("AddChannel: id={ChannelId} format={SampleRate}Hz/{Channels}ch sameRate={SameRate} resampler={HasResampler}",
+            channel.Id, channel.SourceFormat.SampleRate, channel.SourceFormat.Channels, sameRate, resampler != null);
 
         var baked = routeMap.BakeRoutes(channel.SourceFormat.Channels);
         var slot  = new ChannelSlot(channel, resampler, baked, ownsResampler);
@@ -209,6 +227,8 @@ internal sealed class AudioMixer : IAudioMixer
             neo[^1] = slot;
             _slots  = neo;
         }
+
+        Log.LogInformation("Channel added: id={ChannelId}, total channels={Count}", channel.Id, _slots.Length);
     }
 
     public void RemoveChannel(Guid channelId)
@@ -219,7 +239,11 @@ internal sealed class AudioMixer : IAudioMixer
             int idx = -1;
             for (int i = 0; i < old.Length; i++)
                 if (old[i].Channel.Id == channelId) { idx = i; break; }
-            if (idx < 0) return;
+            if (idx < 0)
+            {
+                Log.LogDebug("RemoveChannel: id={ChannelId} not found", channelId);
+                return;
+            }
 
             var neo = new ChannelSlot[old.Length - 1];
             for (int i = 0, j = 0; i < old.Length; i++)
@@ -228,6 +252,35 @@ internal sealed class AudioMixer : IAudioMixer
                 neo[j++] = old[i];
             }
             _slots = neo;
+        }
+        Log.LogInformation("Channel removed: id={ChannelId}, total channels={Count}", channelId, _slots.Length);
+    }
+
+    // ── Per-channel time offset ────────────────────────────────────────────
+
+    public void SetChannelTimeOffset(Guid channelId, TimeSpan offset)
+    {
+        lock (_editLock)
+        {
+            var slot = FindSlot(channelId)
+                ?? throw new InvalidOperationException("Channel is not registered.");
+
+            slot.TimeOffset = offset;
+            long frames = (long)(Math.Abs(offset.TotalSeconds) * LeaderFormat.SampleRate);
+            // Positive = delay (silence); negative = advance (discard).
+            slot.OffsetFramesRemaining = offset >= TimeSpan.Zero ? frames : -frames;
+
+            Log.LogInformation("Audio channel time offset set: id={ChannelId}, offset={OffsetMs}ms, frames={Frames}",
+                channelId, offset.TotalMilliseconds, slot.OffsetFramesRemaining);
+        }
+    }
+
+    public TimeSpan GetChannelTimeOffset(Guid channelId)
+    {
+        lock (_editLock)
+        {
+            var slot = FindSlot(channelId);
+            return slot?.TimeOffset ?? TimeSpan.Zero;
         }
     }
 
@@ -275,6 +328,7 @@ internal sealed class AudioMixer : IAudioMixer
 
             int ch = channels > 0 ? channels : TryGetLeaderChannels();
             var target = new SinkTarget(sink, ch, LeaderFormat.SampleRate);
+            Log.LogDebug("RegisterSink: type={SinkType} channels={Channels}", sink.GetType().Name, ch);
 
             if (_framesPerBuffer > 0 && ch > 0)
                 target.MixBuffer = new float[_framesPerBuffer * ch];
@@ -292,6 +346,7 @@ internal sealed class AudioMixer : IAudioMixer
             foreach (var slot in _slots)
                 slot.SinkRouteBySinkIndex = BuildSinkRouteIndex(slot.SinkRoutes, neo);
         }
+        Log.LogInformation("Sink registered: type={SinkType}, total sinks={Count}", sink.GetType().Name, _sinkTargets.Length);
     }
 
     public void UnregisterSink(IAudioSink sink)
@@ -317,6 +372,7 @@ internal sealed class AudioMixer : IAudioMixer
             foreach (var slot in _slots)
                 slot.SinkRouteBySinkIndex = BuildSinkRouteIndex(slot.SinkRoutes, neo);
         }
+        Log.LogInformation("Sink unregistered: type={SinkType}, total sinks={Count}", sink.GetType().Name, _sinkTargets.Length);
     }
 
     // ── FillOutputBuffer — RT hot path (no alloc, no lock) ───────────────
@@ -357,36 +413,86 @@ internal sealed class AudioMixer : IAudioMixer
             int srcCh     = srcFmt.Channels;
             bool sameRate = slot.Resampler == null;
 
+            // Use the resampler's own frame-count calculation to account for
+            // internally buffered pending frames.  The old fixed formula
+            // (ceil + 1) consistently over-pulled by ~1 frame per callback,
+            // causing unbounded pending-frame growth inside the resampler →
+            // periodic _combinedBuf re-allocation on the RT thread → GC → crackle.
             int srcFrames  = sameRate ? frameCount
-                : (int)Math.Ceiling(frameCount * ((double)srcFmt.SampleRate / outputFormat.SampleRate)) + 1;
+                : slot.Resampler!.GetRequiredInputFrames(frameCount, srcFmt, outputFormat.SampleRate);
             int srcSamples = srcFrames * srcCh;
 
-            if (slot.SrcBuf.Length < srcSamples || slot.ResampleBuf.Length < frameCount * srcCh)
+            if (slot.SrcBuf.Length < srcSamples || (!sameRate && slot.ResampleBuf.Length < frameCount * srcCh))
             {
                 Interlocked.Increment(ref _rtSlotCapacityMisses);
+                continue;
+            }
+
+            // 0. Handle time offset (delay = insert silence, advance = discard frames).
+            long offsetRemaining = Volatile.Read(ref slot.OffsetFramesRemaining);
+            if (offsetRemaining > 0)
+            {
+                // Delay: output silence for this slot.
+                if (offsetRemaining >= frameCount)
+                {
+                    Volatile.Write(ref slot.OffsetFramesRemaining, offsetRemaining - frameCount);
+                    // SrcBuf stays zeroed — skip pull, fill with silence effectively
+                    // (the slot contributes nothing to the mix this cycle).
+                    continue;
+                }
+                // Partial delay: silence for the first part, pull for the rest.
+                // For simplicity, we consume the remaining delay this cycle and
+                // do a full pull next cycle. The granularity loss is at most one
+                // buffer (~5ms at 48kHz/256 frames), which is acceptable.
+                Volatile.Write(ref slot.OffsetFramesRemaining, 0);
+                continue;
+            }
+            else if (offsetRemaining < 0)
+            {
+                // Advance: pull-and-discard frames from the channel.
+                long toDiscard = -offsetRemaining;
+                if (toDiscard >= frameCount)
+                {
+                    // Pull a full buffer and discard it entirely.
+                    slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, srcSamples), srcFrames);
+                    Volatile.Write(ref slot.OffsetFramesRemaining, offsetRemaining + frameCount);
+                    continue;
+                }
+                // Partial advance: discard remaining frames. Pull once more and
+                // let normal processing happen next cycle.
+                slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, srcSamples), srcFrames);
+                Volatile.Write(ref slot.OffsetFramesRemaining, 0);
                 continue;
             }
 
             // 1. Pull
             slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, srcSamples), srcFrames);
 
-            // 2. Resample to leader rate (or direct copy)
+            // 2. Resample to leader rate — or alias SrcBuf directly (zero-copy).
+            float[] activeBuf;
+            int activeSamples;
             if (sameRate)
-                slot.SrcBuf.AsSpan(0, frameCount * srcCh)
-                    .CopyTo(slot.ResampleBuf.AsSpan(0, frameCount * srcCh));
+            {
+                activeBuf     = slot.SrcBuf;
+                activeSamples = frameCount * srcCh;
+            }
             else
+            {
                 slot.Resampler!.Resample(
                     slot.SrcBuf.AsSpan(0, srcSamples),
                     slot.ResampleBuf.AsSpan(0, frameCount * srcCh),
                     srcFmt, outputFormat.SampleRate);
+                activeBuf     = slot.ResampleBuf;
+                activeSamples = frameCount * srcCh;
+            }
 
             // 3. Per-channel volume
             float vol = slot.Channel.Volume;
             if (Math.Abs(vol - 1.0f) > 1e-5f)
-                MultiplyInPlace(slot.ResampleBuf.AsSpan(0, frameCount * srcCh), vol);
+                MultiplyInPlace(activeBuf.AsSpan(0, activeSamples), vol);
 
             // 4. Scatter into leader mix buffer
-            ScatterIntoMix(_mixBuffer, slot.ResampleBuf, frameCount, srcCh, outCh, slot.LeaderBakedRoutes);
+            ScatterIntoMix(_mixBuffer, activeBuf, frameCount, srcCh, outCh, slot.LeaderBakedRoutes);
 
             // 5. Scatter into each sink's mix buffer
             var sinkRoutesByIndex = slot.SinkRouteBySinkIndex;
@@ -401,9 +507,9 @@ internal sealed class AudioMixer : IAudioMixer
                 SinkRoute? route = si < sinkRoutesByIndex.Length ? sinkRoutesByIndex[si] : null;
 
                 if (route != null)
-                    ScatterIntoMix(st.MixBuffer, slot.ResampleBuf, frameCount, srcCh, sinkCh, route.BakedRoutes);
+                    ScatterIntoMix(st.MixBuffer, activeBuf, frameCount, srcCh, sinkCh, route.BakedRoutes);
                 else if (DefaultFallback == ChannelFallback.Broadcast)
-                    ScatterIntoMix(st.MixBuffer, slot.ResampleBuf, frameCount, srcCh, sinkCh, slot.LeaderBakedRoutes);
+                    ScatterIntoMix(st.MixBuffer, activeBuf, frameCount, srcCh, sinkCh, slot.LeaderBakedRoutes);
             }
         }
 
@@ -461,11 +567,7 @@ internal sealed class AudioMixer : IAudioMixer
         return null;
     }
 
-    private int TryGetLeaderChannels()
-    {
-        try   { return LeaderFormat.Channels; }
-        catch { return 0; }
-    }
+    private int TryGetLeaderChannels() => LeaderFormat.Channels;
 
     private static void SetSinkRouteOnSlot(ChannelSlot slot, SinkTarget target,
                                            (int dst, float gain)[][] baked)
@@ -533,7 +635,18 @@ internal sealed class AudioMixer : IAudioMixer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void MultiplyInPlace(Span<float> buf, float gain)
     {
-        for (int i = 0; i < buf.Length; i++) buf[i] *= gain;
+        int i = 0;
+        if (Vector.IsHardwareAccelerated && buf.Length >= Vector<float>.Count)
+        {
+            var vGain = new Vector<float>(gain);
+            int vecEnd = buf.Length - (buf.Length % Vector<float>.Count);
+            for (; i < vecEnd; i += Vector<float>.Count)
+            {
+                var v = new Vector<float>(buf[i..]);
+                (v * vGain).CopyTo(buf[i..]);
+            }
+        }
+        for (; i < buf.Length; i++) buf[i] *= gain;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -542,27 +655,63 @@ internal sealed class AudioMixer : IAudioMixer
         int frameCount, int srcCh, int dstCh,
         (int dst, float gain)[][] bakedRoutes)
     {
-        for (int f = 0; f < frameCount; f++)
-            for (int sc = 0; sc < srcCh; sc++)
+        // Source-channel-outer / frame-inner: loads the route array once per
+        // source channel instead of once per frame, and uses running offsets
+        // to avoid per-frame multiplication.
+        for (int sc = 0; sc < srcCh; sc++)
+        {
+            var routes = bakedRoutes[sc];
+            if (routes.Length == 0) continue;
+
+            // Fast path: single route (identity, mono→stereo, etc.)
+            if (routes.Length == 1)
             {
-                float sample = src[f * srcCh + sc];
-                var routes   = bakedRoutes[sc];
-                for (int r = 0; r < routes.Length; r++)
+                int dc   = routes[0].dst;
+                float g  = routes[0].gain;
+                if (dc >= dstCh) continue;
+                int srcOff = sc;
+                int dstOff = dc;
+                for (int f = 0; f < frameCount; f++)
                 {
-                    int dc = routes[r].dst;
-                    if (dc < dstCh)
-                        mix[f * dstCh + dc] += sample * routes[r].gain;
+                    mix[dstOff] += src[srcOff] * g;
+                    srcOff += srcCh;
+                    dstOff += dstCh;
+                }
+                continue;
+            }
+
+            // General path: multiple routes per source channel.
+            {
+                int srcOff = sc;
+                int dstBase = 0;
+                for (int f = 0; f < frameCount; f++)
+                {
+                    float sample = src[srcOff];
+                    for (int r = 0; r < routes.Length; r++)
+                    {
+                        int dc = routes[r].dst;
+                        if (dc < dstCh)
+                            mix[dstBase + dc] += sample * routes[r].gain;
+                    }
+                    srcOff  += srcCh;
+                    dstBase += dstCh;
                 }
             }
+        }
     }
 
     private void UpdatePeaks(Span<float> buf, int outCh)
     {
         Array.Clear(_peakLevels);
-        for (int i = 0; i < buf.Length; i++)
+        int frames = buf.Length / outCh;
+        for (int f = 0; f < frames; f++)
         {
-            float a = Math.Abs(buf[i]);
-            if (a > _peakLevels[i % outCh]) _peakLevels[i % outCh] = a;
+            int offset = f * outCh;
+            for (int ch = 0; ch < outCh; ch++)
+            {
+                float a = Math.Abs(buf[offset + ch]);
+                if (a > _peakLevels[ch]) _peakLevels[ch] = a;
+            }
         }
         _peakLevels.AsSpan().CopyTo(_peakSnapshot);
     }
@@ -571,6 +720,7 @@ internal sealed class AudioMixer : IAudioMixer
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("AudioMixer disposing ({SlotCount} channels, {SinkCount} sinks)", _slots.Length, _sinkTargets.Length);
         lock (_editLock)
         {
             foreach (var s in _slots)
@@ -578,6 +728,7 @@ internal sealed class AudioMixer : IAudioMixer
             _slots       = [];
             _sinkTargets = [];
         }
+        Log.LogDebug("AudioMixer disposed");
     }
 }
 

@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 
 namespace S.Media.FFmpeg;
 
@@ -9,9 +11,14 @@ namespace S.Media.FFmpeg;
 /// </summary>
 internal static class FFmpegDemuxWorker
 {
+    private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegDemuxWorker));
+
     public static async Task RunAsync(FFmpegDecoder owner, CancellationToken token)
     {
+        Log.LogDebug("Demux worker starting");
         nint pktHandle = owner.AllocateDemuxPacket();
+        var packetPool = owner.PacketPool;
+        long packetCount = 0;
         try
         {
             while (!token.IsCancellationRequested)
@@ -24,8 +31,16 @@ internal static class FFmpegDemuxWorker
                         case FFmpegDecoder.DemuxReadResult.Packet:
                             if (writer != null && packet != null)
                             {
-                                if (!await WritePacketAsync(writer, packet, token).ConfigureAwait(false))
+                                packetCount++;
+                                if (Log.IsEnabled(LogLevel.Trace))
+                                    Log.LogTrace("Demux packet #{Count}: pts={Pts} size={Size} epoch={Epoch}",
+                                        packetCount, packet.Pts, packet.ActualLength, packet.SeekEpoch);
+
+                                if (!await WritePacketAsync(writer, packet, packetPool, token).ConfigureAwait(false))
+                                {
+                                    Log.LogDebug("Demux worker stopping: write channel closed");
                                     return;
+                                }
                             }
                             break;
 
@@ -33,16 +48,22 @@ internal static class FFmpegDemuxWorker
                             continue;
 
                         case FFmpegDecoder.DemuxReadResult.Eof:
+                            Log.LogInformation("Demux worker reached EOF after {PacketCount} packets", packetCount);
+                            return;
+
                         case FFmpegDecoder.DemuxReadResult.Cancelled:
+                            Log.LogDebug("Demux worker cancelled after {PacketCount} packets", packetCount);
                             return;
                     }
                 }
                 catch (OperationCanceledException)
                 {
+                    Log.LogDebug("Demux worker cancelled (OperationCanceledException)");
                     return;
                 }
                 catch (ObjectDisposedException)
                 {
+                    Log.LogDebug("Demux worker stopped (ObjectDisposedException)");
                     return;
                 }
                 catch (Exception ex)
@@ -56,12 +77,14 @@ internal static class FFmpegDemuxWorker
         {
             owner.FreeDemuxPacket(pktHandle);
             owner.CompletePacketQueues();
+            Log.LogDebug("Demux worker finished, total packets demuxed: {PacketCount}", packetCount);
         }
     }
 
     private static async ValueTask<bool> WritePacketAsync(
         ChannelWriter<EncodedPacket> writer,
         EncodedPacket packet,
+        ConcurrentQueue<EncodedPacket> packetPool,
         CancellationToken token)
     {
         try
@@ -73,14 +96,15 @@ internal static class FFmpegDemuxWorker
         {
             if (packet.IsPooled)
                 ArrayPool<byte>.Shared.Return(packet.Data);
+            packetPool.Enqueue(packet);
             return false;
         }
         catch (ChannelClosedException)
         {
             if (packet.IsPooled)
                 ArrayPool<byte>.Shared.Return(packet.Data);
+            packetPool.Enqueue(packet);
             return true;
         }
     }
 }
-

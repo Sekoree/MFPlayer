@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
@@ -20,6 +21,8 @@ namespace S.Media.NDI;
 /// </summary>
 public sealed class NDIAudioChannel : IAudioChannel
 {
+    private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAudioChannel));
+
     private readonly NDIFrameSync        _frameSync;
     private readonly NDIClock            _clock;
     private readonly int                 _requestedSampleRate;
@@ -100,12 +103,16 @@ public sealed class NDIAudioChannel : IAudioChannel
         int poolBufSize = FramesPerCapture * channels;
         for (int i = 0; i < bufferDepth + 4; i++)
             _pool.Enqueue(new float[poolBufSize]);
+
+        Log.LogInformation("Created NDIAudioChannel: {SampleRate}Hz/{Channels}ch, bufferDepth={BufferDepth}",
+            sampleRate, channels, bufferDepth);
     }
 
     // ── Capture thread ────────────────────────────────────────────────
 
     public void StartCapture()
     {
+        Log.LogInformation("Starting NDIAudioChannel capture thread");
         _captureThread = new Thread(CaptureLoop)
         {
             Name         = "NDIAudioChannel.Capture",
@@ -187,8 +194,9 @@ public sealed class NDIAudioChannel : IAudioChannel
                 else
                     _pool.Enqueue(buf);
             }
-            catch (Exception) when (!token.IsCancellationRequested)
+            catch (Exception ex) when (!token.IsCancellationRequested)
             {
+                Log.LogWarning(ex, "NDIAudioChannel capture-loop error, retrying");
                 Thread.Sleep(10);
             }
         }
@@ -239,9 +247,15 @@ public sealed class NDIAudioChannel : IAudioChannel
                         Interlocked.Add(ref _framesInRing, -consumed);
                     }
                     if (dropped > 0)
-                        ThreadPool.QueueUserWorkItem(_ =>
-                            BufferUnderrun?.Invoke(this,
-                                new BufferUnderrunEventArgs(Position, dropped)));
+                    {
+                        // Static delegate + value-tuple state avoids allocating a closure on the RT thread.
+                        var state = (Self: this, Pos: Position, Dropped: dropped);
+                        ThreadPool.QueueUserWorkItem(static s =>
+                        {
+                            var (self, pos, d) = ((NDIAudioChannel, TimeSpan, int))s!;
+                            self.BufferUnderrun?.Invoke(self, new BufferUnderrunEventArgs(pos, d));
+                        }, state);
+                    }
                     return consumed;
                 }
                 _currentOffset = 0;
@@ -278,6 +292,8 @@ public sealed class NDIAudioChannel : IAudioChannel
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing NDIAudioChannel: framesConsumed={FramesConsumed}",
+            Interlocked.Read(ref _framesConsumed));
         _cts.Cancel();
         _captureThread?.Join(TimeSpan.FromSeconds(2));
         _ringWriter.TryComplete();

@@ -18,6 +18,27 @@ public interface IAVMixer : IDisposable
     void AddVideoChannel(IVideoChannel channel);
     void RemoveVideoChannel(Guid channelId);
 
+    // ── Per-channel time offsets ────────────────────────────────────────────
+
+    /// <summary>Sets a time offset for a registered audio channel.</summary>
+    void SetAudioChannelTimeOffset(Guid channelId, TimeSpan offset);
+
+    /// <summary>Gets the current time offset for a registered audio channel.</summary>
+    TimeSpan GetAudioChannelTimeOffset(Guid channelId);
+
+    /// <summary>Sets a time offset for a registered video channel.</summary>
+    void SetVideoChannelTimeOffset(Guid channelId, TimeSpan offset);
+
+    /// <summary>Gets the current time offset for a registered video channel.</summary>
+    TimeSpan GetVideoChannelTimeOffset(Guid channelId);
+
+    /// <summary>
+    /// Returns the instantaneous A/V drift between two channels:
+    /// <c>audioChannel.Position − videoChannel.Position</c>.
+    /// Positive means audio is ahead of video; negative means audio is behind.
+    /// </summary>
+    TimeSpan GetAvDrift(Guid audioChannelId, Guid videoChannelId);
+
     // ── Sink registration ──────────────────────────────────────────────────
 
     void RegisterAudioSink(IAudioSink sink, int channels = 0);

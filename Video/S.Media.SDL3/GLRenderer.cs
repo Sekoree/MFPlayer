@@ -132,10 +132,12 @@ internal sealed unsafe class GLRenderer : IDisposable
     private uint _textureY422P10;
     private uint _textureU422P10;
     private uint _textureV422P10;
+    private uint _textureUyvy;
     private uint _program;
     private uint _programNv12;
     private uint _programI420;
     private uint _programI422P10;
+    private uint _programUyvy422;
     private uint _vao;
     private uint _vbo;
     private int  _texWidth;
@@ -146,12 +148,17 @@ internal sealed unsafe class GLRenderer : IDisposable
     private int  _texHeightI420;
     private int  _texWidthI422P10;
     private int  _texHeightI422P10;
+    private int  _texWidthUyvy;
+    private int  _texHeightUyvy;
     private int  _uNv12LimitedRangeLoc = -1;
     private int  _uNv12ColorMatrixLoc = -1;
     private int  _uI420LimitedRangeLoc = -1;
     private int  _uI420ColorMatrixLoc = -1;
     private int  _uI422P10LimitedRangeLoc = -1;
     private int  _uI422P10ColorMatrixLoc = -1;
+    private int  _uUyvyVideoWidthLoc = -1;
+    private int  _uUyvyLimitedRangeLoc = -1;
+    private int  _uUyvyColorMatrixLoc = -1;
     private YuvColorRange _i422P10ColorRange = YuvColorRange.Auto;
     private YuvColorMatrix _i422P10ColorMatrix = YuvColorMatrix.Auto;
     private bool _disposed;
@@ -203,6 +210,7 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const string FragmentShaderSourceNv12 = GlShaderSources.FragmentNv12;
     private const string FragmentShaderSourceI420 = GlShaderSources.FragmentI420;
     private const string FragmentShaderSourceI422P10 = GlShaderSources.FragmentI422P10;
+    private const string FragmentShaderSourceUyvy422 = GlShaderSources.FragmentUyvy422;
 
     // ── Initialisation ────────────────────────────────────────────────────
 
@@ -240,11 +248,19 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glLinkProgram(_programI422P10);
         CheckProgram(_programI422P10);
 
+        uint fsUyvy422 = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSourceUyvy422);
+        _programUyvy422 = _glCreateProgram();
+        _glAttachShader(_programUyvy422, vs);
+        _glAttachShader(_programUyvy422, fsUyvy422);
+        _glLinkProgram(_programUyvy422);
+        CheckProgram(_programUyvy422);
+
         _glDeleteShader(vs);
         _glDeleteShader(fs);
         _glDeleteShader(fsNv12);
         _glDeleteShader(fsI420);
         _glDeleteShader(fsI422P10);
+        _glDeleteShader(fsUyvy422);
 
         // Set texture uniform to unit 0
         _glUseProgram(_program);
@@ -336,6 +352,31 @@ internal sealed unsafe class GLRenderer : IDisposable
                 _glUniform1i(_uI422P10ColorMatrixLoc, 0);
         }
 
+        _glUseProgram(_programUyvy422);
+        fixed (byte* nameUyvyTex = "uTexUYVY\0"u8)
+        {
+            int locTex = _glGetUniformLocation(_programUyvy422, nameUyvyTex);
+            _glUniform1i(locTex, 0);
+        }
+        fixed (byte* nameUyvyWidth = "uVideoWidth\0"u8)
+        {
+            _uUyvyVideoWidthLoc = _glGetUniformLocation(_programUyvy422, nameUyvyWidth);
+            if (_uUyvyVideoWidthLoc >= 0)
+                _glUniform1i(_uUyvyVideoWidthLoc, 0);
+        }
+        fixed (byte* nameLimited = "uLimitedRange\0"u8)
+        {
+            _uUyvyLimitedRangeLoc = _glGetUniformLocation(_programUyvy422, nameLimited);
+            if (_uUyvyLimitedRangeLoc >= 0)
+                _glUniform1i(_uUyvyLimitedRangeLoc, 0);
+        }
+        fixed (byte* nameMatrix = "uColorMatrix\0"u8)
+        {
+            _uUyvyColorMatrixLoc = _glGetUniformLocation(_programUyvy422, nameMatrix);
+            if (_uUyvyColorMatrixLoc >= 0)
+                _glUniform1i(_uUyvyColorMatrixLoc, 0);
+        }
+
         // Fullscreen quad (2 triangles): position (x,y) + UV (u,v)
         // Note: UV y is flipped (1→0) so the image isn't upside-down.
         var quadVerts = GlShaderSources.FullscreenQuadVerts;
@@ -416,6 +457,13 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+        fixed (uint* pTex = &_textureUyvy) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureUyvy);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
         _glViewport(0, 0, viewportWidth, viewportHeight);
         _windowWidth  = viewportWidth;
         _windowHeight = viewportHeight;
@@ -441,6 +489,12 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (frame.PixelFormat == PixelFormat.Yuv422p10)
         {
             UploadAndDrawI422P10(frame);
+            return;
+        }
+
+        if (frame.PixelFormat == PixelFormat.Uyvy422)
+        {
+            UploadAndDrawUyvy422(frame);
             return;
         }
 
@@ -642,6 +696,49 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(0);
     }
 
+    private void UploadAndDrawUyvy422(VideoFrame frame)
+    {
+        int w = frame.Width;
+        int h = frame.Height;
+        if (w <= 0 || h <= 0)
+            return;
+
+        // UYVY: 2 bytes per pixel → w*h*2 bytes total.
+        // Uploaded as an RGBA8 texture at (w/2) × h: each texel packs one pixel pair
+        // [U, Y0, V, Y1] into R, G, B, A channels.
+        int halfW = Math.Max(1, w / 2);
+        int required = w * h * 2;
+        if (frame.Data.Length < required)
+        {
+            DrawBlack();
+            return;
+        }
+
+        using var pin = frame.Data.Pin();
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureUyvy);
+        if (w == _texWidthUyvy && h == _texHeightUyvy)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, halfW, h, GL_RGBA, GL_UNSIGNED_BYTE, pin.Pointer);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, halfW, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pin.Pointer);
+
+        _texWidthUyvy = w;
+        _texHeightUyvy = h;
+
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programUyvy422);
+        if (_uUyvyVideoWidthLoc >= 0)
+            _glUniform1i(_uUyvyVideoWidthLoc, w);
+        if (_uUyvyLimitedRangeLoc >= 0)
+            _glUniform1i(_uUyvyLimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
+        if (_uUyvyColorMatrixLoc >= 0)
+            _glUniform1i(_uUyvyColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
     private bool ShouldUseBt709MatrixForYuv(int width, int height)
     {
         return YuvAutoPolicy.ResolveMatrix(_i422P10ColorMatrix, width, height) == YuvColorMatrix.Bt709;
@@ -837,12 +934,14 @@ internal sealed unsafe class GLRenderer : IDisposable
         fixed (uint* p = &_textureY422P10) _glDeleteTextures(1, p);
         fixed (uint* p = &_textureU422P10) _glDeleteTextures(1, p);
         fixed (uint* p = &_textureV422P10) _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureUyvy)   _glDeleteTextures(1, p);
         fixed (uint* p = &_vbo)          _glDeleteBuffers(1, p);
         fixed (uint* p = &_vao)          _glDeleteVertexArrays(1, p);
         _glDeleteProgram(_program);
         _glDeleteProgram(_programNv12);
         _glDeleteProgram(_programI420);
         _glDeleteProgram(_programI422P10);
+        _glDeleteProgram(_programUyvy422);
     }
 }
 

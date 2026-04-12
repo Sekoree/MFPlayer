@@ -56,6 +56,24 @@ public interface IAudioMixer : IDisposable
     /// <summary>Removes a previously registered channel by its <see cref="IAudioChannel.Id"/>.</summary>
     void RemoveChannel(Guid channelId);
 
+    // ── Per-channel time offset ────────────────────────────────────────────
+
+    /// <summary>
+    /// Sets a time offset for a registered audio channel.
+    /// Positive values delay the channel (silence is inserted at the start);
+    /// negative values advance it (initial samples are discarded).
+    /// The offset is applied once at the start of playback (or after seek/reset).
+    /// </summary>
+    /// <param name="channelId">The channel's <see cref="IAudioChannel.Id"/>.</param>
+    /// <param name="offset">Time offset to apply. <see cref="TimeSpan.Zero"/> removes any offset.</param>
+    void SetChannelTimeOffset(Guid channelId, TimeSpan offset);
+
+    /// <summary>
+    /// Gets the current time offset for a registered audio channel.
+    /// Returns <see cref="TimeSpan.Zero"/> if no offset has been set.
+    /// </summary>
+    TimeSpan GetChannelTimeOffset(Guid channelId);
+
     // ── Per-sink routing (dynamic, thread-safe) ────────────────────────────
 
     /// <summary>

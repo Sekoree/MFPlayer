@@ -51,6 +51,21 @@ public interface IVideoMixer : IDisposable
     void SetActiveChannelForSink(IVideoSink sink, Guid? channelId);
 
     /// <summary>
+    /// Sets a time offset for a registered video channel.
+    /// Positive values delay the channel (frames present later relative to the clock);
+    /// negative values advance it (frames present earlier).
+    /// </summary>
+    /// <param name="channelId">The channel's <see cref="IVideoChannel.Id"/>.</param>
+    /// <param name="offset">Time offset to apply. <see cref="TimeSpan.Zero"/> removes any offset.</param>
+    void SetChannelTimeOffset(Guid channelId, TimeSpan offset);
+
+    /// <summary>
+    /// Gets the current time offset for a registered video channel.
+    /// Returns <see cref="TimeSpan.Zero"/> if no offset has been set.
+    /// </summary>
+    TimeSpan GetChannelTimeOffset(Guid channelId);
+
+    /// <summary>
     /// Called by the render loop to pull the next frame from the active channel
     /// and present it. The mixer uses <paramref name="clockPosition"/> for basic
     /// PTS pacing (hold if early, advance when due).

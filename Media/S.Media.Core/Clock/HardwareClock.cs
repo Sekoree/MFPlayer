@@ -12,7 +12,8 @@ public class HardwareClock : MediaClockBase
     private readonly Func<double> _secondsProvider;
     private readonly double       _sampleRate;
 
-    // Fallback state
+    // Fallback state — guarded by _fallbackLock
+    private readonly Lock      _fallbackLock = new();
     private readonly Stopwatch _fallbackSw = new();
     private TimeSpan           _lastValidPosition;
     private bool               _usingFallback;
@@ -49,25 +50,28 @@ public class HardwareClock : MediaClockBase
         get
         {
             double hw = _secondsProvider();
-            if (hw > 0.0)
+            lock (_fallbackLock)
             {
-                // Re-sync fallback whenever hardware is valid
-                if (_usingFallback)
+                if (hw > 0.0)
                 {
-                    _usingFallback = false;
-                    _fallbackSw.Reset();
+                    // Re-sync fallback whenever hardware is valid
+                    if (_usingFallback)
+                    {
+                        _usingFallback = false;
+                        _fallbackSw.Reset();
+                    }
+                    _lastValidPosition = TimeSpan.FromSeconds(hw);
+                    return _lastValidPosition;
                 }
-                _lastValidPosition = TimeSpan.FromSeconds(hw);
-                return _lastValidPosition;
-            }
 
-            // Hardware unavailable — continue from last known position via stopwatch
-            if (!_usingFallback)
-            {
-                _usingFallback = true;
-                _fallbackSw.Restart();
+                // Hardware unavailable — continue from last known position via stopwatch
+                if (!_usingFallback)
+                {
+                    _usingFallback = true;
+                    _fallbackSw.Restart();
+                }
+                return _lastValidPosition + _fallbackSw.Elapsed;
             }
-            return _lastValidPosition + _fallbackSw.Elapsed;
         }
     }
 

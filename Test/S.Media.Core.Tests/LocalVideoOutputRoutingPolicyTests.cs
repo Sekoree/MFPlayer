@@ -45,5 +45,21 @@ public sealed class LocalVideoOutputRoutingPolicyTests
         var pf = LocalVideoOutputRoutingPolicy.SelectLeaderPixelFormat(src, supportsNv12: true, supportsYuv420p: true, supportsYuv422p10: true);
         Assert.Equal(PixelFormat.Yuv422p10, pf);
     }
+
+    [Fact]
+    public void SelectLeaderPixelFormat_Uyvy422_SelectedWhenSupported()
+    {
+        var src = new VideoFormat(1920, 1080, PixelFormat.Uyvy422, 60, 1);
+        var pf = LocalVideoOutputRoutingPolicy.SelectLeaderPixelFormat(src, supportsNv12: true, supportsYuv420p: true, supportsUyvy422: true);
+        Assert.Equal(PixelFormat.Uyvy422, pf);
+    }
+
+    [Fact]
+    public void SelectLeaderPixelFormat_Uyvy422_UsesFallbackWhenUnsupported()
+    {
+        var src = new VideoFormat(1920, 1080, PixelFormat.Uyvy422, 60, 1);
+        var pf = LocalVideoOutputRoutingPolicy.SelectLeaderPixelFormat(src, supportsNv12: true, supportsYuv420p: true, supportsUyvy422: false);
+        Assert.Equal(PixelFormat.Bgra32, pf);
+    }
 }
 

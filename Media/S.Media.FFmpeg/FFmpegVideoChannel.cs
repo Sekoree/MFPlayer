@@ -1,6 +1,8 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
 
@@ -13,6 +15,7 @@ namespace S.Media.FFmpeg;
 /// </summary>
 public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrixHint
 {
+    private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegVideoChannel));
     private readonly AVStream*                    _stream;
     private readonly int                          _streamIndex;
     private readonly ChannelReader<EncodedPacket> _packetReader;
@@ -125,8 +128,8 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
 
     internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
     {
-        Console.Error.WriteLine(
-            $"[FFmpegVideoChannel] stream={_streamIndex} epoch={currentEpoch} packetEpoch={ep.SeekEpoch} packetBytes={ep.ActualLength} decode-loop error: {ex}");
+        Log.LogError(ex, "Video stream={StreamIndex} decode-loop error: epoch={Epoch} packetEpoch={PacketEpoch} packetBytes={PacketBytes}",
+            _streamIndex, currentEpoch, ep.SeekEpoch, ep.ActualLength);
     }
 
     private void OpenCodec()
@@ -152,9 +155,8 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
         if (ret < 0) throw new InvalidOperationException($"avcodec_open2 failed: {ret}");
 
         string codecName = ffmpeg.avcodec_get_name(_codecCtx->codec_id);
-        Console.WriteLine(
-            $"[FFmpegVideoChannel] stream={_streamIndex} codec={codecName} " +
-            $"threads(req={_threadCount}, eff={_codecCtx->thread_count}) type(req={_codecCtx->thread_type}, active={_codecCtx->active_thread_type})");
+        Log.LogInformation("Video stream={StreamIndex} codec={CodecName} threads(req={ReqThreads}, eff={EffThreads}) type(req={ReqType}, active={ActiveType})",
+            _streamIndex, codecName, _threadCount, _codecCtx->thread_count, _codecCtx->thread_type, _codecCtx->active_thread_type);
 
         _frame    = ffmpeg.av_frame_alloc();
         _rgbFrame = ffmpeg.av_frame_alloc();
@@ -164,19 +166,18 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
 
     private SwsContext* GetSws(int w, int h, AVPixelFormat srcFmt)
     {
-        if (_sws != null) return _sws;
         var dstFmt = MapPixelFormat(TargetPixelFormat);
-        _sws = ffmpeg.sws_getContext(w, h, srcFmt, w, h, dstFmt,
+        _sws = ffmpeg.sws_getCachedContext(_sws, w, h, srcFmt, w, h, dstFmt,
             2 /* SWS_BILINEAR */, null, null, null);
-        if (_sws == null) throw new InvalidOperationException("sws_getContext failed.");
+        if (_sws == null) throw new InvalidOperationException("sws_getCachedContext failed.");
 
         _swsBufSize = ffmpeg.av_image_get_buffer_size(dstFmt, w, h, 1);
         return _sws;
     }
 
-    internal void StartDecoding()
+    internal void StartDecoding(ConcurrentQueue<EncodedPacket>? packetPool = null)
     {
-        _decodeTask = FFmpegDecodeWorkers.RunVideoAsync(this, _packetReader, _cts.Token);
+        _decodeTask = FFmpegDecodeWorkers.RunVideoAsync(this, _packetReader, _cts.Token, packetPool);
     }
 
     internal void ApplySeekEpoch(long seekPositionTicks)
@@ -385,13 +386,14 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing FFmpegVideoChannel stream={StreamIndex}", _streamIndex);
         _cts.Cancel();
         if (_decodeTask != null)
         {
             try { _decodeTask.Wait(TimeSpan.FromSeconds(2)); }
             catch (AggregateException ex)
             {
-                Console.Error.WriteLine($"[FFmpegVideoChannel] stream={_streamIndex} decode task fault during dispose: {ex.Flatten()}");
+                Log.LogError(ex, "Video stream={StreamIndex} decode task fault during dispose", _streamIndex);
             }
         }
         CompleteDecodeLoop();
@@ -425,7 +427,7 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
             return false;
         if (sendRet < 0)
         {
-            Console.Error.WriteLine($"[FFmpegVideoChannel] stream={_streamIndex} avcodec_send_packet failed: {sendRet}");
+            Log.LogWarning("Video stream={StreamIndex} avcodec_send_packet failed: {ErrorCode}", _streamIndex, sendRet);
             return true;
         }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using S.Media.Core.Media;
 using S.Media.FFmpeg.Tests.Helpers;
 using Xunit;
 

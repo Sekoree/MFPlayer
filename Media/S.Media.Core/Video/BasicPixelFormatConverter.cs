@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Numerics;
+using System.Runtime.InteropServices;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;
@@ -54,16 +56,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
             if (!usedLibYuv)
             {
                 Interlocked.Increment(ref _managedFallbacks);
-                var src = source.Data.Span;
-                var dst = rented.AsSpan(0, bytes);
-                int n = Math.Min(src.Length, bytes);
-                for (int i = 0; i + 3 < n; i += 4)
-                {
-                    dst[i] = src[i + 2];
-                    dst[i + 1] = src[i + 1];
-                    dst[i + 2] = src[i];
-                    dst[i + 3] = src[i + 3];
-                }
+                SwapRedBlueChannels(source.Data.Span, rented.AsSpan(0, bytes));
             }
             else
             {
@@ -195,6 +188,50 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         if (v <= 0f) return 0;
         if (v >= 255f) return 255;
         return (int)(v + 0.5f);
+    }
+
+    /// <summary>
+    /// Swaps R and B channels in BGRA/RGBA pixel data using SIMD where available.
+    /// Each pixel is 4 bytes: [X][G][Y][A] → [Y][G][X][A].
+    /// Works by reinterpreting as uint, masking out R/B, and cross-placing them.
+    /// </summary>
+    private static void SwapRedBlueChannels(ReadOnlySpan<byte> src, Span<byte> dst)
+    {
+        int n = Math.Min(src.Length, dst.Length);
+        int pixelBytes = n & ~3; // round down to whole pixels
+
+        // Reinterpret as uint spans (1 uint = 1 pixel).
+        var srcU = MemoryMarshal.Cast<byte, uint>(src[..pixelBytes]);
+        var dstU = MemoryMarshal.Cast<byte, uint>(dst[..pixelBytes]);
+
+        int i = 0;
+        if (Vector.IsHardwareAccelerated && srcU.Length >= Vector<uint>.Count)
+        {
+            // Masks for little-endian layout: byte[0]=R/B, byte[1]=G, byte[2]=B/R, byte[3]=A
+            var maskGA = new Vector<uint>(0xFF00FF00u); // green + alpha
+            var maskR  = new Vector<uint>(0x000000FFu); // byte 0 (R in RGBA, B in BGRA)
+            var maskB  = new Vector<uint>(0x00FF0000u); // byte 2 (B in RGBA, R in BGRA)
+
+            int vecEnd = srcU.Length - (srcU.Length % Vector<uint>.Count);
+            for (; i < vecEnd; i += Vector<uint>.Count)
+            {
+                var v  = new Vector<uint>(srcU[i..]);
+                var ga = v & maskGA;          // keep G and A
+                var r  = (v & maskR) << 16;   // move byte 0 → byte 2
+                var b  = (v & maskB) >> 16;   // move byte 2 → byte 0
+                (ga | r | b).CopyTo(dstU[i..]);
+            }
+        }
+
+        // Scalar tail
+        for (; i < srcU.Length; i++)
+        {
+            uint px = srcU[i];
+            uint ga = px & 0xFF00FF00u;
+            uint r  = (px & 0x000000FFu) << 16;
+            uint b  = (px & 0x00FF0000u) >> 16;
+            dstU[i] = ga | r | b;
+        }
     }
 
     public void Dispose() => _disposed = true;

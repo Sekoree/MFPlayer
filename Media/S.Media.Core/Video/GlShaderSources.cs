@@ -155,6 +155,53 @@ public static class GlShaderSources
         }
         """;
 
+    /// <summary>
+    /// UYVY 4:2:2 packed format. Data is uploaded as an RGBA8 texture at (width/2)×height;
+    /// each RGBA texel packs one pixel pair: R=U, G=Y0, B=V, A=Y1.
+    /// A <c>uVideoWidth</c> uniform tells the shader the real pixel width so it can
+    /// select the correct Y sample for even/odd pixels.
+    /// </summary>
+    public const string FragmentUyvy422 = """
+        #version 330 core
+        in vec2 vUV;
+        out vec4 fragColor;
+        uniform sampler2D uTexUYVY;
+        uniform int uVideoWidth;
+        uniform int uLimitedRange;
+        uniform int uColorMatrix;
+        void main() {
+            float pixelX = vUV.x * float(uVideoWidth);
+            vec4 uyvy    = texture(uTexUYVY, vUV);
+            float yRaw   = (fract(pixelX / 2.0) < 0.5) ? uyvy.g : uyvy.a;
+            float uRaw   = uyvy.r;
+            float vRaw   = uyvy.b;
+
+            float y = uLimitedRange != 0
+                ? clamp((yRaw - (16.0 / 255.0)) * (255.0 / 219.0), 0.0, 1.0)
+                : yRaw;
+            float u = uLimitedRange != 0
+                ? clamp((uRaw - 0.5) * (255.0 / 224.0), -0.5, 0.5)
+                : (uRaw - 0.5);
+            float v = uLimitedRange != 0
+                ? clamp((vRaw - 0.5) * (255.0 / 224.0), -0.5, 0.5)
+                : (vRaw - 0.5);
+
+            float r;
+            float g;
+            float b;
+            if (uColorMatrix != 0) {
+                r = y + 1.5748 * v;
+                g = y - 0.187324 * u - 0.468124 * v;
+                b = y + 1.8556 * u;
+            } else {
+                r = y + 1.402 * v;
+                g = y - 0.344136 * u - 0.714136 * v;
+                b = y + 1.772 * u;
+            }
+            fragColor = vec4(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0), 1.0);
+        }
+        """;
+
     public static readonly float[] FullscreenQuadVerts =
     [
         -1f, -1f, 0f, 1f,

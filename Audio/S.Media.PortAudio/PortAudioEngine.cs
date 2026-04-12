@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using PALib;
 using PALib.Types.Core;
@@ -10,6 +11,8 @@ namespace S.Media.PortAudio;
 /// </summary>
 public sealed class PortAudioEngine : IAudioEngine
 {
+    private static readonly ILogger Log = PortAudioLogging.GetLogger(nameof(PortAudioEngine));
+
     private bool _initialized;
     private bool _disposed;
 
@@ -20,16 +23,20 @@ public sealed class PortAudioEngine : IAudioEngine
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_initialized) return;
 
+        Log.LogInformation("Initializing PortAudio");
         var err = Native.Pa_Initialize();
         if (err != PaError.paNoError)
             throw new InvalidOperationException(
                 $"Pa_Initialize failed: {Native.Pa_GetErrorText(err)} ({err})");
         _initialized = true;
+        Log.LogDebug("PortAudio initialized: deviceCount={DeviceCount}, hostApiCount={HostApiCount}",
+            Native.Pa_GetDeviceCount(), Native.Pa_GetHostApiCount());
     }
 
     public void Terminate()
     {
         if (!_initialized) return;
+        Log.LogInformation("Terminating PortAudio");
         Native.Pa_Terminate();
         _initialized = false;
     }
@@ -81,7 +88,7 @@ public sealed class PortAudioEngine : IAudioEngine
         EnsureInitialized();
         int idx = Native.Pa_GetDefaultOutputDevice();
         if (idx < 0) return null;
-        return GetDevices().FirstOrDefault(d => d.Index == idx);
+        return GetDeviceByIndex(idx);
     }
 
     public Core.Audio.AudioDeviceInfo? GetDefaultInputDevice()
@@ -89,7 +96,22 @@ public sealed class PortAudioEngine : IAudioEngine
         EnsureInitialized();
         int idx = Native.Pa_GetDefaultInputDevice();
         if (idx < 0) return null;
-        return GetDevices().FirstOrDefault(d => d.Index == idx);
+        return GetDeviceByIndex(idx);
+    }
+
+    private Core.Audio.AudioDeviceInfo? GetDeviceByIndex(int idx)
+    {
+        var info = Native.Pa_GetDeviceInfo(idx);
+        if (info == null) return null;
+        return new Core.Audio.AudioDeviceInfo(
+            Index:                   idx,
+            Name:                    info.Value.Name ?? string.Empty,
+            HostApiIndex:            info.Value.hostApi,
+            MaxInputChannels:        info.Value.maxInputChannels,
+            MaxOutputChannels:       info.Value.maxOutputChannels,
+            DefaultSampleRate:       info.Value.defaultSampleRate,
+            DefaultLowOutputLatency: info.Value.defaultLowOutputLatency,
+            DefaultHighOutputLatency:info.Value.defaultHighOutputLatency);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -117,7 +139,9 @@ public sealed class PortAudioEngine : IAudioEngine
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing PortAudioEngine");
         Terminate();
+        Log.LogDebug("PortAudioEngine disposed");
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
@@ -41,6 +42,8 @@ namespace S.Media.Core.Audio;
 /// </summary>
 public sealed class VirtualAudioOutput : IAudioOutput
 {
+    private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(VirtualAudioOutput));
+
     private readonly int    _framesPerBuffer;
     private readonly float[] _silentBuf;
 
@@ -71,6 +74,9 @@ public sealed class VirtualAudioOutput : IAudioOutput
         Clock            = new StopwatchClock(format.SampleRate);
         _mixer           = new AudioMixer(format);
         _activeMixer     = _mixer;
+
+        Log.LogInformation("Created VirtualAudioOutput: {SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}",
+            format.SampleRate, format.Channels, framesPerBuffer);
     }
 
     /// <inheritdoc/>
@@ -91,12 +97,14 @@ public sealed class VirtualAudioOutput : IAudioOutput
 
         _cts      = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _tickTask = TickLoopAsync(_cts.Token);
+        Log.LogInformation("VirtualAudioOutput started");
         return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken ct = default)
     {
         if (!_isRunning) return;
+        Log.LogInformation("Stopping VirtualAudioOutput");
         _isRunning = false;
         ((StopwatchClock)Clock).Stop();
 
@@ -142,6 +150,7 @@ public sealed class VirtualAudioOutput : IAudioOutput
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing VirtualAudioOutput");
         StopAsync().GetAwaiter().GetResult();
         _mixer?.Dispose();
         _mixer = null;

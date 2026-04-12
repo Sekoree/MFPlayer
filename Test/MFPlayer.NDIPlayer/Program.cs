@@ -169,16 +169,16 @@ using (ndiRuntime)
         var routeMap     = BuildRouteMap(srcFmt.Channels, hwFmt.Channels);
 
         Console.WriteLine($"  NDI audio:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
-        Console.WriteLine($"  Output:     {hwFmt.SampleRate} Hz / {hwFmt.Channels} ch  →  {device.Name}");
 
         // ── 8. Open PortAudio output ─────────────────────────────────────────
+        // PortAudioOutput.Open automatically falls back to the device's default
+        // sample rate if the requested rate isn't supported.  The AudioMixer
+        // resamples any source-rate ↔ output-rate mismatch transparently.
 
         Console.Write("Opening output device… ");
         using var output = new PortAudioOutput();
         try
         {
-            // 1024-frame buffer aligns exactly with NDIAudioChannel's capture chunk size
-            // (FramesPerCapture = 1024), so each RT callback consumes precisely one ring chunk.
             output.Open(device, hwFmt, framesPerBuffer: 1024);
         }
         catch (Exception ex)
@@ -187,6 +187,8 @@ using (ndiRuntime)
             return;
         }
         Console.WriteLine("OK");
+
+        Console.WriteLine($"  Output:     {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
 
         using var avMixer = new AVMixer(output.HardwareFormat);
         avMixer.AttachAudioOutput(output);

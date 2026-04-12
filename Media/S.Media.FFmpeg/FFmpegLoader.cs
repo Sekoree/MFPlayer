@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
+using Microsoft.Extensions.Logging;
 
 namespace S.Media.FFmpeg;
 
@@ -9,6 +10,7 @@ namespace S.Media.FFmpeg;
 /// </summary>
 public static class FFmpegLoader
 {
+    private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegLoader));
     private static bool _loaded;
     private static readonly Lock _lock = new();
 
@@ -23,13 +25,14 @@ public static class FFmpegLoader
         lock (_lock)
         {
             if (_loaded) return;
+            Log.LogInformation("Loading FFmpeg libraries, searchPath={SearchPath}", searchPath ?? "(default)");
             if (!string.IsNullOrEmpty(searchPath))
                 ffmpeg.RootPath = searchPath;
             DynamicallyLoadedBindings.Initialize();
             // Force a cheap FFmpeg call to trigger native library load and surface errors early.
-            _ = ffmpeg.avformat_version();
+            var version = ffmpeg.avformat_version();
             _loaded = true;
+            Log.LogInformation("FFmpeg loaded: avformat version={Version}", version);
         }
     }
 }
-

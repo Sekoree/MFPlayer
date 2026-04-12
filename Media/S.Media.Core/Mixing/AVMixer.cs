@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Endpoints;
 using S.Media.Core.Audio.Routing;
@@ -14,10 +15,15 @@ public sealed class AVMixer : IAVMixer
 {
     private static readonly VideoFormat DefaultVideoFormat = new(1, 1, PixelFormat.Bgra32, 30, 1);
     private static readonly AudioFormat DefaultAudioFormat = new(48000, 2);
+    private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(AVMixer));
 
     // Tracks endpoint→adapter pairs so we can unregister cleanly.
     private readonly Dictionary<IVideoFrameEndpoint, IVideoSink> _videoEndpointAdapters = new();
     private readonly Dictionary<IAudioBufferEndpoint, IAudioSink> _audioEndpointAdapters = new();
+
+    // Track channels for A/V drift monitoring.
+    private readonly Dictionary<Guid, IAudioChannel> _audioChannels = new();
+    private readonly Dictionary<Guid, IVideoChannel> _videoChannels = new();
 
     private readonly IAudioMixer _audio;
     private readonly IVideoMixer _video;
@@ -31,11 +37,14 @@ public sealed class AVMixer : IAVMixer
         _video = videoMixer ?? throw new ArgumentNullException(nameof(videoMixer));
         _ownsAudio = ownsAudio;
         _ownsVideo = ownsVideo;
+        Log.LogDebug("AVMixer created (ownsAudio={OwnsAudio}, ownsVideo={OwnsVideo})", ownsAudio, ownsVideo);
     }
 
     public AVMixer(AudioFormat audioFormat, VideoFormat videoFormat, ChannelFallback audioFallback = ChannelFallback.Silent)
         : this(new AudioMixer(audioFormat, audioFallback), new VideoMixer(videoFormat), ownsAudio: true, ownsVideo: true)
     {
+        Log.LogInformation("AVMixer created: audio={SampleRate}Hz/{Channels}ch, video={Width}x{Height}@{Fps}fps",
+            audioFormat.SampleRate, audioFormat.Channels, videoFormat.Width, videoFormat.Height, videoFormat.FrameRate);
     }
 
     public AVMixer(AudioFormat audioFormat, ChannelFallback audioFallback = ChannelFallback.Silent)
@@ -52,27 +61,67 @@ public sealed class AVMixer : IAVMixer
     {
         ArgumentNullException.ThrowIfNull(output);
         output.OverrideRtMixer(_audio);
+        Log.LogInformation("Audio output attached: {Type}", output.GetType().Name);
     }
 
     public void AttachVideoOutput(IVideoOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
         output.OverridePresentationMixer(_video);
+        Log.LogInformation("Video output attached: {Type}", output.GetType().Name);
     }
 
     // ── Channel management ────────────────────────────────────────────────
 
     public void AddAudioChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null)
-        => _audio.AddChannel(channel, routeMap, resampler);
+    {
+        _audio.AddChannel(channel, routeMap, resampler);
+        _audioChannels[channel.Id] = channel;
+    }
 
     public void RemoveAudioChannel(Guid channelId)
-        => _audio.RemoveChannel(channelId);
+    {
+        _audio.RemoveChannel(channelId);
+        _audioChannels.Remove(channelId);
+    }
 
     public void AddVideoChannel(IVideoChannel channel)
-        => _video.AddChannel(channel);
+    {
+        _video.AddChannel(channel);
+        _videoChannels[channel.Id] = channel;
+    }
 
     public void RemoveVideoChannel(Guid channelId)
-        => _video.RemoveChannel(channelId);
+    {
+        _video.RemoveChannel(channelId);
+        _videoChannels.Remove(channelId);
+    }
+
+    // ── Per-channel time offsets ─────────────────────────────────────────
+
+    public void SetAudioChannelTimeOffset(Guid channelId, TimeSpan offset)
+        => _audio.SetChannelTimeOffset(channelId, offset);
+
+    public TimeSpan GetAudioChannelTimeOffset(Guid channelId)
+        => _audio.GetChannelTimeOffset(channelId);
+
+    public void SetVideoChannelTimeOffset(Guid channelId, TimeSpan offset)
+        => _video.SetChannelTimeOffset(channelId, offset);
+
+    public TimeSpan GetVideoChannelTimeOffset(Guid channelId)
+        => _video.GetChannelTimeOffset(channelId);
+
+    // ── A/V drift monitoring ─────────────────────────────────────────────
+
+    public TimeSpan GetAvDrift(Guid audioChannelId, Guid videoChannelId)
+    {
+        if (!_audioChannels.TryGetValue(audioChannelId, out var audioCh))
+            throw new InvalidOperationException("Audio channel is not registered.");
+        if (!_videoChannels.TryGetValue(videoChannelId, out var videoCh))
+            throw new InvalidOperationException("Video channel is not registered.");
+
+        return audioCh.Position - videoCh.Position;
+    }
 
     // ── Sink registration ─────────────────────────────────────────────────
 
@@ -179,10 +228,12 @@ public sealed class AVMixer : IAVMixer
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("AVMixer disposing");
 
         if (_ownsAudio)
             _audio.Dispose();
         if (_ownsVideo)
             _video.Dispose();
+        Log.LogDebug("AVMixer disposed");
     }
 }

@@ -12,6 +12,7 @@ public static class LocalVideoOutputRoutingPolicy
         bool supportsNv12,
         bool supportsYuv420p,
         bool supportsYuv422p10 = false,
+        bool supportsUyvy422 = false,
         PixelFormat fallback = PixelFormat.Bgra32)
     {
         return source.PixelFormat switch
@@ -19,6 +20,7 @@ public static class LocalVideoOutputRoutingPolicy
             PixelFormat.Nv12 when supportsNv12 => PixelFormat.Nv12,
             PixelFormat.Yuv420p when supportsYuv420p => PixelFormat.Yuv420p,
             PixelFormat.Yuv422p10 when supportsYuv422p10 => PixelFormat.Yuv422p10,
+            PixelFormat.Uyvy422 when supportsUyvy422 => PixelFormat.Uyvy422,
             _ => fallback
         };
     }

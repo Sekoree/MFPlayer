@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using PALib;
 using PALib.Types.Core;
 using S.Media.Core.Audio;
@@ -13,6 +14,8 @@ namespace S.Media.PortAudio;
 /// </summary>
 public sealed class PortAudioSink : IAudioSink
 {
+    private static readonly ILogger Log = PortAudioLogging.GetLogger(nameof(PortAudioSink));
+
     private readonly struct PendingWrite
     {
         public readonly float[] Buffer;
@@ -42,12 +45,20 @@ public sealed class PortAudioSink : IAudioSink
     private long                      _poolMissDrops;
     private long                      _capacityMissDrops;
     private long                      _resamplerMissDrops;
+    private readonly DriftCorrector?  _driftCorrector;
 
     public string Name      { get; }
     public bool   IsRunning => _running;
     public long PoolMissDrops => Interlocked.Read(ref _poolMissDrops);
     public long CapacityMissDrops => Interlocked.Read(ref _capacityMissDrops);
     public long ResamplerMissDrops => Interlocked.Read(ref _resamplerMissDrops);
+
+    /// <summary>
+    /// The drift corrector instance, or <see langword="null"/> if drift correction is disabled.
+    /// Use <see cref="DriftCorrector.CorrectionRatio"/> and <see cref="DriftCorrector.TotalCalls"/>
+    /// to monitor correction behaviour at runtime.
+    /// </summary>
+    public DriftCorrector? DriftCorrection => _driftCorrector;
 
     /// <param name="device">Target output device.</param>
     /// <param name="targetFormat">Hardware format this sink will write at.</param>
@@ -58,51 +69,63 @@ public sealed class PortAudioSink : IAudioSink
     /// <paramref name="targetFormat"/>.SampleRate. To keep <see cref="ReceiveBuffer"/> allocation-free,
     /// mismatched-rate buffers are dropped when this is <see langword="null"/>.
     /// </param>
+    /// <param name="enableDriftCorrection">
+    /// When <see langword="true"/>, a <see cref="DriftCorrector"/> monitors the pending-write
+    /// queue depth and adjusts the per-buffer output frame count by ±1 frame to compensate for
+    /// hardware clock drift between this sink and the leader output. Recommended for long-running
+    /// sessions with multiple outputs on independent hardware clocks.
+    /// </param>
     public unsafe PortAudioSink(
         AudioDeviceInfo  device,
         AudioFormat      targetFormat,
         int              framesPerBuffer = 512,
         string?          name           = null,
-        IAudioResampler? resampler      = null)
+        IAudioResampler? resampler      = null,
+        bool             enableDriftCorrection = false)
     {
-        _targetFormat    = targetFormat;
         _resampler       = resampler;
         _ownsResampler   = false;
         Name             = name ?? $"PortAudioSink({device.Name})";
 
-        double suggestedLatency = framesPerBuffer > 0 && targetFormat.SampleRate > 0
-            ? framesPerBuffer / (double)targetFormat.SampleRate
-            : device.DefaultLowOutputLatency;
+        Log.LogInformation("Creating PortAudioSink '{Name}': device={DeviceName} (idx={DeviceIndex}), format={SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}",
+            Name, device.Name, device.Index, targetFormat.SampleRate, targetFormat.Channels, framesPerBuffer);
 
-        var outParams = new PaStreamParameters
+        var err = TryOpenSinkStream(device, targetFormat, framesPerBuffer, out _stream);
+
+        // If the requested sample rate isn't supported, fall back to the device's
+        // default rate.  The AudioMixer in AggregateOutput will resample automatically.
+        if (err == PaError.paInvalidSampleRate)
         {
-            device                    = device.Index,
-            channelCount              = targetFormat.Channels,
-            sampleFormat              = PaSampleFormat.paFloat32,
-            suggestedLatency          = suggestedLatency,
-            hostApiSpecificStreamInfo = nint.Zero
-        };
-
-        // null streamCallback = blocking write mode
-        var err = Native.Pa_OpenStream(
-            out _stream,
-            inputParameters:  null,
-            outputParameters: outParams,
-            sampleRate:       targetFormat.SampleRate,
-            framesPerBuffer:  (nuint)framesPerBuffer,
-            streamFlags:      PaStreamFlags.paNoFlag,
-            streamCallback:   null,
-            userData:         nint.Zero);
+            int deviceRate = device.DefaultSampleRate > 0
+                ? (int)Math.Round(device.DefaultSampleRate)
+                : 0;
+            if (deviceRate > 0 && deviceRate != targetFormat.SampleRate)
+            {
+                Log.LogWarning("Requested sample rate {RequestedRate}Hz not supported by '{DeviceName}'; " +
+                               "falling back to device default {DeviceRate}Hz (AudioMixer will resample)",
+                    targetFormat.SampleRate, device.Name, deviceRate);
+                targetFormat = targetFormat with { SampleRate = deviceRate };
+                err = TryOpenSinkStream(device, targetFormat, framesPerBuffer, out _stream);
+            }
+        }
 
         if (err != PaError.paNoError)
             throw new InvalidOperationException(
                 $"PortAudioSink Pa_OpenStream failed: {Native.Pa_GetErrorText(err)} ({err})");
+
+        _targetFormat = targetFormat;
 
         // Keep enough headroom for common rate-conversion ratios without resizing on the RT path.
         int bufSize = framesPerBuffer * targetFormat.Channels;
         int poolBufferSamples = Math.Max(1, bufSize * 2);
         for (int i = 0; i < 8; i++)
             _pool.Enqueue(new float[poolBufferSamples]);
+
+        if (enableDriftCorrection)
+            _driftCorrector = new DriftCorrector(targetDepth: 3, ownerName: Name);
+
+        Log.LogDebug("PortAudioSink '{Name}' opened: poolSize={PoolSize}, bufSamples={BufSamples}, driftCorrection={Drift}",
+            Name, 8, poolBufferSamples, enableDriftCorrection);
     }
 
     // ── IAudioSink lifecycle ──────────────────────────────────────────────
@@ -110,6 +133,7 @@ public sealed class PortAudioSink : IAudioSink
     public Task StartAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        Log.LogInformation("Starting PortAudioSink '{Name}'", Name);
         var err = Native.Pa_StartStream(_stream);
         if (err != PaError.paNoError)
             throw new InvalidOperationException(
@@ -117,6 +141,7 @@ public sealed class PortAudioSink : IAudioSink
 
         _cts         = new CancellationTokenSource();
         _running     = true;
+        _driftCorrector?.Reset();
         _writeThread = new Thread(WriteLoop)
         {
             Name       = $"{Name}.WriteThread",
@@ -124,16 +149,19 @@ public sealed class PortAudioSink : IAudioSink
             Priority   = ThreadPriority.AboveNormal
         };
         _writeThread.Start();
+        Log.LogDebug("PortAudioSink '{Name}' started", Name);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct = default)
     {
+        Log.LogInformation("Stopping PortAudioSink '{Name}'", Name);
         _running = false;
         _cts?.Cancel();
         _writeThread?.Join(TimeSpan.FromSeconds(3));
 
         Native.Pa_StopStream(_stream);
+        Log.LogDebug("PortAudioSink '{Name}' stopped", Name);
         return Task.CompletedTask;
     }
 
@@ -149,9 +177,15 @@ public sealed class PortAudioSink : IAudioSink
         // When the sink's hardware rate differs from the leader's, writing the wrong number of
         // frames to Pa_WriteStream causes the secondary stream to drift (or stall):
         //   leader 48 kHz / 1024 frames → 21.33 ms; sink at 44.1 kHz needs 941 frames for the same window.
-        int writeFrames = sourceFormat.SampleRate == _targetFormat.SampleRate
+        int nominalWriteFrames = sourceFormat.SampleRate == _targetFormat.SampleRate
             ? frameCount
             : (int)Math.Round((double)frameCount * _targetFormat.SampleRate / sourceFormat.SampleRate);
+
+        // Apply drift correction: adjusts the frame count by ±1 occasionally to keep
+        // the pending-write queue stable, compensating for hardware clock drift.
+        int writeFrames = _driftCorrector != null
+            ? _driftCorrector.CorrectFrameCount(nominalWriteFrames, _pending.Count)
+            : nominalWriteFrames;
         int writeSamples = writeFrames * outCh;
 
         // Borrow a pool buffer. RT path never allocates: drop when no capacity is available.
@@ -170,6 +204,8 @@ public sealed class PortAudioSink : IAudioSink
 
         if (sourceFormat.SampleRate != _targetFormat.SampleRate)
         {
+            // Cross-rate: resampler output sized for the drift-corrected frame count.
+            // The resampler's stateful phase accumulator handles ±1 frame naturally.
             var rs = _resampler;
             if (rs == null)
             {
@@ -182,8 +218,19 @@ public sealed class PortAudioSink : IAudioSink
         }
         else
         {
-            int copy = Math.Min(buffer.Length, writeSamples);
-            buffer[..copy].CopyTo(dest.AsSpan(0, copy));
+            // Same rate: direct copy. When drift correction adjusts the frame count,
+            // we hold the last frame for extra output frames or copy fewer frames.
+            int copyFrames  = Math.Min(frameCount, writeFrames);
+            int copySamples = copyFrames * outCh;
+            buffer[..copySamples].CopyTo(dest.AsSpan(0, copySamples));
+
+            if (writeFrames > frameCount && frameCount > 0)
+            {
+                // Hold last frame for drift-correction extra frames.
+                var lastFrame = buffer.Slice((frameCount - 1) * outCh, outCh);
+                for (int f = copyFrames; f < writeFrames; f++)
+                    lastFrame.CopyTo(dest.AsSpan(f * outCh, outCh));
+            }
         }
 
         _pending.Enqueue(new PendingWrite(dest, writeSamples));
@@ -219,20 +266,63 @@ public sealed class PortAudioSink : IAudioSink
         }
     }
 
+    // ── Helpers ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Attempts to open a PA blocking-write stream. Returns the PA error code
+    /// so the caller can retry with a different rate on <c>paInvalidSampleRate</c>.
+    /// </summary>
+    private static unsafe PaError TryOpenSinkStream(
+        AudioDeviceInfo device, AudioFormat format, int framesPerBuffer, out nint stream)
+    {
+        double suggestedLatency = framesPerBuffer > 0 && format.SampleRate > 0
+            ? framesPerBuffer / (double)format.SampleRate
+            : device.DefaultLowOutputLatency;
+
+        var outParams = new PaStreamParameters
+        {
+            device                    = device.Index,
+            channelCount              = format.Channels,
+            sampleFormat              = PaSampleFormat.paFloat32,
+            suggestedLatency          = suggestedLatency,
+            hostApiSpecificStreamInfo = nint.Zero
+        };
+
+        // null streamCallback = blocking write mode
+        return Native.Pa_OpenStream(
+            out stream,
+            inputParameters:  null,
+            outputParameters: outParams,
+            sampleRate:       format.SampleRate,
+            framesPerBuffer:  (nuint)framesPerBuffer,
+            streamFlags:      PaStreamFlags.paNoFlag,
+            streamCallback:   null,
+            userData:         nint.Zero);
+    }
+
     // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing PortAudioSink '{Name}': poolMissDrops={PoolMissDrops}, capacityMissDrops={CapacityMissDrops}, resamplerMissDrops={ResamplerMissDrops}, driftRatio={DriftRatio}",
+            Name, Interlocked.Read(ref _poolMissDrops), Interlocked.Read(ref _capacityMissDrops), Interlocked.Read(ref _resamplerMissDrops),
+            _driftCorrector?.CorrectionRatio ?? 1.0);
         _running  = false;
         _cts?.Cancel();
         _writeThread?.Join(TimeSpan.FromSeconds(2));
+
+        // Drain pending writes so pooled buffers are not leaked.
+        while (_pending.TryDequeue(out var p))
+            _pool.Enqueue(p.Buffer);
+
         Native.Pa_AbortStream(_stream);
         Native.Pa_CloseStream(_stream);
         _pendingSignal.Dispose();
         if (_ownsResampler)
             _resampler?.Dispose();
+        Log.LogDebug("PortAudioSink '{Name}' disposed", Name);
     }
 }
 

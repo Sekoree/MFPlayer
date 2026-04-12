@@ -13,10 +13,15 @@ public sealed class VideoPtsClock : MediaClockBase
     private TimeSpan _lastPts;
     private TimeSpan _swAtLastPts;
     private bool     _running;
+    private bool     _initialised;
 
     /// <inheritdoc/>
     public override TimeSpan Position =>
-        _running ? _lastPts + (_sw.Elapsed - _swAtLastPts) : _lastPts;
+        _running
+            ? (_initialised
+                ? _lastPts + (_sw.Elapsed - _swAtLastPts)
+                : TimeSpan.Zero)
+            : _lastPts;
 
     /// <inheritdoc/>
     public override double SampleRate { get; }
@@ -58,6 +63,7 @@ public sealed class VideoPtsClock : MediaClockBase
     {
         _lastPts     = TimeSpan.Zero;
         _swAtLastPts = TimeSpan.Zero;
+        _initialised = false;
         _sw.Reset();
     }
 
@@ -68,9 +74,22 @@ public sealed class VideoPtsClock : MediaClockBase
     /// <param name="pts">The PTS of the frame that was just presented.</param>
     public void UpdateFromFrame(TimeSpan pts)
     {
-        if (pts <= TimeSpan.Zero) return;
+        if (pts < TimeSpan.Zero) return;
 
         var swNow = _sw.Elapsed;
+
+        // Accept PTS=0 as a valid initial anchor so the clock is properly
+        // synchronised from the very first presented frame. Without this, the
+        // clock runs freely from Start() and races ahead of the actual frame
+        // timeline, causing the mixer to drop all frames as stale.
+        if (!_initialised)
+        {
+            _initialised = true;
+            _lastPts = pts;
+            _swAtLastPts = swNow;
+            return;
+        }
+
         var predicted = _lastPts + (swNow - _swAtLastPts);
 
         // Never pull the clock backwards/behind current wall-clock progression.

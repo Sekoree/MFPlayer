@@ -1,4 +1,5 @@
 using System.Buffers;
+using S.Media.Core.Media;
 using Xunit;
 
 namespace S.Media.FFmpeg.Tests;

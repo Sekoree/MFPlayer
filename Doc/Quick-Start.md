@@ -42,7 +42,25 @@ avMixer.RegisterVideoSink(ndiSink);
 avMixer.RouteVideoChannelToSink(videoChannel.Id, ndiSink);
 ```
 
-## 4) Shutdown Order
+## 4) Loading from a Stream
+
+Instead of a file path, you can open media from any `System.IO.Stream`:
+
+```csharp
+// From a MemoryStream, FileStream, HTTP response stream, etc.
+using var stream = File.OpenRead("media.mp4");
+using var decoder = FFmpegDecoder.Open(stream);
+
+// Or with options and leaveOpen control:
+using var decoder = FFmpegDecoder.Open(stream,
+    new FFmpegDecoderOptions { EnableVideo = true },
+    leaveOpen: true);  // caller retains ownership of the stream
+```
+
+Seekable streams enable full seek support; non-seekable streams (e.g. network pipes)
+allow forward-only playback.
+
+## 5) Shutdown Order
 
 - Stop outputs/sinks first.
 - Stop decoder.

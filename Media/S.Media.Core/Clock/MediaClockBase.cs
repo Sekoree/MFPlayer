@@ -1,6 +1,3 @@
-using System.Timers;
-using Timer = System.Timers.Timer;
-
 namespace S.Media.Core.Clock;
 
 /// <summary>
@@ -9,18 +6,23 @@ namespace S.Media.Core.Clock;
 /// <see cref="Timer"/> at a configurable interval so concrete subclasses only
 /// need to supply the current position value.
 /// </summary>
+/// <remarks>
+/// Uses <see cref="System.Threading.Timer"/> instead of <c>System.Timers.Timer</c>
+/// to avoid allocating an <c>ElapsedEventArgs</c> on every tick (~50–62 Hz).
+/// </remarks>
 public abstract class MediaClockBase : IMediaClock, IDisposable
 {
     private readonly object  _tickLock = new();
     private event Action<TimeSpan>? _tick;
     private readonly Timer   _tickTimer;
+    private TimeSpan         _tickInterval;
     private bool             _disposed;
 
     protected MediaClockBase(TimeSpan tickInterval)
     {
-        _tickTimer          = new Timer(tickInterval.TotalMilliseconds);
-        _tickTimer.Elapsed += OnTimerElapsed;
-        _tickTimer.AutoReset = true;
+        _tickInterval = tickInterval;
+        // Infinite dueTime = timer starts stopped; Change() activates it.
+        _tickTimer = new Timer(OnTimerTick, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     // ── IMediaClock ────────────────────────────────────────────────────────
@@ -38,19 +40,19 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     public virtual void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _tickTimer.Start();
+        _tickTimer.Change(_tickInterval, _tickInterval);
     }
 
     public virtual void Stop()
     {
-        _tickTimer.Stop();
+        _tickTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     public abstract void Reset();
 
     // ── Internal helpers ───────────────────────────────────────────────────
 
-    private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
+    private void OnTimerTick(object? state)
     {
         if (!IsRunning) return;
         Action<TimeSpan>? handler;
@@ -64,10 +66,9 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     /// </summary>
     protected void SetTickInterval(TimeSpan interval)
     {
-        bool wasRunning = _tickTimer.Enabled;
-        _tickTimer.Stop();
-        _tickTimer.Interval = interval.TotalMilliseconds;
-        if (wasRunning) _tickTimer.Start();
+        _tickInterval = interval;
+        if (IsRunning)
+            _tickTimer.Change(interval, interval);
     }
 
     public void Dispose()

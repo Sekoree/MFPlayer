@@ -26,15 +26,27 @@ public interface IAudioResampler : IDisposable
     /// <param name="outputSampleRate">Target sample rate.</param>
     /// <returns>Number of output frames written.</returns>
     /// <remarks>
-    /// To avoid artefacts at buffer boundaries the caller should supply
-    /// <c>ceil(outputFrames × inputRate / outputRate) + 1</c> input frames.
-    /// The resampler carries the fractional phase internally.
+    /// The resampler carries the fractional phase internally; the caller should use
+    /// <see cref="GetRequiredInputFrames"/> to determine the correct input size rather
+    /// than a fixed formula, so that internally buffered pending frames are accounted for.
     /// </remarks>
     int Resample(
         ReadOnlySpan<float> input,
         Span<float>         output,
         AudioFormat         inputFormat,
         int                 outputSampleRate);
+
+    /// <summary>
+    /// Returns the number of <b>new</b> input frames the next <see cref="Resample"/> call
+    /// needs to produce <paramref name="outputFrames"/> output frames, accounting for any
+    /// internally buffered pending frames from the previous call.
+    /// <para>
+    /// Using this instead of a fixed <c>ceil(…) + 1</c> formula prevents the internal
+    /// pending-frame buffer from growing unboundedly (which would cause per-callback
+    /// heap allocations on the RT thread and trigger GC pauses → audio crackling).
+    /// </para>
+    /// </summary>
+    int GetRequiredInputFrames(int outputFrames, AudioFormat inputFormat, int outputSampleRate);
 
     /// <summary>Resets the internal phase accumulator (call on seek).</summary>
     void Reset();

@@ -17,6 +17,14 @@ public sealed unsafe class SwrResampler : IAudioResampler
     private int         _lastChannels;
     private bool        _disposed;
 
+    public int GetRequiredInputFrames(int outputFrames, AudioFormat inputFormat, int outputSampleRate)
+    {
+        if (inputFormat.SampleRate == outputSampleRate)
+            return outputFrames;
+        // swresample manages its own internal delay line so a simple ceiling is sufficient.
+        return (int)Math.Ceiling(outputFrames * ((double)inputFormat.SampleRate / outputSampleRate)) + 1;
+    }
+
     public int Resample(
         ReadOnlySpan<float> input,
         Span<float>         output,

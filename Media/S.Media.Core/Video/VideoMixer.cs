@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;
@@ -10,6 +11,8 @@ namespace S.Media.Core.Video;
 /// </summary>
 internal sealed class VideoMixer : IVideoMixer
 {
+    private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(VideoMixer));
+
     public readonly record struct DiagnosticsSnapshot(
         long PresentCalls,
         long LeaderPresented,
@@ -49,6 +52,7 @@ internal sealed class VideoMixer : IVideoMixer
 
     private readonly Lock _lock = new();
     private IVideoChannel[] _channels = [];
+    private readonly Dictionary<Guid, long> _channelOffsetTicks = new();
     private volatile IVideoChannel? _activeChannel;
     private volatile SinkTarget[] _sinkTargets = [];
     private VideoFrame? _lastFrame;
@@ -87,6 +91,9 @@ internal sealed class VideoMixer : IVideoMixer
         _dropLagThreshold = byFrameRate < TimeSpan.FromMilliseconds(30)
             ? TimeSpan.FromMilliseconds(30)
             : byFrameRate;
+
+        Log.LogDebug("VideoMixer created: {Width}x{Height} @ {FrameRate}fps, dropLag={DropLagMs}ms",
+            outputFormat.Width, outputFormat.Height, outputFormat.FrameRate, _dropLagThreshold.TotalMilliseconds);
     }
 
     /// <inheritdoc/>
@@ -137,10 +144,10 @@ internal sealed class VideoMixer : IVideoMixer
             neo[^1] = channel;
             _channels = neo;
 
-            // Auto-activate the first channel added.
             if (_activeChannel is null)
                 _activeChannel = channel;
         }
+        Log.LogInformation("Video channel added: id={ChannelId}, total={ChannelCount}", channel.Id, _channels.Length);
     }
 
     /// <inheritdoc/>
@@ -174,7 +181,9 @@ internal sealed class VideoMixer : IVideoMixer
             for (int i = 0, j = 0; i < old.Length; i++)
                 if (i != idx) neo[j++] = old[i];
             _channels = neo;
+            _channelOffsetTicks.Remove(channelId);
         }
+        Log.LogInformation("Video channel removed: id={ChannelId}", channelId);
     }
 
     /// <inheritdoc/>
@@ -204,6 +213,52 @@ internal sealed class VideoMixer : IVideoMixer
     }
 
     /// <inheritdoc/>
+    public void SetChannelTimeOffset(Guid channelId, TimeSpan offset)
+    {
+        lock (_lock)
+        {
+            bool found = false;
+            foreach (var ch in _channels)
+                if (ch.Id == channelId) { found = true; break; }
+            if (!found)
+                throw new InvalidOperationException("Channel is not registered.");
+
+            if (offset == TimeSpan.Zero)
+                _channelOffsetTicks.Remove(channelId);
+            else
+                _channelOffsetTicks[channelId] = offset.Ticks;
+
+            Log.LogInformation("Video channel time offset set: id={ChannelId}, offset={OffsetMs}ms",
+                channelId, offset.TotalMilliseconds);
+        }
+    }
+
+    /// <inheritdoc/>
+    public TimeSpan GetChannelTimeOffset(Guid channelId)
+    {
+        lock (_lock)
+        {
+            return _channelOffsetTicks.TryGetValue(channelId, out long ticks)
+                ? TimeSpan.FromTicks(ticks)
+                : TimeSpan.Zero;
+        }
+    }
+
+    private TimeSpan GetOffsetForChannel(IVideoChannel? channel)
+    {
+        if (channel is null) return TimeSpan.Zero;
+        // _channelOffsetTicks is only mutated under _lock; the read here is on the
+        // render thread. For the presentation hot path we accept a potential stale
+        // read (the offset changes infrequently and always converges on the next frame).
+        lock (_lock)
+        {
+            return _channelOffsetTicks.TryGetValue(channel.Id, out long ticks)
+                ? TimeSpan.FromTicks(ticks)
+                : TimeSpan.Zero;
+        }
+    }
+
+    /// <inheritdoc/>
     public void RegisterSink(IVideoSink sink)
     {
         ArgumentNullException.ThrowIfNull(sink);
@@ -219,6 +274,7 @@ internal sealed class VideoMixer : IVideoMixer
             neo[^1] = new SinkTarget(sink);
             _sinkTargets = neo;
         }
+        Log.LogInformation("Video sink registered: type={SinkType}, total={SinkCount}", sink.GetType().Name, _sinkTargets.Length);
     }
 
     /// <inheritdoc/>
@@ -286,9 +342,12 @@ internal sealed class VideoMixer : IVideoMixer
     public VideoFrame? PresentNextFrame(TimeSpan clockPosition)
     {
         Interlocked.Increment(ref _presentCallCount);
+
+        var leaderOffset = GetOffsetForChannel(_activeChannel);
+        var leaderClock = clockPosition - leaderOffset;
         var leader = PresentForTarget(_activeChannel, ref _stagedFrame, ref _lastFrame,
             ref _hasLeaderPtsOrigin, ref _leaderPtsOriginTicks,
-            clockPosition,
+            leaderClock,
             countSinkFormatStats: false);
 
         if (leader.HasValue)
@@ -313,9 +372,11 @@ internal sealed class VideoMixer : IVideoMixer
                 continue;
             }
 
+            var sinkOffset = GetOffsetForChannel(st.ActiveChannel);
+            var sinkClock = clockPosition - sinkOffset;
             var sinkFrame = PresentForTarget(st.ActiveChannel, ref st.StagedFrame, ref st.LastFrame,
                 ref st.HasPtsOrigin, ref st.PtsOriginTicks,
-                clockPosition,
+                sinkClock,
                 countSinkFormatStats: true,
                 sink: st.Sink);
             if (sinkFrame.HasValue && st.Sink.IsRunning)
@@ -477,6 +538,7 @@ internal sealed class VideoMixer : IVideoMixer
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing VideoMixer: channels={ChannelCount}, sinks={SinkCount}", _channels.Length, _sinkTargets.Length);
         ResetLeaderState();
         foreach (var st in _sinkTargets)
             st.ResetState();

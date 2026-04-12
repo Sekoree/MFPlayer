@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
@@ -13,6 +14,8 @@ namespace S.Media.SDL3;
 /// </summary>
 public sealed class SDL3VideoOutput : IVideoOutput
 {
+    private static readonly ILogger Log = SDL3VideoLogging.GetLogger(nameof(SDL3VideoOutput));
+
     public readonly record struct DiagnosticsSnapshot(
         long LoopIterations,
         long PresentedFrames,
@@ -22,6 +25,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
         long Nv12Frames,
         long Yuv420pFrames,
         long Yuv422p10Frames,
+        long Uyvy422Frames,
         long OtherFrames,
         long SwapCalls,
         long ResizeEvents,
@@ -53,6 +57,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private long                     _nv12Frames;
     private long                     _yuv420pFrames;
     private long                     _yuv422p10Frames;
+    private long                     _uyvy422Frames;
     private long                     _otherFrames;
     private long                     _swapCalls;
     private long                     _resizeEvents;
@@ -117,6 +122,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
         Nv12Frames: Interlocked.Read(ref _nv12Frames),
         Yuv420pFrames: Interlocked.Read(ref _yuv420pFrames),
         Yuv422p10Frames: Interlocked.Read(ref _yuv422p10Frames),
+        Uyvy422Frames: Interlocked.Read(ref _uyvy422Frames),
         OtherFrames: Interlocked.Read(ref _otherFrames),
         SwapCalls: Interlocked.Read(ref _swapCalls),
         ResizeEvents: Interlocked.Read(ref _resizeEvents),
@@ -204,6 +210,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
             supportsNv12: true,
             supportsYuv420p: true,
             supportsYuv422p10: true,
+            supportsUyvy422: true,
             fallback: PixelFormat.Bgra32);
         _outputFormat = format with { PixelFormat = leaderPixelFormat };
         _mixer = new VideoMixer(_outputFormat);
@@ -217,6 +224,9 @@ public sealed class SDL3VideoOutput : IVideoOutput
         // a correctly letterboxed/pillarboxed viewport from the start.
         if (_outputFormat.Width > 0 && _outputFormat.Height > 0)
             _renderer.SetVideoSize(_outputFormat.Width, _outputFormat.Height);
+
+        Log.LogInformation("Opened SDL3VideoOutput: '{Title}' {Width}x{Height} px={PixelFormat}, fps={FrameRate}",
+            title, _outputFormat.Width, _outputFormat.Height, _outputFormat.PixelFormat, _outputFormat.FrameRate);
     }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
@@ -240,6 +250,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
 
         _clock!.Start();
         _isRunning = true;
+        Log.LogInformation("SDL3VideoOutput started");
         return Task.CompletedTask;
     }
 
@@ -248,6 +259,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
     {
         if (!_isRunning) return Task.CompletedTask;
 
+        Log.LogInformation("Stopping SDL3VideoOutput");
         return Task.Run(() =>
         {
             _clock?.Stop();
@@ -265,7 +277,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
         if (!SDL.GLMakeCurrent(_window, _glContext))
         {
             Interlocked.Increment(ref _glMakeCurrentFailures);
-            Console.Error.WriteLine($"[SDL3VideoOutput] SDL_GL_MakeCurrent failed: {SDL.GetError()}");
+            Log.LogError("SDL_GL_MakeCurrent failed: {Error}", SDL.GetError());
             _isRunning = false;
             return;
         }
@@ -329,6 +341,9 @@ public sealed class SDL3VideoOutput : IVideoOutput
                         case PixelFormat.Yuv422p10:
                             Interlocked.Increment(ref _yuv422p10Frames);
                             break;
+                        case PixelFormat.Uyvy422:
+                            Interlocked.Increment(ref _uyvy422Frames);
+                            break;
                         default:
                             Interlocked.Increment(ref _otherFrames);
                             break;
@@ -352,7 +367,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
             {
                 long ec = Interlocked.Increment(ref _renderExceptions);
                 if (ec <= 3 || ec % 100 == 0)
-                    Console.Error.WriteLine($"[SDL3VideoOutput] render-loop exception (count={ec}): {ex}");
+                    Log.LogError(ex, "Render-loop exception (count={Count})", ec);
             }
         }
 
@@ -374,6 +389,10 @@ public sealed class SDL3VideoOutput : IVideoOutput
     {
         if (_disposed) return;
         _disposed = true;
+
+        Log.LogInformation("Disposing SDL3VideoOutput: presented={Presented}, black={Black}, renderExceptions={RenderExceptions}, resizeEvents={ResizeEvents}",
+            Interlocked.Read(ref _presentedFrames), Interlocked.Read(ref _blackFrames),
+            Interlocked.Read(ref _renderExceptions), Interlocked.Read(ref _resizeEvents));
 
         // Stop the render loop if it is still running.
         if (_isRunning)

@@ -29,6 +29,10 @@ public sealed class VideoPtsClockTests
         using var clock = new VideoPtsClock(sampleRate: 60);
         clock.Start();
 
+
+        // Anchor the clock with an initial frame (simulates the first presented frame).
+        clock.UpdateFromFrame(TimeSpan.Zero);
+
         Thread.Sleep(80);
         var before = clock.Position;
 
@@ -39,5 +43,22 @@ public sealed class VideoPtsClockTests
         var after = clock.Position;
         Assert.True(after >= before, $"Clock regressed after late PTS update. before={before}, after={after}");
         Assert.True(after > TimeSpan.FromMilliseconds(90), $"Expected wall-time progression >90ms, got {after}.");
+    }
+
+    [Fact]
+    public void Position_HoldsAtZero_UntilFirstFrameAnchors()
+    {
+        using var clock = new VideoPtsClock(sampleRate: 30);
+        clock.Start();
+
+        Thread.Sleep(50);
+        var before = clock.Position;
+        Assert.True(before == TimeSpan.Zero, $"Expected Position=0 before any frame, got {before}.");
+
+        // First frame anchors the clock.
+        clock.UpdateFromFrame(TimeSpan.Zero);
+        Thread.Sleep(50);
+        var after = clock.Position;
+        Assert.True(after > TimeSpan.FromMilliseconds(30), $"Expected clock to progress after anchor, got {after}.");
     }
 }

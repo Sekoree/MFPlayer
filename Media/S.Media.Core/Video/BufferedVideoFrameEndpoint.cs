@@ -50,21 +50,23 @@ public sealed class BufferedVideoFrameEndpoint : IVideoFrameEndpoint, IVideoFram
         if (!_running)
             return;
 
-        bool shouldSignal;
         lock (_gate)
         {
-            shouldSignal = _queue.Count < _capacity;
             if (_queue.Count >= _capacity)
             {
                 var dropped = _queue.Dequeue();
                 dropped.MemoryOwner?.Dispose();
+                // No net change in count — a reader is already owed a signal for this slot,
+                // so we don't Release() here; the slot is being replaced, not added.
+            }
+            else
+            {
+                // Net new item — wake a waiting reader.
+                _available.Release();
             }
 
             _queue.Enqueue(frame);
         }
-
-        if (shouldSignal)
-            _available.Release();
     }
 
     public async ValueTask<VideoFrame?> ReadFrameAsync(CancellationToken ct = default)

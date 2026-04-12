@@ -30,6 +30,8 @@ public sealed class VideoOutputPullSourceAdapterTests
 
         public void AddChannel(IVideoChannel channel) { }
         public void RemoveChannel(Guid channelId) { }
+        public void SetChannelTimeOffset(Guid channelId, TimeSpan offset) { }
+        public TimeSpan GetChannelTimeOffset(Guid channelId) => TimeSpan.Zero;
         public void RouteChannelToPrimaryOutput(Guid channelId) { }
         public void UnroutePrimaryOutput() { }
         public void RegisterSink(IVideoSink sink) { }

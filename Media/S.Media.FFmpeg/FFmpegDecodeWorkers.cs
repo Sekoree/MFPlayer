@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 
 namespace S.Media.FFmpeg;
 
@@ -10,12 +12,17 @@ namespace S.Media.FFmpeg;
 /// </summary>
 internal static class FFmpegDecodeWorkers
 {
+    private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegDecodeWorkers));
+
     public static async Task RunAudioAsync(
         FFmpegAudioChannel owner,
         ChannelReader<EncodedPacket> packetReader,
-        CancellationToken token)
+        CancellationToken token,
+        ConcurrentQueue<EncodedPacket>? packetPool = null)
     {
+        Log.LogDebug("Audio decode worker starting for stream {StreamIndex}", owner.StreamIndex);
         int currentEpoch = 0;
+        long frameCount = 0;
         try
         {
             while (!token.IsCancellationRequested)
@@ -28,16 +35,20 @@ internal static class FFmpegDecodeWorkers
                 try
                 {
                     if (ep.SeekEpoch < owner.LatestSeekEpoch)
+                    {
+                        if (Log.IsEnabled(LogLevel.Trace))
+                            Log.LogTrace("Audio stream {StreamIndex}: dropping stale packet (epoch {PacketEpoch} < {CurrentEpoch})",
+                                owner.StreamIndex, ep.SeekEpoch, owner.LatestSeekEpoch);
                         continue;
+                    }
 
                     if (ep.IsFlush)
                     {
-                        // Ignore delayed duplicate flush packets for the current epoch.
-                        // Applying them again would rewind channel position unexpectedly.
                         if (ep.SeekEpoch > currentEpoch)
                         {
                             currentEpoch = ep.SeekEpoch;
                             owner.ApplySeekEpoch(ep.SeekPositionTicks);
+                            Log.LogDebug("Audio stream {StreamIndex}: flush applied, epoch={Epoch}", owner.StreamIndex, currentEpoch);
                         }
                         continue;
                     }
@@ -47,6 +58,11 @@ internal static class FFmpegDecodeWorkers
                         currentEpoch = ep.SeekEpoch;
                         owner.ApplySeekEpoch(ep.SeekPositionTicks);
                     }
+
+                    frameCount++;
+                    if (Log.IsEnabled(LogLevel.Trace))
+                        Log.LogTrace("Audio stream {StreamIndex}: decoding packet #{Count} pts={Pts} size={Size}",
+                            owner.StreamIndex, frameCount, ep.Pts, ep.ActualLength);
 
                     if (!owner.DecodePacketAndEnqueue(ep, token))
                         break;
@@ -68,21 +84,26 @@ internal static class FFmpegDecodeWorkers
                 {
                     if (ep.IsPooled)
                         ArrayPool<byte>.Shared.Return(ep.Data);
+                    packetPool?.Enqueue(ep);
                 }
             }
         }
         finally
         {
             owner.CompleteDecodeLoop();
+            Log.LogDebug("Audio decode worker finished for stream {StreamIndex}, decoded {FrameCount} packets", owner.StreamIndex, frameCount);
         }
     }
 
     public static async Task RunVideoAsync(
         FFmpegVideoChannel owner,
         ChannelReader<EncodedPacket> packetReader,
-        CancellationToken token)
+        CancellationToken token,
+        ConcurrentQueue<EncodedPacket>? packetPool = null)
     {
+        Log.LogDebug("Video decode worker starting for stream {StreamIndex}", owner.StreamIndex);
         int currentEpoch = 0;
+        long frameCount = 0;
         try
         {
             while (!token.IsCancellationRequested)
@@ -95,16 +116,20 @@ internal static class FFmpegDecodeWorkers
                 try
                 {
                     if (ep.SeekEpoch < owner.LatestSeekEpoch)
+                    {
+                        if (Log.IsEnabled(LogLevel.Trace))
+                            Log.LogTrace("Video stream {StreamIndex}: dropping stale packet (epoch {PacketEpoch} < {CurrentEpoch})",
+                                owner.StreamIndex, ep.SeekEpoch, owner.LatestSeekEpoch);
                         continue;
+                    }
 
                     if (ep.IsFlush)
                     {
-                        // Ignore delayed duplicate flush packets for the current epoch.
-                        // Applying them again would rewind channel position unexpectedly.
                         if (ep.SeekEpoch > currentEpoch)
                         {
                             currentEpoch = ep.SeekEpoch;
                             owner.ApplySeekEpoch(ep.SeekPositionTicks);
+                            Log.LogDebug("Video stream {StreamIndex}: flush applied, epoch={Epoch}", owner.StreamIndex, currentEpoch);
                         }
                         continue;
                     }
@@ -114,6 +139,11 @@ internal static class FFmpegDecodeWorkers
                         currentEpoch = ep.SeekEpoch;
                         owner.ApplySeekEpoch(ep.SeekPositionTicks);
                     }
+
+                    frameCount++;
+                    if (Log.IsEnabled(LogLevel.Trace))
+                        Log.LogTrace("Video stream {StreamIndex}: decoding packet #{Count} pts={Pts} size={Size}",
+                            owner.StreamIndex, frameCount, ep.Pts, ep.ActualLength);
 
                     if (!owner.DecodePacketAndEnqueue(ep, token))
                         break;
@@ -135,13 +165,14 @@ internal static class FFmpegDecodeWorkers
                 {
                     if (ep.IsPooled)
                         ArrayPool<byte>.Shared.Return(ep.Data);
+                    packetPool?.Enqueue(ep);
                 }
             }
         }
         finally
         {
             owner.CompleteDecodeLoop();
+            Log.LogDebug("Video decode worker finished for stream {StreamIndex}, decoded {FrameCount} packets", owner.StreamIndex, frameCount);
         }
     }
 }
-

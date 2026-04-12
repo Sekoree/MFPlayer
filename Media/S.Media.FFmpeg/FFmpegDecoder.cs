@@ -1,13 +1,15 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
 
 namespace S.Media.FFmpeg;
 
 /// <summary>
-/// Options for <see cref="FFmpegDecoder.Open"/>.
+/// Options for <see cref="FFmpegDecoder"/>.
 /// </summary>
 public sealed class FFmpegDecoderOptions
 {
@@ -90,6 +92,22 @@ internal sealed class EncodedPacket
         IsPooled     = isPooled;
     }
 
+    /// <summary>Re-initialises this instance for reuse from a pool, avoiding a heap allocation.</summary>
+    public void Reset(byte[] data, int actualLength, long pts, long dts, long duration, int flags,
+                      bool isPooled, int seekEpoch, long seekPositionTicks)
+    {
+        Data              = data;
+        ActualLength      = actualLength;
+        Pts               = pts;
+        Dts               = dts;
+        Duration          = duration;
+        Flags             = flags;
+        SeekEpoch         = seekEpoch;
+        SeekPositionTicks = seekPositionTicks;
+        IsFlush           = false;
+        IsPooled          = isPooled;
+    }
+
     public static EncodedPacket Flush(int seekEpoch, long seekPositionTicks)
         => new([], 0, 0, 0, 0, 0, false, seekEpoch, seekPositionTicks) { IsFlush = true };
 }
@@ -125,6 +143,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
     private AVFormatContext*         _fmt;
     private AVBufferRef*             _hwDeviceCtx;  // null when sw-only
+    private StreamAvioContext?       _avioCtx;      // non-null when opened from a Stream
     private Task?                    _demuxTask;
     private CancellationTokenSource  _cts = new();
     private bool                     _disposed;
@@ -135,16 +154,24 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private int                      _started;
     private readonly object          _formatIoGate = new();
     private string?                  _activeHwDeviceType;
+    private readonly ILogger         _log;
 
     // Per stream-index → bounded packet channel
     private readonly Dictionary<int, Channel<EncodedPacket>> _queues = new();
+
+    // Pool of EncodedPacket objects to avoid per-packet heap allocations during demuxing.
+    // Demux thread borrows; decode threads return via ReturnPacketToPool().
+    internal readonly ConcurrentQueue<EncodedPacket> PacketPool = new();
 
     public IReadOnlyList<FFmpegAudioChannel> AudioChannels { get; private set; }
         = Array.Empty<FFmpegAudioChannel>();
     public IReadOnlyList<FFmpegVideoChannel> VideoChannels { get; private set; }
         = Array.Empty<FFmpegVideoChannel>();
 
-    private FFmpegDecoder() { }
+    private FFmpegDecoder()
+    {
+        _log = FFmpegLogging.GetLogger(nameof(FFmpegDecoder));
+    }
 
     /// <summary>Opens a local file or URL and creates channel objects for each stream.</summary>
     /// <param name="path">File path or URL (anything avformat_open_input accepts).</param>
@@ -154,7 +181,41 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         FFmpegLoader.EnsureLoaded();
         var dec = new FFmpegDecoder();
         dec._options = NormalizeOptions(options ?? new FFmpegDecoderOptions());
-        dec.Initialise(path);
+        dec._log.LogInformation("Opening media from path: {Path}", path);
+        dec._log.LogDebug("Options: QueueDepth={QueueDepth} AudioBuf={AudioBuf} VideoBuf={VideoBuf} Threads={Threads} HW={HW} Audio={Audio} Video={Video} PixFmt={PixFmt}",
+            dec._options.PacketQueueDepth, dec._options.AudioBufferDepth, dec._options.VideoBufferDepth,
+            dec._options.DecoderThreadCount, dec._options.PreferHardwareDecoding,
+            dec._options.EnableAudio, dec._options.EnableVideo, dec._options.VideoTargetPixelFormat);
+        dec.InitialiseFromPath(path);
+        return dec;
+    }
+
+    /// <summary>
+    /// Opens a media source from an arbitrary <see cref="Stream"/> (MemoryStream, FileStream,
+    /// HTTP response stream, etc.) and creates channel objects for each stream.
+    /// </summary>
+    /// <param name="stream">
+    /// The source stream. Must support <see cref="Stream.Read(byte[], int, int)"/>.
+    /// Seekable streams enable seeking in the resulting decoder; non-seekable streams
+    /// allow forward-only playback.
+    /// </param>
+    /// <param name="options">Decoder options; <see langword="null"/> uses defaults.</param>
+    /// <param name="leaveOpen">
+    /// When <see langword="false"/> (default), <see cref="Dispose"/> closes the stream.
+    /// When <see langword="true"/>, the caller retains ownership of the stream.
+    /// </param>
+    public static FFmpegDecoder Open(Stream stream, FFmpegDecoderOptions? options = null,
+                                     bool leaveOpen = false)
+    {
+        FFmpegLoader.EnsureLoaded();
+        var dec = new FFmpegDecoder();
+        dec._options = NormalizeOptions(options ?? new FFmpegDecoderOptions());
+        dec._log.LogInformation("Opening media from Stream (CanSeek={CanSeek}, LeaveOpen={LeaveOpen})", stream.CanSeek, leaveOpen);
+        dec._log.LogDebug("Options: QueueDepth={QueueDepth} AudioBuf={AudioBuf} VideoBuf={VideoBuf} Threads={Threads} HW={HW} Audio={Audio} Video={Video} PixFmt={PixFmt}",
+            dec._options.PacketQueueDepth, dec._options.AudioBufferDepth, dec._options.VideoBufferDepth,
+            dec._options.DecoderThreadCount, dec._options.PreferHardwareDecoding,
+            dec._options.EnableAudio, dec._options.EnableVideo, dec._options.VideoTargetPixelFormat);
+        dec.InitialiseFromStream(stream, leaveOpen);
         return dec;
     }
 
@@ -173,17 +234,52 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         };
     }
 
-    private void Initialise(string path)
+    private void InitialiseFromPath(string path)
     {
         AVFormatContext* fmt = null;
         int ret = ffmpeg.avformat_open_input(&fmt, path, null, null);
         if (ret < 0) throw new InvalidOperationException($"avformat_open_input failed: {ret}");
         _fmt = fmt;
+        _log.LogDebug("avformat_open_input succeeded for path: {Path}", path);
 
-        ret = ffmpeg.avformat_find_stream_info(_fmt, null);
+        DiscoverStreams();
+    }
+
+    private void InitialiseFromStream(Stream stream, bool leaveOpen)
+    {
+        _avioCtx = new StreamAvioContext(stream, leaveOpen);
+        _log.LogDebug("StreamAvioContext created, CanSeek={CanSeek}", stream.CanSeek);
+
+        AVFormatContext* fmt = ffmpeg.avformat_alloc_context();
+        if (fmt == null)
+        {
+            _avioCtx.Dispose();
+            _avioCtx = null;
+            throw new InvalidOperationException("avformat_alloc_context returned null.");
+        }
+
+        fmt->pb = _avioCtx.Context;
+
+        int ret = ffmpeg.avformat_open_input(&fmt, string.Empty, null, null);
+        if (ret < 0)
+        {
+            _avioCtx.Dispose();
+            _avioCtx = null;
+            throw new InvalidOperationException($"avformat_open_input (stream) failed: {ret}");
+        }
+
+        _fmt = fmt;
+        _log.LogDebug("avformat_open_input succeeded for Stream source");
+        DiscoverStreams();
+    }
+
+    private void DiscoverStreams()
+    {
+        int ret = ffmpeg.avformat_find_stream_info(_fmt, null);
         if (ret < 0) throw new InvalidOperationException($"avformat_find_stream_info failed: {ret}");
 
-        // Optionally create a hardware device context for video decoding.
+        _log.LogDebug("Found {StreamCount} streams in container", (int)_fmt->nb_streams);
+
         if (_options.PreferHardwareDecoding)
             TryCreateDefaultHwDevice();
 
@@ -195,15 +291,19 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             var stream    = _fmt->streams[i];
             var codecPars = stream->codecpar;
 
-            // Skip attached pictures (e.g. cover art embedded in FLAC/MP3/OGG files).
-            // These appear as video streams with AV_DISPOSITION_ATTACHED_PIC (0x0400).
             if ((stream->disposition & ffmpeg.AV_DISPOSITION_ATTACHED_PIC) != 0)
+            {
+                _log.LogDebug("Stream {Index}: skipping attached picture", i);
                 continue;
+            }
 
             if (codecPars->codec_type == AVMediaType.AVMEDIA_TYPE_AUDIO)
             {
                 if (!_options.EnableAudio)
+                {
+                    _log.LogDebug("Stream {Index}: audio stream skipped (EnableAudio=false)", i);
                     continue;
+                }
 
                 var q = Channel.CreateBounded<EncodedPacket>(
                     new BoundedChannelOptions(_options.PacketQueueDepth)
@@ -218,11 +318,17 @@ public sealed unsafe class FFmpegDecoder : IDisposable
                     threadCount: _options.DecoderThreadCount,
                     bufferDepth: _options.AudioBufferDepth,
                     latestSeekEpochProvider: () => Volatile.Read(ref _seekEpoch)));
+
+                _log.LogInformation("Stream {Index}: audio channel opened (SampleRate={SampleRate}, Channels={Channels}, Codec={Codec})",
+                    i, codecPars->sample_rate, codecPars->ch_layout.nb_channels, codecPars->codec_id);
             }
             else if (codecPars->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
             {
                 if (!_options.EnableVideo)
+                {
+                    _log.LogDebug("Stream {Index}: video stream skipped (EnableVideo=false)", i);
                     continue;
+                }
 
                 var q = Channel.CreateBounded<EncodedPacket>(
                     new BoundedChannelOptions(_options.PacketQueueDepth)
@@ -239,11 +345,19 @@ public sealed unsafe class FFmpegDecoder : IDisposable
                     threadCount: _options.DecoderThreadCount,
                     bufferDepth: _options.VideoBufferDepth,
                     latestSeekEpochProvider: () => Volatile.Read(ref _seekEpoch)));
+
+                _log.LogInformation("Stream {Index}: video channel opened ({Width}x{Height}, Codec={Codec}, TargetPix={TargetPix})",
+                    i, codecPars->width, codecPars->height, codecPars->codec_id, _options.VideoTargetPixelFormat);
+            }
+            else
+            {
+                _log.LogDebug("Stream {Index}: skipping unsupported type {Type}", i, codecPars->codec_type);
             }
         }
 
         AudioChannels = audio;
         VideoChannels = video;
+        _log.LogInformation("Discovered {AudioCount} audio and {VideoCount} video channels", audio.Count, video.Count);
     }
 
     private void TryCreateHwDevice(string deviceType)
@@ -251,8 +365,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         var type = ffmpeg.av_hwdevice_find_type_by_name(deviceType);
         if (type == AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
         {
-            Console.Error.WriteLine(
-                $"[FFmpegDecoder] Unknown hw device type '{deviceType}', falling back to software.");
+            _log.LogWarning("Unknown hw device type '{DeviceType}', falling back to software", deviceType);
             return;
         }
 
@@ -260,8 +373,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         int ret = ffmpeg.av_hwdevice_ctx_create(&ctx, type, null, null, 0);
         if (ret < 0)
         {
-            Console.Error.WriteLine(
-                $"[FFmpegDecoder] av_hwdevice_ctx_create('{deviceType}') failed ({ret}), falling back to software.");
+            _log.LogWarning("av_hwdevice_ctx_create('{DeviceType}') failed ({ReturnCode}), falling back to software", deviceType, ret);
             return;
         }
         _hwDeviceCtx = ctx;
@@ -271,6 +383,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private void TryCreateDefaultHwDevice()
     {
         var available = GetAvailableHwDeviceTypes();
+        _log.LogDebug("Available hw device types: [{Types}]", string.Join(", ", available));
         if (available.Count == 0)
             return;
 
@@ -295,22 +408,24 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
             TryCreateHwDevice(device);
             if (_hwDeviceCtx != null)
-                Console.WriteLine($"[FFmpegDecoder] using hw device '{device}'.");
+                _log.LogInformation("Using hw device '{Device}'", device);
         }
 
         if (_hwDeviceCtx == null)
         {
-            // Try any other discovered backend as a final fallback.
             foreach (var device in available)
             {
                 TryCreateHwDevice(device);
                 if (_hwDeviceCtx != null)
                 {
-                    Console.WriteLine($"[FFmpegDecoder] using hw device '{device}'.");
+                    _log.LogInformation("Using hw device '{Device}' (fallback)", device);
                     break;
                 }
             }
         }
+
+        if (_hwDeviceCtx == null)
+            _log.LogDebug("No hardware decode device available, using software decoding");
     }
 
     private static HashSet<string> GetAvailableHwDeviceTypes()
@@ -338,39 +453,42 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (Interlocked.Exchange(ref _started, 1) != 0)
-            return; // idempotent start
+        {
+            _log.LogDebug("Start() called again (idempotent, no-op)");
+            return;
+        }
 
-        foreach (var ch in AudioChannels) ch.StartDecoding();
-        foreach (var ch in VideoChannels) ch.StartDecoding();
+        _log.LogInformation("Starting decoder: {AudioChannels} audio + {VideoChannels} video channels", AudioChannels.Count, VideoChannels.Count);
+
+        foreach (var ch in AudioChannels) ch.StartDecoding(PacketPool);
+        foreach (var ch in VideoChannels) ch.StartDecoding(PacketPool);
 
         _demuxTask = FFmpegDemuxWorker.RunAsync(this, _cts.Token);
+        _log.LogDebug("Demux worker started");
     }
 
     /// <summary>Seeks all streams to <paramref name="position"/>.</summary>
     public void Seek(TimeSpan position)
     {
+        _log.LogInformation("Seeking to {Position}", position);
         long ts = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
         int epoch;
 
-        // av_seek_frame and av_read_frame share AVFormatContext internals.
-        // Serialize them to avoid rapid-seek races against the demux loop.
         lock (_formatIoGate)
         {
             int ret = ffmpeg.av_seek_frame(_fmt, -1, ts, ffmpeg.AVSEEK_FLAG_BACKWARD);
             if (ret < 0)
             {
-                Console.Error.WriteLine($"[FFmpegDecoder] av_seek_frame failed ({ret}) at {position}.");
+                _log.LogWarning("av_seek_frame failed ({ReturnCode}) at {Position}", ret, position);
                 return;
             }
 
             epoch = Interlocked.Increment(ref _seekEpoch);
-
-            // Publish seek target so regular packets in this epoch still carry the
-            // correct position if a best-effort flush control packet is dropped.
             Volatile.Write(ref _seekPositionTicks, position.Ticks);
         }
 
-        // In-band flush packet: decode threads perform avcodec_flush_buffers on their own context.
+        _log.LogDebug("Seek committed, epoch={Epoch}", epoch);
+
         var flush = EncodedPacket.Flush(epoch, position.Ticks);
         int droppedControlPackets = 0;
         foreach (var (_, q) in _queues)
@@ -381,10 +499,9 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         {
             long warnCount = Interlocked.Increment(ref _seekControlDropLogCount);
             if (warnCount <= 3 || warnCount % 100 == 0)
-                Console.Error.WriteLine($"[FFmpegDecoder] Seek control packet dropped for {droppedControlPackets} stream(s) (count={warnCount}).");
+                _log.LogWarning("Seek control packet dropped for {DroppedCount} stream(s) (total={TotalDrops})", droppedControlPackets, warnCount);
         }
 
-        // Clear already-decoded channel buffers immediately on the caller thread.
         foreach (var ch in AudioChannels) ch.Seek(position);
         foreach (var ch in VideoChannels) ch.Seek(position);
     }
@@ -401,7 +518,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
     internal void ReportDemuxLoopError(Exception ex)
     {
-        Console.Error.WriteLine($"[FFmpegDecoder] demux-loop error: {ex}");
+        _log.LogError(ex, "Demux loop error");
     }
 
     // ── Demux helpers used by FFmpegDemuxWorker ───────────────────────────
@@ -473,8 +590,14 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
         ffmpeg.av_packet_unref(pkt);
 
-        packet = new EncodedPacket(data, actualLen, pts, dts, duration, flags,
+        if (!PacketPool.TryDequeue(out var ep))
+            ep = new EncodedPacket(data, actualLen, pts, dts, duration, flags,
                                    isPooled, packetEpoch, seekPositionTicks);
+        else
+            ep.Reset(data, actualLen, pts, dts, duration, flags,
+                     isPooled, packetEpoch, seekPositionTicks);
+
+        packet = ep;
         writer = q.Writer;
         return DemuxReadResult.Packet;
     }
@@ -515,6 +638,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _log.LogInformation("Disposing FFmpegDecoder");
         _cts.Cancel();
 
         foreach (var ch in AudioChannels) ch.Dispose();
@@ -534,8 +658,16 @@ public sealed unsafe class FFmpegDecoder : IDisposable
                 ffmpeg.av_buffer_unref(pp);
 
         if (_fmt != null)
+        {
+            if (_avioCtx != null)
+                _fmt->pb = null;
+
             fixed (AVFormatContext** pp = &_fmt)
                 ffmpeg.avformat_close_input(pp);
+        }
+
+        _avioCtx?.Dispose();
+        _log.LogDebug("FFmpegDecoder disposed");
     }
 }
 

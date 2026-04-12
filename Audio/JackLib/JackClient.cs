@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using JackLib.Types;
 
 namespace JackLib;
@@ -15,6 +16,8 @@ namespace JackLib;
 /// </remarks>
 public sealed class JackClient : IDisposable
 {
+    private static readonly ILogger Log = JackLogging.GetLogger(nameof(JackClient));
+
     private nint _client;
     private bool _activated;
     private bool _disposed;
@@ -63,6 +66,8 @@ public sealed class JackClient : IDisposable
             throw new JackException($"jack_client_open failed. Status: {status}");
 
         ClientName = Native.jack_get_client_name(_client);
+        Log.LogInformation("Created JackClient '{ClientName}' (requested='{RequestedName}', options={Options})",
+            ClientName, clientName, options);
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -75,6 +80,7 @@ public sealed class JackClient : IDisposable
         var err = Native.jack_activate(_client);
         if (err != 0) throw new JackException($"jack_activate failed ({err}).");
         _activated = true;
+        Log.LogInformation("JackClient '{ClientName}' activated", ClientName);
     }
 
     /// <summary>Removes this client from the JACK processing graph.</summary>
@@ -83,6 +89,7 @@ public sealed class JackClient : IDisposable
         if (!_activated) return;
         Native.jack_deactivate(_client);
         _activated = false;
+        Log.LogInformation("JackClient '{ClientName}' deactivated", ClientName);
     }
 
     // ── Callbacks ─────────────────────────────────────────────────────────
@@ -159,6 +166,7 @@ public sealed class JackClient : IDisposable
             (ulong)JackPortFlags.IsOutput, 0);
         if (port == nint.Zero)
             throw new JackException($"jack_port_register (output '{shortName}') failed.");
+        Log.LogDebug("Registered output port '{PortName}' on client '{ClientName}'", shortName, ClientName);
         return port;
     }
 
@@ -170,6 +178,7 @@ public sealed class JackClient : IDisposable
             (ulong)JackPortFlags.IsInput, 0);
         if (port == nint.Zero)
             throw new JackException($"jack_port_register (input '{shortName}') failed.");
+        Log.LogDebug("Registered input port '{PortName}' on client '{ClientName}'", shortName, ClientName);
         return port;
     }
 
@@ -314,6 +323,8 @@ public sealed class JackClient : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        Log.LogInformation("Disposing JackClient '{ClientName}'", ClientName);
 
         if (_activated)
         {

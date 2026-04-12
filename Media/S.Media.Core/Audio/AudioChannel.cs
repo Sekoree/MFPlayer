@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Audio;
@@ -10,9 +12,14 @@ namespace S.Media.Core.Audio;
 /// </summary>
 public sealed class AudioChannel : IAudioChannel
 {
+    private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(AudioChannel));
+
     private readonly Channel<float[]>       _channel;
     private readonly ChannelReader<float[]> _reader;
     private readonly ChannelWriter<float[]> _writer;
+
+    // Pool of float[] chunks to avoid per-push allocations.
+    private readonly ConcurrentQueue<float[]> _chunkPool = new();
 
     // Partial-read state (current chunk + offset within it)
     private float[]? _currentChunk;
@@ -52,6 +59,9 @@ public sealed class AudioChannel : IAudioChannel
         _channel = Channel.CreateBounded<float[]>(options);
         _reader  = _channel.Reader;
         _writer  = _channel.Writer;
+
+        Log.LogInformation("Created AudioChannel: {SampleRate}Hz/{Channels}ch, bufferDepth={BufferDepth}",
+            sourceFormat.SampleRate, sourceFormat.Channels, bufferDepth);
     }
 
     // ── Push ──────────────────────────────────────────────────────────────
@@ -59,14 +69,22 @@ public sealed class AudioChannel : IAudioChannel
     public async ValueTask WriteAsync(ReadOnlyMemory<float> frames, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await _writer.WriteAsync(frames.ToArray(), ct).ConfigureAwait(false);
+        var buf = RentChunkBuffer(frames.Length);
+        frames.Span.CopyTo(buf);
+        await _writer.WriteAsync(buf, ct).ConfigureAwait(false);
         Interlocked.Add(ref _framesInRing, frames.Length / SourceFormat.Channels);
     }
 
     public bool TryWrite(ReadOnlySpan<float> frames)
     {
         if (_disposed) return false;
-        if (!_writer.TryWrite(frames.ToArray())) return false;
+        var buf = RentChunkBuffer(frames.Length);
+        frames.CopyTo(buf);
+        if (!_writer.TryWrite(buf))
+        {
+            _chunkPool.Enqueue(buf);
+            return false;
+        }
         Interlocked.Add(ref _framesInRing, frames.Length / SourceFormat.Channels);
         return true;
     }
@@ -86,7 +104,8 @@ public sealed class AudioChannel : IAudioChannel
             {
                 if (_currentChunk != null)
                 {
-                    // Fully consumed — account for any remaining frames already subtracted sample-by-sample
+                    // Fully consumed — return to pool.
+                    _chunkPool.Enqueue(_currentChunk);
                     _currentChunk = null;
                 }
                 if (!_reader.TryRead(out _currentChunk))
@@ -124,10 +143,13 @@ public sealed class AudioChannel : IAudioChannel
 
     public void Seek(TimeSpan position)
     {
-        // Flush buffer
+        // Flush buffer — return chunks to pool
+        if (_currentChunk != null)
+            _chunkPool.Enqueue(_currentChunk);
         _currentChunk  = null;
         _currentOffset = 0;
-        while (_reader.TryRead(out _)) { }
+        while (_reader.TryRead(out var chunk))
+            _chunkPool.Enqueue(chunk);
         Interlocked.Exchange(ref _framesInRing, 0);
         Interlocked.Exchange(ref _framesConsumed,
             (long)(position.TotalSeconds * SourceFormat.SampleRate));
@@ -135,17 +157,39 @@ public sealed class AudioChannel : IAudioChannel
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
+    private float[] RentChunkBuffer(int minLength)
+    {
+        while (_chunkPool.TryDequeue(out var candidate))
+        {
+            if (candidate.Length >= minLength)
+                return candidate;
+            // Re-enqueue undersized buffer so it isn't leaked to GC; stop scanning
+            // because the pool typically holds same-size buffers.
+            _chunkPool.Enqueue(candidate);
+            break;
+        }
+
+        return new float[minLength];
+    }
+
     private void RaiseUnderrun(int framesDropped)
     {
         // Raise on a thread-pool thread so we never block the RT path.
-        var args = new BufferUnderrunEventArgs(Position, framesDropped);
-        ThreadPool.QueueUserWorkItem(_ => BufferUnderrun?.Invoke(this, args));
+        // Capture args in a tuple to avoid allocating a closure.
+        var state = (Self: this, Pos: Position, Dropped: framesDropped);
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, pos, dropped) = ((AudioChannel, TimeSpan, int))s!;
+            self.BufferUnderrun?.Invoke(self, new BufferUnderrunEventArgs(pos, dropped));
+        }, state);
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing AudioChannel: framesConsumed={FramesConsumed}",
+            Interlocked.Read(ref _framesConsumed));
         _writer.TryComplete();
     }
 }

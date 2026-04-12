@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using PALib;
 using PALib.Types.Core;
 using S.Media.Core.Audio;
@@ -16,6 +17,8 @@ namespace S.Media.PortAudio;
 /// </summary>
 public sealed class PortAudioOutput : IAudioOutput
 {
+    private static readonly ILogger Log = PortAudioLogging.GetLogger(nameof(PortAudioOutput));
+
     private nint            _stream;
     private GCHandle        _gcHandle;
     private PortAudioClock? _clock;
@@ -45,31 +48,32 @@ public sealed class PortAudioOutput : IAudioOutput
         if (_stream != nint.Zero)
             throw new InvalidOperationException("Output is already open. Close it before re-opening.");
 
-        double suggestedLatency = framesPerBuffer > 0 && requestedFormat.SampleRate > 0
-            ? framesPerBuffer / (double)requestedFormat.SampleRate
-            : device.DefaultLowOutputLatency;
-
-        var outParams = new PaStreamParameters
-        {
-            device                    = device.Index,
-            channelCount              = requestedFormat.Channels,
-            sampleFormat              = PaSampleFormat.paFloat32,
-            suggestedLatency          = suggestedLatency,
-            hostApiSpecificStreamInfo = nint.Zero
-        };
+        Log.LogInformation("Opening PortAudio output: device={DeviceName} (idx={DeviceIndex}), format={SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}",
+            device.Name, device.Index, requestedFormat.SampleRate, requestedFormat.Channels, framesPerBuffer);
 
         // Pin 'this' for the callback lifetime.
         _gcHandle = GCHandle.Alloc(this);
 
-        var err = Native.Pa_OpenStream(
-            out _stream,
-            inputParameters:  null,
-            outputParameters: outParams,
-            sampleRate:       requestedFormat.SampleRate,
-            framesPerBuffer:  framesPerBuffer > 0 ? (nuint)framesPerBuffer : 0,
-            streamFlags:      PaStreamFlags.paNoFlag,
-            streamCallback:   &StreamCallback,
-            userData:         GCHandle.ToIntPtr(_gcHandle));
+        var err = TryOpenStream(device, requestedFormat, framesPerBuffer);
+
+        // If the requested sample rate isn't supported, fall back to the device's
+        // default rate.  The AudioMixer will automatically resample any channels
+        // whose source rate differs from the negotiated hardware rate.
+        if (err == PaError.paInvalidSampleRate)
+        {
+            int deviceRate = device.DefaultSampleRate > 0
+                ? (int)Math.Round(device.DefaultSampleRate)
+                : 0;
+            if (deviceRate > 0 && deviceRate != requestedFormat.SampleRate)
+            {
+                Log.LogWarning("Requested sample rate {RequestedRate}Hz not supported by '{DeviceName}'; " +
+                               "falling back to device default {DeviceRate}Hz (AudioMixer will resample)",
+                    requestedFormat.SampleRate, device.Name, deviceRate);
+
+                requestedFormat = requestedFormat with { SampleRate = deviceRate };
+                err = TryOpenStream(device, requestedFormat, framesPerBuffer);
+            }
+        }
 
         if (err != PaError.paNoError)
         {
@@ -92,6 +96,9 @@ public sealed class PortAudioOutput : IAudioOutput
 
         _mixer = new AudioMixer(_hardwareFormat);
         _mixer.PrepareBuffers(actualFrames);
+
+        Log.LogInformation("PortAudio output opened: actualRate={ActualRate}Hz, fpb={FramesPerBuffer}, latency={Latency}s",
+            actualRate, actualFrames, info?.outputLatency ?? 0);
     }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
@@ -101,6 +108,7 @@ public sealed class PortAudioOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         EnsureOpen();
 
+        Log.LogInformation("Starting PortAudio output stream");
         var err = Native.Pa_StartStream(_stream);
         if (err != PaError.paNoError)
             throw new InvalidOperationException(
@@ -113,6 +121,7 @@ public sealed class PortAudioOutput : IAudioOutput
         _mixer!.PrepareBuffers(_framesPerBuffer > 0 ? _framesPerBuffer : 512);
         _clock!.Start();
         _isRunning = true;
+        Log.LogDebug("PortAudio output stream started");
         return Task.CompletedTask;
     }
 
@@ -120,7 +129,7 @@ public sealed class PortAudioOutput : IAudioOutput
     {
         if (!_isRunning) return Task.CompletedTask;
 
-        // Pa_StopStream drains callbacks — run on a thread-pool thread to avoid blocking UI.
+        Log.LogInformation("Stopping PortAudio output stream");
         return Task.Run(() =>
         {
             ct.ThrowIfCancellationRequested();
@@ -129,6 +138,7 @@ public sealed class PortAudioOutput : IAudioOutput
 
             if (_stream != nint.Zero)
                 Native.Pa_StopStream(_stream);
+            Log.LogDebug("PortAudio output stream stopped");
         }, ct);
     }
 
@@ -193,12 +203,46 @@ public sealed class PortAudioOutput : IAudioOutput
             throw new InvalidOperationException("Call Open() before Start/Stop.");
     }
 
+    /// <summary>
+    /// Attempts to open a PA stream with the given format. Returns the PA error code
+    /// so the caller can decide whether to retry with a different rate.
+    /// On success, <c>_stream</c> is set; on failure, it remains zero.
+    /// </summary>
+    private unsafe PaError TryOpenStream(AudioDeviceInfo device, AudioFormat format, int framesPerBuffer)
+    {
+        double suggestedLatency = framesPerBuffer > 0 && format.SampleRate > 0
+            ? framesPerBuffer / (double)format.SampleRate
+            : device.DefaultLowOutputLatency;
+
+        var outParams = new PaStreamParameters
+        {
+            device                    = device.Index,
+            channelCount              = format.Channels,
+            sampleFormat              = PaSampleFormat.paFloat32,
+            suggestedLatency          = suggestedLatency,
+            hostApiSpecificStreamInfo = nint.Zero
+        };
+
+        var err = Native.Pa_OpenStream(
+            out _stream,
+            inputParameters:  null,
+            outputParameters: outParams,
+            sampleRate:       format.SampleRate,
+            framesPerBuffer:  framesPerBuffer > 0 ? (nuint)framesPerBuffer : 0,
+            streamFlags:      PaStreamFlags.paNoFlag,
+            streamCallback:   &StreamCallback,
+            userData:         GCHandle.ToIntPtr(_gcHandle));
+
+        return err;
+    }
+
     // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing PortAudioOutput");
 
         if (_isRunning)
         {
@@ -219,6 +263,7 @@ public sealed class PortAudioOutput : IAudioOutput
 
         _mixer?.Dispose();
         _clock?.Dispose();
+        Log.LogDebug("PortAudioOutput disposed");
     }
 }
 

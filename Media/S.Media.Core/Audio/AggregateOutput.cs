@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
@@ -37,6 +38,8 @@ namespace S.Media.Core.Audio;
 /// </remarks>
 public sealed class AggregateOutput : IAudioOutput
 {
+    private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(AggregateOutput));
+
     private readonly record struct SinkRegistration(IAudioSink Sink, int Channels);
 
     private readonly IAudioOutput _leader;
@@ -60,6 +63,8 @@ public sealed class AggregateOutput : IAudioOutput
     {
         ArgumentNullException.ThrowIfNull(leader);
         _leader = leader;
+
+        Log.LogInformation("Creating AggregateOutput with leader type={LeaderType}", leader.GetType().Name);
 
         // If the leader is already open (non-zero sample rate), bind our mixer immediately.
         if (leader.HardwareFormat.SampleRate > 0)
@@ -112,6 +117,9 @@ public sealed class AggregateOutput : IAudioOutput
             // Register with mixer immediately if already available.
             _mixer?.RegisterSink(sink, channels);
         }
+
+        Log.LogInformation("Aggregate sink added: type={SinkType}, channels={Channels}, total={SinkCount}",
+            sink.GetType().Name, channels, _sinkRegistrations.Length);
     }
 
     /// <summary>Removes a sink and unregisters it from the mixer. No-op if not present.</summary>
@@ -153,14 +161,16 @@ public sealed class AggregateOutput : IAudioOutput
     public async Task StartAsync(CancellationToken ct = default)
     {
         await _leader.StartAsync(ct).ConfigureAwait(false);
-        var tasks = _sinks.Select(s => s.StartAsync(ct));
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        var sinks = _sinks;
+        for (int i = 0; i < sinks.Length; i++)
+            await sinks[i].StartAsync(ct).ConfigureAwait(false);
     }
 
     public async Task StopAsync(CancellationToken ct = default)
     {
-        var tasks = _sinks.Select(s => s.StopAsync(ct));
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        var sinks = _sinks;
+        for (int i = 0; i < sinks.Length; i++)
+            await sinks[i].StopAsync(ct).ConfigureAwait(false);
         await _leader.StopAsync(ct).ConfigureAwait(false);
     }
 
@@ -168,7 +178,10 @@ public sealed class AggregateOutput : IAudioOutput
 
     public void Dispose()
     {
+        Log.LogInformation("Disposing AggregateOutput: sinks={SinkCount}", _sinks.Length);
         foreach (var s in _sinks) s.Dispose();
+        _mixer?.Dispose();
         _leader.Dispose();
+        Log.LogDebug("AggregateOutput disposed");
     }
 }

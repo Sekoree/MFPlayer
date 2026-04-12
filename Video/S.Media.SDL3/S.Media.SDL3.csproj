@@ -10,6 +10,7 @@
     <ItemGroup>
         <PackageReference Include="SDL3-CS" />
         <PackageReference Include="SDL3-CS.Native" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     </ItemGroup>
 
     <ItemGroup>

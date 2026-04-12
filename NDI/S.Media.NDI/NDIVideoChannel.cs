@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
@@ -11,6 +13,8 @@ namespace S.Media.NDI;
 /// </summary>
 public sealed class NDIVideoChannel : IVideoChannel
 {
+    private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIVideoChannel));
+
     private readonly NDIFrameSync  _frameSync;
     private readonly NDIClock      _clock;
 
@@ -25,6 +29,11 @@ public sealed class NDIVideoChannel : IVideoChannel
     private VideoFormat _sourceFormat;
     private readonly object _formatLock = new();
     private long _positionTicks;
+
+    // Synthetic PTS fallback when NDI timestamps are undefined (0, negative, or MaxValue).
+    // Uses a monotonic stopwatch so the mixer can pace frames correctly.
+    private readonly Stopwatch _syntheticClock = new();
+    private bool _syntheticClockStarted;
 
     public Guid  Id      { get; } = Guid.NewGuid();
     public bool  IsOpen  => !_disposed;
@@ -41,10 +50,12 @@ public sealed class NDIVideoChannel : IVideoChannel
         _frameSync = frameSync;
         _clock     = clock;
         _ringCapacity = Math.Max(1, bufferDepth);
+        Log.LogInformation("Created NDIVideoChannel: bufferDepth={BufferDepth}", _ringCapacity);
     }
 
     public void StartCapture()
     {
+        Log.LogInformation("Starting NDIVideoChannel capture thread");
         _captureThread = new Thread(CaptureLoop)
         {
             Name         = "NDIVideoChannel.Capture",
@@ -110,9 +121,26 @@ public sealed class NDIVideoChannel : IVideoChannel
                     _                       => PixelFormat.Bgra32,
                 };
 
-                double tsSecs = frame.Timestamp > 0 && frame.Timestamp != long.MaxValue
-                    ? frame.Timestamp / 10_000_000.0
-                    : 0.0;
+                // Use the NDI timestamp when available; fall back to a local monotonic
+                // clock when the source provides undefined timestamps (0, negative, or
+                // long.MaxValue / NDIlib_recv_timestamp_undefined).
+                // Without a valid advancing PTS the VideoMixer's drop-lag logic treats
+                // every frame as stale and drops them all, causing a frozen first frame.
+                bool hasValidTimestamp = frame.Timestamp > 0 && frame.Timestamp != long.MaxValue;
+                double tsSecs;
+                if (hasValidTimestamp)
+                {
+                    tsSecs = frame.Timestamp / 10_000_000.0;
+                }
+                else
+                {
+                    if (!_syntheticClockStarted)
+                    {
+                        _syntheticClock.Start();
+                        _syntheticClockStarted = true;
+                    }
+                    tsSecs = _syntheticClock.Elapsed.TotalSeconds;
+                }
 
                 var vf = new VideoFrame(
                     frame.Xres, frame.Yres,
@@ -133,10 +161,11 @@ public sealed class NDIVideoChannel : IVideoChannel
                 // At 30 fps video a ~16 ms sleep is enough; 8 ms gives headroom for 60 fps.
                 Thread.Sleep(8);
             }
-            catch (Exception) when (!token.IsCancellationRequested)
+            catch (Exception ex) when (!token.IsCancellationRequested)
             {
                 // Swallow per-frame errors so a transient bad frame does not
                 // crash the background thread (and consequently the process).
+                Log.LogWarning(ex, "NDIVideoChannel capture-loop error, retrying");
                 Thread.Sleep(10);
             }
         }
@@ -161,6 +190,7 @@ public sealed class NDIVideoChannel : IVideoChannel
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing NDIVideoChannel");
         _cts.Cancel();
         _captureThread?.Join(TimeSpan.FromSeconds(2));
         lock (_ringGate)

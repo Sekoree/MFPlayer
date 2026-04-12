@@ -30,6 +30,24 @@ public sealed class LinearResampler : IAudioResampler
 
     private bool _disposed;
 
+    public int GetRequiredInputFrames(int outputFrames, AudioFormat inputFormat, int outputSampleRate)
+    {
+        if (inputFormat.SampleRate == outputSampleRate)
+            return outputFrames;
+
+        double step = (double)inputFormat.SampleRate / outputSampleRate;
+
+        // The interpolation loop accesses effective[idx] and effective[idx+1] where
+        // idx = (long)(_phase + i * step).  The maximum index touched is:
+        //   maxIdx  = (long)(_phase + (outputFrames - 1) * step)
+        //   maxIdx1 = maxIdx + 1          (for s1 interpolation neighbour)
+        // Total effective frames needed = maxIdx + 2  (0-based → count).
+        long maxIdx      = (long)(_phase + (outputFrames - 1) * step);
+        int  totalNeeded = (int)(maxIdx + 2);
+        int  newNeeded   = totalNeeded - _pendingFrames;
+        return Math.Max(0, newNeeded);
+    }
+
     public int Resample(
         ReadOnlySpan<float> input,
         Span<float>         output,
@@ -63,11 +81,13 @@ public sealed class LinearResampler : IAudioResampler
 
         if (pendingCount > 0)
         {
-            // Grow the combined buffer lazily (typically 1-3 pending frames — stays small).
-            // Reusing _combinedBuf avoids a heap allocation on every RT call.
+            // Grow the combined buffer lazily (typically 1-2 pending frames when the
+            // caller uses GetRequiredInputFrames).  Multiplicative growth (double capacity)
+            // amortises allocation cost exponentially — critical for RT-thread safety,
+            // since a simple "+1-frame" slack caused per-callback allocations and GC pauses.
             int need = totalFrames * channels;
             if (_combinedBuf.Length < need)
-                _combinedBuf = new float[need + channels]; // +1-frame slack
+                _combinedBuf = new float[Math.Max(need, _combinedBuf.Length * 2)];
             _pendingBuf.AsSpan(0, pendingCount * channels).CopyTo(_combinedBuf);
             input.CopyTo(_combinedBuf.AsSpan(pendingCount * channels));
             effective = _combinedBuf.AsSpan(0, need);
@@ -110,7 +130,7 @@ public sealed class LinearResampler : IAudioResampler
         {
             int need = _pendingFrames * channels;
             if (_pendingBuf.Length < need)
-                _pendingBuf = new float[need + channels]; // +1-frame slack
+                _pendingBuf = new float[Math.Max(need, _pendingBuf.Length * 2)];
             effective.Slice((int)(consumed * channels), need).CopyTo(_pendingBuf);
         }
         else

@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Rendering;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
@@ -14,6 +15,8 @@ namespace S.Media.Avalonia;
 /// </summary>
 public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 {
+    private static readonly ILogger Log = AvaloniaVideoLogging.GetLogger(nameof(AvaloniaOpenGlVideoOutput));
+
     string IMediaEndpoint.Name => Name ?? nameof(AvaloniaOpenGlVideoOutput);
 
     public readonly record struct DiagnosticsSnapshot(
@@ -118,6 +121,9 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
             _isOpen = true;
         }
 
+        Log.LogInformation("Opened AvaloniaOpenGlVideoOutput: {Width}x{Height} px={PixelFormat}, fps={FrameRate}",
+            _outputFormat.Width, _outputFormat.Height, _outputFormat.PixelFormat, _outputFormat.FrameRate);
+
         // Keep the control stretchable in layout; do not pin it to source pixel size.
         Width = double.NaN;
         Height = double.NaN;
@@ -131,6 +137,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 
         _clock!.Start();
         _isRunning = true;
+        Log.LogInformation("AvaloniaOpenGlVideoOutput started");
         RequestNextFrameRendering();
         return Task.CompletedTask;
     }
@@ -140,6 +147,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         if (!_isRunning)
             return Task.CompletedTask;
 
+        Log.LogInformation("Stopping AvaloniaOpenGlVideoOutput");
         _isRunning = false;
         _clock?.Stop();
         return Task.CompletedTask;
@@ -270,7 +278,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         {
             long ec = Interlocked.Increment(ref _renderExceptions);
             if (ec <= 3 || ec % 100 == 0)
-                Console.Error.WriteLine($"[AvaloniaOpenGlVideoOutput] render exception (count={ec}): {ex}");
+                Log.LogError(ex, "Render exception (count={Count})", ec);
         }
         finally
         {
@@ -296,6 +304,11 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     {
         if (_disposed) return;
         _disposed = true;
+
+        Log.LogInformation("Disposing AvaloniaOpenGlVideoOutput: presented={Presented}, black={Black}, uploads={Uploads}, catchupSkips={CatchupSkips}, renderExceptions={RenderExceptions}",
+            Interlocked.Read(ref _presentedFrames), Interlocked.Read(ref _blackFrames),
+            Interlocked.Read(ref _textureUploads), Interlocked.Read(ref _catchupSkips),
+            Interlocked.Read(ref _renderExceptions));
 
         lock (_cloneLock)
         {

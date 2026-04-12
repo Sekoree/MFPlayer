@@ -99,21 +99,18 @@ using (decoder)
     var audioChannel = decoder.AudioChannels[0];
     var srcFmt       = audioChannel.SourceFormat;
 
-    // Cap output to stereo. Prefer source rate first to avoid extra host/backend
-    // resampling layers that can sometimes cause timing/pitch anomalies.
+    // Cap output to stereo.
     int outChannels = Math.Min(srcFmt.Channels, Math.Min(device.MaxOutputChannels, 2));
-    int defaultRate = device.DefaultSampleRate > 0
-        ? (int)Math.Round(device.DefaultSampleRate)
-        : srcFmt.SampleRate;
-    int outRate     = srcFmt.SampleRate;
-    var hwFmt       = new AudioFormat(outRate, outChannels);
+    var hwFmt       = new AudioFormat(srcFmt.SampleRate, outChannels);
     var routeMap    = BuildRouteMap(srcFmt.Channels, outChannels);
 
     Console.WriteLine("OK");
     Console.WriteLine($"  Source:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
-    Console.WriteLine($"  Output:  {hwFmt.SampleRate} Hz / {outChannels} ch  →  {device.Name}");
 
     // ── 6. Open output ───────────────────────────────────────────────────────
+    // PortAudioOutput.Open automatically falls back to the device's default
+    // sample rate if the requested rate isn't supported.  The AudioMixer
+    // resamples any source-rate ↔ output-rate mismatch transparently.
 
     Console.Write("Opening output device… ");
     using var output = new PortAudioOutput();
@@ -123,27 +120,12 @@ using (decoder)
     }
     catch (Exception ex)
     {
-        // Fall back to the device default rate if opening at source rate fails.
-        if (defaultRate != outRate)
-        {
-            hwFmt = new AudioFormat(defaultRate, outChannels);
-            try
-            {
-                output.Open(device, hwFmt, framesPerBuffer: 0);
-            }
-            catch
-            {
-                Console.WriteLine($"FAILED\n  {ex.Message}");
-                return;
-            }
-        }
-        else
-        {
-            Console.WriteLine($"FAILED\n  {ex.Message}");
-            return;
-        }
+        Console.WriteLine($"FAILED\n  {ex.Message}");
+        return;
     }
     Console.WriteLine("OK");
+
+    Console.WriteLine($"  Output:  {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
 
     using var avMixer = new AVMixer(output.HardwareFormat);
     avMixer.AttachAudioOutput(output);
@@ -151,8 +133,8 @@ using (decoder)
     avMixer.AddAudioChannel(audioChannel, routeMap);
     audioChannel.Volume = 1.0f;
 
-    Console.WriteLine($"  Device default rate: {device.DefaultSampleRate:0} Hz");
-    Console.WriteLine($"  Negotiated output:   {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch");
+    if (srcFmt.SampleRate != output.HardwareFormat.SampleRate)
+        Console.WriteLine($"  Resampling: {srcFmt.SampleRate} → {output.HardwareFormat.SampleRate} Hz (AudioMixer)");
 
     // ── 7. EOF detection via BufferUnderrun ──────────────────────────────────
 

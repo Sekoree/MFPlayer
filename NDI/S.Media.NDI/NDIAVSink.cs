@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
@@ -17,6 +18,8 @@ namespace S.Media.NDI;
 /// </summary>
 public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabilities
 {
+    private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAVSink));
+
     private readonly struct PendingVideo
     {
         public readonly byte[] Buffer;
@@ -94,6 +97,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
     private long _audioPoolMissDrops;
     private long _audioCapacityMissDrops;
     private long _audioQueueDrops;
+    private readonly DriftCorrector? _audioDriftCorrector;
 
     private Thread? _videoThread;
     private Thread? _audioThread;
@@ -105,6 +109,11 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
     public bool IsRunning => Volatile.Read(ref _started) == 1;
     public bool HasAudio => _hasAudio;
     public bool HasVideo => _hasVideo;
+
+    /// <summary>
+    /// The audio drift corrector instance, or <see langword="null"/> if drift correction is disabled.
+    /// </summary>
+    public DriftCorrector? AudioDriftCorrection => _audioDriftCorrector;
 
     public IReadOnlyList<PixelFormat> PreferredPixelFormats => _videoTargetFormat.PixelFormat switch
     {
@@ -128,7 +137,8 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         int audioFramesPerBuffer = 1024,
         int audioPoolCount = 0,
         int audioMaxPendingBuffers = 0,
-        IAudioResampler? audioResampler = null)
+        IAudioResampler? audioResampler = null,
+        bool enableAudioDriftCorrection = false)
     {
         _sender = sender;
         Name = name ?? "NDIAVSink";
@@ -180,7 +190,21 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             int headroom = Math.Max(1, audioPreset.BufferHeadroomMultiplier);
             for (int i = 0; i < audioPoolCount; i++)
                 _audioPool.Enqueue(new float[_audioFramesPerBuffer * _audioTargetFormat.Channels * headroom]);
+
+            if (enableAudioDriftCorrection)
+                _audioDriftCorrector = new DriftCorrector(
+                    targetDepth: Math.Max(1, _audioMaxPendingBuffers / 2),
+                    ownerName: Name);
         }
+
+        Log.LogInformation("Created NDIAVSink '{Name}': hasVideo={HasVideo}, hasAudio={HasAudio}, preset={Preset}",
+            Name, _hasVideo, _hasAudio, preset);
+        if (_hasVideo)
+            Log.LogDebug("NDIAVSink '{Name}' video: {Width}x{Height} px={PixelFormat}, maxPending={MaxPending}",
+                Name, _videoTargetFormat.Width, _videoTargetFormat.Height, _videoTargetFormat.PixelFormat, _videoMaxPendingFrames);
+        if (_hasAudio)
+            Log.LogDebug("NDIAVSink '{Name}' audio: {SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}, maxPending={MaxPending}",
+                Name, _audioTargetFormat.SampleRate, _audioTargetFormat.Channels, _audioFramesPerBuffer, _audioMaxPendingBuffers);
     }
 
     public Task StartAsync(CancellationToken ct = default)
@@ -190,6 +214,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             return Task.CompletedTask;
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _audioDriftCorrector?.Reset();
 
         if (_hasVideo)
         {
@@ -213,6 +238,8 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             _audioThread.Start();
         }
 
+        Log.LogInformation("NDIAVSink '{Name}' started: videoThread={HasVideo}, audioThread={HasAudio}",
+            Name, _hasVideo, _hasAudio);
         return Task.CompletedTask;
     }
 
@@ -221,6 +248,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         if (Interlocked.CompareExchange(ref _started, 0, 1) != 1)
             return;
 
+        Log.LogInformation("Stopping NDIAVSink '{Name}'", Name);
         _cts?.Cancel();
 
         await Task.Run(() => _videoThread?.Join(TimeSpan.FromSeconds(3)), ct).ConfigureAwait(false);
@@ -270,10 +298,16 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             return;
 
         int outCh = _audioTargetFormat.Channels;
-        int requestedWriteFrames = sourceFormat.SampleRate == _audioTargetFormat.SampleRate
+        int nominalWriteFrames = sourceFormat.SampleRate == _audioTargetFormat.SampleRate
             ? frameCount
             : (int)Math.Round((double)frameCount * _audioTargetFormat.SampleRate / sourceFormat.SampleRate);
-        int requestedWriteSamples = requestedWriteFrames * outCh;
+
+        // Apply drift correction: adjusts the frame count by ±1 occasionally to keep
+        // the pending-audio queue stable, compensating for clock drift.
+        int writeFrames = _audioDriftCorrector != null
+            ? _audioDriftCorrector.CorrectFrameCount(nominalWriteFrames, Volatile.Read(ref _audioPendingBuffers))
+            : nominalWriteFrames;
+        int writeSamples = writeFrames * outCh;
 
         if (!_audioPool.TryDequeue(out var dest))
         {
@@ -281,7 +315,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             return;
         }
 
-        if (dest.Length < requestedWriteSamples)
+        if (dest.Length < writeSamples)
         {
             _audioPool.Enqueue(dest);
             Interlocked.Increment(ref _audioCapacityMissDrops);
@@ -291,16 +325,31 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         int writtenSamples;
         if (_audioResampler != null && sourceFormat.SampleRate != _audioTargetFormat.SampleRate)
         {
-            int writtenFrames = _audioResampler.Resample(buffer, dest.AsSpan(0, requestedWriteSamples), sourceFormat, _audioTargetFormat.SampleRate);
-            writtenSamples = Math.Clamp(writtenFrames, 0, requestedWriteFrames) * outCh;
+            // Cross-rate: resampler output sized for the drift-corrected frame count.
+            // The resampler's stateful phase accumulator handles ±1 frame naturally.
+            int writtenFrames = _audioResampler.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _audioTargetFormat.SampleRate);
+            writtenSamples = Math.Clamp(writtenFrames, 0, writeFrames) * outCh;
         }
         else
         {
-            int copy = Math.Min(buffer.Length, requestedWriteSamples);
-            buffer[..copy].CopyTo(dest.AsSpan(0, copy));
-            if (copy < requestedWriteSamples)
-                dest.AsSpan(copy, requestedWriteSamples - copy).Clear();
-            writtenSamples = requestedWriteSamples;
+            // Same rate: direct copy with drift correction frame adjustment.
+            int copyFrames  = Math.Min(frameCount, writeFrames);
+            int copySamples = copyFrames * outCh;
+            buffer[..copySamples].CopyTo(dest.AsSpan(0, copySamples));
+
+            if (writeFrames > frameCount && frameCount > 0)
+            {
+                // Hold last frame for drift-correction extra frames.
+                var lastFrame = buffer.Slice((frameCount - 1) * outCh, outCh);
+                for (int f = copyFrames; f < writeFrames; f++)
+                    lastFrame.CopyTo(dest.AsSpan(f * outCh, outCh));
+            }
+            else if (copySamples < writeSamples)
+            {
+                dest.AsSpan(copySamples, writeSamples - copySamples).Clear();
+            }
+
+            writtenSamples = writeSamples;
         }
 
         if (writtenSamples <= 0)
@@ -347,9 +396,26 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         _disposed = true;
         Volatile.Write(ref _started, 0);
 
+        Log.LogInformation(
+            "Disposing NDIAVSink '{Name}': videoPassthrough={VideoPassthrough}, videoConverted={VideoConverted}, videoConversionDrops={VideoConversionDrops}, " +
+            "videoPoolMissDrops={VideoPoolMissDrops}, videoCapacityDrops={VideoCapacityDrops}, videoFormatDrops={VideoFormatDrops}, videoQueueDrops={VideoQueueDrops}, " +
+            "audioPoolMissDrops={AudioPoolMissDrops}, audioCapacityDrops={AudioCapacityDrops}, audioQueueDrops={AudioQueueDrops}, audioDriftRatio={AudioDriftRatio}",
+            Name,
+            Interlocked.Read(ref _videoPassthroughFrames), Interlocked.Read(ref _videoConvertedFrames), Interlocked.Read(ref _videoConversionDrops),
+            Interlocked.Read(ref _videoPoolMissDrops), Interlocked.Read(ref _videoCapacityMissDrops), Interlocked.Read(ref _videoFormatDrops), Interlocked.Read(ref _videoQueueDrops),
+            Interlocked.Read(ref _audioPoolMissDrops), Interlocked.Read(ref _audioCapacityMissDrops), Interlocked.Read(ref _audioQueueDrops),
+            _audioDriftCorrector?.CorrectionRatio ?? 1.0);
+
         _cts?.Cancel();
         _videoThread?.Join(TimeSpan.FromSeconds(2));
         _audioThread?.Join(TimeSpan.FromSeconds(2));
+
+        // Drain pending queues so pooled buffers are not leaked.
+        while (_videoPending.TryDequeue(out var pv))
+            _videoPool.Enqueue(pv.Buffer);
+        while (_audioPending.TryDequeue(out var pa))
+            _audioPool.Enqueue(pa.Buffer);
+
         _videoPendingSignal.Dispose();
         _audioPendingSignal.Dispose();
         _videoConverter.Dispose();
@@ -520,7 +586,11 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         int width,
         int height,
         bool dstRgba,
-        ref SwsContext* sws)
+        ref SwsContext* sws,
+        byte*[] scratchSrcData,
+        int[] scratchSrcStride,
+        byte*[] scratchDstData,
+        int[] scratchDstStride)
     {
         if (width <= 0 || height <= 0) return false;
 
@@ -555,12 +625,12 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             byte* u = pSrc + ySize;
             byte* v = pSrc + ySize + uvSize;
 
-            byte*[] srcData = [y, u, v, null];
-            int[] srcStride = [yStride, uvStride, uvStride, 0];
-            byte*[] dstData = [pDst, null, null, null];
-            int[] dstStride = [width * 4, 0, 0, 0];
+            scratchSrcData[0] = y; scratchSrcData[1] = u; scratchSrcData[2] = v; scratchSrcData[3] = null;
+            scratchSrcStride[0] = yStride; scratchSrcStride[1] = uvStride; scratchSrcStride[2] = uvStride; scratchSrcStride[3] = 0;
+            scratchDstData[0] = pDst; scratchDstData[1] = null; scratchDstData[2] = null; scratchDstData[3] = null;
+            scratchDstStride[0] = width * 4; scratchDstStride[1] = 0; scratchDstStride[2] = 0; scratchDstStride[3] = 0;
 
-            return ffmpeg.sws_scale(sws, srcData, srcStride, 0, height, dstData, dstStride) == height;
+            return ffmpeg.sws_scale(sws, scratchSrcData, scratchSrcStride, 0, height, scratchDstData, scratchDstStride) == height;
         }
     }
 
@@ -570,6 +640,12 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         int fpsNum = _videoTargetFormat.FrameRateNumerator > 0 ? _videoTargetFormat.FrameRateNumerator : 30000;
         int fpsDen = _videoTargetFormat.FrameRateDenominator > 0 ? _videoTargetFormat.FrameRateDenominator : 1001;
         SwsContext* ffmpegSws = null;
+
+        // Pre-allocate scratch arrays for sws_scale to avoid 4 heap allocations per frame.
+        var swsSrcData   = new byte*[4];
+        var swsSrcStride = new int[4];
+        var swsDstData   = new byte*[4];
+        var swsDstStride = new int[4];
 
         while (!token.IsCancellationRequested)
         {
@@ -627,7 +703,8 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
                                     pf.Width,
                                     pf.Height,
                                     _videoTargetFormat.PixelFormat == PixelFormat.Rgba32,
-                                    ref ffmpegSws);
+                                    ref ffmpegSws,
+                                    swsSrcData, swsSrcStride, swsDstData, swsDstStride);
                             }
 
                             if (!converted)
@@ -713,7 +790,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
                 catch (Exception ex)
                 {
                     if (ex is not OperationCanceledException)
-                        Console.Error.WriteLine($"[{Name}] NDI video send exception: {ex.Message}");
+                        Log.LogError(ex, "NDI video send exception: {Message}", ex.Message);
                 }
                 finally
                 {
@@ -751,9 +828,14 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
                 if (planar.Length < planarNeed)
                     planar = new float[planarNeed];
 
-                for (int c = 0; c < channels; c++)
-                    for (int s = 0; s < samplesPerChannel; s++)
-                        planar[c * samplesPerChannel + s] = interleaved[s * channels + c];
+                // Deinterleave: s-outer/c-inner gives sequential reads on the
+                // interleaved source buffer (better cache locality than c-outer/s-inner).
+                for (int s = 0; s < samplesPerChannel; s++)
+                {
+                    int srcBase = s * channels;
+                    for (int c = 0; c < channels; c++)
+                        planar[c * samplesPerChannel + s] = interleaved[srcBase + c];
+                }
 
                 _audioPool.Enqueue(interleaved);
 

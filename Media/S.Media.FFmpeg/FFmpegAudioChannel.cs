@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
 
@@ -12,6 +13,7 @@ namespace S.Media.FFmpeg;
 /// </summary>
 public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 {
+    private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegAudioChannel));
     private readonly struct AudioChunk
     {
         public readonly float[] Buffer;
@@ -103,8 +105,8 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
     {
-        Console.Error.WriteLine(
-            $"[FFmpegAudioChannel] stream={_streamIndex} epoch={currentEpoch} packetEpoch={ep.SeekEpoch} packetBytes={ep.ActualLength} decode-loop error: {ex}");
+        Log.LogError(ex, "Audio stream={StreamIndex} decode-loop error: epoch={Epoch} packetEpoch={PacketEpoch} packetBytes={PacketBytes}",
+            _streamIndex, currentEpoch, ep.SeekEpoch, ep.ActualLength);
     }
 
     // ── Codec init ────────────────────────────────────────────────────────
@@ -155,9 +157,9 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     // ── Decode thread ─────────────────────────────────────────────────────
 
-    internal void StartDecoding()
+    internal void StartDecoding(ConcurrentQueue<EncodedPacket>? packetPool = null)
     {
-        _decodeTask = FFmpegDecodeWorkers.RunAudioAsync(this, _packetReader, _cts.Token);
+        _decodeTask = FFmpegDecodeWorkers.RunAudioAsync(this, _packetReader, _cts.Token, packetPool);
     }
 
     internal void ApplySeekEpoch(long seekPositionTicks)
@@ -194,7 +196,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
             return false;
         if (sendRet < 0)
         {
-            Console.Error.WriteLine($"[FFmpegAudioChannel] stream={_streamIndex} avcodec_send_packet failed: {sendRet}");
+            Log.LogWarning("Audio stream={StreamIndex} avcodec_send_packet failed: {ErrorCode}", _streamIndex, sendRet);
             return true;
         }
 
@@ -273,9 +275,14 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
                         Interlocked.Add(ref _framesInRing, -consumed);
                     }
                     if (dropped > 0)
-                        ThreadPool.QueueUserWorkItem(_ =>
-                            BufferUnderrun?.Invoke(this,
-                                new BufferUnderrunEventArgs(Position, dropped)));
+                    {
+                        var state = (Self: this, Pos: Position, Dropped: dropped);
+                        ThreadPool.QueueUserWorkItem(static s =>
+                        {
+                            var (self, pos, d) = ((FFmpegAudioChannel, TimeSpan, int))s!;
+                            self.BufferUnderrun?.Invoke(self, new BufferUnderrunEventArgs(pos, d));
+                        }, state);
+                    }
                     return consumed;
                 }
                 _currentChunkSamples = chunk.Samples;
@@ -333,13 +340,14 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     {
         if (_disposed) return;
         _disposed = true;
+        Log.LogInformation("Disposing FFmpegAudioChannel stream={StreamIndex}", _streamIndex);
         _cts.Cancel();
         if (_decodeTask != null)
         {
             try { _decodeTask.Wait(TimeSpan.FromSeconds(2)); }
             catch (AggregateException ex)
             {
-                Console.Error.WriteLine($"[FFmpegAudioChannel] stream={_streamIndex} decode task fault during dispose: {ex.Flatten()}");
+                Log.LogError(ex, "Audio stream={StreamIndex} decode task fault during dispose", _streamIndex);
             }
         }
         CompleteDecodeLoop();
@@ -358,8 +366,14 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     private float[] RentChunkBuffer(int minSamples)
     {
         while (_chunkPool.TryDequeue(out var candidate))
+        {
             if (candidate.Length >= minSamples)
                 return candidate;
+            // Re-enqueue undersized buffer so it isn't leaked to GC; stop scanning
+            // because the pool typically holds same-size buffers.
+            _chunkPool.Enqueue(candidate);
+            break;
+        }
 
         return new float[minSamples];
     }

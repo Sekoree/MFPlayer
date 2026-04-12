@@ -209,6 +209,8 @@ public sealed class AVMixerTests
         public ChannelFallback DefaultFallback => ChannelFallback.Silent;
         public void AddChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null) => AddChannelCalls++;
         public void RemoveChannel(Guid channelId) => RemoveChannelCalls++;
+        public void SetChannelTimeOffset(Guid channelId, TimeSpan offset) { }
+        public TimeSpan GetChannelTimeOffset(Guid channelId) => TimeSpan.Zero;
         public void RouteTo(Guid channelId, IAudioSink sink, ChannelRouteMap routeMap) => RouteToCalls++;
         public void UnrouteTo(Guid channelId, IAudioSink sink) { }
         public void RegisterSink(IAudioSink sink, int channels = 0) { }
@@ -232,6 +234,8 @@ public sealed class AVMixerTests
         public int SinkCount => 0;
         public void AddChannel(IVideoChannel channel) => AddChannelCalls++;
         public void RemoveChannel(Guid channelId) => RemoveChannelCalls++;
+        public void SetChannelTimeOffset(Guid channelId, TimeSpan offset) { }
+        public TimeSpan GetChannelTimeOffset(Guid channelId) => TimeSpan.Zero;
         public void RouteChannelToPrimaryOutput(Guid channelId) => RoutePrimaryCalls++;
         public void UnroutePrimaryOutput() => UnroutePrimaryCalls++;
         public void RegisterSink(IVideoSink sink) { }
