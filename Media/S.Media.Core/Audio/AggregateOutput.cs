@@ -10,7 +10,8 @@ namespace S.Media.Core.Audio;
 ///
 /// <para>
 /// Each sink can receive a <b>per-channel, per-sink</b> mix — call
-/// <see cref="IAudioMixer.RouteTo"/> on <see cref="Mixer"/> to set explicit routes.
+/// <see cref="IAudioMixer.RouteTo"/> on the mixer managed by <see cref="Mixing.IAVMixer"/>
+/// attached to this output to set explicit routes.
 /// Channels with no explicit route for a given sink follow the mixer's
 /// <see cref="IAudioMixer.DefaultFallback"/> policy (<see cref="ChannelFallback.Silent"/> by default).
 /// </para>
@@ -25,9 +26,12 @@ namespace S.Media.Core.Audio;
 /// <code>
 /// var aggregate = new AggregateOutput(portAudioOutput);
 /// aggregate.Open(device, format);
+/// var avMixer = new AVMixer(aggregate.HardwareFormat);
+/// avMixer.AttachAudioOutput(aggregate);
 /// aggregate.AddSink(ndiSink);
-/// aggregate.Mixer.AddChannel(channel, ChannelRouteMap.Identity(2));
-/// aggregate.Mixer.RouteTo(channel.Id, ndiSink, ChannelRouteMap.DownmixToMono(2));
+/// avMixer.RegisterAudioSink(ndiSink, aggregate.HardwareFormat.Channels);
+/// avMixer.AddAudioChannel(channel, ChannelRouteMap.Identity(2));
+/// avMixer.RouteAudioChannelToSink(channel.Id, ndiSink, ChannelRouteMap.DownmixToMono(2));
 /// await aggregate.StartAsync();
 /// </code>
 /// </remarks>
@@ -91,6 +95,10 @@ public sealed class AggregateOutput : IAudioOutput
         lock (_sinkLock)
         {
             var old = _sinkRegistrations;
+            for (int i = 0; i < old.Length; i++)
+                if (ReferenceEquals(old[i].Sink, sink))
+                    return;
+
             var neo = new SinkRegistration[old.Length + 1];
             old.CopyTo(neo, 0);
             neo[^1] = new SinkRegistration(sink, channels);

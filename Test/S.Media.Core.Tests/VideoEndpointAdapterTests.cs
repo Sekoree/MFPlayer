@@ -7,6 +7,12 @@ namespace S.Media.Core.Tests;
 
 public sealed class VideoEndpointAdapterTests
 {
+    private sealed class SpyOwner : IDisposable
+    {
+        public int DisposeCalls;
+        public void Dispose() => DisposeCalls++;
+    }
+
     private sealed class SpySink : IVideoSink
     {
         public string Name => nameof(SpySink);
@@ -91,6 +97,23 @@ public sealed class VideoEndpointAdapterTests
         Assert.True(pulled.HasValue);
         Assert.Equal(PixelFormat.Rgba32, pulled.Value.PixelFormat);
         Assert.Equal(4, pulled.Value.Data.Length);
+    }
+
+    [Fact]
+    public async Task BufferedVideoFrameEndpoint_DropOldest_DisposesDroppedOwner()
+    {
+        using var endpoint = new BufferedVideoFrameEndpoint("buf", [PixelFormat.Rgba32], capacity: 1);
+        await endpoint.StartAsync();
+
+        var droppedOwner = new SpyOwner();
+        endpoint.WriteFrame(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 4 }, TimeSpan.Zero, droppedOwner));
+        endpoint.WriteFrame(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 5, 6, 7, 8 }, TimeSpan.FromMilliseconds(1)));
+
+        Assert.Equal(1, droppedOwner.DisposeCalls);
+
+        var pulled = await endpoint.ReadFrameAsync();
+        Assert.True(pulled.HasValue);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), pulled.Value.Pts);
     }
 
     [Fact]

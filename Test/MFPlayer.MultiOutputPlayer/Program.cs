@@ -4,7 +4,7 @@
 //   2. Pick PRIMARY output device  (leader — drives the clock)
 //   3. Pick SECONDARY output device (fan-out sink — receives a copy of the mix)
 //   4. Enter an audio file path
-//   5. Play to both devices simultaneously via AggregateOutput
+//   5. Play to both devices simultaneously via AVMixer routing
 //      Press Enter or Ctrl+C to stop; auto-stops at EOF
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -13,6 +13,7 @@ using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
+using S.Media.Core.Mixing;
 using S.Media.FFmpeg;
 using S.Media.PortAudio;
 
@@ -125,9 +126,8 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    // Wrap in AggregateOutput so we can fan-out to the secondary device.
-    // AggregateOutput takes ownership of primaryOutput and disposes it.
-    using var aggregate = new AggregateOutput(primaryOutput);
+    using var avMixer = new AVMixer(primaryOutput.HardwareFormat);
+    avMixer.AttachAudioOutput(primaryOutput);
 
     // ── 9. Open secondary sink ───────────────────────────────────────────────
 
@@ -151,19 +151,12 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    // AggregateOutput will start and dispose the sink via StartAsync / Dispose.
-    aggregate.AddSink(secondarySink);
+    avMixer.RegisterAudioSink(secondarySink, negotiatedFmt.Channels);
 
     // ── 10. Wire audio channel ───────────────────────────────────────────────
 
-    // Add the channel to the mixer with a route for the leader (primary) output.
-    aggregate.Mixer.AddChannel(audioChannel, routeMap);
-
-    // With ChannelFallback.Silent (the default), sinks only receive audio when
-    // explicitly routed.  Route the same channel+map to the secondary sink so
-    // both outputs play the identical mix.
-    // For different audio on each output, pass a different ChannelRouteMap here.
-    aggregate.Mixer.RouteTo(audioChannel.Id, secondarySink, routeMap);
+    avMixer.AddAudioChannel(audioChannel, routeMap);
+    avMixer.RouteAudioChannelToSink(audioChannel.Id, secondarySink, routeMap);
 
     // ── 11. EOF detection ────────────────────────────────────────────────────
 
@@ -183,7 +176,8 @@ using (decoder)
     // ── 12. Start playback ───────────────────────────────────────────────────
 
     decoder.Start();
-    await aggregate.StartAsync(); // starts primary PA stream + secondary PA stream
+    await secondarySink.StartAsync();
+    await primaryOutput.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine($"  → {primaryDevice.Name}  (primary)");
@@ -197,7 +191,10 @@ using (decoder)
     // ── 13. Stop ─────────────────────────────────────────────────────────────
 
     Console.Write("\nStopping… ");
-    await aggregate.StopAsync(); // stops sink, then primary
+    await secondarySink.StopAsync();
+    await primaryOutput.StopAsync();
+    secondarySink.Dispose();
+    primaryOutput.Dispose();
     Console.WriteLine("Done.");
 }
 

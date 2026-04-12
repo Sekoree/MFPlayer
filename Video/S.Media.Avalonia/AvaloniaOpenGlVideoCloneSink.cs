@@ -25,7 +25,7 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoSink
     public bool IsRunning => _running;
     public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; } = [PixelFormat.Rgba32, PixelFormat.Bgra32];
 
-    public AvaloniaOpenGlVideoCloneSink(string? name = null)
+    internal AvaloniaOpenGlVideoCloneSink(string? name = null)
     {
         Name = name ?? "AvaloniaCloneSink";
         Width = double.NaN;

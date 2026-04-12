@@ -14,25 +14,28 @@ namespace S.Media.Core.Audio;
 /// Useful when you want two or more <see cref="IAudioSink"/> instances (e.g. a
 /// <c>PortAudioSink</c> and an <c>NDIAvSink</c>) with independent per-sink routing but a
 /// shared clock — the <see cref="VirtualAudioOutput"/> acts as the clock master and the sinks
-/// receive their own mix buffers via <see cref="AggregateOutput"/>.
+/// receive their own mix buffers via <see cref="Mixing.IAVMixer"/> routing.
 /// </para>
 ///
 /// <example>
 /// <code>
 /// var virtualOut = new VirtualAudioOutput(new AudioFormat(48000, 2), framesPerBuffer: 512);
-/// var agg        = new AggregateOutput(virtualOut);
+/// var avMixer    = new AVMixer(virtualOut.HardwareFormat);
+/// avMixer.AttachAudioOutput(virtualOut);
 ///
-/// agg.AddSink(portAudioSink);
-/// agg.AddSink(ndiAudioSink);
+/// avMixer.RegisterAudioSink(portAudioSink, virtualOut.HardwareFormat.Channels);
+/// avMixer.RegisterAudioSink(ndiAudioSink,  virtualOut.HardwareFormat.Channels);
 ///
-/// agg.Mixer.AddChannel(channelA, ChannelRouteMap.Silence());
-/// agg.Mixer.AddChannel(channelB, ChannelRouteMap.Silence());
+/// avMixer.AddAudioChannel(channelA, ChannelRouteMap.Silence());
+/// avMixer.AddAudioChannel(channelB, ChannelRouteMap.Silence());
 ///
 /// // Route A exclusively to the PortAudio sink, B exclusively to the NDI sink.
-/// agg.Mixer.RouteTo(channelA.Id, portAudioSink, ChannelRouteMap.Identity(2));
-/// agg.Mixer.RouteTo(channelB.Id, ndiAudioSink,  ChannelRouteMap.Identity(2));
+/// avMixer.RouteAudioChannelToSink(channelA.Id, portAudioSink, ChannelRouteMap.Identity(2));
+/// avMixer.RouteAudioChannelToSink(channelB.Id, ndiAudioSink,  ChannelRouteMap.Identity(2));
 ///
-/// await agg.StartAsync();
+/// await portAudioSink.StartAsync();
+/// await ndiAudioSink.StartAsync();
+/// await virtualOut.StartAsync();
 /// </code>
 /// </example>
 /// </summary>

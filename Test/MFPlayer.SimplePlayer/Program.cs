@@ -16,6 +16,7 @@ using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
+using S.Media.Core.Mixing;
 using S.Media.FFmpeg;
 using S.Media.PortAudio;
 
@@ -144,7 +145,10 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    output.Mixer.AddChannel(audioChannel, routeMap);
+    using var avMixer = new AVMixer(output.HardwareFormat);
+    avMixer.AttachAudioOutput(output);
+
+    avMixer.AddAudioChannel(audioChannel, routeMap);
     audioChannel.Volume = 1.0f;
 
     Console.WriteLine($"  Device default rate: {device.DefaultSampleRate:0} Hz");

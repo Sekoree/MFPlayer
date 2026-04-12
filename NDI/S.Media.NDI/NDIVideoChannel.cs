@@ -17,9 +17,9 @@ public sealed class NDIVideoChannel : IVideoChannel
     private Thread?                  _captureThread;
     private CancellationTokenSource  _cts = new();
 
-    private readonly System.Threading.Channels.Channel<VideoFrame>       _ring;
-    private readonly System.Threading.Channels.ChannelReader<VideoFrame> _ringReader;
-    private readonly System.Threading.Channels.ChannelWriter<VideoFrame> _ringWriter;
+    private readonly Queue<VideoFrame> _ring = new();
+    private readonly Lock _ringGate = new();
+    private readonly int _ringCapacity;
 
     private bool _disposed;
     private VideoFormat _sourceFormat;
@@ -40,16 +40,7 @@ public sealed class NDIVideoChannel : IVideoChannel
     {
         _frameSync = frameSync;
         _clock     = clock;
-
-        _ring = System.Threading.Channels.Channel.CreateBounded<VideoFrame>(
-            new System.Threading.Channels.BoundedChannelOptions(bufferDepth)
-            {
-                FullMode     = System.Threading.Channels.BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = true
-            });
-        _ringReader = _ring.Reader;
-        _ringWriter = _ring.Writer;
+        _ringCapacity = Math.Max(1, bufferDepth);
     }
 
     public void StartCapture()
@@ -63,7 +54,7 @@ public sealed class NDIVideoChannel : IVideoChannel
         _captureThread.Start();
     }
 
-    private unsafe void CaptureLoop()
+    private void CaptureLoop()
     {
         var token = _cts.Token;
         while (!token.IsCancellationRequested)
@@ -110,13 +101,13 @@ public sealed class NDIVideoChannel : IVideoChannel
                 // Map NDI FourCC to our PixelFormat enum.
                 var pixFmt = frame.FourCC switch
                 {
-                    NDIFourCCVideoType.Bgra => Core.Media.PixelFormat.Bgra32,
-                    NDIFourCCVideoType.Bgrx => Core.Media.PixelFormat.Bgra32,
-                    NDIFourCCVideoType.Rgba => Core.Media.PixelFormat.Rgba32,
-                    NDIFourCCVideoType.Rgbx => Core.Media.PixelFormat.Rgba32,
-                    NDIFourCCVideoType.Uyvy => Core.Media.PixelFormat.Uyvy422,
-                    NDIFourCCVideoType.Nv12 => Core.Media.PixelFormat.Nv12,
-                    _                       => Core.Media.PixelFormat.Bgra32,
+                    NDIFourCCVideoType.Bgra => PixelFormat.Bgra32,
+                    NDIFourCCVideoType.Bgrx => PixelFormat.Bgra32,
+                    NDIFourCCVideoType.Rgba => PixelFormat.Rgba32,
+                    NDIFourCCVideoType.Rgbx => PixelFormat.Rgba32,
+                    NDIFourCCVideoType.Uyvy => PixelFormat.Uyvy422,
+                    NDIFourCCVideoType.Nv12 => PixelFormat.Nv12,
+                    _                       => PixelFormat.Bgra32,
                 };
 
                 double tsSecs = frame.Timestamp > 0 && frame.Timestamp != long.MaxValue
@@ -136,7 +127,7 @@ public sealed class NDIVideoChannel : IVideoChannel
                 lock (_formatLock)
                     _sourceFormat = new VideoFormat(frame.Xres, frame.Yres, pixFmt, fpsNum, fpsDen);
 
-                _ringWriter.TryWrite(vf);
+                EnqueueFrame(vf);
 
                 // Throttle to avoid calling CaptureVideo thousands of times per second.
                 // At 30 fps video a ~16 ms sleep is enough; 8 ms gives headroom for 60 fps.
@@ -156,7 +147,7 @@ public sealed class NDIVideoChannel : IVideoChannel
         int filled = 0;
         for (int i = 0; i < frameCount; i++)
         {
-            if (!_ringReader.TryRead(out var vf)) break;
+            if (!TryDequeueFrame(out var vf)) break;
             dest[i] = vf;
             Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
             filled++;
@@ -172,7 +163,43 @@ public sealed class NDIVideoChannel : IVideoChannel
         _disposed = true;
         _cts.Cancel();
         _captureThread?.Join(TimeSpan.FromSeconds(2));
-        _ringWriter.TryComplete();
+        lock (_ringGate)
+        {
+            while (_ring.Count > 0)
+            {
+                var frame = _ring.Dequeue();
+                frame.MemoryOwner?.Dispose();
+            }
+        }
+    }
+
+    private void EnqueueFrame(in VideoFrame frame)
+    {
+        lock (_ringGate)
+        {
+            if (_ring.Count >= _ringCapacity)
+            {
+                var dropped = _ring.Dequeue();
+                dropped.MemoryOwner?.Dispose();
+            }
+
+            _ring.Enqueue(frame);
+        }
+    }
+
+    private bool TryDequeueFrame(out VideoFrame frame)
+    {
+        lock (_ringGate)
+        {
+            if (_ring.Count == 0)
+            {
+                frame = default;
+                return false;
+            }
+
+            frame = _ring.Dequeue();
+            return true;
+        }
     }
 }
 

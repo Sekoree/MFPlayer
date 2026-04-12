@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;
@@ -8,7 +7,10 @@ namespace S.Media.Core.Video;
 /// </summary>
 public sealed class BufferedVideoFrameEndpoint : IVideoFrameEndpoint, IVideoFramePullSource
 {
-    private readonly Channel<VideoFrame> _channel;
+    private readonly Queue<VideoFrame> _queue = new();
+    private readonly Lock _gate = new();
+    private readonly SemaphoreSlim _available = new(0);
+    private readonly int _capacity;
     private bool _disposed;
     private volatile bool _running;
 
@@ -26,12 +28,7 @@ public sealed class BufferedVideoFrameEndpoint : IVideoFrameEndpoint, IVideoFram
             ? supportedPixelFormats
             : [PixelFormat.Rgba32, PixelFormat.Bgra32];
 
-        _channel = Channel.CreateBounded<VideoFrame>(new BoundedChannelOptions(Math.Max(1, capacity))
-        {
-            FullMode = BoundedChannelFullMode.DropOldest,
-            SingleReader = false,
-            SingleWriter = false
-        });
+        _capacity = Math.Max(1, capacity);
     }
 
     public Task StartAsync(CancellationToken ct = default)
@@ -53,7 +50,21 @@ public sealed class BufferedVideoFrameEndpoint : IVideoFrameEndpoint, IVideoFram
         if (!_running)
             return;
 
-        _channel.Writer.TryWrite(frame);
+        bool shouldSignal;
+        lock (_gate)
+        {
+            shouldSignal = _queue.Count < _capacity;
+            if (_queue.Count >= _capacity)
+            {
+                var dropped = _queue.Dequeue();
+                dropped.MemoryOwner?.Dispose();
+            }
+
+            _queue.Enqueue(frame);
+        }
+
+        if (shouldSignal)
+            _available.Release();
     }
 
     public async ValueTask<VideoFrame?> ReadFrameAsync(CancellationToken ct = default)
@@ -61,18 +72,11 @@ public sealed class BufferedVideoFrameEndpoint : IVideoFrameEndpoint, IVideoFram
         if (_disposed || !_running)
             return null;
 
-        try
-        {
-            return await _channel.Reader.ReadAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
-        catch (ChannelClosedException)
-        {
-            return null;
-        }
+        try { await _available.WaitAsync(ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return null; }
+
+        lock (_gate)
+            return _queue.Count > 0 ? _queue.Dequeue() : null;
     }
 
     public void Dispose()
@@ -80,10 +84,17 @@ public sealed class BufferedVideoFrameEndpoint : IVideoFrameEndpoint, IVideoFram
         if (_disposed) return;
         _disposed = true;
         _running = false;
-        _channel.Writer.TryComplete();
+        lock (_gate)
+        {
+            while (_queue.Count > 0)
+            {
+                var frame = _queue.Dequeue();
+                frame.MemoryOwner?.Dispose();
+            }
+        }
 
-        while (_channel.Reader.TryRead(out var frame))
-            frame.MemoryOwner?.Dispose();
+        _available.Release();
+        _available.Dispose();
     }
 }
 

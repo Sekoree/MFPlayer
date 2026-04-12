@@ -20,4 +20,10 @@ public interface IVideoOutput : IMediaOutput
     /// <param name="height">Initial window height in pixels.</param>
     /// <param name="format">Requested output format (pixel format, frame rate hint).</param>
     void Open(string title, int width, int height, VideoFormat format);
+
+    /// <summary>
+    /// Replaces the presentation mixer used by the render loop.
+    /// Called by <see cref="Mixing.IAVMixer"/>; not intended for direct app use.
+    /// </summary>
+    void OverridePresentationMixer(IVideoMixer mixer);
 }

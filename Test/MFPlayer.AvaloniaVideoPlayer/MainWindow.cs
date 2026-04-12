@@ -35,7 +35,6 @@ public sealed class MainWindow : Window
     private CancellationTokenSource? _diagCts;
     private Task? _diagTask;
     private IVideoChannel? _activeChannel;
-    private VideoMixer? _videoMixer;
     private AVMixer? _avMixer;
 
     public MainWindow(string[] args)
@@ -119,9 +118,9 @@ public sealed class MainWindow : Window
                 height: srcFmt.Height > 0 ? srcFmt.Height : 720,
                 format: srcFmt);
 
-            _avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), _videoOutput.Mixer, ownsAudio: true, ownsVideo: false);
+            _avMixer = new AVMixer(new AudioFormat(48000, 2), _videoOutput.OutputFormat);
+            _avMixer.AttachVideoOutput(_videoOutput);
             _avMixer.AddVideoChannel(channel);
-            _videoMixer = _videoOutput.Mixer as VideoMixer;
 
             _decoder.Start();
             await _videoOutput.StartAsync();
@@ -148,7 +147,6 @@ public sealed class MainWindow : Window
         _diagTask = Task.Run(async () =>
         {
             AvaloniaOpenGlVideoOutput.DiagnosticsSnapshot? prevOut = null;
-            VideoMixer.DiagnosticsSnapshot? prevMix = null;
             BasicPixelFormatConverter.DiagnosticsSnapshot? prevConv = null;
             TimeSpan? prevClock = null;
             TimeSpan? prevSrc = null;
@@ -166,18 +164,15 @@ public sealed class MainWindow : Window
                 }
 
                 var outSnap = _videoOutput.GetDiagnosticsSnapshot();
-                var mixSnap = _videoMixer?.GetDiagnosticsSnapshot();
                 var convSnap = BasicPixelFormatConverter.GetDiagnosticsSnapshot();
                 var clockNow = _videoOutput.Clock.Position;
                 var srcNow = _activeChannel?.Position ?? TimeSpan.Zero;
                 long wallNowTicks = Stopwatch.GetTimestamp();
 
-                if (prevOut.HasValue && mixSnap.HasValue && prevMix.HasValue)
+                if (prevOut.HasValue)
                 {
                     var o0 = prevOut.Value;
                     var o1 = outSnap;
-                    var m0 = prevMix.Value;
-                    var m1 = mixSnap.Value;
 
                     long renderDelta = o1.RenderCalls - o0.RenderCalls;
                     long presentDelta = o1.PresentedFrames - o0.PresentedFrames;
@@ -186,21 +181,11 @@ public sealed class MainWindow : Window
                     long uploadDelta = o1.TextureUploads - o0.TextureUploads;
                     long reuseDelta = o1.TextureReuseDraws - o0.TextureReuseDraws;
                     long catchupDelta = o1.CatchupSkips - o0.CatchupSkips;
-                    long holdDelta = m1.Held - m0.Held;
-                    long dropDelta = m1.Dropped - m0.Dropped;
-                    long pullDelta = m1.PullHits - m0.PullHits;
-                    long pullAttemptDelta = m1.PullAttempts - m0.PullAttempts;
-                    long samePassDelta = m1.SameFormatPassthrough - m0.SameFormatPassthrough;
-                    long rawPassDelta = m1.RawMarkerPassthrough - m0.RawMarkerPassthrough;
-                    long convDelta = m1.Converted - m0.Converted;
-                    long sinkFmtHitDelta = m1.SinkFormatHits - m0.SinkFormatHits;
-                    long sinkFmtMissDelta = m1.SinkFormatMisses - m0.SinkFormatMisses;
                     long convLibYuvAttemptsDelta = prevConv.HasValue ? convSnap.LibYuvAttempts - prevConv.Value.LibYuvAttempts : 0;
                     long convLibYuvSuccessDelta = prevConv.HasValue ? convSnap.LibYuvSuccesses - prevConv.Value.LibYuvSuccesses : 0;
                     long convFallbackDelta = prevConv.HasValue ? convSnap.ManagedFallbacks - prevConv.Value.ManagedFallbacks : 0;
 
                     string speedMark = presentDelta < Math.Max(1, (long)Math.Round(expectedFps * 0.75)) ? " slow" : "";
-                    string dropMark = dropDelta > 0 ? " drop" : "";
                     string exMark = exDelta > 0 ? " ex" : "";
 
                     double driftMs = (clockNow - srcNow).TotalMilliseconds;
@@ -223,12 +208,11 @@ public sealed class MainWindow : Window
                         $"[vstats] clock={Fmt(clockNow)} src={Fmt(srcNow)} " +
                         $"fps={presentDelta,3}/{expectedFps,5:F1} r={renderDelta,4} p={presentDelta,4} b={blackDelta,3} " +
                         $"up={uploadDelta,4} reuse={reuseDelta,4} catchup={catchupDelta,3} " +
-                        $"held={holdDelta,4} drop={dropDelta,3} pull={pullDelta,3}/{pullAttemptDelta,3} route={(samePassDelta + rawPassDelta),3}/{convDelta,3} (same/raw={samePassDelta,3}/{rawPassDelta,3}) sinkFmt={sinkFmtHitDelta,3}/{sinkFmtMissDelta,3} cvt={convLibYuvSuccessDelta,3}/{convLibYuvAttemptsDelta,3}/{convFallbackDelta,3} ep=n/a ex={exDelta,2} " +
-                        $"driftMs={driftMs,7:F1} rtf={rtfClockText} srcRtf={rtfSrcText}{speedMark}{dropMark}{exMark}");
+                        $"cvt={convLibYuvSuccessDelta,3}/{convLibYuvAttemptsDelta,3}/{convFallbackDelta,3} ep=n/a ex={exDelta,2} " +
+                        $"driftMs={driftMs,7:F1} rtf={rtfClockText} srcRtf={rtfSrcText}{speedMark}{exMark}");
                 }
 
                 prevOut = outSnap;
-                prevMix = mixSnap;
                 prevConv = convSnap;
                 prevClock = clockNow;
                 prevSrc = srcNow;

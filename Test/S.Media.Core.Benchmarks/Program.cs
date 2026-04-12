@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using S.Media.Core.Audio;
+using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
+using S.Media.Core.Mixing;
 using S.Media.Core.Video;
 
 namespace S.Media.Core.Benchmarks;
@@ -13,10 +16,11 @@ internal static class Program
         int iterations = ParseIntOption(args, "--iterations", DefaultIterations);
         int width = ParseIntOption(args, "--width", 1920);
         int height = ParseIntOption(args, "--height", 1080);
+        int audioFrames = ParseIntOption(args, "--audio-frames", 512);
 
-        if (width <= 0 || height <= 0 || iterations <= 0)
+        if (width <= 0 || height <= 0 || iterations <= 0 || audioFrames <= 0)
         {
-            Console.Error.WriteLine("width/height/iterations must be > 0");
+            Console.Error.WriteLine("width/height/iterations/audio-frames must be > 0");
             return 1;
         }
 
@@ -42,7 +46,58 @@ internal static class Program
             Console.WriteLine("[bench] mode=libyuv unavailable (skipped)");
         }
 
+        Console.WriteLine("[bench] mode=audio-mixer");
+        RunAudioMixerSuite(iterations, audioFrames);
+
         return 0;
+    }
+
+    private static void RunAudioMixerSuite(int iterations, int frameCount)
+    {
+        RunAudioMixerCase(iterations, frameCount, channelCount: 2, sinkCount: 2);
+        RunAudioMixerCase(iterations, frameCount, channelCount: 8, sinkCount: 4);
+        RunAudioMixerCase(iterations, frameCount, channelCount: 16, sinkCount: 8);
+        RunAudioMixerCase(iterations, frameCount, channelCount: 32, sinkCount: 16);
+    }
+
+    private static void RunAudioMixerCase(int iterations, int frameCount, int channelCount, int sinkCount)
+    {
+        var fmt = new AudioFormat(48000, 2);
+        using var mixer = new AudioMixer(fmt);
+        mixer.PrepareBuffers(frameCount);
+
+        var sinks = new List<NullAudioSink>(sinkCount);
+        var identity = ChannelRouteMap.Identity(fmt.Channels);
+
+        for (int i = 0; i < sinkCount; i++)
+        {
+            var sink = new NullAudioSink();
+            sinks.Add(sink);
+            mixer.RegisterSink(sink, fmt.Channels);
+        }
+
+        for (int i = 0; i < channelCount; i++)
+        {
+            var ch = new ConstantAudioChannel(fmt, 0.125f);
+            mixer.AddChannel(ch, identity);
+
+            for (int si = 0; si < sinks.Count; si++)
+                mixer.RouteTo(ch.Id, sinks[si], identity);
+        }
+
+        float[] dest = new float[frameCount * fmt.Channels];
+
+        // Warmup
+        mixer.FillOutputBuffer(dest, frameCount, fmt);
+
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
+            mixer.FillOutputBuffer(dest, frameCount, fmt);
+        sw.Stop();
+
+        double totalUs = sw.Elapsed.TotalMilliseconds * 1000.0;
+        double perCallbackUs = totalUs / iterations;
+        Console.WriteLine($"[bench] audio ch={channelCount,2} sinks={sinkCount,2} frames={frameCount,4}  {perCallbackUs,9:F2} us/callback");
     }
 
     private static void RunSuite(BasicPixelFormatConverter converter, int width, int height, int iterations)
@@ -57,7 +112,7 @@ internal static class Program
     private static void RunCase(BasicPixelFormatConverter converter, VideoFrame source, PixelFormat dst, int iterations, string label)
     {
         // Warmup
-        using (var warm = converter.Convert(source, dst).MemoryOwner)
+        using (converter.Convert(source, dst).MemoryOwner)
         {
         }
 
@@ -111,6 +166,51 @@ internal static class Program
         }
 
         return defaultValue;
+    }
+
+    private sealed class ConstantAudioChannel : IAudioChannel
+    {
+        private readonly float _value;
+        public ConstantAudioChannel(AudioFormat format, float value)
+        {
+            SourceFormat = format;
+            _value = value;
+        }
+
+        public Guid Id { get; } = Guid.NewGuid();
+        public AudioFormat SourceFormat { get; }
+        public bool IsOpen => true;
+        public bool CanSeek => false;
+        public float Volume { get; set; } = 1.0f;
+        public TimeSpan Position => TimeSpan.Zero;
+        public int BufferDepth => 1;
+        public int BufferAvailable => int.MaxValue;
+        public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun
+        {
+            add { }
+            remove { }
+        }
+
+        public int FillBuffer(Span<float> dest, int frameCount)
+        {
+            dest.Fill(_value);
+            return frameCount;
+        }
+
+        public ValueTask WriteAsync(ReadOnlyMemory<float> frames, CancellationToken ct = default) => ValueTask.CompletedTask;
+        public bool TryWrite(ReadOnlySpan<float> frames) => true;
+        public void Seek(TimeSpan position) { }
+        public void Dispose() { }
+    }
+
+    private sealed class NullAudioSink : IAudioSink
+    {
+        public string Name => nameof(NullAudioSink);
+        public bool IsRunning => true;
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat) { }
+        public void Dispose() { }
     }
 }
 

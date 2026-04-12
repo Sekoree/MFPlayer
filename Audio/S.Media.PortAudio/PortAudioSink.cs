@@ -29,11 +29,11 @@ public sealed class PortAudioSink : IAudioSink
     private readonly AudioFormat       _targetFormat;
     private IAudioResampler?           _resampler;
     private bool                       _ownsResampler;
-    private readonly int               _poolBufferSamples;
 
     // Lock-free pool: RT thread takes a buffer, write thread returns it.
     private readonly ConcurrentQueue<float[]> _pool    = new();
     private readonly ConcurrentQueue<PendingWrite> _pending = new();
+    private readonly SemaphoreSlim _pendingSignal = new(0);
 
     private Thread?                   _writeThread;
     private CancellationTokenSource?  _cts;
@@ -100,9 +100,9 @@ public sealed class PortAudioSink : IAudioSink
 
         // Keep enough headroom for common rate-conversion ratios without resizing on the RT path.
         int bufSize = framesPerBuffer * targetFormat.Channels;
-        _poolBufferSamples = Math.Max(1, bufSize * 2);
+        int poolBufferSamples = Math.Max(1, bufSize * 2);
         for (int i = 0; i < 8; i++)
-            _pool.Enqueue(new float[_poolBufferSamples]);
+            _pool.Enqueue(new float[poolBufferSamples]);
     }
 
     // ── IAudioSink lifecycle ──────────────────────────────────────────────
@@ -187,6 +187,7 @@ public sealed class PortAudioSink : IAudioSink
         }
 
         _pending.Enqueue(new PendingWrite(dest, writeSamples));
+        _pendingSignal.Release();
     }
 
     // ── Write thread — calls Pa_WriteStream (blocking) ────────────────────
@@ -196,19 +197,24 @@ public sealed class PortAudioSink : IAudioSink
         var token = _cts!.Token;
         while (!token.IsCancellationRequested)
         {
-            if (_pending.TryDequeue(out var pending))
+            try
+            {
+                _pendingSignal.Wait(token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            while (_pending.TryDequeue(out var pending))
             {
                 // Use actual buffer length as the frame count so rate-adjusted writes are
-                // correct even when writeFrames ≠ _framesPerBuffer.
+                // correct even when writeFrames != _framesPerBuffer.
                 int framesToWrite = pending.Samples / _targetFormat.Channels;
                 fixed (float* ptr = pending.Buffer)
                     Native.Pa_WriteStream(_stream, (nint)ptr, (nuint)framesToWrite);
 
                 _pool.Enqueue(pending.Buffer); // return buffer to pool
-            }
-            else
-            {
-                Thread.Yield(); // nothing pending — yield rather than spin-burn CPU
             }
         }
     }
@@ -224,6 +230,7 @@ public sealed class PortAudioSink : IAudioSink
         _writeThread?.Join(TimeSpan.FromSeconds(2));
         Native.Pa_AbortStream(_stream);
         Native.Pa_CloseStream(_stream);
+        _pendingSignal.Dispose();
         if (_ownsResampler)
             _resampler?.Dispose();
     }

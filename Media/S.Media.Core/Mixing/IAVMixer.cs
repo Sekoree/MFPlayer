@@ -9,6 +9,9 @@ namespace S.Media.Core.Mixing;
 /// </summary>
 public interface IAVMixer : IDisposable
 {
+    void AttachAudioOutput(IAudioOutput output);
+    void AttachVideoOutput(IVideoOutput output);
+
     void AddAudioChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null);
     void RemoveAudioChannel(Guid channelId);
 

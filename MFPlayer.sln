@@ -16,7 +16,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{4FC3071A-F
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB0-47AE-A212-5084CFA63CEC}"
 	ProjectSection(SolutionItems) = preProject
-		Doc\API-Implementation-Audit-2026-04-12.md = Doc\API-Implementation-Audit-2026-04-12.md
+		Doc\README.md = Doc\README.md
+		Doc\Quick-Start.md = Doc\Quick-Start.md
+		Doc\Usage-Guide.md = Doc\Usage-Guide.md
+		Doc\Clone-Sinks.md = Doc\Clone-Sinks.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"
@@ -68,6 +71,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.Avalonia", "Video\S.Media.Avalonia\S.Media.Avalonia.csproj", "{A14E2274-215B-4089-9BBE-732D42DD5216}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MFPlayer.AvaloniaVideoPlayer", "Test\MFPlayer.AvaloniaVideoPlayer\MFPlayer.AvaloniaVideoPlayer.csproj", "{99860D42-4A59-4BB1-BDEF-5F4842345076}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.Core.Benchmarks", "Test\S.Media.Core.Benchmarks\S.Media.Core.Benchmarks.csproj", "{9D2D04FC-B0AA-4727-882E-262DF4E568FA}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -319,6 +324,18 @@ Global
 		{99860D42-4A59-4BB1-BDEF-5F4842345076}.Release|x64.Build.0 = Release|Any CPU
 		{99860D42-4A59-4BB1-BDEF-5F4842345076}.Release|x86.ActiveCfg = Release|Any CPU
 		{99860D42-4A59-4BB1-BDEF-5F4842345076}.Release|x86.Build.0 = Release|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Debug|x64.Build.0 = Debug|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Debug|x86.Build.0 = Debug|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Release|x64.ActiveCfg = Release|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Release|x64.Build.0 = Release|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Release|x86.ActiveCfg = Release|Any CPU
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -344,6 +361,7 @@ Global
 		{65A9613B-8780-4B00-8A5A-D08862AFA533} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{A14E2274-215B-4089-9BBE-732D42DD5216} = {3D3E8295-4C9B-1401-D762-8598E0F2F603}
 		{99860D42-4A59-4BB1-BDEF-5F4842345076} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
+		{9D2D04FC-B0AA-4727-882E-262DF4E568FA} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {83CB65B8-011F-4ED7-BCD3-A6CFA935EF7E}

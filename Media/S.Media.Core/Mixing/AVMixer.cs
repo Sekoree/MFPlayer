@@ -12,6 +12,9 @@ namespace S.Media.Core.Mixing;
 /// </summary>
 public sealed class AVMixer : IAVMixer
 {
+    private static readonly VideoFormat DefaultVideoFormat = new(1, 1, PixelFormat.Bgra32, 30, 1);
+    private static readonly AudioFormat DefaultAudioFormat = new(48000, 2);
+
     // Tracks endpoint→adapter pairs so we can unregister cleanly.
     private readonly Dictionary<IVideoFrameEndpoint, IVideoSink> _videoEndpointAdapters = new();
     private readonly Dictionary<IAudioBufferEndpoint, IAudioSink> _audioEndpointAdapters = new();
@@ -22,7 +25,7 @@ public sealed class AVMixer : IAVMixer
     private readonly bool _ownsVideo;
     private bool _disposed;
 
-    public AVMixer(IAudioMixer audioMixer, IVideoMixer videoMixer, bool ownsAudio = false, bool ownsVideo = false)
+    internal AVMixer(IAudioMixer audioMixer, IVideoMixer videoMixer, bool ownsAudio = false, bool ownsVideo = false)
     {
         _audio = audioMixer ?? throw new ArgumentNullException(nameof(audioMixer));
         _video = videoMixer ?? throw new ArgumentNullException(nameof(videoMixer));
@@ -33,6 +36,28 @@ public sealed class AVMixer : IAVMixer
     public AVMixer(AudioFormat audioFormat, VideoFormat videoFormat, ChannelFallback audioFallback = ChannelFallback.Silent)
         : this(new AudioMixer(audioFormat, audioFallback), new VideoMixer(videoFormat), ownsAudio: true, ownsVideo: true)
     {
+    }
+
+    public AVMixer(AudioFormat audioFormat, ChannelFallback audioFallback = ChannelFallback.Silent)
+        : this(audioFormat, DefaultVideoFormat, audioFallback)
+    {
+    }
+
+    public AVMixer(VideoFormat videoFormat, ChannelFallback audioFallback = ChannelFallback.Silent)
+        : this(DefaultAudioFormat, videoFormat, audioFallback)
+    {
+    }
+
+    public void AttachAudioOutput(IAudioOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        output.OverrideRtMixer(_audio);
+    }
+
+    public void AttachVideoOutput(IVideoOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        output.OverridePresentationMixer(_video);
     }
 
     // ── Channel management ────────────────────────────────────────────────

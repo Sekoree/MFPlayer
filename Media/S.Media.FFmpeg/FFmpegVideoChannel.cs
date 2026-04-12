@@ -28,6 +28,10 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
     private AVFrame*        _swFrame;   // temporary CPU-side frame when using hw decode
     private AVPacket*       _pkt;
     private int             _swsBufSize; // byte size of one converted frame
+    private readonly byte*[] _srcDataArr = new byte*[4];
+    private readonly int[] _srcStrideArr = new int[4];
+    private readonly byte*[] _dstDataArr = new byte*[4];
+    private readonly int[] _dstStrideArr = new int[4];
 
     private Task?                    _decodeTask;
     private CancellationTokenSource  _cts = new();
@@ -197,10 +201,14 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
         var rented = ArrayPool<byte>.Shared.Rent(_swsBufSize);
         var owner  = new ArrayPoolOwner<byte>(rented);
 
-        // Build source data/stride arrays from the AVFrame (native pointers — safe
-        // because FFmpeg owns the underlying allocation for the duration of this call).
-        var srcDataArr   = new[] { frame->data[0], frame->data[1], frame->data[2], frame->data[3] };
-        var srcStrideArr = new[] { frame->linesize[0], frame->linesize[1], frame->linesize[2], frame->linesize[3] };
+        _srcDataArr[0] = frame->data[0];
+        _srcDataArr[1] = frame->data[1];
+        _srcDataArr[2] = frame->data[2];
+        _srcDataArr[3] = frame->data[3];
+        _srcStrideArr[0] = frame->linesize[0];
+        _srcStrideArr[1] = frame->linesize[1];
+        _srcStrideArr[2] = frame->linesize[2];
+        _srcStrideArr[3] = frame->linesize[3];
 
         fixed (byte* pBuf = rented)
         {
@@ -213,18 +221,30 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
                     // Plane layout: [Y (w×h)] [U (w/2 × h/2)] [V (w/2 × h/2)]
                     int ySize  = w * h;
                     int uvSize = (w / 2) * (h / 2);
-                    var dstData   = new byte*[] { pBuf, pBuf + ySize, pBuf + ySize + uvSize, null };
-                    var dstStride = new[] { w, w / 2, w / 2, 0 };
-                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    _dstDataArr[0] = pBuf;
+                    _dstDataArr[1] = pBuf + ySize;
+                    _dstDataArr[2] = pBuf + ySize + uvSize;
+                    _dstDataArr[3] = null;
+                    _dstStrideArr[0] = w;
+                    _dstStrideArr[1] = w / 2;
+                    _dstStrideArr[2] = w / 2;
+                    _dstStrideArr[3] = 0;
+                    ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
                     break;
                 }
                 case PixelFormat.Nv12:
                 {
                     // Plane layout: [Y (w×h)] [UV interleaved (w × h/2)]
                     int ySize = w * h;
-                    var dstData   = new byte*[] { pBuf, pBuf + ySize, null, null };
-                    var dstStride = new[] { w, w, 0, 0 };
-                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    _dstDataArr[0] = pBuf;
+                    _dstDataArr[1] = pBuf + ySize;
+                    _dstDataArr[2] = null;
+                    _dstDataArr[3] = null;
+                    _dstStrideArr[0] = w;
+                    _dstStrideArr[1] = w;
+                    _dstStrideArr[2] = 0;
+                    _dstStrideArr[3] = 0;
+                    ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
                     break;
                 }
                 case PixelFormat.Yuv422p10:
@@ -235,17 +255,29 @@ public sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrix
                     int uvStride = w;                 // (w/2) samples × 2 bytes = w bytes
                     int ySize    = yStride  * h;
                     int uvSize   = uvStride * h;
-                    var dstData   = new byte*[] { pBuf, pBuf + ySize, pBuf + ySize + uvSize, null };
-                    var dstStride = new[] { yStride, uvStride, uvStride, 0 };
-                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    _dstDataArr[0] = pBuf;
+                    _dstDataArr[1] = pBuf + ySize;
+                    _dstDataArr[2] = pBuf + ySize + uvSize;
+                    _dstDataArr[3] = null;
+                    _dstStrideArr[0] = yStride;
+                    _dstStrideArr[1] = uvStride;
+                    _dstStrideArr[2] = uvStride;
+                    _dstStrideArr[3] = 0;
+                    ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
                     break;
                 }
                 default:
                 {
                     // Packed formats: Bgra32, Rgba32, Uyvy422 — all data in one plane.
-                    var dstData   = new byte*[] { pBuf, null, null, null };
-                    var dstStride = new[] { w * BytesPerPixel(TargetPixelFormat), 0, 0, 0 };
-                    ffmpeg.sws_scale(sws, srcDataArr, srcStrideArr, 0, h, dstData, dstStride);
+                    _dstDataArr[0] = pBuf;
+                    _dstDataArr[1] = null;
+                    _dstDataArr[2] = null;
+                    _dstDataArr[3] = null;
+                    _dstStrideArr[0] = w * BytesPerPixel(TargetPixelFormat);
+                    _dstStrideArr[1] = 0;
+                    _dstStrideArr[2] = 0;
+                    _dstStrideArr[3] = 0;
+                    ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
                     break;
                 }
             }

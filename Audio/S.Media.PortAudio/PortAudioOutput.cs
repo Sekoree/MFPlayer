@@ -30,10 +30,9 @@ public sealed class PortAudioOutput : IAudioOutput
 
     // ── IAudioOutput / IMediaOutput ───────────────────────────────────────
 
-    public AudioFormat  HardwareFormat => _hardwareFormat;
-    public IAudioMixer  Mixer          => _mixer  ?? throw new InvalidOperationException("Call Open() first.");
-    public IMediaClock  Clock          => _clock  ?? throw new InvalidOperationException("Call Open() first.");
-    public bool         IsRunning      => _isRunning;
+    public AudioFormat HardwareFormat => _hardwareFormat;
+    public IMediaClock Clock          => _clock  ?? throw new InvalidOperationException("Call Open() first.");
+    public bool        IsRunning      => _isRunning;
 
     /// <inheritdoc/>
     public void OverrideRtMixer(IAudioMixer mixer) => _activeMixer = mixer;
@@ -147,10 +146,9 @@ public sealed class PortAudioOutput : IAudioOutput
         // Wrap in try/catch: any managed exception escaping an [UnmanagedCallersOnly]
         // method causes a runtime fast-fail, killing the process silently.
         Span<float> dest = default;
-        PortAudioOutput? self = null;
         try
         {
-            self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
+            var self = (PortAudioOutput?)GCHandle.FromIntPtr(userData).Target;
             if (self is null) return (int)PaStreamCallbackResult.paAbort;
 
             var mixer = self._activeMixer ?? self._mixer;

@@ -6,7 +6,7 @@
 //   4. Press Enter or Ctrl+C to stop; auto-stops at end of file
 //
 // Pipeline
-//   FFmpegDecoder ──► FFmpegAudioChannel ──► AudioMixer ──► NDIAVSink ──► NDISender
+//   FFmpegDecoder ──► FFmpegAudioChannel ──► AVMixer(audio path) ──► NDIAVSink ──► NDISender
 //   VirtualAudioOutput drives the clock (Stopwatch-based, no hardware device needed)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -16,6 +16,7 @@ using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
+using S.Media.Core.Mixing;
 using S.Media.FFmpeg;
 using S.Media.NDI;
 
@@ -121,31 +122,31 @@ using (ndiRuntime)
             // ── 6. Wire the pipeline ─────────────────────────────────────────
             //
             //   VirtualAudioOutput (clock master, no hardware device)
-            //       └─► AggregateOutput
+            //       └─► AVMixer (audio routing + sink fan-out)
             //               └─► NDIAVSink (audio path: interleaved→planar, SendAudio)
             //                       └─► NDISender ──► network
             //
-            // The mixer inside VirtualAudioOutput pulls from FFmpegAudioChannel,
-            // and via RouteTo forwards that audio to NDIAVSink on every tick.
+            // The AV mixer attached to VirtualAudioOutput pulls from FFmpegAudioChannel
+            // and routes that audio to NDIAVSink on each tick.
 
             const int framesPerBuffer = 1024; // ~21 ms @ 48 kHz — matches NDIAudioChannel chunk size
 
-            var virtualOut = new VirtualAudioOutput(ndiFormat, framesPerBuffer);
-            var ndiSink    = new NDIAVSink(
+            using var virtualOut = new VirtualAudioOutput(ndiFormat, framesPerBuffer);
+            using var avMixer = new AVMixer(ndiFormat);
+            var ndiSink = new NDIAVSink(
                 sender,
                 audioTargetFormat: ndiFormat,
                 audioFramesPerBuffer: framesPerBuffer,
                 name: $"NDIAVSink({senderName})");
 
-            // AggregateOutput takes ownership: Dispose() will also dispose virtualOut and ndiSink.
-            using var agg = new AggregateOutput(virtualOut);
-            agg.AddSink(ndiSink);
+            using (ndiSink)
+            {
+                avMixer.AttachAudioOutput(virtualOut);
+                avMixer.RegisterAudioSink(ndiSink, ndiFormat.Channels);
 
-            // Add the audio channel.  Route it to both the (discarded) main scratch buffer
-            // AND explicitly to the NDI sink.  Without RouteTo the channel is silent on
-            // sinks (DefaultFallback = ChannelFallback.Silent).
-            agg.Mixer.AddChannel(audioChannel, routeMap);
-            agg.Mixer.RouteTo(audioChannel.Id, ndiSink, routeMap);
+                // Route source audio explicitly to the NDI sink.
+                avMixer.AddAudioChannel(audioChannel, routeMap);
+                avMixer.RouteAudioChannelToSink(audioChannel.Id, ndiSink, routeMap);
 
             // ── 7. EOF detection ──────────────────────────────────────────────
 
@@ -166,10 +167,11 @@ using (ndiRuntime)
 
             // ── 8. Start ──────────────────────────────────────────────────────
 
-            Console.Write("Starting… ");
-            decoder.Start();
-            await agg.StartAsync();
-            Console.WriteLine("OK\n");
+                Console.Write("Starting… ");
+                decoder.Start();
+                await ndiSink.StartAsync();
+                await virtualOut.StartAsync();
+                Console.WriteLine("OK\n");
 
             Console.WriteLine($"Broadcasting:  {senderName}");
             Console.WriteLine("NDI clients on the local network can now connect to this source.");
@@ -177,37 +179,39 @@ using (ndiRuntime)
 
             // ── 9. Status display ─────────────────────────────────────────────
 
-            _ = Task.Run(async () =>
-            {
-                while (!cts.IsCancellationRequested)
+                _ = Task.Run(async () =>
                 {
-                    int     receivers = sender.GetConnectionCount();
-                    TimeSpan position = audioChannel.Position;
-                    Console.Write($"\r  {position:mm\\:ss\\:ffff}   Receivers connected: {receivers}   ");
-                    try   { await Task.Delay(10, cts.Token).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
-                }
-            });
+                    while (!cts.IsCancellationRequested)
+                    {
+                        int     receivers = sender.GetConnectionCount();
+                        TimeSpan position = audioChannel.Position;
+                        Console.Write($"\r  {position:mm\\:ss\\:ffff}   Receivers connected: {receivers}   ");
+                        try   { await Task.Delay(10, cts.Token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { break; }
+                    }
+                });
 
             // Allow Enter to cancel (guard against stdin at EOF in Rider's piped console).
-            _ = Task.Run(() =>
-            {
-                while (!cts.IsCancellationRequested)
+                _ = Task.Run(() =>
                 {
-                    var line = Console.ReadLine();
-                    if (line != null) { cts.Cancel(); break; }
-                    Thread.Sleep(200);
-                }
-            });
+                    while (!cts.IsCancellationRequested)
+                    {
+                        var line = Console.ReadLine();
+                        if (line != null) { cts.Cancel(); break; }
+                        Thread.Sleep(200);
+                    }
+                });
 
-            try   { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); }
-            catch (OperationCanceledException) { }
+                try   { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); }
+                catch (OperationCanceledException) { }
 
             // ── 10. Stop ──────────────────────────────────────────────────────
 
-            Console.WriteLine("\n\nStopping… ");
-            await agg.StopAsync();
-            Console.WriteLine("Done.");
+                Console.WriteLine("\n\nStopping… ");
+                await virtualOut.StopAsync();
+                await ndiSink.StopAsync();
+                Console.WriteLine("Done.");
+            }
         } // sender disposed
     } // decoder disposed
 } // ndiRuntime disposed

@@ -85,8 +85,8 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
 
     /// <param name="output">The video output surface.</param>
     /// <param name="mixer">
-    /// The mixer to inject the internal channel into — typically the mixer
-    /// owned by <paramref name="output"/> (e.g. <c>sdl3Output.Mixer</c>).
+    /// The mixer to inject the internal channel into — typically the video mixer
+    /// managed by <see cref="Mixing.IAVMixer"/> and attached to <paramref name="output"/>.
     /// </param>
     public VideoOutputEndpointAdapter(
         IVideoOutput output,

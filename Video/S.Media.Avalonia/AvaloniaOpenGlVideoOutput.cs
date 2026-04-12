@@ -14,6 +14,8 @@ namespace S.Media.Avalonia;
 /// </summary>
 public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 {
+    string IMediaEndpoint.Name => Name ?? nameof(AvaloniaOpenGlVideoOutput);
+
     public readonly record struct DiagnosticsSnapshot(
         long RenderCalls,
         long PresentedFrames,
@@ -28,6 +30,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private readonly object _stateLock = new();
     private AvaloniaGlRenderer? _renderer;
     private VideoMixer? _mixer;
+    private volatile IVideoMixer? _activeMixer;
     private VideoPtsClock? _clock;
     private VideoFormat _outputFormat;
     private readonly BasicPixelFormatConverter _converter = new();
@@ -54,6 +57,9 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private TimeSpan _catchupLagThreshold = TimeSpan.FromMilliseconds(45);
     private int _maxCatchupPullsPerRender = 6;
 
+    private readonly Lock _cloneLock = new();
+    private AvaloniaOpenGlVideoCloneSink[] _clones = [];
+
     public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
         RenderCalls: Interlocked.Read(ref _renderCalls),
         PresentedFrames: Interlocked.Read(ref _presentedFrames),
@@ -67,11 +73,11 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 
     public VideoFormat OutputFormat => _outputFormat;
 
-    public IVideoMixer Mixer => _mixer ?? throw new InvalidOperationException("Call Open() first.");
-
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
 
     public bool IsRunning => _isRunning;
+
+    public void OverridePresentationMixer(IVideoMixer mixer) => _activeMixer = mixer;
 
     /// <summary>
     /// Frames older than (clock - threshold) are eligible for per-render catch-up skipping.
@@ -107,6 +113,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 
             _outputFormat = format with { PixelFormat = PixelFormat.Rgba32 };
             _mixer = new VideoMixer(_outputFormat);
+            _activeMixer = _mixer;
             _clock = new VideoPtsClock(sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
             _isOpen = true;
         }
@@ -169,10 +176,11 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     {
         Interlocked.Increment(ref _renderCalls);
 
-        if (_renderer == null || _mixer == null || _clock == null)
+        var mixer = _activeMixer ?? _mixer;
+        if (_renderer == null || mixer == null || _clock == null)
             return;
 
-        double scale = (VisualRoot as IRenderRoot)?.RenderScaling ?? 1.0;
+        double scale = VisualRoot?.RenderScaling ?? 1.0;
         int viewportWidth = (int)Math.Max(1, Math.Round(Bounds.Width * scale));
         int viewportHeight = (int)Math.Max(1, Math.Round(Bounds.Height * scale));
 
@@ -186,7 +194,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
             }
 
             var clockPosition = _clock.Position;
-            var frame = _mixer.PresentNextFrame(clockPosition);
+            var frame = mixer.PresentNextFrame(clockPosition);
             if (frame.HasValue)
             {
                 var vf = frame.Value;
@@ -197,7 +205,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                     if (vf.Pts + _catchupLagThreshold >= clockPosition)
                         break;
 
-                    var next = _mixer.PresentNextFrame(clockPosition);
+                    var next = mixer.PresentNextFrame(clockPosition);
                     if (!next.HasValue)
                         break;
 
@@ -289,11 +297,36 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         if (_disposed) return;
         _disposed = true;
 
+        lock (_cloneLock)
+        {
+            for (int i = 0; i < _clones.Length; i++)
+                _clones[i].Dispose();
+            _clones = [];
+        }
+
         _ = StopAsync();
         _renderer?.Dispose();
         _renderer = null;
         _mixer?.Dispose();
         _clock?.Dispose();
         _converter.Dispose();
+    }
+
+    public AvaloniaOpenGlVideoCloneSink CreateCloneSink(string? name = null)
+    {
+        if (!_isOpen)
+            throw new InvalidOperationException("Call Open() before creating clone sinks.");
+
+        var clone = new AvaloniaOpenGlVideoCloneSink(name);
+        lock (_cloneLock)
+        {
+            var old = _clones;
+            var neo = new AvaloniaOpenGlVideoCloneSink[old.Length + 1];
+            old.CopyTo(neo, 0);
+            neo[^1] = clone;
+            _clones = neo;
+        }
+
+        return clone;
     }
 }

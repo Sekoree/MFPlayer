@@ -210,14 +210,16 @@ using (decoder)
 
     // ── 4. Wire up ───────────────────────────────────────────────────────
 
-    using var avMixer = new AVMixer(new AudioMixer(new AudioFormat(48000, 2)), videoOutput.Mixer, ownsAudio: true, ownsVideo: false);
+    using var avMixer = new AVMixer(new AudioFormat(48000, 2), videoOutput.OutputFormat);
+    avMixer.AttachVideoOutput(videoOutput);
     avMixer.AddVideoChannel(videoChannel);
 
     // Optional: route the same active channel to an NDI A/V sink.
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
     NDIAVSink? ndiSink = null;
-    AggregateOutput? ndiAudioAggregate = null;
+    VirtualAudioOutput? ndiAudioOutput = null;
+    AVMixer? ndiAudioMixer = null;
 
     Console.Write("Enable NDI video sink? [y/N]: ");
     bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
@@ -286,12 +288,12 @@ using (decoder)
                     if (decoder.AudioChannels.Count > 0 && routeMap != null)
                     {
                         var sourceAudioChannel = decoder.AudioChannels[0];
-                        var virtualOut = new VirtualAudioOutput(ndiAudioFormat!.Value, framesPerBuffer: 1024);
-
-                        ndiAudioAggregate = new AggregateOutput(virtualOut);
-                        ndiAudioAggregate.AddSink(ndiSink);
-                        ndiAudioAggregate.Mixer.AddChannel(sourceAudioChannel, routeMap);
-                        ndiAudioAggregate.Mixer.RouteTo(sourceAudioChannel.Id, ndiSink, routeMap);
+                        ndiAudioOutput = new VirtualAudioOutput(ndiAudioFormat!.Value, framesPerBuffer: 1024);
+                        ndiAudioMixer = new AVMixer(ndiAudioFormat.Value);
+                        ndiAudioMixer.AttachAudioOutput(ndiAudioOutput);
+                        ndiAudioMixer.RegisterAudioSink(ndiSink, ndiAudioFormat.Value.Channels);
+                        ndiAudioMixer.AddAudioChannel(sourceAudioChannel, routeMap);
+                        ndiAudioMixer.RouteAudioChannelToSink(sourceAudioChannel.Id, ndiSink, routeMap);
                     }
 
                     Console.WriteLine($"  NDI sink enabled: {senderName} ({preset}, mode={(preferPerformanceOverQuality ? "perf" : "quality")})");
@@ -317,8 +319,8 @@ using (decoder)
 
     decoder.Start();
     await videoOutput.StartAsync();
-    if (ndiAudioAggregate != null)
-        await ndiAudioAggregate.StartAsync();
+    if (ndiAudioOutput != null)
+        await ndiAudioOutput.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Close the window or press [Ctrl+C] to stop.");
@@ -326,14 +328,11 @@ using (decoder)
         Console.WriteLine("Press [Enter] to stop.");
     Console.WriteLine();
 
-    var mixer = videoOutput.Mixer as VideoMixer;
     var outputForStats = videoOutput;
     var channelForStats = videoChannel;
-    var mixerForStats = mixer;
     var endpointForStats = ndiSink as IVideoSink;
     var statsTask = Task.Run(async () =>
     {
-        VideoMixer.DiagnosticsSnapshot? prevMixer = null;
         SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
         VideoEndpointDiagnosticsSnapshot? prevEndpoint = null;
         double expectedFps = srcFmt.FrameRate > 0 ? srcFmt.FrameRate : 30.0;
@@ -352,14 +351,11 @@ using (decoder)
             if (cts.IsCancellationRequested)
                 break;
 
-            var ms = mixerForStats?.GetDiagnosticsSnapshot();
             var os = outputForStats.GetDiagnosticsSnapshot();
             var es = endpointForStats?.GetDiagnosticsSnapshot();
 
-            if (ms.HasValue && prevMixer.HasValue && prevOutput.HasValue)
+            if (prevOutput.HasValue)
             {
-                var m0 = prevMixer.Value;
-                var m1 = ms.Value;
                 var o0 = prevOutput.Value;
                 var o1 = os;
 
@@ -372,17 +368,7 @@ using (decoder)
                 long y420Delta = o1.Yuv420pFrames - o0.Yuv420pFrames;
                 long y422P10Delta = o1.Yuv422p10Frames - o0.Yuv422p10Frames;
                 long exDelta = o1.RenderExceptions - o0.RenderExceptions;
-                long holdDelta = m1.Held - m0.Held;
-                long dropDelta = m1.Dropped - m0.Dropped;
-                long pullDelta = m1.PullHits - m0.PullHits;
-                long pullAttemptDelta = m1.PullAttempts - m0.PullAttempts;
-                long samePassDelta = m1.SameFormatPassthrough - m0.SameFormatPassthrough;
-                long rawPassDelta = m1.RawMarkerPassthrough - m0.RawMarkerPassthrough;
-                long convDelta = m1.Converted - m0.Converted;
-                long sinkFmtHitDelta = m1.SinkFormatHits - m0.SinkFormatHits;
-                long sinkFmtMissDelta = m1.SinkFormatMisses - m0.SinkFormatMisses;
                 string speedMark = presentDelta < Math.Max(1, (long)Math.Round(expectedFps * 0.75)) ? " slow" : "";
-                string dropMark = dropDelta > 0 ? " drop" : "";
                 string exMark = exDelta > 0 ? " ex" : "";
 
                 string endpointText = "ep=n/a";
@@ -405,12 +391,11 @@ using (decoder)
                 Console.WriteLine(
                     $"[vstats] clock={Fmt(outputForStats.Clock.Position)} src={Fmt(channelForStats.Position)} " +
                     $"fps={presentDelta,3}/{expectedFps,5:F1} r={renderDelta,4} p={presentDelta,4} b={blackDelta,3} " +
-                    $"held={holdDelta,4} drop={dropDelta,3} pull={pullDelta,3}/{pullAttemptDelta,3} route={(samePassDelta + rawPassDelta),3}/{convDelta,3} (same/raw={samePassDelta,3}/{rawPassDelta,3}) sinkFmt={sinkFmtHitDelta,3}/{sinkFmtMissDelta,3} ex={exDelta,2}{speedMark}{dropMark}{exMark}");
+                    $"ex={exDelta,2}{speedMark}{exMark}");
                 Console.WriteLine($"         fmt=bgra:{bgraDelta,3} rgba:{rgbaDelta,3} nv12:{nv12Delta,3} y420:{y420Delta,3} y422p10:{y422P10Delta,3}");
                 Console.WriteLine($"         {endpointText}");
             }
 
-            prevMixer = ms;
             prevOutput = os;
             prevEndpoint = es;
         }
@@ -428,10 +413,11 @@ using (decoder)
     cts.Cancel();
     try { await statsTask; } catch (OperationCanceledException) { }
     await videoOutput.StopAsync();
-    if (ndiAudioAggregate != null)
+    if (ndiAudioOutput != null)
     {
-        await ndiAudioAggregate.StopAsync();
-        ndiAudioAggregate.Dispose();
+        await ndiAudioOutput.StopAsync();
+        ndiAudioMixer?.Dispose();
+        ndiAudioOutput.Dispose();
     }
     if (ndiSink != null)
     {

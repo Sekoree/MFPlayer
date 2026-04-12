@@ -23,8 +23,8 @@ public sealed class AudioOutputEndpointAdapter : IAudioBufferEndpoint
 
     /// <param name="output">The audio output that owns the hardware clock.</param>
     /// <param name="mixer">
-    /// The mixer to inject the internal channel into. Typically the mixer owned by
-    /// <paramref name="output"/> (e.g. <c>portAudioOutput.Mixer</c>).
+    /// The mixer to inject the internal channel into. Typically the audio mixer managed by
+    /// <see cref="Mixing.IAVMixer"/> and attached to <paramref name="output"/>.
     /// </param>
     public AudioOutputEndpointAdapter(
         IAudioOutput output,

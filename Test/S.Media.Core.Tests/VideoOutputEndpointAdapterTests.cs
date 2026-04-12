@@ -22,7 +22,7 @@ public sealed class VideoOutputEndpointAdapterTests
     private sealed class StubOutput : IVideoOutput
     {
         public VideoFormat OutputFormat { get; private set; }
-        public IVideoMixer Mixer { get; }
+        public IVideoMixer Mixer { get; private set; }
         public IMediaClock Clock { get; }
         public bool IsRunning { get; private set; }
 
@@ -35,6 +35,9 @@ public sealed class VideoOutputEndpointAdapterTests
 
         public void Open(string title, int width, int height, VideoFormat format)
             => OutputFormat = format;
+
+        public void OverridePresentationMixer(IVideoMixer mixer)
+            => Mixer = mixer;
 
         public Task StartAsync(CancellationToken ct = default)
         {

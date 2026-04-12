@@ -20,7 +20,7 @@ using S.Media.Core.Audio;
 /// sinks). Sinks that require a different sample rate should use an internal resampler.
 /// </para>
 /// </summary>
-public sealed class AudioMixer : IAudioMixer
+internal sealed class AudioMixer : IAudioMixer
 {
     private const int DefaultPreallocatedFrames = 1024;
 
@@ -60,6 +60,7 @@ public sealed class AudioMixer : IAudioMixer
 
         // Copy-on-write; volatile so RT path gets a consistent snapshot without locking.
         public volatile SinkRoute[] SinkRoutes = [];
+        public volatile SinkRoute?[] SinkRouteBySinkIndex = [];
 
         public ChannelSlot(IAudioChannel ch, IAudioResampler? rs,
                            (int dst, float gain)[][] leaderBaked, bool ownsRs)
@@ -75,7 +76,7 @@ public sealed class AudioMixer : IAudioMixer
 
     private volatile ChannelSlot[] _slots       = [];
     private volatile SinkTarget[]  _sinkTargets = [];
-    private readonly object        _editLock    = new();
+    private readonly Lock        _editLock    = new();
 
     private float[] _mixBuffer    = [];
     private float[] _peakLevels   = [];
@@ -185,21 +186,23 @@ public sealed class AudioMixer : IAudioMixer
         if (_framesPerBuffer > 0)
             AllocateSlotBuffers(slot, _framesPerBuffer);
 
-        // Broadcast: pre-create default sink routes for all already-registered sinks.
-        if (DefaultFallback == ChannelFallback.Broadcast)
-        {
-            var sinkTargets = _sinkTargets;
-            if (sinkTargets.Length > 0)
-            {
-                var initialRoutes = new SinkRoute[sinkTargets.Length];
-                for (int i = 0; i < sinkTargets.Length; i++)
-                    initialRoutes[i] = new SinkRoute(sinkTargets[i], baked);
-                slot.SinkRoutes = initialRoutes;
-            }
-        }
-
         lock (_editLock)
         {
+            // Broadcast: pre-create default sink routes for all already-registered sinks.
+            if (DefaultFallback == ChannelFallback.Broadcast)
+            {
+                var sinkTargets = _sinkTargets;
+                if (sinkTargets.Length > 0)
+                {
+                    var initialRoutes = new SinkRoute[sinkTargets.Length];
+                    for (int i = 0; i < sinkTargets.Length; i++)
+                        initialRoutes[i] = new SinkRoute(sinkTargets[i], baked);
+                    slot.SinkRoutes = initialRoutes;
+                }
+            }
+
+            slot.SinkRouteBySinkIndex = BuildSinkRouteIndex(slot.SinkRoutes, _sinkTargets);
+
             var old = _slots;
             var neo = new ChannelSlot[old.Length + 1];
             old.CopyTo(neo, 0);
@@ -245,6 +248,7 @@ public sealed class AudioMixer : IAudioMixer
 
             var baked = routeMap.BakeRoutes(slot.Channel.SourceFormat.Channels);
             SetSinkRouteOnSlot(slot, target, baked);
+            slot.SinkRouteBySinkIndex = BuildSinkRouteIndex(slot.SinkRoutes, _sinkTargets);
         }
     }
 
@@ -256,6 +260,7 @@ public sealed class AudioMixer : IAudioMixer
             var slot   = FindSlot(channelId);   if (slot   == null) return;
             var target = FindTarget(sink);       if (target == null) return;
             RemoveSinkRouteFromSlot(slot, target);
+            slot.SinkRouteBySinkIndex = BuildSinkRouteIndex(slot.SinkRoutes, _sinkTargets);
         }
     }
 
@@ -283,6 +288,9 @@ public sealed class AudioMixer : IAudioMixer
             old.CopyTo(neo, 0);
             neo[^1] = target;
             _sinkTargets = neo;
+
+            foreach (var slot in _slots)
+                slot.SinkRouteBySinkIndex = BuildSinkRouteIndex(slot.SinkRoutes, neo);
         }
     }
 
@@ -305,6 +313,9 @@ public sealed class AudioMixer : IAudioMixer
             for (int i = 0, j = 0; i < old.Length; i++)
                 if (i != idx) neo[j++] = old[i];
             _sinkTargets = neo;
+
+            foreach (var slot in _slots)
+                slot.SinkRouteBySinkIndex = BuildSinkRouteIndex(slot.SinkRoutes, neo);
         }
     }
 
@@ -378,7 +389,7 @@ public sealed class AudioMixer : IAudioMixer
             ScatterIntoMix(_mixBuffer, slot.ResampleBuf, frameCount, srcCh, outCh, slot.LeaderBakedRoutes);
 
             // 5. Scatter into each sink's mix buffer
-            var sinkRoutes = slot.SinkRoutes;
+            var sinkRoutesByIndex = slot.SinkRouteBySinkIndex;
             for (int si = 0; si < sinkTargets.Length; si++)
             {
                 var st     = sinkTargets[si];
@@ -387,9 +398,7 @@ public sealed class AudioMixer : IAudioMixer
                 if (st.MixBuffer.Length < sinkN)
                     continue;
 
-                SinkRoute? route = null;
-                for (int ri = 0; ri < sinkRoutes.Length; ri++)
-                    if (ReferenceEquals(sinkRoutes[ri].Target, st)) { route = sinkRoutes[ri]; break; }
+                SinkRoute? route = si < sinkRoutesByIndex.Length ? sinkRoutesByIndex[si] : null;
 
                 if (route != null)
                     ScatterIntoMix(st.MixBuffer, slot.ResampleBuf, frameCount, srcCh, sinkCh, route.BakedRoutes);
@@ -494,6 +503,23 @@ public sealed class AudioMixer : IAudioMixer
         for (int i = 0, j = 0; i < old.Length; i++)
             if (i != idx) neo[j++] = old[i];
         slot.SinkRoutes = neo;
+    }
+
+    private static SinkRoute?[] BuildSinkRouteIndex(SinkRoute[] routes, SinkTarget[] sinkTargets)
+    {
+        var byIndex = new SinkRoute?[sinkTargets.Length];
+        for (int si = 0; si < sinkTargets.Length; si++)
+        {
+            var target = sinkTargets[si];
+            for (int ri = 0; ri < routes.Length; ri++)
+            {
+                if (!ReferenceEquals(routes[ri].Target, target)) continue;
+                byIndex[si] = routes[ri];
+                break;
+            }
+        }
+
+        return byIndex;
     }
 
     private void EnsureWorkBuffers(int outSamples, int outCh)

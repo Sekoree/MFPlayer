@@ -11,6 +11,7 @@ using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
+using S.Media.Core.Mixing;
 using S.Media.NDI;
 using S.Media.PortAudio;
 
@@ -187,7 +188,10 @@ using (ndiRuntime)
         }
         Console.WriteLine("OK");
 
-        output.Mixer.AddChannel(audioChannel, routeMap);
+        using var avMixer = new AVMixer(output.HardwareFormat);
+        avMixer.AttachAudioOutput(output);
+
+        avMixer.AddAudioChannel(audioChannel, routeMap);
 
         // ── 9. Start ─────────────────────────────────────────────────────────
 

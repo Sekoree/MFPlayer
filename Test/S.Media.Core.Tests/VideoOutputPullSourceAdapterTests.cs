@@ -59,6 +59,7 @@ public sealed class VideoOutputPullSourceAdapterTests
         }
 
         public void Open(string title, int width, int height, VideoFormat format) { }
+        public void OverridePresentationMixer(IVideoMixer mixer) { }
         public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
         public void Dispose() { }

@@ -66,6 +66,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
     private readonly VideoFormat _videoTargetFormat;
     private readonly ConcurrentQueue<byte[]> _videoPool = new();
     private readonly ConcurrentQueue<PendingVideo> _videoPending = new();
+    private readonly SemaphoreSlim _videoPendingSignal = new(0);
     private readonly int _videoMaxPendingFrames;
     private int _videoPendingFrames;
     private readonly BasicPixelFormatConverter _videoConverter = new();
@@ -88,6 +89,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
     private readonly bool _ownsAudioResampler;
     private readonly ConcurrentQueue<float[]> _audioPool = new();
     private readonly ConcurrentQueue<PendingAudio> _audioPending = new();
+    private readonly SemaphoreSlim _audioPendingSignal = new(0);
     private int _audioPendingBuffers;
     private long _audioPoolMissDrops;
     private long _audioCapacityMissDrops;
@@ -259,6 +261,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         frame.Data.Span[..bytes].CopyTo(dst.AsSpan(0, bytes));
         _videoPending.Enqueue(new PendingVideo(dst, frame.Width, frame.Height, frame.Pts.Ticks, frame.PixelFormat, bytes));
         Interlocked.Increment(ref _videoPendingFrames);
+        _videoPendingSignal.Release();
     }
 
     public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
@@ -319,6 +322,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
 
         _audioPending.Enqueue(new PendingAudio(dest, writtenSamples, startTicks));
         Interlocked.Increment(ref _audioPendingBuffers);
+        _audioPendingSignal.Release();
     }
 
     public VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot()
@@ -346,6 +350,8 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         _cts?.Cancel();
         _videoThread?.Join(TimeSpan.FromSeconds(2));
         _audioThread?.Join(TimeSpan.FromSeconds(2));
+        _videoPendingSignal.Dispose();
+        _audioPendingSignal.Dispose();
         _videoConverter.Dispose();
         if (_ownsAudioResampler) _audioResampler?.Dispose();
     }
@@ -567,148 +573,152 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
 
         while (!token.IsCancellationRequested)
         {
-            if (!_videoPending.TryDequeue(out var pf))
-            {
-                Thread.Yield();
-                continue;
-            }
-
-            Interlocked.Decrement(ref _videoPendingFrames);
-
             try
             {
-                ReadOnlyMemory<byte> payload;
-                PixelFormat sendFormat;
-                IDisposable? tempOwner = null;
-                byte[]? scratchBuffer = null;
+                _videoPendingSignal.Wait(token);
+            }
+            catch (OperationCanceledException) { break; }
+
+            while (_videoPending.TryDequeue(out var pf))
+            {
+                Interlocked.Decrement(ref _videoPendingFrames);
 
                 try
                 {
-                    if (pf.PixelFormat == _videoTargetFormat.PixelFormat)
+                    ReadOnlyMemory<byte> payload;
+                    PixelFormat sendFormat;
+                    IDisposable? tempOwner = null;
+                    byte[]? scratchBuffer = null;
+
+                    try
                     {
-                        payload = pf.Buffer.AsMemory(0, pf.Bytes);
-                        sendFormat = pf.PixelFormat;
-                        Interlocked.Increment(ref _videoPassthroughFrames);
-                    }
-                    else if (pf.PixelFormat == PixelFormat.Yuv422p10 && _videoTargetFormat.PixelFormat == PixelFormat.Uyvy422)
-                    {
-                        if (!TryConvertI210ToUyvyInPlace(pf.Buffer, pf.Width, pf.Height, pf.Bytes, out int uyvyBytes))
+                        if (pf.PixelFormat == _videoTargetFormat.PixelFormat)
                         {
-                            Interlocked.Increment(ref _videoConversionDrops);
+                            payload = pf.Buffer.AsMemory(0, pf.Bytes);
+                            sendFormat = pf.PixelFormat;
+                            Interlocked.Increment(ref _videoPassthroughFrames);
+                        }
+                        else if (pf.PixelFormat == PixelFormat.Yuv422p10 && _videoTargetFormat.PixelFormat == PixelFormat.Uyvy422)
+                        {
+                            if (!TryConvertI210ToUyvyInPlace(pf.Buffer, pf.Width, pf.Height, pf.Bytes, out int uyvyBytes))
+                            {
+                                Interlocked.Increment(ref _videoConversionDrops);
+                                Interlocked.Increment(ref _videoFormatDrops);
+                                continue;
+                            }
+
+                            payload = pf.Buffer.AsMemory(0, uyvyBytes);
+                            sendFormat = PixelFormat.Uyvy422;
+                            Interlocked.Increment(ref _videoConvertedFrames);
+                        }
+                        else if (pf.PixelFormat == PixelFormat.Yuv422p10
+                                 && (_videoTargetFormat.PixelFormat == PixelFormat.Rgba32 || _videoTargetFormat.PixelFormat == PixelFormat.Bgra32))
+                        {
+                            int rgbaBytes = pf.Width * pf.Height * 4;
+                            bool converted = false;
+
+                            scratchBuffer = ArrayPool<byte>.Shared.Rent(rgbaBytes);
+
+                            if (EnsureFfmpegLoaded())
+                            {
+                                converted = TryConvertI210ToRgbaFfmpeg(
+                                    pf.Buffer.AsSpan(0, pf.Bytes),
+                                    scratchBuffer.AsSpan(0, rgbaBytes),
+                                    pf.Width,
+                                    pf.Height,
+                                    _videoTargetFormat.PixelFormat == PixelFormat.Rgba32,
+                                    ref ffmpegSws);
+                            }
+
+                            if (!converted)
+                            {
+                                converted = TryConvertI210ToRgbaManaged(
+                                    pf.Buffer.AsSpan(0, pf.Bytes),
+                                    scratchBuffer.AsSpan(0, rgbaBytes),
+                                    pf.Width,
+                                    pf.Height,
+                                    _videoTargetFormat.PixelFormat == PixelFormat.Rgba32);
+                            }
+
+                            if (!converted)
+                            {
+                                Interlocked.Increment(ref _videoConversionDrops);
+                                Interlocked.Increment(ref _videoFormatDrops);
+                                continue;
+                            }
+
+                            payload = scratchBuffer.AsMemory(0, rgbaBytes);
+                            sendFormat = _videoTargetFormat.PixelFormat;
+                            Interlocked.Increment(ref _videoConvertedFrames);
+                        }
+                        else
+                        {
+                            var srcFrame = new VideoFrame(
+                                pf.Width,
+                                pf.Height,
+                                pf.PixelFormat,
+                                pf.Buffer.AsMemory(0, pf.Bytes),
+                                TimeSpan.FromTicks(pf.PtsTicks));
+
+                            var converted = _videoConverter.Convert(srcFrame, _videoTargetFormat.PixelFormat);
+                            payload = converted.Data;
+                            sendFormat = converted.PixelFormat;
+                            tempOwner = converted.MemoryOwner;
+                            Interlocked.Increment(ref _videoConvertedFrames);
+                        }
+
+                        if (!MemoryMarshal.TryGetArray(payload, out var seg) || seg.Array == null)
+                        {
                             Interlocked.Increment(ref _videoFormatDrops);
                             continue;
                         }
 
-                        payload = pf.Buffer.AsMemory(0, uyvyBytes);
-                        sendFormat = PixelFormat.Uyvy422;
-                        Interlocked.Increment(ref _videoConvertedFrames);
-                    }
-                    else if (pf.PixelFormat == PixelFormat.Yuv422p10
-                             && (_videoTargetFormat.PixelFormat == PixelFormat.Rgba32 || _videoTargetFormat.PixelFormat == PixelFormat.Bgra32))
-                    {
-                        int rgbaBytes = pf.Width * pf.Height * 4;
-                        bool converted = false;
-
-                        scratchBuffer = ArrayPool<byte>.Shared.Rent(rgbaBytes);
-
-                        if (EnsureFfmpegLoaded())
+                        fixed (byte* p = &seg.Array[seg.Offset])
                         {
-                            converted = TryConvertI210ToRgbaFfmpeg(
-                                pf.Buffer.AsSpan(0, pf.Bytes),
-                                scratchBuffer.AsSpan(0, rgbaBytes),
-                                pf.Width,
-                                pf.Height,
-                                _videoTargetFormat.PixelFormat == PixelFormat.Rgba32,
-                                ref ffmpegSws);
-                        }
+                            _timing.ObserveVideoPts(pf.PtsTicks);
 
-                        if (!converted)
-                        {
-                            converted = TryConvertI210ToRgbaManaged(
-                                pf.Buffer.AsSpan(0, pf.Bytes),
-                                scratchBuffer.AsSpan(0, rgbaBytes),
-                                pf.Width,
-                                pf.Height,
-                                _videoTargetFormat.PixelFormat == PixelFormat.Rgba32);
-                        }
+                            var vf = new NDIVideoFrameV2
+                            {
+                                Xres = pf.Width,
+                                Yres = pf.Height,
+                                FourCC = ToFourCc(sendFormat),
+                                FrameRateN = fpsNum,
+                                FrameRateD = fpsDen,
+                                PictureAspectRatio = pf.Height > 0 ? (float)pf.Width / pf.Height : 1f,
+                                FrameFormatType = NDIFrameFormatType.Progressive,
+                                Timecode = pf.PtsTicks,
+                                PData = (nint)p,
+                                LineStrideInBytes = VideoLineStride(sendFormat, pf.Width),
+                                PMetadata = nint.Zero,
+                                Timestamp = pf.PtsTicks
+                            };
 
-                        if (!converted)
-                        {
-                            Interlocked.Increment(ref _videoConversionDrops);
-                            Interlocked.Increment(ref _videoFormatDrops);
-                            continue;
+                            lock (_sendLock)
+                                _sender.SendVideo(vf);
                         }
-
-                        payload = scratchBuffer.AsMemory(0, rgbaBytes);
-                        sendFormat = _videoTargetFormat.PixelFormat;
-                        Interlocked.Increment(ref _videoConvertedFrames);
                     }
-                    else
+                    catch (NotSupportedException)
                     {
-                        var srcFrame = new VideoFrame(
-                            pf.Width,
-                            pf.Height,
-                            pf.PixelFormat,
-                            pf.Buffer.AsMemory(0, pf.Bytes),
-                            TimeSpan.FromTicks(pf.PtsTicks));
-
-                        var converted = _videoConverter.Convert(srcFrame, _videoTargetFormat.PixelFormat);
-                        payload = converted.Data;
-                        sendFormat = converted.PixelFormat;
-                        tempOwner = converted.MemoryOwner;
-                        Interlocked.Increment(ref _videoConvertedFrames);
-                    }
-
-                    if (!MemoryMarshal.TryGetArray(payload, out var seg) || seg.Array == null)
-                    {
+                        Interlocked.Increment(ref _videoConversionDrops);
                         Interlocked.Increment(ref _videoFormatDrops);
-                        continue;
                     }
-
-                    fixed (byte* p = &seg.Array[seg.Offset])
+                    finally
                     {
-                        _timing.ObserveVideoPts(pf.PtsTicks);
-
-                        var vf = new NDIVideoFrameV2
-                        {
-                            Xres = pf.Width,
-                            Yres = pf.Height,
-                            FourCC = ToFourCc(sendFormat),
-                            FrameRateN = fpsNum,
-                            FrameRateD = fpsDen,
-                            PictureAspectRatio = pf.Height > 0 ? (float)pf.Width / pf.Height : 1f,
-                            FrameFormatType = NDIFrameFormatType.Progressive,
-                            Timecode = pf.PtsTicks,
-                            PData = (nint)p,
-                            LineStrideInBytes = VideoLineStride(sendFormat, pf.Width),
-                            PMetadata = nint.Zero,
-                            Timestamp = pf.PtsTicks
-                        };
-
-                        lock (_sendLock)
-                            _sender.SendVideo(vf);
+                        tempOwner?.Dispose();
+                        if (scratchBuffer != null)
+                            ArrayPool<byte>.Shared.Return(scratchBuffer);
                     }
                 }
-                catch (NotSupportedException)
+
+                catch (Exception ex)
                 {
-                    Interlocked.Increment(ref _videoConversionDrops);
-                    Interlocked.Increment(ref _videoFormatDrops);
+                    if (ex is not OperationCanceledException)
+                        Console.Error.WriteLine($"[{Name}] NDI video send exception: {ex.Message}");
                 }
                 finally
                 {
-                    tempOwner?.Dispose();
-                    if (scratchBuffer != null)
-                        ArrayPool<byte>.Shared.Return(scratchBuffer);
+                    _videoPool.Enqueue(pf.Buffer);
                 }
-            }
-            catch (Exception ex)
-            {
-                if (ex is not OperationCanceledException)
-                    Console.Error.WriteLine($"[{Name}] NDI video send exception: {ex.Message}");
-            }
-            finally
-            {
-                _videoPool.Enqueue(pf.Buffer);
             }
         }
 
@@ -724,43 +734,46 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
 
         while (!token.IsCancellationRequested)
         {
-            if (!_audioPending.TryDequeue(out var pending))
+            try
             {
-                Thread.Yield();
-                continue;
+                _audioPendingSignal.Wait(token);
             }
+            catch (OperationCanceledException) { break; }
 
-            Interlocked.Decrement(ref _audioPendingBuffers);
-
-            var interleaved = pending.Buffer;
-            int sampleValues = pending.Samples;
-            int samplesPerChannel = sampleValues / channels;
-            int planarNeed = channels * samplesPerChannel;
-            if (planar.Length < planarNeed)
-                planar = new float[planarNeed];
-
-            for (int c = 0; c < channels; c++)
-                for (int s = 0; s < samplesPerChannel; s++)
-                    planar[c * samplesPerChannel + s] = interleaved[s * channels + c];
-
-            _audioPool.Enqueue(interleaved);
-
-            fixed (float* pData = planar)
+            while (_audioPending.TryDequeue(out var pending))
             {
-                var frame = new NDIAudioFrameV3
-                {
-                    SampleRate = _audioTargetFormat.SampleRate,
-                    NoChannels = channels,
-                    NoSamples = samplesPerChannel,
-                    FourCC = NDIFourCCAudioType.Fltp,
-                    PData = (nint)pData,
-                    ChannelStrideInBytes = samplesPerChannel * sizeof(float),
-                    Timecode = pending.TimecodeTicks,
-                    Timestamp = pending.TimecodeTicks
-                };
+                Interlocked.Decrement(ref _audioPendingBuffers);
 
-                lock (_sendLock)
-                    _sender.SendAudio(frame);
+                var interleaved = pending.Buffer;
+                int sampleValues = pending.Samples;
+                int samplesPerChannel = sampleValues / channels;
+                int planarNeed = channels * samplesPerChannel;
+                if (planar.Length < planarNeed)
+                    planar = new float[planarNeed];
+
+                for (int c = 0; c < channels; c++)
+                    for (int s = 0; s < samplesPerChannel; s++)
+                        planar[c * samplesPerChannel + s] = interleaved[s * channels + c];
+
+                _audioPool.Enqueue(interleaved);
+
+                fixed (float* pData = planar)
+                {
+                    var frame = new NDIAudioFrameV3
+                    {
+                        SampleRate = _audioTargetFormat.SampleRate,
+                        NoChannels = channels,
+                        NoSamples = samplesPerChannel,
+                        FourCC = NDIFourCCAudioType.Fltp,
+                        PData = (nint)pData,
+                        ChannelStrideInBytes = samplesPerChannel * sizeof(float),
+                        Timecode = pending.TimecodeTicks,
+                        Timestamp = pending.TimecodeTicks
+                    };
+
+                    lock (_sendLock)
+                        _sender.SendAudio(frame);
+                }
             }
         }
     }

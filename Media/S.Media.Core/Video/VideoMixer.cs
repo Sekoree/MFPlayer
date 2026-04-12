@@ -8,7 +8,7 @@ namespace S.Media.Core.Video;
 /// Single-channel presentation in v1 (no compositing / layering).
 /// Backend-agnostic — usable with SDL3, Avalonia, NDI, or any other output.
 /// </summary>
-public sealed class VideoMixer : IVideoMixer
+internal sealed class VideoMixer : IVideoMixer
 {
     public readonly record struct DiagnosticsSnapshot(
         long PresentCalls,

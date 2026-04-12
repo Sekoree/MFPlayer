@@ -15,7 +15,7 @@ public sealed class AggregateOutputTests
 {
     // ── Fakes ─────────────────────────────────────────────────────────────
 
-    private static AudioFormat Mono48k => new(48000, 1);
+    private static AudioFormat Mono48K => new(48000, 1);
 
     private sealed class FakeLeaderOutput : IAudioOutput
     {
@@ -46,12 +46,25 @@ public sealed class AggregateOutputTests
     {
         public string Name       => "Spy";
         public bool   IsRunning  { get; private set; }
+        public int StartCalls { get; private set; }
+        public int StopCalls { get; private set; }
 
         public readonly List<(int frameCount, AudioFormat format)> Calls = new();
         public float[]? LastBuffer;
 
-        public Task StartAsync(CancellationToken ct = default) { IsRunning = true; return Task.CompletedTask; }
-        public Task StopAsync(CancellationToken ct = default)  { IsRunning = false; return Task.CompletedTask; }
+        public Task StartAsync(CancellationToken ct = default)
+        {
+            StartCalls++;
+            IsRunning = true;
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken ct = default)
+        {
+            StopCalls++;
+            IsRunning = false;
+            return Task.CompletedTask;
+        }
 
         public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
         {
@@ -62,11 +75,11 @@ public sealed class AggregateOutputTests
         public void Dispose() { }
     }
 
-    private static (AggregateOutput agg, FakeLeaderOutput leader) MakeAggregate()
+    private static AggregateOutput MakeAggregate()
     {
-        var leader = new FakeLeaderOutput(Mono48k);
-        var agg    = new AggregateOutput(leader);
-        return (agg, leader);
+        var leader = new FakeLeaderOutput(Mono48K);
+        _ = leader.Mixer;
+        return new AggregateOutput(leader);
     }
 
     // ── AddSink / Sinks count ──────────────────────────────────────────────
@@ -74,7 +87,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public void AddSink_AppearsinSinks()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var sink = new SpySink();
@@ -88,7 +101,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public void AddSink_Multiple_AllAppear()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var s1 = new SpySink();
@@ -100,12 +113,32 @@ public sealed class AggregateOutputTests
         }
     }
 
+    [Fact]
+    public async Task AddSink_Duplicate_Ignored()
+    {
+        var agg = MakeAggregate();
+        using (agg)
+        {
+            var sink = new SpySink();
+            agg.AddSink(sink);
+            agg.AddSink(sink);
+
+            Assert.Single(agg.Sinks);
+
+            await agg.StartAsync();
+            await agg.StopAsync();
+
+            Assert.Equal(1, sink.StartCalls);
+            Assert.Equal(1, sink.StopCalls);
+        }
+    }
+
     // ── RemoveSink ────────────────────────────────────────────────────────
 
     [Fact]
     public void RemoveSink_RemovesSinkFromList()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var sink = new SpySink();
@@ -119,7 +152,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public void RemoveSink_NonExistent_DoesNotThrow()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             agg.RemoveSink(new SpySink()); // no-op
@@ -129,7 +162,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public void RemoveSink_RemovesCorrectSink_WhenMultiplePresent()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var s1 = new SpySink();
@@ -149,7 +182,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task FillOutputBuffer_DistributesToRunningSink()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var spy = new SpySink();
@@ -158,25 +191,25 @@ public sealed class AggregateOutputTests
 
             // Fill via the aggregate mixer
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             Assert.Single(spy.Calls);
             Assert.Equal(4, spy.Calls[0].frameCount);
-            Assert.Equal(Mono48k, spy.Calls[0].format);
+            Assert.Equal(Mono48K, spy.Calls[0].format);
         }
     }
 
     [Fact]
     public void FillOutputBuffer_DoesNotDistributeToStoppedSink()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var spy = new SpySink(); // IsRunning = false (not started)
             agg.AddSink(spy);
 
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             Assert.Empty(spy.Calls);
         }
@@ -185,7 +218,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task FillOutputBuffer_DistributesToAllRunningSinks()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var s1 = new SpySink();
@@ -196,7 +229,7 @@ public sealed class AggregateOutputTests
             await s2.StartAsync();
 
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             Assert.Single(s1.Calls);
             Assert.Single(s2.Calls);
@@ -206,11 +239,11 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task FillOutputBuffer_SinkReceivesCorrectBuffer()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             // Add a constant-value channel so the mix buffer is non-zero.
-            var ch = new ConstantSourceChannel(Mono48k, 0.75f);
+            var ch = new ConstantSourceChannel(Mono48K, 0.75f);
             agg.Mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
 
             var spy = new SpySink();
@@ -221,7 +254,7 @@ public sealed class AggregateOutputTests
             agg.Mixer.RouteTo(ch.Id, spy, ChannelRouteMap.Identity(1));
 
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             Assert.NotNull(spy.LastBuffer);
             Assert.All(spy.LastBuffer!, s => Assert.Equal(0.75f, s, precision: 5));
@@ -233,7 +266,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task RemoveSink_AtRuntime_NoLongerReceivesBuffers()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             var spy = new SpySink();
@@ -241,10 +274,10 @@ public sealed class AggregateOutputTests
             await spy.StartAsync();
 
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k); // call 1
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K); // call 1
 
             agg.RemoveSink(spy);
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k); // call 2 — spy should not receive
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K); // call 2 — spy should not receive
 
             Assert.Single(spy.Calls); // only the first call
         }
@@ -255,11 +288,11 @@ public sealed class AggregateOutputTests
     [Fact]
     public void Mixer_ChannelCount_DelegatestoInner()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             Assert.Equal(0, agg.Mixer.ChannelCount);
-            var ch = new ConstantSourceChannel(Mono48k);
+            var ch = new ConstantSourceChannel(Mono48K);
             agg.Mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
             Assert.Equal(1, agg.Mixer.ChannelCount);
         }
@@ -268,10 +301,10 @@ public sealed class AggregateOutputTests
     [Fact]
     public void HardwareFormat_DelegatestoLeader()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
-            Assert.Equal(Mono48k, agg.HardwareFormat);
+            Assert.Equal(Mono48K, agg.HardwareFormat);
         }
     }
 
@@ -280,10 +313,10 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task Silent_SinkReceivesZeroBuffer_WhenNoRouteConfigured()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
-            var ch = new ConstantSourceChannel(Mono48k, 1.0f);
+            var ch = new ConstantSourceChannel(Mono48K);
             agg.Mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
 
             var spy = new SpySink();
@@ -292,7 +325,7 @@ public sealed class AggregateOutputTests
 
             // No RouteTo call — spy gets a silent buffer.
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             Assert.Single(spy.Calls); // still called
             Assert.All(spy.LastBuffer!, s => Assert.Equal(0f, s, precision: 5)); // but silent
@@ -304,10 +337,10 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task RouteTo_SinkReceivesChannelData()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
-            var ch = new ConstantSourceChannel(Mono48k, 0.5f);
+            var ch = new ConstantSourceChannel(Mono48K, 0.5f);
             agg.Mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
 
             var spy = new SpySink();
@@ -316,7 +349,7 @@ public sealed class AggregateOutputTests
             await spy.StartAsync();
 
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             Assert.All(spy.LastBuffer!, s => Assert.Equal(0.5f, s, precision: 5));
         }
@@ -325,10 +358,10 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task UnrouteTo_SinkReceivesSilenceAfterRemoval()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
-            var ch = new ConstantSourceChannel(Mono48k, 1.0f);
+            var ch = new ConstantSourceChannel(Mono48K);
             agg.Mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
 
             var spy = new SpySink();
@@ -339,12 +372,12 @@ public sealed class AggregateOutputTests
             float[] dest = new float[4];
 
             // First fill — routed: spy should see 1.0 f samples.
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
             Assert.All(spy.LastBuffer!, s => Assert.Equal(1.0f, s, precision: 5));
 
             // Remove route — spy should see zeros.
             agg.Mixer.UnrouteTo(ch.Id, spy);
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
             Assert.All(spy.LastBuffer!, s => Assert.Equal(0f, s, precision: 5));
         }
     }
@@ -352,10 +385,10 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task RouteTo_TwoSinks_IndependentMixes()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
-            var ch = new ConstantSourceChannel(Mono48k, 0.8f);
+            var ch = new ConstantSourceChannel(Mono48K, 0.8f);
             agg.Mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
 
             var spy1 = new SpySink();
@@ -369,7 +402,7 @@ public sealed class AggregateOutputTests
             await spy2.StartAsync();
 
             float[] dest = new float[4];
-            agg.Mixer.FillOutputBuffer(dest, 4, Mono48k);
+            agg.Mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             // spy1 gets channel data; spy2 gets silence (no route, Silent fallback)
             Assert.All(spy1.LastBuffer!, s => Assert.Equal(0.8f, s, precision: 5));
@@ -382,14 +415,14 @@ public sealed class AggregateOutputTests
     [Fact]
     public async Task Broadcast_SinkReceivesLeaderMix_WithoutExplicitRoute()
     {
-        var leader = new FakeLeaderOutput(Mono48k);
+        var leader = new FakeLeaderOutput(Mono48K);
         var agg    = new AggregateOutput(leader); // default = Silent on inner mixer...
 
         // But we test AudioMixer directly here with Broadcast.
-        using var mixer = new AudioMixer(Mono48k, ChannelFallback.Broadcast);
+        using var mixer = new AudioMixer(Mono48K, ChannelFallback.Broadcast);
         using (agg)
         {
-            var ch = new ConstantSourceChannel(Mono48k, 0.6f);
+            var ch = new ConstantSourceChannel(Mono48K, 0.6f);
             mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
 
             var spy = new SpySink();
@@ -397,7 +430,7 @@ public sealed class AggregateOutputTests
             await spy.StartAsync();
 
             float[] dest = new float[4];
-            mixer.FillOutputBuffer(dest, 4, Mono48k);
+            mixer.FillOutputBuffer(dest, 4, Mono48K);
 
             // No explicit RouteTo needed — Broadcast copies leader route to sinks.
             Assert.All(spy.LastBuffer!, s => Assert.Equal(0.6f, s, precision: 5));
@@ -409,10 +442,10 @@ public sealed class AggregateOutputTests
     [Fact]
     public void RouteTo_UnregisteredSink_Throws()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
-            var ch = new ConstantSourceChannel(Mono48k);
+            var ch = new ConstantSourceChannel(Mono48K);
             agg.Mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
 
             var unregisteredSink = new SpySink();
@@ -426,7 +459,7 @@ public sealed class AggregateOutputTests
     [Fact]
     public void AudioMixer_DefaultFallback_IsSilentByDefault()
     {
-        var (agg, _) = MakeAggregate();
+        var agg = MakeAggregate();
         using (agg)
         {
             Assert.Equal(ChannelFallback.Silent, agg.Mixer.DefaultFallback);

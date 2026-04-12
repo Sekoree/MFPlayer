@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
@@ -11,6 +12,18 @@ namespace S.Media.FFmpeg;
 /// </summary>
 public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 {
+    private readonly struct AudioChunk
+    {
+        public readonly float[] Buffer;
+        public readonly int Samples;
+
+        public AudioChunk(float[] buffer, int samples)
+        {
+            Buffer = buffer;
+            Samples = samples;
+        }
+    }
+
     // ── Decode pipeline ───────────────────────────────────────────────────
     private readonly AVStream*                 _stream;
     private readonly int                       _streamIndex;
@@ -27,11 +40,13 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     private CancellationTokenSource  _cts = new();
 
     // ── Sample ring buffer ────────────────────────────────────────────────
-    private readonly ChannelReader<float[]> _ringReader;
-    private readonly ChannelWriter<float[]> _ringWriter;
+    private readonly ChannelReader<AudioChunk> _ringReader;
+    private readonly ChannelWriter<AudioChunk> _ringWriter;
+    private readonly ConcurrentQueue<float[]> _chunkPool = new();
 
     private float[]? _currentChunk;
     private int      _currentOffset;
+    private int      _currentChunkSamples;
     private long     _framesConsumed;
     private long     _framesInRing;   // frame-accurate ring occupancy (not chunk count)
 
@@ -69,7 +84,7 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
         // Seed from codecpar; OpenCodec() will refine from the opened codec context.
         SourceFormat = new AudioFormat(cp->sample_rate, cp->ch_layout.nb_channels);
 
-        var ring = Channel.CreateBounded<float[]>(
+        var ring = Channel.CreateBounded<AudioChunk>(
             new BoundedChannelOptions(bufferDepth)
             {
                 FullMode     = BoundedChannelFullMode.Wait,
@@ -148,9 +163,12 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     internal void ApplySeekEpoch(long seekPositionTicks)
     {
         ffmpeg.avcodec_flush_buffers(_codecCtx);
+        ReturnCurrentChunkToPool();
         _currentChunk  = null;
         _currentOffset = 0;
-        while (_ringReader.TryRead(out _)) { }
+        _currentChunkSamples = 0;
+        while (_ringReader.TryRead(out var chunk))
+            ReturnChunkToPool(chunk.Buffer);
         Interlocked.Exchange(ref _framesInRing, 0);
     }
 
@@ -188,24 +206,29 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
             if (converted == null)
                 continue;
 
-            var w = _ringWriter.WriteAsync(converted, token);
+            var w = _ringWriter.WriteAsync(converted.Value, token);
             if (!w.IsCompletedSuccessfully)
             {
                 try { w.AsTask().GetAwaiter().GetResult(); }
-                catch (OperationCanceledException) { return false; }
+                catch (OperationCanceledException)
+                {
+                    ReturnChunkToPool(converted.Value.Buffer);
+                    return false;
+                }
             }
 
-            Interlocked.Add(ref _framesInRing, converted.Length / SourceFormat.Channels);
+            Interlocked.Add(ref _framesInRing, converted.Value.Samples / SourceFormat.Channels);
         }
 
         return true;
     }
 
-    private float[]? ConvertFrame()
+    private AudioChunk? ConvertFrame()
     {
         int samples   = _frame->nb_samples;
         int channels  = _frame->ch_layout.nb_channels;
-        var outBuf    = new float[samples * channels];
+        int maxSamples = samples * channels;
+        var outBuf = RentChunkBuffer(maxSamples);
 
         fixed (float* pOut = outBuf)
         {
@@ -215,15 +238,15 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
             for (uint i = 0; i < 8; i++) inData[i] = _frame->data[i];
 
             int written = ffmpeg.swr_convert(_swr, &outPtr, samples, inData, samples);
-            if (written <= 0) return null;
-            if (written < samples)
+            if (written <= 0)
             {
-                var trimmed = new float[written * channels];
-                Array.Copy(outBuf, trimmed, trimmed.Length);
-                return trimmed;
+                ReturnChunkToPool(outBuf);
+                return null;
             }
+
+            int writtenSamples = written * channels;
+            return new AudioChunk(outBuf, writtenSamples);
         }
-        return outBuf;
     }
 
     // ── IAudioChannel pull (RT thread) ────────────────────────────────────
@@ -236,9 +259,10 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
         while (filled < totalSamples)
         {
-            if (_currentChunk == null || _currentOffset >= _currentChunk.Length)
+            if (_currentChunk == null || _currentOffset >= _currentChunkSamples)
             {
-                if (!_ringReader.TryRead(out _currentChunk))
+                ReturnCurrentChunkToPool();
+                if (!_ringReader.TryRead(out var chunk))
                 {
                     dest[filled..].Clear();
                     int consumed = filled / channels;
@@ -254,10 +278,12 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
                                 new BufferUnderrunEventArgs(Position, dropped)));
                     return consumed;
                 }
+                _currentChunkSamples = chunk.Samples;
+                _currentChunk = chunk.Buffer;
                 _currentOffset = 0;
             }
 
-            int available = _currentChunk.Length - _currentOffset;
+            int available = _currentChunkSamples - _currentOffset;
             int needed    = totalSamples - filled;
             int toCopy    = Math.Min(available, needed);
 
@@ -289,9 +315,12 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     public void Seek(TimeSpan position)
     {
+        ReturnCurrentChunkToPool();
         _currentChunk  = null;
         _currentOffset = 0;
-        while (_ringReader.TryRead(out _)) { }
+        _currentChunkSamples = 0;
+        while (_ringReader.TryRead(out var chunk))
+            ReturnChunkToPool(chunk.Buffer);
         Interlocked.Exchange(ref _framesInRing, 0);
         Interlocked.Exchange(ref _framesConsumed,
             (long)(position.TotalSeconds * SourceFormat.SampleRate));
@@ -314,6 +343,9 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
             }
         }
         CompleteDecodeLoop();
+        ReturnCurrentChunkToPool();
+        while (_ringReader.TryRead(out var chunk))
+            ReturnChunkToPool(chunk.Buffer);
 
         if (_frame != null)    fixed (AVFrame**   pp = &_frame)    ffmpeg.av_frame_free(pp);
         if (_pkt != null)      fixed (AVPacket**  pp = &_pkt)      ffmpeg.av_packet_free(pp);
@@ -322,5 +354,31 @@ public sealed unsafe class FFmpegAudioChannel : IAudioChannel
     }
 
     internal void CompleteDecodeLoop() => _ringWriter.TryComplete();
+
+    private float[] RentChunkBuffer(int minSamples)
+    {
+        while (_chunkPool.TryDequeue(out var candidate))
+            if (candidate.Length >= minSamples)
+                return candidate;
+
+        return new float[minSamples];
+    }
+
+    private void ReturnCurrentChunkToPool()
+    {
+        if (_currentChunk != null)
+            ReturnChunkToPool(_currentChunk);
+    }
+
+    private void ReturnChunkToPool(float[] buffer)
+    {
+        _chunkPool.Enqueue(buffer);
+        if (ReferenceEquals(_currentChunk, buffer))
+        {
+            _currentChunk = null;
+            _currentOffset = 0;
+            _currentChunkSamples = 0;
+        }
+    }
 }
 

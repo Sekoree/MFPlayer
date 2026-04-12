@@ -34,6 +34,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private nint         _glContext;
     private GLRenderer?  _renderer;
     private VideoMixer?  _mixer;
+    private volatile IVideoMixer? _activeMixer;
     private VideoPtsClock? _clock;
     private VideoFormat  _outputFormat;
 
@@ -65,6 +66,9 @@ public sealed class SDL3VideoOutput : IVideoOutput
     // call should invoke SDL.Quit.
     private static int _sdlRefCount;
     private bool _sdlInitOwned;
+
+    private readonly Lock _cloneLock = new();
+    private SDL3VideoCloneSink[] _clones = [];
 
     // ── YUV shader config ─────────────────────────────────────────────────
 
@@ -125,10 +129,9 @@ public sealed class SDL3VideoOutput : IVideoOutput
     public VideoFormat OutputFormat => _outputFormat;
 
     /// <inheritdoc/>
-    public IVideoMixer Mixer => _mixer ?? throw new InvalidOperationException("Call Open() first.");
-
-    /// <inheritdoc/>
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
+    public void OverridePresentationMixer(IVideoMixer mixer) => _activeMixer = mixer;
+
 
     /// <inheritdoc/>
     public bool IsRunning => _isRunning;
@@ -150,15 +153,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
             throw new InvalidOperationException("Output is already open. Dispose first.");
 
         // ── SDL init (ref-counted across instances) ───────────────────────
-        if (Interlocked.Increment(ref _sdlRefCount) == 1)
-        {
-            if (!SDL.Init(SDL.InitFlags.Video))
-            {
-                Interlocked.Decrement(ref _sdlRefCount);
-                var err = SDL.GetError();
-                throw new InvalidOperationException($"SDL_Init failed: {err}");
-            }
-        }
+        AcquireSdlVideo();
         _sdlInitOwned = true;
 
         // ── GL attributes (must be set before window creation) ────────────
@@ -212,6 +207,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
             fallback: PixelFormat.Bgra32);
         _outputFormat = format with { PixelFormat = leaderPixelFormat };
         _mixer = new VideoMixer(_outputFormat);
+        _activeMixer = _mixer;
 
 
         _clock = new VideoPtsClock(
@@ -308,7 +304,11 @@ public sealed class SDL3VideoOutput : IVideoOutput
                 if (_closeRequested) break;
 
                 // ── Present frame ─────────────────────────────────────────
-                var frame = _mixer!.PresentNextFrame(_clock!.Position);
+                var mixer = _activeMixer ?? _mixer;
+                if (mixer == null)
+                    throw new InvalidOperationException("Presentation mixer is not available.");
+
+                var frame = mixer.PresentNextFrame(_clock!.Position);
 
                 if (frame.HasValue)
                 {
@@ -399,13 +399,20 @@ public sealed class SDL3VideoOutput : IVideoOutput
             _window = nint.Zero;
         }
 
+        lock (_cloneLock)
+        {
+            for (int i = 0; i < _clones.Length; i++)
+                _clones[i].Dispose();
+            _clones = [];
+        }
+
         _mixer?.Dispose();
         _clock?.Dispose();
         _cts?.Dispose();
 
         // Release SDL only when the last instance has been disposed.
-        if (_sdlInitOwned && Interlocked.Decrement(ref _sdlRefCount) == 0)
-            SDL.Quit();
+        if (_sdlInitOwned)
+            ReleaseSdlVideo();
     }
 
     private static YuvColorRange NormalizeColorRange(YuvColorRange value)
@@ -420,6 +427,48 @@ public sealed class SDL3VideoOutput : IVideoOutput
         return value is YuvColorMatrix.Auto or YuvColorMatrix.Bt601 or YuvColorMatrix.Bt709
             ? value
             : YuvColorMatrix.Auto;
+    }
+
+    public SDL3VideoCloneSink CreateCloneSink(string? title = null, int? width = null, int? height = null)
+    {
+        if (_window == nint.Zero)
+            throw new InvalidOperationException("Call Open() before creating clone sinks.");
+
+        var clone = new SDL3VideoCloneSink(
+            _outputFormat,
+            title: title,
+            width: width ?? Math.Max(1, _outputFormat.Width),
+            height: height ?? Math.Max(1, _outputFormat.Height));
+
+        lock (_cloneLock)
+        {
+            var old = _clones;
+            var neo = new SDL3VideoCloneSink[old.Length + 1];
+            old.CopyTo(neo, 0);
+            neo[^1] = clone;
+            _clones = neo;
+        }
+
+        return clone;
+    }
+
+    internal static void AcquireSdlVideo()
+    {
+        if (Interlocked.Increment(ref _sdlRefCount) != 1)
+            return;
+
+        if (SDL.Init(SDL.InitFlags.Video))
+            return;
+
+        Interlocked.Decrement(ref _sdlRefCount);
+        var err = SDL.GetError();
+        throw new InvalidOperationException($"SDL_Init failed: {err}");
+    }
+
+    internal static void ReleaseSdlVideo()
+    {
+        if (Interlocked.Decrement(ref _sdlRefCount) == 0)
+            SDL.Quit();
     }
 }
 
