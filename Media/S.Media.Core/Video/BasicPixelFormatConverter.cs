@@ -40,6 +40,16 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
 
     public VideoFrame Convert(VideoFrame source, PixelFormat dstFormat)
     {
+        return ConvertWithHints(source, dstFormat);
+    }
+
+    /// <summary>
+    /// Converts pixel data with optional YUV colour-space hints.
+    /// </summary>
+    public VideoFrame ConvertWithHints(VideoFrame source, PixelFormat dstFormat,
+        YuvColorRange colorRange = YuvColorRange.Auto,
+        YuvColorMatrix colorMatrix = YuvColorMatrix.Auto)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (source.PixelFormat == dstFormat)
@@ -94,7 +104,8 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
             }
 
             bool managedConverted = source.PixelFormat == PixelFormat.Yuv422p10
-                && TryConvertI210Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
+                && TryConvertI210Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba,
+                    colorRange, colorMatrix);
 
             if (managedConverted)
             {
@@ -111,11 +122,72 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         // This keeps timing/pacing behavior deterministic until full converters are added.
         if (dstFormat == PixelFormat.Rgba32 || dstFormat == PixelFormat.Bgra32)
         {
-            int bytes = source.Width * source.Height * 4;
-            var rented = ArrayPool<byte>.Shared.Rent(bytes);
-            var owner = new ArrayPoolOwner<byte>(rented);
-            rented.AsSpan(0, bytes).Clear();
-            return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            bool dstRgba = dstFormat == PixelFormat.Rgba32;
+
+            // ── Rgb24 / Bgr24 → RGBA/BGRA ─────────────────────────────────────
+            if (source.PixelFormat == PixelFormat.Rgb24 || source.PixelFormat == PixelFormat.Bgr24)
+            {
+                int bytes = source.Width * source.Height * 4;
+                var rented = ArrayPool<byte>.Shared.Rent(bytes);
+                var owner = new ArrayPoolOwner<byte>(rented);
+                Interlocked.Increment(ref _managedFallbacks);
+                bool srcRgb = source.PixelFormat == PixelFormat.Rgb24;
+                ExpandPacked24To32(source.Data.Span, rented.AsSpan(0, bytes), source.Width * source.Height, srcRgb, dstRgba);
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            }
+
+            // ── Gray8 → RGBA/BGRA ─────────────────────────────────────────────
+            if (source.PixelFormat == PixelFormat.Gray8)
+            {
+                int bytes = source.Width * source.Height * 4;
+                var rented = ArrayPool<byte>.Shared.Rent(bytes);
+                var owner = new ArrayPoolOwner<byte>(rented);
+                Interlocked.Increment(ref _managedFallbacks);
+                ExpandGray8ToRgba(source.Data.Span, rented.AsSpan(0, bytes), source.Width * source.Height);
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            }
+
+            // ── Yuv444p → RGBA/BGRA ───────────────────────────────────────────
+            if (source.PixelFormat == PixelFormat.Yuv444p)
+            {
+                int bytes = source.Width * source.Height * 4;
+                var rented = ArrayPool<byte>.Shared.Rent(bytes);
+                var owner = new ArrayPoolOwner<byte>(rented);
+                Interlocked.Increment(ref _managedFallbacks);
+                ConvertYuv444pManaged(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            }
+
+            // ── Yuv420p10 → RGBA/BGRA ─────────────────────────────────────────
+            if (source.PixelFormat == PixelFormat.Yuv420p10)
+            {
+                int bytes = source.Width * source.Height * 4;
+                var rented = ArrayPool<byte>.Shared.Rent(bytes);
+                var owner = new ArrayPoolOwner<byte>(rented);
+                Interlocked.Increment(ref _managedFallbacks);
+                ConvertYuv420p10Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            }
+
+            // ── P010 → RGBA/BGRA ──────────────────────────────────────────────
+            if (source.PixelFormat == PixelFormat.P010)
+            {
+                int bytes = source.Width * source.Height * 4;
+                var rented = ArrayPool<byte>.Shared.Rent(bytes);
+                var owner = new ArrayPoolOwner<byte>(rented);
+                Interlocked.Increment(ref _managedFallbacks);
+                ConvertP010Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            }
+
+            // Unknown format: black frame
+            {
+                int bytes = source.Width * source.Height * 4;
+                var rented = ArrayPool<byte>.Shared.Rent(bytes);
+                var owner = new ArrayPoolOwner<byte>(rented);
+                rented.AsSpan(0, bytes).Clear();
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+            }
         }
 
         throw new NotSupportedException($"BasicPixelFormatConverter does not support {source.PixelFormat} -> {dstFormat}.");
@@ -209,6 +281,116 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         if (v <= 0f) return 0;
         if (v >= 255f) return 255;
         return (int)(v + 0.5f);
+    }
+
+    // ── New format helpers ────────────────────────────────────────────────
+
+    /// <summary>Expands 24-bit packed RGB/BGR to 32-bit RGBA/BGRA by inserting A=255.</summary>
+    private static void ExpandPacked24To32(ReadOnlySpan<byte> src, Span<byte> dst, int pixelCount, bool srcRgb, bool dstRgba)
+    {
+        for (int i = 0, s = 0, d = 0; i < pixelCount; i++, s += 3, d += 4)
+        {
+            byte c0 = src[s], c1 = src[s + 1], c2 = src[s + 2];
+            // src: RGB order when srcRgb, BGR when !srcRgb
+            // dst: RGBA order when dstRgba, BGRA when !dstRgba
+            // In both cases [0]=R or B, [1]=G, [2]=B or R, [3]=A
+            bool swapNeeded = srcRgb != dstRgba; // e.g. RGB->BGRA needs swap, RGB->RGBA doesn't
+            dst[d]     = swapNeeded ? c2 : c0;
+            dst[d + 1] = c1;
+            dst[d + 2] = swapNeeded ? c0 : c2;
+            dst[d + 3] = 255;
+        }
+    }
+
+    /// <summary>Expands 8-bit luma to 32-bit RGBA by replicating Y into R, G, B.</summary>
+    private static void ExpandGray8ToRgba(ReadOnlySpan<byte> src, Span<byte> dst, int pixelCount)
+    {
+        for (int i = 0, d = 0; i < pixelCount; i++, d += 4)
+        {
+            byte y = src[i];
+            dst[d] = y; dst[d + 1] = y; dst[d + 2] = y; dst[d + 3] = 255;
+        }
+    }
+
+    /// <summary>Converts 8-bit planar YUV 4:4:4 to RGBA/BGRA using BT.601 full-range.</summary>
+    private static void ConvertYuv444pManaged(ReadOnlySpan<byte> src, Span<byte> dst, int width, int height, bool dstRgba)
+    {
+        int plane = width * height;
+        var yp = src[..plane];
+        var up = src.Slice(plane, plane);
+        var vp = src.Slice(plane * 2, plane);
+        for (int i = 0, d = 0; i < plane; i++, d += 4)
+        {
+            float yf = yp[i] / 255f;
+            float uf = (up[i] - 128f) / 128f;
+            float vf = (vp[i] - 128f) / 128f;
+            int r = ClampToByte((yf + 1.402f * vf) * 255f);
+            int g = ClampToByte((yf - 0.344f * uf - 0.714f * vf) * 255f);
+            int b = ClampToByte((yf + 1.772f * uf) * 255f);
+            if (dstRgba) { dst[d] = (byte)r; dst[d + 1] = (byte)g; dst[d + 2] = (byte)b; }
+            else         { dst[d] = (byte)b; dst[d + 1] = (byte)g; dst[d + 2] = (byte)r; }
+            dst[d + 3] = 255;
+        }
+    }
+
+    /// <summary>Converts 10-bit planar YUV 4:2:0 (I010) to RGBA/BGRA using BT.601 full-range.</summary>
+    private static void ConvertYuv420p10Managed(ReadOnlySpan<byte> src, Span<byte> dst, int width, int height, bool dstRgba)
+    {
+        int yStride = width * 2;
+        int uvW = Math.Max(1, (width + 1) / 2);
+        int uvH = Math.Max(1, (height + 1) / 2);
+        int uvStride = uvW * 2;
+        int yBytes = yStride * height;
+        int uvBytes = uvStride * uvH;
+        var yp = src[..yBytes];
+        var up = src.Slice(yBytes, uvBytes);
+        var vp = src.Slice(yBytes + uvBytes, uvBytes);
+        for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+        {
+            int y10 = BinaryPrimitives.ReadUInt16LittleEndian(yp.Slice(y * yStride + x * 2, 2)) & 0x3FF;
+            int uvX = x / 2, uvY = y / 2;
+            int u10 = BinaryPrimitives.ReadUInt16LittleEndian(up.Slice(uvY * uvStride + uvX * 2, 2)) & 0x3FF;
+            int v10 = BinaryPrimitives.ReadUInt16LittleEndian(vp.Slice(uvY * uvStride + uvX * 2, 2)) & 0x3FF;
+            float yf = y10 / 1023f;
+            float uf = (u10 - 512f) / 512f;
+            float vf = (v10 - 512f) / 512f;
+            int r = ClampToByte((yf + 1.402f * vf) * 255f);
+            int g = ClampToByte((yf - 0.344f * uf - 0.714f * vf) * 255f);
+            int b = ClampToByte((yf + 1.772f * uf) * 255f);
+            int d = (y * width + x) * 4;
+            if (dstRgba) { dst[d] = (byte)r; dst[d + 1] = (byte)g; dst[d + 2] = (byte)b; }
+            else         { dst[d] = (byte)b; dst[d + 1] = (byte)g; dst[d + 2] = (byte)r; }
+            dst[d + 3] = 255;
+        }
+    }
+
+    /// <summary>Converts 10-bit semi-planar NV12 (P010) to RGBA/BGRA using BT.601 full-range.</summary>
+    private static void ConvertP010Managed(ReadOnlySpan<byte> src, Span<byte> dst, int width, int height, bool dstRgba)
+    {
+        int yBytes = width * height * 2;
+        var yp  = src[..yBytes];
+        var uvp = src[yBytes..];
+        int uvW = Math.Max(1, width / 2);
+        int uvH = Math.Max(1, height / 2);
+        for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+        {
+            int y10 = BinaryPrimitives.ReadUInt16LittleEndian(yp.Slice((y * width + x) * 2, 2)) & 0x3FF;
+            int uvOff = (y / 2 * uvW + x / 2) * 4;
+            int u10 = BinaryPrimitives.ReadUInt16LittleEndian(uvp.Slice(uvOff,     2)) & 0x3FF;
+            int v10 = BinaryPrimitives.ReadUInt16LittleEndian(uvp.Slice(uvOff + 2, 2)) & 0x3FF;
+            float yf = y10 / 1023f;
+            float uf = (u10 - 512f) / 512f;
+            float vf = (v10 - 512f) / 512f;
+            int r = ClampToByte((yf + 1.402f * vf) * 255f);
+            int g = ClampToByte((yf - 0.344f * uf - 0.714f * vf) * 255f);
+            int b = ClampToByte((yf + 1.772f * uf) * 255f);
+            int d = (y * width + x) * 4;
+            if (dstRgba) { dst[d] = (byte)r; dst[d + 1] = (byte)g; dst[d + 2] = (byte)b; }
+            else         { dst[d] = (byte)b; dst[d + 1] = (byte)g; dst[d + 2] = (byte)r; }
+            dst[d + 3] = 255;
+        }
     }
 
     /// <summary>

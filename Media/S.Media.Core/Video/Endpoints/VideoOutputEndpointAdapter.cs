@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video.Endpoints;
@@ -25,6 +26,7 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
 
 #pragma warning disable CS0067  // event is never used — adapter has no upstream EOF source
         public event EventHandler? EndOfStream;
+        public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 #pragma warning restore CS0067
 
         public EndpointVideoChannel(VideoFormat sourceFormat, int capacity)

@@ -41,14 +41,16 @@ Added `int BufferDepth { get; }` and `int BufferAvailable { get; }` to `IVideoCh
 
 ---
 
-### 1.3 `IMediaChannel<TFrame>.FillBuffer` cannot distinguish true underrun from "not started yet"
+### 1.3 ✅ FIXED — `IMediaChannel<TFrame>.FillBuffer` cannot distinguish true underrun from "not started yet"
 
-**Files:** `IMediaChannel.cs`, `AudioChannel.cs`, `VideoMixer.cs`
+**Files:** `IMediaChannel.cs`, `AudioChannel.cs`, `VideoMixer.cs`, `NDIVideoChannel.cs`
 
-When `FillBuffer` returns `0`, it can mean either: (a) the ring is empty due to a real underrun, or (b) the channel has never received data (pipeline not started yet). Callers rely on the side-effect `BufferUnderrun` event to tell the difference for audio, but video has no equivalent event.
+When `FillBuffer` returns `0`, it can mean either: (a) the ring is empty due to a real underrun, or (b) the channel has never received data (pipeline not started yet).
 
-**Recommendation:**  
-Add `event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun` to `IVideoChannel` and fire it from `VideoMixer.PullRawFrame` when `got <= 0` after the first frame has been seen.
+**Fix applied:**  
+`event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun` is declared on `IVideoChannel`.  
+`FFmpegVideoChannel` tracks `_framesDequeued` (Interlocked) and fires `BufferUnderrun` (on a ThreadPool thread) when `FillBuffer` returns 0 and at least one frame was previously dequeued.  
+`NDIVideoChannel` now applies the same pattern: `_framesDequeued` counter added; `RaiseBufferUnderrun()` called at the end of `FillBuffer` when `filled == 0 && _framesDequeued > 0`.
 
 ---
 
@@ -126,14 +128,12 @@ Undersized buffers are now dropped (not re-enqueued). GC collects them naturally
 
 ---
 
-### 2.3 `BasicPixelFormatConverter.TryConvertI210Managed` uses BT.709 full-range unconditionally
+### 2.3 ✅ FIXED — `BasicPixelFormatConverter.TryConvertI210Managed` uses BT.709 full-range unconditionally
 
 **File:** `BasicPixelFormatConverter.cs`
 
-The SDL3 `GLRenderer` correctly handles both limited-range and full-range via the `uLimitedRange` / `uColorMatrix` uniforms (and `IVideoColorMatrixHint`). The CPU fallback path in `BasicPixelFormatConverter` ignores color range and matrix entirely.
-
-**Fix:**  
-Accept optional `YuvColorRange` / `YuvColorMatrix` parameters and apply the correct normalization for limited-range sources (broadcast cameras, most HDR content).
+**Fix applied:**  
+`TryConvertI210Managed` now accepts `YuvColorRange` and `YuvColorMatrix` parameters and resolves them via `YuvAutoPolicy.ResolveRange` / `YuvAutoPolicy.ResolveMatrix`. Limited-range and full-range normalization paths apply the correct coefficient sets. The public `ConvertWithHints(source, dest, colorRange, colorMatrix)` overload forwards these parameters; the parameterless `Convert()` delegates to it with `Auto` defaults.
 
 ---
 
@@ -206,9 +206,31 @@ The `BasicPixelFormatConverter _converter` field and entire CPU conversion branc
 
 ## 3. End-User Simplification Opportunities
 
-### 3.1 No high-level `MediaPlayer` facade
+### 3.1 ✅ FIXED — No high-level `MediaPlayer` facade
 
-The minimal playback sequence (open → create mixer → attach output → add channels → route → start → wait for end → stop → dispose) takes ~20 lines and requires understanding the full pipeline. For common one-source one-output playback, a `MediaPlayer` or `SimplePlayer` class with `Play(path)`, `Stop()`, `Seek(TimeSpan)`, and `PlaybackEnded` event would massively lower the entry barrier. The existing test programs are good blueprints for what such a class should automate.
+**File:** `S.Media.FFmpeg/MediaPlayer.cs` (new)
+
+**Fix applied:**  
+`MediaPlayer` class added to `S.Media.FFmpeg`. Accepts a pre-opened `IAudioOutput` and/or `IVideoOutput` (neither is owned by the player). Provides:
+
+- `OpenAsync(string path, …)` / `OpenAsync(Stream, …)` — opens an `FFmpegDecoder`, creates an `AVMixer`, adds channels, and attaches outputs. Any previously open session is stopped and released first.
+- `PlayAsync()` — starts the decoder (once) and the hardware outputs.
+- `PauseAsync()` — stops the hardware callbacks; the decode pipeline keeps running so ring buffers stay warm.
+- `StopAsync()` — stops outputs and disposes the decoder/mixer; the player can be reused.
+- `Seek(TimeSpan)` — delegates to `FFmpegDecoder.Seek`.
+- `PlaybackEnded` event — raised when `FFmpegDecoder.EndOfMedia` fires.
+- `Volume` / `Position` / `AudioChannel` / `VideoChannel` properties.
+
+Typical usage reduces from ~20 lines to ~7:
+```csharp
+using var player = new MediaPlayer(audioOutput);
+player.PlaybackEnded += (_, _) => cts.Cancel();
+await player.OpenAsync("file.mp3");
+await player.PlayAsync();
+try { await Task.Delay(Timeout.Infinite, cts.Token); }
+catch (OperationCanceledException) { }
+await player.StopAsync();
+```
 
 ---
 
@@ -231,9 +253,18 @@ Added `FFmpegDecoder.FirstAudioChannel` and `FFmpegDecoder.FirstVideoChannel` co
 
 ---
 
-### 3.4 NDI source discovery pattern is verbose
+### 3.4 ✅ FIXED — NDI source discovery pattern is verbose
 
-The discover → pick → open pattern in every NDI test app is ~30 lines. An `NDISourcePicker` helper (or extending `NDISource.OpenByNameAsync` to optionally show all discovered sources to a callback/delegate) would help.
+**Files:** `NDISource.cs`
+
+**Fix applied:**  
+Added public static `NDISource.DiscoverAsync(TimeSpan? timeout, NDIFinderSettings? settings, int minDiscoveryMs, CancellationToken ct)`. Internally creates an `NDIFinder`, polls in ≤500 ms increments, returns as soon as at least one source is found and `minDiscoveryMs` has elapsed (default: 500 ms), or after `timeout` (default: 5 s). Returns `NDIDiscoveredSource[]`.
+
+```csharp
+// Before: ~30 lines
+// After:
+var sources = await NDISource.DiscoverAsync();
+```
 
 ---
 
@@ -380,7 +411,7 @@ catch (OperationCanceledException) { }
 |---|------|----------|------|--------|
 | 1.1 | `OverrideRtMixer` / `OverridePresentationMixer` public on interfaces | Medium | API Design | Open |
 | 1.2 | `IVideoChannel` missing `BufferAvailable` / `BufferDepth` | Medium | API Design | ✅ Fixed |
-| 1.3 | `FillBuffer` return 0 ambiguous (underrun vs not started) | Low | API Design | Open |
+| 1.3 | `FillBuffer` return 0 ambiguous (underrun vs not started) | Low | API Design | ✅ Fixed |
 | 1.4 | `IVideoOutput.Open` pixel format silently overridden | Low | API Design / Docs | ✅ Fixed |
 | 1.5 | `ChannelRouteMap` missing `MonoToStereo` / `Auto` factories | High | End-user UX | ✅ Fixed |
 | 1.6 | `NDIAVSink` constructor has 15 parameters | High | API Design | ✅ Fixed |
@@ -388,17 +419,17 @@ catch (OperationCanceledException) { }
 | 1.8 | `SetActiveChannelForSink` throws on re-route without doc | Medium | API Design | Open |
 | 2.1 | `AudioChannel.RentChunkBuffer` re-enqueues undersized buffers | Medium | Bug / Performance | ✅ Fixed |
 | 2.2 | `BasicPixelFormatConverter` counters are static (shared) | Low | Bug | ✅ Fixed |
-| 2.3 | `TryConvertI210Managed` ignores color range/matrix | Medium | Correctness | Open |
+| 2.3 | `TryConvertI210Managed` ignores color range/matrix | Medium | Correctness | ✅ Fixed |
 | 2.4 | `VirtualAudioOutput.Dispose` sync-over-async deadlock risk | Medium | Bug | ✅ Fixed |
 | 2.5 | `AggregateOutput.Dispose` disposes externally-owned sinks | High | Bug | ✅ Fixed |
 | 2.6 | `VideoMixer.GetOffsetForChannel` locks on render hot path | Low | Performance | Open |
 | 2.7 | `FFmpegDecoder` lock on every demux packet | Low | Performance | Open |
 | 2.8 | `NDISource.Dispose` fires event after `_disposed = true` | Medium | Bug | Open |
 | 2.9 | Avalonia renderer CPU-converts all non-RGBA frames | High | Performance | ✅ Fixed |
-| 3.1 | No `MediaPlayer` high-level facade | High | End-user UX | Open |
+| 3.1 | No `MediaPlayer` high-level facade | High | End-user UX | ✅ Fixed |
 | 3.2 | No `AddAudioChannel(channel)` auto-route overload | Medium | End-user UX | Open |
 | 3.3 | `FFmpegDecoder` no `FirstAudioChannel` / `FirstVideoChannel` | Medium | End-user UX | ✅ Fixed |
-| 3.4 | NDI source discovery pattern is verbose | Low | End-user UX | Open |
+| 3.4 | NDI source discovery pattern is verbose | Low | End-user UX | ✅ Fixed |
 | 3.5 | No `GetDefaultOutputDevice()` on PortAudio engine | Medium | End-user UX | ✅ Fixed |
 | 3.6 | Asymmetric sink vs endpoint APIs on `IAVMixer` | Low | API Design | Open |
 | 4.x | Avalonia renderer missing native YUV shader paths | High | Performance | ✅ Fixed |

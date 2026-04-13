@@ -5,6 +5,7 @@ using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
 using S.Media.Core.Video.Endpoints;
+using System.Collections.Concurrent;
 
 namespace S.Media.Core.Mixing;
 
@@ -18,12 +19,13 @@ public sealed class AVMixer : IAVMixer
     private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(AVMixer));
 
     // Tracks endpoint→adapter pairs so we can unregister cleanly.
-    private readonly Dictionary<IVideoFrameEndpoint, IVideoSink> _videoEndpointAdapters = new();
-    private readonly Dictionary<IAudioBufferEndpoint, IAudioSink> _audioEndpointAdapters = new();
+    private readonly ConcurrentDictionary<IVideoFrameEndpoint, IVideoSink> _videoEndpointAdapters = new();
+    private readonly ConcurrentDictionary<IAudioBufferEndpoint, IAudioSink> _audioEndpointAdapters = new();
 
-    // Track channels for A/V drift monitoring.
-    private readonly Dictionary<Guid, IAudioChannel> _audioChannels = new();
-    private readonly Dictionary<Guid, IVideoChannel> _videoChannels = new();
+    // Track channels for A/V drift monitoring. ConcurrentDictionary is safe for concurrent
+    // Add/Remove on the management thread while GetAvDrift / routing reads on other threads.
+    private readonly ConcurrentDictionary<Guid, IAudioChannel> _audioChannels = new();
+    private readonly ConcurrentDictionary<Guid, IVideoChannel> _videoChannels = new();
 
     private readonly IAudioMixer _audio;
     private readonly IVideoMixer _video;
@@ -92,7 +94,7 @@ public sealed class AVMixer : IAVMixer
     public void RemoveAudioChannel(Guid channelId)
     {
         _audio.RemoveChannel(channelId);
-        _audioChannels.Remove(channelId);
+        _audioChannels.TryRemove(channelId, out _);
     }
 
     public void AddVideoChannel(IVideoChannel channel)
@@ -104,7 +106,7 @@ public sealed class AVMixer : IAVMixer
     public void RemoveVideoChannel(Guid channelId)
     {
         _video.RemoveChannel(channelId);
-        _videoChannels.Remove(channelId);
+        _videoChannels.TryRemove(channelId, out _);
     }
 
     // ── Per-channel time offsets ─────────────────────────────────────────
@@ -164,16 +166,15 @@ public sealed class AVMixer : IAVMixer
     public void RegisterVideoEndpoint(IVideoFrameEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        if (_videoEndpointAdapters.ContainsKey(endpoint)) return;
         var adapter = new VideoEndpointSinkAdapter(endpoint);
-        _videoEndpointAdapters[endpoint] = adapter;
+        if (!_videoEndpointAdapters.TryAdd(endpoint, adapter)) return;
         _video.RegisterSink(adapter);
     }
 
     public void UnregisterVideoEndpoint(IVideoFrameEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        if (!_videoEndpointAdapters.Remove(endpoint, out var adapter)) return;
+        if (!_videoEndpointAdapters.TryRemove(endpoint, out var adapter)) return;
         _video.UnregisterSink(adapter);
     }
 
@@ -196,17 +197,45 @@ public sealed class AVMixer : IAVMixer
     public void RegisterAudioEndpoint(IAudioBufferEndpoint endpoint, int channels = 0)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        if (_audioEndpointAdapters.ContainsKey(endpoint)) return;
         var adapter = new AudioEndpointSinkAdapter(endpoint);
-        _audioEndpointAdapters[endpoint] = adapter;
+        if (!_audioEndpointAdapters.TryAdd(endpoint, adapter)) return;
         _audio.RegisterSink(adapter, channels);
     }
 
     public void UnregisterAudioEndpoint(IAudioBufferEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        if (!_audioEndpointAdapters.Remove(endpoint, out var adapter)) return;
+        if (!_audioEndpointAdapters.TryRemove(endpoint, out var adapter)) return;
         _audio.UnregisterSink(adapter);
+    }
+
+    // ── Audio endpoint routing ────────────────────────────────────────────
+
+    public void RouteAudioChannelToEndpoint(Guid channelId, IAudioBufferEndpoint endpoint, ChannelRouteMap routeMap)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (!_audioEndpointAdapters.TryGetValue(endpoint, out var adapter))
+            throw new InvalidOperationException("Endpoint is not registered. Call RegisterAudioEndpoint first.");
+        _audio.RouteTo(channelId, adapter, routeMap);
+    }
+
+    public void RouteAudioChannelToEndpoint(Guid channelId, IAudioBufferEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (!_audioEndpointAdapters.TryGetValue(endpoint, out var adapter))
+            throw new InvalidOperationException("Endpoint is not registered. Call RegisterAudioEndpoint first.");
+        if (!_audioChannels.TryGetValue(channelId, out var ch))
+            throw new InvalidOperationException("Audio channel is not registered.");
+        var routeMap = ChannelRouteMap.Auto(ch.SourceFormat.Channels, _audioOutputChannels);
+        _audio.RouteTo(channelId, adapter, routeMap);
+    }
+
+    public void UnrouteAudioChannelFromEndpoint(IAudioBufferEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (!_audioEndpointAdapters.TryGetValue(endpoint, out var adapter)) return;
+        foreach (var channelId in _audioChannels.Keys)
+            _audio.UnrouteTo(channelId, adapter);
     }
 
     // ── Batch helpers ─────────────────────────────────────────────────────

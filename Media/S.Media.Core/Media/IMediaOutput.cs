@@ -1,4 +1,3 @@
-using S.Media.Core.Clock;
 
 namespace S.Media.Core.Media;
 

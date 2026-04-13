@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
 
@@ -45,6 +46,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private bool _disposed;
     private readonly int _bufferDepth;
     private long _framesInRing;
+    private long _framesDequeued;   // tracks whether any frame has ever been pulled
 
     public Guid  Id      { get; } = Guid.NewGuid();
     public bool  IsOpen  => !_disposed;
@@ -54,6 +56,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
     public event EventHandler? EndOfStream;
+    public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
     /// <summary>Target pixel format. Defaults to Bgra32.</summary>
     public PixelFormat TargetPixelFormat { get; }
@@ -93,6 +96,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         _packetReader       = packetReader;
         _hwDeviceCtx        = hwDeviceCtx;
         _threadCount        = threadCount;
+        _bufferDepth        = Math.Max(1, bufferDepth);
         _latestSeekEpochProvider = latestSeekEpochProvider ?? (() => 0);
 
         var cp = stream->codecpar;
@@ -389,9 +393,24 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             if (!_ringReader.TryRead(out var vf)) break;
             dest[i] = vf;
             Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
+            Interlocked.Increment(ref _framesDequeued);
             filled++;
         }
+        if (filled == 0 && Interlocked.Read(ref _framesDequeued) > 0)
+            RaiseBufferUnderrun();
         return filled;
+    }
+
+    private void RaiseBufferUnderrun()
+    {
+        var handler = BufferUnderrun;
+        if (handler == null) return;
+        var pos = Position;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h, p) = ((FFmpegVideoChannel, EventHandler<BufferUnderrunEventArgs>, TimeSpan))s!;
+            h(self, new BufferUnderrunEventArgs(p, 0));
+        }, (this, handler, pos));
     }
 
     public void Seek(TimeSpan position)

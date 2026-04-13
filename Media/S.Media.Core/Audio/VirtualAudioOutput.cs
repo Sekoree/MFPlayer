@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
-using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
 

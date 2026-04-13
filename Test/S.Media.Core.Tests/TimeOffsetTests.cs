@@ -66,6 +66,7 @@ public sealed class TimeOffsetTests
         public int BufferDepth => 64;
         public int BufferAvailable => _frames.Count;
         public event EventHandler? EndOfStream { add { } remove { } }
+        public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun { add { } remove { } }
 
         public int FillBuffer(Span<VideoFrame> dest, int frameCount)
         {
@@ -384,6 +385,7 @@ public sealed class TimeOffsetTests
         public int BufferDepth => 4;
         public int BufferAvailable => 0;
         public event EventHandler? EndOfStream { add { } remove { } }
+        public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun { add { } remove { } }
         public int FillBuffer(Span<VideoFrame> dest, int frameCount) => 0;
         public void Seek(TimeSpan position) { }
         public void Dispose() { }
@@ -421,6 +423,7 @@ public sealed class TimeOffsetTests
         public int BufferDepth => 4;
         public int BufferAvailable => 0;
         public event EventHandler? EndOfStream { add { } remove { } }
+        public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun { add { } remove { } }
 
         public PositionTrackingVideoChannel(TimeSpan position) => Position = position;
 

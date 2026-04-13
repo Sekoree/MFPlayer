@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
 using Xunit;
@@ -24,6 +25,7 @@ public sealed class VideoMixerTests
         public int BufferDepth => 64;
         public int BufferAvailable => _frames.Count;
         public event EventHandler? EndOfStream { add { } remove { } }
+        public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun { add { } remove { } }
         public VideoFormat SourceFormat { get; }
         public TimeSpan Position { get; private set; }
 
@@ -412,7 +414,7 @@ public sealed class VideoMixerTests
     }
 
     [Fact]
-    public void SetActiveChannelForSink_RerouteWithoutUnroute_Throws()
+    public void SetActiveChannelForSink_RerouteWithoutUnroute_AutoUnroutes()
     {
         using var mixer = new VideoMixer(FmtRgba30);
         var sink = new SpyVideoSink();
@@ -424,8 +426,12 @@ public sealed class VideoMixerTests
         mixer.RegisterSink(sink);
 
         mixer.SetActiveChannelForSink(sink, chA.Id);
+        // Should NOT throw — auto-unroutes chA and routes chB instead
+        mixer.SetActiveChannelForSink(sink, chB.Id);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => mixer.SetActiveChannelForSink(sink, chB.Id));
-        Assert.Contains("Unroute first", ex.Message);
+        // Verify the re-route succeeded by pushing a frame through chB
+        chB.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[4], TimeSpan.FromMilliseconds(10)));
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+        Assert.Equal(1, sink.Calls);
     }
 }

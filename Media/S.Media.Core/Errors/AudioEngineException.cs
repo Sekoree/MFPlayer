@@ -1,4 +1,4 @@
-namespace S.Media.Core.Errors;
+namespace S.Media.Core.Audio;
 
 /// <summary>Thrown when the native audio engine (e.g. PortAudio) returns an error code.</summary>
 public sealed class AudioEngineException : MediaException

@@ -150,6 +150,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
                 ? v.PixelFormat
                 : fallbackPixelFormat;
             _videoTargetFormat = v with { PixelFormat = px };
+            _hasVideo = true;
 
             var videoPreset = NDIVideoPresetOptions.For(preset);
             if (videoPoolCount <= 0) videoPoolCount = videoPreset.PoolCount;

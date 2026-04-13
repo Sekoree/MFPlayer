@@ -3,9 +3,9 @@ using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Rendering;
 using Microsoft.Extensions.Logging;
-using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
+using S.Media.Core;
 
 namespace S.Media.Avalonia;
 
@@ -42,6 +42,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private bool _hasYuvHintsOverride;
     private bool _yuvBt709;
     private bool _yuvLimitedRange;
+    private YuvColorMatrix _yuvColorMatrix = YuvColorMatrix.Auto;
     private bool _isOpen;
     private bool _isRunning;
     private bool _disposed;
@@ -61,6 +62,10 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private int _lastUploadedHeight;
     private TimeSpan _lastUploadedPts;
     private ReadOnlyMemory<byte> _lastUploadedData;
+
+    // Per-frame auto-hint tracking (render thread only — no lock needed).
+    private YuvColorMatrix _lastAutoMatrix = YuvColorMatrix.Auto;
+    private YuvColorRange  _lastAutoRange  = YuvColorRange.Auto;
 
     private TimeSpan _catchupLagThreshold = TimeSpan.FromMilliseconds(45);
     private int _maxCatchupPullsPerRender = 6;
@@ -96,7 +101,21 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         _hasYuvHintsOverride = true;
         _yuvBt709 = bt709;
         _yuvLimitedRange = limitedRange;
+        _yuvColorMatrix = bt709 ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
         _renderer?.SetYuvHints(bt709, limitedRange);
+    }
+
+    /// <summary>
+    /// Overrides the YUV color matrix and range using the full <see cref="YuvColorMatrix"/> enum
+    /// (supports BT.601, BT.709, BT.2020 and Auto).
+    /// </summary>
+    public void SetYuvHints(YuvColorMatrix matrix, bool limitedRange)
+    {
+        _hasYuvHintsOverride = true;
+        _yuvColorMatrix = matrix;
+        _yuvBt709 = matrix == YuvColorMatrix.Bt709;
+        _yuvLimitedRange = limitedRange;
+        _renderer?.SetYuvHints(matrix, limitedRange);
     }
 
     /// <summary>Resets YUV hints to auto-detect from frame resolution.</summary>
@@ -187,6 +206,9 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         Log.LogInformation("Stopping AvaloniaOpenGlVideoOutput");
         _isRunning = false;
         _clock?.Stop();
+        // Release the last-uploaded frame reference so the ArrayPool rental can be returned.
+        _hasUploadedFrame = false;
+        _lastUploadedData = default;
         return Task.CompletedTask;
     }
 
@@ -196,7 +218,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         _renderer ??= new AvaloniaGlRenderer();
         _renderer.Initialise(gl);
         if (_hasYuvHintsOverride)
-            _renderer.SetYuvHints(_yuvBt709, _yuvLimitedRange);
+            _renderer.SetYuvHints(_yuvColorMatrix, _yuvLimitedRange);
         _hasUploadedFrame = false;
         _lastUploadedData = default;
     }
@@ -261,30 +283,46 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
             }
 
             var frame = mixer.PresentNextFrame(clockPosition);
-            if (frame.HasValue)
-            {
-                var vf = frame.Value;
-
-                // If decode/render falls behind, skip stale frames up to a bounded budget.
-                for (int i = 0; i < _maxCatchupPullsPerRender; i++)
+                if (frame.HasValue)
                 {
-                    if (vf.Pts + _catchupLagThreshold >= clockPosition)
-                        break;
+                    var vf = frame.Value;
 
-                    var next = mixer.PresentNextFrame(clockPosition);
-                    if (!next.HasValue)
-                        break;
+                    // If decode/render falls behind, skip stale frames up to a bounded budget.
+                    for (int i = 0; i < _maxCatchupPullsPerRender; i++)
+                    {
+                        if (vf.Pts + _catchupLagThreshold >= clockPosition)
+                            break;
 
-                    var nvf = next.Value;
-                    if (nvf.Pts == vf.Pts &&
-                        nvf.Width == vf.Width &&
-                        nvf.Height == vf.Height &&
-                        nvf.Data.Equals(vf.Data))
-                        break;
+                        var next = mixer.PresentNextFrame(clockPosition);
+                        if (!next.HasValue)
+                            break;
 
-                    vf = nvf;
-                    Interlocked.Increment(ref _catchupSkips);
-                }
+                        var nvf = next.Value;
+                        if (nvf.Pts == vf.Pts &&
+                            nvf.Width == vf.Width &&
+                            nvf.Height == vf.Height &&
+                            nvf.Data.Equals(vf.Data))
+                            break;
+
+                        vf = nvf;
+                        Interlocked.Increment(ref _catchupSkips);
+                    }
+
+                    // Auto-propagate IVideoColorMatrixHint from the active channel when no
+                    // manual override has been set. The comparison is O(1) and avoids redundant
+                    // GL uniform updates on every render call when nothing has changed.
+                    if (!_hasYuvHintsOverride && mixer.ActiveChannel is IVideoColorMatrixHint hint)
+                    {
+                        var m = hint.SuggestedYuvColorMatrix;
+                        var r = hint.SuggestedYuvColorRange;
+                        if (m != _lastAutoMatrix || r != _lastAutoRange)
+                        {
+                            _lastAutoMatrix = m;
+                            _lastAutoRange  = r;
+                            // _renderer is non-null here: guarded by the early return above.
+                            _renderer!.SetYuvHints(m, r == YuvColorRange.Limited);
+                        }
+                    }
 
                 // Renderer natively handles all GPU-uploadable formats (Rgba32, Bgra32, Nv12,
                 // Yuv420p, Yuv422p10, Uyvy422, P010, Yuv444p, Gray8). Unknown formats render black.

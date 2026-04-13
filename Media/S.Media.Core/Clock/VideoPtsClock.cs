@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace S.Media.Core.Clock;
+namespace S.Media.Core;
 
 /// <summary>
 /// Video clock driven by presented frame PTS values.

@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;
@@ -22,5 +23,11 @@ public interface IVideoChannel : IMediaChannel<VideoFrame>
 
     /// <summary>Number of frames currently available in the ring buffer.</summary>
     int BufferAvailable { get; }
+
+    /// <summary>
+    /// Raised (on a background thread) when the pull path finds the ring buffer empty
+    /// after at least one frame has been seen, indicating a genuine decoder underrun.
+    /// </summary>
+    event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 }
 

@@ -1,3 +1,4 @@
+using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Endpoints;
 using S.Media.Core.Audio.Routing;
@@ -39,7 +40,7 @@ public sealed class AudioEndpointAdapterTests
         public void Dispose() { }
     }
 
-    private sealed class StubClock : S.Media.Core.Clock.IMediaClock
+    private sealed class StubClock : IMediaClock
     {
         public TimeSpan Position => TimeSpan.Zero;
         public double SampleRate => 48000;
@@ -54,7 +55,7 @@ public sealed class AudioEndpointAdapterTests
     {
         public AudioFormat HardwareFormat { get; }
         public IAudioMixer Mixer { get; }
-        public S.Media.Core.Clock.IMediaClock Clock { get; } = new StubClock();
+        public IMediaClock Clock { get; } = new StubClock();
         public bool IsRunning => true;
 
         public StubAudioOutput(AudioFormat format)

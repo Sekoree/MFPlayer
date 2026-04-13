@@ -195,6 +195,7 @@ public sealed class AVMixerTests
         public int BufferDepth => 4;
         public int BufferAvailable => 0;
         public event EventHandler? EndOfStream { add { } remove { } }
+        public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun { add { } remove { } }
         public int FillBuffer(Span<VideoFrame> dest, int frameCount) => 0;
         public void Seek(TimeSpan position) { }
         public void Dispose() { }

@@ -1,4 +1,3 @@
-using S.Media.Core.Clock;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;

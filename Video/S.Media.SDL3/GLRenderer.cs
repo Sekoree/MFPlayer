@@ -183,8 +183,8 @@ internal sealed unsafe class GLRenderer : IDisposable
     private uint _textureGray8;
     private int  _texWidthGray8;
     private int  _texHeightGray8;
-    private YuvColorRange _i422P10ColorRange = YuvColorRange.Auto;
-    private YuvColorMatrix _i422P10ColorMatrix = YuvColorMatrix.Auto;
+    private YuvColorRange _yuvColorRange = YuvColorRange.Auto;
+    private YuvColorMatrix _yuvColorMatrix = YuvColorMatrix.Auto;
     private bool _disposed;
     private int _windowWidth;
     private int _windowHeight;
@@ -193,20 +193,20 @@ internal sealed unsafe class GLRenderer : IDisposable
 
     public YuvColorRange YuvColorRange
     {
-        get => _i422P10ColorRange;
-        set => _i422P10ColorRange = NormalizeColorRange(value);
+        get => _yuvColorRange;
+        set => _yuvColorRange = NormalizeColorRange(value);
     }
 
     public YuvColorMatrix YuvColorMatrix
     {
-        get => _i422P10ColorMatrix;
-        set => _i422P10ColorMatrix = NormalizeColorMatrix(value);
+        get => _yuvColorMatrix;
+        set => _yuvColorMatrix = NormalizeColorMatrix(value);
     }
 
     public bool I422P10LimitedRange
     {
-        get => _i422P10ColorRange == YuvColorRange.Limited;
-        set => _i422P10ColorRange = value ? YuvColorRange.Limited : YuvColorRange.Full;
+        get => _yuvColorRange == YuvColorRange.Limited;
+        set => _yuvColorRange = value ? YuvColorRange.Limited : YuvColorRange.Full;
     }
 
     public YuvColorRange I422P10ColorRange
@@ -223,8 +223,8 @@ internal sealed unsafe class GLRenderer : IDisposable
 
     public bool I422P10UseBt709Matrix
     {
-        get => _i422P10ColorMatrix == YuvColorMatrix.Bt709;
-        set => _i422P10ColorMatrix = value ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
+        get => _yuvColorMatrix == YuvColorMatrix.Bt709;
+        set => _yuvColorMatrix = value ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
     }
 
     // ── Shaders ───────────────────────────────────────────────────────────
@@ -736,7 +736,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_uNv12LimitedRangeLoc >= 0)
             _glUniform1i(_uNv12LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
         if (_uNv12ColorMatrixLoc >= 0)
-            _glUniform1i(_uNv12ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+            _glUniform1i(_uNv12ColorMatrixLoc, GetColorMatrixValue(w, h));
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
@@ -794,7 +794,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_uI420LimitedRangeLoc >= 0)
             _glUniform1i(_uI420LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
         if (_uI420ColorMatrixLoc >= 0)
-            _glUniform1i(_uI420ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+            _glUniform1i(_uI420ColorMatrixLoc, GetColorMatrixValue(w, h));
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
@@ -851,7 +851,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_uI422P10LimitedRangeLoc >= 0)
             _glUniform1i(_uI422P10LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
         if (_uI422P10ColorMatrixLoc >= 0)
-            _glUniform1i(_uI422P10ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+            _glUniform1i(_uI422P10ColorMatrixLoc, GetColorMatrixValue(w, h));
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
@@ -894,7 +894,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_uUyvyLimitedRangeLoc >= 0)
             _glUniform1i(_uUyvyLimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
         if (_uUyvyColorMatrixLoc >= 0)
-            _glUniform1i(_uUyvyColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+            _glUniform1i(_uUyvyColorMatrixLoc, GetColorMatrixValue(w, h));
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
@@ -938,7 +938,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_uP010LimitedRangeLoc >= 0)
             _glUniform1i(_uP010LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
         if (_uP010ColorMatrixLoc >= 0)
-            _glUniform1i(_uP010ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+            _glUniform1i(_uP010ColorMatrixLoc, GetColorMatrixValue(w, h));
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
@@ -987,7 +987,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_uYuv444pLimitedRangeLoc >= 0)
             _glUniform1i(_uYuv444pLimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
         if (_uYuv444pColorMatrixLoc >= 0)
-            _glUniform1i(_uYuv444pColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+            _glUniform1i(_uYuv444pColorMatrixLoc, GetColorMatrixValue(w, h));
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
@@ -1022,13 +1022,13 @@ internal sealed unsafe class GLRenderer : IDisposable
 
     private int GetColorMatrixValue(int width, int height)
     {
-        var resolved = YuvAutoPolicy.ResolveMatrix(_i422P10ColorMatrix, width, height);
+        var resolved = YuvAutoPolicy.ResolveMatrix(_yuvColorMatrix, width, height);
         return YuvAutoPolicy.ToShaderValue(resolved);
     }
 
     private bool ShouldUseLimitedRangeForYuv()
     {
-        return YuvAutoPolicy.ResolveRange(_i422P10ColorRange) == YuvColorRange.Limited;
+        return YuvAutoPolicy.ResolveRange(_yuvColorRange) == YuvColorRange.Limited;
     }
 
     private static YuvColorRange NormalizeColorRange(YuvColorRange value)

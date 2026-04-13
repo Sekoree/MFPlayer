@@ -4,9 +4,9 @@ using Microsoft.Extensions.Logging;
 using PALib;
 using PALib.Types.Core;
 using S.Media.Core.Audio;
-using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
+using S.Media.Core;
 
 namespace S.Media.PortAudio;
 

@@ -113,6 +113,9 @@ internal sealed class VideoMixer : IVideoMixer
     /// <inheritdoc/>
     public int SinkCount => _sinkTargets.Length;
 
+    /// <inheritdoc/>
+    public IVideoChannel? ActiveChannel => _activeChannel;
+
     public long HeldFrameCount => Interlocked.Read(ref _heldFrameCount);
     public long DroppedStaleFrameCount => Interlocked.Read(ref _droppedStaleFrameCount);
     public long FallbackConversionCount => Interlocked.Read(ref _fallbackConversionCount);

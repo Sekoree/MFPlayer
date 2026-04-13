@@ -234,7 +234,7 @@ using (decoder)
             }
         }
 
-        if (statsSw.ElapsedMilliseconds >= 250)
+        if (statsSw.ElapsedMilliseconds >= 25)
         {
             statsSw.Restart();
             var clockPos = output.Clock.Position - clockBase;

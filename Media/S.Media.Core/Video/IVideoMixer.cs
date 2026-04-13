@@ -18,6 +18,13 @@ public interface IVideoMixer : IDisposable
     /// <summary>Number of registered secondary sinks.</summary>
     int SinkCount { get; }
 
+    /// <summary>
+    /// The channel currently routed to the primary output path, or <see langword="null"/>
+    /// if no channel is active. Outputs can use this to auto-apply
+    /// <see cref="IVideoColorMatrixHint"/> values without requiring the caller to set them manually.
+    /// </summary>
+    IVideoChannel? ActiveChannel => null;
+
     /// <summary>Registers a video channel.</summary>
     void AddChannel(IVideoChannel channel);
 

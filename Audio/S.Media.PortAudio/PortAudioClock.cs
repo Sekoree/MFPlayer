@@ -1,4 +1,4 @@
-using S.Media.Core.Clock;
+using S.Media.Core;
 using PALib;
 
 namespace S.Media.PortAudio;

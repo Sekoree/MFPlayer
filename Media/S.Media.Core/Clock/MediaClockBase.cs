@@ -1,4 +1,4 @@
-namespace S.Media.Core.Clock;
+namespace S.Media.Core;
 
 /// <summary>
 /// Abstract base for <see cref="IMediaClock"/> implementations.

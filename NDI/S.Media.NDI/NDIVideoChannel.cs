@@ -1,7 +1,9 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using NDILib;
+using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
 
@@ -22,15 +24,21 @@ internal sealed class NDIVideoChannel : IVideoChannel
     private Thread?                  _captureThread;
     private CancellationTokenSource  _cts = new();
 
-    private readonly Queue<VideoFrame> _ring = new();
-    private readonly Lock _ringGate = new();
+    // Lock-free ring: unbounded channel (writes always succeed) + manual capacity enforcement.
+    // "Drop oldest" is implemented by draining one frame from the reader before each write
+    // when the counter has reached _ringCapacity, allowing the evicted MemoryOwner to be
+    // disposed correctly — something BoundedChannelFullMode.DropOldest cannot do.
+    private readonly ChannelReader<VideoFrame> _ringReader;
+    private readonly ChannelWriter<VideoFrame> _ringWriter;
     private readonly int _ringCapacity;
+    private long _framesInRing;
 
     private bool _disposed;
     private VideoFormat _sourceFormat;
     private readonly Lock _formatLock = new();
     private readonly HashSet<NDIFourCCVideoType> _unsupportedFourCcLogged = [];
     private long _positionTicks;
+    private long _framesDequeued;
 
     // Synthetic PTS fallback when NDI timestamps are undefined (0, negative, or MaxValue).
     // Uses a monotonic stopwatch so the mixer can pace frames correctly.
@@ -43,11 +51,12 @@ internal sealed class NDIVideoChannel : IVideoChannel
     public bool  IsOpen  => !_disposed;
     public bool  CanSeek => false;
     public int   BufferDepth     => _ringCapacity;
-    public int   BufferAvailable { get { lock (_ringGate) return _ring.Count; } }
+    public int   BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
 #pragma warning disable CS0067  // NDI streams have no defined EOF; event may be used in future
     public event EventHandler? EndOfStream;
 #pragma warning restore CS0067
+    public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
     /// <inheritdoc/>
     public VideoFormat SourceFormat { get { lock (_formatLock) return _sourceFormat; } }
@@ -61,6 +70,17 @@ internal sealed class NDIVideoChannel : IVideoChannel
         _frameSyncGate = frameSyncGate ?? new Lock();
         _clock     = clock;
         _ringCapacity = Math.Max(1, bufferDepth);
+
+        var ring = Channel.CreateUnbounded<VideoFrame>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = false,
+                SingleWriter = true,
+                AllowSynchronousContinuations = false
+            });
+        _ringReader = ring.Reader;
+        _ringWriter = ring.Writer;
+
         Log.LogInformation("Created NDIVideoChannel: bufferDepth={BufferDepth}", _ringCapacity);
     }
 
@@ -155,9 +175,15 @@ internal sealed class NDIVideoChannel : IVideoChannel
 
                 EnqueueFrame(vf);
 
-                // Throttle to avoid calling CaptureVideo thousands of times per second.
-                // At 30 fps video a ~16 ms sleep is enough; 8 ms gives headroom for 60 fps.
-                Thread.Sleep(8);
+                // Throttle based on expected frame interval — avoid spinning at 1000+ fps
+                // while still supporting 120 fps sources (≈8 ms) without adding a mandatory
+                // per-frame sleep that would drop frames from high-frame-rate sources.
+                double fpsNow;
+                lock (_formatLock) fpsNow = _sourceFormat.FrameRate;
+                int sleepMs = fpsNow > 0
+                    ? Math.Max(1, (int)(400.0 / fpsNow))   // half a frame interval, min 1 ms
+                    : 4;
+                Thread.Sleep(sleepMs);
             }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {
@@ -334,12 +360,28 @@ internal sealed class NDIVideoChannel : IVideoChannel
         int filled = 0;
         for (int i = 0; i < frameCount; i++)
         {
-            if (!TryDequeueFrame(out var vf)) break;
+            if (!_ringReader.TryRead(out var vf)) break;
+            Interlocked.Decrement(ref _framesInRing);
             dest[i] = vf;
             Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
+            Interlocked.Increment(ref _framesDequeued);
             filled++;
         }
+        if (filled == 0 && Interlocked.Read(ref _framesDequeued) > 0)
+            RaiseBufferUnderrun();
         return filled;
+    }
+
+    private void RaiseBufferUnderrun()
+    {
+        var handler = BufferUnderrun;
+        if (handler == null) return;
+        var pos = Position;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h, p) = ((NDIVideoChannel, EventHandler<BufferUnderrunEventArgs>, TimeSpan))s!;
+            h(self, new BufferUnderrunEventArgs(p, 0));
+        }, (this, handler, pos));
     }
 
     public void Seek(TimeSpan position) { /* NDI live sources cannot seek */ }
@@ -351,43 +393,26 @@ internal sealed class NDIVideoChannel : IVideoChannel
         Log.LogInformation("Disposing NDIVideoChannel");
         _cts.Cancel();
         _captureThread?.Join(TimeSpan.FromSeconds(2));
-        lock (_ringGate)
-        {
-            while (_ring.Count > 0)
-            {
-                var frame = _ring.Dequeue();
-                frame.MemoryOwner?.Dispose();
-            }
-        }
+        _ringWriter.TryComplete();
+        while (_ringReader.TryRead(out var frame))
+            frame.MemoryOwner?.Dispose();
     }
 
     private void EnqueueFrame(in VideoFrame frame)
     {
-        lock (_ringGate)
+        // Drop oldest (with proper disposal) when at capacity.
+        if (Interlocked.Read(ref _framesInRing) >= _ringCapacity)
         {
-            if (_ring.Count >= _ringCapacity)
+            if (_ringReader.TryRead(out var dropped))
             {
-                var dropped = _ring.Dequeue();
+                Interlocked.Decrement(ref _framesInRing);
                 dropped.MemoryOwner?.Dispose();
             }
-
-            _ring.Enqueue(frame);
         }
-    }
 
-    private bool TryDequeueFrame(out VideoFrame frame)
-    {
-        lock (_ringGate)
-        {
-            if (_ring.Count == 0)
-            {
-                frame = default;
-                return false;
-            }
-
-            frame = _ring.Dequeue();
-            return true;
-        }
+        // TryWrite on an unbounded channel never fails.
+        _ringWriter.TryWrite(frame);
+        Interlocked.Increment(ref _framesInRing);
     }
 }
 

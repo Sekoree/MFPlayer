@@ -1,4 +1,4 @@
-namespace S.Media.Core.Errors;
+namespace S.Media.Core;
 
 /// <summary>Base exception for all media pipeline errors.</summary>
 public class MediaException : Exception

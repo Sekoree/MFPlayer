@@ -360,7 +360,66 @@ public sealed class NDISource : IDisposable
         }
     }
 
-    // ── Discovery helpers ────────────────────────────────────────────────────
+    // ── Public discovery helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Discovers NDI sources on the network and returns all sources found within
+    /// <paramref name="timeout"/> (default 5 s).
+    /// <para>
+    /// The method polls in 500 ms increments. It returns early once at least one
+    /// source has been found and <paramref name="minDiscoveryMs"/> milliseconds have
+    /// elapsed (default 500), giving late-announcing sources a fair chance to appear.
+    /// </para>
+    /// </summary>
+    /// <param name="timeout">Maximum discovery window. <see langword="null"/> defaults to 5 s.</param>
+    /// <param name="settings">Finder settings. <see langword="null"/> uses defaults (local sources visible).</param>
+    /// <param name="minDiscoveryMs">
+    /// Minimum wait even if sources appear immediately. Guards against returning a
+    /// partial list when multiple sources announce at roughly the same time.
+    /// Default: 500 ms.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>All discovered sources; an empty array if none appeared within the timeout.</returns>
+    public static async Task<NDIDiscoveredSource[]> DiscoverAsync(
+        TimeSpan?         timeout          = null,
+        NDIFinderSettings? settings        = null,
+        int               minDiscoveryMs   = 500,
+        CancellationToken ct              = default)
+    {
+        var deadline  = timeout ?? TimeSpan.FromSeconds(5);
+        var minWait   = TimeSpan.FromMilliseconds(Math.Max(0, minDiscoveryMs));
+
+        int ret = NDIFinder.Create(out var finder, settings ?? new NDIFinderSettings { ShowLocalSources = true });
+        if (ret != 0 || finder == null)
+            throw new InvalidOperationException($"NDIFinder.Create failed: {ret}");
+
+        using (finder)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            NDIDiscoveredSource[] best = [];
+
+            while (sw.Elapsed < deadline)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // WaitForSources is blocking: use a capped 500 ms poll interval.
+                uint pollMs = (uint)Math.Min(500, Math.Max(1, (deadline - sw.Elapsed).TotalMilliseconds));
+                finder.WaitForSources(pollMs);
+
+                var current = finder.GetCurrentSources();
+                if (current.Length > best.Length) best = current;
+
+                // Stop early: sources found and minimum wait elapsed.
+                if (best.Length > 0 && sw.Elapsed >= minWait) break;
+            }
+
+            // Return the latest snapshot (may include sources added in the last poll).
+            var final = finder.GetCurrentSources();
+            return final.Length >= best.Length ? final : best;
+        }
+    }
+
+    // ── Private discovery helpers ────────────────────────────────────────────
 
     private static async Task<NDIDiscoveredSource> DiscoverSourceAsync(
         NDIFinder finder,

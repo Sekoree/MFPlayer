@@ -44,7 +44,24 @@ public sealed class AudioChannel : IAudioChannel
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
     public event EventHandler? EndOfStream;
 
-    /// <param name="sourceFormat">Native PCM format of data written by the producer.</param>
+    /// <summary>
+    /// Signals that no more audio will be written to this channel.
+    /// Completes the internal ring and fires <see cref="EndOfStream"/> on the ThreadPool.
+    /// Safe to call from any thread; idempotent after disposal.
+    /// </summary>
+    public void Complete()
+    {
+        if (_disposed) return;
+        _writer.TryComplete();
+        var handler = EndOfStream;
+        if (handler == null) return;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h) = ((AudioChannel, EventHandler))s!;
+            h(self, EventArgs.Empty);
+        }, (this, handler));
+    }
+
     /// <param name="bufferDepth">Number of chunks the ring buffer can hold before back-pressuring.</param>
     public AudioChannel(AudioFormat sourceFormat, int bufferDepth = 8)
     {

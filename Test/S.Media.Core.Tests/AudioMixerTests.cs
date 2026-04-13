@@ -1,6 +1,5 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
-using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
 using Xunit;

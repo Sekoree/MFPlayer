@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
-using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
+using S.Media.Core;
 using SDL = global::SDL3.SDL;
 
 namespace S.Media.SDL3;
@@ -68,6 +68,11 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private long                     _glMakeCurrentFailures;
     private volatile int             _yuvColorRange = (int)YuvColorRange.Auto;
     private volatile int             _yuvColorMatrix = (int)YuvColorMatrix.Auto;
+    // Set to true when the user explicitly overrides the YUV hints; suppresses auto-detect.
+    private volatile bool            _hasYuvHintsOverride;
+    // Per-frame auto-hint tracking (render thread only — no lock needed).
+    private YuvColorMatrix           _lastAutoMatrix = YuvColorMatrix.Auto;
+    private YuvColorRange            _lastAutoRange  = YuvColorRange.Auto;
 
     // ── SDL init ref-counting ─────────────────────────────────────────────
     // Multiple SDL3VideoOutput instances may coexist; only the last Dispose
@@ -92,6 +97,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
         {
             var range  = NormalizeColorRange(value.Range);
             var matrix = NormalizeColorMatrix(value.Matrix);
+            _hasYuvHintsOverride = true;
             _yuvColorRange  = (int)range;
             _yuvColorMatrix = (int)matrix;
             if (_renderer != null)
@@ -362,6 +368,22 @@ public sealed class SDL3VideoOutput : IVideoOutput
                 if (frame.HasValue)
                 {
                     _renderer!.SetVideoSize(frame.Value.Width, frame.Value.Height);
+
+                    // Auto-propagate IVideoColorMatrixHint from the active channel when no
+                    // manual override has been set. O(1) comparison avoids redundant GL uniform
+                    // updates when the matrix/range are stable across frames.
+                    if (!_hasYuvHintsOverride && mixer.ActiveChannel is IVideoColorMatrixHint hint)
+                    {
+                        var m = hint.SuggestedYuvColorMatrix;
+                        var r = hint.SuggestedYuvColorRange;
+                        if (m != _lastAutoMatrix || r != _lastAutoRange)
+                        {
+                            _lastAutoMatrix = m;
+                            _lastAutoRange  = r;
+                            _renderer.YuvColorMatrix = m;
+                            _renderer.YuvColorRange  = r;
+                        }
+                    }
 
                     switch (frame.Value.PixelFormat)
                     {
