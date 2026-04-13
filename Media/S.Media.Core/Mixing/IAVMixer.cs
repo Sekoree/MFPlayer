@@ -74,6 +74,21 @@ public interface IAVMixer : IDisposable
     void RegisterAudioEndpoint(IAudioBufferEndpoint endpoint, int channels = 0);
     void UnregisterAudioEndpoint(IAudioBufferEndpoint endpoint);
 
+    /// <summary>
+    /// Routes an audio channel to a previously registered endpoint.
+    /// An explicit <paramref name="routeMap"/> controls src→dst channel mapping.
+    /// </summary>
+    void RouteAudioChannelToEndpoint(Guid channelId, IAudioBufferEndpoint endpoint, ChannelRouteMap routeMap);
+
+    /// <summary>
+    /// Routes an audio channel to a previously registered endpoint using an
+    /// automatically-derived route map (mono→stereo expansion or straight 1:1 mapping).
+    /// </summary>
+    void RouteAudioChannelToEndpoint(Guid channelId, IAudioBufferEndpoint endpoint);
+
+    /// <summary>Removes any channel route from the specified audio endpoint.</summary>
+    void UnrouteAudioChannelFromEndpoint(IAudioBufferEndpoint endpoint);
+
     // ── Batch helpers ──────────────────────────────────────────────────────
 
     void RouteVideoChannelToSinks(Guid channelId, IReadOnlyList<IVideoSink> sinks);

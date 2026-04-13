@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
 
@@ -52,7 +53,8 @@ internal sealed class VideoMixer : IVideoMixer
 
     private readonly Lock _lock = new();
     private IVideoChannel[] _channels = [];
-    private readonly Dictionary<Guid, long> _channelOffsetTicks = new();
+    // Lock-free read path: replaced Dictionary with an immutable snapshot updated under _lock.
+    private ImmutableDictionary<Guid, long> _channelOffsetTicks = ImmutableDictionary<Guid, long>.Empty;
     private volatile IVideoChannel? _activeChannel;
     private volatile SinkTarget[] _sinkTargets = [];
     private VideoFrame? _lastFrame;
@@ -181,7 +183,7 @@ internal sealed class VideoMixer : IVideoMixer
             for (int i = 0, j = 0; i < old.Length; i++)
                 if (i != idx) neo[j++] = old[i];
             _channels = neo;
-            _channelOffsetTicks.Remove(channelId);
+            Volatile.Write(ref _channelOffsetTicks, _channelOffsetTicks.Remove(channelId));
         }
         Log.LogInformation("Video channel removed: id={ChannelId}", channelId);
     }
@@ -223,10 +225,10 @@ internal sealed class VideoMixer : IVideoMixer
             if (!found)
                 throw new InvalidOperationException("Channel is not registered.");
 
-            if (offset == TimeSpan.Zero)
-                _channelOffsetTicks.Remove(channelId);
-            else
-                _channelOffsetTicks[channelId] = offset.Ticks;
+            var updated = offset == TimeSpan.Zero
+                ? _channelOffsetTicks.Remove(channelId)
+                : _channelOffsetTicks.SetItem(channelId, offset.Ticks);
+            Volatile.Write(ref _channelOffsetTicks, updated);
 
             Log.LogInformation("Video channel time offset set: id={ChannelId}, offset={OffsetMs}ms",
                 channelId, offset.TotalMilliseconds);
@@ -236,26 +238,20 @@ internal sealed class VideoMixer : IVideoMixer
     /// <inheritdoc/>
     public TimeSpan GetChannelTimeOffset(Guid channelId)
     {
-        lock (_lock)
-        {
-            return _channelOffsetTicks.TryGetValue(channelId, out long ticks)
-                ? TimeSpan.FromTicks(ticks)
-                : TimeSpan.Zero;
-        }
+        var snap = Volatile.Read(ref _channelOffsetTicks);
+        return snap.TryGetValue(channelId, out long ticks)
+            ? TimeSpan.FromTicks(ticks)
+            : TimeSpan.Zero;
     }
 
     private TimeSpan GetOffsetForChannel(IVideoChannel? channel)
     {
         if (channel is null) return TimeSpan.Zero;
-        // _channelOffsetTicks is only mutated under _lock; the read here is on the
-        // render thread. For the presentation hot path we accept a potential stale
-        // read (the offset changes infrequently and always converges on the next frame).
-        lock (_lock)
-        {
-            return _channelOffsetTicks.TryGetValue(channel.Id, out long ticks)
-                ? TimeSpan.FromTicks(ticks)
-                : TimeSpan.Zero;
-        }
+        // Lock-free read: _channelOffsetTicks is an immutable snapshot replaced atomically.
+        var snap = Volatile.Read(ref _channelOffsetTicks);
+        return snap.TryGetValue(channel.Id, out long ticks)
+            ? TimeSpan.FromTicks(ticks)
+            : TimeSpan.Zero;
     }
 
     /// <inheritdoc/>
@@ -318,10 +314,14 @@ internal sealed class VideoMixer : IVideoMixer
                 return;
             }
 
-            // Temporary guard: each sink can be routed to at most one source channel.
-            // Re-route requires explicit unroute first; multi-source blend/composite is not supported yet.
+            // Auto-unroute: if the sink is already routed to a different channel, reset it first.
             if (target.ActiveChannel is not null && target.ActiveChannel.Id != channelId.Value)
-                throw new InvalidOperationException("Sink already has a routed source channel. Unroute first before routing a different channel.");
+            {
+                Log.LogInformation("Auto-unrouting sink from channel {OldId} before routing to {NewId}",
+                    target.ActiveChannel.Id, channelId.Value);
+                target.ActiveChannel = null;
+                target.ResetState();
+            }
 
             foreach (var ch in _channels)
                 if (ch.Id == channelId.Value)

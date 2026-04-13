@@ -1020,9 +1020,10 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(0);
     }
 
-    private bool ShouldUseBt709MatrixForYuv(int width, int height)
+    private int GetColorMatrixValue(int width, int height)
     {
-        return YuvAutoPolicy.ResolveMatrix(_i422P10ColorMatrix, width, height) == YuvColorMatrix.Bt709;
+        var resolved = YuvAutoPolicy.ResolveMatrix(_i422P10ColorMatrix, width, height);
+        return YuvAutoPolicy.ToShaderValue(resolved);
     }
 
     private bool ShouldUseLimitedRangeForYuv()
@@ -1039,7 +1040,7 @@ internal sealed unsafe class GLRenderer : IDisposable
 
     private static YuvColorMatrix NormalizeColorMatrix(YuvColorMatrix value)
     {
-        return value is YuvColorMatrix.Auto or YuvColorMatrix.Bt601 or YuvColorMatrix.Bt709
+        return value is YuvColorMatrix.Auto or YuvColorMatrix.Bt601 or YuvColorMatrix.Bt709 or YuvColorMatrix.Bt2020
             ? value
             : YuvColorMatrix.Auto;
     }

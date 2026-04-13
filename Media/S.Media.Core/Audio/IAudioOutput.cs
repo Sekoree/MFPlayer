@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Audio;
@@ -32,5 +33,6 @@ public interface IAudioOutput : IMediaOutput
     /// Called by <see cref="AggregateOutput"/> to intercept the fill path.
     /// Not intended for direct use by application code.
     /// </summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
     void OverrideRtMixer(IAudioMixer mixer);
 }

@@ -161,10 +161,17 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     private int _yuvColorMatrix  = -1;
     private int _yuvLimitedRange = 0;
 
-    /// <summary>Overrides YUV color matrix and range used by GPU shaders.</summary>
+    /// <summary>Overrides YUV color matrix and range used by GPU shaders (legacy boolean API).</summary>
     public void SetYuvHints(bool bt709, bool limitedRange)
     {
         _yuvColorMatrix  = bt709        ? 1 : 0;
+        _yuvLimitedRange = limitedRange ? 1 : 0;
+    }
+
+    /// <summary>Overrides YUV color matrix and range used by GPU shaders.</summary>
+    public void SetYuvHints(YuvColorMatrix matrix, bool limitedRange)
+    {
+        _yuvColorMatrix  = YuvAutoPolicy.ToShaderValue(matrix);
         _yuvLimitedRange = limitedRange ? 1 : 0;
     }
 
@@ -465,7 +472,10 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
 
     private void DrawYuv(uint prog, int height)
     {
-        int matrix = _yuvColorMatrix >= 0 ? _yuvColorMatrix : (height > 720 ? 1 : 0);
+        // -1 = auto: pick BT.601 for SD (≤720 lines) or BT.709 for HD
+        int matrix = _yuvColorMatrix >= 0
+            ? _yuvColorMatrix
+            : YuvAutoPolicy.ToShaderValue(YuvAutoPolicy.ResolveMatrix(YuvColorMatrix.Auto, 0, height));
         _glUseProgram(prog);
         SetUniform1i(prog, "uColorMatrix\0"u8,  matrix);
         SetUniform1i(prog, "uLimitedRange\0"u8, _yuvLimitedRange);
@@ -474,7 +484,9 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
 
     private void DrawUyvy422(uint prog, int videoWidth, int videoHeight)
     {
-        int matrix = _yuvColorMatrix >= 0 ? _yuvColorMatrix : (videoHeight > 720 ? 1 : 0);
+        int matrix = _yuvColorMatrix >= 0
+            ? _yuvColorMatrix
+            : YuvAutoPolicy.ToShaderValue(YuvAutoPolicy.ResolveMatrix(YuvColorMatrix.Auto, 0, videoHeight));
         _glUseProgram(prog);
         SetUniform1i(prog, "uVideoWidth\0"u8,   videoWidth);
         SetUniform1i(prog, "uColorMatrix\0"u8,  matrix);

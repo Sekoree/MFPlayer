@@ -51,11 +51,18 @@ public static class GlShaderSources
             float r;
             float g;
             float b;
-            if (uColorMatrix != 0) {
+            if (uColorMatrix == 2) {
+                // BT.2020
+                r = y + 1.4746 * v;
+                g = y - 0.1645 * u - 0.5713 * v;
+                b = y + 1.8814 * u;
+            } else if (uColorMatrix == 1) {
+                // BT.709
                 r = y + 1.5748 * v;
                 g = y - 0.187324 * u - 0.468124 * v;
                 b = y + 1.8556 * u;
             } else {
+                // BT.601
                 r = y + 1.402 * v;
                 g = y - 0.344136 * u - 0.714136 * v;
                 b = y + 1.772 * u;
@@ -91,7 +98,11 @@ public static class GlShaderSources
             float r;
             float g;
             float b;
-            if (uColorMatrix != 0) {
+            if (uColorMatrix == 2) {
+                r = y + 1.4746 * v;
+                g = y - 0.1645 * u - 0.5713 * v;
+                b = y + 1.8814 * u;
+            } else if (uColorMatrix == 1) {
                 r = y + 1.5748 * v;
                 g = y - 0.187324 * u - 0.468124 * v;
                 b = y + 1.8556 * u;
@@ -140,7 +151,12 @@ public static class GlShaderSources
             float r;
             float g;
             float b;
-            if (uColorMatrix != 0) {
+            if (uColorMatrix == 2) {
+                // BT.2020
+                r = y + 1.4746 * v;
+                g = y - 0.1645 * u - 0.5713 * v;
+                b = y + 1.8814 * u;
+            } else if (uColorMatrix == 1) {
                 // BT.709
                 r = y + 1.5748 * v;
                 g = y - 0.187324 * u - 0.468124 * v;
@@ -193,7 +209,11 @@ public static class GlShaderSources
             float r;
             float g;
             float b;
-            if (uColorMatrix != 0) {
+            if (uColorMatrix == 2) {
+                r = y + 1.4746 * v;
+                g = y - 0.1645 * u - 0.5713 * v;
+                b = y + 1.8814 * u;
+            } else if (uColorMatrix == 1) {
                 r = y + 1.5748 * v;
                 g = y - 0.187324 * u - 0.468124 * v;
                 b = y + 1.8556 * u;
@@ -243,7 +263,11 @@ public static class GlShaderSources
             float r;
             float g;
             float b;
-            if (uColorMatrix != 0) {
+            if (uColorMatrix == 2) {
+                r = y + 1.4746 * v;
+                g = y - 0.1645 * u - 0.5713 * v;
+                b = y + 1.8814 * u;
+            } else if (uColorMatrix == 1) {
                 r = y + 1.5748 * v;
                 g = y - 0.187324 * u - 0.468124 * v;
                 b = y + 1.8556 * u;
@@ -286,7 +310,11 @@ public static class GlShaderSources
             float r;
             float g;
             float b;
-            if (uColorMatrix != 0) {
+            if (uColorMatrix == 2) {
+                r = y + 1.4746 * v;
+                g = y - 0.1645 * u - 0.5713 * v;
+                b = y + 1.8814 * u;
+            } else if (uColorMatrix == 1) {
                 r = y + 1.5748 * v;
                 g = y - 0.187324 * u - 0.468124 * v;
                 b = y + 1.8556 * u;

@@ -154,7 +154,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private long                     _seekPositionTicks;
     private long                     _seekControlDropLogCount;
     private int                      _started;
-    private readonly object          _formatIoGate = new();
+    private readonly ReaderWriterLockSlim  _formatIoGate = new(LockRecursionPolicy.NoRecursion);
     private string?                  _activeHwDeviceType;
     private readonly ILogger         _log;
 
@@ -498,7 +498,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         long ts = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
         int epoch;
 
-        lock (_formatIoGate)
+        _formatIoGate.EnterWriteLock();
+        try
         {
             int ret = ffmpeg.av_seek_frame(_fmt, -1, ts, ffmpeg.AVSEEK_FLAG_BACKWARD);
             if (ret < 0)
@@ -509,6 +510,10 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
             epoch = Interlocked.Increment(ref _seekEpoch);
             Volatile.Write(ref _seekPositionTicks, position.Ticks);
+        }
+        finally
+        {
+            _formatIoGate.ExitWriteLock();
         }
 
         _log.LogDebug("Seek committed, epoch={Epoch}", epoch);
@@ -574,7 +579,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         var pkt = (AVPacket*)pktHandle;
         int packetEpoch;
         long seekPositionTicks;
-        lock (_formatIoGate)
+        _formatIoGate.EnterReadLock();
+        try
         {
             int ret = ffmpeg.av_read_frame(_fmt, pkt);
             if (ret == ffmpeg.AVERROR_EOF)
@@ -584,6 +590,10 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
             packetEpoch = Volatile.Read(ref _seekEpoch);
             seekPositionTicks = Volatile.Read(ref _seekPositionTicks);
+        }
+        finally
+        {
+            _formatIoGate.ExitReadLock();
         }
 
         if (!_queues.TryGetValue(pkt->stream_index, out var q))
@@ -702,6 +712,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         }
 
         _avioCtx?.Dispose();
+        _formatIoGate.Dispose();
         _log.LogDebug("FFmpegDecoder disposed");
     }
 }

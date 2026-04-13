@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using S.Media.Core.Media;
 
 namespace S.Media.Core.Video;
@@ -25,5 +26,6 @@ public interface IVideoOutput : IMediaOutput
     /// Replaces the presentation mixer used by the render loop.
     /// Called by <see cref="Mixing.IAVMixer"/>; not intended for direct app use.
     /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     void OverridePresentationMixer(IVideoMixer mixer);
 }
