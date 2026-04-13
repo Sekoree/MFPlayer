@@ -170,9 +170,13 @@ public static class GlShaderSources
         uniform int uLimitedRange;
         uniform int uColorMatrix;
         void main() {
-            float pixelX = vUV.x * float(uVideoWidth);
-            vec4 uyvy    = texture(uTexUYVY, vUV);
-            float yRaw   = (fract(pixelX / 2.0) < 0.5) ? uyvy.g : uyvy.a;
+            ivec2 texSize = textureSize(uTexUYVY, 0);
+            int px = int(clamp(floor(vUV.x * float(uVideoWidth)), 0.0, float(max(uVideoWidth - 1, 0))));
+            int py = int(clamp(floor(vUV.y * float(texSize.y)), 0.0, float(max(texSize.y - 1, 0))));
+            int pairX = px >> 1;
+
+            vec4 uyvy  = texelFetch(uTexUYVY, ivec2(pairX, py), 0);
+            float yRaw = ((px & 1) == 0) ? uyvy.g : uyvy.a;
             float uRaw   = uyvy.r;
             float vRaw   = uyvy.b;
 

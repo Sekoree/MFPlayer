@@ -209,7 +209,7 @@ using (ndiRuntime)
             // scheduler jitter between the capture thread's Sleep wakeups.
             Console.Write("buffering… ");
             using var preCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            try   { await audioChannel.WaitForBufferAsync(8, preCts.Token); }
+            try   { await ndiSource.WaitForAudioBufferAsync(8, preCts.Token); }
             catch (OperationCanceledException) { /* timed out — proceed with whatever arrived */ }
 
             await output.StartAsync();

@@ -11,7 +11,7 @@ namespace S.Media.FFmpeg;
 /// Decodes a single audio stream into interleaved Float32 PCM via a background thread,
 /// then exposes the data through the <see cref="IAudioChannel"/> pull/push interface.
 /// </summary>
-public sealed unsafe class FFmpegAudioChannel : IAudioChannel
+internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
 {
     private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegAudioChannel));
     private readonly struct AudioChunk

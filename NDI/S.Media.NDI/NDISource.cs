@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using NDILib;
+using S.Media.Core.Audio;
 using S.Media.Core.Media;
+using S.Media.Core.Video;
 
 namespace S.Media.NDI;
 
@@ -68,6 +70,8 @@ public sealed class NDISource : IDisposable
     private readonly NDIReceiver  _receiver;
     private readonly NDIFrameSync _frameSync;
     private readonly NDISourceOptions _options;
+    private readonly NDIAudioChannel? _audioChannelImpl;
+    private readonly NDIVideoChannel? _videoChannelImpl;
 
     // Connection tracking
     private NDIDiscoveredSource? _connectedSource;
@@ -80,10 +84,10 @@ public sealed class NDISource : IDisposable
     private bool _disposed;
 
     /// <summary>The audio channel for this source. <see langword="null"/> if audio is not available.</summary>
-    public NDIAudioChannel? AudioChannel { get; }
+    public IAudioChannel? AudioChannel { get; }
 
     /// <summary>The video channel for this source. <see langword="null"/> if video is not available.</summary>
-    public NDIVideoChannel? VideoChannel { get; }
+    public IVideoChannel? VideoChannel { get; }
 
     /// <summary>The clock driven by NDI frame timestamps.</summary>
     public NDIClock Clock { get; }
@@ -100,8 +104,8 @@ public sealed class NDISource : IDisposable
         NDIReceiver      receiver,
         NDIFrameSync     frameSync,
         NDIClock         clock,
-        NDIAudioChannel? audio,
-        NDIVideoChannel? video,
+        IAudioChannel?   audio,
+        IVideoChannel?   video,
         NDISourceOptions options)
     {
         _receiver    = receiver;
@@ -109,6 +113,8 @@ public sealed class NDISource : IDisposable
         Clock        = clock;
         AudioChannel = audio;
         VideoChannel = video;
+        _audioChannelImpl = audio as NDIAudioChannel;
+        _videoChannelImpl = video as NDIVideoChannel;
         _options     = options;
     }
 
@@ -139,12 +145,14 @@ public sealed class NDISource : IDisposable
         }
 
         var clock = new NDIClock();
+        var frameSyncGate = new Lock();
         var audio = new NDIAudioChannel(frameSync, clock,
+            frameSyncGate,
             sampleRate:  options.SampleRate,
             channels:    options.Channels,
             bufferDepth: options.AudioBufferDepth);
         var video = options.EnableVideo
-            ? new NDIVideoChannel(frameSync, clock, bufferDepth: options.VideoBufferDepth)
+            ? new NDIVideoChannel(frameSync, clock, frameSyncGate, bufferDepth: options.VideoBufferDepth)
             : null;
 
         Log.LogInformation("Opened NDISource: source={SourceName}, sampleRate={SampleRate}, channels={Channels}, enableVideo={EnableVideo}, autoReconnect={AutoReconnect}",
@@ -236,8 +244,8 @@ public sealed class NDISource : IDisposable
 
         Log.LogInformation("Starting NDISource");
         Clock.Start();
-        AudioChannel?.StartCapture();
-        VideoChannel?.StartCapture();
+        _audioChannelImpl?.StartCapture();
+        _videoChannelImpl?.StartCapture();
 
         if (_options.AutoReconnect)
             StartWatchThread();
@@ -248,6 +256,17 @@ public sealed class NDISource : IDisposable
     {
         Log.LogInformation("Stopping NDISource");
         Clock.Stop();
+    }
+
+    /// <summary>
+    /// Waits until the underlying NDI audio ring reaches a minimum number of chunks.
+    /// No-op when audio is unavailable.
+    /// </summary>
+    public Task WaitForAudioBufferAsync(int minChunks, CancellationToken ct = default)
+    {
+        return _audioChannelImpl != null
+            ? _audioChannelImpl.WaitForBufferAsync(minChunks, ct)
+            : Task.CompletedTask;
     }
 
     // ── Connection watchdog ──────────────────────────────────────────────────

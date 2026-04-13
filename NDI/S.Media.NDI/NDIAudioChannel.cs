@@ -19,11 +19,12 @@ namespace S.Media.NDI;
 /// Fully consumed buffers are returned to the pool immediately after the RT pull.
 /// </para>
 /// </summary>
-public sealed class NDIAudioChannel : IAudioChannel
+internal sealed class NDIAudioChannel : IAudioChannel
 {
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAudioChannel));
 
     private readonly NDIFrameSync        _frameSync;
+    private readonly Lock                _frameSyncGate;
     private readonly NDIClock            _clock;
     private readonly int                 _requestedSampleRate;
     private readonly int                 _requestedChannels;
@@ -73,11 +74,13 @@ public sealed class NDIAudioChannel : IAudioChannel
     public NDIAudioChannel(
         NDIFrameSync frameSync,
         NDIClock     clock,
+        Lock?        frameSyncGate = null,
         int          sampleRate  = 48000,
         int          channels    = 2,
         int          bufferDepth = 16)
     {
         _frameSync            = frameSync;
+        _frameSyncGate        = frameSyncGate ?? new Lock();
         _clock                = clock;
         _requestedSampleRate  = sampleRate;
         _requestedChannels    = channels;
@@ -164,8 +167,12 @@ public sealed class NDIAudioChannel : IAudioChannel
             // ── Capture ───────────────────────────────────────────────────────
             try
             {
-                _frameSync.CaptureAudio(out var frame,
-                    _requestedSampleRate, _requestedChannels, FramesPerCapture);
+                NDIAudioFrameV3 frame;
+                lock (_frameSyncGate)
+                {
+                    _frameSync.CaptureAudio(out frame,
+                        _requestedSampleRate, _requestedChannels, FramesPerCapture);
+                }
 
                 // Guard: no samples or null data pointer → framesync returning silence placeholder.
                 if (frame.NoSamples <= 0 || frame.PData == nint.Zero) continue;
@@ -185,7 +192,8 @@ public sealed class NDIAudioChannel : IAudioChannel
                 }
 
                 PlanarToInterleaved(frame, buf);
-                _frameSync.FreeAudio(frame); // release NDI buffer as soon as data is copied
+                lock (_frameSyncGate)
+                    _frameSync.FreeAudio(frame); // release NDI buffer as soon as data is copied
 
                 // With DropOldest mode the channel handles overflow atomically — no
                 // separate TryRead loop here.  TryWrite returns false only after Dispose.

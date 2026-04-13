@@ -137,10 +137,10 @@ using (ndiRuntime)
     // Allow Ctrl+C to cancel discovery too.
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; discoveryCts.Cancel(); };
 
-    NDISource ndiSource;
+    NDIAVChannel avSource;
     try
     {
-        ndiSource = await NDISource.OpenByNameAsync(
+        avSource = await NDIAVChannel.OpenByNameAsync(
             sourceName,
             new NDISourceOptions
             {
@@ -149,6 +149,10 @@ using (ndiRuntime)
                 AudioBufferDepth         = 32,
                 VideoBufferDepth         = 4,
                 EnableVideo              = true,
+                //ReceiverSettings         = new NDIReceiverSettings
+                //{
+                //    ColorFormat = NDIRecvColorFormat.BgrxBgra
+                //},
                 AutoReconnect            = true,
                 ConnectionCheckIntervalMs = 2000,
                 FinderSettings           = new NDIFinderSettings { ShowLocalSources = true }
@@ -168,18 +172,11 @@ using (ndiRuntime)
 
     Console.WriteLine($"  ✓ Connected to NDI source");
 
-    if (ndiSource.AudioChannel == null)
-    {
-        Console.WriteLine("The selected NDI source has no audio stream.");
-        ndiSource.Dispose();
-        return;
-    }
-
-    using (ndiSource)
+    using (avSource)
     {
         // ── 7. Subscribe to state changes ────────────────────────────────────
 
-        ndiSource.StateChanged += (_, e) =>
+        avSource.StateChanged += (_, e) =>
         {
             var color = e.NewState switch
             {
@@ -197,7 +194,7 @@ using (ndiRuntime)
 
         // ── 8. Wire up audio pipeline ────────────────────────────────────────
 
-        var audioChannel = ndiSource.AudioChannel;
+        var audioChannel = avSource.AudioChannel;
         var srcFmt       = audioChannel.SourceFormat;
         int outCh        = Math.Min(srcFmt.Channels, outChannels);
         var hwFmt        = new AudioFormat(srcFmt.SampleRate, outCh);
@@ -227,14 +224,14 @@ using (ndiRuntime)
 
         // ── 8b. Wire up video pipeline (if available) ─────────────────────────
 
-        var videoChannel = ndiSource.VideoChannel;
+        var videoChannel = avSource.VideoChannel;
         SDL3VideoOutput? videoOutput = null;
 
         if (videoChannel != null)
         {
             // NDISource.Start() must be called before we can receive frames,
             // so start now and wait for the first video frame to learn the format.
-            ndiSource.Start();
+            avSource.Start();
 
             Console.Write("  Waiting for first video frame… ");
             VideoFormat videoFormat = default;
@@ -266,6 +263,7 @@ using (ndiRuntime)
             try
             {
                 videoOutput.Open($"NDI — {sourceName}", winW, winH, videoFormat);
+                videoOutput.OverridePresentationClock(output.Clock);
                 Console.WriteLine($"  SDL3 video: {winW}×{winH} window, {videoOutput.OutputFormat}");
             }
             catch (Exception ex)
@@ -301,12 +299,12 @@ using (ndiRuntime)
         {
             // ndiSource.Start() may already have been called above for video
             // format detection — calling it again is a safe no-op.
-            ndiSource.Start();
+            avSource.Start();
 
             // Pre-buffer audio
             Console.Write("buffering… ");
             using var preCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            try   { await audioChannel.WaitForBufferAsync(8, preCts.Token); }
+            try   { await avSource.WaitForAudioBufferAsync(8, preCts.Token); }
             catch (OperationCanceledException) { /* timed out — proceed */ }
 
             await output.StartAsync();
@@ -316,7 +314,7 @@ using (ndiRuntime)
         catch (Exception ex)
         {
             Console.WriteLine($"FAILED\n  {ex.Message}");
-            ndiSource.Stop();
+            avSource.Stop();
             videoOutput?.Dispose();
             return;
         }
@@ -349,12 +347,14 @@ using (ndiRuntime)
             while (!cts.IsCancellationRequested)
             {
                 await Task.Delay(5000, cts.Token).ConfigureAwait(false);
-                var state    = ndiSource.State;
+                var state    = avSource.State;
                 var aPos     = audioChannel.Position;
                 var bufAvail = audioChannel.BufferAvailable;
                 var line     = $"  [{DateTime.Now:HH:mm:ss}]  state={state}  audio={aPos:mm\\:ss\\.fff}  buf={bufAvail}";
                 if (videoChannel != null)
                     line += $"  video={videoChannel.Position:mm\\:ss\\.fff}";
+                if (avSource.TryGetAvDrift(out var drift))
+                    line += $"  drift={drift.TotalMilliseconds,7:F1}ms";
                 if (videoOutput != null)
                 {
                     var snap = videoOutput.GetDiagnosticsSnapshot();
@@ -387,7 +387,7 @@ using (ndiRuntime)
         if (videoOutput != null)
             await videoOutput.StopAsync();
         await output.StopAsync();
-        ndiSource.Stop();
+        avSource.Stop();
         videoOutput?.Dispose();
         Console.WriteLine("Done.");
     }

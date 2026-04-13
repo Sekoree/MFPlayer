@@ -40,6 +40,9 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private VideoMixer?  _mixer;
     private volatile IVideoMixer? _activeMixer;
     private VideoPtsClock? _clock;
+    private volatile IMediaClock? _presentationClockOverride;
+    private long _presentationClockOriginTicks;
+    private int _hasPresentationClockOrigin;
     private VideoFormat  _outputFormat;
 
     // ── Render thread ─────────────────────────────────────────────────────
@@ -137,6 +140,18 @@ public sealed class SDL3VideoOutput : IVideoOutput
     /// <inheritdoc/>
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
     public void OverridePresentationMixer(IVideoMixer mixer) => _activeMixer = mixer;
+
+    /// <summary>
+    /// Overrides the render-loop presentation clock.
+    /// Set this to an audio hardware clock (for example <see cref="S.Media.PortAudio.PortAudioOutput.Clock"/>)
+    /// to keep video pacing aligned with audio.
+    /// </summary>
+    public void OverridePresentationClock(IMediaClock? clock)
+    {
+        _presentationClockOverride = clock;
+        Volatile.Write(ref _hasPresentationClockOrigin, 0);
+        Volatile.Write(ref _presentationClockOriginTicks, 0);
+    }
 
 
     /// <inheritdoc/>
@@ -240,6 +255,8 @@ public sealed class SDL3VideoOutput : IVideoOutput
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _closeRequested = false;
+        Volatile.Write(ref _hasPresentationClockOrigin, 0);
+        Volatile.Write(ref _presentationClockOriginTicks, 0);
 
         _renderThread = new Thread(RenderLoop)
         {
@@ -320,10 +337,32 @@ public sealed class SDL3VideoOutput : IVideoOutput
                 if (mixer == null)
                     throw new InvalidOperationException("Presentation mixer is not available.");
 
-                var frame = mixer.PresentNextFrame(_clock!.Position);
+                var externalClock = _presentationClockOverride;
+                var presentationClock = externalClock ?? _clock;
+                if (presentationClock == null)
+                    throw new InvalidOperationException("Presentation clock is not available.");
+
+                var clockPosition = presentationClock.Position;
+                if (externalClock != null)
+                {
+                    long rawTicks = clockPosition.Ticks;
+                    if (rawTicks < 0) rawTicks = 0;
+
+                    if (Interlocked.CompareExchange(ref _hasPresentationClockOrigin, 1, 0) == 0)
+                        Volatile.Write(ref _presentationClockOriginTicks, rawTicks);
+
+                    long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
+                    long relTicks = rawTicks - originTicks;
+                    if (relTicks < 0) relTicks = 0;
+                    clockPosition = TimeSpan.FromTicks(relTicks);
+                }
+
+                var frame = mixer.PresentNextFrame(clockPosition);
 
                 if (frame.HasValue)
                 {
+                    _renderer!.SetVideoSize(frame.Value.Width, frame.Value.Height);
+
                     switch (frame.Value.PixelFormat)
                     {
                         case PixelFormat.Bgra32:
@@ -350,7 +389,8 @@ public sealed class SDL3VideoOutput : IVideoOutput
                     }
 
                     _renderer!.UploadAndDraw(frame.Value);
-                    _clock!.UpdateFromFrame(frame.Value.Pts);
+                    if (_presentationClockOverride == null)
+                        _clock!.UpdateFromFrame(frame.Value.Pts);
                     Interlocked.Increment(ref _presentedFrames);
                 }
                 else

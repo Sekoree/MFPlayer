@@ -4,7 +4,9 @@ using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Audio;
 using S.Media.Core.Media;
+using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg;
 
@@ -114,7 +116,7 @@ internal sealed class EncodedPacket
 
 /// <summary>
 /// Opens a media file or URL, discovers audio/video streams and exposes them as
-/// <see cref="FFmpegAudioChannel"/> / <see cref="FFmpegVideoChannel"/> instances.
+/// <see cref="IAudioChannel"/> / <see cref="IVideoChannel"/> collections.
 /// A single demux thread reads packets and routes them to per-stream bounded queues.
 /// Back-pressure is applied via async write — no silent packet drops.
 /// </summary>
@@ -163,10 +165,13 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     // Demux thread borrows; decode threads return via ReturnPacketToPool().
     internal readonly ConcurrentQueue<EncodedPacket> PacketPool = new();
 
-    public IReadOnlyList<FFmpegAudioChannel> AudioChannels { get; private set; }
-        = Array.Empty<FFmpegAudioChannel>();
-    public IReadOnlyList<FFmpegVideoChannel> VideoChannels { get; private set; }
-        = Array.Empty<FFmpegVideoChannel>();
+    private IReadOnlyList<FFmpegAudioChannel> _audioChannelsImpl = Array.Empty<FFmpegAudioChannel>();
+    private IReadOnlyList<FFmpegVideoChannel> _videoChannelsImpl = Array.Empty<FFmpegVideoChannel>();
+
+    public IReadOnlyList<IAudioChannel> AudioChannels { get; private set; }
+        = Array.Empty<IAudioChannel>();
+    public IReadOnlyList<IVideoChannel> VideoChannels { get; private set; }
+        = Array.Empty<IVideoChannel>();
 
     private FFmpegDecoder()
     {
@@ -355,6 +360,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             }
         }
 
+        _audioChannelsImpl = audio;
+        _videoChannelsImpl = video;
         AudioChannels = audio;
         VideoChannels = video;
         _log.LogInformation("Discovered {AudioCount} audio and {VideoCount} video channels", audio.Count, video.Count);
@@ -460,8 +467,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
         _log.LogInformation("Starting decoder: {AudioChannels} audio + {VideoChannels} video channels", AudioChannels.Count, VideoChannels.Count);
 
-        foreach (var ch in AudioChannels) ch.StartDecoding(PacketPool);
-        foreach (var ch in VideoChannels) ch.StartDecoding(PacketPool);
+        foreach (var ch in _audioChannelsImpl) ch.StartDecoding(PacketPool);
+        foreach (var ch in _videoChannelsImpl) ch.StartDecoding(PacketPool);
 
         _demuxTask = FFmpegDemuxWorker.RunAsync(this, _cts.Token);
         _log.LogDebug("Demux worker started");
@@ -502,8 +509,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
                 _log.LogWarning("Seek control packet dropped for {DroppedCount} stream(s) (total={TotalDrops})", droppedControlPackets, warnCount);
         }
 
-        foreach (var ch in AudioChannels) ch.Seek(position);
-        foreach (var ch in VideoChannels) ch.Seek(position);
+        foreach (var ch in _audioChannelsImpl) ch.Seek(position);
+        foreach (var ch in _videoChannelsImpl) ch.Seek(position);
     }
 
     private bool WriteControlPacket(ChannelWriter<EncodedPacket> writer, EncodedPacket packet)
@@ -610,12 +617,12 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
     public DiagnosticsSnapshot GetDiagnosticsSnapshot()
     {
-        var channels = new VideoChannelDiagnostics[VideoChannels.Count];
+        var channels = new VideoChannelDiagnostics[_videoChannelsImpl.Count];
         int hwCount = 0;
 
-        for (int i = 0; i < VideoChannels.Count; i++)
+        for (int i = 0; i < _videoChannelsImpl.Count; i++)
         {
-            var ch = VideoChannels[i];
+            var ch = _videoChannelsImpl[i];
             bool isHw = ch.IsHardwareAccelerated;
             if (isHw) hwCount++;
 
@@ -641,8 +648,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         _log.LogInformation("Disposing FFmpegDecoder");
         _cts.Cancel();
 
-        foreach (var ch in AudioChannels) ch.Dispose();
-        foreach (var ch in VideoChannels) ch.Dispose();
+        foreach (var ch in _audioChannelsImpl) ch.Dispose();
+        foreach (var ch in _videoChannelsImpl) ch.Dispose();
 
         if (_demuxTask != null)
         {

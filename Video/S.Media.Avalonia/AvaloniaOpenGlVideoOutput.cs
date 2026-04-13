@@ -35,6 +35,9 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private VideoMixer? _mixer;
     private volatile IVideoMixer? _activeMixer;
     private VideoPtsClock? _clock;
+    private volatile IMediaClock? _presentationClockOverride;
+    private long _presentationClockOriginTicks;
+    private int _hasPresentationClockOrigin;
     private VideoFormat _outputFormat;
     private readonly BasicPixelFormatConverter _converter = new();
     private bool _isOpen;
@@ -81,6 +84,17 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     public bool IsRunning => _isRunning;
 
     public void OverridePresentationMixer(IVideoMixer mixer) => _activeMixer = mixer;
+
+    /// <summary>
+    /// Overrides the render-loop presentation clock.
+    /// Set this to an audio hardware clock to keep video pacing aligned with audio.
+    /// </summary>
+    public void OverridePresentationClock(IMediaClock? clock)
+    {
+        _presentationClockOverride = clock;
+        Volatile.Write(ref _hasPresentationClockOrigin, 0);
+        Volatile.Write(ref _presentationClockOriginTicks, 0);
+    }
 
     /// <summary>
     /// Frames older than (clock - threshold) are eligible for per-render catch-up skipping.
@@ -137,6 +151,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 
         _clock!.Start();
         _isRunning = true;
+        Volatile.Write(ref _hasPresentationClockOrigin, 0);
+        Volatile.Write(ref _presentationClockOriginTicks, 0);
         Log.LogInformation("AvaloniaOpenGlVideoOutput started");
         RequestNextFrameRendering();
         return Task.CompletedTask;
@@ -201,7 +217,26 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                 return;
             }
 
-            var clockPosition = _clock.Position;
+            var externalClock = _presentationClockOverride;
+            var presentationClock = externalClock ?? _clock;
+            if (presentationClock == null)
+                throw new InvalidOperationException("Presentation clock is not available.");
+
+            var clockPosition = presentationClock.Position;
+            if (externalClock != null)
+            {
+                long rawTicks = clockPosition.Ticks;
+                if (rawTicks < 0) rawTicks = 0;
+
+                if (Interlocked.CompareExchange(ref _hasPresentationClockOrigin, 1, 0) == 0)
+                    Volatile.Write(ref _presentationClockOriginTicks, rawTicks);
+
+                long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
+                long relTicks = rawTicks - originTicks;
+                if (relTicks < 0) relTicks = 0;
+                clockPosition = TimeSpan.FromTicks(relTicks);
+            }
+
             var frame = mixer.PresentNextFrame(clockPosition);
             if (frame.HasValue)
             {
@@ -265,7 +300,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 
                 tempOwner?.Dispose();
 
-                _clock.UpdateFromFrame(vf.Pts);
+                if (_presentationClockOverride == null)
+                    _clock.UpdateFromFrame(vf.Pts);
                 Interlocked.Increment(ref _presentedFrames);
             }
             else
