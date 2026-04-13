@@ -10,5 +10,17 @@ public enum PixelFormat
     Uyvy422,
     /// <summary>10-bit YUV 4:2:2 planar (yuv422p10le in FFmpeg). Required for high-bit-depth formats such as Apple ProRes 4444 and certain camera codecs.</summary>
     Yuv422p10,
+    /// <summary>10-bit semi-planar YUV 4:2:0 (p010le). Direct output of D3D11VA / VAAPI hardware decode on 10-bit HEVC/AV1.</summary>
+    P010,
+    /// <summary>10-bit planar YUV 4:2:0 (yuv420p10le / I010). FFmpeg software decode output for 10-bit HEVC/VP9.</summary>
+    Yuv420p10,
+    /// <summary>8-bit planar YUV 4:4:4. Used by JPEG 2000, lossless profiles, and some professional capture cards.</summary>
+    Yuv444p,
+    /// <summary>24-bit packed RGB (no alpha). Used by screenshots, some industrial cameras, and PNG-sourced frames.</summary>
+    Rgb24,
+    /// <summary>24-bit packed BGR (no alpha). Variant of Rgb24 with swapped R/B channels.</summary>
+    Bgr24,
+    /// <summary>Single-channel 8-bit luma (greyscale). Used by monochrome cameras, IR sensors, and mask/keying sources.</summary>
+    Gray8,
 }
 

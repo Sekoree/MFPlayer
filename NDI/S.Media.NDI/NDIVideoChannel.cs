@@ -42,6 +42,12 @@ internal sealed class NDIVideoChannel : IVideoChannel
     public Guid  Id      { get; } = Guid.NewGuid();
     public bool  IsOpen  => !_disposed;
     public bool  CanSeek => false;
+    public int   BufferDepth     => _ringCapacity;
+    public int   BufferAvailable { get { lock (_ringGate) return _ring.Count; } }
+
+#pragma warning disable CS0067  // NDI streams have no defined EOF; event may be used in future
+    public event EventHandler? EndOfStream;
+#pragma warning restore CS0067
 
     /// <inheritdoc/>
     public VideoFormat SourceFormat { get { lock (_formatLock) return _sourceFormat; } }

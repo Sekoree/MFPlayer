@@ -179,7 +179,8 @@ public sealed class AggregateOutput : IAudioOutput
     public void Dispose()
     {
         Log.LogInformation("Disposing AggregateOutput: sinks={SinkCount}", _sinks.Length);
-        foreach (var s in _sinks) s.Dispose();
+        // Do NOT dispose sinks — they are externally-owned and may be shared with other aggregates.
+        // Callers are responsible for disposing sinks they injected via AddSink().
         _mixer?.Dispose();
         _leader.Dispose();
         Log.LogDebug("AggregateOutput disposed");

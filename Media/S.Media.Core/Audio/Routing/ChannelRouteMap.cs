@@ -105,5 +105,27 @@ public sealed class ChannelRouteMap
     /// exclusively to sinks via <see cref="IAudioMixer.RouteTo"/>.
     /// </summary>
     public static ChannelRouteMap Silence() => new([]);
+
+    /// <summary>
+    /// Mono source → both channels (0 and 1) of a stereo output.
+    /// </summary>
+    public static ChannelRouteMap MonoToStereo() =>
+        new Builder().Route(0, 0).Route(0, 1).Build();
+
+    /// <summary>
+    /// Automatic route map for the most common playback wiring:
+    /// pass-through up to <c>min(srcChannels, dstChannels)</c>,
+    /// with mono-to-stereo expansion when <paramref name="srcChannels"/> == 1 and
+    /// <paramref name="dstChannels"/> >= 2.
+    /// </summary>
+    public static ChannelRouteMap Auto(int srcChannels, int dstChannels)
+    {
+        if (srcChannels == 1 && dstChannels >= 2)
+            return MonoToStereo();
+        int common = Math.Min(srcChannels, dstChannels);
+        var b = new Builder();
+        for (int i = 0; i < common; i++) b.Route(i, i);
+        return b.Build();
+    }
 }
 

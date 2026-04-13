@@ -21,6 +21,9 @@ public sealed class VideoMixerTests
         public Guid Id { get; } = Guid.NewGuid();
         public bool IsOpen => true;
         public bool CanSeek => false;
+        public int BufferDepth => 64;
+        public int BufferAvailable => _frames.Count;
+        public event EventHandler? EndOfStream { add { } remove { } }
         public VideoFormat SourceFormat { get; }
         public TimeSpan Position { get; private set; }
 

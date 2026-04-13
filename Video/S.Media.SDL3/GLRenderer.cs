@@ -46,6 +46,8 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const uint GL_TEXTURE0            = 0x84C0;
     private const uint GL_TEXTURE1            = 0x84C1;
     private const uint GL_TEXTURE2            = 0x84C2;
+    private const uint GL_RG16UI              = 0x823A;
+    private const uint GL_RG_INTEGER          = 0x8228;
 
     // ── GL function pointers ──────────────────────────────────────────────
 
@@ -138,6 +140,9 @@ internal sealed unsafe class GLRenderer : IDisposable
     private uint _programI420;
     private uint _programI422P10;
     private uint _programUyvy422;
+    private uint _programP010;
+    private uint _programYuv444p;
+    private uint _programGray8;
     private uint _vao;
     private uint _vbo;
     private int  _texWidth;
@@ -159,6 +164,25 @@ internal sealed unsafe class GLRenderer : IDisposable
     private int  _uUyvyVideoWidthLoc = -1;
     private int  _uUyvyLimitedRangeLoc = -1;
     private int  _uUyvyColorMatrixLoc = -1;
+    // P010 textures and uniforms
+    private uint _textureP010Y;
+    private uint _textureP010UV;
+    private int  _texWidthP010;
+    private int  _texHeightP010;
+    private int  _uP010LimitedRangeLoc = -1;
+    private int  _uP010ColorMatrixLoc = -1;
+    // Yuv444p textures and uniforms
+    private uint _textureY444p;
+    private uint _textureU444p;
+    private uint _textureV444p;
+    private int  _texWidthYuv444p;
+    private int  _texHeightYuv444p;
+    private int  _uYuv444pLimitedRangeLoc = -1;
+    private int  _uYuv444pColorMatrixLoc = -1;
+    // Gray8 texture
+    private uint _textureGray8;
+    private int  _texWidthGray8;
+    private int  _texHeightGray8;
     private YuvColorRange _i422P10ColorRange = YuvColorRange.Auto;
     private YuvColorMatrix _i422P10ColorMatrix = YuvColorMatrix.Auto;
     private bool _disposed;
@@ -211,6 +235,9 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const string FragmentShaderSourceI420 = GlShaderSources.FragmentI420;
     private const string FragmentShaderSourceI422P10 = GlShaderSources.FragmentI422P10;
     private const string FragmentShaderSourceUyvy422 = GlShaderSources.FragmentUyvy422;
+    private const string FragmentShaderSourceP010    = GlShaderSources.FragmentP010;
+    private const string FragmentShaderSourceYuv444p = GlShaderSources.FragmentYuv444p;
+    private const string FragmentShaderSourceGray8   = GlShaderSources.FragmentGray8;
 
     // ── Initialisation ────────────────────────────────────────────────────
 
@@ -255,12 +282,36 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glLinkProgram(_programUyvy422);
         CheckProgram(_programUyvy422);
 
+        uint fsP010 = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSourceP010);
+        _programP010 = _glCreateProgram();
+        _glAttachShader(_programP010, vs);
+        _glAttachShader(_programP010, fsP010);
+        _glLinkProgram(_programP010);
+        CheckProgram(_programP010);
+
+        uint fsYuv444p = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSourceYuv444p);
+        _programYuv444p = _glCreateProgram();
+        _glAttachShader(_programYuv444p, vs);
+        _glAttachShader(_programYuv444p, fsYuv444p);
+        _glLinkProgram(_programYuv444p);
+        CheckProgram(_programYuv444p);
+
+        uint fsGray8 = CompileShader(GL_FRAGMENT_SHADER, FragmentShaderSourceGray8);
+        _programGray8 = _glCreateProgram();
+        _glAttachShader(_programGray8, vs);
+        _glAttachShader(_programGray8, fsGray8);
+        _glLinkProgram(_programGray8);
+        CheckProgram(_programGray8);
+
         _glDeleteShader(vs);
         _glDeleteShader(fs);
         _glDeleteShader(fsNv12);
         _glDeleteShader(fsI420);
         _glDeleteShader(fsI422P10);
         _glDeleteShader(fsUyvy422);
+        _glDeleteShader(fsP010);
+        _glDeleteShader(fsYuv444p);
+        _glDeleteShader(fsGray8);
 
         // Set texture uniform to unit 0
         _glUseProgram(_program);
@@ -377,6 +428,53 @@ internal sealed unsafe class GLRenderer : IDisposable
                 _glUniform1i(_uUyvyColorMatrixLoc, 0);
         }
 
+        // ── P010 uniforms ──────────────────────────────────────────────────
+        _glUseProgram(_programP010);
+        fixed (byte* nameY = "uTexY\0"u8)
+        {
+            int locY = _glGetUniformLocation(_programP010, nameY);
+            _glUniform1i(locY, 0);
+        }
+        fixed (byte* nameUv = "uTexUV\0"u8)
+        {
+            int locUv = _glGetUniformLocation(_programP010, nameUv);
+            _glUniform1i(locUv, 1);
+        }
+        fixed (byte* nameLimited = "uLimitedRange\0"u8)
+        {
+            _uP010LimitedRangeLoc = _glGetUniformLocation(_programP010, nameLimited);
+            if (_uP010LimitedRangeLoc >= 0) _glUniform1i(_uP010LimitedRangeLoc, 0);
+        }
+        fixed (byte* nameMatrix = "uColorMatrix\0"u8)
+        {
+            _uP010ColorMatrixLoc = _glGetUniformLocation(_programP010, nameMatrix);
+            if (_uP010ColorMatrixLoc >= 0) _glUniform1i(_uP010ColorMatrixLoc, 0);
+        }
+
+        // ── Yuv444p uniforms ───────────────────────────────────────────────
+        _glUseProgram(_programYuv444p);
+        fixed (byte* nameY = "uTexY\0"u8)
+        { int l = _glGetUniformLocation(_programYuv444p, nameY); _glUniform1i(l, 0); }
+        fixed (byte* nameU = "uTexU\0"u8)
+        { int l = _glGetUniformLocation(_programYuv444p, nameU); _glUniform1i(l, 1); }
+        fixed (byte* nameV = "uTexV\0"u8)
+        { int l = _glGetUniformLocation(_programYuv444p, nameV); _glUniform1i(l, 2); }
+        fixed (byte* nameLimited = "uLimitedRange\0"u8)
+        {
+            _uYuv444pLimitedRangeLoc = _glGetUniformLocation(_programYuv444p, nameLimited);
+            if (_uYuv444pLimitedRangeLoc >= 0) _glUniform1i(_uYuv444pLimitedRangeLoc, 0);
+        }
+        fixed (byte* nameMatrix = "uColorMatrix\0"u8)
+        {
+            _uYuv444pColorMatrixLoc = _glGetUniformLocation(_programYuv444p, nameMatrix);
+            if (_uYuv444pColorMatrixLoc >= 0) _glUniform1i(_uYuv444pColorMatrixLoc, 0);
+        }
+
+        // ── Gray8 uniforms ─────────────────────────────────────────────────
+        _glUseProgram(_programGray8);
+        fixed (byte* nameY = "uTexY\0"u8)
+        { int l = _glGetUniformLocation(_programGray8, nameY); _glUniform1i(l, 0); }
+
         // Fullscreen quad (2 triangles): position (x,y) + UV (u,v)
         // Note: UV y is flipped (1→0) so the image isn't upside-down.
         var quadVerts = GlShaderSources.FullscreenQuadVerts;
@@ -464,6 +562,51 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+        // P010 textures (R16UI / RG16UI — NEAREST filter for integer sampling)
+        fixed (uint* pTex = &_textureP010Y) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureP010Y);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureP010UV) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureP010UV);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // Yuv444p textures (R8 × 3, full resolution — LINEAR filter)
+        fixed (uint* pTex = &_textureY444p) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureY444p);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureU444p) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureU444p);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pTex = &_textureV444p) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureV444p);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // Gray8 texture (R8 — LINEAR filter)
+        fixed (uint* pTex = &_textureGray8) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _textureGray8);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
         _glViewport(0, 0, viewportWidth, viewportHeight);
         _windowWidth  = viewportWidth;
         _windowHeight = viewportHeight;
@@ -495,6 +638,24 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (frame.PixelFormat == PixelFormat.Uyvy422)
         {
             UploadAndDrawUyvy422(frame);
+            return;
+        }
+
+        if (frame.PixelFormat == PixelFormat.P010)
+        {
+            UploadAndDrawP010(frame);
+            return;
+        }
+
+        if (frame.PixelFormat == PixelFormat.Yuv444p)
+        {
+            UploadAndDrawYuv444p(frame);
+            return;
+        }
+
+        if (frame.PixelFormat == PixelFormat.Gray8)
+        {
+            UploadAndDrawGray8(frame);
             return;
         }
 
@@ -739,6 +900,126 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(0);
     }
 
+    private void UploadAndDrawP010(VideoFrame frame)
+    {
+        int w = frame.Width, h = frame.Height;
+        if (w <= 0 || h <= 0) return;
+
+        // Y: w×h × uint16 (R16UI); UV: (w/2)×(h/2) × uvec2 (RG16UI)
+        int yBytes  = w * h * 2;
+        int uvW     = Math.Max(1, w / 2);
+        int uvH     = Math.Max(1, h / 2);
+        int required = yBytes + uvW * uvH * 4;
+        if (frame.Data.Length < required) { DrawBlack(); return; }
+
+        using var pin = frame.Data.Pin();
+        nint yPtr  = (nint)pin.Pointer;
+        nint uvPtr = yPtr + yBytes;
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureP010Y);
+        if (w == _texWidthP010 && h == _texHeightP010)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, w, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
+
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureP010UV);
+        if (w == _texWidthP010 && h == _texHeightP010)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, uvW, uvH, GL_RG_INTEGER, GL_UNSIGNED_SHORT, (void*)uvPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16UI, uvW, uvH, 0, GL_RG_INTEGER, GL_UNSIGNED_SHORT, (void*)uvPtr);
+
+        _texWidthP010  = w;
+        _texHeightP010 = h;
+
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programP010);
+        if (_uP010LimitedRangeLoc >= 0)
+            _glUniform1i(_uP010LimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
+        if (_uP010ColorMatrixLoc >= 0)
+            _glUniform1i(_uP010ColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    private void UploadAndDrawYuv444p(VideoFrame frame)
+    {
+        int w = frame.Width, h = frame.Height;
+        if (w <= 0 || h <= 0) return;
+
+        int planeSize = w * h;
+        int required  = planeSize * 3;
+        if (frame.Data.Length < required) { DrawBlack(); return; }
+
+        using var pin = frame.Data.Pin();
+        nint yPtr = (nint)pin.Pointer;
+        nint uPtr = yPtr + planeSize;
+        nint vPtr = uPtr + planeSize;
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY444p);
+        if (w == _texWidthYuv444p && h == _texHeightYuv444p)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureU444p);
+        if (w == _texWidthYuv444p && h == _texHeightYuv444p)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
+
+        _glActiveTexture(GL_TEXTURE2);
+        _glBindTexture(GL_TEXTURE_2D, _textureV444p);
+        if (w == _texWidthYuv444p && h == _texHeightYuv444p)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
+
+        _texWidthYuv444p  = w;
+        _texHeightYuv444p = h;
+
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programYuv444p);
+        if (_uYuv444pLimitedRangeLoc >= 0)
+            _glUniform1i(_uYuv444pLimitedRangeLoc, ShouldUseLimitedRangeForYuv() ? 1 : 0);
+        if (_uYuv444pColorMatrixLoc >= 0)
+            _glUniform1i(_uYuv444pColorMatrixLoc, ShouldUseBt709MatrixForYuv(w, h) ? 1 : 0);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    private void UploadAndDrawGray8(VideoFrame frame)
+    {
+        int w = frame.Width, h = frame.Height;
+        if (w <= 0 || h <= 0) return;
+
+        int required = w * h;
+        if (frame.Data.Length < required) { DrawBlack(); return; }
+
+        using var pin = frame.Data.Pin();
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureGray8);
+        if (w == _texWidthGray8 && h == _texHeightGray8)
+            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, pin.Pointer);
+        else
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, pin.Pointer);
+
+        _texWidthGray8  = w;
+        _texHeightGray8 = h;
+
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programGray8);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
     private bool ShouldUseBt709MatrixForYuv(int width, int height)
     {
         return YuvAutoPolicy.ResolveMatrix(_i422P10ColorMatrix, width, height) == YuvColorMatrix.Bt709;
@@ -926,22 +1207,31 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        fixed (uint* p = &_texture)      _glDeleteTextures(1, p);
-        fixed (uint* p = &_textureY)     _glDeleteTextures(1, p);
-        fixed (uint* p = &_textureUv)    _glDeleteTextures(1, p);
-        fixed (uint* p = &_textureU)     _glDeleteTextures(1, p);
-        fixed (uint* p = &_textureV)     _glDeleteTextures(1, p);
+        fixed (uint* p = &_texture)        _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureY)       _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureUv)      _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureU)       _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureV)       _glDeleteTextures(1, p);
         fixed (uint* p = &_textureY422P10) _glDeleteTextures(1, p);
         fixed (uint* p = &_textureU422P10) _glDeleteTextures(1, p);
         fixed (uint* p = &_textureV422P10) _glDeleteTextures(1, p);
-        fixed (uint* p = &_textureUyvy)   _glDeleteTextures(1, p);
-        fixed (uint* p = &_vbo)          _glDeleteBuffers(1, p);
-        fixed (uint* p = &_vao)          _glDeleteVertexArrays(1, p);
+        fixed (uint* p = &_textureUyvy)    _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureP010Y)   _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureP010UV)  _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureY444p)   _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureU444p)   _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureV444p)   _glDeleteTextures(1, p);
+        fixed (uint* p = &_textureGray8)   _glDeleteTextures(1, p);
+        fixed (uint* p = &_vbo)            _glDeleteBuffers(1, p);
+        fixed (uint* p = &_vao)            _glDeleteVertexArrays(1, p);
         _glDeleteProgram(_program);
         _glDeleteProgram(_programNv12);
         _glDeleteProgram(_programI420);
         _glDeleteProgram(_programI422P10);
         _glDeleteProgram(_programUyvy422);
+        _glDeleteProgram(_programP010);
+        _glDeleteProgram(_programYuv444p);
+        _glDeleteProgram(_programGray8);
     }
 }
 

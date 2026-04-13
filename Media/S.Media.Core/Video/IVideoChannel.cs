@@ -13,5 +13,14 @@ public interface IVideoChannel : IMediaChannel<VideoFrame>
 
     /// <summary>Current playback position (derived from the last presented frame's PTS).</summary>
     TimeSpan Position { get; }
+
+    /// <summary>
+    /// Number of frames the internal ring buffer can hold.
+    /// Configured at construction time.
+    /// </summary>
+    int BufferDepth { get; }
+
+    /// <summary>Number of frames currently available in the ring buffer.</summary>
+    int BufferAvailable { get; }
 }
 

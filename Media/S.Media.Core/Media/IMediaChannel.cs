@@ -27,5 +27,12 @@ public interface IMediaChannel<TFrame> : IDisposable
 
     /// <summary>Seek to the given position. Flushes internal buffers.</summary>
     void Seek(TimeSpan position);
+
+    /// <summary>
+    /// Raised when the channel's backing source signals that no more frames will be produced.
+    /// For file-backed channels this fires once after the last frame has been pushed into the buffer.
+    /// Subscribe to this event to trigger auto-stop / looping / next-item logic.
+    /// </summary>
+    event EventHandler? EndOfStream;
 }
 

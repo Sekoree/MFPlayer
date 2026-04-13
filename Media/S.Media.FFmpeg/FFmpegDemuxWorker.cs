@@ -49,6 +49,7 @@ internal static class FFmpegDemuxWorker
 
                         case FFmpegDecoder.DemuxReadResult.Eof:
                             Log.LogInformation("Demux worker reached EOF after {PacketCount} packets", packetCount);
+                            owner.RaiseEndOfMedia();
                             return;
 
                         case FFmpegDecoder.DemuxReadResult.Cancelled:

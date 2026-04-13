@@ -147,7 +147,6 @@ public sealed class MainWindow : Window
         _diagTask = Task.Run(async () =>
         {
             AvaloniaOpenGlVideoOutput.DiagnosticsSnapshot? prevOut = null;
-            BasicPixelFormatConverter.DiagnosticsSnapshot? prevConv = null;
             TimeSpan? prevClock = null;
             TimeSpan? prevSrc = null;
             long prevWallTicks = 0;
@@ -164,7 +163,6 @@ public sealed class MainWindow : Window
                 }
 
                 var outSnap = _videoOutput.GetDiagnosticsSnapshot();
-                var convSnap = BasicPixelFormatConverter.GetDiagnosticsSnapshot();
                 var clockNow = _videoOutput.Clock.Position;
                 var srcNow = _activeChannel?.Position ?? TimeSpan.Zero;
                 long wallNowTicks = Stopwatch.GetTimestamp();
@@ -181,9 +179,6 @@ public sealed class MainWindow : Window
                     long uploadDelta = o1.TextureUploads - o0.TextureUploads;
                     long reuseDelta = o1.TextureReuseDraws - o0.TextureReuseDraws;
                     long catchupDelta = o1.CatchupSkips - o0.CatchupSkips;
-                    long convLibYuvAttemptsDelta = prevConv.HasValue ? convSnap.LibYuvAttempts - prevConv.Value.LibYuvAttempts : 0;
-                    long convLibYuvSuccessDelta = prevConv.HasValue ? convSnap.LibYuvSuccesses - prevConv.Value.LibYuvSuccesses : 0;
-                    long convFallbackDelta = prevConv.HasValue ? convSnap.ManagedFallbacks - prevConv.Value.ManagedFallbacks : 0;
 
                     string speedMark = presentDelta < Math.Max(1, (long)Math.Round(expectedFps * 0.75)) ? " slow" : "";
                     string exMark = exDelta > 0 ? " ex" : "";
@@ -207,13 +202,11 @@ public sealed class MainWindow : Window
                     Console.WriteLine(
                         $"[vstats] clock={Fmt(clockNow)} src={Fmt(srcNow)} " +
                         $"fps={presentDelta,3}/{expectedFps,5:F1} r={renderDelta,4} p={presentDelta,4} b={blackDelta,3} " +
-                        $"up={uploadDelta,4} reuse={reuseDelta,4} catchup={catchupDelta,3} " +
-                        $"cvt={convLibYuvSuccessDelta,3}/{convLibYuvAttemptsDelta,3}/{convFallbackDelta,3} ep=n/a ex={exDelta,2} " +
+                        $"up={uploadDelta,4} reuse={reuseDelta,4} catchup={catchupDelta,3} ep=n/a ex={exDelta,2} " +
                         $"driftMs={driftMs,7:F1} rtf={rtfClockText} srcRtf={rtfSrcText}{speedMark}{exMark}");
                 }
 
                 prevOut = outSnap;
-                prevConv = convSnap;
                 prevClock = clockNow;
                 prevSrc = srcNow;
                 prevWallTicks = wallNowTicks;

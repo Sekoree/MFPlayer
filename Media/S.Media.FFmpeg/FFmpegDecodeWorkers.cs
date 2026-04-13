@@ -23,6 +23,7 @@ internal static class FFmpegDecodeWorkers
         Log.LogDebug("Audio decode worker starting for stream {StreamIndex}", owner.StreamIndex);
         int currentEpoch = 0;
         long frameCount = 0;
+        bool reachedEof = false;
         try
         {
             while (!token.IsCancellationRequested)
@@ -30,7 +31,11 @@ internal static class FFmpegDecodeWorkers
                 EncodedPacket ep;
                 try { ep = await packetReader.ReadAsync(token).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
-                catch (ChannelClosedException) { break; }
+                catch (ChannelClosedException)
+                {
+                    reachedEof = !token.IsCancellationRequested;
+                    break;
+                }
 
                 try
                 {
@@ -90,6 +95,7 @@ internal static class FFmpegDecodeWorkers
         }
         finally
         {
+            if (reachedEof) owner.RaiseEndOfStream();
             owner.CompleteDecodeLoop();
             Log.LogDebug("Audio decode worker finished for stream {StreamIndex}, decoded {FrameCount} packets", owner.StreamIndex, frameCount);
         }
@@ -104,6 +110,7 @@ internal static class FFmpegDecodeWorkers
         Log.LogDebug("Video decode worker starting for stream {StreamIndex}", owner.StreamIndex);
         int currentEpoch = 0;
         long frameCount = 0;
+        bool reachedEof = false;
         try
         {
             while (!token.IsCancellationRequested)
@@ -111,7 +118,11 @@ internal static class FFmpegDecodeWorkers
                 EncodedPacket ep;
                 try { ep = await packetReader.ReadAsync(token).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
-                catch (ChannelClosedException) { break; }
+                catch (ChannelClosedException)
+                {
+                    reachedEof = !token.IsCancellationRequested;
+                    break;
+                }
 
                 try
                 {
@@ -171,6 +182,7 @@ internal static class FFmpegDecodeWorkers
         }
         finally
         {
+            if (reachedEof) owner.RaiseEndOfStream();
             owner.CompleteDecodeLoop();
             Log.LogDebug("Video decode worker finished for stream {StreamIndex}, decoded {FrameCount} packets", owner.StreamIndex, frameCount);
         }

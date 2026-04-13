@@ -13,6 +13,13 @@ public interface IAVMixer : IDisposable
     void AttachVideoOutput(IVideoOutput output);
 
     void AddAudioChannel(IAudioChannel channel, ChannelRouteMap routeMap, IAudioResampler? resampler = null);
+
+    /// <summary>
+    /// Adds an audio channel with an automatically-derived route map.
+    /// Mono sources are expanded to both channels of a stereo output; otherwise
+    /// channels are routed 1:1 up to the lesser of src and dst channel counts.
+    /// </summary>
+    void AddAudioChannel(IAudioChannel channel, IAudioResampler? resampler = null);
     void RemoveAudioChannel(Guid channelId);
 
     void AddVideoChannel(IVideoChannel channel);

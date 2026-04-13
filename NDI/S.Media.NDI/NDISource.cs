@@ -427,10 +427,13 @@ public sealed class NDISource : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
+
+        // Fire state change BEFORE _disposed = true so handlers can still access this instance.
+        SetState(NDISourceState.Disconnected);
+
         _disposed = true;
         Log.LogInformation("Disposing NDISource");
 
-        // Stop watch thread first
         _watchCts.Cancel();
         _watchThread?.Join(TimeSpan.FromSeconds(2));
         _watchCts.Dispose();
@@ -442,7 +445,6 @@ public sealed class NDISource : IDisposable
         _receiver.Dispose();
         _finder?.Dispose();
         Clock.Dispose();
-        SetState(NDISourceState.Disconnected);
     }
 }
 

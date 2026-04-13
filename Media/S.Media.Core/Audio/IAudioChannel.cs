@@ -49,5 +49,12 @@ public interface IAudioChannel : IMediaChannel<float>
     /// and fills frames with silence.
     /// </summary>
     event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
+
+    /// <summary>
+    /// Raised when the channel's backing source signals that no more frames will be produced.
+    /// For file-backed channels this fires once after the last audio chunk has been pushed.
+    /// Subscribe to trigger auto-stop / looping / next-item logic.
+    /// </summary>
+    new event EventHandler? EndOfStream;
 }
 

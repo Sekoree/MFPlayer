@@ -172,6 +172,7 @@ public sealed class AVMixerTests
             add { }
             remove { }
         }
+        public event EventHandler? EndOfStream { add { } remove { } }
 
         public int FillBuffer(Span<float> dest, int frameCount)
         {
@@ -191,6 +192,9 @@ public sealed class AVMixerTests
         public bool CanSeek => false;
         public VideoFormat SourceFormat { get; } = new(640, 360, PixelFormat.Rgba32, 30, 1);
         public TimeSpan Position => TimeSpan.Zero;
+        public int BufferDepth => 4;
+        public int BufferAvailable => 0;
+        public event EventHandler? EndOfStream { add { } remove { } }
         public int FillBuffer(Span<VideoFrame> dest, int frameCount) => 0;
         public void Seek(TimeSpan position) { }
         public void Dispose() { }

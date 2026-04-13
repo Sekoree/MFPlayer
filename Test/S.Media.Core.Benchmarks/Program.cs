@@ -28,7 +28,7 @@ internal static class Program
 
         Console.WriteLine($"[bench] size={width}x{height} iterations={iterations}");
 
-        bool libYuvAvailable = BasicPixelFormatConverter.GetDiagnosticsSnapshot().LibYuvAvailable;
+        bool libYuvAvailable = converter.GetDiagnosticsSnapshot().LibYuvAvailable;
 
         // Managed-only pass provides deterministic baseline.
         BasicPixelFormatConverter.LibYuvEnabled = false;
@@ -186,6 +186,12 @@ internal static class Program
         public int BufferDepth => 1;
         public int BufferAvailable => int.MaxValue;
         public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun
+        {
+            add { }
+            remove { }
+        }
+
+        public event EventHandler? EndOfStream
         {
             add { }
             remove { }

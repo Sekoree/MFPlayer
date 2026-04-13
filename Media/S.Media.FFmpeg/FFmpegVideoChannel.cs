@@ -43,10 +43,17 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private readonly ChannelWriter<VideoFrame> _ringWriter;
 
     private bool _disposed;
+    private readonly int _bufferDepth;
+    private long _framesInRing;
 
     public Guid  Id      { get; } = Guid.NewGuid();
     public bool  IsOpen  => !_disposed;
     public bool  CanSeek => true;
+
+    public int BufferDepth     => _bufferDepth;
+    public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
+
+    public event EventHandler? EndOfStream;
 
     /// <summary>Target pixel format. Defaults to Bgra32.</summary>
     public PixelFormat TargetPixelFormat { get; }
@@ -267,6 +274,58 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
                     ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
                     break;
                 }
+                case PixelFormat.Yuv444p:
+                {
+                    // Plane layout: [Y (w×h)] [U (w×h)] [V (w×h)] — full chroma resolution
+                    int planeSize = w * h;
+                    _dstDataArr[0] = pBuf;
+                    _dstDataArr[1] = pBuf + planeSize;
+                    _dstDataArr[2] = pBuf + planeSize * 2;
+                    _dstDataArr[3] = null;
+                    _dstStrideArr[0] = w;
+                    _dstStrideArr[1] = w;
+                    _dstStrideArr[2] = w;
+                    _dstStrideArr[3] = 0;
+                    ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
+                    break;
+                }
+                case PixelFormat.P010:
+                {
+                    // Semi-planar 10-bit 4:2:0: Y plane (16-bit/sample), interleaved UV plane (16-bit each)
+                    // Y: w×h×2 bytes, stride = w*2
+                    // UV: (w/2)×(h/2) pairs × 4 bytes/pair, stride = w*2 bytes/row
+                    int yStride = w * 2;
+                    int uvStride = w * 2; // (w/2) UV pairs × 4 bytes = w*2 bytes/row
+                    int ySize = yStride * h;
+                    _dstDataArr[0] = pBuf;
+                    _dstDataArr[1] = pBuf + ySize;
+                    _dstDataArr[2] = null;
+                    _dstDataArr[3] = null;
+                    _dstStrideArr[0] = yStride;
+                    _dstStrideArr[1] = uvStride;
+                    _dstStrideArr[2] = 0;
+                    _dstStrideArr[3] = 0;
+                    ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
+                    break;
+                }
+                case PixelFormat.Yuv420p10:
+                {
+                    // Planar 10-bit 4:2:0: Y, U, V planes, each stored as 16-bit LE samples
+                    int yStride = w * 2;            // 2 bytes per Y sample
+                    int uvStride = (w / 2) * 2;     // 2 bytes per chroma sample
+                    int ySize = yStride * h;
+                    int uvSize = uvStride * (h / 2);
+                    _dstDataArr[0] = pBuf;
+                    _dstDataArr[1] = pBuf + ySize;
+                    _dstDataArr[2] = pBuf + ySize + uvSize;
+                    _dstDataArr[3] = null;
+                    _dstStrideArr[0] = yStride;
+                    _dstStrideArr[1] = uvStride;
+                    _dstStrideArr[2] = uvStride;
+                    _dstStrideArr[3] = 0;
+                    ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
+                    break;
+                }
                 default:
                 {
                     // Packed formats: Bgra32, Rgba32, Uyvy422 — all data in one plane.
@@ -311,6 +370,12 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         PixelFormat.Yuv422p10 => 4, // packed as 2 bytes/component → stride = w*4 for luma plane
         PixelFormat.Nv12      => 1, // multi-plane; stride applies to luma only
         PixelFormat.Yuv420p   => 1,
+        PixelFormat.Rgb24     => 3,
+        PixelFormat.Bgr24     => 3,
+        PixelFormat.Gray8     => 1,
+        PixelFormat.P010      => 2, // 16-bit luma stride
+        PixelFormat.Yuv420p10 => 2, // 16-bit luma stride
+        PixelFormat.Yuv444p   => 1,
         _                     => 4  // BGRA32, RGBA32, UYVY422 all 4 bytes/px
     };
 
@@ -346,6 +411,12 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         PixelFormat.Yuv420p   => AVPixelFormat.AV_PIX_FMT_YUV420P,
         PixelFormat.Uyvy422   => AVPixelFormat.AV_PIX_FMT_UYVY422,
         PixelFormat.Yuv422p10 => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
+        PixelFormat.P010      => AVPixelFormat.AV_PIX_FMT_P010LE,
+        PixelFormat.Yuv420p10 => AVPixelFormat.AV_PIX_FMT_YUV420P10LE,
+        PixelFormat.Yuv444p   => AVPixelFormat.AV_PIX_FMT_YUV444P,
+        PixelFormat.Rgb24     => AVPixelFormat.AV_PIX_FMT_RGB24,
+        PixelFormat.Bgr24     => AVPixelFormat.AV_PIX_FMT_BGR24,
+        PixelFormat.Gray8     => AVPixelFormat.AV_PIX_FMT_GRAY8,
         _                     => AVPixelFormat.AV_PIX_FMT_BGRA
     };
 
@@ -363,6 +434,12 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         AVPixelFormat.AV_PIX_FMT_UYVY422     => PixelFormat.Uyvy422,
         AVPixelFormat.AV_PIX_FMT_BGRA        => PixelFormat.Bgra32,
         AVPixelFormat.AV_PIX_FMT_RGBA        => PixelFormat.Rgba32,
+        AVPixelFormat.AV_PIX_FMT_P010LE      => PixelFormat.P010,
+        AVPixelFormat.AV_PIX_FMT_YUV420P10LE => PixelFormat.Yuv420p10,
+        AVPixelFormat.AV_PIX_FMT_YUV444P     => PixelFormat.Yuv444p,
+        AVPixelFormat.AV_PIX_FMT_RGB24       => PixelFormat.Rgb24,
+        AVPixelFormat.AV_PIX_FMT_BGR24       => PixelFormat.Bgr24,
+        AVPixelFormat.AV_PIX_FMT_GRAY8       => PixelFormat.Gray8,
         _                                    => PixelFormat.Bgra32
     };
 
@@ -455,6 +532,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
                     try { w.AsTask().GetAwaiter().GetResult(); }
                     catch (OperationCanceledException) { return false; }
                 }
+                Interlocked.Increment(ref _framesInRing);
             }
             ffmpeg.av_frame_unref(_frame);
             if (transferred) ffmpeg.av_frame_unref(_swFrame);
@@ -464,5 +542,16 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     }
 
     internal void CompleteDecodeLoop() => _ringWriter.TryComplete();
+
+    internal void RaiseEndOfStream()
+    {
+        var handler = EndOfStream;
+        if (handler == null) return;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h) = ((FFmpegVideoChannel, EventHandler))s!;
+            h(self, EventArgs.Empty);
+        }, (this, handler));
+    }
 }
 

@@ -66,6 +66,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
     public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
+    public event EventHandler? EndOfStream;
 
     private bool _disposed;
 
@@ -363,15 +364,24 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
 
     internal void CompleteDecodeLoop() => _ringWriter.TryComplete();
 
+    internal void RaiseEndOfStream()
+    {
+        var handler = EndOfStream;
+        if (handler == null) return;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h) = ((FFmpegAudioChannel, EventHandler))s!;
+            h(self, EventArgs.Empty);
+        }, (this, handler));
+    }
+
     private float[] RentChunkBuffer(int minSamples)
     {
         while (_chunkPool.TryDequeue(out var candidate))
         {
             if (candidate.Length >= minSamples)
                 return candidate;
-            // Re-enqueue undersized buffer so it isn't leaked to GC; stop scanning
-            // because the pool typically holds same-size buffers.
-            _chunkPool.Enqueue(candidate);
+            // Drop undersized buffer — GC will collect it. Do NOT re-enqueue.
             break;
         }
 

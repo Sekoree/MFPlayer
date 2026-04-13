@@ -143,7 +143,6 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         _sender = sender;
         Name = name ?? "NDIAVSink";
 
-        _hasVideo = videoTargetFormat.HasValue;
         if (videoTargetFormat is { } v)
         {
             var fallbackPixelFormat = preferPerformanceOverQuality ? PixelFormat.Uyvy422 : PixelFormat.Rgba32;
@@ -206,6 +205,26 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             Log.LogDebug("NDIAVSink '{Name}' audio: {SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}, maxPending={MaxPending}",
                 Name, _audioTargetFormat.SampleRate, _audioTargetFormat.Channels, _audioFramesPerBuffer, _audioMaxPendingBuffers);
     }
+
+    /// <summary>
+    /// Creates an <see cref="NDIAVSink"/> using an <see cref="NDIAVSinkOptions"/> record.
+    /// This is the preferred constructor.
+    /// </summary>
+    public NDIAVSink(NDISender sender, NDIAVSinkOptions? options) : this(
+        sender,
+        options?.VideoTargetFormat,
+        options?.AudioTargetFormat,
+        options?.Preset ?? NDIEndpointPreset.Balanced,
+        options?.Name,
+        options?.PreferPerformanceOverQuality ?? false,
+        options?.VideoPoolCount ?? 0,
+        options?.VideoMaxPendingFrames ?? 0,
+        options?.AudioFramesPerBuffer ?? 1024,
+        options?.AudioPoolCount ?? 0,
+        options?.AudioMaxPendingBuffers ?? 0,
+        options?.AudioResampler,
+        options?.EnableAudioDriftCorrection ?? false)
+    { }
 
     public Task StartAsync(CancellationToken ct = default)
     {

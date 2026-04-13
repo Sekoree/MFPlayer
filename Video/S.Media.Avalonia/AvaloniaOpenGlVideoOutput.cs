@@ -39,7 +39,9 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private long _presentationClockOriginTicks;
     private int _hasPresentationClockOrigin;
     private VideoFormat _outputFormat;
-    private readonly BasicPixelFormatConverter _converter = new();
+    private bool _hasYuvHintsOverride;
+    private bool _yuvBt709;
+    private bool _yuvLimitedRange;
     private bool _isOpen;
     private bool _isRunning;
     private bool _disposed;
@@ -86,6 +88,25 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     public void OverridePresentationMixer(IVideoMixer mixer) => _activeMixer = mixer;
 
     /// <summary>
+    /// Overrides the YUV color matrix and range used by the GPU shaders.
+    /// Call this after Open() once you know the stream's color metadata (e.g. from IVideoColorMatrixHint).
+    /// </summary>
+    public void SetYuvHints(bool bt709, bool limitedRange)
+    {
+        _hasYuvHintsOverride = true;
+        _yuvBt709 = bt709;
+        _yuvLimitedRange = limitedRange;
+        _renderer?.SetYuvHints(bt709, limitedRange);
+    }
+
+    /// <summary>Resets YUV hints to auto-detect from frame resolution.</summary>
+    public void ResetYuvHints()
+    {
+        _hasYuvHintsOverride = false;
+        _renderer?.ResetYuvHintsToAuto();
+    }
+
+    /// <summary>
     /// Overrides the render-loop presentation clock.
     /// Set this to an audio hardware clock to keep video pacing aligned with audio.
     /// </summary>
@@ -128,7 +149,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
             if (_isOpen)
                 throw new InvalidOperationException("Output is already open.");
 
-            _outputFormat = format with { PixelFormat = PixelFormat.Rgba32 };
+            _outputFormat = format;
             _mixer = new VideoMixer(_outputFormat);
             _activeMixer = _mixer;
             _clock = new VideoPtsClock(sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
@@ -174,6 +195,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         Interlocked.Increment(ref _initCalls);
         _renderer ??= new AvaloniaGlRenderer();
         _renderer.Initialise(gl);
+        if (_hasYuvHintsOverride)
+            _renderer.SetYuvHints(_yuvBt709, _yuvLimitedRange);
         _hasUploadedFrame = false;
         _lastUploadedData = default;
     }
@@ -263,24 +286,13 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                     Interlocked.Increment(ref _catchupSkips);
                 }
 
-                // Avalonia renderer expects RGBA8 texture uploads; convert at the output
-                // boundary so the mixer can stay raw-frame only.
-                VideoFrame renderFrame = vf;
-                IDisposable? tempOwner = null;
-                if (vf.PixelFormat != PixelFormat.Rgba32)
-                {
-                    var converted = _converter.Convert(vf, PixelFormat.Rgba32);
-                    renderFrame = converted;
-                    tempOwner = !ReferenceEquals(converted.MemoryOwner, vf.MemoryOwner)
-                        ? converted.MemoryOwner
-                        : null;
-                }
-
+                // Renderer natively handles all GPU-uploadable formats (Rgba32, Bgra32, Nv12,
+                // Yuv420p, Yuv422p10, Uyvy422, P010, Yuv444p, Gray8). Unknown formats render black.
                 bool sameAsUploaded = _hasUploadedFrame &&
-                                      renderFrame.Width == _lastUploadedWidth &&
-                                      renderFrame.Height == _lastUploadedHeight &&
-                                      renderFrame.Pts == _lastUploadedPts &&
-                                      renderFrame.Data.Equals(_lastUploadedData);
+                                      vf.Width == _lastUploadedWidth &&
+                                      vf.Height == _lastUploadedHeight &&
+                                      vf.Pts == _lastUploadedPts &&
+                                      vf.Data.Equals(_lastUploadedData);
 
                 if (sameAsUploaded)
                 {
@@ -289,16 +301,15 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                 }
                 else
                 {
-                    _renderer.UploadAndDraw(renderFrame, fb, viewportWidth, viewportHeight);
+                    _renderer.UploadAndDraw(vf, fb, viewportWidth, viewportHeight);
                     _hasUploadedFrame = true;
-                    _lastUploadedWidth = renderFrame.Width;
-                    _lastUploadedHeight = renderFrame.Height;
-                    _lastUploadedPts = renderFrame.Pts;
-                    _lastUploadedData = renderFrame.Data;
+                    _lastUploadedWidth = vf.Width;
+                    _lastUploadedHeight = vf.Height;
+                    _lastUploadedPts = vf.Pts;
+                    _lastUploadedData = vf.Data;
                     Interlocked.Increment(ref _textureUploads);
                 }
 
-                tempOwner?.Dispose();
 
                 if (_presentationClockOverride == null)
                     _clock.UpdateFromFrame(vf.Pts);
@@ -358,7 +369,6 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         _renderer = null;
         _mixer?.Dispose();
         _clock?.Dispose();
-        _converter.Dispose();
     }
 
     public AvaloniaOpenGlVideoCloneSink CreateCloneSink(string? name = null)

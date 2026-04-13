@@ -42,6 +42,7 @@ public sealed class AudioChannel : IAudioChannel
     public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
+    public event EventHandler? EndOfStream;
 
     /// <param name="sourceFormat">Native PCM format of data written by the producer.</param>
     /// <param name="bufferDepth">Number of chunks the ring buffer can hold before back-pressuring.</param>
@@ -163,9 +164,8 @@ public sealed class AudioChannel : IAudioChannel
         {
             if (candidate.Length >= minLength)
                 return candidate;
-            // Re-enqueue undersized buffer so it isn't leaked to GC; stop scanning
-            // because the pool typically holds same-size buffers.
-            _chunkPool.Enqueue(candidate);
+            // Drop undersized buffer — GC will collect it. Do NOT re-enqueue or it will
+            // cycle through the pool on every call for the channel's lifetime.
             break;
         }
 

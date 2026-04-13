@@ -31,12 +31,15 @@ public sealed class AVMixer : IAVMixer
     private readonly bool _ownsVideo;
     private bool _disposed;
 
+    private readonly int _audioOutputChannels;
+
     internal AVMixer(IAudioMixer audioMixer, IVideoMixer videoMixer, bool ownsAudio = false, bool ownsVideo = false)
     {
         _audio = audioMixer ?? throw new ArgumentNullException(nameof(audioMixer));
         _video = videoMixer ?? throw new ArgumentNullException(nameof(videoMixer));
         _ownsAudio = ownsAudio;
         _ownsVideo = ownsVideo;
+        _audioOutputChannels = audioMixer.LeaderFormat.Channels;
         Log.LogDebug("AVMixer created (ownsAudio={OwnsAudio}, ownsVideo={OwnsVideo})", ownsAudio, ownsVideo);
     }
 
@@ -77,6 +80,13 @@ public sealed class AVMixer : IAVMixer
     {
         _audio.AddChannel(channel, routeMap, resampler);
         _audioChannels[channel.Id] = channel;
+    }
+
+    /// <inheritdoc/>
+    public void AddAudioChannel(IAudioChannel channel, IAudioResampler? resampler = null)
+    {
+        var routeMap = ChannelRouteMap.Auto(channel.SourceFormat.Channels, _audioOutputChannels);
+        AddAudioChannel(channel, routeMap, resampler);
     }
 
     public void RemoveAudioChannel(Guid channelId)

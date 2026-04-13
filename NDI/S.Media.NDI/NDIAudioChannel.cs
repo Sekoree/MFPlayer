@@ -66,6 +66,10 @@ internal sealed class NDIAudioChannel : IAudioChannel
 
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
+#pragma warning disable CS0067  // NDI streams have no defined EOF; event may be used in future
+    public event EventHandler? EndOfStream;
+#pragma warning restore CS0067
+
     /// <param name="frameSync">NDIFrameSync created from the NDIReceiver for this source.</param>
     /// <param name="clock">NDIClock to update with each incoming frame's timestamp.</param>
     /// <param name="sampleRate">Desired output sample rate (passed to NDIFrameSync).</param>

@@ -20,6 +20,12 @@ public sealed class VideoOutputEndpointAdapter : IVideoFrameEndpoint
         public bool CanSeek => false;
         public VideoFormat SourceFormat { get; }
         public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
+        public int BufferDepth     => _capacity;
+        public int BufferAvailable { get { lock (_gate) return _queue.Count; } }
+
+#pragma warning disable CS0067  // event is never used — adapter has no upstream EOF source
+        public event EventHandler? EndOfStream;
+#pragma warning restore CS0067
 
         public EndpointVideoChannel(VideoFormat sourceFormat, int capacity)
         {

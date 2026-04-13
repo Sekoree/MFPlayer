@@ -21,9 +21,10 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
 
 
     private bool _disposed;
-    private static long _libYuvAttempts;
-    private static long _libYuvSuccesses;
-    private static long _managedFallbacks;
+    // Instance counters — each converter tracks its own conversions independently.
+    private long _libYuvAttempts;
+    private long _libYuvSuccesses;
+    private long _managedFallbacks;
 
     public static bool LibYuvEnabled
     {
@@ -31,7 +32,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         set => LibYuvRuntime.Enabled = value;
     }
 
-    public static DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
+    public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
         LibYuvAvailable: LibYuvRuntime.IsAvailable,
         LibYuvAttempts: Interlocked.Read(ref _libYuvAttempts),
         LibYuvSuccesses: Interlocked.Read(ref _libYuvSuccesses),
@@ -120,7 +121,8 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         throw new NotSupportedException($"BasicPixelFormatConverter does not support {source.PixelFormat} -> {dstFormat}.");
     }
 
-    private static bool TryConvertI210Managed(ReadOnlySpan<byte> src, Span<byte> dst, int width, int height, bool dstRgba)
+    private bool TryConvertI210Managed(ReadOnlySpan<byte> src, Span<byte> dst, int width, int height, bool dstRgba,
+        YuvColorRange colorRange = YuvColorRange.Auto, YuvColorMatrix colorMatrix = YuvColorMatrix.Auto)
     {
         if (width <= 0 || height <= 0)
             return false;
@@ -139,6 +141,15 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
         var uPlane = src.Slice(ySize, uvSize);
         var vPlane = src.Slice(ySize + uvSize, uvSize);
 
+        // Resolve color parameters
+        bool limitedRange = YuvAutoPolicy.ResolveRange(colorRange) == YuvColorRange.Limited;
+        bool bt709 = YuvAutoPolicy.ResolveMatrix(colorMatrix, width, height) == YuvColorMatrix.Bt709;
+
+        // Coefficient sets
+        float kr, kg_u, kg_v, kb;
+        if (bt709) { kr = 1.5748f; kg_u = 0.1873f; kg_v = 0.4681f; kb = 1.8556f; }
+        else       { kr = 1.4020f; kg_u = 0.3441f; kg_v = 0.7141f; kb = 1.7720f; }
+
         for (int y = 0; y < height; y++)
         {
             int yRow = y * yStride;
@@ -154,13 +165,23 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
                 int u10 = BinaryPrimitives.ReadUInt16LittleEndian(uPlane.Slice(uvOff, 2)) & 0x03FF;
                 int v10 = BinaryPrimitives.ReadUInt16LittleEndian(vPlane.Slice(uvOff, 2)) & 0x03FF;
 
-                float yf = y10 / 1023f;
-                float uf = (u10 - 512f) / 512f;
-                float vf = (v10 - 512f) / 512f;
+                float yf, uf, vf;
+                if (limitedRange)
+                {
+                    yf = Math.Clamp((y10 / 1023f - 64f / 1023f) * (1023f / 876f), 0f, 1f);
+                    uf = Math.Clamp((u10 / 1023f - 512f / 1023f) * (1023f / 896f), -0.5f, 0.5f);
+                    vf = Math.Clamp((v10 / 1023f - 512f / 1023f) * (1023f / 896f), -0.5f, 0.5f);
+                }
+                else
+                {
+                    yf = y10 / 1023f;
+                    uf = (u10 - 512f) / 512f;
+                    vf = (v10 - 512f) / 512f;
+                }
 
-                int r = ClampToByte((yf + (1.5748f * vf)) * 255f);
-                int g = ClampToByte((yf - (0.1873f * uf) - (0.4681f * vf)) * 255f);
-                int b = ClampToByte((yf + (1.8556f * uf)) * 255f);
+                int r = ClampToByte((yf + kr * vf) * 255f);
+                int g = ClampToByte((yf - kg_u * uf - kg_v * vf) * 255f);
+                int b = ClampToByte((yf + kb * uf) * 255f);
 
                 int d = dstRow + (x * 4);
                 if (dstRgba)

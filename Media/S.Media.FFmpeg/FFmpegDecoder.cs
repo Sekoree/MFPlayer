@@ -173,6 +173,23 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     public IReadOnlyList<IVideoChannel> VideoChannels { get; private set; }
         = Array.Empty<IVideoChannel>();
 
+    /// <summary>
+    /// Returns the first audio channel, or <see langword="null"/> if no audio streams were found.
+    /// </summary>
+    public IAudioChannel? FirstAudioChannel => AudioChannels.Count > 0 ? AudioChannels[0] : null;
+
+    /// <summary>
+    /// Returns the first video channel, or <see langword="null"/> if no video streams were found.
+    /// </summary>
+    public IVideoChannel? FirstVideoChannel => VideoChannels.Count > 0 ? VideoChannels[0] : null;
+
+    /// <summary>
+    /// Raised when the demux loop reaches the end of the media file/stream.
+    /// Fired once on a ThreadPool thread after all encoded packets have been queued;
+    /// the audio/video channels may still have buffered frames to drain.
+    /// </summary>
+    public event EventHandler? EndOfMedia;
+
     private FFmpegDecoder()
     {
         _log = FFmpegLogging.GetLogger(nameof(FFmpegDecoder));
@@ -613,6 +630,17 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     {
         foreach (var (_, q) in _queues)
             q.Writer.TryComplete();
+    }
+
+    internal void RaiseEndOfMedia()
+    {
+        var handler = EndOfMedia;
+        if (handler == null) return;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h) = ((FFmpegDecoder, EventHandler))s!;
+            h(self, EventArgs.Empty);
+        }, (this, handler));
     }
 
     public DiagnosticsSnapshot GetDiagnosticsSnapshot()

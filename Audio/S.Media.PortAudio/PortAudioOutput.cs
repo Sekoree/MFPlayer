@@ -23,16 +23,18 @@ public sealed class PortAudioOutput : IAudioOutput
     private GCHandle        _gcHandle;
     private PortAudioClock? _clock;
     private AudioMixer?     _mixer;
-    // Normally null (falls back to _mixer); set by AggregateOutput.OverrideRtMixer
-    // to redirect the RT callback through the aggregate fan-out path.
     private volatile IAudioMixer? _activeMixer;
     private AudioFormat     _hardwareFormat;
     private int             _framesPerBuffer;
+    private string          _deviceName = string.Empty;
     private bool            _isRunning;
     private bool            _disposed;
 
     // ── IAudioOutput / IMediaOutput ───────────────────────────────────────
 
+    public string      Name          => _hardwareFormat.SampleRate > 0
+        ? $"PortAudioOutput({_deviceName})"
+        : "PortAudioOutput(not open)";
     public AudioFormat HardwareFormat => _hardwareFormat;
     public IMediaClock Clock          => _clock  ?? throw new InvalidOperationException("Call Open() first.");
     public bool        IsRunning      => _isRunning;
@@ -88,6 +90,7 @@ public sealed class PortAudioOutput : IAudioOutput
         int    actualFrames = framesPerBuffer > 0 ? framesPerBuffer : 512; // sensible fallback
         _framesPerBuffer = actualFrames;
         _hardwareFormat = requestedFormat with { SampleRate = (int)actualRate };
+        _deviceName = device.Name ?? device.Index.ToString();
 
         // Build clock and mixer, then pre-allocate buffers NOW so the RT callback
         // never has to allocate managed memory from a native thread (which can fast-fail).

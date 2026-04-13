@@ -151,9 +151,29 @@ public sealed class VirtualAudioOutput : IAudioOutput
         if (_disposed) return;
         _disposed = true;
         Log.LogInformation("Disposing VirtualAudioOutput");
-        StopAsync().GetAwaiter().GetResult();
+        StopSync();
         _mixer?.Dispose();
         _mixer = null;
+    }
+
+    /// <summary>
+    /// Synchronous stop path used by <see cref="Dispose"/> to avoid sync-over-async deadlocks.
+    /// Cancels the tick loop CTS and waits for the task with a bounded timeout.
+    /// </summary>
+    private void StopSync()
+    {
+        if (!_isRunning) return;
+        _isRunning = false;
+        ((StopwatchClock)Clock).Stop();
+
+        _cts?.Cancel();
+        try { _tickTask?.Wait(TimeSpan.FromSeconds(2)); }
+        catch (AggregateException ex) when (ex.InnerException is OperationCanceledException) { }
+        catch (OperationCanceledException) { }
+
+        _cts?.Dispose();
+        _cts      = null;
+        _tickTask = null;
     }
 }
 

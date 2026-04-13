@@ -59,6 +59,7 @@ public sealed class AudioMixerTests
             add { }
             remove { }
         }
+        public event EventHandler? EndOfStream { add { } remove { } }
 
         public int FillBuffer(Span<float> dest, int frameCount)
         {

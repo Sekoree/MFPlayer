@@ -486,6 +486,7 @@ public sealed class AggregateOutputTests
             add { }
             remove { }
         }
+        public event EventHandler? EndOfStream { add { } remove { } }
 
         public int FillBuffer(Span<float> dest, int frameCount) { dest.Fill(_value); return frameCount; }
         public ValueTask WriteAsync(ReadOnlyMemory<float> frames, CancellationToken ct = default) => ValueTask.CompletedTask;
