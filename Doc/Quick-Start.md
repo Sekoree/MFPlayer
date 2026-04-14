@@ -1,6 +1,18 @@
 # Quick Start
 
-This guide shows the minimum wiring for playback using `AVMixer`.
+This guide shows quick setup paths for both `MediaPlayer` and `AVMixer`.
+
+## 0) Fastest path (`MediaPlayer`)
+
+```csharp
+using var player = new MediaPlayer(audioOutput, videoOutput);
+await player.OpenAsync("media.mp4");
+await player.PlayAsync();
+```
+
+For playback events and extra output/sink fan-out helpers, see `MediaPlayer-Guide.md`.
+For a full main-output + NDI fan-out example, see
+`MediaPlayer-Guide.md#end-to-end-main-output--ndi-fan-out`.
 
 ## 1) Audio Playback (PortAudio)
 

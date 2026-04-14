@@ -159,7 +159,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
 
             int w = _videoTargetFormat.Width > 0 ? _videoTargetFormat.Width : 1280;
             int h = _videoTargetFormat.Height > 0 ? _videoTargetFormat.Height : 720;
-            int bytes = w * h * 4;
+            int bytes = GetVideoBufferBytes(_videoTargetFormat.PixelFormat, w, h);
             for (int i = 0; i < Math.Max(1, videoPoolCount); i++)
                 _videoPool.Enqueue(new byte[bytes]);
         }
@@ -448,6 +448,17 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         PixelFormat.Uyvy422 => w * 2,
         PixelFormat.Nv12 or PixelFormat.Yuv420p => w,
         _ => w * 4,
+    };
+
+    private static int GetVideoBufferBytes(PixelFormat fmt, int width, int height) => fmt switch
+    {
+        PixelFormat.Uyvy422 => width * height * 2,
+        PixelFormat.Nv12 => width * height + (width * ((height + 1) / 2)),
+        PixelFormat.Yuv420p =>
+            width * height +
+            ((width + 1) / 2) * ((height + 1) / 2) +
+            ((width + 1) / 2) * ((height + 1) / 2),
+        _ => width * height * 4,
     };
 
     private static NDIFourCCVideoType ToFourCc(PixelFormat fmt) => fmt switch

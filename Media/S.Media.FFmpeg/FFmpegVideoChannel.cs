@@ -196,6 +196,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         ffmpeg.avcodec_flush_buffers(_codecCtx);
         while (_ringReader.TryRead(out var vf))
             vf.MemoryOwner?.Dispose();
+        Interlocked.Exchange(ref _framesInRing, 0);
     }
 
     private VideoFrame? ConvertFrame(AVFrame* frame)
@@ -396,6 +397,8 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             Interlocked.Increment(ref _framesDequeued);
             filled++;
         }
+        if (filled > 0)
+            Interlocked.Add(ref _framesInRing, -filled);
         if (filled == 0 && Interlocked.Read(ref _framesDequeued) > 0)
             RaiseBufferUnderrun();
         return filled;
@@ -417,6 +420,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     {
         while (_ringReader.TryRead(out var vf))
             vf.MemoryOwner?.Dispose();
+        Interlocked.Exchange(ref _framesInRing, 0);
         Volatile.Write(ref _positionTicks, position.Ticks);
     }
 
@@ -494,6 +498,10 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         }
         CompleteDecodeLoop();
 
+        while (_ringReader.TryRead(out var vf))
+            vf.MemoryOwner?.Dispose();
+        Interlocked.Exchange(ref _framesInRing, 0);
+
         if (_frame    != null) fixed (AVFrame**        pp = &_frame)    ffmpeg.av_frame_free(pp);
         if (_rgbFrame != null) fixed (AVFrame**        pp = &_rgbFrame) ffmpeg.av_frame_free(pp);
         if (_swFrame  != null) fixed (AVFrame**        pp = &_swFrame)  ffmpeg.av_frame_free(pp);
@@ -549,7 +557,16 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
                 if (!w.IsCompletedSuccessfully)
                 {
                     try { w.AsTask().GetAwaiter().GetResult(); }
-                    catch (OperationCanceledException) { return false; }
+                    catch (OperationCanceledException)
+                    {
+                        vf.Value.MemoryOwner?.Dispose();
+                        return false;
+                    }
+                    catch (ChannelClosedException)
+                    {
+                        vf.Value.MemoryOwner?.Dispose();
+                        return false;
+                    }
                 }
                 Interlocked.Increment(ref _framesInRing);
             }

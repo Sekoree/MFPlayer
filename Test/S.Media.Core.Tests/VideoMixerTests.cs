@@ -19,6 +19,7 @@ public sealed class VideoMixerTests
     private sealed class QueueVideoChannel : IVideoChannel
     {
         private readonly Queue<VideoFrame> _frames = new();
+        public int FillCalls { get; private set; }
         public Guid Id { get; } = Guid.NewGuid();
         public bool IsOpen => true;
         public bool CanSeek => false;
@@ -35,6 +36,7 @@ public sealed class VideoMixerTests
 
         public int FillBuffer(Span<VideoFrame> dest, int frameCount)
         {
+            FillCalls++;
             if (frameCount <= 0 || _frames.Count == 0)
                 return 0;
 
@@ -433,5 +435,34 @@ public sealed class VideoMixerTests
         chB.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[4], TimeSpan.FromMilliseconds(10)));
         mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
         Assert.Equal(1, sink.Calls);
+    }
+
+    [Fact]
+    public void PresentNextFrame_NonLeaderSharedByTwoSinks_PullsChannelOncePerTick()
+    {
+        using var mixer = new VideoMixer(FmtRgba30);
+
+        var leader = new QueueVideoChannel(FmtRgba30);
+        leader.Enqueue(new VideoFrame(1, 1, PixelFormat.Rgba32, new byte[] { 1, 2, 3, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        var shared = new QueueVideoChannel(new VideoFormat(1, 1, PixelFormat.Bgra32, 30, 1));
+        shared.Enqueue(new VideoFrame(1, 1, PixelFormat.Bgra32, new byte[] { 10, 20, 30, 255 }, TimeSpan.FromMilliseconds(10)));
+
+        mixer.AddChannel(leader);
+        mixer.AddChannel(shared);
+        mixer.RouteChannelToPrimaryOutput(leader.Id);
+
+        var sinkA = new SpyVideoSink();
+        var sinkB = new SpyVideoSink();
+        mixer.RegisterSink(sinkA);
+        mixer.RegisterSink(sinkB);
+        mixer.SetActiveChannelForSink(sinkA, shared.Id);
+        mixer.SetActiveChannelForSink(sinkB, shared.Id);
+
+        mixer.PresentNextFrame(TimeSpan.FromMilliseconds(20));
+
+        Assert.Equal(1, shared.FillCalls);
+        Assert.Equal(1, sinkA.Calls);
+        Assert.Equal(1, sinkB.Calls);
     }
 }

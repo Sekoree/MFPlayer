@@ -89,7 +89,8 @@ internal static class FFmpegDecodeWorkers
                 {
                     if (ep.IsPooled)
                         ArrayPool<byte>.Shared.Return(ep.Data);
-                    packetPool?.Enqueue(ep);
+                    if (!ep.IsFlush)
+                        packetPool?.Enqueue(ep);
                 }
             }
         }
@@ -176,7 +177,8 @@ internal static class FFmpegDecodeWorkers
                 {
                     if (ep.IsPooled)
                         ArrayPool<byte>.Shared.Return(ep.Data);
-                    packetPool?.Enqueue(ep);
+                    if (!ep.IsFlush)
+                        packetPool?.Enqueue(ep);
                 }
             }
         }

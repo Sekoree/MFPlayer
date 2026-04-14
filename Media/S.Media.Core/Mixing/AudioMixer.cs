@@ -413,20 +413,9 @@ internal sealed class AudioMixer : IAudioMixer
             int srcCh     = srcFmt.Channels;
             bool sameRate = slot.Resampler == null;
 
-            // Use the resampler's own frame-count calculation to account for
-            // internally buffered pending frames.  The old fixed formula
-            // (ceil + 1) consistently over-pulled by ~1 frame per callback,
-            // causing unbounded pending-frame growth inside the resampler →
-            // periodic _combinedBuf re-allocation on the RT thread → GC → crackle.
-            int srcFrames  = sameRate ? frameCount
-                : slot.Resampler!.GetRequiredInputFrames(frameCount, srcFmt, outputFormat.SampleRate);
-            int srcSamples = srcFrames * srcCh;
-
-            if (slot.SrcBuf.Length < srcSamples || (!sameRate && slot.ResampleBuf.Length < frameCount * srcCh))
-            {
-                Interlocked.Increment(ref _rtSlotCapacityMisses);
-                continue;
-            }
+            int mixFrames = frameCount;
+            int srcFrameStart = 0;
+            int dstFrameStart = 0;
 
             // 0. Handle time offset (delay = insert silence, advance = discard frames).
             long offsetRemaining = Volatile.Read(ref slot.OffsetFramesRemaining);
@@ -440,12 +429,12 @@ internal sealed class AudioMixer : IAudioMixer
                     // (the slot contributes nothing to the mix this cycle).
                     continue;
                 }
-                // Partial delay: silence for the first part, pull for the rest.
-                // For simplicity, we consume the remaining delay this cycle and
-                // do a full pull next cycle. The granularity loss is at most one
-                // buffer (~5ms at 48kHz/256 frames), which is acceptable.
+
+                // Partial delay: fill the first part with silence and mix the remainder.
+                int delayFrames = (int)Math.Min(offsetRemaining, frameCount);
                 Volatile.Write(ref slot.OffsetFramesRemaining, 0);
-                continue;
+                dstFrameStart = delayFrames;
+                mixFrames = frameCount - delayFrames;
             }
             else if (offsetRemaining < 0)
             {
@@ -454,14 +443,43 @@ internal sealed class AudioMixer : IAudioMixer
                 if (toDiscard >= frameCount)
                 {
                     // Pull a full buffer and discard it entirely.
-                    slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, srcSamples), srcFrames);
+                    int discardSrcFrames = sameRate
+                        ? frameCount
+                        : slot.Resampler!.GetRequiredInputFrames(frameCount, srcFmt, outputFormat.SampleRate);
+                    int discardSrcSamples = discardSrcFrames * srcCh;
+                    if (slot.SrcBuf.Length < discardSrcSamples)
+                    {
+                        Interlocked.Increment(ref _rtSlotCapacityMisses);
+                        continue;
+                    }
+
+                    slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, discardSrcSamples), discardSrcFrames);
                     Volatile.Write(ref slot.OffsetFramesRemaining, offsetRemaining + frameCount);
                     continue;
                 }
-                // Partial advance: discard remaining frames. Pull once more and
-                // let normal processing happen next cycle.
-                slot.Channel.FillBuffer(slot.SrcBuf.AsSpan(0, srcSamples), srcFrames);
+
+                // Partial advance: discard within the same callback by skipping
+                // a prefix of the pulled audio for this cycle.
+                int discardFrames = (int)Math.Min(toDiscard, frameCount);
                 Volatile.Write(ref slot.OffsetFramesRemaining, 0);
+                srcFrameStart = discardFrames;
+                mixFrames = frameCount - discardFrames;
+            }
+
+            if (mixFrames <= 0)
+                continue;
+
+            int requiredOutFrames = mixFrames + srcFrameStart;
+
+            // Use the resampler's own frame-count calculation to account for
+            // internally buffered pending frames.
+            int srcFrames  = sameRate ? requiredOutFrames
+                : slot.Resampler!.GetRequiredInputFrames(requiredOutFrames, srcFmt, outputFormat.SampleRate);
+            int srcSamples = srcFrames * srcCh;
+
+            if (slot.SrcBuf.Length < srcSamples || (!sameRate && slot.ResampleBuf.Length < requiredOutFrames * srcCh))
+            {
+                Interlocked.Increment(ref _rtSlotCapacityMisses);
                 continue;
             }
 
@@ -474,16 +492,16 @@ internal sealed class AudioMixer : IAudioMixer
             if (sameRate)
             {
                 activeBuf     = slot.SrcBuf;
-                activeSamples = frameCount * srcCh;
+                activeSamples = requiredOutFrames * srcCh;
             }
             else
             {
                 slot.Resampler!.Resample(
                     slot.SrcBuf.AsSpan(0, srcSamples),
-                    slot.ResampleBuf.AsSpan(0, frameCount * srcCh),
+                    slot.ResampleBuf.AsSpan(0, requiredOutFrames * srcCh),
                     srcFmt, outputFormat.SampleRate);
                 activeBuf     = slot.ResampleBuf;
-                activeSamples = frameCount * srcCh;
+                activeSamples = requiredOutFrames * srcCh;
             }
 
             // 3. Per-channel volume
@@ -492,7 +510,7 @@ internal sealed class AudioMixer : IAudioMixer
                 MultiplyInPlace(activeBuf.AsSpan(0, activeSamples), vol);
 
             // 4. Scatter into leader mix buffer
-            ScatterIntoMix(_mixBuffer, activeBuf, frameCount, srcCh, outCh, slot.LeaderBakedRoutes);
+            ScatterIntoMix(_mixBuffer, activeBuf, mixFrames, srcCh, outCh, slot.LeaderBakedRoutes, srcFrameStart, dstFrameStart);
 
             // 5. Scatter into each sink's mix buffer
             var sinkRoutesByIndex = slot.SinkRouteBySinkIndex;
@@ -507,9 +525,9 @@ internal sealed class AudioMixer : IAudioMixer
                 SinkRoute? route = si < sinkRoutesByIndex.Length ? sinkRoutesByIndex[si] : null;
 
                 if (route != null)
-                    ScatterIntoMix(st.MixBuffer, activeBuf, frameCount, srcCh, sinkCh, route.BakedRoutes);
+                    ScatterIntoMix(st.MixBuffer, activeBuf, mixFrames, srcCh, sinkCh, route.BakedRoutes, srcFrameStart, dstFrameStart);
                 else if (DefaultFallback == ChannelFallback.Broadcast)
-                    ScatterIntoMix(st.MixBuffer, activeBuf, frameCount, srcCh, sinkCh, slot.LeaderBakedRoutes);
+                    ScatterIntoMix(st.MixBuffer, activeBuf, mixFrames, srcCh, sinkCh, slot.LeaderBakedRoutes, srcFrameStart, dstFrameStart);
             }
         }
 
@@ -653,7 +671,9 @@ internal sealed class AudioMixer : IAudioMixer
     private static void ScatterIntoMix(
         float[] mix, float[] src,
         int frameCount, int srcCh, int dstCh,
-        (int dst, float gain)[][] bakedRoutes)
+        (int dst, float gain)[][] bakedRoutes,
+        int srcFrameOffset = 0,
+        int dstFrameOffset = 0)
     {
         // Source-channel-outer / frame-inner: loads the route array once per
         // source channel instead of once per frame, and uses running offsets
@@ -669,8 +689,8 @@ internal sealed class AudioMixer : IAudioMixer
                 int dc   = routes[0].dst;
                 float g  = routes[0].gain;
                 if (dc >= dstCh) continue;
-                int srcOff = sc;
-                int dstOff = dc;
+                int srcOff = (srcFrameOffset * srcCh) + sc;
+                int dstOff = (dstFrameOffset * dstCh) + dc;
                 for (int f = 0; f < frameCount; f++)
                 {
                     mix[dstOff] += src[srcOff] * g;
@@ -682,8 +702,8 @@ internal sealed class AudioMixer : IAudioMixer
 
             // General path: multiple routes per source channel.
             {
-                int srcOff = sc;
-                int dstBase = 0;
+                int srcOff = (srcFrameOffset * srcCh) + sc;
+                int dstBase = dstFrameOffset * dstCh;
                 for (int f = 0; f < frameCount; f++)
                 {
                     float sample = src[srcOff];

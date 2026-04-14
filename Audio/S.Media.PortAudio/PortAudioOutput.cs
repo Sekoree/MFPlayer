@@ -135,7 +135,6 @@ public sealed class PortAudioOutput : IAudioOutput
         Log.LogInformation("Stopping PortAudio output stream");
         return Task.Run(() =>
         {
-            ct.ThrowIfCancellationRequested();
             _clock?.Stop();
             _isRunning = false;
 

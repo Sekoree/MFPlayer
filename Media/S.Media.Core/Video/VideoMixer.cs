@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
 
@@ -359,6 +360,7 @@ internal sealed class VideoMixer : IVideoMixer
             Interlocked.Increment(ref _leaderNullCount);
 
         var sinks = _sinkTargets;
+        var sharedChannelFrames = new Dictionary<Guid, VideoFrame?>();
         for (int i = 0; i < sinks.Length; i++)
         {
             var st = sinks[i];
@@ -375,6 +377,13 @@ internal sealed class VideoMixer : IVideoMixer
                 continue;
             }
 
+            if (st.ActiveChannel != null && sharedChannelFrames.TryGetValue(st.ActiveChannel.Id, out var shared))
+            {
+                if (shared.HasValue && st.Sink.IsRunning)
+                    DeliverSharedFrame(st, shared.Value, countPullAsFanOut: false);
+                continue;
+            }
+
             var sinkOffset = GetOffsetForChannel(st.ActiveChannel);
             var sinkClock = clockPosition - sinkOffset;
             var sinkFrame = PresentForTarget(st.ActiveChannel, ref st.StagedFrame, ref st.LastFrame,
@@ -382,6 +391,8 @@ internal sealed class VideoMixer : IVideoMixer
                 sinkClock,
                 countSinkFormatStats: true,
                 sink: st.Sink);
+            if (st.ActiveChannel != null)
+                sharedChannelFrames[st.ActiveChannel.Id] = sinkFrame;
             if (sinkFrame.HasValue && st.Sink.IsRunning)
                 st.Sink.ReceiveFrame(sinkFrame.Value);
         }
@@ -396,11 +407,17 @@ internal sealed class VideoMixer : IVideoMixer
     /// </summary>
     private void DeliverFanOutFrame(SinkTarget st)
     {
-        var raw = _lastFrame!.Value;
+        DeliverSharedFrame(st, _lastFrame!.Value, countPullAsFanOut: true);
+    }
 
-        Interlocked.Increment(ref _pullAttemptCount);
-        Interlocked.Increment(ref _pullHitCount);
-        Interlocked.Increment(ref _rawMarkerPassthroughCount);
+    private void DeliverSharedFrame(SinkTarget st, in VideoFrame raw, bool countPullAsFanOut)
+    {
+        if (countPullAsFanOut)
+        {
+            Interlocked.Increment(ref _pullAttemptCount);
+            Interlocked.Increment(ref _pullHitCount);
+            Interlocked.Increment(ref _rawMarkerPassthroughCount);
+        }
 
         if (st.Sink is IVideoSinkFormatCapabilities caps)
         {

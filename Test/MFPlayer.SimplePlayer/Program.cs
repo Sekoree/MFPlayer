@@ -136,12 +136,26 @@ using (decoder)
     if (srcFmt.SampleRate != output.HardwareFormat.SampleRate)
         Console.WriteLine($"  Resampling: {srcFmt.SampleRate} → {output.HardwareFormat.SampleRate} Hz (AudioMixer)");
 
-    // ── 7. EOF detection via BufferUnderrun ──────────────────────────────────
+    // ── 7. Completion detection (source-ended + drain) ───────────────────────
 
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
     var seekState = new SeekUiState();
+    int sourceEnded = 0;
+    long sourceEndedTicks = 0;
+    bool completionAnnounced = false;
+    const double DrainGraceSeconds = 0.30;
+
+    void MarkSourceEnded(string tag)
+    {
+        Volatile.Write(ref sourceEnded, 1);
+        Interlocked.Exchange(ref sourceEndedTicks, Stopwatch.GetTimestamp());
+        Console.WriteLine($"\n[{tag}: waiting for drain]");
+    }
+
+    decoder.EndOfMedia += (_, _) => MarkSourceEnded("demux EOF");
+    audioChannel.EndOfStream += (_, _) => MarkSourceEnded("decode EOF");
 
     var sw = Stopwatch.StartNew();
     audioChannel.BufferUnderrun += (_, _) =>
@@ -155,11 +169,7 @@ using (decoder)
         double secondsSinceSeek = ticksSinceSeek / (double)Stopwatch.Frequency;
         if (secondsSinceSeek < 1.2) return;
 
-        if (audioChannel.BufferAvailable == 0)
-        {
-            Console.WriteLine("\n[EOF reached]");
-            cts.Cancel();
-        }
+        // Underruns can happen before true EOF under decode pressure; do not auto-stop here.
     };
 
     // ── 8. Start playback ────────────────────────────────────────────────────
@@ -245,6 +255,21 @@ using (decoder)
                 $"[stats] state={(paused ? "paused" : "playing"),7}  " +
                 $"clock={FormatTime(clockPos)}  src={FormatTime(chPos)}  " +
                 $"buffer={audioChannel.BufferAvailable,6}f  vol={audioChannel.Volume:0.00}");
+        }
+
+        if (!paused && Volatile.Read(ref sourceEnded) == 1 && audioChannel.BufferAvailable == 0)
+        {
+            long endedAt = Interlocked.Read(ref sourceEndedTicks);
+            double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
+            if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
+            {
+                if (!completionAnnounced)
+                {
+                    completionAnnounced = true;
+                    Console.WriteLine("\n[Playback drained]");
+                }
+                cts.Cancel();
+            }
         }
 
         try { await Task.Delay(20, cts.Token); }

@@ -148,20 +148,41 @@ using (ndiRuntime)
                 avMixer.AddAudioChannel(audioChannel, routeMap);
                 avMixer.RouteAudioChannelToSink(audioChannel.Id, ndiSink, routeMap);
 
-            // ── 7. EOF detection ──────────────────────────────────────────────
+            // ── 7. Completion detection (source-ended + drain) ───────────────
 
             var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            int sourceEnded = 0;
+            long sourceEndedTicks = 0;
+            const double DrainGraceSeconds = 0.30;
+
+            void MarkSourceEnded(string tag)
+            {
+                Volatile.Write(ref sourceEnded, 1);
+                Interlocked.Exchange(ref sourceEndedTicks, Stopwatch.GetTimestamp());
+                Console.WriteLine($"\n[{tag}: waiting for drain]");
+            }
+
+            decoder.EndOfMedia += (_, _) => MarkSourceEnded("demux EOF");
+            audioChannel.EndOfStream += (_, _) => MarkSourceEnded("decode EOF");
 
             // Ignore underruns during the first 2 s (buffer warm-up while the decoder
-            // pre-fills its ring).  The first real underrun after that is EOF.
+            // pre-fills its ring). Underrun alone is not treated as EOF.
             var warmUp = Stopwatch.StartNew();
             audioChannel.BufferUnderrun += (_, _) =>
             {
-                if (warmUp.Elapsed.TotalSeconds > 2 && !cts.IsCancellationRequested)
+                if (warmUp.Elapsed.TotalSeconds <= 2 || cts.IsCancellationRequested)
+                    return;
+
+                if (Volatile.Read(ref sourceEnded) == 1 && audioChannel.BufferAvailable == 0)
                 {
-                    Console.WriteLine("\n[End of file]");
-                    cts.Cancel();
+                    long endedAt = Interlocked.Read(ref sourceEndedTicks);
+                    double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
+                    if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
+                    {
+                        Console.WriteLine("\n[Playback drained]");
+                        cts.Cancel();
+                    }
                 }
             };
 

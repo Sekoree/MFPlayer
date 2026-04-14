@@ -518,10 +518,9 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
         _log.LogDebug("Seek committed, epoch={Epoch}", epoch);
 
-        var flush = EncodedPacket.Flush(epoch, position.Ticks);
         int droppedControlPackets = 0;
         foreach (var (_, q) in _queues)
-            if (!WriteControlPacket(q.Writer, flush))
+            if (!WriteControlPacket(q.Writer, EncodedPacket.Flush(epoch, position.Ticks)))
                 droppedControlPackets++;
 
         if (droppedControlPackets > 0)

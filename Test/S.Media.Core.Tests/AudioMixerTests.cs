@@ -402,6 +402,32 @@ public sealed class AudioMixerTests
         }
     }
 
+    [Fact]
+    public void FillOutputBuffer_PartialPositiveTimeOffset_MixesRemainderInSameCallback()
+    {
+        var (_, mixer) = MakeMixer(Mono48k);
+        using (mixer)
+        {
+            var ch = new ConstantChannel(Mono48k, 1f);
+            mixer.AddChannel(ch, ChannelRouteMap.Identity(1));
+
+            long ticksFor4Frames = (long)Math.Round(TimeSpan.TicksPerSecond * (4d / Mono48k.SampleRate));
+            var offset = TimeSpan.FromTicks(ticksFor4Frames);
+            mixer.SetChannelTimeOffset(ch.Id, offset);
+
+            float[] dest = new float[8];
+            mixer.FillOutputBuffer(dest, 8, Mono48k);
+
+            int expectedDelayFrames = (int)(Math.Abs(offset.TotalSeconds) * Mono48k.SampleRate);
+            expectedDelayFrames = Math.Clamp(expectedDelayFrames, 1, 7);
+
+            for (int i = 0; i < expectedDelayFrames; i++)
+                Assert.Equal(0f, dest[i], precision: 5);
+            for (int i = expectedDelayFrames; i < 8; i++)
+                Assert.Equal(1f, dest[i], precision: 5);
+        }
+    }
+
     // ── Dispose guard ─────────────────────────────────────────────────────
 
     [Fact]

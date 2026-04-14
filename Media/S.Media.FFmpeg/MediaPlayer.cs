@@ -1,9 +1,43 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
 using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg;
+
+public enum PlaybackState
+{
+    Idle,
+    Opening,
+    Ready,
+    Playing,
+    Paused,
+    Stopping,
+    Stopped,
+    Faulted
+}
+
+public enum PlaybackCompletedReason
+{
+    SourceEnded,
+    StoppedByUser,
+    ReplacedByOpen,
+    Faulted,
+}
+
+public enum PlaybackFailureStage
+{
+    Open,
+    Play,
+    Pause,
+    Stop,
+    Runtime,
+}
+
+public sealed record PlaybackStateChangedEventArgs(PlaybackState Previous, PlaybackState Current);
+public sealed record PlaybackCompletedEventArgs(PlaybackCompletedReason Reason);
+public sealed record PlaybackFailedEventArgs(PlaybackFailureStage Stage, Exception Exception);
 
 /// <summary>
 /// High-level one-source one-output playback facade built on
@@ -31,6 +65,7 @@ public sealed class MediaPlayer : IDisposable
     private float           _volume         = 1.0f;
     private bool            _decoderStarted;
     private bool            _disposed;
+    private PlaybackState   _state = PlaybackState.Idle;
 
     // ── Construction ──────────────────────────────────────────────────────────
 
@@ -58,6 +93,9 @@ public sealed class MediaPlayer : IDisposable
     /// the current media source. Subscribe to cancel a wait handle or trigger the next track.
     /// </summary>
     public event EventHandler? PlaybackEnded;
+    public event EventHandler<PlaybackStateChangedEventArgs>? PlaybackStateChanged;
+    public event EventHandler<PlaybackCompletedEventArgs>? PlaybackCompleted;
+    public event EventHandler<PlaybackFailedEventArgs>? PlaybackFailed;
 
     // ── Properties ───────────────────────────────────────────────────────────
 
@@ -101,6 +139,12 @@ public sealed class MediaPlayer : IDisposable
     /// </summary>
     public IVideoChannel? VideoChannel => _decoder?.FirstVideoChannel;
 
+    /// <summary>
+    /// Exposes the currently active mixer for advanced routing scenarios.
+    /// Returns <see langword="null"/> when no media session is attached.
+    /// </summary>
+    public IAVMixer? Mixer => _mixer;
+
     // ── Open ──────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -114,8 +158,19 @@ public sealed class MediaPlayer : IDisposable
         CancellationToken     ct     = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await CloseAsync(ct).ConfigureAwait(false);
-        AttachDecoder(FFmpegDecoder.Open(path, options));
+        SetState(PlaybackState.Opening);
+        try
+        {
+            await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen).ConfigureAwait(false);
+            AttachDecoder(FFmpegDecoder.Open(path, options));
+            SetState(PlaybackState.Ready);
+        }
+        catch (Exception ex)
+        {
+            SetState(PlaybackState.Faulted);
+            PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Open, ex));
+            throw;
+        }
     }
 
     /// <summary>
@@ -130,8 +185,19 @@ public sealed class MediaPlayer : IDisposable
         CancellationToken     ct        = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await CloseAsync(ct).ConfigureAwait(false);
-        AttachDecoder(FFmpegDecoder.Open(stream, options, leaveOpen));
+        SetState(PlaybackState.Opening);
+        try
+        {
+            await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen).ConfigureAwait(false);
+            AttachDecoder(FFmpegDecoder.Open(stream, options, leaveOpen));
+            SetState(PlaybackState.Ready);
+        }
+        catch (Exception ex)
+        {
+            SetState(PlaybackState.Faulted);
+            PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Open, ex));
+            throw;
+        }
     }
 
     // ── Transport ─────────────────────────────────────────────────────────────
@@ -148,16 +214,27 @@ public sealed class MediaPlayer : IDisposable
             throw new InvalidOperationException(
                 "No media is open. Call OpenAsync first.");
 
-        if (!_decoderStarted)
+        try
         {
-            _decoder.Start();
-            _decoderStarted = true;
-        }
+            if (!_decoderStarted)
+            {
+                _decoder.Start();
+                _decoderStarted = true;
+            }
 
-        if (_audioOutput != null)
-            await _audioOutput.StartAsync(ct).ConfigureAwait(false);
-        if (_videoOutput != null)
-            await _videoOutput.StartAsync(ct).ConfigureAwait(false);
+            if (_audioOutput != null)
+                await _audioOutput.StartAsync(ct).ConfigureAwait(false);
+            if (_videoOutput != null)
+                await _videoOutput.StartAsync(ct).ConfigureAwait(false);
+
+            SetState(PlaybackState.Playing);
+        }
+        catch (Exception ex)
+        {
+            SetState(PlaybackState.Faulted);
+            PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Play, ex));
+            throw;
+        }
     }
 
     /// <summary>
@@ -167,10 +244,20 @@ public sealed class MediaPlayer : IDisposable
     /// </summary>
     public async Task PauseAsync(CancellationToken ct = default)
     {
-        if (_audioOutput != null)
-            await _audioOutput.StopAsync(ct).ConfigureAwait(false);
-        if (_videoOutput != null)
-            await _videoOutput.StopAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_audioOutput != null)
+                await _audioOutput.StopAsync(ct).ConfigureAwait(false);
+            if (_videoOutput != null)
+                await _videoOutput.StopAsync(ct).ConfigureAwait(false);
+            SetState(PlaybackState.Paused);
+        }
+        catch (Exception ex)
+        {
+            SetState(PlaybackState.Faulted);
+            PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Pause, ex));
+            throw;
+        }
     }
 
     /// <summary>
@@ -180,7 +267,18 @@ public sealed class MediaPlayer : IDisposable
     public async Task StopAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await CloseAsync(ct).ConfigureAwait(false);
+        SetState(PlaybackState.Stopping);
+        try
+        {
+            await CloseAsync(ct, PlaybackCompletedReason.StoppedByUser).ConfigureAwait(false);
+            SetState(PlaybackState.Stopped);
+        }
+        catch (Exception ex)
+        {
+            SetState(PlaybackState.Faulted);
+            PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Stop, ex));
+            throw;
+        }
     }
 
     /// <summary>
@@ -188,6 +286,71 @@ public sealed class MediaPlayer : IDisposable
     /// Silently ignored for non-seekable streams.
     /// </summary>
     public void Seek(TimeSpan position) => _decoder?.Seek(position);
+
+    /// <summary>
+    /// Registers an additional audio sink and optionally routes the current first audio channel.
+    /// </summary>
+    public void AddAudioSink(IAudioSink sink, ChannelRouteMap? routeMap = null, int channels = 0, bool autoRouteFirstChannel = true)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        var mixer = RequireMixer();
+        mixer.RegisterAudioSink(sink, channels);
+
+        if (autoRouteFirstChannel && AudioChannel is { } ch)
+        {
+            var map = routeMap ?? ChannelRouteMap.Auto(ch.SourceFormat.Channels, channels > 0 ? channels : _audioOutput?.HardwareFormat.Channels ?? ch.SourceFormat.Channels);
+            mixer.RouteAudioChannelToSink(ch.Id, sink, map);
+        }
+    }
+
+    /// <summary>
+    /// Registers an additional video sink and optionally routes the current first video channel.
+    /// </summary>
+    public void AddVideoSink(IVideoSink sink, bool autoRouteFirstChannel = true)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        var mixer = RequireMixer();
+        mixer.RegisterVideoSink(sink);
+
+        if (autoRouteFirstChannel && VideoChannel is { } ch)
+            mixer.RouteVideoChannelToSink(ch.Id, sink);
+    }
+
+    /// <summary>
+    /// Registers an additional audio endpoint and optionally routes the current first audio channel.
+    /// </summary>
+    public void AddAudioEndpoint(IAudioBufferEndpoint endpoint, ChannelRouteMap? routeMap = null, int channels = 0, bool autoRouteFirstChannel = true)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        var mixer = RequireMixer();
+        mixer.RegisterAudioEndpoint(endpoint, channels);
+
+        if (autoRouteFirstChannel && AudioChannel is { } ch)
+        {
+            if (routeMap != null)
+                mixer.RouteAudioChannelToEndpoint(ch.Id, endpoint, routeMap);
+            else
+                mixer.RouteAudioChannelToEndpoint(ch.Id, endpoint);
+        }
+    }
+
+    /// <summary>
+    /// Registers an additional video endpoint and optionally routes the current first video channel.
+    /// </summary>
+    public void AddVideoEndpoint(IVideoFrameEndpoint endpoint, bool autoRouteFirstChannel = true)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        var mixer = RequireMixer();
+        mixer.RegisterVideoEndpoint(endpoint);
+
+        if (autoRouteFirstChannel && VideoChannel is { } ch)
+            mixer.RouteVideoChannelToEndpoint(ch.Id, endpoint);
+    }
+
+    public void RemoveAudioSink(IAudioSink sink) => RequireMixer().UnregisterAudioSink(sink);
+    public void RemoveVideoSink(IVideoSink sink) => RequireMixer().UnregisterVideoSink(sink);
+    public void RemoveAudioEndpoint(IAudioBufferEndpoint endpoint) => RequireMixer().UnregisterAudioEndpoint(endpoint);
+    public void RemoveVideoEndpoint(IVideoFrameEndpoint endpoint) => RequireMixer().UnregisterVideoEndpoint(endpoint);
 
     // ── IDisposable ───────────────────────────────────────────────────────────
 
@@ -197,6 +360,7 @@ public sealed class MediaPlayer : IDisposable
         if (_disposed) return;
         _disposed = true;
         ReleaseSession();
+        SetState(PlaybackState.Stopped);
     }
 
     // ── Private ───────────────────────────────────────────────────────────────
@@ -230,8 +394,9 @@ public sealed class MediaPlayer : IDisposable
         _decoderStarted = false;
     }
 
-    private async Task CloseAsync(CancellationToken ct)
+    private async Task CloseAsync(CancellationToken ct, PlaybackCompletedReason? closeReason = null)
     {
+        bool hadSession = _decoder != null || _mixer != null || _decoderStarted;
         if (_decoderStarted)
         {
             if (_audioOutput != null)
@@ -246,6 +411,8 @@ public sealed class MediaPlayer : IDisposable
             }
         }
         ReleaseSession();
+        if (hadSession && closeReason.HasValue)
+            PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(closeReason.Value));
     }
 
     private void ReleaseSession()
@@ -257,7 +424,23 @@ public sealed class MediaPlayer : IDisposable
         _decoderStarted = false;
     }
 
-    private void OnEndOfMedia(object? sender, EventArgs e) =>
+    private void OnEndOfMedia(object? sender, EventArgs e)
+    {
         PlaybackEnded?.Invoke(this, EventArgs.Empty);
+        PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(PlaybackCompletedReason.SourceEnded));
+    }
+
+    private void SetState(PlaybackState next)
+    {
+        var prev = _state;
+        if (prev == next)
+            return;
+
+        _state = next;
+        PlaybackStateChanged?.Invoke(this, new PlaybackStateChangedEventArgs(prev, next));
+    }
+
+    private IAVMixer RequireMixer()
+        => _mixer ?? throw new InvalidOperationException("No active media session. Call OpenAsync first.");
 }
 

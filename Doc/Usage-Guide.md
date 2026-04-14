@@ -1,6 +1,12 @@
-# Usage Guide (AVMixer API)
+# Usage Guide
 
-## Core Model
+## Choose Your API Level
+
+- Use `MediaPlayer` for fast open/play/pause/stop workflows and optional fan-out.
+- Use `AVMixer` when you need full explicit channel/sink routing control.
+- See `MediaPlayer-Guide.md` for complete `MediaPlayer` examples and events.
+
+## Core Model (AVMixer)
 
 - Add channels to `AVMixer`.
 - Attach outputs to `AVMixer` (`AttachAudioOutput`, `AttachVideoOutput`).
@@ -63,4 +69,27 @@ avMixer.RouteVideoChannelToEndpoint(videoChannel.Id, videoEndpoint);
 - Open outputs first, then attach/register/route, then start.
 - During shutdown: stop endpoints, unroute if needed, then dispose.
 - Disposing `AVMixer` cleans internal mixer resources it owns.
+
+## MediaPlayer Quick Reference
+
+```csharp
+using var player = new MediaPlayer(audioOutput, videoOutput);
+await player.OpenAsync("file.mp4");
+await player.PlayAsync();
+
+player.AddAudioSink(extraAudioSink, channels: 2);
+player.AddVideoSink(extraVideoSink);
+
+await player.PauseAsync();
+player.Seek(TimeSpan.FromSeconds(30));
+await player.PlayAsync();
+await player.StopAsync();
+```
+
+Events:
+
+- `PlaybackStateChanged`
+- `PlaybackCompleted`
+- `PlaybackFailed`
+- `PlaybackEnded` (compatibility signal)
 

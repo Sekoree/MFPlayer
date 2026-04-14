@@ -158,18 +158,39 @@ using (decoder)
     avMixer.AddAudioChannel(audioChannel, routeMap);
     avMixer.RouteAudioChannelToSink(audioChannel.Id, secondarySink, routeMap);
 
-    // ── 11. EOF detection ────────────────────────────────────────────────────
+    // ── 11. Completion detection (source-ended + drain) ─────────────────────
 
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+    int sourceEnded = 0;
+    long sourceEndedTicks = 0;
+    const double DrainGraceSeconds = 0.30;
+
+    void MarkSourceEnded(string tag)
+    {
+        Volatile.Write(ref sourceEnded, 1);
+        Interlocked.Exchange(ref sourceEndedTicks, Stopwatch.GetTimestamp());
+        Console.WriteLine($"\n[{tag}: waiting for drain]");
+    }
+
+    decoder.EndOfMedia += (_, _) => MarkSourceEnded("demux EOF");
+    audioChannel.EndOfStream += (_, _) => MarkSourceEnded("decode EOF");
 
     var sw = Stopwatch.StartNew();
     audioChannel.BufferUnderrun += (_, _) =>
     {
-        if (sw.Elapsed.TotalSeconds > 2 && !cts.IsCancellationRequested)
+        if (sw.Elapsed.TotalSeconds <= 2 || cts.IsCancellationRequested)
+            return;
+
+        if (Volatile.Read(ref sourceEnded) == 1 && audioChannel.BufferAvailable == 0)
         {
-            Console.WriteLine("\n[EOF reached]");
-            cts.Cancel();
+            long endedAt = Interlocked.Read(ref sourceEndedTicks);
+            double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
+            if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
+            {
+                Console.WriteLine("\n[Playback drained]");
+                cts.Cancel();
+            }
         }
     };
 
