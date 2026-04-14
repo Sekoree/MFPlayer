@@ -58,10 +58,27 @@ internal sealed class OSCRouter
         return hits;
     }
 
+    // Manual copy-on-write removal (§8.1): avoids LINQ .Where().ToArray() allocation
+    // that the original implementation used on every unregister call.
     private void Unregister(Route route)
     {
         lock (_gate)
-            _routes = _routes.Where(r => !ReferenceEquals(r, route)).ToArray();
+        {
+            var old = _routes;
+            int idx = -1;
+            for (int i = 0; i < old.Length; i++)
+            {
+                if (ReferenceEquals(old[i], route)) { idx = i; break; }
+            }
+            if (idx < 0) return;
+
+            var neo = new Route[old.Length - 1];
+            for (int i = 0, j = 0; i < old.Length; i++)
+            {
+                if (i != idx) neo[j++] = old[i];
+            }
+            _routes = neo;
+        }
     }
 
     private sealed record Route(string AddressPattern, Func<string, bool> Matcher, OSCMessageHandler Handler);

@@ -6,37 +6,62 @@ using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg;
 
+/// <summary>Lifecycle state of a <see cref="MediaPlayer"/>.</summary>
 public enum PlaybackState
 {
+    /// <summary>No media loaded; initial state after construction or after <see cref="MediaPlayer.StopAsync"/>.</summary>
     Idle,
+    /// <summary>An <see cref="MediaPlayer.OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/> call is in progress.</summary>
     Opening,
+    /// <summary>Media is open and ready; call <see cref="MediaPlayer.PlayAsync"/> to start.</summary>
     Ready,
+    /// <summary>Actively rendering audio/video.</summary>
     Playing,
+    /// <summary>Output paused; decode pipeline stays warm.</summary>
     Paused,
+    /// <summary>A <see cref="MediaPlayer.StopAsync"/> call is in progress.</summary>
     Stopping,
+    /// <summary>Playback stopped; the player may be reused via <see cref="MediaPlayer.OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>.</summary>
     Stopped,
+    /// <summary>An unrecoverable error occurred; inspect <see cref="MediaPlayer.PlaybackFailed"/>.</summary>
     Faulted
 }
 
+/// <summary>Describes why playback ended.</summary>
 public enum PlaybackCompletedReason
 {
+    /// <summary>The media source reached end-of-file.</summary>
     SourceEnded,
+    /// <summary>The user called <see cref="MediaPlayer.StopAsync"/>.</summary>
     StoppedByUser,
+    /// <summary>A new <see cref="MediaPlayer.OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/> call replaced the current session.</summary>
     ReplacedByOpen,
+    /// <summary>An exception occurred during playback.</summary>
     Faulted,
 }
 
+/// <summary>Identifies which transport operation failed.</summary>
 public enum PlaybackFailureStage
 {
+    /// <summary>Failure during <see cref="MediaPlayer.OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>.</summary>
     Open,
+    /// <summary>Failure during <see cref="MediaPlayer.PlayAsync"/>.</summary>
     Play,
+    /// <summary>Failure during <see cref="MediaPlayer.PauseAsync"/>.</summary>
     Pause,
+    /// <summary>Failure during <see cref="MediaPlayer.StopAsync"/>.</summary>
     Stop,
+    /// <summary>Failure during runtime (e.g. RT callback).</summary>
     Runtime,
 }
 
+/// <summary>Carries the previous and current <see cref="PlaybackState"/> on transitions.</summary>
 public sealed record PlaybackStateChangedEventArgs(PlaybackState Previous, PlaybackState Current);
+
+/// <summary>Carries the reason playback finished.</summary>
 public sealed record PlaybackCompletedEventArgs(PlaybackCompletedReason Reason);
+
+/// <summary>Carries the stage and exception when a transport operation fails.</summary>
 public sealed record PlaybackFailedEventArgs(PlaybackFailureStage Stage, Exception Exception);
 
 /// <summary>
@@ -92,9 +117,23 @@ public sealed class MediaPlayer : IDisposable
     /// Raised (on a background thread) when all packets have been demuxed from
     /// the current media source. Subscribe to cancel a wait handle or trigger the next track.
     /// </summary>
+    [Obsolete("Use PlaybackCompleted with PlaybackCompletedReason.SourceEnded instead.")]
     public event EventHandler? PlaybackEnded;
+
+    /// <summary>Raised on every <see cref="PlaybackState"/> transition.</summary>
     public event EventHandler<PlaybackStateChangedEventArgs>? PlaybackStateChanged;
+
+    /// <summary>
+    /// Raised when playback finishes for any reason (source ended, user stopped,
+    /// replaced by a new <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/> call, or fault).
+    /// </summary>
     public event EventHandler<PlaybackCompletedEventArgs>? PlaybackCompleted;
+
+    /// <summary>
+    /// Raised when a transport operation (<see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>,
+    /// <see cref="PlayAsync"/>, <see cref="PauseAsync"/>, <see cref="StopAsync"/>) fails.
+    /// The original exception is also rethrown from the calling method.
+    /// </summary>
     public event EventHandler<PlaybackFailedEventArgs>? PlaybackFailed;
 
     // ── Properties ───────────────────────────────────────────────────────────
@@ -105,11 +144,42 @@ public sealed class MediaPlayer : IDisposable
     public bool IsPlaying => _decoderStarted && !_disposed;
 
     /// <summary>
+    /// Current playback state. Poll-friendly alternative to <see cref="PlaybackStateChanged"/>.
+    /// </summary>
+    public PlaybackState State => _state;
+
+    /// <summary>
+    /// Total duration of the currently open media, or <see langword="null"/> when
+    /// no media is open or the duration is unknown (e.g. live streams).
+    /// </summary>
+    public TimeSpan? Duration => _decoder?.Duration;
+
+    /// <summary>
+    /// When <see langword="true"/>, playback automatically restarts from the
+    /// beginning when the source ends.
+    /// </summary>
+    public bool IsLooping { get; set; }
+
+    /// <summary>
     /// Current decode position.
     /// Returns <see cref="TimeSpan.Zero"/> when no media is open.
     /// </summary>
     public TimeSpan Position =>
         AudioChannel?.Position ?? VideoChannel?.Position ?? TimeSpan.Zero;
+
+    /// <summary>
+    /// Normalized playback progress in the range [0..1].
+    /// Returns 0 when no media is open or the duration is unknown.
+    /// </summary>
+    public double NormalizedPosition
+    {
+        get
+        {
+            var dur = Duration;
+            if (!dur.HasValue || dur.Value <= TimeSpan.Zero) return 0.0;
+            return Math.Clamp(Position / dur.Value, 0.0, 1.0);
+        }
+    }
 
     /// <summary>
     /// Playback volume applied to the audio channel. Range [0..2], default 1.0.
@@ -227,6 +297,7 @@ public sealed class MediaPlayer : IDisposable
             if (_videoOutput != null)
                 await _videoOutput.StartAsync(ct).ConfigureAwait(false);
 
+            _isRunning = true;
             SetState(PlaybackState.Playing);
         }
         catch (Exception ex)
@@ -286,6 +357,33 @@ public sealed class MediaPlayer : IDisposable
     /// Silently ignored for non-seekable streams.
     /// </summary>
     public void Seek(TimeSpan position) => _decoder?.Seek(position);
+
+    /// <summary>
+    /// Convenience: opens the media and immediately starts playback.
+    /// Equivalent to calling <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>
+    /// followed by <see cref="PlayAsync"/>.
+    /// </summary>
+    public async Task OpenAndPlayAsync(
+        string                path,
+        FFmpegDecoderOptions? options = null,
+        CancellationToken     ct      = default)
+    {
+        await OpenAsync(path, options, ct).ConfigureAwait(false);
+        await PlayAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Convenience: opens the media from a stream and immediately starts playback.
+    /// </summary>
+    public async Task OpenAndPlayAsync(
+        Stream                stream,
+        FFmpegDecoderOptions? options   = null,
+        bool                  leaveOpen = false,
+        CancellationToken     ct        = default)
+    {
+        await OpenAsync(stream, options, leaveOpen, ct).ConfigureAwait(false);
+        await PlayAsync(ct).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Registers an additional audio sink and optionally routes the current first audio channel.
@@ -359,11 +457,23 @@ public sealed class MediaPlayer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Stop outputs first so the RT callback cannot race with session teardown (§3.1).
+        if (_isRunning)
+        {
+            try { _audioOutput?.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
+            try { _videoOutput?.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
+            _isRunning = false;
+        }
+
         ReleaseSession();
         SetState(PlaybackState.Stopped);
     }
 
     // ── Private ───────────────────────────────────────────────────────────────
+
+    // Track whether outputs are actively running so Dispose can stop them.
+    private volatile bool _isRunning;
 
     private void AttachDecoder(FFmpegDecoder decoder)
     {
@@ -394,6 +504,12 @@ public sealed class MediaPlayer : IDisposable
         _decoderStarted = false;
     }
 
+    /// <summary>
+    /// Stops outputs (if running), releases the decoder/mixer session, and optionally
+    /// raises <see cref="PlaybackCompleted"/>.  Used by both <see cref="StopAsync"/> and
+    /// <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/> (to tear down
+    /// the previous session before opening a new one).
+    /// </summary>
     private async Task CloseAsync(CancellationToken ct, PlaybackCompletedReason? closeReason = null)
     {
         bool hadSession = _decoder != null || _mixer != null || _decoderStarted;
@@ -409,6 +525,7 @@ public sealed class MediaPlayer : IDisposable
                 try { await _videoOutput.StopAsync(ct).ConfigureAwait(false); }
                 catch { /* best-effort */ }
             }
+            _isRunning = false;
         }
         ReleaseSession();
         if (hadSession && closeReason.HasValue)
@@ -424,9 +541,21 @@ public sealed class MediaPlayer : IDisposable
         _decoderStarted = false;
     }
 
+    /// <summary>
+    /// Called by the decoder's <see cref="FFmpegDecoder.EndOfMedia"/> event on a ThreadPool thread.
+    /// When <see cref="IsLooping"/> is set, seeks back to the start instead of signalling completion.
+    /// </summary>
     private void OnEndOfMedia(object? sender, EventArgs e)
     {
+        if (IsLooping && _decoder != null && !_disposed)
+        {
+            _decoder.Seek(TimeSpan.Zero);
+            return;
+        }
+
+#pragma warning disable CS0618 // Obsolete PlaybackEnded
         PlaybackEnded?.Invoke(this, EventArgs.Empty);
+#pragma warning restore CS0618
         PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(PlaybackCompletedReason.SourceEnded));
     }
 

@@ -144,11 +144,7 @@ internal sealed class VideoMixer : IVideoMixer
 
         lock (_lock)
         {
-            var old = _channels;
-            var neo = new IVideoChannel[old.Length + 1];
-            old.CopyTo(neo, 0);
-            neo[^1] = channel;
-            _channels = neo;
+            _channels = CopyOnWriteArray.Add(_channels, channel);
 
             if (_activeChannel is null)
                 _activeChannel = channel;
@@ -162,11 +158,7 @@ internal sealed class VideoMixer : IVideoMixer
         lock (_lock)
         {
             var old = _channels;
-            int idx = -1;
-            for (int i = 0; i < old.Length; i++)
-            {
-                if (old[i].Id == channelId) { idx = i; break; }
-            }
+            int idx = CopyOnWriteArray.IndexOf(old, ch => ch.Id == channelId);
             if (idx < 0) return;
 
             // If removing the active channel, clear it.
@@ -183,10 +175,7 @@ internal sealed class VideoMixer : IVideoMixer
                     st.ResetState();
                 }
 
-            var neo = new IVideoChannel[old.Length - 1];
-            for (int i = 0, j = 0; i < old.Length; i++)
-                if (i != idx) neo[j++] = old[i];
-            _channels = neo;
+            _channels = CopyOnWriteArray.RemoveAt(old, idx);
             Volatile.Write(ref _channelOffsetTicks, _channelOffsetTicks.Remove(channelId));
         }
         Log.LogInformation("Video channel removed: id={ChannelId}", channelId);
@@ -269,10 +258,7 @@ internal sealed class VideoMixer : IVideoMixer
                     return;
 
             var old = _sinkTargets;
-            var neo = new SinkTarget[old.Length + 1];
-            old.CopyTo(neo, 0);
-            neo[^1] = new SinkTarget(sink);
-            _sinkTargets = neo;
+            _sinkTargets = CopyOnWriteArray.Add(old, new SinkTarget(sink));
         }
         Log.LogInformation("Video sink registered: type={SinkType}, total={SinkCount}", sink.GetType().Name, _sinkTargets.Length);
     }
@@ -284,18 +270,13 @@ internal sealed class VideoMixer : IVideoMixer
         lock (_lock)
         {
             var old = _sinkTargets;
-            int idx = -1;
-            for (int i = 0; i < old.Length; i++)
-                if (ReferenceEquals(old[i].Sink, sink)) { idx = i; break; }
+            int idx = CopyOnWriteArray.IndexOf(old, st => ReferenceEquals(st.Sink, sink));
             if (idx < 0) return;
 
             old[idx].LastFrame?.MemoryOwner?.Dispose();
             old[idx].StagedFrame?.MemoryOwner?.Dispose();
 
-            var neo = new SinkTarget[old.Length - 1];
-            for (int i = 0, j = 0; i < old.Length; i++)
-                if (i != idx) neo[j++] = old[i];
-            _sinkTargets = neo;
+            _sinkTargets = CopyOnWriteArray.RemoveAt(old, idx);
         }
     }
 
@@ -342,6 +323,13 @@ internal sealed class VideoMixer : IVideoMixer
     // Pre-allocated single-frame buffer to avoid per-call allocation.
     private readonly VideoFrame[] _pullBuffer = new VideoFrame[1];
 
+    // Reusable dictionary to avoid per-frame allocation in PresentNextFrame (§3.2).
+    // Maps channel ID → frame already pulled this tick.  When multiple sinks are
+    // routed to the same channel, the first sink pulls the frame; subsequent sinks
+    // reuse it from this cache ("fan-out"), keeping all co-routed sinks frame-aligned
+    // and avoiding redundant ring-buffer reads.
+    private readonly Dictionary<Guid, VideoFrame?> _sharedChannelFrames = new();
+
     /// <inheritdoc/>
     public VideoFrame? PresentNextFrame(TimeSpan clockPosition)
     {
@@ -360,7 +348,7 @@ internal sealed class VideoMixer : IVideoMixer
             Interlocked.Increment(ref _leaderNullCount);
 
         var sinks = _sinkTargets;
-        var sharedChannelFrames = new Dictionary<Guid, VideoFrame?>();
+        _sharedChannelFrames.Clear();
         for (int i = 0; i < sinks.Length; i++)
         {
             var st = sinks[i];
@@ -377,7 +365,7 @@ internal sealed class VideoMixer : IVideoMixer
                 continue;
             }
 
-            if (st.ActiveChannel != null && sharedChannelFrames.TryGetValue(st.ActiveChannel.Id, out var shared))
+            if (st.ActiveChannel != null && _sharedChannelFrames.TryGetValue(st.ActiveChannel.Id, out var shared))
             {
                 if (shared.HasValue && st.Sink.IsRunning)
                     DeliverSharedFrame(st, shared.Value, countPullAsFanOut: false);
@@ -392,7 +380,7 @@ internal sealed class VideoMixer : IVideoMixer
                 countSinkFormatStats: true,
                 sink: st.Sink);
             if (st.ActiveChannel != null)
-                sharedChannelFrames[st.ActiveChannel.Id] = sinkFrame;
+                _sharedChannelFrames[st.ActiveChannel.Id] = sinkFrame;
             if (sinkFrame.HasValue && st.Sink.IsRunning)
                 st.Sink.ReceiveFrame(sinkFrame.Value);
         }
@@ -441,6 +429,23 @@ internal sealed class VideoMixer : IVideoMixer
         st.Sink.ReceiveFrame(raw);
     }
 
+    /// <summary>
+    /// Core frame-presentation logic shared between the leader output and per-sink targets.
+    /// Implements a simple two-slot (staged + last) pipeline:
+    /// <list type="number">
+    ///   <item><b>Pull</b>: if no frame is staged, pull one from the channel's ring buffer
+    ///     and normalise its PTS relative to this target's origin.</item>
+    ///   <item><b>Bootstrap</b>: if no frame has ever been shown, present the first available
+    ///     frame immediately (avoids indefinite black on startup/seek).</item>
+    ///   <item><b>Drop stale</b>: if the staged frame's PTS is more than
+    ///     <see cref="_dropLagThreshold"/> behind the clock, discard it and pull the next
+    ///     (lets the mixer catch up after a decode stall).</item>
+    ///   <item><b>Advance</b>: if the staged frame's PTS is at or before
+    ///     <c>clockPosition + LeadTolerance</c>, promote it to "last" (the displayed frame).</item>
+    ///   <item><b>Hold</b>: otherwise keep displaying "last" until the staged frame's PTS
+    ///     arrives.</item>
+    /// </list>
+    /// </summary>
     private VideoFrame? PresentForTarget(
         IVideoChannel? channel,
         ref VideoFrame? staged,
@@ -527,6 +532,11 @@ internal sealed class VideoMixer : IVideoMixer
         return NormalizePts(raw, ref hasPtsOrigin, ref ptsOriginTicks);
     }
 
+    /// <summary>
+    /// Normalises a frame's PTS to be relative to the first frame seen by this target.
+    /// Each target (leader + each sink) maintains its own origin so that targets started
+    /// at different times or after a seek all count from zero independently.
+    /// </summary>
     private static VideoFrame NormalizePts(VideoFrame frame, ref bool hasPtsOrigin, ref long ptsOriginTicks)
     {
         if (!hasPtsOrigin)

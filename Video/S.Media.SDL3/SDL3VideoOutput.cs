@@ -191,9 +191,13 @@ public sealed class SDL3VideoOutput : IVideoOutput
         SDL.GLSetAttribute(SDL.GLAttr.DoubleBuffer, 1);
 
         // ── Window ────────────────────────────────────────────────────────
+        // HighPixelDensity ensures the GL backbuffer matches the physical pixel
+        // resolution on HiDPI / fractionally-scaled displays. Without it the
+        // compositor upscales the logical-resolution output, causing blur that
+        // no shader improvement can fix.
         _window = SDL.CreateWindow(
             title, width, height,
-            SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable);
+            SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable | SDL.WindowFlags.HighPixelDensity);
 
         if (_window == nint.Zero)
         {
@@ -219,7 +223,22 @@ public sealed class SDL3VideoOutput : IVideoOutput
         _renderer = new GLRenderer();
         _renderer.YuvColorRange  = (YuvColorRange)_yuvColorRange;
         _renderer.YuvColorMatrix = (YuvColorMatrix)_yuvColorMatrix;
-        _renderer.Initialise(width, height);
+
+        // Query actual physical pixel size — on HiDPI/scaled displays the pixel
+        // dimensions differ from the logical window size and the GL viewport must
+        // be set in physical pixels, otherwise the image is rendered at too low a
+        // resolution and the compositor upscales it, producing a blurry result.
+        SDL.GetWindowSizeInPixels(_window, out int pixelW, out int pixelH);
+        _renderer.Initialise(pixelW, pixelH);
+
+        // Log DPI diagnostic so mismatches are immediately visible.
+        SDL.GetWindowSize(_window, out int logicalW, out int logicalH);
+        if (logicalW != pixelW || logicalH != pixelH)
+            Log.LogInformation("HiDPI active: logical={LogicalW}x{LogicalH}, physical={PixelW}x{PixelH}, scale={ScaleX:F2}x{ScaleY:F2}",
+                logicalW, logicalH, pixelW, pixelH,
+                (double)pixelW / logicalW, (double)pixelH / logicalH);
+        else
+            Log.LogInformation("Window pixel size: {PixelW}x{PixelH} (no DPI scaling detected)", pixelW, pixelH);
 
         // Release the GL context from the calling thread so the render thread
         // can claim it via GLMakeCurrent.
@@ -327,7 +346,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
 
                         case SDL.EventType.WindowResized:
                         case SDL.EventType.WindowPixelSizeChanged:
-                            SDL.GetWindowSize(_window, out int w, out int h);
+                            SDL.GetWindowSizeInPixels(_window, out int w, out int h);
                             _renderer!.SetViewport(w, h);
                             Interlocked.Increment(ref _resizeEvents);
                             break;

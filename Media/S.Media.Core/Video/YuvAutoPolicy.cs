@@ -11,7 +11,10 @@ public static class YuvAutoPolicy
         {
             YuvColorRange.Full => YuvColorRange.Full,
             YuvColorRange.Limited => YuvColorRange.Limited,
-            _ => YuvColorRange.Full
+            // Auto: virtually all H.264/H.265/VP9 video uses limited (studio) range
+            // even when the container/codec reports UNSPECIFIED. Defaulting to Full
+            // causes washed-out blacks/contrast because Y 16–235 is not expanded.
+            _ => YuvColorRange.Limited
         };
     }
 

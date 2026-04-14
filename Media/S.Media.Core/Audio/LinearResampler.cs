@@ -97,21 +97,33 @@ public sealed class LinearResampler : IAudioResampler
             effective = input;
         }
 
-        // Interpolation loop.
+        // ── Linear interpolation loop ──────────────────────────────────────
+        // For each output frame, _phase identifies a fractional position in the
+        // effective input window.  We take the two nearest input frames (s0, s1)
+        // and blend: output = s0 + (s1 - s0) * t, where t is the fractional part.
+        // _phase advances by `step` (= srcRate / dstRate) per output frame.
+        // After the loop, unconsumed input frames are saved as "pending" for the
+        // next call, ensuring seamless interpolation across buffer boundaries.
         int written = 0;
         for (int i = 0; i < outFrames; i++)
         {
             long   idx = (long)_phase;
             double t   = _phase - idx;
 
+            // Clamp idx to valid range — prevents overflow when casting to nint for indexing.
+            if (idx < 0) idx = 0;
+            if (idx >= totalFrames) idx = totalFrames - 1;
+
             for (int ch = 0; ch < channels; ch++)
             {
+                int i0 = (int)(idx * channels) + ch;
                 float s0 = idx < totalFrames
-                    ? effective[(int)(idx * channels) + ch]
+                    ? effective[i0]
                     : (totalFrames > 0 ? effective[(totalFrames - 1) * channels + ch] : 0f);
 
+                int i1 = (int)((idx + 1) * channels) + ch;
                 float s1 = (idx + 1) < totalFrames
-                    ? effective[(int)((idx + 1) * channels) + ch]
+                    ? effective[i1]
                     : s0; // hold last value at end of stream
 
                 output[i * channels + ch] = s0 + (s1 - s0) * (float)t;
@@ -121,8 +133,13 @@ public sealed class LinearResampler : IAudioResampler
             written++;
         }
 
-        // Save unconsumed frames for the next call.
-        // consumed = number of frames whose s0 position we passed.
+        // ── Save unconsumed tail for cross-buffer continuity ───────────────
+        // `consumed` = how many input frames the interpolation loop has fully
+        // passed over.  Any remaining frames (totalFrames - consumed) are saved
+        // in _pendingBuf and prepended to the next call's input.  _phase is then
+        // normalised to be relative to the new pending window origin (always < step
+        // in steady state).  This carry mechanism is what makes the resampler
+        // stateful and allows seamless buffer-boundary interpolation.
         long consumed = Math.Min((long)_phase, totalFrames);
         _pendingFrames = (int)(totalFrames - consumed);
 

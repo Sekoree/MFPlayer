@@ -318,15 +318,11 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             return;
 
         int outCh = _audioTargetFormat.Channels;
-        int nominalWriteFrames = sourceFormat.SampleRate == _audioTargetFormat.SampleRate
-            ? frameCount
-            : (int)Math.Round((double)frameCount * _audioTargetFormat.SampleRate / sourceFormat.SampleRate);
 
-        // Apply drift correction: adjusts the frame count by ±1 occasionally to keep
-        // the pending-audio queue stable, compensating for clock drift.
-        int writeFrames = _audioDriftCorrector != null
-            ? _audioDriftCorrector.CorrectFrameCount(nominalWriteFrames, Volatile.Read(ref _audioPendingBuffers))
-            : nominalWriteFrames;
+        // Compute rate-adjusted + drift-corrected output frame count (§6.2).
+        int writeFrames = SinkBufferHelper.ComputeWriteFrames(
+            frameCount, sourceFormat.SampleRate, _audioTargetFormat.SampleRate,
+            _audioDriftCorrector, Volatile.Read(ref _audioPendingBuffers));
         int writeSamples = writeFrames * outCh;
 
         if (!_audioPool.TryDequeue(out var dest))
@@ -346,29 +342,14 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         if (_audioResampler != null && sourceFormat.SampleRate != _audioTargetFormat.SampleRate)
         {
             // Cross-rate: resampler output sized for the drift-corrected frame count.
-            // The resampler's stateful phase accumulator handles ±1 frame naturally.
             int writtenFrames = _audioResampler.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _audioTargetFormat.SampleRate);
             writtenSamples = Math.Clamp(writtenFrames, 0, writeFrames) * outCh;
         }
         else
         {
-            // Same rate: direct copy with drift correction frame adjustment.
-            int copyFrames  = Math.Min(frameCount, writeFrames);
-            int copySamples = copyFrames * outCh;
-            buffer[..copySamples].CopyTo(dest.AsSpan(0, copySamples));
-
-            if (writeFrames > frameCount && frameCount > 0)
-            {
-                // Hold last frame for drift-correction extra frames.
-                var lastFrame = buffer.Slice((frameCount - 1) * outCh, outCh);
-                for (int f = copyFrames; f < writeFrames; f++)
-                    lastFrame.CopyTo(dest.AsSpan(f * outCh, outCh));
-            }
-            else if (copySamples < writeSamples)
-            {
-                dest.AsSpan(copySamples, writeSamples - copySamples).Clear();
-            }
-
+            // Same rate: direct copy with drift-corrected last-frame hold (§6.2).
+            SinkBufferHelper.CopySameRate(buffer, dest.AsSpan(0, writeSamples),
+                frameCount, writeFrames, outCh, clearTail: true);
             writtenSamples = writeSamples;
         }
 
@@ -834,6 +815,12 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             ffmpeg.sws_freeContext(ffmpegSws);
     }
 
+    /// <summary>
+    /// Background thread that dequeues pending audio buffers, deinterleaves them into
+    /// NDI's planar float layout (one contiguous block per channel), and calls
+    /// <c>SendAudio</c> under the send lock.  The deinterleave uses sample-outer /
+    /// channel-inner order for better cache locality on the interleaved source.
+    /// </summary>
     private unsafe void AudioWriteLoop()
     {
         var token = _cts!.Token;

@@ -258,7 +258,7 @@ using (ndiRuntime)
                 Console.WriteLine($"timed out — using {videoFormat}");
             }
 
-            var (winW, winH) = FitWithin(videoFormat.Width, videoFormat.Height, 1920, 1080);
+            var (winW, winH) = FitWithin(videoFormat.Width, videoFormat.Height, 2560, 1440);
             videoOutput = new SDL3VideoOutput();
             try
             {

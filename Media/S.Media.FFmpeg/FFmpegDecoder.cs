@@ -150,11 +150,23 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private CancellationTokenSource  _cts = new();
     private bool                     _disposed;
     private FFmpegDecoderOptions     _options = new();
+
+    // ── Seek epoch protocol ──────────────────────────────────────────────
+    // Each Seek() call increments _seekEpoch and sends a Flush sentinel to every
+    // packet queue.  Decode workers compare the packet's epoch against the channel's
+    // LatestSeekEpoch to discard stale packets from the pre-seek position.
     private int                      _seekEpoch;
     private long                     _seekPositionTicks;
     private long                     _seekControlDropLogCount;
+
     private int                      _started;
+
+    // Guards concurrent av_read_frame (demux thread) vs. av_seek_frame (user thread).
+    // Read lock = demux reading packets; Write lock = seek repositioning the format context.
+    // This is the ONLY lock on the demux hot path and is held only for the duration of
+    // a single FFmpeg call — not across async operations.
     private readonly ReaderWriterLockSlim  _formatIoGate = new(LockRecursionPolicy.NoRecursion);
+
     private string?                  _activeHwDeviceType;
     private readonly ILogger         _log;
 
@@ -182,6 +194,23 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     /// Returns the first video channel, or <see langword="null"/> if no video streams were found.
     /// </summary>
     public IVideoChannel? FirstVideoChannel => VideoChannels.Count > 0 ? VideoChannels[0] : null;
+
+    /// <summary>
+    /// Total duration of the media, or <see langword="null"/> when the duration is unknown
+    /// (e.g. live streams or formats without a duration header).
+    /// </summary>
+    public TimeSpan? Duration
+    {
+        get
+        {
+            if (_fmt == null) return null;
+            long d = _fmt->duration;
+            // AV_NOPTS_VALUE means unknown duration.
+            if (d <= 0 || d == long.MinValue) return null;
+            // FFmpeg stores duration in AV_TIME_BASE units (microseconds).
+            return TimeSpan.FromTicks(d * (TimeSpan.TicksPerSecond / ffmpeg.AV_TIME_BASE));
+        }
+    }
 
     /// <summary>
     /// Raised when the demux loop reaches the end of the media file/stream.
@@ -560,6 +589,18 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         ffmpeg.av_packet_free(&pkt);
     }
 
+    /// <summary>
+    /// Reads one packet from the format context under the read-lock, copies its payload
+    /// into an <see cref="ArrayPool{T}"/>-rented buffer, and wraps it in a pooled
+    /// <see cref="EncodedPacket"/>.  The native <c>AVPacket</c> is unreffed immediately
+    /// so the caller owns only managed memory.
+    /// <para>
+    /// The caller (<see cref="FFmpegDemuxWorker"/>) is responsible for writing the returned
+    /// packet into the appropriate per-stream channel; the decode worker on the other end
+    /// returns the <c>ArrayPool</c> buffer and the <c>EncodedPacket</c> shell to their
+    /// respective pools after decoding.
+    /// </para>
+    /// </summary>
     internal DemuxReadResult TryReadNextPacket(
         nint pktHandle,
         out ChannelWriter<EncodedPacket>? writer,
@@ -678,6 +719,23 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             VideoChannels: channels);
     }
 
+    /// <summary>
+    /// Disposes the decoder, stopping all threads and releasing unmanaged FFmpeg resources.
+    /// <para><b>Teardown order:</b></para>
+    /// <list type="number">
+    ///   <item>Cancel the CTS → unblocks demux and decode workers.</item>
+    ///   <item>Dispose channels → completes their output rings and decode tasks.</item>
+    ///   <item>Wait on the demux task (3 s timeout) → ensures av_read_frame is not in flight.</item>
+    ///   <item>Release HW device context (if any).</item>
+    ///   <item>Close the AVFormatContext (and the custom AVIO context if opened from a Stream).</item>
+    /// </list>
+    /// <para>
+    /// <b>Note:</b> The 3-second blocking wait on <c>_demuxTask</c> can deadlock if Dispose
+    /// is called from a sync context that the demux task's <c>ChannelWriter.WriteAsync</c>
+    /// continuation needs. Callers in async code should <c>await StopAsync()</c> first or
+    /// call Dispose from a plain thread/ThreadPool context.
+    /// </para>
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

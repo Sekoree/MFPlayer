@@ -10,7 +10,21 @@ namespace S.Media.PortAudio;
 /// <summary>
 /// <see cref="IAudioSink"/> backed by a PortAudio blocking-write stream.
 /// Use as a secondary destination in <see cref="S.Media.Core.Audio.AggregateOutput"/>.
+///
+/// <para><b>Two-thread architecture:</b></para>
+/// <list type="bullet">
+///   <item><b>RT thread</b> (<see cref="ReceiveBuffer"/>): borrows a pre-allocated buffer
+///     from the pool, copies/resamples into it (zero-alloc), and enqueues it as a
+///     <c>PendingWrite</c>.  Never blocks.</item>
+///   <item><b>Write thread</b> (<see cref="WriteLoop"/>): waits on a semaphore, dequeues
+///     pending writes, and calls <c>Pa_WriteStream</c> (blocking I/O).  Returns buffers
+///     to the pool after each write.</item>
+/// </list>
+///
+/// <para>
 /// A pre-allocated buffer pool keeps <see cref="ReceiveBuffer"/> allocation-free on the RT thread.
+/// When the pool is empty the buffer is dropped (counted via <see cref="PoolMissDrops"/>).
+/// </para>
 /// </summary>
 public sealed class PortAudioSink : IAudioSink
 {
@@ -115,6 +129,15 @@ public sealed class PortAudioSink : IAudioSink
 
         _targetFormat = targetFormat;
 
+        // Auto-create a default resampler when none was provided. This prevents the
+        // silent-drop footgun when the leader and sink run at different sample rates (§3.7).
+        if (_resampler == null)
+        {
+            _resampler     = new LinearResampler();
+            _ownsResampler = true;
+            Log.LogDebug("PortAudioSink '{Name}': auto-created LinearResampler (no explicit resampler provided)", Name);
+        }
+
         // Keep enough headroom for common rate-conversion ratios without resizing on the RT path.
         int bufSize = framesPerBuffer * targetFormat.Channels;
         int poolBufferSamples = Math.Max(1, bufSize * 2);
@@ -173,19 +196,10 @@ public sealed class PortAudioSink : IAudioSink
 
         int outCh = _targetFormat.Channels;
 
-        // Compute rate-adjusted output frame count.
-        // When the sink's hardware rate differs from the leader's, writing the wrong number of
-        // frames to Pa_WriteStream causes the secondary stream to drift (or stall):
-        //   leader 48 kHz / 1024 frames → 21.33 ms; sink at 44.1 kHz needs 941 frames for the same window.
-        int nominalWriteFrames = sourceFormat.SampleRate == _targetFormat.SampleRate
-            ? frameCount
-            : (int)Math.Round((double)frameCount * _targetFormat.SampleRate / sourceFormat.SampleRate);
-
-        // Apply drift correction: adjusts the frame count by ±1 occasionally to keep
-        // the pending-write queue stable, compensating for hardware clock drift.
-        int writeFrames = _driftCorrector != null
-            ? _driftCorrector.CorrectFrameCount(nominalWriteFrames, _pending.Count)
-            : nominalWriteFrames;
+        // Compute rate-adjusted + drift-corrected output frame count (§6.2).
+        int writeFrames = SinkBufferHelper.ComputeWriteFrames(
+            frameCount, sourceFormat.SampleRate, _targetFormat.SampleRate,
+            _driftCorrector, _pending.Count);
         int writeSamples = writeFrames * outCh;
 
         // Borrow a pool buffer. RT path never allocates: drop when no capacity is available.
@@ -205,7 +219,6 @@ public sealed class PortAudioSink : IAudioSink
         if (sourceFormat.SampleRate != _targetFormat.SampleRate)
         {
             // Cross-rate: resampler output sized for the drift-corrected frame count.
-            // The resampler's stateful phase accumulator handles ±1 frame naturally.
             var rs = _resampler;
             if (rs == null)
             {
@@ -218,19 +231,9 @@ public sealed class PortAudioSink : IAudioSink
         }
         else
         {
-            // Same rate: direct copy. When drift correction adjusts the frame count,
-            // we hold the last frame for extra output frames or copy fewer frames.
-            int copyFrames  = Math.Min(frameCount, writeFrames);
-            int copySamples = copyFrames * outCh;
-            buffer[..copySamples].CopyTo(dest.AsSpan(0, copySamples));
-
-            if (writeFrames > frameCount && frameCount > 0)
-            {
-                // Hold last frame for drift-correction extra frames.
-                var lastFrame = buffer.Slice((frameCount - 1) * outCh, outCh);
-                for (int f = copyFrames; f < writeFrames; f++)
-                    lastFrame.CopyTo(dest.AsSpan(f * outCh, outCh));
-            }
+            // Same rate: direct copy with drift-corrected last-frame hold (§6.2).
+            SinkBufferHelper.CopySameRate(buffer, dest.AsSpan(0, writeSamples),
+                frameCount, writeFrames, outCh);
         }
 
         _pending.Enqueue(new PendingWrite(dest, writeSamples));

@@ -8,7 +8,7 @@ public sealed class YuvAutoPolicyTests
     [Theory]
     [InlineData(YuvColorRange.Full, YuvColorRange.Full)]
     [InlineData(YuvColorRange.Limited, YuvColorRange.Limited)]
-    [InlineData(YuvColorRange.Auto, YuvColorRange.Full)]
+    [InlineData(YuvColorRange.Auto, YuvColorRange.Limited)]
     public void ResolveRange_MapsExpected(YuvColorRange requested, YuvColorRange expected)
     {
         Assert.Equal(expected, YuvAutoPolicy.ResolveRange(requested));

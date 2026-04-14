@@ -70,7 +70,10 @@ public sealed class AggregateOutput : IAudioOutput
             InitMixer(leader.HardwareFormat);
     }
 
-    // Creates the aggregate AudioMixer and redirects the leader's RT callback through it.
+    // Creates the aggregate AudioMixer and injects it into the leader output via
+    // OverrideRtMixer.  After this call the leader's RT callback fills THIS mixer
+    // (which fans out to sinks) instead of the leader's own internal mixer.
+    // Any sinks registered before Open() are retroactively added to the mixer here.
     private void InitMixer(AudioFormat format)
     {
         _mixer = new AudioMixer(format);
@@ -99,13 +102,10 @@ public sealed class AggregateOutput : IAudioOutput
         lock (_sinkLock)
         {
             var old = _sinkRegistrations;
-            for (int i = 0; i < old.Length; i++)
-                if (ReferenceEquals(old[i].Sink, sink))
-                    return;
+            if (CopyOnWriteArray.IndexOf(old, r => ReferenceEquals(r.Sink, sink)) >= 0)
+                return;
 
-            var neo = new SinkRegistration[old.Length + 1];
-            old.CopyTo(neo, 0);
-            neo[^1] = new SinkRegistration(sink, channels);
+            var neo = CopyOnWriteArray.Add(old, new SinkRegistration(sink, channels));
             _sinkRegistrations = neo;
 
             var sinkSnapshot = new IAudioSink[neo.Length];
@@ -127,14 +127,10 @@ public sealed class AggregateOutput : IAudioOutput
         lock (_sinkLock)
         {
             var old = _sinkRegistrations;
-            int idx = -1;
-            for (int i = 0; i < old.Length; i++)
-                if (ReferenceEquals(old[i].Sink, sink)) { idx = i; break; }
+            int idx = CopyOnWriteArray.IndexOf(old, r => ReferenceEquals(r.Sink, sink));
             if (idx < 0) return;
 
-            var neo = new SinkRegistration[old.Length - 1];
-            for (int i = 0, j = 0; i < old.Length; i++)
-                if (i != idx) neo[j++] = old[i];
+            var neo = CopyOnWriteArray.RemoveAt(old, idx);
             _sinkRegistrations = neo;
 
             var sinkSnapshot = new IAudioSink[neo.Length];

@@ -11,7 +11,7 @@ namespace S.Media.FFmpeg;
 /// Decodes a single audio stream into interleaved Float32 PCM via a background thread,
 /// then exposes the data through the <see cref="IAudioChannel"/> pull/push interface.
 /// </summary>
-internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
+internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChannel
 {
     private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegAudioChannel));
     private readonly struct AudioChunk
@@ -100,11 +100,11 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
         OpenCodec();
     }
 
-    internal int StreamIndex => _streamIndex;
+    public int StreamIndex => _streamIndex;
 
-    internal int LatestSeekEpoch => _latestSeekEpochProvider();
+    public int LatestSeekEpoch => _latestSeekEpochProvider();
 
-    internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
+    public void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
     {
         Log.LogError(ex, "Audio stream={StreamIndex} decode-loop error: epoch={Epoch} packetEpoch={PacketEpoch} packetBytes={PacketBytes}",
             _streamIndex, currentEpoch, ep.SeekEpoch, ep.ActualLength);
@@ -163,7 +163,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
         _decodeTask = FFmpegDecodeWorkers.RunAudioAsync(this, _packetReader, _cts.Token, packetPool);
     }
 
-    internal void ApplySeekEpoch(long seekPositionTicks)
+    public void ApplySeekEpoch(long seekPositionTicks)
     {
         ffmpeg.avcodec_flush_buffers(_codecCtx);
         ReturnCurrentChunkToPool();
@@ -175,7 +175,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
         Interlocked.Exchange(ref _framesInRing, 0);
     }
 
-    internal bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
+    public bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
     {
         int sendRet;
         fixed (byte* p = ep.Data)
@@ -362,9 +362,9 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel
         if (_swr != null)      fixed (SwrContext** pp = &_swr)     ffmpeg.swr_free(pp);
     }
 
-    internal void CompleteDecodeLoop() => _ringWriter.TryComplete();
+    public void CompleteDecodeLoop() => _ringWriter.TryComplete();
 
-    internal void RaiseEndOfStream()
+    public void RaiseEndOfStream()
     {
         var handler = EndOfStream;
         if (handler == null) return;

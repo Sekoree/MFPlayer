@@ -48,6 +48,11 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const uint GL_TEXTURE2            = 0x84C2;
     private const uint GL_RG16UI              = 0x823A;
     private const uint GL_RG_INTEGER          = 0x8228;
+    private const uint GL_UNPACK_ALIGNMENT    = 0x0CF5;
+    private const uint GL_FRAMEBUFFER         = 0x8D40;
+    private const uint GL_COLOR_ATTACHMENT0   = 0x8CE0;
+    private const uint GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
+    private const uint GL_LINEAR_MIPMAP_LINEAR = 0x2703;
 
     // ── GL function pointers ──────────────────────────────────────────────
 
@@ -86,6 +91,13 @@ internal sealed unsafe class GLRenderer : IDisposable
     private delegate void   GlVertexAttribPointer(uint index, int size, uint type, byte normalized, int stride, void* pointer);
     private delegate void   GlDrawArrays(uint mode, int first, int count);
     private delegate void   GlActiveTexture(uint texture);
+    private delegate void   GlPixelStorei(uint pname, int param);
+    private delegate void   GlGenFramebuffers(int n, uint* framebuffers);
+    private delegate void   GlDeleteFramebuffers(int n, uint* framebuffers);
+    private delegate void   GlBindFramebuffer(uint target, uint framebuffer);
+    private delegate void   GlFramebufferTexture2D(uint target, uint attachment, uint textarget, uint texture, int level);
+    private delegate uint   GlCheckFramebufferStatus(uint target);
+    private delegate void   GlGenerateMipmap(uint target);
 
     // Instances
     private GlViewport                _glViewport = null!;
@@ -123,6 +135,13 @@ internal sealed unsafe class GLRenderer : IDisposable
     private GlVertexAttribPointer     _glVertexAttribPointer = null!;
     private GlDrawArrays              _glDrawArrays = null!;
     private GlActiveTexture           _glActiveTexture = null!;
+    private GlPixelStorei             _glPixelStorei = null!;
+    private GlGenFramebuffers         _glGenFramebuffers = null!;
+    private GlDeleteFramebuffers      _glDeleteFramebuffers = null!;
+    private GlBindFramebuffer         _glBindFramebuffer = null!;
+    private GlFramebufferTexture2D    _glFramebufferTexture2D = null!;
+    private GlCheckFramebufferStatus  _glCheckFramebufferStatus = null!;
+    private GlGenerateMipmap          _glGenerateMipmap = null!;
 
     // ── GL state ──────────────────────────────────────────────────────────
 
@@ -190,6 +209,14 @@ internal sealed unsafe class GLRenderer : IDisposable
     private int _windowHeight;
     private int _videoWidth;
     private int _videoHeight;
+    // Stored letterbox viewport — restored after FBO pass 1 in two-pass rendering.
+    private int _vpX, _vpY, _vpW, _vpH;
+    // FBO for two-pass UYVY rendering: decode at native resolution, then scale with mipmaps.
+    private uint _fboUyvy;
+    private uint _fboUyvyTexture;
+    private int  _fboUyvyWidth;
+    private int  _fboUyvyHeight;
+    private uint _programFbo;
 
     public YuvColorRange YuvColorRange
     {
@@ -303,6 +330,14 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glLinkProgram(_programGray8);
         CheckProgram(_programGray8);
 
+        // FBO passthrough program for two-pass rendering (hardware bilinear + Y-flip)
+        uint fsFbo = CompileShader(GL_FRAGMENT_SHADER, GlShaderSources.FragmentPassthroughFbo);
+        _programFbo = _glCreateProgram();
+        _glAttachShader(_programFbo, vs);
+        _glAttachShader(_programFbo, fsFbo);
+        _glLinkProgram(_programFbo);
+        CheckProgram(_programFbo);
+
         _glDeleteShader(vs);
         _glDeleteShader(fs);
         _glDeleteShader(fsNv12);
@@ -312,6 +347,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glDeleteShader(fsP010);
         _glDeleteShader(fsYuv444p);
         _glDeleteShader(fsGray8);
+        _glDeleteShader(fsFbo);
 
         // Set texture uniform to unit 0
         _glUseProgram(_program);
@@ -475,6 +511,11 @@ internal sealed unsafe class GLRenderer : IDisposable
         fixed (byte* nameY = "uTexY\0"u8)
         { int l = _glGetUniformLocation(_programGray8, nameY); _glUniform1i(l, 0); }
 
+        // ── FBO passthrough uniforms ──────────────────────────────────────
+        _glUseProgram(_programFbo);
+        fixed (byte* name = "uTexture\0"u8)
+        { int l = _glGetUniformLocation(_programFbo, name); _glUniform1i(l, 0); }
+
         // Fullscreen quad (2 triangles): position (x,y) + UV (u,v)
         // Note: UV y is flipped (1→0) so the image isn't upside-down.
         var quadVerts = GlShaderSources.FullscreenQuadVerts;
@@ -498,114 +539,32 @@ internal sealed unsafe class GLRenderer : IDisposable
 
         _glBindVertexArray(0);
 
-        // Texture
-        fixed (uint* pTex = &_texture) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _texture);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // Byte-aligned unpacking — required for R8/RG8 texture planes where the row
+        // byte count may not be a multiple of 4 (the GL default alignment).
+        _glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-        fixed (uint* pTex = &_textureY) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureY);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureUv) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureUv);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureU) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureU);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureV) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureV);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureY422P10) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureY422P10);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureU422P10) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureU422P10);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureV422P10) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureV422P10);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureUyvy) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureUyvy);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // Textures — initialised via helper to eliminate repetition (§6.3).
+        InitTexture(ref _texture,        GL_LINEAR);
+        InitTexture(ref _textureY,       GL_LINEAR);
+        InitTexture(ref _textureUv,      GL_LINEAR);
+        InitTexture(ref _textureU,       GL_LINEAR);
+        InitTexture(ref _textureV,       GL_LINEAR);
+        InitTexture(ref _textureY422P10, GL_NEAREST);
+        InitTexture(ref _textureU422P10, GL_NEAREST);
+        InitTexture(ref _textureV422P10, GL_NEAREST);
+        InitTexture(ref _textureUyvy,    GL_NEAREST);
 
         // P010 textures (R16UI / RG16UI — NEAREST filter for integer sampling)
-        fixed (uint* pTex = &_textureP010Y) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureP010Y);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureP010UV) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureP010UV);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        InitTexture(ref _textureP010Y,  GL_NEAREST);
+        InitTexture(ref _textureP010UV, GL_NEAREST);
 
         // Yuv444p textures (R8 × 3, full resolution — LINEAR filter)
-        fixed (uint* pTex = &_textureY444p) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureY444p);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureU444p) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureU444p);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        fixed (uint* pTex = &_textureV444p) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureV444p);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        InitTexture(ref _textureY444p, GL_LINEAR);
+        InitTexture(ref _textureU444p, GL_LINEAR);
+        InitTexture(ref _textureV444p, GL_LINEAR);
 
         // Gray8 texture (R8 — LINEAR filter)
-        fixed (uint* pTex = &_textureGray8) _glGenTextures(1, pTex);
-        _glBindTexture(GL_TEXTURE_2D, _textureGray8);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        InitTexture(ref _textureGray8, GL_LINEAR);
 
         _glViewport(0, 0, viewportWidth, viewportHeight);
         _windowWidth  = viewportWidth;
@@ -887,7 +846,17 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthUyvy = w;
         _texHeightUyvy = h;
 
-        _glClear(GL_COLOR_BUFFER_BIT);
+        // Ensure FBO exists at native video resolution for the two-pass decode.
+        EnsureFboUyvy(w, h);
+
+        // ── Pass 1: Decode UYVY → RGB at native resolution into FBO ──────
+        // Re-bind UYVY texture — EnsureFboUyvy may have changed the TEXTURE0 binding
+        // when creating/recreating the FBO texture (first frame or resolution change).
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureUyvy);
+        _glBindFramebuffer(GL_FRAMEBUFFER, _fboUyvy);
+        _glViewport(0, 0, w, h);
+
         _glUseProgram(_programUyvy422);
         if (_uUyvyVideoWidthLoc >= 0)
             _glUniform1i(_uUyvyVideoWidthLoc, w);
@@ -897,7 +866,62 @@ internal sealed unsafe class GLRenderer : IDisposable
             _glUniform1i(_uUyvyColorMatrixLoc, GetColorMatrixValue(w, h));
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // ── Pass 2: Display FBO texture on screen with hardware bilinear ─
+        _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        _glViewport(_vpX, _vpY, _vpW, _vpH);
+        _glClear(GL_COLOR_BUFFER_BIT);
+        _glUseProgram(_programFbo);
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _fboUyvyTexture);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+    }
+
+    /// <summary>
+    /// Creates (or recreates on resolution change) an FBO + RGBA8 texture at the given video
+    /// resolution.  Pass 2 uses a simple passthrough shader with <c>texture()</c> and the
+    /// GPU's native <c>GL_LINEAR</c> bilinear filter — the sharpest standard filter for
+    /// moderate scaling and what reference video players typically use.
+    /// </summary>
+    private void EnsureFboUyvy(int w, int h)
+    {
+        if (_fboUyvyWidth == w && _fboUyvyHeight == h && _fboUyvy != 0)
+            return;
+
+        // Delete old resources if they exist.
+        if (_fboUyvy != 0)
+        {
+            fixed (uint* p = &_fboUyvy) _glDeleteFramebuffers(1, p);
+            _fboUyvy = 0;
+        }
+        if (_fboUyvyTexture != 0)
+        {
+            fixed (uint* p = &_fboUyvyTexture) _glDeleteTextures(1, p);
+            _fboUyvyTexture = 0;
+        }
+
+        // Create FBO color attachment: RGBA8 at native video resolution, GL_LINEAR for
+        // hardware bilinear in Pass 2 (texture() respects the filter mode).
+        fixed (uint* pTex = &_fboUyvyTexture) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _fboUyvyTexture);
+        _glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, null);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // Create and validate the framebuffer object.
+        fixed (uint* pFbo = &_fboUyvy) _glGenFramebuffers(1, pFbo);
+        _glBindFramebuffer(GL_FRAMEBUFFER, _fboUyvy);
+        _glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _fboUyvyTexture, 0);
+        uint status = _glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE)
+            throw new InvalidOperationException($"UYVY FBO incomplete: 0x{status:X}");
+        _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        _fboUyvyWidth  = w;
+        _fboUyvyHeight = h;
     }
 
     private void UploadAndDrawP010(VideoFrame frame)
@@ -1086,6 +1110,7 @@ internal sealed unsafe class GLRenderer : IDisposable
 
         if (_videoWidth <= 0 || _videoHeight <= 0)
         {
+            _vpX = 0; _vpY = 0; _vpW = winW; _vpH = winH;
             _glViewport(0, 0, winW, winH);
             return;
         }
@@ -1111,7 +1136,9 @@ internal sealed unsafe class GLRenderer : IDisposable
             vpY = (winH - vpH) / 2;
         }
 
-        _glViewport(vpX, vpY, Math.Max(1, vpW), Math.Max(1, vpH));
+        _vpX = vpX; _vpY = vpY;
+        _vpW = Math.Max(1, vpW); _vpH = Math.Max(1, vpH);
+        _glViewport(_vpX, _vpY, _vpW, _vpH);
     }
 
     // ── GL loading helpers ────────────────────────────────────────────────
@@ -1161,6 +1188,30 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glVertexAttribPointer     = LoadGL<GlVertexAttribPointer>("glVertexAttribPointer");
         _glDrawArrays              = LoadGL<GlDrawArrays>("glDrawArrays");
         _glActiveTexture           = LoadGL<GlActiveTexture>("glActiveTexture");
+        _glPixelStorei             = LoadGL<GlPixelStorei>("glPixelStorei");
+        _glGenFramebuffers         = LoadGL<GlGenFramebuffers>("glGenFramebuffers");
+        _glDeleteFramebuffers      = LoadGL<GlDeleteFramebuffers>("glDeleteFramebuffers");
+        _glBindFramebuffer         = LoadGL<GlBindFramebuffer>("glBindFramebuffer");
+        _glFramebufferTexture2D    = LoadGL<GlFramebufferTexture2D>("glFramebufferTexture2D");
+        _glCheckFramebufferStatus  = LoadGL<GlCheckFramebufferStatus>("glCheckFramebufferStatus");
+        _glGenerateMipmap          = LoadGL<GlGenerateMipmap>("glGenerateMipmap");
+    }
+
+    /// <summary>
+    /// Generates a single GL texture, binds it, and sets min/mag filter + clamp-to-edge wrap.
+    /// Consolidates the 6-line texture init sequence that was previously repeated 15+ times
+    /// across all <c>EnsureTextures*</c> methods (§6.3).
+    /// </summary>
+    /// <param name="texture">Field reference that receives the new texture name.</param>
+    /// <param name="filterMode"><c>GL_NEAREST</c> for pixel-exact formats, <c>GL_LINEAR</c> for sub-sampled chroma.</param>
+    private void InitTexture(ref uint texture, uint filterMode)
+    {
+        fixed (uint* pTex = &texture) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, texture);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filterMode);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filterMode);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
     private uint CompileShader(uint type, string source)
@@ -1223,6 +1274,10 @@ internal sealed unsafe class GLRenderer : IDisposable
         fixed (uint* p = &_textureU444p)   _glDeleteTextures(1, p);
         fixed (uint* p = &_textureV444p)   _glDeleteTextures(1, p);
         fixed (uint* p = &_textureGray8)   _glDeleteTextures(1, p);
+        if (_fboUyvyTexture != 0)
+        { fixed (uint* p = &_fboUyvyTexture) _glDeleteTextures(1, p); }
+        if (_fboUyvy != 0)
+        { fixed (uint* p = &_fboUyvy) _glDeleteFramebuffers(1, p); }
         fixed (uint* p = &_vbo)            _glDeleteBuffers(1, p);
         fixed (uint* p = &_vao)            _glDeleteVertexArrays(1, p);
         _glDeleteProgram(_program);
@@ -1233,6 +1288,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glDeleteProgram(_programP010);
         _glDeleteProgram(_programYuv444p);
         _glDeleteProgram(_programGray8);
+        _glDeleteProgram(_programFbo);
     }
 }
 

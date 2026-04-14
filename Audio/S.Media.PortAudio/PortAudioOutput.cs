@@ -97,8 +97,13 @@ public sealed class PortAudioOutput : IAudioOutput
         _clock = PortAudioClock.Create(actualRate);
         _clock.SetStreamHandle(_stream, actualFrames);
 
-        _mixer = new AudioMixer(_hardwareFormat);
-        _mixer.PrepareBuffers(actualFrames);
+        // Only create a new AudioMixer if one hasn't already been overridden
+        // (e.g. by AggregateOutput). Avoids leaking a mixer that is immediately replaced (§3.4).
+        if (_activeMixer == null)
+        {
+            _mixer = new AudioMixer(_hardwareFormat);
+            _mixer.PrepareBuffers(actualFrames);
+        }
 
         Log.LogInformation("PortAudio output opened: actualRate={ActualRate}Hz, fpb={FramesPerBuffer}, latency={Latency}s",
             actualRate, actualFrames, info?.outputLatency ?? 0);
@@ -144,7 +149,17 @@ public sealed class PortAudioOutput : IAudioOutput
         }, ct);
     }
 
-    // ── RT callback — MUST NOT allocate, lock, or block ───────────────────
+    // ── RT callback ─────────────────────────────────────────────────────
+    //
+    //  Called by PortAudio from a native real-time thread at hardware-interrupt
+    //  cadence.  Absolute constraints:
+    //    • MUST NOT allocate managed memory (GC could stall the thread).
+    //    • MUST NOT acquire locks (priority inversion with the GC or UI thread).
+    //    • MUST NOT block (no I/O, no WaitHandle, no Task.Wait).
+    //    • Any managed exception kills the process ([UnmanagedCallersOnly]).
+    //
+    //  The try/catch is therefore essential: on any failure we output silence and
+    //  return paContinue rather than letting the exception escape.
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe int StreamCallback(
@@ -174,17 +189,26 @@ public sealed class PortAudioOutput : IAudioOutput
             // Some backends can request larger callback blocks than the stream was
             // opened/prepared for. Mix in bounded chunks to stay allocation-free.
             int maxChunkFrames = self._framesPerBuffer > 0 ? self._framesPerBuffer : 512;
-            int offsetFrames = 0;
-            while (offsetFrames < totalFrames)
+
+            // Fast path: common case where the callback size matches the prepared buffer (§4.6).
+            if (totalFrames <= maxChunkFrames)
             {
-                int chunkFrames = Math.Min(maxChunkFrames, totalFrames - offsetFrames);
-                int chunkOffsetSamples = offsetFrames * channels;
-                int chunkSamples = chunkFrames * channels;
-                mixer.FillOutputBuffer(
-                    dest.Slice(chunkOffsetSamples, chunkSamples),
-                    chunkFrames,
-                    self._hardwareFormat);
-                offsetFrames += chunkFrames;
+                mixer.FillOutputBuffer(dest, totalFrames, self._hardwareFormat);
+            }
+            else
+            {
+                int offsetFrames = 0;
+                while (offsetFrames < totalFrames)
+                {
+                    int chunkFrames = Math.Min(maxChunkFrames, totalFrames - offsetFrames);
+                    int chunkOffsetSamples = offsetFrames * channels;
+                    int chunkSamples = chunkFrames * channels;
+                    mixer.FillOutputBuffer(
+                        dest.Slice(chunkOffsetSamples, chunkSamples),
+                        chunkFrames,
+                        self._hardwareFormat);
+                    offsetFrames += chunkFrames;
+                }
             }
             return (int)PaStreamCallbackResult.paContinue;
         }

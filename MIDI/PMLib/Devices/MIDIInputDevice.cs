@@ -149,6 +149,19 @@ public class MIDIInputDevice : MIDIDevice
         }
     }
 
+    /// <summary>
+    /// Routes a single PortMidi event through a two-state machine:
+    /// <list type="bullet">
+    ///   <item><b>Normal mode</b> (<c>_sysExBuffer == null</c>): decodes the event and
+    ///     fires <see cref="MessageReceived"/>, or transitions to SysEx mode on 0xF0.</item>
+    ///   <item><b>SysEx accumulation mode</b> (<c>_sysExBuffer != null</c>): appends bytes
+    ///     to the accumulator until EOX (0xF7) is found, then fires
+    ///     <see cref="SysExReceived"/> and returns to normal mode.  Real-time messages
+    ///     (0xF8–0xFF) embedded inside SysEx are dispatched immediately without
+    ///     disrupting accumulation (per MIDI spec).</item>
+    /// </list>
+    /// Handler exceptions are caught and logged rather than propagated (§8.2).
+    /// </summary>
     private void ProcessEvent(PmEvent ev)
     {
         byte status = PmEvent.GetStatus(ev.Message);
@@ -159,7 +172,8 @@ public class MIDIInputDevice : MIDIDevice
             if (MIDIMessageParser.IsRealTime(status))
             {
                 var rt = MIDIMessageParser.Decode(ev);
-                if (rt != null) try { MessageReceived?.Invoke(this, rt); } catch { /* P2.7: swallow handler exceptions */ }
+                if (rt != null) try { MessageReceived?.Invoke(this, rt); }
+                    catch (Exception ex) { Logger.LogWarning(ex, "MessageReceived handler threw (deviceId={DeviceId})", DeviceId); }
                 return;
             }
             AccumulateSysEx(ev.Message, startByte: 0);
@@ -172,7 +186,8 @@ public class MIDIInputDevice : MIDIDevice
         else
         {
             var msg = MIDIMessageParser.Decode(ev);
-            if (msg != null) try { MessageReceived?.Invoke(this, msg); } catch { /* P2.7: swallow handler exceptions */ }
+            if (msg != null) try { MessageReceived?.Invoke(this, msg); }
+                catch (Exception ex) { Logger.LogWarning(ex, "MessageReceived handler threw (deviceId={DeviceId})", DeviceId); }
         }
     }
 
@@ -189,7 +204,8 @@ public class MIDIInputDevice : MIDIDevice
             if (by == 0xF7)
             {
                 _sysExBuffer!.Add(0xF7);
-                try { SysExReceived?.Invoke(this, new SysEx([.. _sysExBuffer])); } catch { /* P2.7 */ }
+                try { SysExReceived?.Invoke(this, new SysEx([.. _sysExBuffer])); }
+                catch (Exception ex) { Logger.LogWarning(ex, "SysExReceived handler threw (deviceId={DeviceId})", DeviceId); }
                 _sysExBuffer = null;
                 return;
             }

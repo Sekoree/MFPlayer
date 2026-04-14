@@ -62,7 +62,7 @@ public sealed class SDL3VideoCloneSink : IVideoSink, IVideoSinkFormatCapabilitie
         SDL.GLSetAttribute(SDL.GLAttr.ContextProfileMask, (int)SDL.GLProfile.Core);
         SDL.GLSetAttribute(SDL.GLAttr.DoubleBuffer, 1);
 
-        _window = SDL.CreateWindow(Name, _width, _height, SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable);
+        _window = SDL.CreateWindow(Name, _width, _height, SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable | SDL.WindowFlags.HighPixelDensity);
         if (_window == nint.Zero)
         {
             SDL3VideoOutput.ReleaseSdlVideo();
@@ -81,7 +81,8 @@ public sealed class SDL3VideoCloneSink : IVideoSink, IVideoSinkFormatCapabilitie
         SDL.GLSetSwapInterval(1);
 
         _renderer = new GLRenderer();
-        _renderer.Initialise(_width, _height);
+        SDL.GetWindowSizeInPixels(_window, out int pixelW, out int pixelH);
+        _renderer.Initialise(pixelW, pixelH);
         _renderer.SetVideoSize(Math.Max(1, _format.Width), Math.Max(1, _format.Height));
 
         SDL.GLMakeCurrent(_window, nint.Zero);
@@ -164,7 +165,7 @@ public sealed class SDL3VideoCloneSink : IVideoSink, IVideoSinkFormatCapabilitie
 
                 if (eventType is SDL.EventType.WindowResized or SDL.EventType.WindowPixelSizeChanged)
                 {
-                    SDL.GetWindowSize(_window, out int w, out int h);
+                    SDL.GetWindowSizeInPixels(_window, out int w, out int h);
                     _renderer?.SetViewport(w, h);
                 }
             }

@@ -14,7 +14,7 @@ namespace S.Media.FFmpeg;
 /// thread. Each frame is pixel-format-converted to <see cref="Core.Media.PixelFormat.Bgra32"/>
 /// by default. Frames are exposed through the <see cref="IMediaChannel{VideoFrame}"/> pull interface.
 /// </summary>
-internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrixHint
+internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrixHint, IDecodableChannel
 {
     private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegVideoChannel));
     private readonly AVStream*                    _stream;
@@ -129,15 +129,15 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         OpenCodec();
     }
 
-    internal int StreamIndex => _streamIndex;
+    public int StreamIndex => _streamIndex;
 
     internal bool IsHardwareAccelerated => _codecCtx != null && _codecCtx->hw_device_ctx != null;
 
     internal string DecoderName => ffmpeg.avcodec_get_name(_codecCtx != null ? _codecCtx->codec_id : _stream->codecpar->codec_id);
 
-    internal int LatestSeekEpoch => _latestSeekEpochProvider();
+    public int LatestSeekEpoch => _latestSeekEpochProvider();
 
-    internal void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
+    public void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
     {
         Log.LogError(ex, "Video stream={StreamIndex} decode-loop error: epoch={Epoch} packetEpoch={PacketEpoch} packetBytes={PacketBytes}",
             _streamIndex, currentEpoch, ep.SeekEpoch, ep.ActualLength);
@@ -191,7 +191,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         _decodeTask = FFmpegDecodeWorkers.RunVideoAsync(this, _packetReader, _cts.Token, packetPool);
     }
 
-    internal void ApplySeekEpoch(long seekPositionTicks)
+    public void ApplySeekEpoch(long seekPositionTicks)
     {
         ffmpeg.avcodec_flush_buffers(_codecCtx);
         while (_ringReader.TryRead(out var vf))
@@ -510,7 +510,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         if (_sws      != null) ffmpeg.sws_freeContext(_sws);
     }
 
-    internal bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
+    public bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
     {
         int sendRet;
         fixed (byte* p = ep.Data)
@@ -577,9 +577,9 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         return true;
     }
 
-    internal void CompleteDecodeLoop() => _ringWriter.TryComplete();
+    public void CompleteDecodeLoop() => _ringWriter.TryComplete();
 
-    internal void RaiseEndOfStream()
+    public void RaiseEndOfStream()
     {
         var handler = EndOfStream;
         if (handler == null) return;

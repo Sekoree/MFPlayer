@@ -109,6 +109,15 @@ public sealed class AudioChannel : IAudioChannel
 
     // ── Pull (called from RT thread — no allocation, no blocking) ─────────
 
+    /// <summary>
+    /// Fills <paramref name="dest"/> with up to <paramref name="frameCount"/> interleaved
+    /// frames from the ring buffer.  Handles partial chunks: each enqueued float[] may
+    /// contain fewer samples than requested, so the method loops across chunks, tracking
+    /// <c>_currentChunk</c>/<c>_currentOffset</c> as carry state.
+    /// <para>On underrun (ring empty before <paramref name="frameCount"/> frames delivered),
+    /// the remainder is filled with silence and a <see cref="BufferUnderrun"/> event is
+    /// raised asynchronously via the ThreadPool (never blocks the RT thread).</para>
+    /// </summary>
     public int FillBuffer(Span<float> dest, int frameCount)
     {
         int channels     = SourceFormat.Channels;
@@ -181,9 +190,7 @@ public sealed class AudioChannel : IAudioChannel
         {
             if (candidate.Length >= minLength)
                 return candidate;
-            // Drop undersized buffer — GC will collect it. Do NOT re-enqueue or it will
-            // cycle through the pool on every call for the channel's lifetime.
-            break;
+            // Undersized — let GC collect it, keep looking for a suitable buffer.
         }
 
         return new float[minLength];
