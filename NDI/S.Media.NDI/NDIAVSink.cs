@@ -497,6 +497,11 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
             return (byte)n;
         }
 
+        // Rows are processed in reverse order (bottom-to-top) because the conversion
+        // is in-place: each output row is smaller than its source data (4 bytes per
+        // pixel pair vs. 8 bytes: 2×uint16 Y + 1×uint16 U + 1×uint16 V). Writing
+        // row N overwrites bytes that row N+1 still needs to read, so we must finish
+        // row N before row N-1, i.e. high-index rows first.
         for (int row = height - 1; row >= 0; row--)
         {
             int yRow = row * yStride;

@@ -70,6 +70,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private volatile int             _yuvColorMatrix = (int)YuvColorMatrix.Auto;
     // Set to true when the user explicitly overrides the YUV hints; suppresses auto-detect.
     private volatile bool            _hasYuvHintsOverride;
+    private volatile int             _scalingFilter = (int)ScalingFilter.Bicubic;
     // Per-frame auto-hint tracking (render thread only — no lock needed).
     private YuvColorMatrix           _lastAutoMatrix = YuvColorMatrix.Auto;
     private YuvColorRange            _lastAutoRange  = YuvColorRange.Auto;
@@ -120,6 +121,26 @@ public sealed class SDL3VideoOutput : IVideoOutput
     {
         get => (YuvColorMatrix)_yuvColorMatrix;
         set => YuvConfig = new((YuvColorRange)_yuvColorRange, value);
+    }
+
+    /// <summary>
+    /// Scaling filter applied when the video does not fill the window at 1:1 pixel mapping.
+    /// <list type="bullet">
+    ///   <item><see cref="ScalingFilter.Bilinear"/> (default) — GPU hardware bilinear; fast, smooth.</item>
+    ///   <item><see cref="ScalingFilter.Bicubic"/> — Catmull-Rom bicubic via an intermediate FBO; sharper edges.</item>
+    ///   <item><see cref="ScalingFilter.Nearest"/> — pixel-exact; useful for 1:1 monitoring.</item>
+    /// </list>
+    /// Thread-safe: the render thread picks up the new value on the next frame.
+    /// </summary>
+    public ScalingFilter ScalingFilter
+    {
+        get => (ScalingFilter)_scalingFilter;
+        set
+        {
+            _scalingFilter = (int)value;
+            if (_renderer != null)
+                _renderer.ScalingFilter = value;
+        }
     }
 
     public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
@@ -223,6 +244,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
         _renderer = new GLRenderer();
         _renderer.YuvColorRange  = (YuvColorRange)_yuvColorRange;
         _renderer.YuvColorMatrix = (YuvColorMatrix)_yuvColorMatrix;
+        _renderer.ScalingFilter  = (ScalingFilter)_scalingFilter;
 
         // Query actual physical pixel size — on HiDPI/scaled displays the pixel
         // dimensions differ from the logical window size and the GL viewport must

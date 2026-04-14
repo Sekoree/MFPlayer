@@ -52,6 +52,8 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     private const uint GL_TEXTURE2          = 0x84C2;
     private const uint GL_RG16UI            = 0x823A;
     private const uint GL_RG_INTEGER        = 0x8228;
+    private const uint GL_COLOR_ATTACHMENT0  = 0x8CE0;
+    private const uint GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
 
     // ── Delegates ─────────────────────────────────────────────────────────
     private delegate void GlViewport(int x, int y, int w, int h);
@@ -92,6 +94,10 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     private delegate void GlPixelStorei(uint pname, int param);
     private delegate void GlActiveTexture(uint texture);
     private delegate void GlDisable(uint cap);
+    private delegate void GlGenFramebuffers(int n, uint* framebuffers);
+    private delegate void GlDeleteFramebuffers(int n, uint* framebuffers);
+    private delegate void GlFramebufferTexture2D(uint target, uint attachment, uint textarget, uint texture, int level);
+    private delegate uint GlCheckFramebufferStatus(uint target);
 
     // ── Function pointers ─────────────────────────────────────────────────
     private GlViewport _glViewport = null!;
@@ -132,6 +138,10 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     private GlPixelStorei _glPixelStorei = null!;
     private GlActiveTexture _glActiveTexture = null!;
     private GlDisable _glDisable = null!;
+    private GlGenFramebuffers        _glGenFramebuffers        = null!;
+    private GlDeleteFramebuffers     _glDeleteFramebuffers     = null!;
+    private GlFramebufferTexture2D   _glFramebufferTexture2D   = null!;
+    private GlCheckFramebufferStatus _glCheckFramebufferStatus = null!;
 
     // ── Programs ──────────────────────────────────────────────────────────
     private uint _programRgba;
@@ -142,6 +152,8 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     private uint _programP010;
     private uint _programYuv444p;
     private uint _programGray8;
+    private uint _programFbo;
+    private uint _programBicubic;
     private uint _currentProgram;
 
     // ── Textures (Y/single, U/UV, V) ──────────────────────────────────────
@@ -160,6 +172,26 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     // YUV hints: -1 = auto-detect from resolution
     private int _yuvColorMatrix  = -1;
     private int _yuvLimitedRange = 0;
+
+    // FBO for bicubic/nearest scaling
+    private uint _fboGeneral;
+    private uint _fboGeneralTexture;
+    private int  _fboGeneralWidth;
+    private int  _fboGeneralHeight;
+
+    // Scaling filter — bicubic by default for broadcast-monitoring quality.
+    private volatile int _scalingFilter = (int)ScalingFilter.Bicubic;
+
+    /// <summary>
+    /// Scaling filter applied during final presentation.
+    /// Defaults to <see cref="ScalingFilter.Bicubic"/> (Catmull-Rom via FBO) for sharp edges.
+    /// Thread-safe via a volatile backing field; the render thread reads on each frame.
+    /// </summary>
+    public ScalingFilter ScalingFilter
+    {
+        get => (ScalingFilter)_scalingFilter;
+        set => _scalingFilter = (int)value;
+    }
 
     /// <summary>Overrides YUV color matrix and range used by GPU shaders (legacy boolean API).</summary>
     public void SetYuvHints(bool bt709, bool limitedRange)
@@ -219,6 +251,10 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
         _glPixelStorei            = LoadGL<GlPixelStorei>(gl, "glPixelStorei");
         _glActiveTexture          = LoadGL<GlActiveTexture>(gl, "glActiveTexture");
         _glDisable                = LoadGL<GlDisable>(gl, "glDisable");
+        _glGenFramebuffers        = LoadGL<GlGenFramebuffers>(gl, "glGenFramebuffers");
+        _glDeleteFramebuffers     = LoadGL<GlDeleteFramebuffers>(gl, "glDeleteFramebuffers");
+        _glFramebufferTexture2D   = LoadGL<GlFramebufferTexture2D>(gl, "glFramebufferTexture2D");
+        _glCheckFramebufferStatus = LoadGL<GlCheckFramebufferStatus>(gl, "glCheckFramebufferStatus");
 
         _programRgba    = BuildProgram(GlShaderSources.FragmentPassthrough);
         _programNv12    = BuildProgram(GlShaderSources.FragmentNv12);
@@ -228,6 +264,8 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
         _programP010    = BuildProgram(GlShaderSources.FragmentP010);
         _programYuv444p = BuildProgram(GlShaderSources.FragmentYuv444p);
         _programGray8   = BuildProgram(GlShaderSources.FragmentGray8);
+        _programFbo     = BuildProgram(GlShaderSources.FragmentPassthroughFbo);
+        _programBicubic = BuildProgram(GlShaderSources.FragmentBicubicBlit);
 
         BindSamplerSingle(_programRgba,    "uTexture\0"u8);
         BindSamplerSingle(_programUyvy422, "uTexUYVY\0"u8);  // fixed: shader uses uTexUYVY
@@ -237,6 +275,8 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
         BindSamplers3(_programI422P10, "uTexY\0"u8, "uTexU\0"u8, "uTexV\0"u8);
         BindSamplers3(_programYuv444p, "uTexY\0"u8, "uTexU\0"u8, "uTexV\0"u8);
         BindSamplerSingle(_programGray8,   "uTexY\0"u8);
+        BindSamplerSingle(_programFbo,     "uTexture\0"u8);
+        BindSamplerSingle(_programBicubic, "uTexture\0"u8);
 
         var quad = GlShaderSources.FullscreenQuadVerts;
         fixed (uint* p = &_vao) _glGenVertexArrays(1, p);
@@ -269,6 +309,80 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
         _initialised = true;
     }
 
+    // ── FBO helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// If <see cref="ScalingFilter"/> is not <see cref="ScalingFilter.Bilinear"/>, ensures the
+    /// general FBO exists at native video resolution, binds it, and sets the viewport.
+    /// Otherwise binds the Avalonia framebuffer directly at viewport size.
+    /// Returns <c>true</c> if FBO was bound; caller must then call <see cref="BlitFboToScreen"/>.
+    /// </summary>
+    private bool BeginFboIfNeeded(int w, int h, int fallbackFb, int fallbackVpW, int fallbackVpH)
+    {
+        if ((ScalingFilter)_scalingFilter == ScalingFilter.Bilinear)
+        {
+            _glBindFramebuffer(GL_FRAMEBUFFER, (uint)fallbackFb);
+            _glViewport(0, 0, fallbackVpW, fallbackVpH);
+            return false;
+        }
+        EnsureFboGeneral(w, h);
+        _glBindFramebuffer(GL_FRAMEBUFFER, _fboGeneral);
+        _glViewport(0, 0, w, h);
+        return true;
+    }
+
+    /// <summary>
+    /// Binds the Avalonia framebuffer, restores the viewport, and blits the general FBO texture
+    /// using the shader selected by <see cref="ScalingFilter"/>.
+    /// </summary>
+    private void BlitFboToScreen(int fb, int vpW, int vpH)
+    {
+        _glBindFramebuffer(GL_FRAMEBUFFER, (uint)fb);
+        _glViewport(0, 0, vpW, vpH);
+        _glClear(GL_COLOR_BUFFER_BIT);
+        uint prog = (ScalingFilter)_scalingFilter == ScalingFilter.Bicubic
+            ? _programBicubic
+            : _programFbo;
+        _glUseProgram(prog);
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _fboGeneralTexture);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    /// <summary>Creates (or recreates on resolution change) a general-purpose RGBA8 FBO.</summary>
+    private void EnsureFboGeneral(int w, int h)
+    {
+        if (_fboGeneralWidth == w && _fboGeneralHeight == h && _fboGeneral != 0)
+            return;
+
+        if (_fboGeneral != 0)
+        { fixed (uint* p = &_fboGeneral) _glDeleteFramebuffers(1, p); _fboGeneral = 0; }
+        if (_fboGeneralTexture != 0)
+        { fixed (uint* p = &_fboGeneralTexture) _glDeleteTextures(1, p); _fboGeneralTexture = 0; }
+
+        fixed (uint* pTex = &_fboGeneralTexture) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _fboGeneralTexture);
+        _glTexImage2D(GL_TEXTURE_2D, 0, (int)GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, null);
+        // GL_NEAREST: bicubic uses texelFetch (bypasses filter), avoids double-bilinear blending.
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     (int)GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     (int)GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pFbo = &_fboGeneral) _glGenFramebuffers(1, pFbo);
+        _glBindFramebuffer(GL_FRAMEBUFFER, _fboGeneral);
+        _glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _fboGeneralTexture, 0);
+        uint status = _glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE)
+            throw new InvalidOperationException($"General FBO incomplete: 0x{status:X}");
+        _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        _fboGeneralWidth  = w;
+        _fboGeneralHeight = h;
+    }
+
     public void DrawBlack(int framebuffer, int width, int height)
     {
         if (!_initialised) return;
@@ -280,8 +394,6 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     public void UploadAndDraw(in VideoFrame frame, int framebuffer, int vpW, int vpH)
     {
         if (!_initialised) return;
-        _glBindFramebuffer(GL_FRAMEBUFFER, (uint)framebuffer);
-        _glViewport(0, 0, vpW, vpH);
         _glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         _glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
@@ -290,29 +402,47 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
         int   w    = frame.Width, h = frame.Height;
         _lastW = w; _lastH = h;
 
+        // ── Upload phase (framebuffer-independent texture ops) ───────────────
         switch (frame.PixelFormat)
         {
-            case PixelFormat.Rgba32:
-                UploadRgba(data, w, h, GL_RGBA);   DrawWith(_programRgba);  break;
-            case PixelFormat.Bgra32:
-                UploadRgba(data, w, h, GL_BGRA);   DrawWith(_programRgba);  break;
-            case PixelFormat.Nv12:
-                UploadNv12(data, w, h);            DrawYuv(_programNv12, h); break;
-            case PixelFormat.Yuv420p:
-                UploadI420(data, w, h);            DrawYuv(_programI420, h); break;
-            case PixelFormat.Yuv422p10:
-                UploadI422P10(data, w, h);         DrawYuv(_programI422P10, h); break;
-            case PixelFormat.Uyvy422:
-                UploadUyvy422(data, w, h);         DrawUyvy422(_programUyvy422, w, h); break;
-            case PixelFormat.P010:
-                UploadP010(data, w, h);            DrawYuv(_programP010, h); break;
-            case PixelFormat.Yuv444p:
-                UploadYuv444p(data, w, h);         DrawYuv(_programYuv444p, h); break;
-            case PixelFormat.Gray8:
-                UploadGray8(data, w, h);           DrawWith(_programGray8); break;
+            case PixelFormat.Rgba32:    UploadRgba(data, w, h, GL_RGBA);  break;
+            case PixelFormat.Bgra32:    UploadRgba(data, w, h, GL_BGRA);  break;
+            case PixelFormat.Nv12:      UploadNv12(data, w, h);           break;
+            case PixelFormat.Yuv420p:   UploadI420(data, w, h);           break;
+            case PixelFormat.Yuv422p10: UploadI422P10(data, w, h);        break;
+            case PixelFormat.Uyvy422:   UploadUyvy422(data, w, h);        break;
+            case PixelFormat.P010:      UploadP010(data, w, h);           break;
+            case PixelFormat.Yuv444p:   UploadYuv444p(data, w, h);        break;
+            case PixelFormat.Gray8:     UploadGray8(data, w, h);          break;
             default:
-                _glClear(GL_COLOR_BUFFER_BIT); return;
+                _glBindFramebuffer(GL_FRAMEBUFFER, (uint)framebuffer);
+                _glViewport(0, 0, vpW, vpH);
+                _glClear(GL_COLOR_BUFFER_BIT);
+                return;
         }
+
+        // ── Draw phase — bind FBO or direct framebuffer, then blit ──────────
+        bool useFbo = BeginFboIfNeeded(w, h, framebuffer, vpW, vpH);
+        switch (frame.PixelFormat)
+        {
+            case PixelFormat.Rgba32: case PixelFormat.Bgra32:
+                DrawWith(_programRgba);             break;
+            case PixelFormat.Nv12:
+                DrawYuv(_programNv12, h);           break;
+            case PixelFormat.Yuv420p:
+                DrawYuv(_programI420, h);           break;
+            case PixelFormat.Yuv422p10:
+                DrawYuv(_programI422P10, h);        break;
+            case PixelFormat.Uyvy422:
+                DrawUyvy422(_programUyvy422, w, h); break;
+            case PixelFormat.P010:
+                DrawYuv(_programP010, h);           break;
+            case PixelFormat.Yuv444p:
+                DrawYuv(_programYuv444p, h);        break;
+            case PixelFormat.Gray8:
+                DrawWith(_programGray8);            break;
+        }
+        if (useFbo) BlitFboToScreen(framebuffer, vpW, vpH);
 
         _lastFormat = frame.PixelFormat;
     }
@@ -320,46 +450,45 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
     public void DrawLastTexture(int framebuffer, int vpW, int vpH)
     {
         if (!_initialised || _texY == 0) return;
-        _glBindFramebuffer(GL_FRAMEBUFFER, (uint)framebuffer);
-        _glViewport(0, 0, vpW, vpH);
 
+        // ── Re-bind textures (no framebuffer dependency) ──────────────────
+        switch (_lastFormat)
+        {
+            case PixelFormat.Rgba32: case PixelFormat.Bgra32: case PixelFormat.Uyvy422: case PixelFormat.Gray8:
+                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY); break;
+            case PixelFormat.Nv12: case PixelFormat.P010:
+                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
+                _glActiveTexture(GL_TEXTURE1); _glBindTexture(GL_TEXTURE_2D, _texU); break;
+            case PixelFormat.Yuv420p: case PixelFormat.Yuv422p10: case PixelFormat.Yuv444p:
+                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
+                _glActiveTexture(GL_TEXTURE1); _glBindTexture(GL_TEXTURE_2D, _texU);
+                _glActiveTexture(GL_TEXTURE2); _glBindTexture(GL_TEXTURE_2D, _texV); break;
+        }
+
+        // ── Draw with optional FBO for bicubic/nearest scaling ──────────
+        bool useFbo = BeginFboIfNeeded(_lastW, _lastH, framebuffer, vpW, vpH);
         switch (_lastFormat)
         {
             case PixelFormat.Rgba32: case PixelFormat.Bgra32:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
-                DrawWith(_programRgba); break;
+                DrawWith(_programRgba);                       break;
             case PixelFormat.Nv12:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
-                _glActiveTexture(GL_TEXTURE1); _glBindTexture(GL_TEXTURE_2D, _texU);
-                DrawWith(_programNv12); break;
+                DrawWith(_programNv12);                       break;
             case PixelFormat.Yuv420p:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
-                _glActiveTexture(GL_TEXTURE1); _glBindTexture(GL_TEXTURE_2D, _texU);
-                _glActiveTexture(GL_TEXTURE2); _glBindTexture(GL_TEXTURE_2D, _texV);
-                DrawWith(_programI420); break;
+                DrawWith(_programI420);                       break;
             case PixelFormat.Yuv422p10:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
-                _glActiveTexture(GL_TEXTURE1); _glBindTexture(GL_TEXTURE_2D, _texU);
-                _glActiveTexture(GL_TEXTURE2); _glBindTexture(GL_TEXTURE_2D, _texV);
-                DrawWith(_programI422P10); break;
+                DrawWith(_programI422P10);                    break;
             case PixelFormat.Uyvy422:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
                 DrawUyvy422(_programUyvy422, _lastW, _lastH); break;
             case PixelFormat.P010:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
-                _glActiveTexture(GL_TEXTURE1); _glBindTexture(GL_TEXTURE_2D, _texU);
-                DrawWith(_programP010); break;
+                DrawWith(_programP010);                       break;
             case PixelFormat.Yuv444p:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
-                _glActiveTexture(GL_TEXTURE1); _glBindTexture(GL_TEXTURE_2D, _texU);
-                _glActiveTexture(GL_TEXTURE2); _glBindTexture(GL_TEXTURE_2D, _texV);
-                DrawWith(_programYuv444p); break;
+                DrawWith(_programYuv444p);                    break;
             case PixelFormat.Gray8:
-                _glActiveTexture(GL_TEXTURE0); _glBindTexture(GL_TEXTURE_2D, _texY);
-                DrawWith(_programGray8); break;
+                DrawWith(_programGray8);                      break;
             default:
                 DrawWith(_currentProgram != 0 ? _currentProgram : _programRgba); break;
         }
+        if (useFbo) BlitFboToScreen(framebuffer, vpW, vpH);
     }
 
     // ── Upload helpers ────────────────────────────────────────────────────
@@ -570,11 +699,15 @@ internal sealed unsafe class AvaloniaGlRenderer : IDisposable
         void DelBuf(ref uint b) { if (b == 0) return; fixed (uint* p = &b) _glDeleteBuffers(1, p);      b = 0; }
         void DelVao(ref uint v) { if (v == 0) return; fixed (uint* p = &v) _glDeleteVertexArrays(1, p); v = 0; }
         void DelPrg(ref uint p) { if (p == 0) return; _glDeleteProgram(p); p = 0; }
+        void DelFbo(ref uint f) { if (f == 0) return; fixed (uint* p = &f) _glDeleteFramebuffers(1, p); f = 0; }
 
         DelTex(ref _texY); DelTex(ref _texU); DelTex(ref _texV);
+        DelTex(ref _fboGeneralTexture);
+        DelFbo(ref _fboGeneral);
         DelBuf(ref _vbo);  DelVao(ref _vao);
         DelPrg(ref _programRgba); DelPrg(ref _programNv12); DelPrg(ref _programI420);
         DelPrg(ref _programI422P10); DelPrg(ref _programUyvy422);
         DelPrg(ref _programP010); DelPrg(ref _programYuv444p); DelPrg(ref _programGray8);
+        DelPrg(ref _programFbo); DelPrg(ref _programBicubic);
     }
 }

@@ -5,6 +5,22 @@ namespace S.Media.Core.Video;
 /// </summary>
 public static class YuvAutoPolicy
 {
+    /// <summary>
+    /// Resolves <see cref="YuvColorRange.Auto"/> to a concrete value.
+    /// <para>
+    /// <b>Broadcast-safe default:</b> <c>Auto</c> resolves to <see cref="YuvColorRange.Limited"/>
+    /// (studio swing, Y 16–235, Cb/Cr 16–240). Virtually all broadcast and streaming content
+    /// (H.264/H.265/VP9/AVC-Intra) uses limited range even when the container reports
+    /// <c>UNSPECIFIED</c>. Defaulting to <see cref="YuvColorRange.Full"/> would cause
+    /// washed-out blacks/clipped whites because the 16–235 luma range would be mapped
+    /// directly onto 0–255 without the required studio-swing expansion.
+    /// </para>
+    /// <para>
+    /// Override this by setting an explicit <see cref="YuvColorRange.Full"/> value on
+    /// <c>SDL3VideoOutput.YuvColorRange</c>, or implement <c>IVideoColorMatrixHint</c>
+    /// on the channel to supply per-stream metadata (e.g. NDI Full-range sources).
+    /// </para>
+    /// </summary>
     public static YuvColorRange ResolveRange(YuvColorRange requested)
     {
         return requested switch

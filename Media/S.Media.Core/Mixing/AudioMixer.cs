@@ -90,7 +90,9 @@ internal sealed class AudioMixer : IAudioMixer
 
     private float[] _mixBuffer    = [];
     private float[] _peakLevels   = [];
-    private float[] _peakSnapshot = [];
+    // _peakSnapshot is published via Volatile.Write so UI-thread readers on ARM
+    // always see a fully-written array rather than a partially-updated one.
+    private volatile float[] _peakSnapshot = [];
 
     private int  _framesPerBuffer;
     private bool _disposed;
@@ -884,7 +886,12 @@ internal sealed class AudioMixer : IAudioMixer
                 }
             }
         }
-        _peakLevels.AsSpan().CopyTo(_peakSnapshot);
+        // Publish the completed peak data to UI threads by swapping in a new array.
+        // Direct assignment to a volatile reference field emits a store-release barrier
+        // on ARM, so readers always see a fully-written array.
+        var snap = new float[_peakLevels.Length];
+        _peakLevels.AsSpan().CopyTo(snap);
+        _peakSnapshot = snap;
     }
 
     public void Dispose()

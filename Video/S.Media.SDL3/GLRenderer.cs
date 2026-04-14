@@ -217,6 +217,23 @@ internal sealed unsafe class GLRenderer : IDisposable
     private int  _fboUyvyWidth;
     private int  _fboUyvyHeight;
     private uint _programFbo;
+    // Bicubic (Catmull-Rom) blit program — compiled from FragmentBicubicBlit.
+    // Used in place of _programFbo when ScalingFilter == Bicubic.
+    private uint _programBicubic;
+    // General-purpose FBO for non-UYVY formats when ScalingFilter != Bilinear.
+    private uint _fboGeneral;
+    private uint _fboGeneralTexture;
+    private int  _fboGeneralWidth;
+    private int  _fboGeneralHeight;
+    // Scaling filter — bicubic by default for broadcast-quality monitoring.
+    // Set via ScalingFilter property (render thread reads, any thread writes).
+    private volatile int _scalingFilter = (int)ScalingFilter.Bicubic;
+
+    public ScalingFilter ScalingFilter
+    {
+        get => (ScalingFilter)_scalingFilter;
+        set => _scalingFilter = (int)value;
+    }
 
     public YuvColorRange YuvColorRange
     {
@@ -338,6 +355,15 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glLinkProgram(_programFbo);
         CheckProgram(_programFbo);
 
+        // Bicubic (Catmull-Rom) blit program for high-quality scaling.
+        // Used for all formats when ScalingFilter == Bicubic.
+        uint fsBicubic = CompileShader(GL_FRAGMENT_SHADER, GlShaderSources.FragmentBicubicBlit);
+        _programBicubic = _glCreateProgram();
+        _glAttachShader(_programBicubic, vs);
+        _glAttachShader(_programBicubic, fsBicubic);
+        _glLinkProgram(_programBicubic);
+        CheckProgram(_programBicubic);
+
         _glDeleteShader(vs);
         _glDeleteShader(fs);
         _glDeleteShader(fsNv12);
@@ -348,6 +374,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glDeleteShader(fsYuv444p);
         _glDeleteShader(fsGray8);
         _glDeleteShader(fsFbo);
+        _glDeleteShader(fsBicubic);
 
         // Set texture uniform to unit 0
         _glUseProgram(_program);
@@ -516,6 +543,11 @@ internal sealed unsafe class GLRenderer : IDisposable
         fixed (byte* name = "uTexture\0"u8)
         { int l = _glGetUniformLocation(_programFbo, name); _glUniform1i(l, 0); }
 
+        // ── Bicubic blit uniforms ─────────────────────────────────────────
+        _glUseProgram(_programBicubic);
+        fixed (byte* name = "uTexture\0"u8)
+        { int l = _glGetUniformLocation(_programBicubic, name); _glUniform1i(l, 0); }
+
         // Fullscreen quad (2 triangles): position (x,y) + UV (u,v)
         // Note: UV y is flipped (1→0) so the image isn't upside-down.
         var quadVerts = GlShaderSources.FullscreenQuadVerts;
@@ -646,11 +678,13 @@ internal sealed unsafe class GLRenderer : IDisposable
             _texHeight = h;
         }
 
+        bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_program);
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+        if (useFbo) BlitFboToScreen();
     }
 
     private void UploadAndDrawNv12(VideoFrame frame)
@@ -690,6 +724,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthNv12 = w;
         _texHeightNv12 = h;
 
+        bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programNv12);
         if (_uNv12LimitedRangeLoc >= 0)
@@ -699,6 +734,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+        if (useFbo) BlitFboToScreen();
     }
 
     private void UploadAndDrawI420(VideoFrame frame)
@@ -748,6 +784,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthI420 = w;
         _texHeightI420 = h;
 
+        bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programI420);
         if (_uI420LimitedRangeLoc >= 0)
@@ -757,6 +794,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+        if (useFbo) BlitFboToScreen();
     }
 
     private void UploadAndDrawI422P10(VideoFrame frame)
@@ -805,6 +843,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthI422P10 = w;
         _texHeightI422P10 = h;
 
+        bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programI422P10);
         if (_uI422P10LimitedRangeLoc >= 0)
@@ -814,6 +853,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+        if (useFbo) BlitFboToScreen();
     }
 
     private void UploadAndDrawUyvy422(VideoFrame frame)
@@ -867,15 +907,89 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
 
-        // ── Pass 2: Display FBO texture on screen with hardware bilinear ─
+        // ── Pass 2: Display FBO texture on screen with selected scaling ──
         _glBindFramebuffer(GL_FRAMEBUFFER, 0);
         _glViewport(_vpX, _vpY, _vpW, _vpH);
         _glClear(GL_COLOR_BUFFER_BIT);
-        _glUseProgram(_programFbo);
+        // Select between bilinear passthrough and Catmull-Rom bicubic for pass 2.
+        uint pass2Prog = (ScalingFilter)_scalingFilter == ScalingFilter.Bicubic
+            ? _programBicubic
+            : _programFbo;
+        _glUseProgram(pass2Prog);
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _fboUyvyTexture);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+    }
+
+    /// <summary>
+    /// When <see cref="ScalingFilter"/> is <see cref="ScalingFilter.Bicubic"/>, ensures the
+    /// general FBO exists at the given native video resolution, binds it, and sets the GL
+    /// viewport to cover the full FBO.  The caller's draw call then renders into the FBO
+    /// rather than directly to the window.
+    /// </summary>
+    /// <returns><c>true</c> if FBO was bound (bicubic path); <c>false</c> for direct rendering.</returns>
+    private bool BeginFboIfNeeded(int w, int h)
+    {
+        if ((ScalingFilter)_scalingFilter == ScalingFilter.Bilinear) return false;
+        EnsureFboGeneral(w, h);
+        _glBindFramebuffer(GL_FRAMEBUFFER, _fboGeneral);
+        _glViewport(0, 0, w, h);
+        return true;
+    }
+
+    /// <summary>
+    /// Unbinds the general FBO, restores the letterbox viewport, and blits the FBO
+    /// texture to the window using the shader selected by <see cref="ScalingFilter"/>.
+    /// </summary>
+    private void BlitFboToScreen()
+    {
+        _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        _glViewport(_vpX, _vpY, _vpW, _vpH);
+        _glClear(GL_COLOR_BUFFER_BIT);
+
+        uint prog = (ScalingFilter)_scalingFilter == ScalingFilter.Bicubic
+            ? _programBicubic
+            : _programFbo;
+        _glUseProgram(prog);
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _fboGeneralTexture);
+        _glBindVertexArray(_vao);
+        _glDrawArrays(GL_TRIANGLES, 0, 6);
+        _glBindVertexArray(0);
+    }
+
+    /// <summary>Creates (or recreates on resolution change) a general-purpose RGBA8 FBO.</summary>
+    private void EnsureFboGeneral(int w, int h)
+    {
+        if (_fboGeneralWidth == w && _fboGeneralHeight == h && _fboGeneral != 0)
+            return;
+
+        if (_fboGeneral != 0)
+        { fixed (uint* p = &_fboGeneral) _glDeleteFramebuffers(1, p); _fboGeneral = 0; }
+        if (_fboGeneralTexture != 0)
+        { fixed (uint* p = &_fboGeneralTexture) _glDeleteTextures(1, p); _fboGeneralTexture = 0; }
+
+        fixed (uint* pTex = &_fboGeneralTexture) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _fboGeneralTexture);
+        _glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, null);
+        // GL_NEAREST on the FBO texture: the bicubic shader uses texelFetch (ignores filter),
+        // and GL_NEAREST avoids any hardware bilinear blending during the decode pass.
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        fixed (uint* pFbo = &_fboGeneral) _glGenFramebuffers(1, pFbo);
+        _glBindFramebuffer(GL_FRAMEBUFFER, _fboGeneral);
+        _glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _fboGeneralTexture, 0);
+        uint status = _glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE)
+            throw new InvalidOperationException($"General FBO incomplete: 0x{status:X}");
+        _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        _fboGeneralWidth  = w;
+        _fboGeneralHeight = h;
     }
 
     /// <summary>
@@ -957,6 +1071,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthP010  = w;
         _texHeightP010 = h;
 
+        bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programP010);
         if (_uP010LimitedRangeLoc >= 0)
@@ -966,6 +1081,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+        if (useFbo) BlitFboToScreen();
     }
 
     private void UploadAndDrawYuv444p(VideoFrame frame)
@@ -1006,6 +1122,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthYuv444p  = w;
         _texHeightYuv444p = h;
 
+        bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programYuv444p);
         if (_uYuv444pLimitedRangeLoc >= 0)
@@ -1015,6 +1132,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+        if (useFbo) BlitFboToScreen();
     }
 
     private void UploadAndDrawGray8(VideoFrame frame)
@@ -1037,11 +1155,13 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthGray8  = w;
         _texHeightGray8 = h;
 
+        bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programGray8);
         _glBindVertexArray(_vao);
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
+        if (useFbo) BlitFboToScreen();
     }
 
     private int GetColorMatrixValue(int width, int height)
@@ -1278,6 +1398,10 @@ internal sealed unsafe class GLRenderer : IDisposable
         { fixed (uint* p = &_fboUyvyTexture) _glDeleteTextures(1, p); }
         if (_fboUyvy != 0)
         { fixed (uint* p = &_fboUyvy) _glDeleteFramebuffers(1, p); }
+        if (_fboGeneralTexture != 0)
+        { fixed (uint* p = &_fboGeneralTexture) _glDeleteTextures(1, p); }
+        if (_fboGeneral != 0)
+        { fixed (uint* p = &_fboGeneral) _glDeleteFramebuffers(1, p); }
         fixed (uint* p = &_vbo)            _glDeleteBuffers(1, p);
         fixed (uint* p = &_vao)            _glDeleteVertexArrays(1, p);
         _glDeleteProgram(_program);
@@ -1289,6 +1413,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glDeleteProgram(_programYuv444p);
         _glDeleteProgram(_programGray8);
         _glDeleteProgram(_programFbo);
+        if (_programBicubic != 0) _glDeleteProgram(_programBicubic);
     }
 }
 

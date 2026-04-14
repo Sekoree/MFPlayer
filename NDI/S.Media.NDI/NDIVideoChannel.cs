@@ -12,8 +12,10 @@ namespace S.Media.NDI;
 /// <summary>
 /// <see cref="IVideoChannel"/> that pulls video from an NDI source via
 /// <see cref="NDIFrameSync.CaptureVideo"/>. Frames are exposed as BGRA32 <see cref="VideoFrame"/> records.
+/// Implements <see cref="IVideoColorMatrixHint"/> so the renderer can automatically apply
+/// the correct YUV color-space when the NDI sender embeds <c>ndi_color_space</c> XML metadata.
 /// </summary>
-internal sealed class NDIVideoChannel : IVideoChannel
+internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 {
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIVideoChannel));
 
@@ -39,6 +41,16 @@ internal sealed class NDIVideoChannel : IVideoChannel
     private readonly HashSet<NDIFourCCVideoType> _unsupportedFourCcLogged = [];
     private long _positionTicks;
     private long _framesDequeued;
+
+    // IVideoColorMatrixHint — updated from NDI frame metadata on the capture thread;
+    // read by the render thread; Volatile ensures visibility without a lock.
+    private volatile int _suggestedMatrix = (int)YuvColorMatrix.Auto;
+    private volatile int _suggestedRange  = (int)YuvColorRange.Auto;
+
+    /// <inheritdoc/>
+    public YuvColorMatrix SuggestedYuvColorMatrix => (YuvColorMatrix)_suggestedMatrix;
+    /// <inheritdoc/>
+    public YuvColorRange  SuggestedYuvColorRange  => (YuvColorRange)_suggestedRange;
 
     // Synthetic PTS fallback when NDI timestamps are undefined (0, negative, or MaxValue).
     // Uses a monotonic stopwatch so the mixer can pace frames correctly.
@@ -74,7 +86,7 @@ internal sealed class NDIVideoChannel : IVideoChannel
         var ring = Channel.CreateUnbounded<VideoFrame>(
             new UnboundedChannelOptions
             {
-                SingleReader = false,
+                SingleReader = true,   // only FillBuffer reads — enables the faster lock-free path
                 SingleWriter = true,
                 AllowSynchronousContinuations = false
             });
@@ -94,6 +106,18 @@ internal sealed class NDIVideoChannel : IVideoChannel
             Priority     = ThreadPriority.AboveNormal
         };
         _captureThread.Start();
+    }
+
+    /// <summary>
+    /// Waits asynchronously until the ring contains at least <paramref name="minFrames"/> captured
+    /// video frames. Call this after <see cref="StartCapture"/> and before starting playback to
+    /// align the video pre-buffer depth with the audio pre-buffer, preventing A/V drift at startup.
+    /// </summary>
+    public async Task WaitForBufferAsync(int minFrames, CancellationToken ct = default)
+    {
+        long target = Math.Clamp(minFrames, 1, _ringCapacity);
+        while (Interlocked.Read(ref _framesInRing) < target && !ct.IsCancellationRequested)
+            await Task.Delay(10, ct).ConfigureAwait(false);
     }
 
     private void CaptureLoop()
@@ -173,15 +197,23 @@ internal sealed class NDIVideoChannel : IVideoChannel
                 lock (_formatLock)
                     _sourceFormat = new VideoFormat(frame.Xres, frame.Yres, pixFmt, fpsNum, fpsDen);
 
+                // Extract YUV color-space hints from NDI frame metadata (if present).
+                // NDI does not have a structured color-space field; senders embed optional
+                // XML such as <ndi_color_space colorspace="BT.709" range="Limited"/>.
+                var (matrix, range) = ParseNdiColorMeta(frame.Metadata);
+                _suggestedMatrix = (int)matrix;
+                _suggestedRange  = (int)range;
+
                 EnqueueFrame(vf);
 
-                // Throttle based on expected frame interval — avoid spinning at 1000+ fps
-                // while still supporting 120 fps sources (≈8 ms) without adding a mandatory
-                // per-frame sleep that would drop frames from high-frame-rate sources.
+                // Throttle: sleep for roughly ¼ of a frame interval so the capture loop
+                // wakes up ~4× per frame, keeping end-to-end video latency under ~5 ms
+                // while still being gentle on the CPU (a 1 ms floor prevents busy-spinning
+                // on high-frame-rate or unknown-rate sources).
                 double fpsNow;
                 lock (_formatLock) fpsNow = _sourceFormat.FrameRate;
                 int sleepMs = fpsNow > 0
-                    ? Math.Max(1, (int)(400.0 / fpsNow))   // half a frame interval, min 1 ms
+                    ? Math.Max(1, (int)(250.0 / fpsNow))   // ¼ frame interval, min 1 ms
                     : 4;
                 Thread.Sleep(sleepMs);
             }
@@ -413,6 +445,35 @@ internal sealed class NDIVideoChannel : IVideoChannel
         // TryWrite on an unbounded channel never fails.
         _ringWriter.TryWrite(frame);
         Interlocked.Increment(ref _framesInRing);
+    }
+
+    /// <summary>
+    /// Parses the optional NDI frame metadata XML for YUV color-space information.
+    /// NDI carries this as XML text in the <c>PMetadata</c> field, e.g.:
+    /// <c>&lt;ndi_color_space colorspace="BT.709" range="Limited"/&gt;</c>.
+    /// Returns <see cref="YuvColorMatrix.Auto"/> / <see cref="YuvColorRange.Auto"/> when
+    /// no metadata is present or the tag is absent — the renderer will fall back to the
+    /// resolution-based heuristic in <see cref="YuvAutoPolicy"/>.
+    /// </summary>
+    private static (YuvColorMatrix Matrix, YuvColorRange Range) ParseNdiColorMeta(string? xml)
+    {
+        if (xml is null) return (YuvColorMatrix.Auto, YuvColorRange.Auto);
+
+        var matrix = xml.Contains("BT.2020", StringComparison.OrdinalIgnoreCase)
+            ? YuvColorMatrix.Bt2020
+            : xml.Contains("BT.709", StringComparison.OrdinalIgnoreCase)
+                ? YuvColorMatrix.Bt709
+                : xml.Contains("BT.601", StringComparison.OrdinalIgnoreCase)
+                    ? YuvColorMatrix.Bt601
+                    : YuvColorMatrix.Auto;
+
+        var range = xml.Contains("Full", StringComparison.OrdinalIgnoreCase)
+            ? YuvColorRange.Full
+            : xml.Contains("Limited", StringComparison.OrdinalIgnoreCase)
+                ? YuvColorRange.Limited
+                : YuvColorRange.Auto;
+
+        return (matrix, range);
     }
 }
 

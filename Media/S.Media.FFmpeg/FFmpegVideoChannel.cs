@@ -178,8 +178,11 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private SwsContext* GetSws(int w, int h, AVPixelFormat srcFmt)
     {
         var dstFmt = MapPixelFormat(TargetPixelFormat);
+        // swsBilinear = 2 (SWS_BILINEAR in libswscale/swscale.h). Used only for pixel-format
+        // conversion (not a resize), so the interpolation quality has no visual effect here.
+        const int swsBilinear = 2;
         _sws = ffmpeg.sws_getCachedContext(_sws, w, h, srcFmt, w, h, dstFmt,
-            2 /* SWS_BILINEAR */, null, null, null);
+            swsBilinear, null, null, null);
         if (_sws == null) throw new InvalidOperationException("sws_getCachedContext failed.");
 
         _swsBufSize = ffmpeg.av_image_get_buffer_size(dstFmt, w, h, 1);

@@ -147,7 +147,17 @@ using (ndiRuntime)
                 SampleRate               = 48000,
                 Channels                 = outChannels,
                 AudioBufferDepth         = 32,
-                VideoBufferDepth         = 4,
+                // Ring capacity for latency vs. jitter trade-off:
+                //   • Large enough to outlast the startup window (first NDI frame
+                //     detection ≤10 ms + SDL3 open ≈20 ms + pre-buffer ≈43 ms ≈ 73 ms).
+                //   • At 60 fps, 16 frames = 267 ms — well above the ~73 ms window,
+                //     so frames from T = 0 are never evicted before playback starts,
+                //     giving near-zero A/V offset at startup.
+                //   • In steady state only 1–2 frames are queued; depth has no effect
+                //     on steady-state latency.
+                //   • Increase to 32 if you observe video jitter on slow machines or
+                //     with very high-resolution (4K 60 fps) NDI sources.
+                VideoBufferDepth         = 16,
                 EnableVideo              = true,
                 //ReceiverSettings         = new NDIReceiverSettings
                 //{
@@ -209,7 +219,7 @@ using (ndiRuntime)
         using var output = new PortAudioOutput();
         try
         {
-            output.Open(device, hwFmt, framesPerBuffer: 1024);
+            output.Open(device, hwFmt, framesPerBuffer: 0);
         }
         catch (Exception ex)
         {
@@ -229,22 +239,25 @@ using (ndiRuntime)
 
         if (videoChannel != null)
         {
-            // NDISource.Start() must be called before we can receive frames,
-            // so start now and wait for the first video frame to learn the format.
-            avSource.Start();
+            // Start only the video capture thread first. The audio capture thread will be
+            // started in step 9, AFTER the first real NDI video frame has been confirmed.
+            // This ensures the audio ring is never pre-filled with framesync-generated
+            // silence from before the NDI source began streaming, which would otherwise
+            // add T_conn worth of silent pre-buffer to the effective startup latency.
+            avSource.StartVideoCapture();
 
+            // Wait for the first video frame to arrive in the ring — this is far more
+            // latency-efficient than polling SourceFormat every 100 ms, because the
+            // format is set by the capture thread immediately before the frame is
+            // enqueued. WaitForVideoBufferAsync polls at 10 ms intervals, so we detect
+            // the format within 10 ms of the first NDI frame rather than up to 100 ms.
             Console.Write("  Waiting for first video frame… ");
             VideoFormat videoFormat = default;
             using var vfCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
-                while (!vfCts.Token.IsCancellationRequested)
-                {
-                    videoFormat = videoChannel.SourceFormat;
-                    if (videoFormat.Width > 0 && videoFormat.Height > 0)
-                        break;
-                    await Task.Delay(100, vfCts.Token).ConfigureAwait(false);
-                }
+                await avSource.WaitForVideoBufferAsync(1, vfCts.Token).ConfigureAwait(false);
+                videoFormat = videoChannel.SourceFormat;
             }
             catch (OperationCanceledException) { /* timeout — use fallback */ }
 
@@ -297,14 +310,28 @@ using (ndiRuntime)
         Console.Write("Starting… ");
         try
         {
-            // ndiSource.Start() may already have been called above for video
-            // format detection — calling it again is a safe no-op.
-            avSource.Start();
+            // If we took the video path above, only the video capture thread is running.
+            // Start the audio capture thread now — the NDI source is confirmed to be
+            // streaming real content, so the audio ring will fill with real audio from T=0.
+            // If we took the audio-only path (no video), Start() is called for the first
+            // time here; it is idempotent so calling it twice is safe.
+            avSource.StartAudioCapture();
 
-            // Pre-buffer audio
+            // Pre-buffer: wait for BOTH audio and video simultaneously so both rings start
+            // from the same NDI timestamp, giving near-zero A/V offset at startup.
+            // 3 audio chunks ≈ 64 ms is sufficient because we no longer drain framesync
+            // silence — audio capture started after the first real video frame arrived.
             Console.Write("buffering… ");
-            using var preCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            try   { await avSource.WaitForAudioBufferAsync(8, preCts.Token); }
+            using var preCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                await Task.WhenAll(
+                    avSource.WaitForAudioBufferAsync(3, preCts.Token),
+                    videoChannel != null
+                        ? avSource.WaitForVideoBufferAsync(2, preCts.Token)
+                        : Task.CompletedTask
+                );
+            }
             catch (OperationCanceledException) { /* timed out — proceed */ }
 
             await output.StartAsync();
@@ -339,6 +366,41 @@ using (ndiRuntime)
                 Console.WriteLine("\n[Window closed]");
                 if (!cts.IsCancellationRequested) cts.Cancel();
             };
+        }
+
+        // Auto-correct A/V drift every 30 s.
+        // Even after the pre-buffer alignment fix, tiny residual drift can accumulate from
+        // NDI timestamp jitter or hardware clock differences.  This loop measures drift and
+        // nudges the video channel's time offset by 50 % of the measured error — gentle
+        // enough to be invisible, converging to <5 ms within a few correction cycles.
+        //
+        // drift = audio.Position − video.Position
+        //   negative → video is ahead  → increase offset (hold video frames longer)
+        //   positive → audio is ahead  → decrease offset (release video frames sooner)
+        if (videoChannel != null && videoOutput != null)
+        {
+            _ = Task.Run(async () =>
+            {
+                // Skip the first interval to let both streams settle after startup.
+                try { await Task.Delay(30_000, cts.Token); } catch (OperationCanceledException) { return; }
+
+                while (!cts.IsCancellationRequested)
+                {
+                    if (avSource.TryGetAvDrift(out var drift) &&
+                        Math.Abs(drift.TotalMilliseconds) > 20)
+                    {
+                        // correction = −drift/2  →  nudges offset in the direction that reduces drift
+                        var current    = avMixer.GetVideoChannelTimeOffset(videoChannel.Id);
+                        var correction = TimeSpan.FromTicks(-drift.Ticks / 2);
+                        avMixer.SetVideoChannelTimeOffset(videoChannel.Id, current + correction);
+                        Console.WriteLine(
+                            $"  [AV-sync] drift={drift.TotalMilliseconds:+0.0;-0.0}ms " +
+                            $"→ applied {correction.TotalMilliseconds:+0.0;-0.0}ms correction");
+                    }
+
+                    try { await Task.Delay(30_000, cts.Token); } catch (OperationCanceledException) { break; }
+                }
+            });
         }
 
         // Print periodic status

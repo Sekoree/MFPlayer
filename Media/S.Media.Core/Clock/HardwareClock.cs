@@ -12,8 +12,8 @@ public class HardwareClock : MediaClockBase
     private readonly Func<double> _secondsProvider;
     private readonly double       _sampleRate;
 
-    // Fallback state — guarded by _fallbackLock
-    private readonly Lock      _fallbackLock = new();
+    // Fallback state — guarded by _fallbackLock (SpinLock: low-contention, sub-μs hold time)
+    private SpinLock           _fallbackLock = new(enableThreadOwnerTracking: false);
     private readonly Stopwatch _fallbackSw = new();
     private TimeSpan           _lastValidPosition;
     private bool               _usingFallback;
@@ -50,8 +50,10 @@ public class HardwareClock : MediaClockBase
         get
         {
             double hw = _secondsProvider();
-            lock (_fallbackLock)
+            bool taken = false;
+            try
             {
+                _fallbackLock.Enter(ref taken);
                 if (hw > 0.0)
                 {
                     // Re-sync fallback whenever hardware is valid
@@ -71,6 +73,10 @@ public class HardwareClock : MediaClockBase
                     _fallbackSw.Restart();
                 }
                 return _lastValidPosition + _fallbackSw.Elapsed;
+            }
+            finally
+            {
+                if (taken) _fallbackLock.Exit(useMemoryBarrier: false);
             }
         }
     }

@@ -41,7 +41,28 @@ public sealed class NDIAVChannel : IDisposable
         CancellationToken ct = default)
         => new(await NDISource.OpenByNameAsync(sourceName, options, ct).ConfigureAwait(false));
 
+    /// <summary>
+    /// Starts all capture threads (audio + video). Equivalent to calling
+    /// <see cref="StartVideoCapture"/> followed by <see cref="StartAudioCapture"/>.
+    /// For lower latency, prefer calling them separately — see <see cref="StartVideoCapture"/>.
+    /// </summary>
     public void Start() => _source.Start();
+
+    /// <summary>
+    /// Starts only the video capture thread (and the internal clock / watchdog).
+    /// Use this to detect the video format before committing to audio capture.
+    /// Call <see cref="StartAudioCapture"/> once <see cref="WaitForVideoBufferAsync"/>
+    /// confirms real NDI content is flowing, so the audio ring is never pre-filled
+    /// with framesync silence from before the NDI source began streaming.
+    /// </summary>
+    public void StartVideoCapture() => _source.StartVideoCapture();
+
+    /// <summary>
+    /// Starts only the audio capture thread (and the clock / watchdog if not yet running).
+    /// Call this after <see cref="StartVideoCapture"/> and after the first video frame
+    /// has arrived to ensure the audio ring contains only real audio content.
+    /// </summary>
+    public void StartAudioCapture() => _source.StartAudioCapture();
 
     public void Stop() => _source.Stop();
 
@@ -56,8 +77,33 @@ public sealed class NDIAVChannel : IDisposable
     }
 
     /// <summary>
+    /// Waits until the video capture ring reaches a minimum number of frames.
+    /// <para>
+    /// Use <see cref="Task.WhenAll"/> to wait for both audio and video simultaneously
+    /// before starting playback. This ensures both rings contain content from the same
+    /// NDI timestamp origin, which prevents the fixed A/V offset that would otherwise
+    /// occur if the audio ring is allowed to accumulate many more milliseconds than the
+    /// video ring before playback starts.
+    /// </para>
+    /// </summary>
+    public Task WaitForVideoBufferAsync(int minFrames, CancellationToken ct = default)
+    {
+        if (VideoChannel is NDIVideoChannel ndiVideo)
+            return ndiVideo.WaitForBufferAsync(minFrames, ct);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Returns audio minus video position drift.
     /// Positive means audio is ahead; negative means video is ahead.
+    /// <para>
+    /// Both positions are measured in media time (seconds since the first consumed frame),
+    /// so a non-zero value indicates that the two streams have drifted apart. When
+    /// pre-buffering is done with <see cref="Task.WhenAll"/> across
+    /// <see cref="WaitForAudioBufferAsync"/> and <see cref="WaitForVideoBufferAsync"/>,
+    /// startup drift is near zero; any residual value represents runtime clock skew.
+    /// Pass the result to <see cref="IAVMixer.SetVideoChannelTimeOffset"/> to correct it.
+    /// </para>
     /// </summary>
     public bool TryGetAvDrift(out TimeSpan drift)
     {

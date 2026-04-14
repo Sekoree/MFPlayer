@@ -43,6 +43,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     private bool _yuvBt709;
     private bool _yuvLimitedRange;
     private YuvColorMatrix _yuvColorMatrix = YuvColorMatrix.Auto;
+    private volatile int _scalingFilter = (int)ScalingFilter.Bicubic;
     private bool _isOpen;
     private bool _isRunning;
     private bool _disposed;
@@ -123,6 +124,35 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     {
         _hasYuvHintsOverride = false;
         _renderer?.ResetYuvHintsToAuto();
+    }
+
+    /// <summary>YUV color range used by the GL shaders. Equivalent to calling <see cref="SetYuvHints(YuvColorMatrix,bool)"/>.</summary>
+    public YuvColorRange YuvColorRange
+    {
+        get => _yuvLimitedRange ? YuvColorRange.Limited : YuvColorRange.Full;
+        set => SetYuvHints(_yuvColorMatrix, YuvAutoPolicy.ResolveRange(value) == YuvColorRange.Limited);
+    }
+
+    /// <summary>YUV color matrix used by the GL shaders. Equivalent to calling <see cref="SetYuvHints(YuvColorMatrix,bool)"/>.</summary>
+    public YuvColorMatrix YuvColorMatrix
+    {
+        get => _yuvColorMatrix;
+        set => SetYuvHints(value, _yuvLimitedRange);
+    }
+
+    /// <summary>
+    /// Scaling filter applied during final presentation.
+    /// Defaults to <see cref="ScalingFilter.Bicubic"/> for broadcast-quality monitoring.
+    /// Thread-safe; the render thread picks up the new value on the next frame.
+    /// </summary>
+    public ScalingFilter ScalingFilter
+    {
+        get => (ScalingFilter)_scalingFilter;
+        set
+        {
+            _scalingFilter = (int)value;
+            if (_renderer != null) _renderer.ScalingFilter = value;
+        }
     }
 
     /// <summary>
@@ -217,6 +247,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         Interlocked.Increment(ref _initCalls);
         _renderer ??= new AvaloniaGlRenderer();
         _renderer.Initialise(gl);
+        _renderer.ScalingFilter = (ScalingFilter)_scalingFilter;
         if (_hasYuvHintsOverride)
             _renderer.SetYuvHints(_yuvColorMatrix, _yuvLimitedRange);
         _hasUploadedFrame = false;

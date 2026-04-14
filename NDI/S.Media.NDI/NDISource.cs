@@ -20,8 +20,18 @@ public sealed class NDISourceOptions
     /// <summary>Audio ring buffer depth in chunks. Default 16.</summary>
     public int AudioBufferDepth { get; init; } = 16;
 
-    /// <summary>Video ring buffer depth in frames. Default 4.</summary>
-    public int VideoBufferDepth { get; init; } = 4;
+    /// <summary>
+    /// Video ring buffer depth in frames. Default 16.
+    /// <para>
+    /// The ring must be large enough to survive the entire startup window
+    /// (format detection + output device open + audio pre-buffer) so that frames
+    /// captured from the very beginning of the stream are still available when
+    /// playback starts, ensuring zero-offset A/V sync.
+    /// At 60 fps, 16 frames ≈ 267 ms; at 30 fps, 16 frames ≈ 533 ms.
+    /// Increase to 32 or more for sources with high frame rates or slow startup paths.
+    /// </para>
+    /// </summary>
+    public int VideoBufferDepth { get; init; } = 16;
 
     /// <summary>
     /// Whether to create and start the video capture channel. Default: <see langword="true"/>.
@@ -145,14 +155,17 @@ public sealed class NDISource : IDisposable
         }
 
         var clock = new NDIClock();
-        var frameSyncGate = new Lock();
+        // Each channel gets its own lock — the NDI FrameSync API is internally thread-safe
+        // for concurrent audio/video captures on the same instance, so there is no need to
+        // share a gate.  A shared gate caused audio capture to stall while video held the
+        // lock during the Marshal.Copy of a full video frame (~8 MB for 1080p UYVY).
         var audio = new NDIAudioChannel(frameSync, clock,
-            frameSyncGate,
+            frameSyncGate: null,   // creates its own per-channel Lock
             sampleRate:  options.SampleRate,
             channels:    options.Channels,
             bufferDepth: options.AudioBufferDepth);
         var video = options.EnableVideo
-            ? new NDIVideoChannel(frameSync, clock, frameSyncGate, bufferDepth: options.VideoBufferDepth)
+            ? new NDIVideoChannel(frameSync, clock, frameSyncGate: null, bufferDepth: options.VideoBufferDepth)
             : null;
 
         Log.LogInformation("Opened NDISource: source={SourceName}, sampleRate={SampleRate}, channels={Channels}, enableVideo={EnableVideo}, autoReconnect={AutoReconnect}",
@@ -234,21 +247,73 @@ public sealed class NDISource : IDisposable
     /// If <see cref="NDISourceOptions.AutoReconnect"/> is enabled, also starts the
     /// connection watchdog thread.
     /// Call after adding channels to mixers/consumers.
+    /// <para>
+    /// For lower latency, call <see cref="StartVideoCapture"/> first to detect the video
+    /// format, then call <see cref="StartAudioCapture"/> after the first video frame
+    /// arrives. This ensures the audio ring contains only real content (no framesync
+    /// silence from before the NDI source began streaming), eliminating the T_conn worth
+    /// of silent pre-buffering that would otherwise be baked into playback start.
+    /// </para>
     /// </summary>
     private volatile bool _started;
+    private volatile bool _videoStarted;
+    private volatile bool _audioStarted;
 
-    public void Start()
+    /// <summary>
+    /// Ensures the clock and connection watchdog are started (idempotent).
+    /// Called internally by both <see cref="StartVideoCapture"/> and <see cref="StartAudioCapture"/>.
+    /// </summary>
+    private void EnsureCommonStarted()
     {
         if (_started) return;
         _started = true;
-
-        Log.LogInformation("Starting NDISource");
+        Log.LogInformation("Starting NDISource common components (clock + watchdog)");
         Clock.Start();
-        _audioChannelImpl?.StartCapture();
-        _videoChannelImpl?.StartCapture();
-
         if (_options.AutoReconnect)
             StartWatchThread();
+    }
+
+    /// <summary>
+    /// Starts only the video capture thread (and the internal clock / watchdog).
+    /// Use this when you want to detect the video format before committing to audio
+    /// capture — call <see cref="StartAudioCapture"/> once the first video frame confirms
+    /// the NDI source is streaming real content.
+    /// Idempotent: safe to call multiple times.
+    /// </summary>
+    public void StartVideoCapture()
+    {
+        if (_videoStarted) return;
+        _videoStarted = true;
+        EnsureCommonStarted();
+        Log.LogInformation("Starting NDISource video capture");
+        _videoChannelImpl?.StartCapture();
+    }
+
+    /// <summary>
+    /// Starts only the audio capture thread (and the internal clock / watchdog if not yet
+    /// running). Call this after <see cref="StartVideoCapture"/> and after the first video
+    /// frame has arrived so that the audio ring is filled with real audio instead of
+    /// framesync-generated silence.
+    /// Idempotent: safe to call multiple times.
+    /// </summary>
+    public void StartAudioCapture()
+    {
+        if (_audioStarted) return;
+        _audioStarted = true;
+        EnsureCommonStarted();
+        Log.LogInformation("Starting NDISource audio capture");
+        _audioChannelImpl?.StartCapture();
+    }
+
+    /// <summary>
+    /// Starts all capture threads (audio + video) and the clock/watchdog.
+    /// Equivalent to calling <see cref="StartVideoCapture"/> followed by
+    /// <see cref="StartAudioCapture"/>. Idempotent.
+    /// </summary>
+    public void Start()
+    {
+        StartVideoCapture();
+        StartAudioCapture();
     }
 
     /// <summary>Stops the clock. Capture threads continue running until <see cref="Dispose"/> is called.</summary>
@@ -266,6 +331,22 @@ public sealed class NDISource : IDisposable
     {
         return _audioChannelImpl != null
             ? _audioChannelImpl.WaitForBufferAsync(minChunks, ct)
+            : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Waits until the underlying NDI video ring reaches a minimum number of frames.
+    /// No-op when video is unavailable or disabled via <see cref="NDISourceOptions.EnableVideo"/>.
+    /// <para>
+    /// Call this concurrently with <see cref="WaitForAudioBufferAsync"/> (via
+    /// <see cref="Task.WhenAll"/>) before starting playback so both rings accumulate content
+    /// from the same NDI timestamp origin, preventing a fixed A/V offset at startup.
+    /// </para>
+    /// </summary>
+    public Task WaitForVideoBufferAsync(int minFrames, CancellationToken ct = default)
+    {
+        return _videoChannelImpl != null
+            ? _videoChannelImpl.WaitForBufferAsync(minFrames, ct)
             : Task.CompletedTask;
     }
 

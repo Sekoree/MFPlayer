@@ -82,6 +82,12 @@ public sealed class PortAudioSink : IAudioSink
     /// Optional rate converter used when source rate differs from
     /// <paramref name="targetFormat"/>.SampleRate. To keep <see cref="ReceiveBuffer"/> allocation-free,
     /// mismatched-rate buffers are dropped when this is <see langword="null"/>.
+    /// <para>
+    /// When <see langword="null"/>, a <see cref="S.Media.Core.Audio.LinearResampler"/> is created
+    /// automatically. Linear interpolation is adequate for small rate discrepancies (e.g. 44100→48000)
+    /// but introduces audible high-frequency aliasing on music content. For highest quality, supply an
+    /// explicit <c>SwrResampler</c> (libswresample polyphase sinc) from <c>S.Media.FFmpeg</c>.
+    /// </para>
     /// </param>
     /// <param name="enableDriftCorrection">
     /// When <see langword="true"/>, a <see cref="DriftCorrector"/> monitors the pending-write

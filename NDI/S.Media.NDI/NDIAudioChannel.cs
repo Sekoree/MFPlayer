@@ -157,12 +157,22 @@ internal sealed class NDIAudioChannel : IAudioChannel
             long nowTicks = sw.ElapsedTicks;
             if (nowTicks < expectedTicks)
             {
-                // Convert remaining ticks to ms; sleep most of the wait, then poll.
-                long remMs = (expectedTicks - nowTicks) * 1000L / Stopwatch.Frequency;
-                if (remMs > 2)
-                    Thread.Sleep((int)(remMs - 2));
+                // Coarse sleep for anything more than ~5 ms out; spin-wait the tail.
+                // On Linux, Thread.Sleep(1) can overshoot by 1–4 ms due to kernel
+                // timer granularity, which accumulates and starves the PortAudio ring.
+                // SpinWait burns CPU for the last few ms but gives microsecond accuracy.
+                long remTicks = expectedTicks - nowTicks;
+                if (remTicks > Stopwatch.Frequency / 200) // > ~5 ms
+                {
+                    int sleepMs = (int)(remTicks * 1000L / Stopwatch.Frequency) - 4;
+                    if (sleepMs > 0) Thread.Sleep(sleepMs);
+                }
                 else
-                    Thread.Sleep(1);
+                {
+                    // Spin the final ≤5 ms — avoids accumulating jitter.
+                    while (sw.ElapsedTicks < expectedTicks)
+                        Thread.SpinWait(50);
+                }
                 continue;
             }
             // Advance to next absolute target — compensates if we woke up late.
