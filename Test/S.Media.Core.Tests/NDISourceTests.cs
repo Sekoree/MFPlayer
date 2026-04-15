@@ -122,5 +122,61 @@ public sealed class NDISourceTests
         Assert.Contains(NDISourceState.Reconnecting, values);
         Assert.Equal(4, values.Length);
     }
+
+    [Fact]
+    public void NDILatencyPreset_FromEndpointPreset_MapsExpectedQueueDepths()
+    {
+        Assert.Equal(12, NDILatencyPreset.FromEndpointPreset(NDIEndpointPreset.Safe).ResolveQueueDepth());
+        Assert.Equal(8, NDILatencyPreset.FromEndpointPreset(NDIEndpointPreset.Balanced).ResolveQueueDepth());
+        Assert.Equal(4, NDILatencyPreset.FromEndpointPreset(NDIEndpointPreset.LowLatency).ResolveQueueDepth());
+    }
+
+    [Fact]
+    public void NDILatencyPreset_ResolveQueueDepth_DefaultsToBalancedWhenInvalid()
+    {
+        Assert.Equal(8, new NDILatencyPreset(0).ResolveQueueDepth());
+        Assert.Equal(8, new NDILatencyPreset(-5).ResolveQueueDepth());
+    }
+
+    [Fact]
+    public void NDISourceOptions_ResolveBufferDepths_UseQueuePresetWhenOverridesUnset()
+    {
+        var options = new NDISourceOptions
+        {
+            QueueBufferDepth = NDILatencyPreset.Safe
+        };
+
+        Assert.Equal(12, options.ResolveQueueBufferDepth());
+        Assert.Equal(12, options.ResolveAudioBufferDepth());
+        Assert.Equal(12, options.ResolveVideoBufferDepth());
+    }
+
+    [Fact]
+    public void NDISourceOptions_ResolveBufferDepths_PreferPerStreamOverrides()
+    {
+        var options = new NDISourceOptions
+        {
+            QueueBufferDepth = NDILatencyPreset.Balanced,
+            AudioBufferDepth = 6,
+            VideoBufferDepth = 10
+        };
+
+        Assert.Equal(8, options.ResolveQueueBufferDepth());
+        Assert.Equal(6, options.ResolveAudioBufferDepth());
+        Assert.Equal(10, options.ResolveVideoBufferDepth());
+    }
+
+    [Fact]
+    public void NDISourceOptions_DefaultQueuePreset_IsBalanced()
+    {
+        var options = new NDISourceOptions();
+        Assert.Equal(8, options.ResolveQueueBufferDepth());
+    }
+
+    [Fact]
+    public void NDILatencyPreset_FromQueueDepth_UsesProvidedValue()
+    {
+        Assert.Equal(11, NDILatencyPreset.FromQueueDepth(11).ResolveQueueDepth());
+    }
 }
 

@@ -14,6 +14,23 @@
 
 ## Common Operations
 
+### NDI receive latency tuning
+
+Use `NDISourceOptions.QueueBufferDepth` with `NDILatencyPreset` for end-user-friendly buffering defaults:
+
+```csharp
+var options = new NDISourceOptions
+{
+	QueueBufferDepth = NDILatencyPreset.Balanced, // Safe(12), Balanced(8), LowLatency(4)
+	LowLatency = false
+};
+```
+
+- `QueueBufferDepth` applies to both audio and video rings.
+- `QueueBufferDepth` can use built-in presets or a custom value via `NDILatencyPreset.FromQueueDepth(...)`.
+- `AudioBufferDepth` / `VideoBufferDepth` remain available as advanced overrides.
+- `LowLatency = true` enables faster polling and tighter capture sleeps (lower latency, higher CPU).
+
 ### Add/Remove channels
 
 ```csharp

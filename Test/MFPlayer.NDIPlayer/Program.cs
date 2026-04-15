@@ -23,7 +23,7 @@ Console.WriteLine("╔═══════════════════�
 Console.WriteLine("║   MFPlayer  —  NDI Player         ║");
 Console.WriteLine("╚═══════════════════════════════════╝\n");
 
-// ── 1. Initialise NDI runtime ────────────────────────────────────────────────
+// ── 1. Initialize NDI runtime ────────────────────────────────────────────────
 
 if (!NDIRuntime.IsSupportedCpu())
 {
@@ -34,7 +34,7 @@ if (!NDIRuntime.IsSupportedCpu())
 int ndiRet = NDIRuntime.Create(out var ndiRuntime);
 if (ndiRet != 0 || ndiRuntime == null)
 {
-    Console.WriteLine($"Failed to initialise NDI runtime (code {ndiRet}).");
+    Console.WriteLine($"Failed to initialize NDI runtime (code {ndiRet}).");
     Console.WriteLine("Make sure the NDI runtime is installed: https://ndi.video/tools/");
     return;
 }
@@ -43,7 +43,7 @@ using (ndiRuntime)
 {
     Console.WriteLine($"NDI runtime  v{NDIRuntime.Version}\n");
 
-    // ── 2. Initialise PortAudio ──────────────────────────────────────────────
+    // ── 2. Initialize PortAudio ──────────────────────────────────────────────
 
     using var engine = new PortAudioEngine();
     engine.Initialize();
@@ -55,7 +55,7 @@ using (ndiRuntime)
     for (int i = 0; i < apis.Count; i++)
         Console.WriteLine($"  [{i}]  {apis[i].Name}  ({apis[i].DeviceCount} device{(apis[i].DeviceCount == 1 ? "" : "s")})");
 
-    int apiIdx      = PickNumber("Select API", 0, apis.Count - 1);
+    int apiIdx      = PickNumber("Select host API", 0, apis.Count - 1);
     var selectedApi = apis[apiIdx];
 
     // ── 4. Pick output device ────────────────────────────────────────────────
@@ -76,7 +76,7 @@ using (ndiRuntime)
                           $"(ch: {outputDevices[i].MaxOutputChannels},  " +
                           $"{outputDevices[i].DefaultSampleRate:0} Hz)");
 
-    int devIdx = PickNumber("Select device", 0, outputDevices.Count - 1);
+    int devIdx = PickNumber("Select output device", 0, outputDevices.Count - 1);
     var device = outputDevices[devIdx];
 
     // ── 5. Discover NDI sources ───────────────────────────────────────────────
@@ -125,8 +125,17 @@ using (ndiRuntime)
         Console.WriteLine($"  [{i}]  {sources[i].Name}{url}");
     }
 
-    int srcIdx          = PickNumber("Select NDI source", 0, sources.Length - 1);
+    int srcIdx          = PickNumber("Select source", 0, sources.Length - 1);
     var selectedSource  = sources[srcIdx];
+
+    var preset = PickNdiPreset();
+    var latencyPreset = NDILatencyPreset.FromEndpointPreset(preset);
+    int queueDepth = PickNumber("Queue buffer depth", 1, 64, latencyPreset.ResolveQueueDepth());
+    bool defaultLowLatencyPolling = preset == NDIEndpointPreset.LowLatency;
+    bool lowLatencyPolling = PickYesNo(
+        "Use LowLatency polling (faster polling, higher CPU)",
+        defaultLowLatencyPolling);
+    Console.WriteLine($"NDI receive profile: preset={preset}, queueDepth={queueDepth}, lowLatencyPolling={(lowLatencyPolling ? "on" : "off")}");
 
     // ── 7. Open NDI source ────────────────────────────────────────────────────
 
@@ -141,9 +150,9 @@ using (ndiRuntime)
         {
             SampleRate       = 48000,
             Channels         = outChannels,
-            AudioBufferDepth = 32,   // larger ring: 32 × 1024 = 682 ms — keeps DropOldest dormant
-            VideoBufferDepth = 1,
-            EnableVideo      = false   // audio-only; video thread caused SIGSEGV on non-BGRA formats
+            QueueBufferDepth = NDILatencyPreset.FromQueueDepth(queueDepth),
+            LowLatency       = lowLatencyPolling,
+            EnableVideo      = false   // audio-only path
         });
     }
     catch (Exception ex)
@@ -258,15 +267,40 @@ using (ndiRuntime)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-static int PickNumber(string label, int min, int max)
+static int PickNumber(string label, int min, int max, int? defaultValue = null)
+{
+    int fallback = defaultValue ?? min;
+    while (true)
+    {
+        Console.Write($"{label} [{min}-{max}] (default {fallback}): ");
+        string? line = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(line)) return fallback;
+        if (int.TryParse(line, out int v) && v >= min && v <= max) return v;
+        Console.WriteLine($"  Please enter a number between {min} and {max}.");
+    }
+}
+
+static NDIEndpointPreset PickNdiPreset()
+{
+    Console.Write("NDI receive preset [Safe/Balanced/LowLatency] (default Balanced): ");
+    string raw = (Console.ReadLine() ?? string.Empty).Trim();
+    if (raw.Equals("safe", StringComparison.OrdinalIgnoreCase)) return NDIEndpointPreset.Safe;
+    if (raw.Equals("low", StringComparison.OrdinalIgnoreCase) ||
+        raw.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) ||
+        raw.Equals("low-latency", StringComparison.OrdinalIgnoreCase)) return NDIEndpointPreset.LowLatency;
+    return NDIEndpointPreset.Balanced;
+}
+
+static bool PickYesNo(string label, bool defaultValue)
 {
     while (true)
     {
-        Console.Write($"{label} [{min}–{max}] (default {min}): ");
-        string? line = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(line)) return min;
-        if (int.TryParse(line, out int v) && v >= min && v <= max) return v;
-        Console.WriteLine($"  Please enter a number between {min} and {max}.");
+        Console.Write($"{label} [{(defaultValue ? "Y/n" : "y/N")}]: ");
+        string? raw = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(raw)) return defaultValue;
+        if (raw.Equals("y", StringComparison.OrdinalIgnoreCase) || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)) return true;
+        if (raw.Equals("n", StringComparison.OrdinalIgnoreCase) || raw.Equals("no", StringComparison.OrdinalIgnoreCase)) return false;
+        Console.WriteLine("  Please enter y/yes or n/no.");
     }
 }
 

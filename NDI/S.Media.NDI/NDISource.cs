@@ -17,21 +17,36 @@ public sealed class NDISourceOptions
     /// <summary>Desired audio channel count. Default 2.</summary>
     public int Channels { get; init; } = 2;
 
-    /// <summary>Audio ring buffer depth in chunks. Default 16.</summary>
-    public int AudioBufferDepth { get; init; } = 16;
+    /// <summary>
+    /// Unified queue-depth preset used for both audio and video when per-stream overrides are unset.
+    /// Defaults to <see cref="NDILatencyPreset.Balanced"/>.
+    /// </summary>
+    public NDILatencyPreset QueueBufferDepth { get; init; } = NDILatencyPreset.Balanced;
 
     /// <summary>
-    /// Video ring buffer depth in frames. Default 16.
+    /// Optional audio ring buffer depth override in chunks.
+    /// When <see langword="null"/>, <see cref="QueueBufferDepth"/> is used.
+    /// </summary>
+    public int? AudioBufferDepth { get; init; }
+
+    /// <summary>
+    /// Optional video ring buffer depth override in frames.
+    /// When <see langword="null"/>, <see cref="QueueBufferDepth"/> is used.
     /// <para>
     /// The ring must be large enough to survive the entire startup window
     /// (format detection + output device open + audio pre-buffer) so that frames
     /// captured from the very beginning of the stream are still available when
     /// playback starts, ensuring zero-offset A/V sync.
-    /// At 60 fps, 16 frames ≈ 267 ms; at 30 fps, 16 frames ≈ 533 ms.
+    /// At 60 fps, 8 frames ≈ 133 ms; at 30 fps, 8 frames ≈ 267 ms.
     /// Increase to 32 or more for sources with high frame rates or slow startup paths.
     /// </para>
     /// </summary>
-    public int VideoBufferDepth { get; init; } = 16;
+    public int? VideoBufferDepth { get; init; }
+
+    /// <summary>
+    /// Enables faster startup/capture polling for lower latency at the cost of higher CPU usage.
+    /// </summary>
+    public bool LowLatency { get; init; }
 
     /// <summary>
     /// Whether to create and start the video capture channel. Default: <see langword="true"/>.
@@ -61,6 +76,10 @@ public sealed class NDISourceOptions
     /// <see langword="null"/> uses defaults.
     /// </summary>
     public NDIFinderSettings? FinderSettings { get; init; }
+
+    public int ResolveAudioBufferDepth() => Math.Max(1, AudioBufferDepth ?? ResolveQueueBufferDepth());
+    public int ResolveVideoBufferDepth() => Math.Max(1, VideoBufferDepth ?? ResolveQueueBufferDepth());
+    public int ResolveQueueBufferDepth() => QueueBufferDepth.ResolveQueueDepth();
 }
 
 /// <summary>
@@ -140,6 +159,9 @@ public sealed class NDISource : IDisposable
     public static NDISource Open(NDIDiscoveredSource source, NDISourceOptions? options = null)
     {
         options ??= new NDISourceOptions();
+        int resolvedAudioDepth = options.ResolveAudioBufferDepth();
+        int resolvedVideoDepth = options.ResolveVideoBufferDepth();
+        int resolvedQueueDepth = options.ResolveQueueBufferDepth();
 
         int ret = NDIReceiver.Create(out var receiver, options.ReceiverSettings);
         if (ret != 0 || receiver == null)
@@ -163,13 +185,14 @@ public sealed class NDISource : IDisposable
             frameSyncGate: null,   // creates its own per-channel Lock
             sampleRate:  options.SampleRate,
             channels:    options.Channels,
-            bufferDepth: options.AudioBufferDepth);
+            bufferDepth: resolvedAudioDepth,
+            preferLowLatency: options.LowLatency);
         var video = options.EnableVideo
-            ? new NDIVideoChannel(frameSync, clock, frameSyncGate: null, bufferDepth: options.VideoBufferDepth)
+            ? new NDIVideoChannel(frameSync, clock, frameSyncGate: null, bufferDepth: resolvedVideoDepth, preferLowLatency: options.LowLatency)
             : null;
 
-        Log.LogInformation("Opened NDISource: source={SourceName}, sampleRate={SampleRate}, channels={Channels}, enableVideo={EnableVideo}, autoReconnect={AutoReconnect}",
-            source.Name, options.SampleRate, options.Channels, options.EnableVideo, options.AutoReconnect);
+        Log.LogInformation("Opened NDISource: source={SourceName}, sampleRate={SampleRate}, channels={Channels}, queueDepth={QueueDepth}, audioDepth={AudioDepth}, videoDepth={VideoDepth}, lowLatency={LowLatency}, enableVideo={EnableVideo}, autoReconnect={AutoReconnect}",
+            source.Name, options.SampleRate, options.Channels, resolvedQueueDepth, resolvedAudioDepth, resolvedVideoDepth, options.LowLatency, options.EnableVideo, options.AutoReconnect);
 
         var ndiSource = new NDISource(receiver, frameSync, clock, audio, video, options);
         ndiSource._connectedSource = source;

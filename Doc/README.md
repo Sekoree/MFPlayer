@@ -20,6 +20,8 @@ This folder contains current documentation for both `MediaPlayer` and `AVMixer` 
 ## Sample Apps
 
 - `Test/MFPlayer.SimplePlayer` - audio playback.
+- `Test/MFPlayer.NDIPlayer` - audio-focused NDI receive sample with latency presets.
+- `Test/MFPlayer.NDIAutoPlayer` - auto-discovery + auto-reconnect NDI A/V sample with latency presets.
 - `Test/MFPlayer.VideoPlayer` - video playback with optional NDI sink.
 - `Test/MFPlayer.MultiOutputPlayer` - one audio source to multiple outputs.
 - `Test/MFPlayer.AvaloniaVideoPlayer` - embedded Avalonia video output.

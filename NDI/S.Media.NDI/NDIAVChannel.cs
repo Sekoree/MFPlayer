@@ -12,6 +12,9 @@ namespace S.Media.NDI;
 public sealed class NDIAVChannel : IDisposable
 {
     private readonly NDISource _source;
+    private long _audioDriftOriginTicks;
+    private long _videoDriftOriginTicks;
+    private int _hasDriftOrigin;
 
     public IAudioChannel AudioChannel { get; }
     public IVideoChannel? VideoChannel { get; }
@@ -113,9 +116,26 @@ public sealed class NDIAVChannel : IDisposable
             return false;
         }
 
-        drift = AudioChannel.Position - VideoChannel.Position;
+        long audioTicks = AudioChannel.Position.Ticks;
+        long videoTicks = VideoChannel.Position.Ticks;
+
+        if (Interlocked.CompareExchange(ref _hasDriftOrigin, 1, 0) == 0)
+        {
+            Volatile.Write(ref _audioDriftOriginTicks, audioTicks);
+            Volatile.Write(ref _videoDriftOriginTicks, videoTicks);
+        }
+
+        long relAudioTicks = audioTicks - Volatile.Read(ref _audioDriftOriginTicks);
+        long relVideoTicks = videoTicks - Volatile.Read(ref _videoDriftOriginTicks);
+        drift = TimeSpan.FromTicks(relAudioTicks - relVideoTicks);
         return true;
     }
+
+    /// <summary>
+    /// Resets the A/V drift baseline so the next <see cref="TryGetAvDrift"/> call re-anchors
+    /// both streams to a fresh common origin.
+    /// </summary>
+    public void ResetAvDriftBaseline() => Volatile.Write(ref _hasDriftOrigin, 0);
 
     public void Dispose() => _source.Dispose();
 }

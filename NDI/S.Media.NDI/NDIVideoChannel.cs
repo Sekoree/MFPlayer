@@ -33,6 +33,8 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     private readonly ChannelReader<VideoFrame> _ringReader;
     private readonly ChannelWriter<VideoFrame> _ringWriter;
     private readonly int _ringCapacity;
+    private readonly bool _preferLowLatency;
+    private readonly int _waitPollMs;
     private long _framesInRing;
 
     private bool _disposed;
@@ -76,12 +78,14 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     /// <inheritdoc/>
     public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
 
-    public NDIVideoChannel(NDIFrameSync frameSync, NDIClock clock, Lock? frameSyncGate = null, int bufferDepth = 4)
+    public NDIVideoChannel(NDIFrameSync frameSync, NDIClock clock, Lock? frameSyncGate = null, int bufferDepth = 4, bool preferLowLatency = false)
     {
         _frameSync = frameSync;
         _frameSyncGate = frameSyncGate ?? new Lock();
         _clock     = clock;
         _ringCapacity = Math.Max(1, bufferDepth);
+        _preferLowLatency = preferLowLatency;
+        _waitPollMs = _preferLowLatency ? 2 : 10;
 
         var ring = Channel.CreateUnbounded<VideoFrame>(
             new UnboundedChannelOptions
@@ -117,7 +121,7 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     {
         long target = Math.Clamp(minFrames, 1, _ringCapacity);
         while (Interlocked.Read(ref _framesInRing) < target && !ct.IsCancellationRequested)
-            await Task.Delay(10, ct).ConfigureAwait(false);
+            await Task.Delay(_waitPollMs, ct).ConfigureAwait(false);
     }
 
     private void CaptureLoop()
@@ -215,6 +219,8 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 int sleepMs = fpsNow > 0
                     ? Math.Max(1, (int)(250.0 / fpsNow))   // ¼ frame interval, min 1 ms
                     : 4;
+                if (_preferLowLatency)
+                    sleepMs = 1;
                 Thread.Sleep(sleepMs);
             }
             catch (Exception ex) when (!token.IsCancellationRequested)

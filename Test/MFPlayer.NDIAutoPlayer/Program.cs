@@ -51,7 +51,7 @@ NDIMediaLogging.Configure(loggerFactory);
 PortAudioLogging.Configure(loggerFactory);
 SDL3VideoLogging.Configure(loggerFactory);
 
-// ── 1. Initialise NDI runtime ────────────────────────────────────────────────
+// ── 1. Initialize NDI runtime ────────────────────────────────────────────────
 
 if (!NDIRuntime.IsSupportedCpu())
 {
@@ -62,7 +62,7 @@ if (!NDIRuntime.IsSupportedCpu())
 int ndiRet = NDIRuntime.Create(out var ndiRuntime);
 if (ndiRet != 0 || ndiRuntime == null)
 {
-    Console.WriteLine($"Failed to initialise NDI runtime (code {ndiRet}).");
+    Console.WriteLine($"Failed to initialize NDI runtime (code {ndiRet}).");
     Console.WriteLine("Make sure the NDI runtime is installed: https://ndi.video/tools/");
     return;
 }
@@ -71,7 +71,7 @@ using (ndiRuntime)
 {
     Console.WriteLine($"NDI runtime  v{NDIRuntime.Version}\n");
 
-    // ── 2. Initialise PortAudio ──────────────────────────────────────────────
+    // ── 2. Initialize PortAudio ──────────────────────────────────────────────
 
     using var engine = new PortAudioEngine();
     engine.Initialize();
@@ -83,7 +83,7 @@ using (ndiRuntime)
     for (int i = 0; i < apis.Count; i++)
         Console.WriteLine($"  [{i}]  {apis[i].Name}  ({apis[i].DeviceCount} device{(apis[i].DeviceCount == 1 ? "" : "s")})");
 
-    int apiIdx      = PickNumber("Select API", 0, apis.Count - 1);
+    int apiIdx      = PickNumber("Select host API", 0, apis.Count - 1);
     var selectedApi = apis[apiIdx];
 
     // ── 4. Pick output device ────────────────────────────────────────────────
@@ -104,7 +104,7 @@ using (ndiRuntime)
                           $"(ch: {outputDevices[i].MaxOutputChannels},  " +
                           $"{outputDevices[i].DefaultSampleRate:0} Hz)");
 
-    int devIdx = PickNumber("Select device", 0, outputDevices.Count - 1);
+    int devIdx = PickNumber("Select output device", 0, outputDevices.Count - 1);
     var device = outputDevices[devIdx];
 
     // ── 5. Get NDI source name ───────────────────────────────────────────────
@@ -125,12 +125,22 @@ using (ndiRuntime)
         }
     }
 
+    var preset = PickNdiPreset();
+    var latencyPreset = NDILatencyPreset.FromEndpointPreset(preset);
+    int defaultQueueDepth = latencyPreset.ResolveQueueDepth();
+    int queueDepth = PickNumber("Queue buffer depth", 1, 64, defaultQueueDepth);
+    bool defaultLowLatencyPolling = preset == NDIEndpointPreset.LowLatency;
+    bool lowLatencyPolling = PickYesNo(
+        "Use LowLatency polling (faster polling, higher CPU)",
+        defaultLowLatencyPolling);
+    Console.WriteLine($"NDI receive profile: preset={preset}, queueDepth={queueDepth}, lowLatencyPolling={(lowLatencyPolling ? "on" : "off")}");
+
     // ── 6. Open NDI source by name (async discovery + auto-reconnect) ────────
 
     int outChannels = Math.Min(device.MaxOutputChannels, 2);
 
-    Console.WriteLine($"\nWaiting for NDI source matching '{sourceName}'…");
-    Console.WriteLine("  (the source does not need to be online yet — we'll wait)\n");
+    Console.WriteLine($"\nWaiting for NDI source matching '{sourceName}'...");
+    Console.WriteLine("  (Source can be offline now; discovery will keep waiting.)\n");
 
     using var discoveryCts = new CancellationTokenSource();
 
@@ -146,23 +156,9 @@ using (ndiRuntime)
             {
                 SampleRate               = 48000,
                 Channels                 = outChannels,
-                AudioBufferDepth         = 32,
-                // Ring capacity for latency vs. jitter trade-off:
-                //   • Large enough to outlast the startup window (first NDI frame
-                //     detection ≤10 ms + SDL3 open ≈20 ms + pre-buffer ≈43 ms ≈ 73 ms).
-                //   • At 60 fps, 16 frames = 267 ms — well above the ~73 ms window,
-                //     so frames from T = 0 are never evicted before playback starts,
-                //     giving near-zero A/V offset at startup.
-                //   • In steady state only 1–2 frames are queued; depth has no effect
-                //     on steady-state latency.
-                //   • Increase to 32 if you observe video jitter on slow machines or
-                //     with very high-resolution (4K 60 fps) NDI sources.
-                VideoBufferDepth         = 16,
+                QueueBufferDepth         = NDILatencyPreset.FromQueueDepth(queueDepth),
+                LowLatency               = lowLatencyPolling,
                 EnableVideo              = true,
-                //ReceiverSettings         = new NDIReceiverSettings
-                //{
-                //    ColorFormat = NDIRecvColorFormat.BgrxBgra
-                //},
                 AutoReconnect            = true,
                 ConnectionCheckIntervalMs = 2000,
                 FinderSettings           = new NDIFinderSettings { ShowLocalSources = true }
@@ -180,7 +176,7 @@ using (ndiRuntime)
         return;
     }
 
-    Console.WriteLine($"  ✓ Connected to NDI source");
+    Console.WriteLine("  Connected to NDI source");
 
     using (avSource)
     {
@@ -198,7 +194,7 @@ using (ndiRuntime)
             };
             var prev = Console.ForegroundColor;
             Console.ForegroundColor = color;
-            Console.WriteLine($"  [NDI] {e.OldState} → {e.NewState}  ({e.SourceName})");
+            Console.WriteLine($"  [NDI] state {e.OldState} -> {e.NewState}  ({e.SourceName})");
             Console.ForegroundColor = prev;
         };
 
@@ -249,8 +245,8 @@ using (ndiRuntime)
             // Wait for the first video frame to arrive in the ring — this is far more
             // latency-efficient than polling SourceFormat every 100 ms, because the
             // format is set by the capture thread immediately before the frame is
-            // enqueued. WaitForVideoBufferAsync polls at 10 ms intervals, so we detect
-            // the format within 10 ms of the first NDI frame rather than up to 100 ms.
+            // enqueued. WaitForVideoBufferAsync polls quickly (2-10 ms depending on
+            // LowLatency mode), so format detection happens near the first real frame.
             Console.Write("  Waiting for first video frame… ");
             VideoFormat videoFormat = default;
             using var vfCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -347,8 +343,8 @@ using (ndiRuntime)
         }
         Console.WriteLine("OK");
 
-        Console.WriteLine($"\n  ▶  Playing NDI source: '{sourceName}'");
-        Console.WriteLine("     Auto-reconnect is ENABLED — source can go offline and come back.");
+        Console.WriteLine($"\n  Playing NDI source: '{sourceName}'");
+        Console.WriteLine("  Auto-reconnect: enabled (source can go offline and reconnect).");
         Console.WriteLine(videoOutput != null
             ? "     Press [Enter] or [Ctrl+C] to stop. Closing the video window also stops.\n"
             : "     Press [Enter] or [Ctrl+C] to stop.\n");
@@ -381,21 +377,35 @@ using (ndiRuntime)
         {
             _ = Task.Run(async () =>
             {
+                const double MinDriftMs = 20;
+                const double IgnoreOutlierDriftMs = 250;
+                const double CorrectionGain = 0.50;
+                const double MaxStepMs = 40;
+                const double MaxAbsOffsetMs = 250;
+
                 // Skip the first interval to let both streams settle after startup.
                 try { await Task.Delay(30_000, cts.Token); } catch (OperationCanceledException) { return; }
 
                 while (!cts.IsCancellationRequested)
                 {
-                    if (avSource.TryGetAvDrift(out var drift) &&
-                        Math.Abs(drift.TotalMilliseconds) > 20)
+                    if (avSource.TryGetAvDrift(out var drift))
                     {
-                        // correction = −drift/2  →  nudges offset in the direction that reduces drift
-                        var current    = avMixer.GetVideoChannelTimeOffset(videoChannel.Id);
-                        var correction = TimeSpan.FromTicks(-drift.Ticks / 2);
-                        avMixer.SetVideoChannelTimeOffset(videoChannel.Id, current + correction);
-                        Console.WriteLine(
-                            $"  [AV-sync] drift={drift.TotalMilliseconds:+0.0;-0.0}ms " +
-                            $"→ applied {correction.TotalMilliseconds:+0.0;-0.0}ms correction");
+                        double absDriftMs = Math.Abs(drift.TotalMilliseconds);
+                        if (absDriftMs >= IgnoreOutlierDriftMs)
+                        {
+                            avSource.ResetAvDriftBaseline();
+                        }
+                        else if (absDriftMs >= MinDriftMs)
+                        {
+                            var currentOffset = avMixer.GetVideoChannelTimeOffset(videoChannel.Id);
+                            double requestedStepMs = -drift.TotalMilliseconds * CorrectionGain;
+                            double clampedStepMs = Math.Clamp(requestedStepMs, -MaxStepMs, MaxStepMs);
+                            double nextOffsetMs = Math.Clamp(currentOffset.TotalMilliseconds + clampedStepMs, -MaxAbsOffsetMs, MaxAbsOffsetMs);
+                            avMixer.SetVideoChannelTimeOffset(videoChannel.Id, TimeSpan.FromMilliseconds(nextOffsetMs));
+                            Console.WriteLine(
+                                $"  [AV-sync] drift={drift.TotalMilliseconds:+0.0;-0.0}ms " +
+                                $"→ step {clampedStepMs:+0.0;-0.0}ms (offset={nextOffsetMs:+0.0;-0.0}ms)");
+                        }
                     }
 
                     try { await Task.Delay(30_000, cts.Token); } catch (OperationCanceledException) { break; }
@@ -470,17 +480,43 @@ static (int Width, int Height) FitWithin(int srcWidth, int srcHeight, int maxWid
     return (width, height);
 }
 
-static int PickNumber(string label, int min, int max)
+static int PickNumber(string label, int min, int max, int? defaultValue = null)
 {
+    int fallback = defaultValue ?? min;
     while (true)
     {
-        Console.Write($"{label} [{min}–{max}] (default {min}): ");
+        Console.Write($"{label} [{min}-{max}] (default {fallback}): ");
         string? line = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(line)) return min;
+        if (string.IsNullOrEmpty(line)) return fallback;
         if (int.TryParse(line, out int v) && v >= min && v <= max) return v;
         Console.WriteLine($"  Please enter a number between {min} and {max}.");
     }
 }
+
+static NDIEndpointPreset PickNdiPreset()
+{
+    Console.Write("NDI receive preset [Safe/Balanced/LowLatency] (default Balanced): ");
+    string raw = (Console.ReadLine() ?? string.Empty).Trim();
+    if (raw.Equals("safe", StringComparison.OrdinalIgnoreCase)) return NDIEndpointPreset.Safe;
+    if (raw.Equals("low", StringComparison.OrdinalIgnoreCase) ||
+        raw.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) ||
+        raw.Equals("low-latency", StringComparison.OrdinalIgnoreCase)) return NDIEndpointPreset.LowLatency;
+    return NDIEndpointPreset.Balanced;
+}
+
+static bool PickYesNo(string label, bool defaultValue)
+{
+    while (true)
+    {
+        Console.Write($"{label} [{(defaultValue ? "Y/n" : "y/N")}]: ");
+        string? raw = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(raw)) return defaultValue;
+        if (raw.Equals("y", StringComparison.OrdinalIgnoreCase) || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)) return true;
+        if (raw.Equals("n", StringComparison.OrdinalIgnoreCase) || raw.Equals("no", StringComparison.OrdinalIgnoreCase)) return false;
+        Console.WriteLine("  Please enter y/yes or n/no.");
+    }
+}
+
 
 /// <summary>
 /// Builds a route map: mono → both stereo channels; multi-channel → straight-across up to min(src, dst).

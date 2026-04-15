@@ -32,6 +32,7 @@ internal sealed class NDIAudioChannel : IAudioChannel
     // 0.333 ms/cycle surplus that integer milliseconds cause (1024*1000/48000 = 21 ms
     // vs true 21.333 ms), which filled the ring every ~1.3 s and triggered DropOldest.
     private readonly long                _captureIntervalTicks;
+    private readonly int                 _waitPollMs;
 
     private Thread?                  _captureThread;
     private CancellationTokenSource  _cts = new();
@@ -81,7 +82,8 @@ internal sealed class NDIAudioChannel : IAudioChannel
         Lock?        frameSyncGate = null,
         int          sampleRate  = 48000,
         int          channels    = 2,
-        int          bufferDepth = 16)
+        int          bufferDepth = 16,
+        bool         preferLowLatency = false)
     {
         _frameSync            = frameSync;
         _frameSyncGate        = frameSyncGate ?? new Lock();
@@ -90,6 +92,7 @@ internal sealed class NDIAudioChannel : IAudioChannel
         _requestedChannels    = channels;
         BufferDepth           = bufferDepth;
         SourceFormat          = new AudioFormat(sampleRate, channels);
+        _waitPollMs           = preferLowLatency ? 2 : 10;
 
         // Tick-accurate interval: Stopwatch.Frequency × 1024 / 48000.
         // The integer truncation error is ~0.3 ns/cycle vs ~0.3 ms/cycle with ms arithmetic —
@@ -140,7 +143,7 @@ internal sealed class NDIAudioChannel : IAudioChannel
         // the RT thread may call Count/TryRead; reading from another thread is undefined.
         long minFrames = (long)Math.Clamp(minChunks, 1, BufferDepth) * FramesPerCapture;
         while (Interlocked.Read(ref _framesInRing) < minFrames && !ct.IsCancellationRequested)
-            await Task.Delay(10, ct).ConfigureAwait(false);
+            await Task.Delay(_waitPollMs, ct).ConfigureAwait(false);
     }
 
     private void CaptureLoop()
