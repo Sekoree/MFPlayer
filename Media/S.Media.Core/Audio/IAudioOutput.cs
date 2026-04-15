@@ -26,7 +26,11 @@ public interface IAudioOutput : IMediaOutput
     /// <param name="framesPerBuffer">
     /// Requested hardware buffer size in frames. Pass 0 to let the driver choose.
     /// </param>
-    void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0);
+    /// <param name="suggestedLatency">
+    /// Suggested output latency in seconds. When &gt; 0, passed to the driver directly.
+    /// When ≤ 0 (default), derived from <paramref name="framesPerBuffer"/> or device default.
+    /// </param>
+    void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0, double suggestedLatency = 0);
 
     /// <summary>
     /// Replaces the <see cref="IAudioMixer"/> invoked by the RT callback.

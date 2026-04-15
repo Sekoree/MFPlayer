@@ -44,19 +44,31 @@ public sealed class PortAudioOutput : IAudioOutput
 
     // ── Open ──────────────────────────────────────────────────────────────
 
-    public unsafe void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0)
+    /// <summary>
+    /// Opens a PortAudio output stream.
+    /// </summary>
+    /// <param name="device">Audio device to open.</param>
+    /// <param name="requestedFormat">Desired sample rate and channel count.</param>
+    /// <param name="framesPerBuffer">Frames per callback buffer. 0 = driver-chosen.</param>
+    /// <param name="suggestedLatency">
+    /// Suggested output latency in seconds. When &gt; 0, this value is passed directly to
+    /// <c>PaStreamParameters.suggestedLatency</c>. When ≤ 0 (default), the latency is
+    /// derived from <paramref name="framesPerBuffer"/> or the device's default low-output latency.
+    /// Use <c>0.005</c> (5 ms) for low-latency live monitoring (OPT-12).
+    /// </param>
+    public unsafe void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0, double suggestedLatency = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_stream != nint.Zero)
             throw new InvalidOperationException("Output is already open. Close it before re-opening.");
 
-        Log.LogInformation("Opening PortAudio output: device={DeviceName} (idx={DeviceIndex}), format={SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}",
-            device.Name, device.Index, requestedFormat.SampleRate, requestedFormat.Channels, framesPerBuffer);
+        Log.LogInformation("Opening PortAudio output: device={DeviceName} (idx={DeviceIndex}), format={SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}, suggestedLatency={SuggestedLatency}s",
+            device.Name, device.Index, requestedFormat.SampleRate, requestedFormat.Channels, framesPerBuffer, suggestedLatency);
 
         // Pin 'this' for the callback lifetime.
         _gcHandle = GCHandle.Alloc(this);
 
-        var err = TryOpenStream(device, requestedFormat, framesPerBuffer);
+        var err = TryOpenStream(device, requestedFormat, framesPerBuffer, suggestedLatency);
 
         // If the requested sample rate isn't supported, fall back to the device's
         // default rate.  The AudioMixer will automatically resample any channels
@@ -73,7 +85,7 @@ public sealed class PortAudioOutput : IAudioOutput
                     requestedFormat.SampleRate, device.Name, deviceRate);
 
                 requestedFormat = requestedFormat with { SampleRate = deviceRate };
-                err = TryOpenStream(device, requestedFormat, framesPerBuffer);
+                err = TryOpenStream(device, requestedFormat, framesPerBuffer, suggestedLatency);
             }
         }
 
@@ -234,11 +246,17 @@ public sealed class PortAudioOutput : IAudioOutput
     /// so the caller can decide whether to retry with a different rate.
     /// On success, <c>_stream</c> is set; on failure, it remains zero.
     /// </summary>
-    private unsafe PaError TryOpenStream(AudioDeviceInfo device, AudioFormat format, int framesPerBuffer)
+    private unsafe PaError TryOpenStream(AudioDeviceInfo device, AudioFormat format, int framesPerBuffer, double explicitLatency)
     {
-        double suggestedLatency = framesPerBuffer > 0 && format.SampleRate > 0
-            ? framesPerBuffer / (double)format.SampleRate
-            : device.DefaultLowOutputLatency;
+        // OPT-12: when the caller provides an explicit latency hint, use it directly.
+        // Otherwise fall back to computing from framesPerBuffer or device default.
+        double suggestedLatency;
+        if (explicitLatency > 0)
+            suggestedLatency = explicitLatency;
+        else if (framesPerBuffer > 0 && format.SampleRate > 0)
+            suggestedLatency = framesPerBuffer / (double)format.SampleRate;
+        else
+            suggestedLatency = device.DefaultLowOutputLatency;
 
         var outParams = new PaStreamParameters
         {

@@ -33,7 +33,7 @@ public sealed class AudioMixerTests
         public IMediaClock Clock          { get; }
         public bool        IsRunning      => false;
 
-        public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0) { }
+        public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0, double suggestedLatency = 0) { }
         public void OverrideRtMixer(IAudioMixer mixer) { } // no-op for tests
         public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task StopAsync(CancellationToken ct = default)  => Task.CompletedTask;

@@ -73,9 +73,20 @@ public interface IVideoMixer : IDisposable
     TimeSpan GetChannelTimeOffset(Guid channelId);
 
     /// <summary>
+    /// When <see langword="true"/>, <see cref="PresentNextFrame"/> bypasses PTS-based
+    /// scheduling and always presents the newest available frame, dropping all older frames.
+    /// Appropriate for live NDI monitoring where "show the latest picture" is always correct;
+    /// PTS-based scheduling only adds delay for live sources.
+    /// Default: <see langword="false"/> (PTS-based scheduling for file playback).
+    /// </summary>
+    bool LiveMode { get; set; }
+
+    /// <summary>
     /// Called by the render loop to pull the next frame from the active channel
     /// and present it. The mixer uses <paramref name="clockPosition"/> for basic
     /// PTS pacing (hold if early, advance when due).
+    /// When <see cref="LiveMode"/> is <see langword="true"/>, the clock position is ignored
+    /// and the newest available frame is presented unconditionally.
     /// </summary>
     VideoFrame? PresentNextFrame(TimeSpan clockPosition);
 }

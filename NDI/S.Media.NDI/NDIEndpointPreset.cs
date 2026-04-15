@@ -7,7 +7,8 @@ public enum NDIEndpointPreset
 {
     Safe,
     Balanced,
-    LowLatency
+    LowLatency,
+    UltraLowLatency
 }
 
 public readonly record struct NDIVideoPresetOptions(
@@ -19,6 +20,7 @@ public readonly record struct NDIVideoPresetOptions(
         NDIEndpointPreset.Safe => new NDIVideoPresetOptions(PoolCount: 8, MaxPendingFrames: 12),
         NDIEndpointPreset.Balanced => new NDIVideoPresetOptions(PoolCount: 4, MaxPendingFrames: 6),
         NDIEndpointPreset.LowLatency => new NDIVideoPresetOptions(PoolCount: 3, MaxPendingFrames: 2),
+        NDIEndpointPreset.UltraLowLatency => new NDIVideoPresetOptions(PoolCount: 2, MaxPendingFrames: 1),
         _ => new NDIVideoPresetOptions(PoolCount: 4, MaxPendingFrames: 6)
     };
 }
@@ -33,6 +35,7 @@ public readonly record struct NDIAudioPresetOptions(
         NDIEndpointPreset.Safe => new NDIAudioPresetOptions(PoolCount: 12, MaxPendingBuffers: 16, BufferHeadroomMultiplier: 3),
         NDIEndpointPreset.Balanced => new NDIAudioPresetOptions(PoolCount: 8, MaxPendingBuffers: 8, BufferHeadroomMultiplier: 2),
         NDIEndpointPreset.LowLatency => new NDIAudioPresetOptions(PoolCount: 4, MaxPendingBuffers: 3, BufferHeadroomMultiplier: 2),
+        NDIEndpointPreset.UltraLowLatency => new NDIAudioPresetOptions(PoolCount: 3, MaxPendingBuffers: 2, BufferHeadroomMultiplier: 1),
         _ => new NDIAudioPresetOptions(PoolCount: 8, MaxPendingBuffers: 8, BufferHeadroomMultiplier: 2)
     };
 }

@@ -237,6 +237,7 @@ public sealed class AVMixerTests
         public VideoFormat OutputFormat { get; } = new(640, 360, PixelFormat.Rgba32, 30, 1);
         public int ChannelCount => 0;
         public int SinkCount => 0;
+        public bool LiveMode { get; set; }
         public void AddChannel(IVideoChannel channel) => AddChannelCalls++;
         public void RemoveChannel(Guid channelId) => RemoveChannelCalls++;
         public void SetChannelTimeOffset(Guid channelId, TimeSpan offset) { }

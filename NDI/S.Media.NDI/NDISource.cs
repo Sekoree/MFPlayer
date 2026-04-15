@@ -49,6 +49,14 @@ public sealed class NDISourceOptions
     public bool LowLatency { get; init; }
 
     /// <summary>
+    /// Number of audio samples per NDI FrameSync capture call.
+    /// Smaller values reduce audio capture-to-playback latency but increase CPU overhead.
+    /// Default 1024 (~21 ms @ 48 kHz); use 256 (~5.3 ms) or 512 (~10.7 ms) for low-latency paths.
+    /// Clamped to [64, 4096].
+    /// </summary>
+    public int AudioFramesPerCapture { get; init; } = 1024;
+
+    /// <summary>
     /// Whether to create and start the video capture channel. Default: <see langword="true"/>.
     /// Set to <see langword="false"/> for audio-only use cases to avoid the overhead (and any
     /// potential format-mismatch crashes) of decoding video frames.
@@ -80,6 +88,39 @@ public sealed class NDISourceOptions
     public int ResolveAudioBufferDepth() => Math.Max(1, AudioBufferDepth ?? ResolveQueueBufferDepth());
     public int ResolveVideoBufferDepth() => Math.Max(1, VideoBufferDepth ?? ResolveQueueBufferDepth());
     public int ResolveQueueBufferDepth() => QueueBufferDepth.ResolveQueueDepth();
+
+    /// <summary>
+    /// Creates an <see cref="NDISourceOptions"/> with all source-side knobs pre-configured
+    /// from the given <paramref name="preset"/>. Output-side configuration is provided by
+    /// <see cref="NDIPlaybackProfile.For"/>.
+    /// <para>
+    /// The returned options have <see cref="AutoReconnect"/> = <see langword="true"/> and
+    /// <see cref="EnableVideo"/> = <see langword="true"/>. Override individual properties
+    /// with <c>with { … }</c> if needed (requires converting to a mutable copy or
+    /// constructing manually).
+    /// </para>
+    /// </summary>
+    /// <param name="preset">Endpoint latency preset.</param>
+    /// <param name="sampleRate">Desired audio sample rate. Default 48000.</param>
+    /// <param name="channels">Desired audio channel count. Default 2.</param>
+    public static NDISourceOptions ForPreset(
+        NDIEndpointPreset preset,
+        int sampleRate = 48000,
+        int channels   = 2)
+    {
+        var profile = NDIPlaybackProfile.For(preset);
+        return new NDISourceOptions
+        {
+            SampleRate            = sampleRate,
+            Channels              = channels,
+            QueueBufferDepth      = NDILatencyPreset.FromEndpointPreset(preset),
+            LowLatency            = profile.LowLatencyPolling,
+            AudioFramesPerCapture = profile.AudioFramesPerCapture,
+            EnableVideo           = true,
+            AutoReconnect         = true,
+            FinderSettings        = new NDIFinderSettings { ShowLocalSources = true },
+        };
+    }
 }
 
 /// <summary>
@@ -186,7 +227,8 @@ public sealed class NDISource : IDisposable
             sampleRate:  options.SampleRate,
             channels:    options.Channels,
             bufferDepth: resolvedAudioDepth,
-            preferLowLatency: options.LowLatency);
+            preferLowLatency: options.LowLatency,
+            framesPerCapture: options.AudioFramesPerCapture);
         var video = options.EnableVideo
             ? new NDIVideoChannel(frameSync, clock, frameSyncGate: null, bufferDepth: resolvedVideoDepth, preferLowLatency: options.LowLatency)
             : null;

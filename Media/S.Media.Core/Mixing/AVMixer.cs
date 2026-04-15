@@ -109,6 +109,13 @@ public sealed class AVMixer : IAVMixer
         _videoChannels.TryRemove(channelId, out _);
     }
 
+    /// <inheritdoc/>
+    public bool VideoLiveMode
+    {
+        get => _video.LiveMode;
+        set => _video.LiveMode = value;
+    }
+
     // ── Per-channel time offsets ─────────────────────────────────────────
 
     public void SetAudioChannelTimeOffset(Guid channelId, TimeSpan offset)

@@ -25,6 +25,13 @@ public interface IAVMixer : IDisposable
     void AddVideoChannel(IVideoChannel channel);
     void RemoveVideoChannel(Guid channelId);
 
+    /// <summary>
+    /// When <see langword="true"/>, the video mixer bypasses PTS-based scheduling and
+    /// always presents the newest available frame, dropping all older frames.
+    /// Suitable for live NDI monitoring; default <see langword="false"/>.
+    /// </summary>
+    bool VideoLiveMode { get; set; }
+
     // ── Per-channel time offsets ────────────────────────────────────────────
 
     /// <summary>Sets a time offset for a registered audio channel.</summary>

@@ -45,14 +45,15 @@ internal sealed class NDIAudioChannel : IAudioChannel
     private readonly ChannelReader<float[]> _ringReader;
     private readonly ChannelWriter<float[]> _ringWriter;
 
-    // Pre-allocated buffer pool: bufferDepth + 4 arrays, each sized for one NDI capture block.
+    // Pre-allocated buffer pool: ringCapacity + 4 arrays, each sized for one NDI capture block.
     private readonly ConcurrentQueue<float[]> _pool = new();
-    private const int FramesPerCapture = 1024;
+    private readonly int _framesPerCapture;
+    private readonly int _ringCapacity;           // actual ring slot count (≥ bufferDepth)
 
     private float[]? _currentChunk;
     private int      _currentOffset;
     private long     _framesConsumed;
-    private long     _framesInRing;   // accurate frame count (not chunk count)
+    private long     _framesProduced;             // monotonic: total frames ever enqueued
     private bool     _disposed;
 
     public Guid        Id           { get; } = Guid.NewGuid();
@@ -63,7 +64,17 @@ internal sealed class NDIAudioChannel : IAudioChannel
     public int         BufferDepth  { get; }
     public TimeSpan    Position =>
         TimeSpan.FromSeconds((double)Interlocked.Read(ref _framesConsumed) / SourceFormat.SampleRate);
-    public int         BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
+    public int         BufferAvailable
+    {
+        get
+        {
+            // produced − consumed gives an upper bound; cap at ring capacity because
+            // BoundedChannelFullMode.DropOldest silently discards excess chunks.
+            long inFlight = Interlocked.Read(ref _framesProduced) - Interlocked.Read(ref _framesConsumed);
+            long cap = (long)_ringCapacity * _framesPerCapture;
+            return (int)Math.Max(0, Math.Min(inFlight, cap));
+        }
+    }
 
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
@@ -76,6 +87,9 @@ internal sealed class NDIAudioChannel : IAudioChannel
     /// <param name="sampleRate">Desired output sample rate (passed to NDIFrameSync).</param>
     /// <param name="channels">Desired channel count.</param>
     /// <param name="bufferDepth">Ring buffer depth in chunks.</param>
+    /// <param name="framesPerCapture">Samples per NDI capture call. Smaller values reduce latency
+    /// but increase CPU overhead from more frequent calls. Default 1024 (~21 ms @ 48 kHz);
+    /// use 256 (~5.3 ms) or 512 (~10.7 ms) for low-latency paths.</param>
     public NDIAudioChannel(
         NDIFrameSync frameSync,
         NDIClock     clock,
@@ -83,7 +97,8 @@ internal sealed class NDIAudioChannel : IAudioChannel
         int          sampleRate  = 48000,
         int          channels    = 2,
         int          bufferDepth = 16,
-        bool         preferLowLatency = false)
+        bool         preferLowLatency = false,
+        int          framesPerCapture = 1024)
     {
         _frameSync            = frameSync;
         _frameSyncGate        = frameSyncGate ?? new Lock();
@@ -91,16 +106,25 @@ internal sealed class NDIAudioChannel : IAudioChannel
         _requestedSampleRate  = sampleRate;
         _requestedChannels    = channels;
         BufferDepth           = bufferDepth;
+        _framesPerCapture     = Math.Clamp(framesPerCapture, 64, 4096);
         SourceFormat          = new AudioFormat(sampleRate, channels);
         _waitPollMs           = preferLowLatency ? 2 : 10;
 
-        // Tick-accurate interval: Stopwatch.Frequency × 1024 / 48000.
+        // Tick-accurate interval: Stopwatch.Frequency × framesPerCapture / sampleRate.
         // The integer truncation error is ~0.3 ns/cycle vs ~0.3 ms/cycle with ms arithmetic —
         // one million times smaller. DropOldest now triggers at most once every ~2 hours.
-        _captureIntervalTicks = (long)((double)Stopwatch.Frequency * FramesPerCapture / sampleRate);
+        _captureIntervalTicks = (long)((double)Stopwatch.Frequency * _framesPerCapture / sampleRate);
+
+        // Ring capacity: with small framesPerCapture (e.g. 256 @ 48kHz = 5.3 ms/chunk) the
+        // user's queue depth may be too few physical slots to absorb scheduling jitter.
+        // Scale the internal ring to always hold at least ~100 ms of audio, preventing
+        // BoundedChannelFullMode.DropOldest from silently discarding chunks under normal
+        // operating conditions. The user-facing BufferDepth stays as requested.
+        int minSlotsForHeadroom = (int)Math.Ceiling(sampleRate * 0.1 / _framesPerCapture);
+        _ringCapacity = Math.Max(bufferDepth, minSlotsForHeadroom);
 
         _ring = Channel.CreateBounded<float[]>(
-            new BoundedChannelOptions(bufferDepth)
+            new BoundedChannelOptions(_ringCapacity)
             {
                 FullMode     = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,   // only RT thread reads
@@ -109,13 +133,13 @@ internal sealed class NDIAudioChannel : IAudioChannel
         _ringReader = _ring.Reader;
         _ringWriter = _ring.Writer;
 
-        // Pre-allocate pool: bufferDepth + 4 to cover ring capacity + in-flight captures.
-        int poolBufSize = FramesPerCapture * channels;
-        for (int i = 0; i < bufferDepth + 4; i++)
+        // Pre-allocate pool: ringCapacity + 4 to cover ring capacity + in-flight captures.
+        int poolBufSize = _framesPerCapture * channels;
+        for (int i = 0; i < _ringCapacity + 4; i++)
             _pool.Enqueue(new float[poolBufSize]);
 
-        Log.LogInformation("Created NDIAudioChannel: {SampleRate}Hz/{Channels}ch, bufferDepth={BufferDepth}",
-            sampleRate, channels, bufferDepth);
+        Log.LogInformation("Created NDIAudioChannel: {SampleRate}Hz/{Channels}ch, bufferDepth={BufferDepth}, ringCapacity={RingCapacity}, framesPerCapture={FramesPerCapture}",
+            sampleRate, channels, bufferDepth, _ringCapacity, _framesPerCapture);
     }
 
     // ── Capture thread ────────────────────────────────────────────────
@@ -139,10 +163,9 @@ internal sealed class NDIAudioChannel : IAudioChannel
     /// </summary>
     public async Task WaitForBufferAsync(int minChunks, CancellationToken ct = default)
     {
-        // Use _framesInRing (not _ringReader.Count) because SingleReader = true means only
-        // the RT thread may call Count/TryRead; reading from another thread is undefined.
-        long minFrames = (long)Math.Clamp(minChunks, 1, BufferDepth) * FramesPerCapture;
-        while (Interlocked.Read(ref _framesInRing) < minFrames && !ct.IsCancellationRequested)
+        long minFrames = (long)Math.Clamp(minChunks, 1, BufferDepth) * _framesPerCapture;
+        while ((Interlocked.Read(ref _framesProduced) - Interlocked.Read(ref _framesConsumed)) < minFrames
+               && !ct.IsCancellationRequested)
             await Task.Delay(_waitPollMs, ct).ConfigureAwait(false);
     }
 
@@ -188,7 +211,7 @@ internal sealed class NDIAudioChannel : IAudioChannel
                 lock (_frameSyncGate)
                 {
                     _frameSync.CaptureAudio(out frame,
-                        _requestedSampleRate, _requestedChannels, FramesPerCapture);
+                        _requestedSampleRate, _requestedChannels, _framesPerCapture);
                 }
 
                 // Guard: no samples or null data pointer → framesync returning silence placeholder.
@@ -215,7 +238,7 @@ internal sealed class NDIAudioChannel : IAudioChannel
                 // With DropOldest mode the channel handles overflow atomically — no
                 // separate TryRead loop here.  TryWrite returns false only after Dispose.
                 if (_ringWriter.TryWrite(buf))
-                    Interlocked.Add(ref _framesInRing, frame.NoSamples);
+                    Interlocked.Add(ref _framesProduced, frame.NoSamples);
                 else
                     _pool.Enqueue(buf);
             }
@@ -229,6 +252,24 @@ internal sealed class NDIAudioChannel : IAudioChannel
 
     private static unsafe void PlanarToInterleaved(NDIAudioFrameV3 frame, float[] dest)
     {
+        // OPT-9: Use NDI SDK's SIMD-optimized conversion when available.
+        // Pin the managed buffer and point the interleaved struct's PData at it.
+        fixed (float* pDest = dest)
+        {
+            var interleaved = new NDIAudioInterleaved32f
+            {
+                SampleRate = frame.SampleRate,
+                NoChannels = frame.NoChannels,
+                NoSamples  = frame.NoSamples,
+                Timecode   = frame.Timecode,
+                PData      = (nint)pDest
+            };
+
+            if (NDIAudioUtils.ToInterleaved32f(frame, ref interleaved))
+                return; // success — NDI filled the buffer with SIMD-optimized interleave
+        }
+
+        // Fallback: manual scalar loop (shouldn't normally be reached).
         int channels = frame.NoChannels;
         int samples  = frame.NoSamples;
         int stride   = frame.ChannelStrideInBytes / sizeof(float);
@@ -267,10 +308,7 @@ internal sealed class NDIAudioChannel : IAudioChannel
                     int dropped  = (totalSamples - filled) / channels;
                     // Update tracking for frames that were consumed before the underrun.
                     if (consumed > 0)
-                    {
                         Interlocked.Add(ref _framesConsumed, consumed);
-                        Interlocked.Add(ref _framesInRing, -consumed);
-                    }
                     if (dropped > 0)
                     {
                         // Static delegate + value-tuple state avoids allocating a closure on the RT thread.
@@ -293,7 +331,6 @@ internal sealed class NDIAudioChannel : IAudioChannel
         }
 
         Interlocked.Add(ref _framesConsumed, frameCount);
-        Interlocked.Add(ref _framesInRing, -frameCount);
         return frameCount;
     }
 

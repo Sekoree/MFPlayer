@@ -80,7 +80,7 @@ public sealed class VirtualAudioOutput : IAudioOutput
 
     /// <inheritdoc/>
     /// <remarks>No-op — <see cref="VirtualAudioOutput"/> needs no hardware device.</remarks>
-    public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0) { }
+    public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0, double suggestedLatency = 0) { }
 
     public void OverrideRtMixer(IAudioMixer mixer) => _activeMixer = mixer;
 

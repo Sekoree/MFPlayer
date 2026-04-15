@@ -25,6 +25,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Mixing;
+using S.Media.Core.Video;
 using S.Media.NDI;
 using S.Media.PortAudio;
 using S.Media.SDL3;
@@ -125,15 +126,10 @@ using (ndiRuntime)
         }
     }
 
-    var preset = PickNdiPreset();
-    var latencyPreset = NDILatencyPreset.FromEndpointPreset(preset);
-    int defaultQueueDepth = latencyPreset.ResolveQueueDepth();
-    int queueDepth = PickNumber("Queue buffer depth", 1, 64, defaultQueueDepth);
-    bool defaultLowLatencyPolling = preset == NDIEndpointPreset.LowLatency;
-    bool lowLatencyPolling = PickYesNo(
-        "Use LowLatency polling (faster polling, higher CPU)",
-        defaultLowLatencyPolling);
-    Console.WriteLine($"NDI receive profile: preset={preset}, queueDepth={queueDepth}, lowLatencyPolling={(lowLatencyPolling ? "on" : "off")}");
+    var preset  = PickNdiPreset();
+    var profile = NDIPlaybackProfile.For(preset);
+    Console.WriteLine($"NDI profile: preset={preset}, audioCapture={profile.AudioFramesPerCapture}smp, " +
+                      $"liveMode={profile.VideoLiveMode}, adaptiveVSync={profile.AdaptiveVSync}");
 
     // ── 6. Open NDI source by name (async discovery + auto-reconnect) ────────
 
@@ -152,17 +148,7 @@ using (ndiRuntime)
     {
         avSource = await NDIAVChannel.OpenByNameAsync(
             sourceName,
-            new NDISourceOptions
-            {
-                SampleRate               = 48000,
-                Channels                 = outChannels,
-                QueueBufferDepth         = NDILatencyPreset.FromQueueDepth(queueDepth),
-                LowLatency               = lowLatencyPolling,
-                EnableVideo              = true,
-                AutoReconnect            = true,
-                ConnectionCheckIntervalMs = 2000,
-                FinderSettings           = new NDIFinderSettings { ShowLocalSources = true }
-            },
+            NDISourceOptions.ForPreset(preset, channels: outChannels),
             discoveryCts.Token);
     }
     catch (OperationCanceledException)
@@ -215,7 +201,7 @@ using (ndiRuntime)
         using var output = new PortAudioOutput();
         try
         {
-            output.Open(device, hwFmt, framesPerBuffer: 0);
+            output.Open(device, hwFmt, suggestedLatency: profile.AudioSuggestedLatency);
         }
         catch (Exception ex)
         {
@@ -271,9 +257,17 @@ using (ndiRuntime)
             videoOutput = new SDL3VideoOutput();
             try
             {
+                if (profile.AdaptiveVSync)
+                    videoOutput.VsyncMode = VsyncMode.Adaptive;
+
                 videoOutput.Open($"NDI — {sourceName}", winW, winH, videoFormat);
                 videoOutput.OverridePresentationClock(output.Clock);
-                Console.WriteLine($"  SDL3 video: {winW}×{winH} window, {videoOutput.OutputFormat}");
+
+                if (profile.ResetClockOrigin)
+                    videoOutput.ResetClockOrigin();
+
+                Console.WriteLine($"  SDL3 video: {winW}×{winH} window, {videoOutput.OutputFormat}" +
+                    (profile.AdaptiveVSync ? " [VSync=Adaptive]" : ""));
             }
             catch (Exception ex)
             {
@@ -299,6 +293,10 @@ using (ndiRuntime)
         {
             avMixer.AttachVideoOutput(videoOutput);
             avMixer.AddVideoChannel(videoChannel);
+            avMixer.VideoLiveMode = profile.VideoLiveMode;
+
+            if (profile.VideoLiveMode)
+                Console.WriteLine("  VideoMixer: LiveMode=ON (newest-frame, no PTS scheduling)");
         }
 
         // ── 9. Start ─────────────────────────────────────────────────────────
@@ -315,16 +313,14 @@ using (ndiRuntime)
 
             // Pre-buffer: wait for BOTH audio and video simultaneously so both rings start
             // from the same NDI timestamp, giving near-zero A/V offset at startup.
-            // 3 audio chunks ≈ 64 ms is sufficient because we no longer drain framesync
-            // silence — audio capture started after the first real video frame arrived.
-            Console.Write("buffering… ");
+            Console.Write($"buffering (audio={profile.AudioPreBufferChunks}, video={profile.VideoPreBufferFrames})… ");
             using var preCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             try
             {
                 await Task.WhenAll(
-                    avSource.WaitForAudioBufferAsync(3, preCts.Token),
+                    avSource.WaitForAudioBufferAsync(profile.AudioPreBufferChunks, preCts.Token),
                     videoChannel != null
-                        ? avSource.WaitForVideoBufferAsync(2, preCts.Token)
+                        ? avSource.WaitForVideoBufferAsync(profile.VideoPreBufferFrames, preCts.Token)
                         : Task.CompletedTask
                 );
             }
@@ -495,28 +491,18 @@ static int PickNumber(string label, int min, int max, int? defaultValue = null)
 
 static NDIEndpointPreset PickNdiPreset()
 {
-    Console.Write("NDI receive preset [Safe/Balanced/LowLatency] (default Balanced): ");
+    Console.Write("NDI receive preset [Safe/Balanced/LowLatency/UltraLow] (default Balanced): ");
     string raw = (Console.ReadLine() ?? string.Empty).Trim();
     if (raw.Equals("safe", StringComparison.OrdinalIgnoreCase)) return NDIEndpointPreset.Safe;
     if (raw.Equals("low", StringComparison.OrdinalIgnoreCase) ||
         raw.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) ||
         raw.Equals("low-latency", StringComparison.OrdinalIgnoreCase)) return NDIEndpointPreset.LowLatency;
+    if (raw.Equals("ultra", StringComparison.OrdinalIgnoreCase) ||
+        raw.Equals("ultralow", StringComparison.OrdinalIgnoreCase) ||
+        raw.Equals("ultralowlatency", StringComparison.OrdinalIgnoreCase) ||
+        raw.Equals("ultra-low", StringComparison.OrdinalIgnoreCase)) return NDIEndpointPreset.UltraLowLatency;
     return NDIEndpointPreset.Balanced;
 }
-
-static bool PickYesNo(string label, bool defaultValue)
-{
-    while (true)
-    {
-        Console.Write($"{label} [{(defaultValue ? "Y/n" : "y/N")}]: ");
-        string? raw = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(raw)) return defaultValue;
-        if (raw.Equals("y", StringComparison.OrdinalIgnoreCase) || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)) return true;
-        if (raw.Equals("n", StringComparison.OrdinalIgnoreCase) || raw.Equals("no", StringComparison.OrdinalIgnoreCase)) return false;
-        Console.WriteLine("  Please enter y/yes or n/no.");
-    }
-}
-
 
 /// <summary>
 /// Builds a route map: mono → both stereo channels; multi-channel → straight-across up to min(src, dst).

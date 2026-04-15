@@ -147,7 +147,7 @@ public sealed class AggregateOutput : IAudioOutput
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
-    public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0)
+    public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0, double suggestedLatency = 0)
     {
         _leader.Open(device, requestedFormat, framesPerBuffer);
         InitMixer(_leader.HardwareFormat);

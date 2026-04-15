@@ -219,9 +219,25 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 int sleepMs = fpsNow > 0
                     ? Math.Max(1, (int)(250.0 / fpsNow))   // ¼ frame interval, min 1 ms
                     : 4;
+
+                // OPT-7: In low-latency mode, use Stopwatch-based spin-wait instead of
+                // Thread.Sleep(1) which has 1–4 ms granularity on Linux.  This yields
+                // microsecond-accurate wakeup, cutting up to ~3 ms of jitter per frame.
                 if (_preferLowLatency)
-                    sleepMs = 1;
-                Thread.Sleep(sleepMs);
+                {
+                    long waitTicks = Stopwatch.Frequency * sleepMs / 1000;
+                    long deadline = Stopwatch.GetTimestamp() + waitTicks;
+                    // Coarse sleep for anything > ~3 ms to keep CPU gentle.
+                    if (sleepMs > 3)
+                        Thread.Sleep(sleepMs - 3);
+                    // Spin-wait the remaining tail for microsecond accuracy.
+                    while (Stopwatch.GetTimestamp() < deadline)
+                        Thread.SpinWait(20);
+                }
+                else
+                {
+                    Thread.Sleep(sleepMs);
+                }
             }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {

@@ -7,6 +7,25 @@ using SDL = global::SDL3.SDL;
 namespace S.Media.SDL3;
 
 /// <summary>
+/// Controls the swap-interval (vsync) behavior of the SDL3 OpenGL render loop.
+/// </summary>
+public enum VsyncMode
+{
+    /// <summary>VSync ON — swap is blocked until the next vertical blanking interval. Best for file playback.</summary>
+    On = 1,
+
+    /// <summary>VSync OFF — immediate swap, no blocking. Lowest latency, may tear. Best for live monitoring.</summary>
+    Off = 0,
+
+    /// <summary>
+    /// Adaptive VSync — behaves like <see cref="On"/> when frames arrive on time, but swaps immediately
+    /// when a frame is late. Not all drivers support this; falls back to <see cref="Off"/> automatically.
+    /// Recommended for live NDI monitoring.
+    /// </summary>
+    Adaptive = -1
+}
+
+/// <summary>
 /// SDL3 + OpenGL backed video output.
 /// Creates an SDL3 window with an OpenGL 3.3 core-profile context and runs a
 /// vsync-driven render loop on a dedicated thread.
@@ -52,6 +71,7 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private volatile bool            _isRunning;
     private volatile bool            _closeRequested;
     private bool                     _disposed;
+    private VsyncMode                _vsyncMode = VsyncMode.On;
     private long                     _loopIterations;
     private long                     _presentedFrames;
     private long                     _blackFrames;
@@ -143,6 +163,21 @@ public sealed class SDL3VideoOutput : IVideoOutput
         }
     }
 
+    /// <summary>
+    /// Controls the swap-interval (vsync) behavior.
+    /// Set this <b>before</b> calling <see cref="Open"/>.
+    /// <list type="bullet">
+    ///   <item><see cref="VsyncMode.On"/> — classic VSync (default for file playback).</item>
+    ///   <item><see cref="VsyncMode.Adaptive"/> — adaptive VSync; recommended for live NDI monitoring.</item>
+    ///   <item><see cref="VsyncMode.Off"/> — no VSync; lowest latency, may tear.</item>
+    /// </list>
+    /// </summary>
+    public VsyncMode VsyncMode
+    {
+        get => _vsyncMode;
+        set => _vsyncMode = value;
+    }
+
     public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
         LoopIterations: Interlocked.Read(ref _loopIterations),
         PresentedFrames: Interlocked.Read(ref _presentedFrames),
@@ -178,6 +213,27 @@ public sealed class SDL3VideoOutput : IVideoOutput
         _presentationClockOverride = clock;
         Volatile.Write(ref _hasPresentationClockOrigin, 0);
         Volatile.Write(ref _presentationClockOriginTicks, 0);
+    }
+
+    /// <summary>
+    /// Captures the current external presentation clock position as the video timeline
+    /// origin. Call this <b>after</b> the audio output is started and pre-buffering is
+    /// complete, but <b>before</b> calling <see cref="StartAsync"/>. This gives a
+    /// deterministic origin instead of latching it non-deterministically on the first
+    /// render-loop vsync tick (OPT-10).
+    /// <para>No-op if no external presentation clock has been set.</para>
+    /// </summary>
+    public void ResetClockOrigin()
+    {
+        var clock = _presentationClockOverride;
+        if (clock == null) return;
+
+        long ticks = clock.Position.Ticks;
+        if (ticks < 0) ticks = 0;
+        Volatile.Write(ref _presentationClockOriginTicks, ticks);
+        Volatile.Write(ref _hasPresentationClockOrigin, 1);
+        Log.LogInformation("Presentation clock origin set deterministically: {OriginMs:F2} ms",
+            TimeSpan.FromTicks(ticks).TotalMilliseconds);
     }
 
 
@@ -237,8 +293,15 @@ public sealed class SDL3VideoOutput : IVideoOutput
                 $"SDL_GL_CreateContext failed: {err}");
         }
 
-        // Vsync
-        SDL.GLSetSwapInterval(1);
+        // Vsync — configurable for latency optimization (OPT-8).
+        // Adaptive (-1) falls back to Off (0) if the driver doesn't support it.
+        if (!SDL.GLSetSwapInterval((int)_vsyncMode) && _vsyncMode == VsyncMode.Adaptive)
+        {
+            Log.LogWarning("Adaptive VSync not supported by driver; falling back to VSync Off");
+            SDL.GLSetSwapInterval((int)VsyncMode.Off);
+        }
+        Log.LogInformation("VSync mode: {VsyncMode} (swap interval = {Interval})",
+            _vsyncMode, (int)_vsyncMode);
 
         // ── GL renderer (context is current on this thread) ───────────────
         _renderer = new GLRenderer();

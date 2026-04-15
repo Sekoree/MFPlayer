@@ -64,7 +64,7 @@ public sealed class AudioEndpointAdapterTests
             Mixer = new AudioMixer(format, ChannelFallback.Silent);
         }
 
-        public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0) { }
+        public void Open(AudioDeviceInfo device, AudioFormat requestedFormat, int framesPerBuffer = 0, double suggestedLatency = 0) { }
         public void OverrideRtMixer(IAudioMixer mixer) { }
         public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;

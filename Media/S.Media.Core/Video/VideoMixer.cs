@@ -78,6 +78,10 @@ internal sealed class VideoMixer : IVideoMixer
     private long _sinkFormatHitCount;
     private long _sinkFormatMissCount;
 
+    // OPT-11: LiveMode — when true, PresentForTarget drains all queued frames and
+    // presents the newest one unconditionally, bypassing PTS-based scheduling.
+    private volatile bool _liveMode;
+
     private static readonly TimeSpan LeadTolerance = TimeSpan.FromMilliseconds(5);
     private readonly TimeSpan _dropLagThreshold;
 
@@ -116,6 +120,13 @@ internal sealed class VideoMixer : IVideoMixer
 
     /// <inheritdoc/>
     public IVideoChannel? ActiveChannel => _activeChannel;
+
+    /// <inheritdoc/>
+    public bool LiveMode
+    {
+        get => _liveMode;
+        set => _liveMode = value;
+    }
 
     public long HeldFrameCount => Interlocked.Read(ref _heldFrameCount);
     public long DroppedStaleFrameCount => Interlocked.Read(ref _droppedStaleFrameCount);
@@ -458,6 +469,35 @@ internal sealed class VideoMixer : IVideoMixer
     {
         if (channel is null)
             return last;
+
+        // OPT-11: LiveMode — drain ALL queued frames, keep only the newest.
+        // PTS scheduling is skipped entirely; the newest captured frame is always
+        // the correct one for a live monitoring scenario.
+        if (_liveMode)
+        {
+            // Discard any staged frame we were holding from a previous tick.
+            staged?.MemoryOwner?.Dispose();
+            staged = null;
+
+            VideoFrame? newest = null;
+            VideoFrame? pulled;
+            while ((pulled = PullRawFrame(channel, ref hasPtsOrigin, ref ptsOriginTicks, countSinkFormatStats, sink)) != null)
+            {
+                if (newest.HasValue)
+                {
+                    newest.Value.MemoryOwner?.Dispose();
+                    Interlocked.Increment(ref _droppedStaleFrameCount);
+                }
+                newest = pulled;
+            }
+
+            if (newest.HasValue)
+            {
+                last?.MemoryOwner?.Dispose();
+                last = newest;
+            }
+            return last;
+        }
 
         if (!staged.HasValue)
             staged = PullRawFrame(channel, ref hasPtsOrigin, ref ptsOriginTicks, countSinkFormatStats, sink);

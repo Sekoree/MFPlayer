@@ -15,6 +15,9 @@ public readonly record struct NDILatencyPreset(int QueueDepth)
     /// <summary>Lowest queue depth for minimum latency.</summary>
     public static NDILatencyPreset LowLatency => new(4);
 
+    /// <summary>Absolute minimum buffering — may underrun on slower systems.</summary>
+    public static NDILatencyPreset UltraLowLatency => new(2);
+
     /// <summary>
     /// Creates a preset from a raw queue depth value.
     /// Invalid values are clamped by <see cref="ResolveQueueDepth"/>.
@@ -27,6 +30,7 @@ public readonly record struct NDILatencyPreset(int QueueDepth)
     {
         NDIEndpointPreset.Safe => Safe,
         NDIEndpointPreset.LowLatency => LowLatency,
+        NDIEndpointPreset.UltraLowLatency => UltraLowLatency,
         _ => Balanced
     };
 }

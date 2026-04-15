@@ -23,6 +23,7 @@ public sealed class VideoOutputPullSourceAdapterTests
         public VideoFormat OutputFormat => new(640, 360, PixelFormat.Rgba32, 30, 1);
         public int ChannelCount => 0;
         public int SinkCount => 0;
+        public bool LiveMode { get; set; }
 
         public TimeSpan LastClockPosition { get; private set; }
         public VideoFrame? NextFrame { get; set; }
