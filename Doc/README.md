@@ -8,9 +8,7 @@ This folder contains current documentation for both `MediaPlayer` and `AVMixer` 
 2. `MediaPlayer-Guide.md` - high-level playback API, events, and fan-out examples (including NDI).
 3. `Usage-Guide.md` - day-to-day API usage patterns.
 4. `Clone-Sinks.md` - parent-owned clone sink usage for Avalonia and SDL3.
-5. `AVMixer-Timeline-Refactor-Plan.md` - architecture plan to decouple `AVMixer` from outputs and add timeline scheduling.
-6. `AVMixer-Timeline-Migration-Guide.md` - practical old-to-new API migration mapping and recipes.
-7. `AVMixer-Timeline-Proposed-Interfaces.md` - doc-only C# signatures for graph/timeline/endpoints.
+5. `AVMixer-Refactor-Plan.md` - architecture plan to decouple `AVMixer` from outputs (Phase 1) and timeline scheduling (Phase 2 outline).
 
 ## Current Architecture (Short)
 
