@@ -20,5 +20,17 @@ public enum NDIErrorCode
 
     /// <summary>Failed to create an <see cref="NDIRouter"/> instance.</summary>
     NDIRouterCreateFailed = 6,
+
+    /// <summary>Failed to create an <see cref="NDIRecvAdvertiser"/> instance (Discovery Server may be unavailable).</summary>
+    NDIRecvAdvertiserCreateFailed = 7,
+
+    /// <summary>Failed to create an <see cref="NDIRecvListener"/> instance (Discovery Server may be unavailable).</summary>
+    NDIRecvListenerCreateFailed = 8,
+
+    /// <summary>Failed to create an <see cref="NDISendAdvertiser"/> instance (Discovery Server may be unavailable).</summary>
+    NDISendAdvertiserCreateFailed = 9,
+
+    /// <summary>Failed to create an <see cref="NDISendListener"/> instance (Discovery Server may be unavailable).</summary>
+    NDISendListenerCreateFailed = 10,
 }
 

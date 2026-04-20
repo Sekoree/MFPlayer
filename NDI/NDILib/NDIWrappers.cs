@@ -337,6 +337,87 @@ public sealed class NDIReceiver : IDisposable
     }
 
     // ------------------------------------------------------------------
+    // PTZ Control
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the connected source supports PTZ control.
+    /// May take a second after connection to stabilize — check after <see cref="NDIFrameType.StatusChange"/>.
+    /// </summary>
+    public bool IsPtzSupported() => Native.NDIlib_recv_ptz_is_supported(_instance);
+
+    /// <summary>Zoom to an absolute value. 0.0 = zoomed in, 1.0 = zoomed out.</summary>
+    public bool PtzZoom(float zoomValue) => Native.NDIlib_recv_ptz_zoom(_instance, zoomValue);
+
+    /// <summary>Zoom at a particular speed. −1.0 = zoom outwards, +1.0 = zoom inwards.</summary>
+    public bool PtzZoomSpeed(float zoomSpeed) => Native.NDIlib_recv_ptz_zoom_speed(_instance, zoomSpeed);
+
+    /// <summary>
+    /// Set pan and tilt to absolute values.
+    /// Pan: −1.0 (left) … 0.0 (center) … +1.0 (right).
+    /// Tilt: −1.0 (bottom) … 0.0 (center) … +1.0 (top).
+    /// </summary>
+    public bool PtzPanTilt(float panValue, float tiltValue)
+        => Native.NDIlib_recv_ptz_pan_tilt(_instance, panValue, tiltValue);
+
+    /// <summary>
+    /// Set pan and tilt speed.
+    /// Pan: −1.0 (moving right) … 0.0 (stopped) … +1.0 (moving left).
+    /// Tilt: −1.0 (down) … 0.0 (stopped) … +1.0 (up).
+    /// </summary>
+    public bool PtzPanTiltSpeed(float panSpeed, float tiltSpeed)
+        => Native.NDIlib_recv_ptz_pan_tilt_speed(_instance, panSpeed, tiltSpeed);
+
+    /// <summary>Store the current position, focus, etc. as a preset (0–99).</summary>
+    public bool PtzStorePreset(int presetNo) => Native.NDIlib_recv_ptz_store_preset(_instance, presetNo);
+
+    /// <summary>Recall a preset (0–99) at the given speed (0.0 = slow, 1.0 = fast).</summary>
+    public bool PtzRecallPreset(int presetNo, float speed)
+        => Native.NDIlib_recv_ptz_recall_preset(_instance, presetNo, speed);
+
+    /// <summary>Put the camera in auto-focus mode.</summary>
+    public bool PtzAutoFocus() => Native.NDIlib_recv_ptz_auto_focus(_instance);
+
+    /// <summary>Focus to an absolute value. 0.0 = infinity, 1.0 = closest.</summary>
+    public bool PtzFocus(float focusValue) => Native.NDIlib_recv_ptz_focus(_instance, focusValue);
+
+    /// <summary>Focus at a particular speed. −1.0 = focus outwards, +1.0 = focus inwards.</summary>
+    public bool PtzFocusSpeed(float focusSpeed) => Native.NDIlib_recv_ptz_focus_speed(_instance, focusSpeed);
+
+    /// <summary>Put the camera in auto white balance mode.</summary>
+    public bool PtzWhiteBalanceAuto() => Native.NDIlib_recv_ptz_white_balance_auto(_instance);
+
+    /// <summary>Put the camera in indoor white balance.</summary>
+    public bool PtzWhiteBalanceIndoor() => Native.NDIlib_recv_ptz_white_balance_indoor(_instance);
+
+    /// <summary>Put the camera in outdoor white balance.</summary>
+    public bool PtzWhiteBalanceOutdoor() => Native.NDIlib_recv_ptz_white_balance_outdoor(_instance);
+
+    /// <summary>Use the current brightness to automatically set the current white balance.</summary>
+    public bool PtzWhiteBalanceOneshot() => Native.NDIlib_recv_ptz_white_balance_oneshot(_instance);
+
+    /// <summary>
+    /// Set the manual camera white balance.
+    /// Red: 0.0 (not red) … 1.0 (very red). Blue: 0.0 (not blue) … 1.0 (very blue).
+    /// </summary>
+    public bool PtzWhiteBalanceManual(float red, float blue)
+        => Native.NDIlib_recv_ptz_white_balance_manual(_instance, red, blue);
+
+    /// <summary>Put the camera in auto-exposure mode.</summary>
+    public bool PtzExposureAuto() => Native.NDIlib_recv_ptz_exposure_auto(_instance);
+
+    /// <summary>Manually set camera exposure. 0.0 = dark, 1.0 = light.</summary>
+    public bool PtzExposureManual(float exposureLevel)
+        => Native.NDIlib_recv_ptz_exposure_manual(_instance, exposureLevel);
+
+    /// <summary>
+    /// Manually set camera exposure with individual control over iris, gain, and shutter speed.
+    /// All values range from 0.0 (dark/slow) to 1.0 (light/fast).
+    /// </summary>
+    public bool PtzExposureManual(float iris, float gain, float shutterSpeed)
+        => Native.NDIlib_recv_ptz_exposure_manual_v2(_instance, iris, gain, shutterSpeed);
+
+    // ------------------------------------------------------------------
     // Dispose
     // ------------------------------------------------------------------
 
@@ -842,6 +923,555 @@ public static class NDIAudioUtils
     {
         ArgumentNullException.ThrowIfNull(sender);
         return sender.InstanceInternal;
+    }
+}
+
+// ------------------------------------------------------------------
+// NDIRecvAdvertiser — Advertises receivers to an NDI Discovery Server
+// ------------------------------------------------------------------
+
+/// <summary>
+/// Advertises receivers to an NDI Discovery Server for centralized monitoring and control.
+/// Requires an NDI Discovery Server to be running and accessible.
+/// </summary>
+public sealed class NDIRecvAdvertiser : IDisposable
+{
+    private static readonly ILogger Logger = NDILibLogging.GetLogger("NDILib.RecvAdvertiser");
+    private nint _instance;
+
+    private NDIRecvAdvertiser(nint instance) => _instance = instance;
+
+    // ------------------------------------------------------------------
+    // Factory
+    // ------------------------------------------------------------------
+
+    /// <summary>Creates a new <see cref="NDIRecvAdvertiser"/>.</summary>
+    /// <param name="advertiser">On success, the created advertiser. <see langword="null"/> on failure.</param>
+    /// <param name="discoveryServerUrl">
+    /// URL of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see langword="null"/> uses the default Discovery Server.
+    /// </param>
+    /// <returns><c>0</c> on success; <c>(int)<see cref="NDIErrorCode.NDIRecvAdvertiserCreateFailed"/></c> on failure.</returns>
+    public static int Create(out NDIRecvAdvertiser? advertiser, string? discoveryServerUrl = null)
+    {
+        advertiser = null;
+
+        nint ptr;
+        if (discoveryServerUrl is not null)
+        {
+            using var url = Utf8Buffer.From(discoveryServerUrl);
+            var create = new NDIRecvAdvertiserCreate { PUrlAddress = url.Pointer };
+            ptr = Native.NDIlib_recv_advertiser_create(create);
+        }
+        else
+        {
+            ptr = Native.NDIlib_recv_advertiser_create_default(nint.Zero);
+        }
+
+        if (ptr == nint.Zero)
+            return (int)NDIErrorCode.NDIRecvAdvertiserCreateFailed;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDIRecvAdvertiser created (url={Url}, ptr={Ptr})",
+                discoveryServerUrl ?? "(default)", NDILibLogging.PtrMeta(ptr));
+
+        advertiser = new NDIRecvAdvertiser(ptr);
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Operations
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Adds a receiver to the list of receivers being advertised on the Discovery Server.
+    /// </summary>
+    /// <param name="receiver">The receiver to advertise.</param>
+    /// <param name="allowControlling">Allow remote control of this receiver.</param>
+    /// <param name="allowMonitoring">Allow remote monitoring of this receiver.</param>
+    /// <param name="inputGroupName">Optional input group name.</param>
+    /// <returns><see langword="true"/> on success; <see langword="false"/> if already registered.</returns>
+    public bool AddReceiver(NDIReceiver receiver, bool allowControlling = true, bool allowMonitoring = true, string? inputGroupName = null)
+    {
+        ArgumentNullException.ThrowIfNull(receiver);
+        using var groupName = Utf8Buffer.From(inputGroupName);
+        return Native.NDIlib_recv_advertiser_add_receiver(_instance, receiver.Instance, allowControlling, allowMonitoring, groupName.Pointer);
+    }
+
+    /// <summary>
+    /// Removes a receiver from the advertised list.
+    /// </summary>
+    /// <returns><see langword="true"/> on success; <see langword="false"/> if not previously registered.</returns>
+    public bool RemoveReceiver(NDIReceiver receiver)
+    {
+        ArgumentNullException.ThrowIfNull(receiver);
+        return Native.NDIlib_recv_advertiser_del_receiver(_instance, receiver.Instance);
+    }
+
+    // ------------------------------------------------------------------
+    // Dispose
+    // ------------------------------------------------------------------
+
+    public void Dispose()
+    {
+        if (_instance == nint.Zero) return;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDIRecvAdvertiser disposing (ptr={Ptr})", NDILibLogging.PtrMeta(_instance));
+
+        Native.NDIlib_recv_advertiser_destroy(_instance);
+        _instance = nint.Zero;
+    }
+}
+
+// ------------------------------------------------------------------
+// NDIRecvListener — Discovers advertised receivers on the Discovery Server
+// ------------------------------------------------------------------
+
+/// <summary>
+/// Discovers advertised receivers on the NDI Discovery Server and allows remote control.
+/// Requires an NDI Discovery Server to be running and accessible.
+/// </summary>
+public sealed class NDIRecvListener : IDisposable
+{
+    private static readonly ILogger Logger = NDILibLogging.GetLogger("NDILib.RecvListener");
+    private nint _instance;
+
+    private NDIRecvListener(nint instance) => _instance = instance;
+
+    // ------------------------------------------------------------------
+    // Factory
+    // ------------------------------------------------------------------
+
+    /// <summary>Creates a new <see cref="NDIRecvListener"/>.</summary>
+    /// <param name="listener">On success, the created listener. <see langword="null"/> on failure.</param>
+    /// <param name="discoveryServerUrl">
+    /// URL of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see langword="null"/> uses the default Discovery Server.
+    /// </param>
+    /// <returns><c>0</c> on success; <c>(int)<see cref="NDIErrorCode.NDIRecvListenerCreateFailed"/></c> on failure.</returns>
+    public static int Create(out NDIRecvListener? listener, string? discoveryServerUrl = null)
+    {
+        listener = null;
+
+        nint ptr;
+        if (discoveryServerUrl is not null)
+        {
+            using var url = Utf8Buffer.From(discoveryServerUrl);
+            var create = new NDIRecvListenerCreate { PUrlAddress = url.Pointer };
+            ptr = Native.NDIlib_recv_listener_create(create);
+        }
+        else
+        {
+            ptr = Native.NDIlib_recv_listener_create_default(nint.Zero);
+        }
+
+        if (ptr == nint.Zero)
+            return (int)NDIErrorCode.NDIRecvListenerCreateFailed;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDIRecvListener created (url={Url}, ptr={Ptr})",
+                discoveryServerUrl ?? "(default)", NDILibLogging.PtrMeta(ptr));
+
+        listener = new NDIRecvListener(ptr);
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Connection status
+    // ------------------------------------------------------------------
+
+    /// <summary>Returns <see langword="true"/> if actively connected to the configured NDI Discovery Server.</summary>
+    public bool IsConnected => Native.NDIlib_recv_listener_is_connected(_instance);
+
+    /// <summary>Returns the URL of the connected Discovery Server, or <see langword="null"/> if not connected.</summary>
+    public string? GetServerUrl()
+    {
+        var ptr = Native.NDIlib_recv_listener_get_server_url(_instance);
+        return ptr == nint.Zero ? null : Marshal.PtrToStringUTF8(ptr);
+    }
+
+    // ------------------------------------------------------------------
+    // Receiver discovery
+    // ------------------------------------------------------------------
+
+    /// <summary>Returns the current list of advertised receivers on the Discovery Server.</summary>
+    /// <remarks>
+    /// Do not call this concurrently from multiple threads on the same listener instance.
+    /// The returned data is copied; the native memory is only valid until the next call.
+    /// </remarks>
+    public NDIDiscoveredReceiver[] GetReceivers()
+    {
+        var ptr = Native.NDIlib_recv_listener_get_receivers(_instance, out var count);
+        if (ptr == nint.Zero || count == 0)
+            return [];
+
+        var structSize = Marshal.SizeOf<NDIReceiverRef>();
+        var result = new NDIDiscoveredReceiver[count];
+
+        for (var i = 0; i < count; i++)
+        {
+            var itemPtr = nint.Add(ptr, i * structSize);
+            var r = Marshal.PtrToStructure<NDIReceiverRef>(itemPtr);
+
+            // Read streams array
+            var streams = new NDIReceiverType[r.NumStreams];
+            for (var s = 0; s < r.NumStreams; s++)
+                streams[s] = (NDIReceiverType)Marshal.ReadInt32(r.PStreams, s * sizeof(int));
+
+            // Read commands array
+            var commands = new NDIReceiverCommand[r.NumCommands];
+            for (var c = 0; c < r.NumCommands; c++)
+                commands[c] = (NDIReceiverCommand)Marshal.ReadInt32(r.PCommands, c * sizeof(int));
+
+            result[i] = new NDIDiscoveredReceiver(
+                r.Uuid ?? string.Empty, r.Name, r.InputUuid, r.InputName, r.Address,
+                streams, commands, r.EventsSubscribed != 0);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Blocks until the number of advertised receivers changes, or <paramref name="timeoutMs"/> elapses.
+    /// </summary>
+    /// <returns><see langword="true"/> if the receiver list changed; <see langword="false"/> on timeout.</returns>
+    public bool WaitForReceivers(uint timeoutMs) => Native.NDIlib_recv_listener_wait_for_receivers(_instance, timeoutMs);
+
+    // ------------------------------------------------------------------
+    // Event subscriptions
+    // ------------------------------------------------------------------
+
+    /// <summary>Subscribe to events from a specific receiver identified by UUID.</summary>
+    public void SubscribeEvents(string receiverUuid)
+    {
+        using var uuid = Utf8Buffer.From(receiverUuid);
+        Native.NDIlib_recv_listener_subscribe_events(_instance, uuid.Pointer);
+    }
+
+    /// <summary>Unsubscribe from events from a specific receiver identified by UUID.</summary>
+    public void UnsubscribeEvents(string receiverUuid)
+    {
+        using var uuid = Utf8Buffer.From(receiverUuid);
+        Native.NDIlib_recv_listener_unsubscribe_events(_instance, uuid.Pointer);
+    }
+
+    /// <summary>
+    /// Returns pending events in the order they were received.
+    /// Use <c>0</c> for <paramref name="timeoutMs"/> to poll immediately.
+    /// </summary>
+    public NDIListenerEvent[] GetEvents(uint timeoutMs = 0)
+    {
+        var ptr = Native.NDIlib_recv_listener_get_events(_instance, out var count, timeoutMs);
+        if (ptr == nint.Zero || count == 0)
+            return [];
+
+        var structSize = Marshal.SizeOf<NDIListenerEvent>();
+        var result = new NDIListenerEvent[count];
+        for (var i = 0; i < count; i++)
+        {
+            var itemPtr = nint.Add(ptr, i * structSize);
+            result[i] = Marshal.PtrToStructure<NDIListenerEvent>(itemPtr);
+        }
+
+        Native.NDIlib_recv_listener_free_events(_instance, ptr);
+        return result;
+    }
+
+    // ------------------------------------------------------------------
+    // Remote control
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Sends a "connect" command to the specified receiver, telling it to connect to <paramref name="sourceName"/>.
+    /// Pass <see langword="null"/> for <paramref name="sourceName"/> to disconnect the receiver.
+    /// </summary>
+    /// <remarks>Only call this for receivers that have <see cref="NDIReceiverCommand.Connect"/> in their commands list.</remarks>
+    /// <returns><see langword="true"/> on success.</returns>
+    public bool SendConnect(string receiverUuid, string? sourceName)
+    {
+        using var uuid = Utf8Buffer.From(receiverUuid);
+        using var name = Utf8Buffer.From(sourceName);
+        return Native.NDIlib_recv_listener_send_connect(_instance, uuid.Pointer, name.Pointer);
+    }
+
+    // ------------------------------------------------------------------
+    // Dispose
+    // ------------------------------------------------------------------
+
+    public void Dispose()
+    {
+        if (_instance == nint.Zero) return;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDIRecvListener disposing (ptr={Ptr})", NDILibLogging.PtrMeta(_instance));
+
+        Native.NDIlib_recv_listener_destroy(_instance);
+        _instance = nint.Zero;
+    }
+}
+
+// ------------------------------------------------------------------
+// NDISendAdvertiser — Advertises senders to an NDI Discovery Server
+// ------------------------------------------------------------------
+
+/// <summary>
+/// Advertises senders to an NDI Discovery Server for centralized monitoring.
+/// This is distinct from the normal mDNS/Discovery Server advertisement that
+/// <c>NDIlib_send_create</c> does automatically — this is strictly for monitoring purposes.
+/// </summary>
+public sealed class NDISendAdvertiser : IDisposable
+{
+    private static readonly ILogger Logger = NDILibLogging.GetLogger("NDILib.SendAdvertiser");
+    private nint _instance;
+
+    private NDISendAdvertiser(nint instance) => _instance = instance;
+
+    // ------------------------------------------------------------------
+    // Factory
+    // ------------------------------------------------------------------
+
+    /// <summary>Creates a new <see cref="NDISendAdvertiser"/>.</summary>
+    /// <param name="advertiser">On success, the created advertiser. <see langword="null"/> on failure.</param>
+    /// <param name="discoveryServerUrl">
+    /// URL of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see langword="null"/> uses the default Discovery Server.
+    /// </param>
+    /// <returns><c>0</c> on success; <c>(int)<see cref="NDIErrorCode.NDISendAdvertiserCreateFailed"/></c> on failure.</returns>
+    public static int Create(out NDISendAdvertiser? advertiser, string? discoveryServerUrl = null)
+    {
+        advertiser = null;
+
+        nint ptr;
+        if (discoveryServerUrl is not null)
+        {
+            using var url = Utf8Buffer.From(discoveryServerUrl);
+            var create = new NDISendAdvertiserCreate { PUrlAddress = url.Pointer };
+            ptr = Native.NDIlib_send_advertiser_create(create);
+        }
+        else
+        {
+            ptr = Native.NDIlib_send_advertiser_create_default(nint.Zero);
+        }
+
+        if (ptr == nint.Zero)
+            return (int)NDIErrorCode.NDISendAdvertiserCreateFailed;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDISendAdvertiser created (url={Url}, ptr={Ptr})",
+                discoveryServerUrl ?? "(default)", NDILibLogging.PtrMeta(ptr));
+
+        advertiser = new NDISendAdvertiser(ptr);
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Operations
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Adds a sender to the list of senders being advertised on the Discovery Server.
+    /// </summary>
+    /// <param name="sender">The sender to advertise.</param>
+    /// <param name="allowMonitoring">Allow remote monitoring of this sender.</param>
+    /// <returns><see langword="true"/> on success; <see langword="false"/> if already registered.</returns>
+    public bool AddSender(NDISender sender, bool allowMonitoring = true)
+    {
+        ArgumentNullException.ThrowIfNull(sender);
+        return Native.NDIlib_send_advertiser_add_sender(_instance, sender.InstanceInternal, allowMonitoring);
+    }
+
+    /// <summary>
+    /// Removes a sender from the advertised list.
+    /// </summary>
+    /// <returns><see langword="true"/> on success; <see langword="false"/> if not previously registered.</returns>
+    public bool RemoveSender(NDISender sender)
+    {
+        ArgumentNullException.ThrowIfNull(sender);
+        return Native.NDIlib_send_advertiser_del_sender(_instance, sender.InstanceInternal);
+    }
+
+    // ------------------------------------------------------------------
+    // Dispose
+    // ------------------------------------------------------------------
+
+    public void Dispose()
+    {
+        if (_instance == nint.Zero) return;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDISendAdvertiser disposing (ptr={Ptr})", NDILibLogging.PtrMeta(_instance));
+
+        Native.NDIlib_send_advertiser_destroy(_instance);
+        _instance = nint.Zero;
+    }
+}
+
+// ------------------------------------------------------------------
+// NDISendListener — Discovers advertised senders on the Discovery Server
+// ------------------------------------------------------------------
+
+/// <summary>
+/// Discovers advertised senders on the NDI Discovery Server and allows event subscriptions.
+/// Requires an NDI Discovery Server to be running and accessible.
+/// </summary>
+public sealed class NDISendListener : IDisposable
+{
+    private static readonly ILogger Logger = NDILibLogging.GetLogger("NDILib.SendListener");
+    private nint _instance;
+
+    private NDISendListener(nint instance) => _instance = instance;
+
+    // ------------------------------------------------------------------
+    // Factory
+    // ------------------------------------------------------------------
+
+    /// <summary>Creates a new <see cref="NDISendListener"/>.</summary>
+    /// <param name="listener">On success, the created listener. <see langword="null"/> on failure.</param>
+    /// <param name="discoveryServerUrl">
+    /// URL of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see langword="null"/> uses the default Discovery Server.
+    /// </param>
+    /// <returns><c>0</c> on success; <c>(int)<see cref="NDIErrorCode.NDISendListenerCreateFailed"/></c> on failure.</returns>
+    public static int Create(out NDISendListener? listener, string? discoveryServerUrl = null)
+    {
+        listener = null;
+
+        nint ptr;
+        if (discoveryServerUrl is not null)
+        {
+            using var url = Utf8Buffer.From(discoveryServerUrl);
+            var create = new NDISendListenerCreate { PUrlAddress = url.Pointer };
+            ptr = Native.NDIlib_send_listener_create(create);
+        }
+        else
+        {
+            ptr = Native.NDIlib_send_listener_create_default(nint.Zero);
+        }
+
+        if (ptr == nint.Zero)
+            return (int)NDIErrorCode.NDISendListenerCreateFailed;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDISendListener created (url={Url}, ptr={Ptr})",
+                discoveryServerUrl ?? "(default)", NDILibLogging.PtrMeta(ptr));
+
+        listener = new NDISendListener(ptr);
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Connection status
+    // ------------------------------------------------------------------
+
+    /// <summary>Returns <see langword="true"/> if actively connected to the configured NDI Discovery Server.</summary>
+    public bool IsConnected => Native.NDIlib_send_listener_is_connected(_instance);
+
+    /// <summary>Returns the URL of the connected Discovery Server, or <see langword="null"/> if not connected.</summary>
+    public string? GetServerUrl()
+    {
+        var ptr = Native.NDIlib_send_listener_get_server_url(_instance);
+        return ptr == nint.Zero ? null : Marshal.PtrToStringUTF8(ptr);
+    }
+
+    // ------------------------------------------------------------------
+    // Sender discovery
+    // ------------------------------------------------------------------
+
+    /// <summary>Returns the current list of advertised senders on the Discovery Server.</summary>
+    /// <remarks>
+    /// Do not call this concurrently from multiple threads on the same listener instance.
+    /// The returned data is copied; the native memory is only valid until the next call.
+    /// </remarks>
+    public NDIDiscoveredSender[] GetSenders()
+    {
+        var ptr = Native.NDIlib_send_listener_get_senders(_instance, out var count);
+        if (ptr == nint.Zero || count == 0)
+            return [];
+
+        var structSize = Marshal.SizeOf<NDISenderRef>();
+        var result = new NDIDiscoveredSender[count];
+
+        for (var i = 0; i < count; i++)
+        {
+            var itemPtr = nint.Add(ptr, i * structSize);
+            var s = Marshal.PtrToStructure<NDISenderRef>(itemPtr);
+
+            // Read groups array (array of const char* pointers)
+            var groups = new string[s.NumGroups];
+            for (var g = 0; g < s.NumGroups; g++)
+            {
+                var groupStrPtr = Marshal.ReadIntPtr(s.PGroups, g * nint.Size);
+                groups[g] = Marshal.PtrToStringUTF8(groupStrPtr) ?? string.Empty;
+            }
+
+            result[i] = new NDIDiscoveredSender(
+                s.Uuid ?? string.Empty, s.Name, s.Metadata, s.Address, s.Port,
+                groups, s.EventsSubscribed != 0);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Blocks until the number of advertised senders changes, or <paramref name="timeoutMs"/> elapses.
+    /// </summary>
+    /// <returns><see langword="true"/> if the sender list changed; <see langword="false"/> on timeout.</returns>
+    public bool WaitForSenders(uint timeoutMs) => Native.NDIlib_send_listener_wait_for_senders(_instance, timeoutMs);
+
+    // ------------------------------------------------------------------
+    // Event subscriptions
+    // ------------------------------------------------------------------
+
+    /// <summary>Subscribe to events from a specific sender identified by UUID.</summary>
+    public void SubscribeEvents(string senderUuid)
+    {
+        using var uuid = Utf8Buffer.From(senderUuid);
+        Native.NDIlib_send_listener_subscribe_events(_instance, uuid.Pointer);
+    }
+
+    /// <summary>Unsubscribe from events from a specific sender identified by UUID.</summary>
+    public void UnsubscribeEvents(string senderUuid)
+    {
+        using var uuid = Utf8Buffer.From(senderUuid);
+        Native.NDIlib_send_listener_unsubscribe_events(_instance, uuid.Pointer);
+    }
+
+    /// <summary>
+    /// Returns pending events in the order they were received.
+    /// Use <c>0</c> for <paramref name="timeoutMs"/> to poll immediately.
+    /// </summary>
+    public NDIListenerEvent[] GetEvents(uint timeoutMs = 0)
+    {
+        var ptr = Native.NDIlib_send_listener_get_events(_instance, out var count, timeoutMs);
+        if (ptr == nint.Zero || count == 0)
+            return [];
+
+        var structSize = Marshal.SizeOf<NDIListenerEvent>();
+        var result = new NDIListenerEvent[count];
+        for (var i = 0; i < count; i++)
+        {
+            var itemPtr = nint.Add(ptr, i * structSize);
+            result[i] = Marshal.PtrToStructure<NDIListenerEvent>(itemPtr);
+        }
+
+        Native.NDIlib_send_listener_free_events(_instance, ptr);
+        return result;
+    }
+
+    // ------------------------------------------------------------------
+    // Dispose
+    // ------------------------------------------------------------------
+
+    public void Dispose()
+    {
+        if (_instance == nint.Zero) return;
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("NDISendListener disposing (ptr={Ptr})", NDILibLogging.PtrMeta(_instance));
+
+        Native.NDIlib_send_listener_destroy(_instance);
+        _instance = nint.Zero;
     }
 }
 

@@ -291,4 +291,210 @@ internal static partial class Native
     [LibraryImport(LibraryName)]
     internal static partial void NDIlib_util_P216_to_V210(
         in NDIVideoFrameV2 p_src_p216, ref NDIVideoFrameV2 p_dst_v210);
+
+    // ------------------------------------------------------------------
+    // PTZ Control (Processing.NDI.Recv.ex.h)
+    // ------------------------------------------------------------------
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_is_supported(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_zoom(nint p_instance, float zoom_value);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_zoom_speed(nint p_instance, float zoom_speed);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_pan_tilt(nint p_instance, float pan_value, float tilt_value);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_pan_tilt_speed(nint p_instance, float pan_speed, float tilt_speed);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_store_preset(nint p_instance, int preset_no);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_recall_preset(nint p_instance, int preset_no, float speed);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_auto_focus(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_focus(nint p_instance, float focus_value);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_focus_speed(nint p_instance, float focus_speed);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_white_balance_auto(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_white_balance_indoor(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_white_balance_outdoor(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_white_balance_oneshot(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_white_balance_manual(nint p_instance, float red, float blue);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_exposure_auto(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_exposure_manual(nint p_instance, float exposure_level);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_ptz_exposure_manual_v2(nint p_instance, float iris, float gain, float shutter_speed);
+
+    // ------------------------------------------------------------------
+    // Receiver Advertiser (Processing.NDI.RecvAdvertiser.h)
+    // ------------------------------------------------------------------
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_recv_advertiser_create(in NDIRecvAdvertiserCreate p_create_settings);
+
+    [LibraryImport(LibraryName, EntryPoint = "NDIlib_recv_advertiser_create")]
+    internal static partial nint NDIlib_recv_advertiser_create_default(nint p_create_settings);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_recv_advertiser_destroy(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_advertiser_add_receiver(
+        nint p_instance, nint p_receiver,
+        [MarshalAs(UnmanagedType.I1)] bool allow_controlling,
+        [MarshalAs(UnmanagedType.I1)] bool allow_monitoring,
+        nint p_input_group_name);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_advertiser_del_receiver(nint p_instance, nint p_receiver);
+
+    // ------------------------------------------------------------------
+    // Receiver Listener (Processing.NDI.RecvListener.h)
+    // ------------------------------------------------------------------
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_recv_listener_create(in NDIRecvListenerCreate p_create_settings);
+
+    [LibraryImport(LibraryName, EntryPoint = "NDIlib_recv_listener_create")]
+    internal static partial nint NDIlib_recv_listener_create_default(nint p_create_settings);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_recv_listener_destroy(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_listener_is_connected(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_recv_listener_get_server_url(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_recv_listener_get_receivers(nint p_instance, out uint p_num_receivers);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_listener_wait_for_receivers(nint p_instance, uint timeout_in_ms);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_recv_listener_subscribe_events(nint p_instance, nint p_receiver_uuid);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_recv_listener_unsubscribe_events(nint p_instance, nint p_receiver_uuid);
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_recv_listener_get_events(nint p_instance, out uint p_num_events, uint timeout_in_ms);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_recv_listener_free_events(nint p_instance, nint p_events);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_recv_listener_send_connect(nint p_instance, nint p_receiver_uuid, nint p_source_name);
+
+    // ------------------------------------------------------------------
+    // Sender Advertiser (Processing.NDI.SendAdvertiser.h)
+    // ------------------------------------------------------------------
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_send_advertiser_create(in NDISendAdvertiserCreate p_create_settings);
+
+    [LibraryImport(LibraryName, EntryPoint = "NDIlib_send_advertiser_create")]
+    internal static partial nint NDIlib_send_advertiser_create_default(nint p_create_settings);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_send_advertiser_destroy(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_send_advertiser_add_sender(
+        nint p_instance, nint p_sender,
+        [MarshalAs(UnmanagedType.I1)] bool allow_monitoring);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_send_advertiser_del_sender(nint p_instance, nint p_sender);
+
+    // ------------------------------------------------------------------
+    // Sender Listener (Processing.NDI.SendListener.h)
+    // ------------------------------------------------------------------
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_send_listener_create(in NDISendListenerCreate p_create_settings);
+
+    [LibraryImport(LibraryName, EntryPoint = "NDIlib_send_listener_create")]
+    internal static partial nint NDIlib_send_listener_create_default(nint p_create_settings);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_send_listener_destroy(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_send_listener_is_connected(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_send_listener_get_server_url(nint p_instance);
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_send_listener_get_senders(nint p_instance, out uint p_num_senders);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool NDIlib_send_listener_wait_for_senders(nint p_instance, uint timeout_in_ms);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_send_listener_subscribe_events(nint p_instance, nint p_sender_uuid);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_send_listener_unsubscribe_events(nint p_instance, nint p_sender_uuid);
+
+    [LibraryImport(LibraryName)]
+    internal static partial nint NDIlib_send_listener_get_events(nint p_instance, out uint p_num_events, uint timeout_in_ms);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void NDIlib_send_listener_free_events(nint p_instance, nint p_events);
 }

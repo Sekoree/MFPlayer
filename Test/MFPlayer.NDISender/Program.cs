@@ -1,13 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // MFPlayer.NDISender
-//   1. Enter an audio file path
-//   2. Optionally enter an NDI source name  (default: "MFPlayer NDI Audio")
-//   3. Broadcast audio to the local network so NDI clients can receive it
+//   1. Enter a media file path (audio, video, or both)
+//   2. Optionally enter an NDI source name  (default: "MFPlayer NDI")
+//   3. Broadcast A/V to the local network so NDI clients can receive it
 //   4. Press Enter or Ctrl+C to stop; auto-stops at end of file
 //
 // Pipeline
-//   FFmpegDecoder ──► FFmpegAudioChannel ──► AVMixer(audio path) ──► NDIAVSink ──► NDISender
-//   VirtualAudioOutput drives the clock (Stopwatch-based, no hardware device needed)
+//   FFmpegDecoder ──► FFmpegAudioChannel ──► AVRouter ──► NDIAVSink(audio) ──► NDISender
+//                 └─► FFmpegVideoChannel ──► AVRouter ──► NDIAVSink(video) ──╯
+//   VirtualClockEndpoint drives the master clock (Stopwatch-based, no hardware device needed)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using System.Diagnostics;
@@ -18,6 +19,7 @@ using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Routing;
+using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.NDI;
 
@@ -26,7 +28,7 @@ AppDomain.CurrentDomain.UnhandledException += (_, e) =>
     Console.Error.WriteLine($"\n[FATAL] {e.ExceptionObject}");
 
 Console.WriteLine("╔═══════════════════════════════════════╗");
-Console.WriteLine("║   MFPlayer  —  NDI Audio Sender       ║");
+Console.WriteLine("║   MFPlayer  —  NDI A/V Sender         ║");
 Console.WriteLine("╚═══════════════════════════════════════╝\n");
 
 // Set FFmpeg library path.
@@ -52,9 +54,9 @@ using (ndiRuntime)
 {
     Console.WriteLine($"NDI runtime  v{NDIRuntime.Version}\n");
 
-    // ── 2. Audio file path ────────────────────────────────────────────────────
+    // ── 2. Media file path ────────────────────────────────────────────────────
 
-    Console.Write("Audio file path: ");
+    Console.Write("Media file path: ");
     string filePath = (Console.ReadLine() ?? "").Trim('"', ' ');
 
     if (!File.Exists(filePath))
@@ -65,49 +67,90 @@ using (ndiRuntime)
 
     // ── 3. NDI source name ────────────────────────────────────────────────────
 
-    Console.Write("NDI source name [MFPlayer NDI Audio]: ");
+    Console.Write("NDI source name [MFPlayer NDI]: ");
     string? rawName   = Console.ReadLine()?.Trim();
-    string senderName = string.IsNullOrEmpty(rawName) ? "MFPlayer NDI Audio" : rawName;
+    string senderName = string.IsNullOrEmpty(rawName) ? "MFPlayer NDI" : rawName;
 
-    // ── 4. Open FFmpeg decoder ────────────────────────────────────────────────
+    // ── 4. Open FFmpeg decoder (audio + video) ──────────────────────────────
 
     Console.Write("\nOpening decoder… ");
     FFmpegDecoder decoder;
-    try { decoder = FFmpegDecoder.Open(filePath); }
+    try
+    {
+        decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions
+        {
+            EnableAudio = true,
+            EnableVideo = true,
+            // RGBA is the most universally compatible NDI pixel format
+            VideoTargetPixelFormat = PixelFormat.Rgba32
+        });
+    }
     catch (Exception ex)
     {
         Console.WriteLine($"FAILED\n  {ex.Message}");
         return;
     }
 
-    if (decoder.AudioChannels.Count == 0)
+    bool hasAudio = decoder.AudioChannels.Count > 0;
+    bool hasVideo = decoder.VideoChannels.Count > 0;
+
+    if (!hasAudio && !hasVideo)
     {
-        Console.WriteLine("No audio streams found in file.");
+        Console.WriteLine("No audio or video streams found in file.");
         decoder.Dispose();
         return;
     }
 
     using (decoder)
     {
-        var audioChannel = decoder.AudioChannels[0];
-        var srcFmt       = audioChannel.SourceFormat;
+        IAudioChannel? audioChannel = hasAudio ? decoder.AudioChannels[0] : null;
+        IVideoChannel? videoChannel = hasVideo ? decoder.VideoChannels[0] : null;
 
-        // NDI target format: 48 kHz, up to stereo.
-        // The mixer's LinearResampler handles any sample-rate conversion automatically.
-        var ndiFormat = new AudioFormat(48000, Math.Min(srcFmt.Channels, 2));
-        var routeMap  = BuildRouteMap(srcFmt.Channels, ndiFormat.Channels);
+        // ── Determine NDI audio format ──
+        AudioFormat? ndiAudioFormat = null;
+        ChannelRouteMap? routeMap = null;
+        if (audioChannel != null)
+        {
+            var srcFmt = audioChannel.SourceFormat;
+            ndiAudioFormat = new AudioFormat(48000, Math.Min(srcFmt.Channels, 2));
+            routeMap = BuildRouteMap(srcFmt.Channels, ndiAudioFormat.Value.Channels);
+        }
+
+        // ── Determine NDI video format ──
+        VideoFormat? ndiVideoFormat = null;
+        if (videoChannel != null)
+        {
+            var srcVid = videoChannel.SourceFormat;
+            ndiVideoFormat = new VideoFormat(
+                srcVid.Width,
+                srcVid.Height,
+                PixelFormat.Rgba32,
+                srcVid.FrameRateNumerator > 0 ? srcVid.FrameRateNumerator : 30000,
+                srcVid.FrameRateDenominator > 0 ? srcVid.FrameRateDenominator : 1001);
+        }
 
         Console.WriteLine("OK");
-        Console.WriteLine($"  Source:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch  " +
-                          $"({Path.GetFileName(filePath)})");
-        Console.WriteLine($"  NDI out: {ndiFormat.SampleRate} Hz / {ndiFormat.Channels} ch");
+        if (audioChannel != null)
+        {
+            var srcFmt = audioChannel.SourceFormat;
+            Console.WriteLine($"  Audio source:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
+            Console.WriteLine($"  Audio NDI out: {ndiAudioFormat!.Value.SampleRate} Hz / {ndiAudioFormat.Value.Channels} ch");
+        }
+        if (videoChannel != null)
+        {
+            var srcVid = videoChannel.SourceFormat;
+            Console.WriteLine($"  Video source:  {srcVid.Width}×{srcVid.Height} {srcVid.PixelFormat} @ {srcVid.FrameRate:F2} fps");
+            Console.WriteLine($"  Video NDI out: {ndiVideoFormat!.Value.Width}×{ndiVideoFormat.Value.Height} {ndiVideoFormat.Value.PixelFormat}");
+        }
+        if (!hasAudio) Console.WriteLine("  (no audio track)");
+        if (!hasVideo) Console.WriteLine("  (no video track)");
 
         // ── 5. Create NDI sender ──────────────────────────────────────────────
 
-        // clockAudio: false — VirtualAudioOutput drives timing via Stopwatch;
-        // we do NOT want NDI's internal clock to add a second layer of blocking.
+        // clockAudio: false — VirtualClockEndpoint drives timing via Stopwatch;
+        // clockVideo: false — same (router push thread drives video delivery).
         Console.Write("Creating NDI sender… ");
-        int senderRet = NDISender.Create(out var sender, senderName, clockAudio: false);
+        int senderRet = NDISender.Create(out var sender, senderName, clockAudio: false, clockVideo: false);
         if (senderRet != 0 || sender == null)
         {
             Console.WriteLine($"FAILED (code {senderRet}).");
@@ -123,17 +166,25 @@ using (ndiRuntime)
             // ── 6. Wire the pipeline ─────────────────────────────────────────
             //
             //   VirtualClockEndpoint (clock master, no hardware device)
-            //       └─► AVRouter (audio routing + endpoint fan-out)
-            //               └─► NDIAVSink (audio path: interleaved→planar, SendAudio)
+            //       └─► AVRouter
+            //               ├─► NDIAVSink (audio: interleaved→planar, SendAudio)
+            //               └─► NDIAVSink (video: pixel copy, SendVideo)
             //                       └─► NDISender ──► network
 
-            const int framesPerBuffer = 1024; // ~21 ms @ 48 kHz — matches NDIAudioChannel chunk size
+            const int framesPerBuffer = 1024; // ~21 ms @ 48 kHz
 
             using var virtualClock = new VirtualClockEndpoint();
-            using var router = new AVRouter();
+            using var router = new AVRouter(new AVRouterOptions()
+            {
+                //VideoPtsEarlyTolerance = TimeSpan.FromMilliseconds(1),
+                //VideoMaxCatchUpFramesPerTick = 1,
+                //VideoPullDriftCorrectionGain = 0.002, 
+            });
+
             var ndiSink = new NDIAVSink(
                 sender,
-                audioTargetFormat: ndiFormat,
+                videoTargetFormat: ndiVideoFormat,
+                audioTargetFormat: ndiAudioFormat,
                 audioFramesPerBuffer: framesPerBuffer,
                 name: $"NDIAVSink({senderName})");
 
@@ -141,11 +192,24 @@ using (ndiRuntime)
             {
                 var clockEpId = router.RegisterEndpoint(virtualClock);
                 router.SetClock(virtualClock.Clock);
+
                 var ndiEpId = router.RegisterEndpoint(ndiSink);
 
-                // Route source audio explicitly to the NDI sink.
-                var inputId = router.RegisterAudioInput(audioChannel);
-                router.CreateRoute(inputId, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
+                // Route audio (if present)
+                InputId? audioInputId = null;
+                if (audioChannel != null)
+                {
+                    audioInputId = router.RegisterAudioInput(audioChannel);
+                    router.CreateRoute(audioInputId.Value, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
+                }
+
+                // Route video (if present)
+                InputId? videoInputId = null;
+                if (videoChannel != null)
+                {
+                    videoInputId = router.RegisterVideoInput(videoChannel);
+                    router.CreateRoute(videoInputId.Value, ndiEpId);
+                }
 
             // ── 7. Completion detection (source-ended + drain) ───────────────
 
@@ -157,33 +221,61 @@ using (ndiRuntime)
 
             void MarkSourceEnded(string tag)
             {
-                Volatile.Write(ref sourceEnded, 1);
-                Interlocked.Exchange(ref sourceEndedTicks, Stopwatch.GetTimestamp());
-                Console.WriteLine($"\n[{tag}: waiting for drain]");
+                if (Interlocked.CompareExchange(ref sourceEnded, 1, 0) == 0)
+                {
+                    Interlocked.Exchange(ref sourceEndedTicks, Stopwatch.GetTimestamp());
+                    Console.WriteLine($"\n[{tag}: waiting for drain]");
+                }
             }
 
             decoder.EndOfMedia += (_, _) => MarkSourceEnded("demux EOF");
-            audioChannel.EndOfStream += (_, _) => MarkSourceEnded("decode EOF");
+            if (audioChannel != null)
+                audioChannel.EndOfStream += (_, _) => MarkSourceEnded("audio decode EOF");
 
             // Ignore underruns during the first 2 s (buffer warm-up while the decoder
             // pre-fills its ring). Underrun alone is not treated as EOF.
             var warmUp = Stopwatch.StartNew();
-            audioChannel.BufferUnderrun += (_, _) =>
+            if (audioChannel != null)
             {
-                if (warmUp.Elapsed.TotalSeconds <= 2 || cts.IsCancellationRequested)
-                    return;
-
-                if (Volatile.Read(ref sourceEnded) == 1 && audioChannel.BufferAvailable == 0)
+                audioChannel.BufferUnderrun += (_, _) =>
                 {
-                    long endedAt = Interlocked.Read(ref sourceEndedTicks);
-                    double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
-                    if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
+                    if (warmUp.Elapsed.TotalSeconds <= 2 || cts.IsCancellationRequested)
+                        return;
+
+                    if (Volatile.Read(ref sourceEnded) == 1 && audioChannel.BufferAvailable == 0)
                     {
-                        Console.WriteLine("\n[Playback drained]");
-                        cts.Cancel();
+                        long endedAt = Interlocked.Read(ref sourceEndedTicks);
+                        double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
+                        if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
+                        {
+                            Console.WriteLine("\n[Playback drained]");
+                            cts.Cancel();
+                        }
                     }
-                }
-            };
+                };
+            }
+
+            // For video-only files, use the video channel's EndOfStream + buffer check
+            if (videoChannel != null && audioChannel == null)
+            {
+                videoChannel.EndOfStream += (_, _) => MarkSourceEnded("video decode EOF");
+                videoChannel.BufferUnderrun += (_, _) =>
+                {
+                    if (warmUp.Elapsed.TotalSeconds <= 2 || cts.IsCancellationRequested)
+                        return;
+
+                    if (Volatile.Read(ref sourceEnded) == 1 && videoChannel.BufferAvailable == 0)
+                    {
+                        long endedAt = Interlocked.Read(ref sourceEndedTicks);
+                        double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
+                        if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
+                        {
+                            Console.WriteLine("\n[Playback drained]");
+                            cts.Cancel();
+                        }
+                    }
+                };
+            }
 
             // ── 8. Start ──────────────────────────────────────────────────────
 
@@ -194,7 +286,14 @@ using (ndiRuntime)
                 await router.StartAsync();
                 Console.WriteLine("OK\n");
 
-            Console.WriteLine($"Broadcasting:  {senderName}");
+            string modeLabel = (hasAudio, hasVideo) switch
+            {
+                (true, true)   => "A/V",
+                (true, false)  => "Audio-only",
+                (false, true)  => "Video-only",
+                _              => "???"
+            };
+            Console.WriteLine($"Broadcasting ({modeLabel}):  {senderName}");
             Console.WriteLine("NDI clients on the local network can now connect to this source.");
             Console.WriteLine("Press [Enter] or [Ctrl+C] to stop.\n");
 
@@ -204,10 +303,38 @@ using (ndiRuntime)
                 {
                     while (!cts.IsCancellationRequested)
                     {
-                        int     receivers = sender.GetConnectionCount();
-                        TimeSpan position = audioChannel.Position;
-                        Console.Write($"\r  {position:mm\\:ss\\:ffff}   Receivers connected: {receivers}   ");
-                        try   { await Task.Delay(10, cts.Token).ConfigureAwait(false); }
+                        int receivers = sender.GetConnectionCount();
+                        TimeSpan clockPos = router.Clock.Position;
+                        string clockStr = clockPos.ToString(@"mm\:ss\.ff");
+
+                        var parts = new List<string> { $"Clock: {clockStr}" };
+
+                        if (audioChannel != null)
+                            parts.Add($"A: {audioChannel.Position:mm\\:ss\\.ff}");
+
+                        if (videoChannel != null)
+                            parts.Add($"V: {videoChannel.Position:mm\\:ss\\.ff}");
+
+                        if (hasAudio && hasVideo && audioInputId.HasValue && videoInputId.HasValue)
+                        {
+                            try
+                            {
+                                var drift = router.GetAvDrift(audioInputId.Value, videoInputId.Value);
+                                parts.Add($"A-V: {drift.TotalMilliseconds:+0;-0}ms");
+                            }
+                            catch { /* inputs may not exist yet */ }
+                        }
+
+                        if (hasVideo)
+                        {
+                            var diag = ndiSink.GetDiagnosticsSnapshot();
+                            parts.Add($"VQ: {diag.QueueDepth}  Drop: {diag.DroppedFrames}");
+                        }
+
+                        parts.Add($"Rx: {receivers}");
+
+                        Console.Write($"\r  {string.Join("  |  ", parts)}   ");
+                        try   { await Task.Delay(100, cts.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) { break; }
                     }
                 });
@@ -229,6 +356,7 @@ using (ndiRuntime)
             // ── 10. Stop ──────────────────────────────────────────────────────
 
                 Console.WriteLine("\n\nStopping… ");
+                await router.StopAsync();
                 await virtualClock.StopAsync();
                 await ndiSink.StopAsync();
                 Console.WriteLine("Done.");

@@ -302,3 +302,142 @@ public struct NDIAudioInterleaved32f
 // ------------------------------------------------------------------
 
 public readonly record struct NDIDiscoveredSource(string Name, string? UrlAddress);
+
+// ------------------------------------------------------------------
+// Discovery Server — Enumerations
+// ------------------------------------------------------------------
+
+/// <summary>The types of streams that a receiver can receive from the source it's connected to.</summary>
+public enum NDIReceiverType : int
+{
+    None = 0,
+    Metadata = 1,
+    Video = 2,
+    Audio = 3,
+    Max = 0x7fffffff
+}
+
+/// <summary>The types of commands that a receiver can process.</summary>
+public enum NDIReceiverCommand : int
+{
+    None = 0,
+    /// <summary>A receiver can be told to connect to a specific source.</summary>
+    Connect = 1,
+    Max = 0x7fffffff
+}
+
+// ------------------------------------------------------------------
+// Discovery Server — Structs
+// ------------------------------------------------------------------
+
+/// <summary>Creation settings for <c>NDIlib_recv_advertiser_create</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NDIRecvAdvertiserCreate
+{
+    /// <summary>
+    /// The URL address of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see cref="nint.Zero"/> uses the default Discovery Server.
+    /// </summary>
+    public nint PUrlAddress;
+}
+
+/// <summary>Creation settings for <c>NDIlib_recv_listener_create</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NDIRecvListenerCreate
+{
+    /// <summary>
+    /// The URL address of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see cref="nint.Zero"/> uses the default Discovery Server.
+    /// </summary>
+    public nint PUrlAddress;
+}
+
+/// <summary>Creation settings for <c>NDIlib_send_advertiser_create</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NDISendAdvertiserCreate
+{
+    /// <summary>
+    /// The URL address of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see cref="nint.Zero"/> uses the default Discovery Server.
+    /// </summary>
+    public nint PUrlAddress;
+}
+
+/// <summary>Creation settings for <c>NDIlib_send_listener_create</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NDISendListenerCreate
+{
+    /// <summary>
+    /// The URL address of the NDI Discovery Server (e.g. <c>"127.0.0.1:5959"</c>).
+    /// <see cref="nint.Zero"/> uses the default Discovery Server.
+    /// </summary>
+    public nint PUrlAddress;
+}
+
+/// <summary>Describes a receiver discovered via the NDI Discovery Server.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NDIReceiverRef
+{
+    public nint PUuid;
+    public nint PName;
+    public nint PInputUuid;
+    public nint PInputName;
+    public nint PAddress;
+    public nint PStreams;
+    public uint NumStreams;
+    public nint PCommands;
+    public uint NumCommands;
+    public byte EventsSubscribed;
+
+    public readonly string? Uuid      => Marshal.PtrToStringUTF8(PUuid);
+    public readonly string? Name      => Marshal.PtrToStringUTF8(PName);
+    public readonly string? InputUuid => Marshal.PtrToStringUTF8(PInputUuid);
+    public readonly string? InputName => Marshal.PtrToStringUTF8(PInputName);
+    public readonly string? Address   => Marshal.PtrToStringUTF8(PAddress);
+}
+
+/// <summary>Describes a sender discovered via the NDI Discovery Server.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NDISenderRef
+{
+    public nint PUuid;
+    public nint PName;
+    public nint PMetadata;
+    public nint PAddress;
+    public int Port;
+    public nint PGroups;
+    public uint NumGroups;
+    public byte EventsSubscribed;
+
+    public readonly string? Uuid     => Marshal.PtrToStringUTF8(PUuid);
+    public readonly string? Name     => Marshal.PtrToStringUTF8(PName);
+    public readonly string? Metadata => Marshal.PtrToStringUTF8(PMetadata);
+    public readonly string? Address  => Marshal.PtrToStringUTF8(PAddress);
+}
+
+/// <summary>An event received from a sender or receiver listener.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NDIListenerEvent
+{
+    public nint PUuid;
+    public nint PName;
+    public nint PValue;
+
+    public readonly string? Uuid  => Marshal.PtrToStringUTF8(PUuid);
+    public readonly string? Name  => Marshal.PtrToStringUTF8(PName);
+    public readonly string? Value => Marshal.PtrToStringUTF8(PValue);
+}
+
+// ------------------------------------------------------------------
+// Discovery Server — High-level records
+// ------------------------------------------------------------------
+
+/// <summary>A discovered receiver on the NDI Discovery Server.</summary>
+public readonly record struct NDIDiscoveredReceiver(
+    string Uuid, string? Name, string? InputUuid, string? InputName, string? Address,
+    NDIReceiverType[] Streams, NDIReceiverCommand[] Commands, bool EventsSubscribed);
+
+/// <summary>A discovered sender on the NDI Discovery Server.</summary>
+public readonly record struct NDIDiscoveredSender(
+    string Uuid, string? Name, string? Metadata, string? Address, int Port,
+    string[] Groups, bool EventsSubscribed);

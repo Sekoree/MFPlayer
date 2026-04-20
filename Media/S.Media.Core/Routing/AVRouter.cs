@@ -132,6 +132,27 @@ public sealed class AVRouter : IAVRouter
 
     private readonly ConcurrentDictionary<EndpointId, float[]> _scratchBuffers = new();
 
+    // Per-endpoint fractional frame accumulator for time-aware push audio.
+    // Prevents truncation drift when computing frame counts from elapsed seconds.
+    private readonly ConcurrentDictionary<EndpointId, double> _pushAudioFrameAccumulators = new();
+
+    // Per-input pending video frame for push endpoints.
+    // When a frame is pulled from the ring but its PTS is ahead of the clock,
+    // it is cached here instead of being dropped.  The next push tick retries it.
+    private readonly ConcurrentDictionary<InputId, VideoFrame> _pushVideoPending = new();
+
+    // Per-input push video drift correction origin.
+    // Tracks PTS↔clock offset and applies smooth proportional correction so
+    // sub-frame drift converges to zero without ±½-frame oscillation.
+    private sealed class PushVideoDriftState
+    {
+        public bool HasOrigin;
+        public long PtsOriginTicks;
+        public long ClockOriginTicks;
+    }
+
+    private readonly ConcurrentDictionary<InputId, PushVideoDriftState> _pushVideoDrift = new();
+
     // ── Constructor ─────────────────────────────────────────────────────
 
     public AVRouter(AVRouterOptions? options = null)
@@ -226,6 +247,9 @@ public sealed class AVRouter : IAVRouter
             foreach (var route in toRemove)
                 RemoveRouteInternal(route);
 
+            _pushVideoPending.TryRemove(id, out _);
+            _pushVideoDrift.TryRemove(id, out _);
+
             Log.LogDebug("Input unregistered: {Id}", id);
         }
     }
@@ -292,6 +316,7 @@ public sealed class AVRouter : IAVRouter
                 RemoveRouteInternal(route);
 
             _scratchBuffers.TryRemove(id, out _);
+            _pushAudioFrameAccumulators.TryRemove(id, out _);
 
             Log.LogDebug("Endpoint unregistered: {Id}", id);
         }
@@ -708,13 +733,23 @@ public sealed class AVRouter : IAVRouter
         };
         videoThread.Start();
 
+        // Time-aware audio push: track wall-clock elapsed time so frame counts
+        // are derived from actual elapsed time, not the nominal tick cadence.
+        // This eliminates audio speed fluctuations caused by Thread.Sleep jitter.
+        long lastAudioSw = sw.ElapsedTicks;
+
         while (_running)
         {
             long tickStart = sw.ElapsedTicks;
+            long elapsedSw = tickStart - lastAudioSw;
+            lastAudioSw = tickStart;
+
+            // Convert to seconds for frame count computation.
+            double elapsedSeconds = (double)elapsedSw / System.Diagnostics.Stopwatch.Frequency;
 
             try
             {
-                PushAudioTick();
+                PushAudioTick(elapsedSeconds);
             }
             catch (Exception ex)
             {
@@ -765,7 +800,7 @@ public sealed class AVRouter : IAVRouter
         }
     }
 
-    private void PushAudioTick()
+    private void PushAudioTick(double elapsedSeconds)
     {
         var routes = _audioRouteSnapshot;
         if (routes.Length == 0) return;
@@ -794,9 +829,22 @@ public sealed class AVRouter : IAVRouter
                 if (outFormat is null)
                 {
                     outFormat = fmt;
-                    framesPerBuffer = _options.DefaultFramesPerBuffer > 0
-                        ? _options.DefaultFramesPerBuffer
-                        : (int)(fmt.SampleRate * _options.InternalTickCadence.TotalSeconds);
+
+                    if (_options.DefaultFramesPerBuffer > 0)
+                    {
+                        framesPerBuffer = _options.DefaultFramesPerBuffer;
+                    }
+                    else
+                    {
+                        // Time-aware: compute frame count from actual elapsed wall-clock
+                        // time plus any fractional remainder from the previous tick.
+                        // This keeps the long-term average rate exactly at the source
+                        // sample rate regardless of Thread.Sleep jitter.
+                        double accum = _pushAudioFrameAccumulators.GetOrAdd(ep.Id, 0.0);
+                        double exact = fmt.SampleRate * elapsedSeconds + accum;
+                        framesPerBuffer = (int)exact;
+                        _pushAudioFrameAccumulators[ep.Id] = exact - framesPerBuffer;
+                    }
                 }
                 break;
             }
@@ -883,6 +931,16 @@ public sealed class AVRouter : IAVRouter
         if (routes.Length == 0) return;
 
         var clockPos = Clock.Position;
+        long earlyToleranceTicks = _options.VideoPtsEarlyTolerance.Ticks;
+        int maxCatchUp = _options.VideoMaxCatchUpFramesPerTick;
+
+        // Clear the cross-endpoint cache so pull→push sharing doesn't persist
+        // across ticks (which would prevent the ring from draining).
+        foreach (var route in routes)
+        {
+            if (_inputs.TryGetValue(route.InputId, out var entry) && entry.Kind == InputKind.Video)
+                entry.LastVideoFrame = null;
+        }
 
         foreach (var route in routes)
         {
@@ -893,8 +951,7 @@ public sealed class AVRouter : IAVRouter
 
             var channel = inp.VideoChannel!;
 
-            // Check if a pull endpoint already dequeued a frame for this input.
-            // If so, forward that frame instead of competing for the ring buffer.
+            // 1) Check if a pull endpoint already dequeued a frame this cycle.
             var lastFrame = inp.LastVideoFrame;
             if (lastFrame.HasValue)
             {
@@ -903,18 +960,89 @@ public sealed class AVRouter : IAVRouter
                 continue;
             }
 
-            VideoFrame[] frameBuf = new VideoFrame[1];
-            int got = channel.FillBuffer(frameBuf, 1);
-            if (got > 0)
-            {
-                var frame = frameBuf[0];
-                // For push video, apply time offset for PTS comparison
-                if (!VideoLiveMode && frame.Pts + inp.TimeOffset > clockPos)
-                    continue; // frame is in the future, skip for now
+            // 2) Try the pending frame (pulled last tick but was too early).
+            VideoFrame candidate;
+            bool haveCandidate = _pushVideoPending.TryRemove(inp.Id, out candidate);
 
-                inp.LastVideoFrame = frame;
-                ep.Video.ReceiveFrame(in frame);
+            if (!haveCandidate)
+            {
+                // 3) Pull a fresh frame from the ring buffer.
+                VideoFrame[] frameBuf = new VideoFrame[1];
+                int got = channel.FillBuffer(frameBuf, 1);
+                if (got == 0) continue;
+                candidate = frameBuf[0];
             }
+
+            // 4) PTS gate with smooth drift correction (unless live mode).
+            if (!VideoLiveMode)
+            {
+                var drift = _pushVideoDrift.GetOrAdd(inp.Id, _ => new PushVideoDriftState());
+
+                // Seed origin on first frame.
+                if (!drift.HasOrigin)
+                {
+                    drift.PtsOriginTicks   = candidate.Pts.Ticks;
+                    drift.ClockOriginTicks = clockPos.Ticks;
+                    drift.HasOrigin = true;
+                }
+
+                long relativeClockTicks = clockPos.Ticks - drift.ClockOriginTicks;
+
+                // Compute relative PTS for the current candidate.
+                long relativePtsTicks = candidate.Pts.Ticks - drift.PtsOriginTicks + inp.TimeOffset.Ticks;
+
+                // Too early — cache for next tick.
+                if (relativePtsTicks > relativeClockTicks + earlyToleranceTicks)
+                {
+                    _pushVideoPending[inp.Id] = candidate;
+                    continue;
+                }
+
+                // Catch-up: if this frame is late and the ring has newer frames,
+                // skip forward up to maxCatchUp frames to find the latest frame
+                // whose PTS is still <= clock.  This prevents video from falling
+                // behind after a slow-decode burst.
+                if (maxCatchUp > 0)
+                {
+                    VideoFrame[] peekBuf = new VideoFrame[1];
+                    for (int skip = 0; skip < maxCatchUp; skip++)
+                    {
+                        int peeked = channel.FillBuffer(peekBuf, 1);
+                        if (peeked == 0) break;
+
+                        var next = peekBuf[0];
+                        long nextRelPts = next.Pts.Ticks - drift.PtsOriginTicks + inp.TimeOffset.Ticks;
+
+                        if (nextRelPts > relativeClockTicks + earlyToleranceTicks)
+                        {
+                            // Next frame is too early — cache it and present the
+                            // current candidate (the latest "on time" frame).
+                            _pushVideoPending[inp.Id] = next;
+                            break;
+                        }
+
+                        // Next frame is also on-time or late — skip the current
+                        // candidate and promote next.
+                        candidate = next;
+                        relativePtsTicks = nextRelPts;
+                    }
+                }
+
+                // Smooth drift correction applied AFTER catch-up, using the
+                // PTS of the frame that will actually be presented.  This
+                // prevents the positive feedback loop where stale error from
+                // a pre-catchup frame causes overcorrection → more skips →
+                // video runs ahead.
+                double pushGain = _options.VideoPushDriftCorrectionGain;
+                if (pushGain > 0)
+                {
+                    long errorTicks = relativePtsTicks - relativeClockTicks;
+                    drift.PtsOriginTicks += (long)(errorTicks * pushGain);
+                }
+            }
+
+            inp.LastVideoFrame = candidate;
+            ep.Video.ReceiveFrame(in candidate);
         }
     }
 
@@ -1032,7 +1160,6 @@ public sealed class AVRouter : IAVRouter
         private bool   _hasOrigin;
         private long   _ptsOriginTicks;
         private long   _clockOriginTicks;
-        private const double DriftCorrectionGain = 0.005;
 
         // Cache a frame that was fetched but too early to present, so it's
         // retried on the next render tick instead of being lost.
@@ -1105,7 +1232,7 @@ public sealed class AVRouter : IAVRouter
                     long relativePtsTicks   = candidate.Pts.Ticks - _ptsOriginTicks + inp.TimeOffset.Ticks;
                     long relativeClockTicks  = clockPosition.Ticks - _clockOriginTicks;
 
-                    if (relativePtsTicks > relativeClockTicks + TimeSpan.TicksPerMillisecond * 5)
+                    if (relativePtsTicks > relativeClockTicks + _router._options.VideoPtsEarlyTolerance.Ticks)
                     {
                         // Too early — cache for next tick instead of losing it
                         _pendingFrame = candidate;
@@ -1121,7 +1248,7 @@ public sealed class AVRouter : IAVRouter
 
                     // Drift correction
                     long errorTicks = relativePtsTicks - relativeClockTicks;
-                    _ptsOriginTicks += (long)(errorTicks * DriftCorrectionGain);
+                    _ptsOriginTicks += (long)(errorTicks * _router._options.VideoPullDriftCorrectionGain);
 
                     _lastPresentedRelativePts = relativePtsTicks;
                 }
