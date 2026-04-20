@@ -16,7 +16,8 @@ using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.FFmpeg;
 using S.Media.PortAudio;
 
@@ -79,7 +80,7 @@ Console.Write("\nOpening decoder… ");
 FFmpegDecoder decoder;
 try
 {
-    decoder = FFmpegDecoder.Open(filePath);
+    decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions { EnableVideo = false });
 }
 catch (Exception ex)
 {
@@ -127,10 +128,13 @@ using (decoder)
 
     Console.WriteLine($"  Output:  {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
 
-    using var avMixer = new AVMixer(output.HardwareFormat);
-    avMixer.AttachAudioOutput(output);
+    // Set up routing via AVRouter
+    using var router = new AVRouter();
+    var epId = router.RegisterEndpoint(output);
+    router.SetClock(output.Clock);
 
-    avMixer.AddAudioChannel(audioChannel, routeMap);
+    var inputId = router.RegisterAudioInput(audioChannel);
+    router.CreateRoute(inputId, epId, new AudioRouteOptions { ChannelMap = routeMap });
     audioChannel.Volume = 1.0f;
 
     if (srcFmt.SampleRate != output.HardwareFormat.SampleRate)
@@ -176,6 +180,7 @@ using (decoder)
 
     decoder.Start();
     await output.StartAsync();
+    await router.StartAsync();
     var clockBase = output.Clock.Position;
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");

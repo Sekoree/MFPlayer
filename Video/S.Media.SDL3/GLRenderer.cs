@@ -53,6 +53,10 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const uint GL_COLOR_ATTACHMENT0   = 0x8CE0;
     private const uint GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
     private const uint GL_LINEAR_MIPMAP_LINEAR = 0x2703;
+    private const uint GL_BLEND               = 0x0BE2;
+    private const uint GL_SRC_ALPHA           = 0x0302;
+    private const uint GL_ONE_MINUS_SRC_ALPHA = 0x0303;
+    private const uint GL_DYNAMIC_DRAW        = 0x88E8;
 
     // ── GL function pointers ──────────────────────────────────────────────
 
@@ -98,6 +102,11 @@ internal sealed unsafe class GLRenderer : IDisposable
     private delegate void   GlFramebufferTexture2D(uint target, uint attachment, uint textarget, uint texture, int level);
     private delegate uint   GlCheckFramebufferStatus(uint target);
     private delegate void   GlGenerateMipmap(uint target);
+    private delegate void   GlEnable(uint cap);
+    private delegate void   GlDisable(uint cap);
+    private delegate void   GlBlendFunc(uint sfactor, uint dfactor);
+    private delegate void   GlUniform2f(int location, float v0, float v1);
+    private delegate void   GlUniform4f(int location, float v0, float v1, float v2, float v3);
 
     // Instances
     private GlViewport                _glViewport = null!;
@@ -142,6 +151,11 @@ internal sealed unsafe class GLRenderer : IDisposable
     private GlFramebufferTexture2D    _glFramebufferTexture2D = null!;
     private GlCheckFramebufferStatus  _glCheckFramebufferStatus = null!;
     private GlGenerateMipmap          _glGenerateMipmap = null!;
+    private GlEnable                  _glEnable = null!;
+    private GlDisable                 _glDisable = null!;
+    private GlBlendFunc               _glBlendFunc = null!;
+    private GlUniform2f               _glUniform2f = null!;
+    private GlUniform4f               _glUniform4f = null!;
 
     // ── GL state ──────────────────────────────────────────────────────────
 
@@ -228,6 +242,16 @@ internal sealed unsafe class GLRenderer : IDisposable
     // Scaling filter — bicubic by default for broadcast-quality monitoring.
     // Set via ScalingFilter property (render thread reads, any thread writes).
     private volatile int _scalingFilter = (int)ScalingFilter.Bicubic;
+
+    // ── HUD state ──────────────────────────────────────────────────────────
+    private uint _hudProgram;
+    private uint _hudVao;
+    private uint _hudVbo;
+    private uint _hudFontTexture;
+    private int  _hudUScreenSize = -1;
+    private int  _hudUColor = -1;
+    private int  _hudUBgColor = -1;
+    private bool _hudInitialised;
 
     public ScalingFilter ScalingFilter
     {
@@ -887,7 +911,8 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texHeightUyvy = h;
 
         // Ensure FBO exists at native video resolution for the two-pass decode.
-        EnsureFboUyvy(w, h);
+        if (!EnsureFboUyvy(w, h))
+            return; // FBO unavailable — skip this frame
 
         // ── Pass 1: Decode UYVY → RGB at native resolution into FBO ──────
         // Re-bind UYVY texture — EnsureFboUyvy may have changed the TEXTURE0 binding
@@ -932,7 +957,7 @@ internal sealed unsafe class GLRenderer : IDisposable
     private bool BeginFboIfNeeded(int w, int h)
     {
         if ((ScalingFilter)_scalingFilter == ScalingFilter.Bilinear) return false;
-        EnsureFboGeneral(w, h);
+        if (!EnsureFboGeneral(w, h)) return false; // FBO unavailable, fall back to direct
         _glBindFramebuffer(GL_FRAMEBUFFER, _fboGeneral);
         _glViewport(0, 0, w, h);
         return true;
@@ -960,10 +985,11 @@ internal sealed unsafe class GLRenderer : IDisposable
     }
 
     /// <summary>Creates (or recreates on resolution change) a general-purpose RGBA8 FBO.</summary>
-    private void EnsureFboGeneral(int w, int h)
+    /// <returns><c>true</c> if the FBO is ready; <c>false</c> if creation failed (frame should be skipped).</returns>
+    private bool EnsureFboGeneral(int w, int h)
     {
         if (_fboGeneralWidth == w && _fboGeneralHeight == h && _fboGeneral != 0)
-            return;
+            return true;
 
         if (_fboGeneral != 0)
         { fixed (uint* p = &_fboGeneral) _glDeleteFramebuffers(1, p); _fboGeneral = 0; }
@@ -985,11 +1011,20 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _fboGeneralTexture, 0);
         uint status = _glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE)
-            throw new InvalidOperationException($"General FBO incomplete: 0x{status:X}");
+        {
+            // FBO incomplete — delete it and signal failure. Will retry next frame.
+            fixed (uint* p = &_fboGeneral) _glDeleteFramebuffers(1, p); _fboGeneral = 0;
+            fixed (uint* p = &_fboGeneralTexture) _glDeleteTextures(1, p); _fboGeneralTexture = 0;
+            _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            _fboGeneralWidth = 0;
+            _fboGeneralHeight = 0;
+            return false;
+        }
         _glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         _fboGeneralWidth  = w;
         _fboGeneralHeight = h;
+        return true;
     }
 
     /// <summary>
@@ -998,10 +1033,10 @@ internal sealed unsafe class GLRenderer : IDisposable
     /// GPU's native <c>GL_LINEAR</c> bilinear filter — the sharpest standard filter for
     /// moderate scaling and what reference video players typically use.
     /// </summary>
-    private void EnsureFboUyvy(int w, int h)
+    private bool EnsureFboUyvy(int w, int h)
     {
         if (_fboUyvyWidth == w && _fboUyvyHeight == h && _fboUyvy != 0)
-            return;
+            return true;
 
         // Delete old resources if they exist.
         if (_fboUyvy != 0)
@@ -1031,11 +1066,19 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _fboUyvyTexture, 0);
         uint status = _glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE)
-            throw new InvalidOperationException($"UYVY FBO incomplete: 0x{status:X}");
+        {
+            fixed (uint* p = &_fboUyvy) _glDeleteFramebuffers(1, p); _fboUyvy = 0;
+            fixed (uint* p = &_fboUyvyTexture) _glDeleteTextures(1, p); _fboUyvyTexture = 0;
+            _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            _fboUyvyWidth = 0;
+            _fboUyvyHeight = 0;
+            return false;
+        }
         _glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         _fboUyvyWidth  = w;
         _fboUyvyHeight = h;
+        return true;
     }
 
     private void UploadAndDrawP010(VideoFrame frame)
@@ -1315,6 +1358,11 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glFramebufferTexture2D    = LoadGL<GlFramebufferTexture2D>("glFramebufferTexture2D");
         _glCheckFramebufferStatus  = LoadGL<GlCheckFramebufferStatus>("glCheckFramebufferStatus");
         _glGenerateMipmap          = LoadGL<GlGenerateMipmap>("glGenerateMipmap");
+        _glEnable                  = LoadGL<GlEnable>("glEnable");
+        _glDisable                 = LoadGL<GlDisable>("glDisable");
+        _glBlendFunc               = LoadGL<GlBlendFunc>("glBlendFunc");
+        _glUniform2f               = LoadGL<GlUniform2f>("glUniform2f");
+        _glUniform4f               = LoadGL<GlUniform4f>("glUniform4f");
     }
 
     /// <summary>
@@ -1372,6 +1420,152 @@ internal sealed unsafe class GLRenderer : IDisposable
         }
     }
 
+    // ── HUD rendering ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Draws a multi-line text overlay in the top-left corner of the window.
+    /// Uses a bitmap font atlas and a dedicated shader program.
+    /// Must be called AFTER the video frame has been rendered and BEFORE SwapWindow.
+    /// </summary>
+    public void DrawHud(string[] lines)
+    {
+        if (lines.Length == 0 || _windowWidth <= 0 || _windowHeight <= 0) return;
+
+        EnsureHudInitialised();
+
+        // Build vertex data for all glyphs: 6 verts per glyph (2 triangles), 4 floats per vert (pos.xy + uv.xy)
+        const int glyphW = BitmapFont.GlyphWidth;
+        const int glyphH = BitmapFont.GlyphHeight;
+        const int atlasW = 128;
+        const int atlasH = 128;
+        const int colCount = 16; // atlas cols
+        const int padding = 4;
+        int scale = Math.Max(1, _windowHeight / 500); // auto-scale HUD for HiDPI
+
+        int totalGlyphs = 0;
+        foreach (var line in lines) totalGlyphs += line.Length;
+
+        var verts = new float[totalGlyphs * 6 * 4];
+        int vi = 0;
+        int cursorY = padding;
+
+        foreach (var line in lines)
+        {
+            int cursorX = padding;
+            foreach (char c in line)
+            {
+                int idx = c - BitmapFont.FirstChar;
+                if (idx < 0 || idx >= BitmapFont.GlyphCount) idx = 0; // space
+
+                int atlasCol = idx % colCount;
+                int atlasRow = idx / colCount;
+
+                float u0 = (float)(atlasCol * glyphW) / atlasW;
+                float v0 = (float)(atlasRow * glyphH) / atlasH;
+                float u1 = (float)((atlasCol + 1) * glyphW) / atlasW;
+                float v1 = (float)((atlasRow + 1) * glyphH) / atlasH;
+
+                float x0 = cursorX;
+                float y0 = cursorY;
+                float x1 = cursorX + glyphW * scale;
+                float y1 = cursorY + glyphH * scale;
+
+                // Triangle 1
+                verts[vi++] = x0; verts[vi++] = y0; verts[vi++] = u0; verts[vi++] = v0;
+                verts[vi++] = x1; verts[vi++] = y0; verts[vi++] = u1; verts[vi++] = v0;
+                verts[vi++] = x1; verts[vi++] = y1; verts[vi++] = u1; verts[vi++] = v1;
+                // Triangle 2
+                verts[vi++] = x0; verts[vi++] = y0; verts[vi++] = u0; verts[vi++] = v0;
+                verts[vi++] = x1; verts[vi++] = y1; verts[vi++] = u1; verts[vi++] = v1;
+                verts[vi++] = x0; verts[vi++] = y1; verts[vi++] = u0; verts[vi++] = v1;
+
+                cursorX += glyphW * scale;
+            }
+            cursorY += (glyphH + 2) * scale;
+        }
+
+        int vertCount = vi / 4;
+        if (vertCount == 0) return;
+
+        // Upload vertex data
+        _glBindBuffer(GL_ARRAY_BUFFER, _hudVbo);
+        fixed (float* pData = verts)
+            _glBufferData(GL_ARRAY_BUFFER, (nint)(vi * sizeof(float)), pData, GL_DYNAMIC_DRAW);
+
+        // Render with blending
+        _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        _glViewport(0, 0, _windowWidth, _windowHeight);
+        _glEnable(GL_BLEND);
+        _glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        _glUseProgram(_hudProgram);
+        _glUniform2f(_hudUScreenSize, _windowWidth, _windowHeight);
+        _glUniform4f(_hudUColor, 1f, 1f, 1f, 1f); // white text
+        _glUniform4f(_hudUBgColor, 0f, 0f, 0f, 0.65f); // semi-transparent black bg
+
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _hudFontTexture);
+
+        _glBindVertexArray(_hudVao);
+        _glDrawArrays(GL_TRIANGLES, 0, (int)(uint)vertCount);
+        _glBindVertexArray(0);
+
+        _glDisable(GL_BLEND);
+
+        // Restore video viewport
+        _glViewport(_vpX, _vpY, _vpW, _vpH);
+    }
+
+    private void EnsureHudInitialised()
+    {
+        if (_hudInitialised) return;
+        _hudInitialised = true;
+
+        // Compile HUD shader
+        uint vs = CompileShader(GL_VERTEX_SHADER, GlShaderSources.VertexHud);
+        uint fs = CompileShader(GL_FRAGMENT_SHADER, GlShaderSources.FragmentHud);
+        _hudProgram = _glCreateProgram();
+        _glAttachShader(_hudProgram, vs);
+        _glAttachShader(_hudProgram, fs);
+        _glLinkProgram(_hudProgram);
+        CheckProgram(_hudProgram);
+        _glDeleteShader(vs);
+        _glDeleteShader(fs);
+
+        _glUseProgram(_hudProgram);
+        fixed (byte* name = "uFontAtlas\0"u8)
+        { int l = _glGetUniformLocation(_hudProgram, name); _glUniform1i(l, 0); }
+        fixed (byte* name = "uScreenSize\0"u8)
+            _hudUScreenSize = _glGetUniformLocation(_hudProgram, name);
+        fixed (byte* name = "uColor\0"u8)
+            _hudUColor = _glGetUniformLocation(_hudProgram, name);
+        fixed (byte* name = "uBgColor\0"u8)
+            _hudUBgColor = _glGetUniformLocation(_hudProgram, name);
+
+        // Create font atlas texture
+        var atlas = BitmapFont.BuildAtlasRgba(out int aw, out int ah, out _);
+        fixed (uint* pTex = &_hudFontTexture) _glGenTextures(1, pTex);
+        _glBindTexture(GL_TEXTURE_2D, _hudFontTexture);
+        fixed (byte* pData = atlas)
+            _glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, aw, ah, 0, GL_RGBA, GL_UNSIGNED_BYTE, pData);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        _glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // Create VAO/VBO for dynamic glyph quads
+        fixed (uint* pVao = &_hudVao) _glGenVertexArrays(1, pVao);
+        fixed (uint* pVbo = &_hudVbo) _glGenBuffers(1, pVbo);
+
+        _glBindVertexArray(_hudVao);
+        _glBindBuffer(GL_ARRAY_BUFFER, _hudVbo);
+        _glEnableVertexAttribArray(0);
+        _glVertexAttribPointer(0, 2, GL_FLOAT, (byte)GL_FALSE, 4 * sizeof(float), (void*)0);
+        _glEnableVertexAttribArray(1);
+        _glVertexAttribPointer(1, 2, GL_FLOAT, (byte)GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        _glBindVertexArray(0);
+    }
+
     // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
@@ -1414,6 +1608,10 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glDeleteProgram(_programGray8);
         _glDeleteProgram(_programFbo);
         if (_programBicubic != 0) _glDeleteProgram(_programBicubic);
+        if (_hudProgram != 0) _glDeleteProgram(_hudProgram);
+        if (_hudFontTexture != 0) { fixed (uint* p = &_hudFontTexture) _glDeleteTextures(1, p); }
+        if (_hudVbo != 0) { fixed (uint* p = &_hudVbo) _glDeleteBuffers(1, p); }
+        if (_hudVao != 0) { fixed (uint* p = &_hudVao) _glDeleteVertexArrays(1, p); }
     }
 }
 

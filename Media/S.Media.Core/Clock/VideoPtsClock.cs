@@ -23,21 +23,20 @@ public sealed class VideoPtsClock : MediaClockBase
                 : TimeSpan.Zero)
             : _lastPts;
 
-    /// <inheritdoc/>
-    public override double SampleRate { get; }
+    /// <summary>Nominal frame rate (e.g. 30, 60). Exposed as a concrete property.</summary>
+    public double FrameRate { get; }
 
     /// <inheritdoc/>
     public override bool IsRunning => _running;
 
-    /// <param name="sampleRate">
-    /// Nominal sample rate exposed to consumers.
-    /// For video this is typically the frame rate (e.g. 30, 60).
+    /// <param name="frameRate">
+    /// Nominal frame rate exposed to consumers (e.g. 30, 60).
     /// </param>
     /// <param name="tickIntervalMs">How often the base Tick event fires (default 16 ms ≈ 60 Hz).</param>
-    public VideoPtsClock(double sampleRate = 30, double tickIntervalMs = 16)
+    public VideoPtsClock(double frameRate = 30, double tickIntervalMs = 16)
         : base(TimeSpan.FromMilliseconds(tickIntervalMs))
     {
-        SampleRate = sampleRate;
+        FrameRate = frameRate;
     }
 
     /// <inheritdoc/>
@@ -97,7 +96,7 @@ public sealed class VideoPtsClock : MediaClockBase
             return;
 
         // Ignore tiny forward jitter; only apply a meaningful resync correction.
-        double fps = SampleRate > 1 ? SampleRate : 30.0;
+        double fps = FrameRate > 1 ? FrameRate : 30.0;
         var minCorrection = TimeSpan.FromSeconds(0.5 / fps);
         if (pts - predicted < minCorrection)
             return;

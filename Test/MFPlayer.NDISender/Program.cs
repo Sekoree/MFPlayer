@@ -16,7 +16,8 @@ using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.FFmpeg;
 using S.Media.NDI;
 
@@ -121,18 +122,15 @@ using (ndiRuntime)
 
             // ── 6. Wire the pipeline ─────────────────────────────────────────
             //
-            //   VirtualAudioOutput (clock master, no hardware device)
-            //       └─► AVMixer (audio routing + sink fan-out)
+            //   VirtualClockEndpoint (clock master, no hardware device)
+            //       └─► AVRouter (audio routing + endpoint fan-out)
             //               └─► NDIAVSink (audio path: interleaved→planar, SendAudio)
             //                       └─► NDISender ──► network
-            //
-            // The AV mixer attached to VirtualAudioOutput pulls from FFmpegAudioChannel
-            // and routes that audio to NDIAVSink on each tick.
 
             const int framesPerBuffer = 1024; // ~21 ms @ 48 kHz — matches NDIAudioChannel chunk size
 
-            using var virtualOut = new VirtualAudioOutput(ndiFormat, framesPerBuffer);
-            using var avMixer = new AVMixer(ndiFormat);
+            using var virtualClock = new VirtualClockEndpoint();
+            using var router = new AVRouter();
             var ndiSink = new NDIAVSink(
                 sender,
                 audioTargetFormat: ndiFormat,
@@ -141,12 +139,13 @@ using (ndiRuntime)
 
             using (ndiSink)
             {
-                avMixer.AttachAudioOutput(virtualOut);
-                avMixer.RegisterAudioSink(ndiSink, ndiFormat.Channels);
+                var clockEpId = router.RegisterEndpoint(virtualClock);
+                router.SetClock(virtualClock.Clock);
+                var ndiEpId = router.RegisterEndpoint(ndiSink);
 
                 // Route source audio explicitly to the NDI sink.
-                avMixer.AddAudioChannel(audioChannel, routeMap);
-                avMixer.RouteAudioChannelToSink(audioChannel.Id, ndiSink, routeMap);
+                var inputId = router.RegisterAudioInput(audioChannel);
+                router.CreateRoute(inputId, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
 
             // ── 7. Completion detection (source-ended + drain) ───────────────
 
@@ -191,7 +190,8 @@ using (ndiRuntime)
                 Console.Write("Starting… ");
                 decoder.Start();
                 await ndiSink.StartAsync();
-                await virtualOut.StartAsync();
+                await virtualClock.StartAsync();
+                await router.StartAsync();
                 Console.WriteLine("OK\n");
 
             Console.WriteLine($"Broadcasting:  {senderName}");
@@ -229,7 +229,7 @@ using (ndiRuntime)
             // ── 10. Stop ──────────────────────────────────────────────────────
 
                 Console.WriteLine("\n\nStopping… ");
-                await virtualOut.StopAsync();
+                await virtualClock.StopAsync();
                 await ndiSink.StopAsync();
                 Console.WriteLine("Done.");
             }

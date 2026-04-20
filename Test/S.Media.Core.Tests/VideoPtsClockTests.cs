@@ -25,7 +25,7 @@ public sealed class VideoPtsClockTests
     [Fact]
     public void UpdateFromFrame_LatePts_DoesNotPullClockBackwards()
     {
-        using var clock = new VideoPtsClock(sampleRate: 60);
+        using var clock = new VideoPtsClock(frameRate: 60);
         clock.Start();
 
 
@@ -47,7 +47,7 @@ public sealed class VideoPtsClockTests
     [Fact]
     public void Position_HoldsAtZero_UntilFirstFrameAnchors()
     {
-        using var clock = new VideoPtsClock(sampleRate: 30);
+        using var clock = new VideoPtsClock(frameRate: 30);
         clock.Start();
 
         Thread.Sleep(50);

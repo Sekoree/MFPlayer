@@ -2,7 +2,7 @@ using System.Diagnostics;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Video;
 
 namespace S.Media.Core.Benchmarks;
@@ -46,59 +46,11 @@ internal static class Program
             Console.WriteLine("[bench] mode=libyuv unavailable (skipped)");
         }
 
-        Console.WriteLine("[bench] mode=audio-mixer");
-        RunAudioMixerSuite(iterations, audioFrames);
+        // TODO: Audio router benchmarks (AVRouter-based) - pending new API stabilization
 
         return 0;
     }
 
-    private static void RunAudioMixerSuite(int iterations, int frameCount)
-    {
-        RunAudioMixerCase(iterations, frameCount, channelCount: 2, sinkCount: 2);
-        RunAudioMixerCase(iterations, frameCount, channelCount: 8, sinkCount: 4);
-        RunAudioMixerCase(iterations, frameCount, channelCount: 16, sinkCount: 8);
-        RunAudioMixerCase(iterations, frameCount, channelCount: 32, sinkCount: 16);
-    }
-
-    private static void RunAudioMixerCase(int iterations, int frameCount, int channelCount, int sinkCount)
-    {
-        var fmt = new AudioFormat(48000, 2);
-        using var mixer = new AudioMixer(fmt);
-        mixer.PrepareBuffers(frameCount);
-
-        var sinks = new List<NullAudioSink>(sinkCount);
-        var identity = ChannelRouteMap.Identity(fmt.Channels);
-
-        for (int i = 0; i < sinkCount; i++)
-        {
-            var sink = new NullAudioSink();
-            sinks.Add(sink);
-            mixer.RegisterSink(sink, fmt.Channels);
-        }
-
-        for (int i = 0; i < channelCount; i++)
-        {
-            var ch = new ConstantAudioChannel(fmt, 0.125f);
-            mixer.AddChannel(ch, identity);
-
-            for (int si = 0; si < sinks.Count; si++)
-                mixer.RouteTo(ch.Id, sinks[si], identity);
-        }
-
-        float[] dest = new float[frameCount * fmt.Channels];
-
-        // Warmup
-        mixer.FillOutputBuffer(dest, frameCount, fmt);
-
-        var sw = Stopwatch.StartNew();
-        for (int i = 0; i < iterations; i++)
-            mixer.FillOutputBuffer(dest, frameCount, fmt);
-        sw.Stop();
-
-        double totalUs = sw.Elapsed.TotalMilliseconds * 1000.0;
-        double perCallbackUs = totalUs / iterations;
-        Console.WriteLine($"[bench] audio ch={channelCount,2} sinks={sinkCount,2} frames={frameCount,4}  {perCallbackUs,9:F2} us/callback");
-    }
 
     private static void RunSuite(BasicPixelFormatConverter converter, int width, int height, int iterations)
     {
@@ -209,7 +161,7 @@ internal static class Program
         public void Dispose() { }
     }
 
-    private sealed class NullAudioSink : IAudioSink
+    private sealed class NullAudioSink : IAudioEndpoint
     {
         public string Name => nameof(NullAudioSink);
         public bool IsRunning => true;

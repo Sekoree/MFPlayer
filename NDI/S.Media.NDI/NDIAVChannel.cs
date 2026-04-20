@@ -105,7 +105,7 @@ public sealed class NDIAVChannel : IDisposable
     /// pre-buffering is done with <see cref="Task.WhenAll"/> across
     /// <see cref="WaitForAudioBufferAsync"/> and <see cref="WaitForVideoBufferAsync"/>,
     /// startup drift is near zero; any residual value represents runtime clock skew.
-    /// Pass the result to <see cref="IAVMixer.SetVideoChannelTimeOffset"/> to correct it.
+    /// Pass the result to <see cref="S.Media.Core.Routing.IAVRouter.SetInputTimeOffset"/> to correct it.
     /// </para>
     /// </summary>
     public bool TryGetAvDrift(out TimeSpan drift)

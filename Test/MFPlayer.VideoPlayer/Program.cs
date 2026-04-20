@@ -12,7 +12,8 @@ using S.Media.NDI;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.Core.Video;
 using S.Media.SDL3;
 
@@ -127,6 +128,11 @@ if (!File.Exists(filePath))
     return;
 }
 
+// ── 1b. Ask about NDI early (determines whether we need audio) ───────────────
+
+Console.Write("Enable NDI video sink? [y/N]: ");
+bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
+
 // ── 2. Open decoder ──────────────────────────────────────────────────────────
 
 Console.Write("Opening decoder… ");
@@ -135,7 +141,7 @@ try
 {
     decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions
     {
-        EnableAudio = true,
+        EnableAudio = enableNdi,   // only decode audio when NDI sink will consume it
         EnableVideo = true,
         // null = auto-detect: decoder outputs frames in the source's native pixel format
         // so the routing policy can select an efficient YUV shader path (no CPU conversion).
@@ -210,19 +216,18 @@ using (decoder)
 
     // ── 4. Wire up ───────────────────────────────────────────────────────
 
-    using var avMixer = new AVMixer(new AudioFormat(48000, 2), videoOutput.OutputFormat);
-    avMixer.AttachVideoOutput(videoOutput);
-    avMixer.AddVideoChannel(videoChannel);
+    using var router = new AVRouter();
+    var videoEpId = router.RegisterEndpoint(videoOutput);
+    router.SetClock(videoOutput.Clock);
+
+    var videoInputId = router.RegisterVideoInput(videoChannel);
+    router.CreateRoute(videoInputId, videoEpId);
 
     // Optional: route the same active channel to an NDI A/V sink.
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
     NDIAVSink? ndiSink = null;
-    VirtualAudioOutput? ndiAudioOutput = null;
-    AVMixer? ndiAudioMixer = null;
 
-    Console.Write("Enable NDI video sink? [y/N]: ");
-    bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
     if (enableNdi)
     {
         if (!NDIRuntime.IsSupportedCpu())
@@ -281,19 +286,15 @@ using (decoder)
                         videoPoolCount: 0,
                         videoMaxPendingFrames: 0,
                         audioFramesPerBuffer: 1024);
-                    avMixer.RegisterVideoSink(ndiSink);
-                    avMixer.RouteVideoChannelToSink(videoChannel.Id, ndiSink);
+                    var ndiEpId = router.RegisterEndpoint(ndiSink);
+                    router.CreateRoute(videoInputId, ndiEpId);
                     await ndiSink.StartAsync();
 
                     if (decoder.AudioChannels.Count > 0 && routeMap != null)
                     {
                         var sourceAudioChannel = decoder.AudioChannels[0];
-                        ndiAudioOutput = new VirtualAudioOutput(ndiAudioFormat!.Value, framesPerBuffer: 1024);
-                        ndiAudioMixer = new AVMixer(ndiAudioFormat.Value);
-                        ndiAudioMixer.AttachAudioOutput(ndiAudioOutput);
-                        ndiAudioMixer.RegisterAudioSink(ndiSink, ndiAudioFormat.Value.Channels);
-                        ndiAudioMixer.AddAudioChannel(sourceAudioChannel, routeMap);
-                        ndiAudioMixer.RouteAudioChannelToSink(sourceAudioChannel.Id, ndiSink, routeMap);
+                        var audioInputId = router.RegisterAudioInput(sourceAudioChannel);
+                        router.CreateRoute(audioInputId, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
                     }
 
                     Console.WriteLine($"  NDI sink enabled: {senderName} ({preset}, mode={(preferPerformanceOverQuality ? "perf" : "quality")})");
@@ -319,8 +320,7 @@ using (decoder)
 
     decoder.Start();
     await videoOutput.StartAsync();
-    if (ndiAudioOutput != null)
-        await ndiAudioOutput.StartAsync();
+    await router.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Close the window or press [Ctrl+C] to stop.");
@@ -330,7 +330,7 @@ using (decoder)
 
     var outputForStats = videoOutput;
     var channelForStats = videoChannel;
-    var endpointForStats = ndiSink as IVideoSink;
+    var endpointForStats = ndiSink as IVideoEndpoint;
     var statsTask = Task.Run(async () =>
     {
         SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
@@ -413,16 +413,9 @@ using (decoder)
     cts.Cancel();
     try { await statsTask; } catch (OperationCanceledException) { }
     await videoOutput.StopAsync();
-    if (ndiAudioOutput != null)
-    {
-        await ndiAudioOutput.StopAsync();
-        ndiAudioMixer?.Dispose();
-        ndiAudioOutput.Dispose();
-    }
     if (ndiSink != null)
     {
         await ndiSink.StopAsync();
-        avMixer.UnregisterVideoSink(ndiSink);
         ndiSink.Dispose();
     }
     ndiSender?.Dispose();

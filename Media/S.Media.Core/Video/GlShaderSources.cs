@@ -518,6 +518,35 @@ public static class GlShaderSources
         }
         """;
 
+    /// <summary>HUD text overlay vertex shader — transforms per-glyph quads.</summary>
+    public const string VertexHud = """
+        #version 330 core
+        layout(location = 0) in vec2 aPos;
+        layout(location = 1) in vec2 aUV;
+        uniform vec2 uScreenSize;
+        out vec2 vUV;
+        void main() {
+            vec2 ndc = (aPos / uScreenSize) * 2.0 - 1.0;
+            ndc.y = -ndc.y; // flip Y so (0,0) is top-left
+            gl_Position = vec4(ndc, 0.0, 1.0);
+            vUV = aUV;
+        }
+        """;
+
+    /// <summary>HUD text overlay fragment shader — samples font atlas with alpha blending.</summary>
+    public const string FragmentHud = """
+        #version 330 core
+        in vec2 vUV;
+        out vec4 fragColor;
+        uniform sampler2D uFontAtlas;
+        uniform vec4 uColor;
+        uniform vec4 uBgColor;
+        void main() {
+            float a = texture(uFontAtlas, vUV).a;
+            fragColor = mix(uBgColor, uColor, a);
+        }
+        """;
+
     public static readonly float[] FullscreenQuadVerts =
     [
         -1f, -1f, 0f, 1f,

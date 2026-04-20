@@ -1,7 +1,8 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg;
@@ -66,13 +67,14 @@ public sealed record PlaybackFailedEventArgs(PlaybackFailureStage Stage, Excepti
 
 /// <summary>
 /// High-level one-source one-output playback facade built on
-/// <see cref="FFmpegDecoder"/> and <see cref="AVMixer"/>.
+/// <see cref="FFmpegDecoder"/> and <see cref="AVRouter"/>.
 /// </summary>
 /// <remarks>
 /// Typical audio-only usage:
 /// <code>
-/// using var player = new MediaPlayer(audioOutput);
-/// player.PlaybackEnded += (_, _) => cts.Cancel();
+/// using var player = new MediaPlayer();
+/// player.AddEndpoint(audioOutput);
+/// player.PlaybackCompleted += (_, _) => cts.Cancel();
 /// await player.OpenAsync("file.mp3");
 /// await player.PlayAsync();
 /// try { await Task.Delay(Timeout.Infinite, cts.Token); }
@@ -82,33 +84,29 @@ public sealed record PlaybackFailedEventArgs(PlaybackFailureStage Stage, Excepti
 /// </remarks>
 public sealed class MediaPlayer : IDisposable
 {
-    private readonly IAudioOutput? _audioOutput;
-    private readonly IVideoOutput? _videoOutput;
+    private readonly AVRouter _router;
+    private readonly List<IMediaEndpoint> _endpoints = [];
+    private readonly List<EndpointId> _endpointIds = [];
 
     private FFmpegDecoder? _decoder;
-    private AVMixer?        _mixer;
     private float           _volume         = 1.0f;
     private bool            _decoderStarted;
     private bool            _disposed;
     private PlaybackState   _state = PlaybackState.Idle;
 
+    // Track registered input/route ids for current session
+    private InputId? _audioInputId;
+    private InputId? _videoInputId;
+    private readonly List<RouteId> _routeIds = [];
+
     // ── Construction ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Creates a <see cref="MediaPlayer"/> that routes decoded content to the supplied outputs.
-    /// Both outputs must already be opened (device and format configured) before calling
-    /// <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>.
-    /// Neither output is owned or disposed by the player — the caller retains ownership.
+    /// Creates a <see cref="MediaPlayer"/>. Endpoints can be added before or after construction.
     /// </summary>
-    /// <param name="audioOutput">Pre-opened audio output, or <see langword="null"/> for video-only.</param>
-    /// <param name="videoOutput">Pre-opened video output, or <see langword="null"/> for audio-only.</param>
-    public MediaPlayer(IAudioOutput? audioOutput = null, IVideoOutput? videoOutput = null)
+    public MediaPlayer()
     {
-        if (audioOutput == null && videoOutput == null)
-            throw new ArgumentException("At least one output (audio or video) must be provided.",
-                nameof(audioOutput));
-        _audioOutput = audioOutput;
-        _videoOutput = videoOutput;
+        _router = new AVRouter();
     }
 
     // ── Events ────────────────────────────────────────────────────────────────
@@ -120,57 +118,34 @@ public sealed class MediaPlayer : IDisposable
     [Obsolete("Use PlaybackCompleted with PlaybackCompletedReason.SourceEnded instead.")]
     public event EventHandler? PlaybackEnded;
 
-    /// <summary>Raised on every <see cref="PlaybackState"/> transition.</summary>
+    /// <inheritdoc cref="PlaybackStateChangedEventArgs"/>
     public event EventHandler<PlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
-    /// <summary>
-    /// Raised when playback finishes for any reason (source ended, user stopped,
-    /// replaced by a new <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/> call, or fault).
-    /// </summary>
+    /// <inheritdoc cref="PlaybackCompletedEventArgs"/>
     public event EventHandler<PlaybackCompletedEventArgs>? PlaybackCompleted;
 
-    /// <summary>
-    /// Raised when a transport operation (<see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>,
-    /// <see cref="PlayAsync"/>, <see cref="PauseAsync"/>, <see cref="StopAsync"/>) fails.
-    /// The original exception is also rethrown from the calling method.
-    /// </summary>
+    /// <inheritdoc cref="PlaybackFailedEventArgs"/>
     public event EventHandler<PlaybackFailedEventArgs>? PlaybackFailed;
 
     // ── Properties ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Returns <see langword="true"/> while the output is actively rendering.
-    /// </summary>
+    /// <summary>Whether the output is actively rendering.</summary>
     public bool IsPlaying => _decoderStarted && !_disposed;
 
-    /// <summary>
-    /// Current playback state. Poll-friendly alternative to <see cref="PlaybackStateChanged"/>.
-    /// </summary>
+    /// <summary>Current playback state.</summary>
     public PlaybackState State => _state;
 
-    /// <summary>
-    /// Total duration of the currently open media, or <see langword="null"/> when
-    /// no media is open or the duration is unknown (e.g. live streams).
-    /// </summary>
+    /// <summary>Total duration of the currently open media.</summary>
     public TimeSpan? Duration => _decoder?.Duration;
 
-    /// <summary>
-    /// When <see langword="true"/>, playback automatically restarts from the
-    /// beginning when the source ends.
-    /// </summary>
+    /// <summary>When true, playback restarts from the beginning on EOF.</summary>
     public bool IsLooping { get; set; }
 
-    /// <summary>
-    /// Current decode position.
-    /// Returns <see cref="TimeSpan.Zero"/> when no media is open.
-    /// </summary>
+    /// <summary>Current decode position.</summary>
     public TimeSpan Position =>
         AudioChannel?.Position ?? VideoChannel?.Position ?? TimeSpan.Zero;
 
-    /// <summary>
-    /// Normalized playback progress in the range [0..1].
-    /// Returns 0 when no media is open or the duration is unknown.
-    /// </summary>
+    /// <summary>Normalized playback progress [0..1].</summary>
     public double NormalizedPosition
     {
         get
@@ -181,47 +156,73 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    /// <summary>
-    /// Playback volume applied to the audio channel. Range [0..2], default 1.0.
-    /// May be set before or after
-    /// <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>;
-    /// the value is preserved across <see cref="OpenAsync"/> calls.
-    /// </summary>
+    /// <summary>Playback volume. Range [0..2], default 1.0.</summary>
     public float Volume
     {
         get => _volume;
         set
         {
             _volume = value;
-            if (AudioChannel is { } ch) ch.Volume = value;
+            if (_audioInputId.HasValue)
+                _router.SetInputVolume(_audioInputId.Value, value);
         }
     }
 
-    /// <summary>
-    /// The first audio channel of the currently open decoder,
-    /// or <see langword="null"/> when no media is open or the source has no audio.
-    /// </summary>
+    /// <summary>First audio channel of the current decoder.</summary>
     public IAudioChannel? AudioChannel => _decoder?.FirstAudioChannel;
 
-    /// <summary>
-    /// The first video channel of the currently open decoder,
-    /// or <see langword="null"/> when no media is open or the source has no video.
-    /// </summary>
+    /// <summary>First video channel of the current decoder.</summary>
     public IVideoChannel? VideoChannel => _decoder?.FirstVideoChannel;
 
+    /// <summary>The underlying router for advanced routing scenarios.</summary>
+    public IAVRouter Router => _router;
+
+    // ── Endpoint management ───────────────────────────────────────────────────
+
     /// <summary>
-    /// Exposes the currently active mixer for advanced routing scenarios.
-    /// Returns <see langword="null"/> when no media session is attached.
+    /// Registers an audio endpoint. If the endpoint is <see cref="IClockCapableEndpoint"/>,
+    /// the router's clock is automatically overridden to use it.
     /// </summary>
-    public IAVMixer? Mixer => _mixer;
+    public void AddEndpoint(IAudioEndpoint endpoint)
+    {
+        var id = _router.RegisterEndpoint(endpoint);
+        _endpoints.Add(endpoint);
+        _endpointIds.Add(id);
+        AutoRouteToEndpoint(id, audio: true, video: false);
+    }
+
+    /// <summary>Registers a video endpoint.</summary>
+    public void AddEndpoint(IVideoEndpoint endpoint)
+    {
+        var id = _router.RegisterEndpoint(endpoint);
+        _endpoints.Add(endpoint);
+        _endpointIds.Add(id);
+        AutoRouteToEndpoint(id, audio: false, video: true);
+    }
+
+    /// <summary>Registers a dual audio+video endpoint.</summary>
+    public void AddEndpoint(IAVEndpoint endpoint)
+    {
+        var id = _router.RegisterEndpoint(endpoint);
+        _endpoints.Add(endpoint);
+        _endpointIds.Add(id);
+        AutoRouteToEndpoint(id, audio: true, video: true);
+    }
+
+    /// <summary>Removes a previously added endpoint.</summary>
+    public void RemoveEndpoint(IMediaEndpoint endpoint)
+    {
+        int idx = _endpoints.IndexOf(endpoint);
+        if (idx < 0) return;
+        var epId = _endpointIds[idx];
+        _router.UnregisterEndpoint(epId);
+        _endpoints.RemoveAt(idx);
+        _endpointIds.RemoveAt(idx);
+    }
 
     // ── Open ──────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Opens the media file at <paramref name="path"/> and prepares the pipeline.
-    /// Any previously open media is stopped and released first.
-    /// Call <see cref="PlayAsync"/> to begin rendering.
-    /// </summary>
+    /// <summary>Opens the media file and prepares the pipeline.</summary>
     public async Task OpenAsync(
         string                path,
         FFmpegDecoderOptions? options = null,
@@ -243,11 +244,7 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    /// <summary>
-    /// Opens the media from <paramref name="stream"/> and prepares the pipeline.
-    /// Any previously open media is stopped and released first.
-    /// Call <see cref="PlayAsync"/> to begin rendering.
-    /// </summary>
+    /// <summary>Opens the media from a stream and prepares the pipeline.</summary>
     public async Task OpenAsync(
         Stream                stream,
         FFmpegDecoderOptions? options   = null,
@@ -272,17 +269,12 @@ public sealed class MediaPlayer : IDisposable
 
     // ── Transport ─────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Starts or resumes playback of the currently open media.
-    /// The decoder is started on the first call; subsequent calls resume the hardware output.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">No media has been opened.</exception>
+    /// <summary>Starts or resumes playback.</summary>
     public async Task PlayAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_decoder == null)
-            throw new InvalidOperationException(
-                "No media is open. Call OpenAsync first.");
+            throw new InvalidOperationException("No media is open. Call OpenAsync first.");
 
         try
         {
@@ -292,10 +284,11 @@ public sealed class MediaPlayer : IDisposable
                 _decoderStarted = true;
             }
 
-            if (_audioOutput != null)
-                await _audioOutput.StartAsync(ct).ConfigureAwait(false);
-            if (_videoOutput != null)
-                await _videoOutput.StartAsync(ct).ConfigureAwait(false);
+            // Start all registered endpoints
+            foreach (var ep in _endpoints)
+                await ep.StartAsync(ct).ConfigureAwait(false);
+
+            await _router.StartAsync(ct).ConfigureAwait(false);
 
             _isRunning = true;
             SetState(PlaybackState.Playing);
@@ -308,19 +301,14 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    /// <summary>
-    /// Pauses playback by stopping the hardware output callbacks.
-    /// The decode pipeline keeps running so the ring buffers stay warm.
-    /// Call <see cref="PlayAsync"/> to resume from the current position.
-    /// </summary>
+    /// <summary>Pauses playback.</summary>
     public async Task PauseAsync(CancellationToken ct = default)
     {
         try
         {
-            if (_audioOutput != null)
-                await _audioOutput.StopAsync(ct).ConfigureAwait(false);
-            if (_videoOutput != null)
-                await _videoOutput.StopAsync(ct).ConfigureAwait(false);
+            await _router.StopAsync(ct).ConfigureAwait(false);
+            foreach (var ep in _endpoints)
+                await ep.StopAsync(ct).ConfigureAwait(false);
             SetState(PlaybackState.Paused);
         }
         catch (Exception ex)
@@ -331,10 +319,7 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    /// <summary>
-    /// Stops playback and releases the current media. The player may be
-    /// reused by calling <see cref="OpenAsync"/> again.
-    /// </summary>
+    /// <summary>Stops playback and releases the current media.</summary>
     public async Task StopAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -352,17 +337,10 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    /// <summary>
-    /// Seeks to <paramref name="position"/>.
-    /// Silently ignored for non-seekable streams.
-    /// </summary>
+    /// <summary>Seeks to <paramref name="position"/>.</summary>
     public void Seek(TimeSpan position) => _decoder?.Seek(position);
 
-    /// <summary>
-    /// Convenience: opens the media and immediately starts playback.
-    /// Equivalent to calling <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/>
-    /// followed by <see cref="PlayAsync"/>.
-    /// </summary>
+    /// <summary>Opens and immediately starts playback.</summary>
     public async Task OpenAndPlayAsync(
         string                path,
         FFmpegDecoderOptions? options = null,
@@ -372,9 +350,7 @@ public sealed class MediaPlayer : IDisposable
         await PlayAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Convenience: opens the media from a stream and immediately starts playback.
-    /// </summary>
+    /// <summary>Opens from stream and immediately starts playback.</summary>
     public async Task OpenAndPlayAsync(
         Stream                stream,
         FFmpegDecoderOptions? options   = null,
@@ -385,145 +361,87 @@ public sealed class MediaPlayer : IDisposable
         await PlayAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Registers an additional audio sink and optionally routes the current first audio channel.
-    /// </summary>
-    public void AddAudioSink(IAudioSink sink, ChannelRouteMap? routeMap = null, int channels = 0, bool autoRouteFirstChannel = true)
-    {
-        ArgumentNullException.ThrowIfNull(sink);
-        var mixer = RequireMixer();
-        mixer.RegisterAudioSink(sink, channels);
-
-        if (autoRouteFirstChannel && AudioChannel is { } ch)
-        {
-            var map = routeMap ?? ChannelRouteMap.Auto(ch.SourceFormat.Channels, channels > 0 ? channels : _audioOutput?.HardwareFormat.Channels ?? ch.SourceFormat.Channels);
-            mixer.RouteAudioChannelToSink(ch.Id, sink, map);
-        }
-    }
-
-    /// <summary>
-    /// Registers an additional video sink and optionally routes the current first video channel.
-    /// </summary>
-    public void AddVideoSink(IVideoSink sink, bool autoRouteFirstChannel = true)
-    {
-        ArgumentNullException.ThrowIfNull(sink);
-        var mixer = RequireMixer();
-        mixer.RegisterVideoSink(sink);
-
-        if (autoRouteFirstChannel && VideoChannel is { } ch)
-            mixer.RouteVideoChannelToSink(ch.Id, sink);
-    }
-
-    /// <summary>
-    /// Registers an additional audio endpoint and optionally routes the current first audio channel.
-    /// </summary>
-    public void AddAudioEndpoint(IAudioBufferEndpoint endpoint, ChannelRouteMap? routeMap = null, int channels = 0, bool autoRouteFirstChannel = true)
-    {
-        ArgumentNullException.ThrowIfNull(endpoint);
-        var mixer = RequireMixer();
-        mixer.RegisterAudioEndpoint(endpoint, channels);
-
-        if (autoRouteFirstChannel && AudioChannel is { } ch)
-        {
-            if (routeMap != null)
-                mixer.RouteAudioChannelToEndpoint(ch.Id, endpoint, routeMap);
-            else
-                mixer.RouteAudioChannelToEndpoint(ch.Id, endpoint);
-        }
-    }
-
-    /// <summary>
-    /// Registers an additional video endpoint and optionally routes the current first video channel.
-    /// </summary>
-    public void AddVideoEndpoint(IVideoFrameEndpoint endpoint, bool autoRouteFirstChannel = true)
-    {
-        ArgumentNullException.ThrowIfNull(endpoint);
-        var mixer = RequireMixer();
-        mixer.RegisterVideoEndpoint(endpoint);
-
-        if (autoRouteFirstChannel && VideoChannel is { } ch)
-            mixer.RouteVideoChannelToEndpoint(ch.Id, endpoint);
-    }
-
-    public void RemoveAudioSink(IAudioSink sink) => RequireMixer().UnregisterAudioSink(sink);
-    public void RemoveVideoSink(IVideoSink sink) => RequireMixer().UnregisterVideoSink(sink);
-    public void RemoveAudioEndpoint(IAudioBufferEndpoint endpoint) => RequireMixer().UnregisterAudioEndpoint(endpoint);
-    public void RemoveVideoEndpoint(IVideoFrameEndpoint endpoint) => RequireMixer().UnregisterVideoEndpoint(endpoint);
-
     // ── IDisposable ───────────────────────────────────────────────────────────
 
-    /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
-        // Stop outputs first so the RT callback cannot race with session teardown (§3.1).
         if (_isRunning)
         {
-            try { _audioOutput?.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
-            try { _videoOutput?.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
+            try { _router.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
+            foreach (var ep in _endpoints)
+            {
+                try { ep.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
+            }
             _isRunning = false;
         }
 
         ReleaseSession();
+        _router.Dispose();
         SetState(PlaybackState.Stopped);
     }
 
     // ── Private ───────────────────────────────────────────────────────────────
 
-    // Track whether outputs are actively running so Dispose can stop them.
     private volatile bool _isRunning;
 
     private void AttachDecoder(FFmpegDecoder decoder)
     {
-        var audioFmt = _audioOutput?.HardwareFormat ?? new AudioFormat(48000, 2);
-        var videoFmt = _videoOutput?.OutputFormat;
-
-        var mixer = videoFmt.HasValue
-            ? new AVMixer(audioFmt, videoFmt.Value)
-            : new AVMixer(audioFmt);
-
-        if (_audioOutput != null && decoder.FirstAudioChannel is { } audioCh)
+        if (decoder.FirstAudioChannel is { } audioCh)
         {
-            mixer.AddAudioChannel(audioCh);
+            var inputId = _router.RegisterAudioInput(audioCh);
+            _audioInputId = inputId;
             audioCh.Volume = _volume;
-            mixer.AttachAudioOutput(_audioOutput);
+
+            // Create routes to all audio-capable endpoints
+            for (int i = 0; i < _endpoints.Count; i++)
+            {
+                if (_endpoints[i] is IAudioEndpoint)
+                    _routeIds.Add(_router.CreateRoute(inputId, _endpointIds[i]));
+            }
         }
 
-        if (_videoOutput != null && decoder.FirstVideoChannel is { } videoCh)
+        if (decoder.FirstVideoChannel is { } videoCh)
         {
-            mixer.AddVideoChannel(videoCh);
-            mixer.AttachVideoOutput(_videoOutput);
+            var inputId = _router.RegisterVideoInput(videoCh);
+            _videoInputId = inputId;
+
+            // Create routes to all video-capable endpoints
+            for (int i = 0; i < _endpoints.Count; i++)
+            {
+                if (_endpoints[i] is IVideoEndpoint)
+                    _routeIds.Add(_router.CreateRoute(inputId, _endpointIds[i]));
+            }
         }
 
         decoder.EndOfMedia += OnEndOfMedia;
-
         _decoder        = decoder;
-        _mixer          = mixer;
         _decoderStarted = false;
     }
 
-    /// <summary>
-    /// Stops outputs (if running), releases the decoder/mixer session, and optionally
-    /// raises <see cref="PlaybackCompleted"/>.  Used by both <see cref="StopAsync"/> and
-    /// <see cref="OpenAsync(string,FFmpegDecoderOptions?,CancellationToken)"/> (to tear down
-    /// the previous session before opening a new one).
-    /// </summary>
+    // Clock auto-registration is now handled by AVRouter.RegisterEndpoint
+    // when the endpoint implements IClockCapableEndpoint.
+
+    private void AutoRouteToEndpoint(EndpointId epId, bool audio, bool video)
+    {
+        // If there's already an open session, auto-route existing inputs
+        if (audio && _audioInputId.HasValue)
+            _routeIds.Add(_router.CreateRoute(_audioInputId.Value, epId));
+        if (video && _videoInputId.HasValue)
+            _routeIds.Add(_router.CreateRoute(_videoInputId.Value, epId));
+    }
+
     private async Task CloseAsync(CancellationToken ct, PlaybackCompletedReason? closeReason = null)
     {
-        bool hadSession = _decoder != null || _mixer != null || _decoderStarted;
+        bool hadSession = _decoder != null || _decoderStarted;
         if (_decoderStarted)
         {
-            if (_audioOutput != null)
+            try { await _router.StopAsync(ct).ConfigureAwait(false); } catch { /* best-effort */ }
+            foreach (var ep in _endpoints)
             {
-                try { await _audioOutput.StopAsync(ct).ConfigureAwait(false); }
-                catch { /* best-effort */ }
-            }
-            if (_videoOutput != null)
-            {
-                try { await _videoOutput.StopAsync(ct).ConfigureAwait(false); }
-                catch { /* best-effort */ }
+                try { await ep.StopAsync(ct).ConfigureAwait(false); } catch { /* best-effort */ }
             }
             _isRunning = false;
         }
@@ -534,17 +452,27 @@ public sealed class MediaPlayer : IDisposable
 
     private void ReleaseSession()
     {
+        // Remove routes and inputs from router
+        foreach (var routeId in _routeIds)
+            _router.RemoveRoute(routeId);
+        _routeIds.Clear();
+
+        if (_audioInputId.HasValue)
+        {
+            _router.UnregisterInput(_audioInputId.Value);
+            _audioInputId = null;
+        }
+        if (_videoInputId.HasValue)
+        {
+            _router.UnregisterInput(_videoInputId.Value);
+            _videoInputId = null;
+        }
+
         _decoder?.Dispose();
-        _mixer?.Dispose();
         _decoder        = null;
-        _mixer          = null;
         _decoderStarted = false;
     }
 
-    /// <summary>
-    /// Called by the decoder's <see cref="FFmpegDecoder.EndOfMedia"/> event on a ThreadPool thread.
-    /// When <see cref="IsLooping"/> is set, seeks back to the start instead of signalling completion.
-    /// </summary>
     private void OnEndOfMedia(object? sender, EventArgs e)
     {
         if (IsLooping && _decoder != null && !_disposed)
@@ -568,8 +496,4 @@ public sealed class MediaPlayer : IDisposable
         _state = next;
         PlaybackStateChanged?.Invoke(this, new PlaybackStateChangedEventArgs(prev, next));
     }
-
-    private IAVMixer RequireMixer()
-        => _mixer ?? throw new InvalidOperationException("No active media session. Call OpenAsync first.");
 }
-

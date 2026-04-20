@@ -42,7 +42,12 @@ public class HardwareClock : MediaClockBase
 
     // ── IMediaClock ────────────────────────────────────────────────────────
 
-    public override double   SampleRate => _sampleRate;
+    /// <summary>
+    /// The hardware sample rate. Exposed as a concrete property (no longer on IMediaClock).
+    /// Used by PortAudioClock and other hardware-backed clocks.
+    /// </summary>
+    public double SampleRate => _sampleRate;
+
     public override bool     IsRunning  => _running;
 
     public override TimeSpan Position

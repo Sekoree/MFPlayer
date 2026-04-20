@@ -3,9 +3,8 @@ using System.Runtime.CompilerServices;
 namespace S.Media.Core;
 
 /// <summary>
-/// Static helpers for the copy-on-write array pattern used throughout the mixer and
-/// router layers (<see cref="S.Media.Core.Mixing.AudioMixer"/>,
-/// <see cref="S.Media.Core.Video.VideoMixer"/>, <see cref="S.Media.Core.Audio.AggregateOutput"/>).
+/// Static helpers for the copy-on-write array pattern used throughout the
+/// router layer (<see cref="S.Media.Core.Routing.AVRouter"/>).
 /// <para>
 /// <b>Pattern:</b> A <c>volatile T[]</c> field is read lock-free on the RT thread.
 /// The management thread mutates the array under a lock by creating a new copy with

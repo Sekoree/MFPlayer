@@ -13,7 +13,8 @@ using S.Media.NDI;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.Core.Video;
 using S.Media.SDL3;
 
@@ -109,15 +110,16 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    using var avMixer = new AVMixer(new AudioFormat(48000, 2), videoOutput.OutputFormat);
-    avMixer.AttachVideoOutput(videoOutput);
-    avMixer.AddVideoChannel(videoChannel);
+    using var router = new AVRouter();
+    var videoEpId = router.RegisterEndpoint(videoOutput);
+    router.SetClock(videoOutput.Clock);
+
+    var videoInputId = router.RegisterVideoInput(videoChannel);
+    router.CreateRoute(videoInputId, videoEpId);
 
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
     NDIAVSink? ndiSink = null;
-    VirtualAudioOutput? ndiAudioOutput = null;
-    AVMixer? ndiAudioMixer = null;
 
     Console.Write("Enable NDI video sink? [y/N]: ");
     bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
@@ -170,18 +172,14 @@ using (decoder)
                         videoPoolCount: 0,
                         videoMaxPendingFrames: 0,
                         audioFramesPerBuffer: 1024);
-                    avMixer.RegisterVideoSink(ndiSink);
-                    avMixer.RouteVideoChannelToSink(videoChannel.Id, ndiSink);
+                    var ndiEpId = router.RegisterEndpoint(ndiSink);
+                    router.CreateRoute(videoInputId, ndiEpId);
                     await ndiSink.StartAsync();
 
                     if (audioChannel != null && routeMap != null)
                     {
-                        ndiAudioOutput = new VirtualAudioOutput(ndiAudioFormat!.Value, framesPerBuffer: 1024);
-                        ndiAudioMixer = new AVMixer(ndiAudioFormat.Value);
-                        ndiAudioMixer.AttachAudioOutput(ndiAudioOutput);
-                        ndiAudioMixer.RegisterAudioSink(ndiSink, ndiAudioFormat.Value.Channels);
-                        ndiAudioMixer.AddAudioChannel(audioChannel, routeMap);
-                        ndiAudioMixer.RouteAudioChannelToSink(audioChannel.Id, ndiSink, routeMap);
+                        var audioInputId = router.RegisterAudioInput(audioChannel);
+                        router.CreateRoute(audioInputId, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
                     }
 
                     Console.WriteLine($"  NDI sink enabled: {senderName} ({preset})");
@@ -203,8 +201,7 @@ using (decoder)
 
     decoder.Start();
     await videoOutput.StartAsync();
-    if (ndiAudioOutput != null)
-        await ndiAudioOutput.StartAsync();
+    await router.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Targets: SDL3 leader" + (ndiSink != null ? " + NDI sink" : string.Empty));
@@ -257,17 +254,9 @@ using (decoder)
     try { await statsTask; } catch (OperationCanceledException) { }
     await videoOutput.StopAsync();
 
-    if (ndiAudioOutput != null)
-    {
-        await ndiAudioOutput.StopAsync();
-        ndiAudioMixer?.Dispose();
-        ndiAudioOutput.Dispose();
-    }
-
     if (ndiSink != null)
     {
         await ndiSink.StopAsync();
-        avMixer.UnregisterVideoSink(ndiSink);
         ndiSink.Dispose();
     }
 

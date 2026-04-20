@@ -24,7 +24,8 @@ using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.Core.Video;
 using S.Media.NDI;
 using S.Media.PortAudio;
@@ -281,19 +282,22 @@ using (ndiRuntime)
             Console.WriteLine("  (No video channel — audio only)");
         }
 
-        // ── 8c. Create AV mixer ───────────────────────────────────────────────
+        // ── 8c. Create AV router ───────────────────────────────────────────────
 
-        using var avMixer = videoOutput != null
-            ? new AVMixer(output.HardwareFormat, videoOutput.OutputFormat)
-            : new AVMixer(output.HardwareFormat);
-        avMixer.AttachAudioOutput(output);
-        avMixer.AddAudioChannel(audioChannel, routeMap);
+        using var router = new AVRouter();
+        var audioEpId = router.RegisterEndpoint(output);
+        router.SetClock(output.Clock);
 
+        var audioInputId = router.RegisterAudioInput(audioChannel);
+        router.CreateRoute(audioInputId, audioEpId, new AudioRouteOptions { ChannelMap = routeMap });
+
+        InputId? videoInputId = null;
         if (videoOutput != null && videoChannel != null)
         {
-            avMixer.AttachVideoOutput(videoOutput);
-            avMixer.AddVideoChannel(videoChannel);
-            avMixer.VideoLiveMode = profile.VideoLiveMode;
+            var videoEpId = router.RegisterEndpoint(videoOutput);
+            videoInputId = router.RegisterVideoInput(videoChannel);
+            router.CreateRoute(videoInputId.Value, videoEpId);
+            router.VideoLiveMode = profile.VideoLiveMode;
 
             if (profile.VideoLiveMode)
                 Console.WriteLine("  VideoMixer: LiveMode=ON (newest-frame, no PTS scheduling)");
@@ -329,6 +333,7 @@ using (ndiRuntime)
             await output.StartAsync();
             if (videoOutput != null)
                 await videoOutput.StartAsync();
+            await router.StartAsync();
         }
         catch (Exception ex)
         {
@@ -369,8 +374,9 @@ using (ndiRuntime)
         // drift = audio.Position − video.Position
         //   negative → video is ahead  → increase offset (hold video frames longer)
         //   positive → audio is ahead  → decrease offset (release video frames sooner)
-        if (videoChannel != null && videoOutput != null)
+        if (videoChannel != null && videoOutput != null && videoInputId.HasValue)
         {
+            var vidInputId = videoInputId.Value;
             _ = Task.Run(async () =>
             {
                 const double MinDriftMs = 20;
@@ -378,6 +384,7 @@ using (ndiRuntime)
                 const double CorrectionGain = 0.50;
                 const double MaxStepMs = 40;
                 const double MaxAbsOffsetMs = 250;
+                double currentOffsetMs = 0;
 
                 // Skip the first interval to let both streams settle after startup.
                 try { await Task.Delay(30_000, cts.Token); } catch (OperationCanceledException) { return; }
@@ -393,11 +400,11 @@ using (ndiRuntime)
                         }
                         else if (absDriftMs >= MinDriftMs)
                         {
-                            var currentOffset = avMixer.GetVideoChannelTimeOffset(videoChannel.Id);
                             double requestedStepMs = -drift.TotalMilliseconds * CorrectionGain;
                             double clampedStepMs = Math.Clamp(requestedStepMs, -MaxStepMs, MaxStepMs);
-                            double nextOffsetMs = Math.Clamp(currentOffset.TotalMilliseconds + clampedStepMs, -MaxAbsOffsetMs, MaxAbsOffsetMs);
-                            avMixer.SetVideoChannelTimeOffset(videoChannel.Id, TimeSpan.FromMilliseconds(nextOffsetMs));
+                            double nextOffsetMs = Math.Clamp(currentOffsetMs + clampedStepMs, -MaxAbsOffsetMs, MaxAbsOffsetMs);
+                            currentOffsetMs = nextOffsetMs;
+                            router.SetInputTimeOffset(vidInputId, TimeSpan.FromMilliseconds(nextOffsetMs));
                             Console.WriteLine(
                                 $"  [AV-sync] drift={drift.TotalMilliseconds:+0.0;-0.0}ms " +
                                 $"→ step {clampedStepMs:+0.0;-0.0}ms (offset={nextOffsetMs:+0.0;-0.0}ms)");

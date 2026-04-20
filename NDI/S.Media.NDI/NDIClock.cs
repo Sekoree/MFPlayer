@@ -20,7 +20,8 @@ public sealed class NDIClock : MediaClockBase
     public override TimeSpan Position =>
         _running ? _lastFramePosition + (_sw.Elapsed - _swAtLastFrame) : _lastFramePosition;
 
-    public override double SampleRate => _sampleRate;
+    /// <summary>Nominal sample rate (exposed as a concrete property, no longer on IMediaClock).</summary>
+    public double SampleRate => _sampleRate;
     public override bool   IsRunning  => _running;
 
     /// <param name="sampleRate">Nominal sample rate (used by consumers; NDI frame sync handles actual timing).</param>

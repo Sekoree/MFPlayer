@@ -4,12 +4,13 @@ using PALib;
 using PALib.Types.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
+using S.Media.Core.Media.Endpoints;
 
 namespace S.Media.PortAudio;
 
 /// <summary>
-/// <see cref="IAudioSink"/> backed by a PortAudio blocking-write stream.
-/// Use as a secondary destination in <see cref="S.Media.Core.Audio.AggregateOutput"/>.
+/// <see cref="IAudioEndpoint"/> backed by a PortAudio blocking-write stream.
+/// Use as a secondary audio destination registered in <see cref="S.Media.Core.Routing.AVRouter"/>.
 ///
 /// <para><b>Two-thread architecture:</b></para>
 /// <list type="bullet">
@@ -26,7 +27,7 @@ namespace S.Media.PortAudio;
 /// When the pool is empty the buffer is dropped (counted via <see cref="PoolMissDrops"/>).
 /// </para>
 /// </summary>
-public sealed class PortAudioSink : IAudioSink
+public sealed class PortAudioSink : IAudioEndpoint
 {
     private static readonly ILogger Log = PortAudioLogging.GetLogger(nameof(PortAudioSink));
 
@@ -113,7 +114,7 @@ public sealed class PortAudioSink : IAudioSink
         var err = TryOpenSinkStream(device, targetFormat, framesPerBuffer, out _stream);
 
         // If the requested sample rate isn't supported, fall back to the device's
-        // default rate.  The AudioMixer in AggregateOutput will resample automatically.
+        // default rate.  The AVRouter's per-route resampler will resample automatically.
         if (err == PaError.paInvalidSampleRate)
         {
             int deviceRate = device.DefaultSampleRate > 0

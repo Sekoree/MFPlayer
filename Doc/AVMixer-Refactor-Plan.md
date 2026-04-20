@@ -477,7 +477,7 @@ are summed — this is the only "mixing" the graph does.
 | Per-route channel map + gain | Applied during forwarding (lightweight, RT-safe) |
 | Per-input volume | Applied before forwarding |
 | Per-endpoint gain | Applied after accumulation, before delivery |
-| Clock authority selection | `SetClock` — override or revert to internal |
+| Clock priority selection | `RegisterClock`/`UnregisterClock`/`SetClock` — priority-based with auto-fallback |
 | A/V drift monitoring | Reads channel positions |
 | PTS scheduling | VideoPresenter, per-endpoint instance |
 
@@ -582,24 +582,50 @@ router itself fills that role. `VirtualClockEndpoint` is still useful when you
 want a _specific_ tick cadence (e.g. matching a target frame rate for NDI send),
 but for the common "just keep running" case, the router's internal clock suffices.
 
-**Clock override (`SetClock`):**
+**Clock priority system (`RegisterClock` / `UnregisterClock` / `SetClock`):**
 
-The router's effective `Clock` is its `InternalClock` by default. You can override
-it at any time with `SetClock(someClock)`:
+The router maintains a **priority-based clock registry**. Multiple clocks can be
+registered at different priority tiers; the router automatically selects the
+highest-priority one. If the active clock is unregistered, the router falls back
+to the next-highest priority clock (ultimately the internal clock).
 
-- Pass a hardware endpoint's clock: `router.SetClock(portAudioOutput.Clock)`
-- Pass an NDI sink's clock: `router.SetClock(ndiSink.Clock)`
-- Pass another router's clock: `router.SetClock(otherRouter.Clock)`
-- Pass `null` to revert to the internal clock: `router.SetClock(null)`
+Priority tiers (`ClockPriority` enum):
 
-The override clock is **not** owned by the router — the router does not dispose it.
-The router just reads its position for PTS scheduling and push-endpoint timing.
+| Tier | Value | Description |
+|---|---|---|
+| `Internal` | 0 | Built-in StopwatchClock. Always present. Users don't register at this level. |
+| `Hardware` | 100 | Local hardware clocks: PortAudio, SDL3 video, virtual tick endpoint. Auto-assigned when an `IClockCapableEndpoint` is registered. |
+| `External` | 200 | Network/remote clocks: NDI source clock, PTP/genlock, remote transport. |
+| `Override` | 300 | Manual override. Always wins. Set via `SetClock(clock)`. |
 
-There is no "clock authority" concept — just "internal clock" and "optional override".
-This keeps the API simple: one method, one property, no selection/fallback logic.
+Within the same tier, the most recently registered clock wins.
 
-If the override clock stops or is disposed externally, the router detects this and
-falls back to its internal clock with a warning log.
+**Auto-registration:** when an endpoint implementing `IClockCapableEndpoint` is
+registered via `RegisterEndpoint(...)`, its clock is automatically registered at
+`Hardware` priority (configurable via `AVRouterOptions.DefaultEndpointClockPriority`).
+When the endpoint is unregistered, its clock is automatically removed.
+
+This means `MediaPlayer` and most test apps no longer need to call `SetClock`
+manually — just registering a PortAudio endpoint gives the router a hardware clock.
+
+**API:**
+
+```csharp
+// Register a clock at a specific priority
+router.RegisterClock(ndiSource.Clock, ClockPriority.External);
+
+// Auto-registered at Hardware priority when endpoint is registered:
+router.RegisterEndpoint(portAudioOutput); // ← also registers portAudioOutput.Clock
+
+// Manual override (Override priority — always wins)
+router.SetClock(someSpecialClock);
+
+// Remove the override, fall back to priority selection
+router.SetClock(null);
+
+// Explicitly unregister a clock
+router.UnregisterClock(ndiSource.Clock);
+```
 
 ### Clock override examples
 
@@ -607,36 +633,45 @@ falls back to its internal clock with a warning log.
 // Default: router uses its own internal stopwatch clock
 var router = new AVRouter();
 
-// Override with hardware audio clock for better sync
+// Registering a PortAudio endpoint auto-registers its clock at Hardware priority
 var hwEpId = router.RegisterEndpoint(portAudioOutput);
-router.SetClock(portAudioOutput.Clock);
+// router.Clock is now portAudioOutput.Clock (auto-selected)
 
-// Override with NDI receive clock
-router.SetClock(ndiSource.Clock);
+// Register an NDI clock at External priority — takes over automatically
+router.RegisterClock(ndiSource.Clock, ClockPriority.External);
+// router.Clock is now ndiSource.Clock
+
+// Unregister NDI clock — falls back to PortAudio (Hardware)
+router.UnregisterClock(ndiSource.Clock);
+// router.Clock is now portAudioOutput.Clock again
+
+// Manual override always wins regardless of other registrations
+router.SetClock(customClock); // Override priority
+// router.Clock is customClock
+
+// Revert to automatic priority selection
+router.SetClock(null);
 
 // Sync two routers
 var routerA = new AVRouter();
 var routerB = new AVRouter();
-routerA.SetClock(portAudioOutput.Clock);
+routerA.RegisterEndpoint(portAudioOutput); // auto-selects HW clock
 routerB.SetClock(routerA.Clock); // follows routerA's effective clock
-
-// Revert to internal
-router.SetClock(null);
 ```
 
 ### Multi-router clock sharing
 
-Multiple `AVRouter` instances can be synchronized via `SetClock`:
+Multiple `AVRouter` instances can be synchronized via clock registration:
 
 ```csharp
 var routerA = new AVRouter();
 var routerB = new AVRouter();
 
-// Router A uses hardware audio clock
-routerA.SetClock(portAudioOutput.Clock);
+// Router A auto-selects hardware clock from endpoint
+routerA.RegisterEndpoint(portAudioOutput);
 
-// Router B follows router A
-routerB.SetClock(routerA.Clock);
+// Router B follows router A's effective clock
+routerB.RegisterClock(routerA.Clock, ClockPriority.External);
 ```
 
 - Push endpoints on the follower router are driven by the shared clock's
@@ -654,10 +689,64 @@ routerB.SetClock(routerA.Clock);
 - NDI send router following the playback router's clock so NDI output timestamps
   stay aligned with local hardware output.
 
-**Drift:** when router B's pull endpoints have their own hardware clocks (different
-sound card), the same cross-clock drift correction applies — the graph detects the
-mismatch between the external clock and the endpoint's clock and inserts a drift
-corrector on affected routes.
+### Cross-clock drift handling
+
+**Problem:** when the router has multiple inputs whose timestamps originate from
+different physical clocks (e.g. a local file decoder using PTS from a local
+stopwatch, plus an NDI source using the NDI sender's clock), the router's chosen
+clock will only be in sync with _one_ of those sources. The other input's
+timestamps will slowly drift.
+
+This also applies when multiple clocks are registered at the same priority tier —
+the router picks one, but the other clock's time base still governs its input's
+timestamps.
+
+**Solution: per-input PTS drift correction (implemented in `AVRouter`).**
+
+The router's `VideoPresentCallbackForEndpoint` already tracks a per-input PTS
+origin and applies exponential-smoothing drift correction on every presented
+frame. This compensates for clock-rate differences between the source's timestamp
+clock and the router's effective clock, preventing drift accumulation over long
+sessions.
+
+**How it works:**
+
+1. On the first frame from an input, the router records the PTS origin and the
+   clock position at that moment.
+2. On each subsequent frame, the router computes:
+   `error = (frame.Pts - ptsOrigin) - (clockPosition - clockOrigin)`
+3. The PTS origin is nudged by `error × gain` (default gain = 0.005).
+4. At 60 fps this gives a ~3.3 s time constant — fast enough to track real HW
+   drift (~100 ppm typical), slow enough to be invisible in playback.
+
+**Audio side:** the same drift manifests as gradual ring-buffer over/underrun.
+The `AudioFillCallbackForEndpoint` should apply equivalent drift tracking when
+the input's sample rate and the endpoint's sample rate come from different
+physical clocks. The per-route resampler's effective ratio can be micro-adjusted
+to absorb drift (same technique used by `PortAudioSink.DriftCorrector` today).
+
+**Multiple same-priority clocks scenario:**
+
+When two `External` clocks are registered (e.g. NDI source A's clock and NDI
+source B's clock), the router picks the most recently registered one as the
+effective clock. Input B's timestamps will drift relative to input A's clock.
+The per-input drift correction handles this transparently — input B's PTS origin
+is continuously nudged so its frames stay in sync with the effective clock.
+
+```
+Example: NDI source A (clock selected) + NDI source B (different sender)
+
+  Router clock = NDI-A clock
+  Input A: PTS from NDI-A → no drift (same clock)
+  Input B: PTS from NDI-B → ~50-200 ppm drift
+    → per-input drift correction nudges B's origin
+    → drift stays < 10 ms indefinitely
+```
+
+**When to use `VideoLiveMode` instead:** for monitoring scenarios where frame-
+perfect PTS scheduling isn't needed, `VideoLiveMode = true` bypasses all PTS
+checks and drift correction, always presenting the newest frame. This is simpler
+and works regardless of clock relationships, but sacrifices smooth frame pacing.
 
 ### Format negotiation
 
@@ -1123,71 +1212,6 @@ replaced by the graph's cross-clock drift detection.
 
 #### 9. Clock `Start`/`Stop`/`Reset` on `IMediaClock`
 
-The router's `SetClock(someClock)` takes an `IMediaClock` but the router should NOT
-call `Start()`/`Stop()`/`Reset()` on an override clock (it doesn't own it). The plan
-says "not owned by the router" — good. But the router's internal clock DOES need
-`Start`/`Stop`/`Reset` management.
-
-**Recommendation**: document explicitly that `SetClock` only reads `Position` and
-`IsRunning` from the override clock. The router never calls `Start`/`Stop`/`Reset` on
-an external clock. The internal clock's lifecycle is managed by the router's own
-`StartAsync`/`StopAsync` (or equivalent).
-
-#### 10. Router lifecycle — no `IMediaEndpoint` on `AVRouter`?
-
-The plan's `IAVRouter` extends `IDisposable` but not `IMediaEndpoint`. There's no
-`StartAsync`/`StopAsync` on the router itself.
-
-**Question**: how does the router's internal clock get started? Who starts the tick loop
-for push endpoints?
-
-**Recommendation**: either add `StartAsync`/`StopAsync` to `IAVRouter`, or have the
-router auto-start its internal clock when the first route is created and auto-stop when
-disposed. The former is more explicit and safer. Consider:
-
-```csharp
-public interface IAVRouter : IAsyncDisposable, IDisposable
-{
-    Task StartAsync(CancellationToken ct = default);
-    Task StopAsync(CancellationToken ct = default);
-    // ...existing API...
-}
-```
-
-#### 11. `IVideoSinkFormatCapabilities` → `IFormatCapabilities<PixelFormat>`
-
-`NDIAVSink` implements `IVideoSinkFormatCapabilities` which has `SupportedPixelFormats`
-and `PreferredPixelFormat`. The new `IFormatCapabilities<PixelFormat>` has
-`SupportedFormats` and `PreferredFormat`. Names change but semantics are identical.
-
-`IVideoFrameEndpoint` also has `SupportedPixelFormats` directly on the interface.
-In the new model this should be via `IFormatCapabilities<PixelFormat>` only.
-
-**Note**: confirmed clean 1:1 mapping. No issues.
-
-#### 12. `VideoEndpointDiagnosticsSnapshot` on `IVideoSink`
-
-`IVideoSink` has a default-implemented `GetDiagnosticsSnapshot()`. This diagnostic
-capability needs to survive on `IVideoEndpoint`.
-
-**Recommendation**: add `GetDiagnosticsSnapshot()` as a default-implemented method on
-`IVideoEndpoint`, or create a separate `IDiagnosticEndpoint` capability interface.
-
-#### 13. `MediaPlayer` constructor requires at least one output
-
-Currently: `if (audioOutput == null && videoOutput == null) throw`. The plan's new
-`MediaPlayer` uses `AddEndpoint`/`RemoveEndpoint` post-construction.
-
-**Question**: can `MediaPlayer` be constructed with zero endpoints and have them added
-later?
-
-**Recommendation**: yes — allow zero-endpoint construction. The router runs on its
-internal clock. Endpoints are added before or after `OpenAsync`. This is consistent
-with the "router runs with zero endpoints" design. The `MediaPlayer` constructor
-becomes parameterless.
-
-#### 14. `IMediaClock.Tick` event for push endpoint delivery
-
 The router needs a tick source to drive push endpoints. Currently `StopwatchClock` and
 `HardwareClock` raise `Tick`. But when using `SetClock(externalClock)`, push delivery
 timing depends on the external clock's `Tick` event.
@@ -1203,12 +1227,106 @@ This decouples push timing from clock implementation details.
 
 Before starting Step 1:
 
-- [ ] Decide on `IMediaClock.SampleRate` — keep, make optional, or replace with `TickCadence`.
-- [ ] Decide on `IAVRouter` lifecycle — explicit `StartAsync`/`StopAsync` vs auto-start.
-- [ ] Decide on auto-resampler behavior — auto-create when rates mismatch, or require explicit?
-- [ ] Decide on video single-route-per-endpoint enforcement — replace or fail on duplicate?
-- [ ] Decide on `MediaPlayer` zero-endpoint construction.
-- [ ] Decide on push-endpoint tick source — router's own timer vs clock's `Tick` event.
-- [ ] Review `PortAudioSink`'s `DriftCorrector` integration — confirm it survives as-is.
-- [ ] Audit all sample apps for current API usage patterns to validate migration table completeness.
+- [x] Decide on `IMediaClock.SampleRate` — ✅ replaced with `TickCadence`.
+- [x] Decide on `IAVRouter` lifecycle — ✅ explicit `StartAsync`/`StopAsync`.
+- [x] Decide on auto-resampler behavior — ✅ auto-create `LinearResampler` when rates mismatch.
+- [x] Decide on video single-route-per-endpoint enforcement — ✅ last-write-wins (replace).
+- [x] Decide on `MediaPlayer` zero-endpoint construction — ✅ parameterless constructor.
+- [x] Decide on push-endpoint tick source — ✅ router's own timer, reads `Clock.Position`.
+- [x] Review `PortAudioSink`'s `DriftCorrector` integration — ✅ survives as-is in endpoint.
+- [x] Audit all sample apps — ✅ all migrated.
+- [x] Clock selection model — ✅ priority-based `RegisterClock`/`UnregisterClock`/`SetClock` with auto-registration from `IClockCapableEndpoint`.
+- [x] Cross-clock drift — ✅ per-input PTS origin drift correction in `VideoPresentCallbackForEndpoint`; audio-side drift handled by existing `DriftCorrector` in endpoints.
 
+---
+
+## Phase 1 Implementation Audit
+
+_Added: 2026-04-20 (post-implementation review)_
+
+### Implementation Status Summary
+
+| Plan Step | Status | Notes |
+|---|---|---|
+| Step 1: New contracts | ✅ Complete | All interfaces match plan. `IVideoPresentCallback` improved to `bool TryPresentNext(out VideoFrame)` to avoid nullable-struct boxing. |
+| Step 2: Rename internals | ⚠️ Simplified | `AudioRenderer`/`VideoPresenter` not created as separate classes — logic inlined into `AudioFillCallbackForEndpoint`/`VideoPresentCallbackForEndpoint`. Acceptable simplification. |
+| Step 3: Implement `AVRouter` | ✅ Complete | Full routing graph with copy-on-write snapshots, push/pull, priority-based clock. |
+| Step 4: Adapt outputs | ✅ Complete | `PortAudioOutput` → `IPullAudioEndpoint`, `SDL3VideoOutput` → `IPullVideoEndpoint`. |
+| Step 5: Adapt sinks | ✅ Complete | `PortAudioSink` → `IAudioEndpoint`, `NDIAVSink` → `IAVEndpoint`. |
+| Step 6: `VirtualClockEndpoint` | ✅ Complete | Push-based (not pull). |
+| Step 7: Migrate `MediaPlayer` | ✅ Complete | Parameterless ctor, `AddEndpoint`/`RemoveEndpoint`, full state machine. |
+| Step 8: Migrate sample apps | ✅ Complete | All 5+ test apps use new API. |
+| Step 9: Delete old types | ✅ Complete | All old interfaces/classes removed. Some stale doc comments remain. |
+| Clock priority system | ✅ Complete | `RegisterClock`/`UnregisterClock`/`SetClock` with auto-registration from endpoints. |
+| Cross-clock drift (video) | ✅ Complete | PTS origin nudging in `VideoPresentCallbackForEndpoint`. |
+
+### 🐛 Bugs Fixed (2026-04-20)
+
+#### 1. ~~`ChannelRouteMap` is never applied during audio forwarding~~ ✅ FIXED
+
+Added `ApplyChannelMap()` helper using pre-baked route table (`BakeRoutes()`).
+Applied in both `AudioFillCallbackForEndpoint.Fill()` (pull) and `PushAudioTick()`
+(push). Channel map is baked at route creation time for zero-allocation hot path.
+Uses `ArrayPool<float>` for the mapped buffer.
+
+#### 2. ~~`stackalloc` in RT callback can overflow the stack~~ ✅ FIXED
+
+Replaced unbounded `stackalloc float[outSamples]` with
+`ArrayPool<float>.Shared.Rent()`/`Return()`. Safe for any buffer size.
+
+#### 3. ~~Push audio doesn't accumulate routes to the same endpoint~~ ✅ FIXED
+
+`PushAudioTick()` rewritten to group routes by endpoint, accumulate all routes
+into a single mixed buffer per endpoint (with channel map application), then
+call `ReceiveBuffer` once.
+
+#### 4. ~~Push/pull video consumes frames destructively on PTS skip~~ ✅ FIXED
+
+`VideoPresentCallbackForEndpoint` now caches a `_pendingFrame`/`_pendingInputId`.
+When a frame is too early, it's stored and retried on the next render tick instead
+of being lost.
+
+### ⚠️ Thread Safety
+
+#### 5. ~~`RegisterAudioInput`/`RegisterVideoInput` don't hold `_lock`~~ ✅ FIXED
+
+Now wrapped in `_lock` for full thread safety during registration.
+
+#### 6. ~~`SetRouteEnabled` — no volatile write~~ ✅ FIXED
+
+`SetRouteEnabled` now uses `Volatile.Write(ref route.Enabled, enabled)`.
+All RT read paths (`Fill`, `TryPresentNext`, `PushAudioTick`, `PushVideoTick`)
+use `Volatile.Read(ref route.Enabled)`.
+
+### 🔧 Optimizations Applied (2026-04-20)
+
+#### 7. ~~SIMD for `ApplyGain` and `MixInto`~~ ✅ DONE
+
+Both now use `System.Numerics.Vector<float>` when `Vector.IsHardwareAccelerated`,
+with scalar fallback for remainder elements. ~4–8× throughput on x86/ARM NEON.
+
+#### 8. ~~Push timer resolution~~ ✅ FIXED
+
+Replaced `System.Threading.Timer` (~15 ms jitter on Linux) with a dedicated
+`AVRouter-PushTick` thread using `Thread.Sleep` for bulk wait + `SpinWait` for
+sub-millisecond precision. Thread runs at `AboveNormal` priority.
+
+### 📝 ~~Stale Code References~~ ✅ CLEANED UP (2026-04-20)
+
+| File | Fix Applied |
+|---|---|
+| `CopyOnWriteArray.cs` | Updated doc comment to reference `AVRouter` |
+| `PortAudioSink.cs` | Updated comment to reference `AVRouter` per-route resampler |
+| `NDIAVChannel.cs` | Updated to reference `IAVRouter.SetInputTimeOffset` |
+| `NDIPlaybackProfile.cs` | Updated to reference `IAVRouter.VideoLiveMode` |
+
+### 📋 ~~Not Yet Implemented~~ ✅ RESOLVED (2026-04-20)
+
+| Feature | Plan Section | Status |
+|---|---|---|
+| Format capability validation at route creation | "Format negotiation" | ✅ Implemented — logs warning if `IFormatCapabilities<T>` check fails |
+| Per-input peak metering | "Per-input peaks" | ✅ Implemented — `GetInputPeakLevel(InputId)` + SIMD `MeasurePeak` |
+| `AudioRenderer` / `VideoPresenter` named classes | Step 2 | Skipped — logic inlined (acceptable) |
+| Audio-side cross-clock drift correction in router | "Cross-clock drift" | ⏸️ Deferred — relies on endpoint `DriftCorrector` (not a router concern) |
+| `IAVRouter` interface (for testability) | Open question #4 | ✅ Implemented |
+| `DiagnosticsSnapshot` on router | Plan mentions | ✅ Implemented — `GetDiagnosticsSnapshot()` returns full state |

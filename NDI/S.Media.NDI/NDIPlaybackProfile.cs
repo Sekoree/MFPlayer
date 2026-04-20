@@ -61,7 +61,7 @@ public sealed record NDIPlaybackProfile
     /// <summary>
     /// When <see langword="true"/>, the video mixer should bypass PTS scheduling and
     /// always present the newest available frame. Ideal for live monitoring.
-    /// Set on <c>IAVMixer.VideoLiveMode</c>.
+    /// Set on <c>IAVRouter.VideoLiveMode</c>.
     /// </summary>
     public bool VideoLiveMode { get; init; }
 

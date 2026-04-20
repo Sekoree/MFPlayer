@@ -13,7 +13,8 @@ using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.FFmpeg;
 using S.Media.PortAudio;
 
@@ -126,8 +127,9 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    using var avMixer = new AVMixer(primaryOutput.HardwareFormat);
-    avMixer.AttachAudioOutput(primaryOutput);
+    using var router = new AVRouter();
+    var primaryEpId = router.RegisterEndpoint(primaryOutput);
+    router.SetClock(primaryOutput.Clock);
 
     // ── 9. Open secondary sink ───────────────────────────────────────────────
 
@@ -151,12 +153,13 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    avMixer.RegisterAudioSink(secondarySink, negotiatedFmt.Channels);
+    var secondaryEpId = router.RegisterEndpoint(secondarySink);
 
     // ── 10. Wire audio channel ───────────────────────────────────────────────
 
-    avMixer.AddAudioChannel(audioChannel, routeMap);
-    avMixer.RouteAudioChannelToSink(audioChannel.Id, secondarySink, routeMap);
+    var inputId = router.RegisterAudioInput(audioChannel);
+    router.CreateRoute(inputId, primaryEpId, new AudioRouteOptions { ChannelMap = routeMap });
+    router.CreateRoute(inputId, secondaryEpId, new AudioRouteOptions { ChannelMap = routeMap });
 
     // ── 11. Completion detection (source-ended + drain) ─────────────────────
 
@@ -199,6 +202,7 @@ using (decoder)
     decoder.Start();
     await secondarySink.StartAsync();
     await primaryOutput.StartAsync();
+    await router.StartAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine($"  → {primaryDevice.Name}  (primary)");

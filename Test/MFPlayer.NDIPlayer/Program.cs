@@ -11,7 +11,8 @@ using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.NDI;
 using S.Media.PortAudio;
 
@@ -199,10 +200,12 @@ using (ndiRuntime)
 
         Console.WriteLine($"  Output:     {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
 
-        using var avMixer = new AVMixer(output.HardwareFormat);
-        avMixer.AttachAudioOutput(output);
+        using var router = new AVRouter();
+        var epId = router.RegisterEndpoint(output);
+        router.SetClock(output.Clock);
 
-        avMixer.AddAudioChannel(audioChannel, routeMap);
+        var inputId = router.RegisterAudioInput(audioChannel);
+        router.CreateRoute(inputId, epId, new AudioRouteOptions { ChannelMap = routeMap });
 
         // ── 9. Start ─────────────────────────────────────────────────────────
 
@@ -222,6 +225,7 @@ using (ndiRuntime)
             catch (OperationCanceledException) { /* timed out — proceed with whatever arrived */ }
 
             await output.StartAsync();
+            await router.StartAsync();
         }
         catch (Exception ex)
         {

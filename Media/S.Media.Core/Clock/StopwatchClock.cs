@@ -10,21 +10,27 @@ public sealed class StopwatchClock : MediaClockBase
 {
     private readonly Stopwatch _sw = new();
     private readonly Lock      _swLock = new();
-    private readonly double    _sampleRate;
     private TimeSpan           _offset; // accumulated time from previous Start/Stop cycles
     private volatile bool      _running;
 
-    /// <param name="sampleRate">Nominal sample rate for this clock.</param>
+    /// <param name="tickInterval">How often Tick fires. Defaults to 20 ms.</param>
+    public StopwatchClock(TimeSpan? tickInterval = null)
+        : base(tickInterval ?? TimeSpan.FromMilliseconds(20))
+    {
+    }
+
+    /// <summary>
+    /// Backwards-compatible constructor: accepts a sample rate and derives tick interval.
+    /// </summary>
+    /// <param name="sampleRate">Nominal sample rate (used to derive tick cadence for compatibility).</param>
     /// <param name="tickInterval">How often Tick fires. Defaults to 20 ms.</param>
     public StopwatchClock(double sampleRate, TimeSpan? tickInterval = null)
         : base(tickInterval ?? TimeSpan.FromMilliseconds(20))
     {
-        _sampleRate = sampleRate;
     }
 
     // ── IMediaClock ────────────────────────────────────────────────────────
 
-    public override double   SampleRate => _sampleRate;
     public override bool     IsRunning  => _running;
 
     public override TimeSpan Position

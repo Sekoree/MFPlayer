@@ -1,5 +1,6 @@
 using System.Buffers;
 using S.Media.Core.Media;
+using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Video;
 using SDL = global::SDL3.SDL;
 
@@ -9,7 +10,7 @@ namespace S.Media.SDL3;
 /// Parent-owned SDL3 clone sink that mirrors frames into its own window.
 /// Instances are created via <see cref="SDL3VideoOutput.CreateCloneSink"/>.
 /// </summary>
-public sealed class SDL3VideoCloneSink : IVideoSink, IVideoSinkFormatCapabilities
+public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<PixelFormat>
 {
     private sealed class ArrayPoolFrameOwner : IMemoryOwner<byte>
     {
@@ -45,8 +46,10 @@ public sealed class SDL3VideoCloneSink : IVideoSink, IVideoSinkFormatCapabilitie
     public string Name { get; }
     public bool IsRunning => _running;
 
-    public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; } =
+    public IReadOnlyList<PixelFormat> SupportedFormats { get; } =
         [PixelFormat.Bgra32, PixelFormat.Rgba32, PixelFormat.Nv12, PixelFormat.Yuv420p, PixelFormat.Yuv422p10];
+
+    public PixelFormat? PreferredFormat => PixelFormat.Bgra32;
 
     internal SDL3VideoCloneSink(VideoFormat format, string? title, int width, int height)
     {

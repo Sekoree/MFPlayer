@@ -4,6 +4,7 @@ using Avalonia.OpenGL.Controls;
 using Avalonia.Rendering;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
+using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Video;
 using S.Media.Core;
 
@@ -13,7 +14,7 @@ namespace S.Media.Avalonia;
 /// Avalonia embedded video output based on OpenGlControlBase.
 /// Host apps place this control in their visual tree and wire channels via Mixer.
 /// </summary>
-public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
+public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEndpoint, IClockCapableEndpoint
 {
     private static readonly ILogger Log = AvaloniaVideoLogging.GetLogger(nameof(AvaloniaOpenGlVideoOutput));
 
@@ -32,8 +33,6 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 
     private readonly object _stateLock = new();
     private AvaloniaGlRenderer? _renderer;
-    private VideoMixer? _mixer;
-    private volatile IVideoMixer? _activeMixer;
     private VideoPtsClock? _clock;
     private volatile IMediaClock? _presentationClockOverride;
     private long _presentationClockOriginTicks;
@@ -87,11 +86,29 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
 
     public VideoFormat OutputFormat => _outputFormat;
 
+    /// <summary>
+    /// When <see langword="true"/>, a diagnostic HUD overlay is rendered on top of the video.
+    /// Thread-safe: can be toggled from any thread at any time.
+    /// </summary>
+    public bool ShowHud { get; set; }
+
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
 
     public bool IsRunning => _isRunning;
 
-    public void OverridePresentationMixer(IVideoMixer mixer) => _activeMixer = mixer;
+
+    // ── IPullVideoEndpoint ──────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public IVideoPresentCallback? PresentCallback { get; set; }
+
+    // ── IVideoEndpoint (push — unused for pull endpoints) ───────────────────
+
+    void IVideoEndpoint.ReceiveFrame(in VideoFrame frame) { }
+
+    // ── IClockCapableEndpoint ───────────────────────────────────────────────
+
+    IMediaClock IClockCapableEndpoint.Clock => Clock;
 
     /// <summary>
     /// Overrides the YUV color matrix and range used by the GPU shaders.
@@ -199,9 +216,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                 throw new InvalidOperationException("Output is already open.");
 
             _outputFormat = format;
-            _mixer = new VideoMixer(_outputFormat);
-            _activeMixer = _mixer;
-            _clock = new VideoPtsClock(sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
+            _clock = new VideoPtsClock(frameRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
             _isOpen = true;
         }
 
@@ -276,8 +291,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
     {
         Interlocked.Increment(ref _renderCalls);
 
-        var mixer = _activeMixer ?? _mixer;
-        if (_renderer == null || mixer == null || _clock == null)
+        if (_renderer == null || _clock == null)
             return;
 
         double scale = VisualRoot?.RenderScaling ?? 1.0;
@@ -313,7 +327,15 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                 clockPosition = TimeSpan.FromTicks(relTicks);
             }
 
-            var frame = mixer.PresentNextFrame(clockPosition);
+            var frame = (VideoFrame?)null;
+
+            var presentCb = PresentCallback;
+            if (presentCb is not null)
+            {
+                if (presentCb.TryPresentNext(clockPosition, out var cbFrame))
+                    frame = cbFrame;
+            }
+
                 if (frame.HasValue)
                 {
                     var vf = frame.Value;
@@ -324,7 +346,11 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                         if (vf.Pts + _catchupLagThreshold >= clockPosition)
                             break;
 
-                        var next = mixer.PresentNextFrame(clockPosition);
+                        VideoFrame? next = null;
+                        if (presentCb is not null)
+                        {
+                            next = presentCb.TryPresentNext(clockPosition, out var nf) ? nf : null;
+                        }
                         if (!next.HasValue)
                             break;
 
@@ -339,21 +365,6 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
                         Interlocked.Increment(ref _catchupSkips);
                     }
 
-                    // Auto-propagate IVideoColorMatrixHint from the active channel when no
-                    // manual override has been set. The comparison is O(1) and avoids redundant
-                    // GL uniform updates on every render call when nothing has changed.
-                    if (!_hasYuvHintsOverride && mixer.ActiveChannel is IVideoColorMatrixHint hint)
-                    {
-                        var m = hint.SuggestedYuvColorMatrix;
-                        var r = hint.SuggestedYuvColorRange;
-                        if (m != _lastAutoMatrix || r != _lastAutoRange)
-                        {
-                            _lastAutoMatrix = m;
-                            _lastAutoRange  = r;
-                            // _renderer is non-null here: guarded by the early return above.
-                            _renderer!.SetYuvHints(m, r == YuvColorRange.Limited);
-                        }
-                    }
 
                 // Renderer natively handles all GPU-uploadable formats (Rgba32, Bgra32, Nv12,
                 // Yuv420p, Yuv422p10, Uyvy422, P010, Yuv444p, Gray8). Unknown formats render black.
@@ -436,7 +447,6 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IVideoOutput
         _ = StopAsync();
         _renderer?.Dispose();
         _renderer = null;
-        _mixer?.Dispose();
         _clock?.Dispose();
     }
 

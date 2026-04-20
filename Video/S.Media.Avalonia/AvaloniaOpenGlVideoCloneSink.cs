@@ -4,15 +4,16 @@ using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Rendering;
 using S.Media.Core.Media;
+using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Video;
 
 namespace S.Media.Avalonia;
 
 /// <summary>
-/// Clone/preview sink for Avalonia. Can be registered on a mixer to mirror video
+/// Clone/preview sink for Avalonia. Can be registered on a router to mirror video
 /// without creating an extra decoder instance.
 /// </summary>
-public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoSink, IVideoSinkFormatCapabilities
+public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoEndpoint, IFormatCapabilities<PixelFormat>
 {
     private readonly Lock _gate = new();
     private readonly BasicPixelFormatConverter _converter = new();
@@ -23,7 +24,8 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoSink
 
     public new string Name { get; }
     public bool IsRunning => _running;
-    public IReadOnlyList<PixelFormat> PreferredPixelFormats { get; } = [PixelFormat.Rgba32, PixelFormat.Bgra32];
+    public IReadOnlyList<PixelFormat> SupportedFormats { get; } = [PixelFormat.Rgba32, PixelFormat.Bgra32];
+    public PixelFormat? PreferredFormat => PixelFormat.Rgba32;
 
     internal AvaloniaOpenGlVideoCloneSink(string? name = null)
     {

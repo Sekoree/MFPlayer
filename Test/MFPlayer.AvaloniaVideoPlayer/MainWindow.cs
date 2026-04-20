@@ -4,7 +4,8 @@ using FFmpeg.AutoGen;
 using S.Media.Avalonia;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
-using S.Media.Core.Mixing;
+using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Routing;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 
@@ -35,7 +36,7 @@ public sealed class MainWindow : Window
     private CancellationTokenSource? _diagCts;
     private Task? _diagTask;
     private IVideoChannel? _activeChannel;
-    private AVMixer? _avMixer;
+    private AVRouter? _router;
 
     public MainWindow(string[] args)
     {
@@ -118,12 +119,15 @@ public sealed class MainWindow : Window
                 height: srcFmt.Height > 0 ? srcFmt.Height : 720,
                 format: srcFmt);
 
-            _avMixer = new AVMixer(new AudioFormat(48000, 2), _videoOutput.OutputFormat);
-            _avMixer.AttachVideoOutput(_videoOutput);
-            _avMixer.AddVideoChannel(channel);
+            _router = new AVRouter();
+            var epId = _router.RegisterEndpoint(_videoOutput);
+            _router.SetClock(_videoOutput.Clock);
+            var inputId = _router.RegisterVideoInput(channel);
+            _router.CreateRoute(inputId, epId);
 
             _decoder.Start();
             await _videoOutput.StartAsync();
+            await _router.StartAsync();
             _started = true;
 
             StartDiagnostics();
@@ -256,8 +260,8 @@ public sealed class MainWindow : Window
         }
 
         _decoder?.Dispose();
-        _avMixer?.Dispose();
-        _avMixer = null;
+        _router?.Dispose();
+        _router = null;
         _videoOutput.Dispose();
     }
 

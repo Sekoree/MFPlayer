@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
+using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 
@@ -16,7 +17,7 @@ namespace S.Media.NDI;
 /// Consolidated NDI sink that can accept both audio and video and send them through one sender
 /// with a shared A/V timing context.
 /// </summary>
-public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabilities
+public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 {
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAVSink));
 
@@ -115,7 +116,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
     /// </summary>
     public DriftCorrector? AudioDriftCorrection => _audioDriftCorrector;
 
-    public IReadOnlyList<PixelFormat> PreferredPixelFormats => _videoTargetFormat.PixelFormat switch
+    public IReadOnlyList<PixelFormat> SupportedFormats => _videoTargetFormat.PixelFormat switch
     {
         PixelFormat.Bgra32 => sBgraPrefs,
         PixelFormat.Rgba32 => sRgbaPrefs,
@@ -124,6 +125,8 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         PixelFormat.Yuv420p => sI420Prefs,
         _ => sRgbaPrefs,
     };
+
+    public PixelFormat? PreferredFormat => _videoTargetFormat.PixelFormat;
 
     public NDIAVSink(
         NDISender sender,
@@ -145,7 +148,19 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
 
         if (videoTargetFormat is { } v)
         {
-            var fallbackPixelFormat = preferPerformanceOverQuality ? PixelFormat.Uyvy422 : PixelFormat.Rgba32;
+            // NDI assumes a fixed YUV color space based on resolution (SDK §21.1):
+            //   SD → Rec.601, HD → Rec.709, UHD (>1920 or >1080) → Rec.2020.
+            // For UHD sources encoded in Rec.709, sending UYVY causes the receiver to
+            // misinterpret colors as Rec.2020.  Fall back to RGBA for UHD to avoid this.
+            bool isUhd = v.Width > 1920 || v.Height > 1080;
+            var is422Source = v.PixelFormat is PixelFormat.Uyvy422 or PixelFormat.Yuv422p10;
+            PixelFormat fallbackPixelFormat;
+            if (isUhd)
+                fallbackPixelFormat = PixelFormat.Rgba32;  // safe for any color space
+            else if (preferPerformanceOverQuality || is422Source)
+                fallbackPixelFormat = PixelFormat.Uyvy422;
+            else
+                fallbackPixelFormat = PixelFormat.Rgba32;
             var px = v.PixelFormat is PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Nv12 or PixelFormat.Uyvy422 or PixelFormat.Yuv420p
                 ? v.PixelFormat
                 : fallbackPixelFormat;
@@ -159,7 +174,11 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
 
             int w = _videoTargetFormat.Width > 0 ? _videoTargetFormat.Width : 1280;
             int h = _videoTargetFormat.Height > 0 ? _videoTargetFormat.Height : 720;
-            int bytes = GetVideoBufferBytes(_videoTargetFormat.PixelFormat, w, h);
+            // Pool buffers must hold the *source* frame data (copied in ReceiveFrame)
+            // which may be larger than the target format (conversion happens later).
+            int srcBytes = GetVideoBufferBytes(v.PixelFormat, w, h);
+            int dstBytes = GetVideoBufferBytes(_videoTargetFormat.PixelFormat, w, h);
+            int bytes = Math.Max(srcBytes, dstBytes);
             for (int i = 0; i < Math.Max(1, videoPoolCount); i++)
                 _videoPool.Enqueue(new byte[bytes]);
         }
@@ -473,7 +492,7 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         }
     }
 
-    private static bool TryConvertI210ToUyvyInPlace(byte[] buffer, int width, int height, int sourceBytes, out int outputBytes)
+    private static unsafe bool TryConvertI210ToUyvyInPlace(byte[] buffer, int width, int height, int sourceBytes, out int outputBytes)
     {
         outputBytes = 0;
         if (width <= 0 || height <= 0) return false;
@@ -489,41 +508,31 @@ public sealed class NDIAVSink : IAudioSink, IVideoSink, IVideoSinkFormatCapabili
         outputBytes = dstStride * height;
         if (buffer.Length < outputBytes) return false;
 
-        static byte Narrow10To8(ushort v)
+        fixed (byte* pBuf = buffer)
         {
-            int n = ((v & 0x03FF) + 2) >> 2;
-            if (n < 0) n = 0;
-            if (n > 255) n = 255;
-            return (byte)n;
-        }
+            ushort* pY = (ushort*)pBuf;
+            ushort* pU = (ushort*)(pBuf + ySize);
+            ushort* pV = (ushort*)(pBuf + ySize + uvSize);
 
-        // Rows are processed in reverse order (bottom-to-top) because the conversion
-        // is in-place: each output row is smaller than its source data (4 bytes per
-        // pixel pair vs. 8 bytes: 2×uint16 Y + 1×uint16 U + 1×uint16 V). Writing
-        // row N overwrites bytes that row N+1 still needs to read, so we must finish
-        // row N before row N-1, i.e. high-index rows first.
-        for (int row = height - 1; row >= 0; row--)
-        {
-            int yRow = row * yStride;
-            int uvRow = row * uvStride;
-            int dstRow = row * dstStride;
-
-            for (int x = width - 2; x >= 0; x -= 2)
+            // Process bottom-to-top because in-place output (2 bytes/px-pair) is smaller
+            // than source (4 bytes for 2×Y + U + V in 10-bit), avoiding overwrites.
+            for (int row = height - 1; row >= 0; row--)
             {
-                int y0Off = yRow + (x * 2);
-                int y1Off = y0Off + 2;
-                int uvOff = uvRow + ((x >> 1) * 2);
+                int yRowOff  = row * width;         // in ushort units
+                int uvRowOff = row * (width >> 1);   // in ushort units
+                byte* dstRow = pBuf + row * dstStride;
 
-                ushort y0V = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(y0Off, 2));
-                ushort y1V = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(y1Off, 2));
-                ushort uv = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(uvOff + ySize, 2));
-                ushort vv = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(uvOff + ySize + uvSize, 2));
+                for (int x = width - 2; x >= 0; x -= 2)
+                {
+                    int uvIdx = uvRowOff + (x >> 1);
+                    byte* d = dstRow + x * 2;
 
-                int d = dstRow + (x * 2);
-                buffer[d] = Narrow10To8(uv);
-                buffer[d + 1] = Narrow10To8(y0V);
-                buffer[d + 2] = Narrow10To8(vv);
-                buffer[d + 3] = Narrow10To8(y1V);
+                    // Narrow 10-bit to 8-bit: (v + 2) >> 2
+                    d[0] = (byte)(((pU[uvIdx] & 0x03FF) + 2) >> 2);
+                    d[1] = (byte)(((pY[yRowOff + x] & 0x03FF) + 2) >> 2);
+                    d[2] = (byte)(((pV[uvIdx] & 0x03FF) + 2) >> 2);
+                    d[3] = (byte)(((pY[yRowOff + x + 1] & 0x03FF) + 2) >> 2);
+                }
             }
         }
 

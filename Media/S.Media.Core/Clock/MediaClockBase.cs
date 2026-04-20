@@ -28,7 +28,7 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     // ── IMediaClock ────────────────────────────────────────────────────────
 
     public abstract TimeSpan Position   { get; }
-    public abstract double   SampleRate { get; }
+    public          TimeSpan TickCadence => _tickInterval;
     public abstract bool     IsRunning  { get; }
 
     public event Action<TimeSpan>? Tick

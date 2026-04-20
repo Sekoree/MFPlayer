@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
+using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Video;
 using S.Media.Core;
 using SDL = global::SDL3.SDL;
@@ -31,7 +32,7 @@ public enum VsyncMode
 /// vsync-driven render loop on a dedicated thread.
 /// Analogous to <c>PortAudioOutput</c> for audio.
 /// </summary>
-public sealed class SDL3VideoOutput : IVideoOutput
+public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
 {
     private static readonly ILogger Log = SDL3VideoLogging.GetLogger(nameof(SDL3VideoOutput));
 
@@ -56,13 +57,12 @@ public sealed class SDL3VideoOutput : IVideoOutput
     private nint         _window;
     private nint         _glContext;
     private GLRenderer?  _renderer;
-    private VideoMixer?  _mixer;
-    private volatile IVideoMixer? _activeMixer;
     private VideoPtsClock? _clock;
     private volatile IMediaClock? _presentationClockOverride;
     private long _presentationClockOriginTicks;
     private int _hasPresentationClockOrigin;
     private VideoFormat  _outputFormat;
+    private VideoFormat  _inputFormat;
 
     // ── Render thread ─────────────────────────────────────────────────────
 
@@ -94,6 +94,11 @@ public sealed class SDL3VideoOutput : IVideoOutput
     // Per-frame auto-hint tracking (render thread only — no lock needed).
     private YuvColorMatrix           _lastAutoMatrix = YuvColorMatrix.Auto;
     private YuvColorRange            _lastAutoRange  = YuvColorRange.Auto;
+
+    // HUD FPS measurement (render thread only)
+    private long   _hudLastTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    private int    _hudFrameCount;
+    private double _hudFps;
 
     // ── SDL init ref-counting ─────────────────────────────────────────────
     // Multiple SDL3VideoOutput instances may coexist; only the last Dispose
@@ -194,14 +199,40 @@ public sealed class SDL3VideoOutput : IVideoOutput
         RenderExceptions: Interlocked.Read(ref _renderExceptions),
         GlMakeCurrentFailures: Interlocked.Read(ref _glMakeCurrentFailures));
 
-    // ── IVideoOutput / IMediaOutput ───────────────────────────────────────
+    // ── Public properties ────────────────────────────────────────────────────
 
-    /// <inheritdoc/>
+    /// <summary>Format describing the current output surface.</summary>
     public VideoFormat OutputFormat => _outputFormat;
 
+    /// <summary>
+    /// When <see langword="true"/>, a diagnostic HUD overlay is rendered on top of the video
+    /// showing resolution, pixel format, FPS, presented/black frame counts, and clock position.
+    /// Thread-safe: can be toggled from any thread at any time.
+    /// </summary>
+    public bool ShowHud { get; set; }
+
     /// <inheritdoc/>
+    public string Name => "SDL3VideoOutput";
+
+    /// <summary>Clock driven by video PTS.</summary>
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
-    public void OverridePresentationMixer(IVideoMixer mixer) => _activeMixer = mixer;
+
+    // ── IPullVideoEndpoint ──────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public IVideoPresentCallback? PresentCallback { get; set; }
+
+    // ── IVideoEndpoint (push — unused for pull endpoints) ───────────────────
+
+    /// <inheritdoc/>
+    void IVideoEndpoint.ReceiveFrame(in VideoFrame frame)
+    {
+        // Pull endpoints do not use push delivery; no-op.
+    }
+
+    // ── IClockCapableEndpoint ───────────────────────────────────────────────
+
+    IMediaClock IClockCapableEndpoint.Clock => Clock;
 
     /// <summary>
     /// Overrides the render-loop presentation clock.
@@ -338,12 +369,11 @@ public sealed class SDL3VideoOutput : IVideoOutput
             supportsUyvy422: true,
             fallback: PixelFormat.Bgra32);
         _outputFormat = format with { PixelFormat = leaderPixelFormat };
-        _mixer = new VideoMixer(_outputFormat);
-        _activeMixer = _mixer;
+        _inputFormat = format;
 
 
         _clock = new VideoPtsClock(
-            sampleRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
+            frameRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
 
         // Inform the renderer of the video dimensions so resize events produce
         // a correctly letterboxed/pillarboxed viewport from the start.
@@ -435,6 +465,11 @@ public sealed class SDL3VideoOutput : IVideoOutput
                             _renderer!.SetViewport(w, h);
                             Interlocked.Increment(ref _resizeEvents);
                             break;
+
+                        case SDL.EventType.KeyDown:
+                            if (evt.Key.Key == SDL.Keycode.H)
+                                ShowHud = !ShowHud;
+                            break;
                     }
 
                     if (_closeRequested) break;
@@ -443,51 +478,39 @@ public sealed class SDL3VideoOutput : IVideoOutput
                 if (_closeRequested) break;
 
                 // ── Present frame ─────────────────────────────────────────
-                var mixer = _activeMixer ?? _mixer;
-                if (mixer == null)
-                    throw new InvalidOperationException("Presentation mixer is not available.");
+                VideoFrame? frame = null;
 
-                var externalClock = _presentationClockOverride;
-                var presentationClock = externalClock ?? _clock;
-                if (presentationClock == null)
-                    throw new InvalidOperationException("Presentation clock is not available.");
-
-                var clockPosition = presentationClock.Position;
-                if (externalClock != null)
+                var presentCb = PresentCallback;
+                if (presentCb is not null)
                 {
-                    long rawTicks = clockPosition.Ticks;
-                    if (rawTicks < 0) rawTicks = 0;
+                    var externalClock = _presentationClockOverride;
+                    var presentationClock = externalClock ?? _clock;
+                    if (presentationClock == null)
+                        throw new InvalidOperationException("Presentation clock is not available.");
 
-                    if (Interlocked.CompareExchange(ref _hasPresentationClockOrigin, 1, 0) == 0)
-                        Volatile.Write(ref _presentationClockOriginTicks, rawTicks);
+                    var clockPosition = presentationClock.Position;
+                    if (externalClock != null)
+                    {
+                        long rawTicks = clockPosition.Ticks;
+                        if (rawTicks < 0) rawTicks = 0;
 
-                    long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
-                    long relTicks = rawTicks - originTicks;
-                    if (relTicks < 0) relTicks = 0;
-                    clockPosition = TimeSpan.FromTicks(relTicks);
+                        if (Interlocked.CompareExchange(ref _hasPresentationClockOrigin, 1, 0) == 0)
+                            Volatile.Write(ref _presentationClockOriginTicks, rawTicks);
+
+                        long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
+                        long relTicks = rawTicks - originTicks;
+                        if (relTicks < 0) relTicks = 0;
+                        clockPosition = TimeSpan.FromTicks(relTicks);
+                    }
+
+                    if (presentCb.TryPresentNext(clockPosition, out var cbFrame))
+                        frame = cbFrame;
                 }
-
-                var frame = mixer.PresentNextFrame(clockPosition);
 
                 if (frame.HasValue)
                 {
                     _renderer!.SetVideoSize(frame.Value.Width, frame.Value.Height);
 
-                    // Auto-propagate IVideoColorMatrixHint from the active channel when no
-                    // manual override has been set. O(1) comparison avoids redundant GL uniform
-                    // updates when the matrix/range are stable across frames.
-                    if (!_hasYuvHintsOverride && mixer.ActiveChannel is IVideoColorMatrixHint hint)
-                    {
-                        var m = hint.SuggestedYuvColorMatrix;
-                        var r = hint.SuggestedYuvColorRange;
-                        if (m != _lastAutoMatrix || r != _lastAutoRange)
-                        {
-                            _lastAutoMatrix = m;
-                            _lastAutoRange  = r;
-                            _renderer.YuvColorMatrix = m;
-                            _renderer.YuvColorRange  = r;
-                        }
-                    }
 
                     switch (frame.Value.PixelFormat)
                     {
@@ -526,6 +549,37 @@ public sealed class SDL3VideoOutput : IVideoOutput
                 }
 
                 // ── Swap (paced by vsync) ─────────────────────────────────
+                // ── HUD overlay ───────────────────────────────────────────
+                if (ShowHud)
+                {
+                    long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                    double elapsed = (double)(now - _hudLastTimestamp) / System.Diagnostics.Stopwatch.Frequency;
+                    _hudFrameCount++;
+                    if (elapsed >= 1.0)
+                    {
+                        _hudFps = _hudFrameCount / elapsed;
+                        _hudFrameCount = 0;
+                        _hudLastTimestamp = now;
+                    }
+
+                    var stats = new HudStats
+                    {
+                        Width = _outputFormat.Width,
+                        Height = _outputFormat.Height,
+                        PixelFormat = _outputFormat.PixelFormat,
+                        Fps = _hudFps,
+                        InputWidth = _inputFormat.Width,
+                        InputHeight = _inputFormat.Height,
+                        InputFps = _inputFormat.FrameRate,
+                        InputPixelFormat = _inputFormat.PixelFormat,
+                        PresentedFrames = Interlocked.Read(ref _presentedFrames),
+                        BlackFrames = Interlocked.Read(ref _blackFrames),
+                        DroppedFrames = Interlocked.Read(ref _renderExceptions),
+                        ClockPosition = ((_presentationClockOverride ?? _clock)?.Position ?? TimeSpan.Zero),
+                    };
+                    _renderer!.DrawHud(stats.ToLines());
+                }
+
                 SDL.GLSwapWindow(_window);
                 Interlocked.Increment(ref _swapCalls);
             }
@@ -591,7 +645,6 @@ public sealed class SDL3VideoOutput : IVideoOutput
             _clones = [];
         }
 
-        _mixer?.Dispose();
         _clock?.Dispose();
         _cts?.Dispose();
 
