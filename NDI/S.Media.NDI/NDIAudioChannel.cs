@@ -336,17 +336,9 @@ internal sealed class NDIAudioChannel : IAudioChannel
 
     // ── Push (not supported — NDI receive is pull-only) ───────────────────────
 
-    /// <summary>Not supported. <see cref="NDIAudioChannel"/> is a receive-only channel fed by the NDI
-    /// framesync capture thread; external writers would race with the capture thread and violate the
-    /// <c>SingleWriter = true</c> contract on the internal ring.</summary>
-    public ValueTask WriteAsync(ReadOnlyMemory<float> frames, CancellationToken ct = default)
-        => throw new NotSupportedException(
-            "NDIAudioChannel is receive-only. Data is produced by the internal NDI capture thread.");
-
-    /// <inheritdoc cref="WriteAsync"/>
-    public bool TryWrite(ReadOnlySpan<float> frames)
-        => throw new NotSupportedException(
-            "NDIAudioChannel is receive-only. Data is produced by the internal NDI capture thread.");
+    // NDIAudioChannel implements only IAudioChannel, not IWritableAudioChannel —
+    // data is produced by the internal NDI capture thread, so there is no external
+    // write path exposed to callers.
 
     public void Seek(TimeSpan position) { /* NDI live sources cannot seek */ }
 

@@ -44,19 +44,24 @@ public record AVRouterOptions
 
     /// <summary>
     /// Drift correction gain for the pull video endpoint's PTS origin
-    /// adjustment. Higher values correct drift more aggressively.
+    /// adjustment, applied outside a dead-band equal to
+    /// <see cref="VideoPtsEarlyTolerance"/> / 2 and suppressed on frames where the
+    /// catch-up loop had to skip (so the integrator doesn't fight the loop).
     /// Range: 0.0 (disabled) – 1.0 (instant snap).
-    /// Default: 0.02 (2 % per frame — corrects a 33 ms drift in ~50 frames).
+    /// Default: 0.02 (2 % per frame — converges sub-frame error in ~50 frames).
     /// </summary>
     public double VideoPullDriftCorrectionGain { get; init; } = 0.02;
 
     /// <summary>
     /// Drift correction gain for the push video path's PTS origin adjustment.
-    /// Applied every time a frame is presented, shifting the PTS↔clock origin
-    /// by <c>gain × error</c> so sub-frame drift converges smoothly to zero
-    /// instead of oscillating ±½ frame.
+    /// Applied each tick that a frame is presented <i>without</i> the catch-up
+    /// loop firing, and only when the signed error exceeds
+    /// <see cref="VideoPtsEarlyTolerance"/> / 2 (a dead-band that prevents
+    /// limit-cycle oscillation around zero).  The origin shifts by
+    /// <c>gain × (error − sign(error) × deadband)</c> so sub-frame drift
+    /// converges smoothly to zero without fighting frame-skipping catch-up.
     /// Range: 0.0 (disabled) – 1.0 (instant snap).
-    /// Default: 0.03 (3 % per frame — corrects an 8 ms drift in ~40 frames at 60 fps).
+    /// Default: 0.03 (3 % per frame — converges 8 ms drift in ~15 frames at 60 fps).
     /// </summary>
     public double VideoPushDriftCorrectionGain { get; init; } = 0.03;
 }

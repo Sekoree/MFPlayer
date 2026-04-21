@@ -18,11 +18,18 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     {
         public readonly float[] Buffer;
         public readonly int Samples;
+        /// <summary>
+        /// Stream-PTS ticks of the first frame in this chunk (not wall-clock elapsed).
+        /// Used so <see cref="FFmpegAudioChannel.Position"/> reports container time and is
+        /// directly comparable to <see cref="FFmpegVideoChannel.Position"/> for A/V drift.
+        /// </summary>
+        public readonly long StartPtsTicks;
 
-        public AudioChunk(float[] buffer, int samples)
+        public AudioChunk(float[] buffer, int samples, long startPtsTicks)
         {
             Buffer = buffer;
             Samples = samples;
+            StartPtsTicks = startPtsTicks;
         }
     }
 
@@ -49,7 +56,9 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     private float[]? _currentChunk;
     private int      _currentOffset;
     private int      _currentChunkSamples;
+    private long     _currentChunkStartPtsTicks;
     private long     _framesConsumed;
+    private long     _positionTicks; // interpolated stream-PTS of the last sample consumed
     private long     _framesInRing;   // frame-accurate ring occupancy (not chunk count)
 
     // ── IAudioChannel ─────────────────────────────────────────────────────
@@ -60,8 +69,12 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     public float       Volume       { get; set; } = 1.0f;
     public int         BufferDepth  { get; }
 
-    public TimeSpan Position =>
-        TimeSpan.FromSeconds((double)Interlocked.Read(ref _framesConsumed) / SourceFormat.SampleRate);
+    /// <summary>
+    /// Current playback position in the container's stream-PTS domain.
+    /// Starts at the first frame's PTS (may be non-zero for MP4 edit lists, HLS, etc.)
+    /// and advances sample-accurately inside each decoded chunk.
+    /// </summary>
+    public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
 
     public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
@@ -103,12 +116,6 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     public int StreamIndex => _streamIndex;
 
     public int LatestSeekEpoch => _latestSeekEpochProvider();
-
-    public void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
-    {
-        Log.LogError(ex, "Audio stream={StreamIndex} decode-loop error: epoch={Epoch} packetEpoch={PacketEpoch} packetBytes={PacketBytes}",
-            _streamIndex, currentEpoch, ep.SeekEpoch, ep.ActualLength);
-    }
 
     // ── Codec init ────────────────────────────────────────────────────────
 
@@ -160,7 +167,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
 
     internal void StartDecoding(ConcurrentQueue<EncodedPacket>? packetPool = null)
     {
-        _decodeTask = FFmpegDecodeWorkers.RunAudioAsync(this, _packetReader, _cts.Token, packetPool);
+        _decodeTask = FFmpegDecodeWorkers.RunAsync(this, _packetReader, _cts.Token, packetPool);
     }
 
     public void ApplySeekEpoch(long seekPositionTicks)
@@ -170,9 +177,14 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
         _currentChunk  = null;
         _currentOffset = 0;
         _currentChunkSamples = 0;
+        _currentChunkStartPtsTicks = seekPositionTicks;
         while (_ringReader.TryRead(out var chunk))
             ReturnChunkToPool(chunk.Buffer);
         Interlocked.Exchange(ref _framesInRing, 0);
+        // Reset sample-counter AND PTS-domain position so Position reports the post-seek
+        // value immediately instead of drifting until the first FillBuffer on the new epoch.
+        Interlocked.Exchange(ref _framesConsumed, 0);
+        Volatile.Write(ref _positionTicks, seekPositionTicks);
     }
 
     public bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token)
@@ -230,6 +242,22 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     {
         int samples   = _frame->nb_samples;
         int channels  = _frame->ch_layout.nb_channels;
+
+        // Guard against transient channel-count mismatch: the codec context was opened with
+        // SourceFormat.Channels; if a frame arrives with a different count (e.g. mono-island
+        // packet inside a stereo stream), downstream mixers would see the wrong layout.
+        if (channels != SourceFormat.Channels)
+        {
+            Log.LogWarning("Audio stream={StreamIndex} frame channel count {FrameChannels} != declared {DeclaredChannels}; dropping frame.",
+                _streamIndex, channels, SourceFormat.Channels);
+            return null;
+        }
+
+        // Resolve stream-PTS of this frame's first sample. Falls back to the previous
+        // chunk end when the frame has no PTS (AV_NOPTS_VALUE).
+        double tbSeconds = _stream->time_base.num / (double)_stream->time_base.den;
+        long framePtsTicks = FFmpegVideoChannel.SafePts(_frame->pts, tbSeconds).Ticks;
+
         int maxSamples = samples * channels;
         var outBuf = RentChunkBuffer(maxSamples);
 
@@ -248,7 +276,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
             }
 
             int writtenSamples = written * channels;
-            return new AudioChunk(outBuf, writtenSamples);
+            return new AudioChunk(outBuf, writtenSamples, framePtsTicks);
         }
     }
 
@@ -257,6 +285,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     public int FillBuffer(Span<float> dest, int frameCount)
     {
         int channels     = SourceFormat.Channels;
+        int sampleRate   = SourceFormat.SampleRate;
         int totalSamples = frameCount * channels;
         int filled       = 0;
 
@@ -274,6 +303,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
                     {
                         Interlocked.Add(ref _framesConsumed, consumed);
                         Interlocked.Add(ref _framesInRing, -consumed);
+                        UpdatePositionTicks(sampleRate, channels);
                     }
                     if (dropped > 0)
                     {
@@ -289,6 +319,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
                 _currentChunkSamples = chunk.Samples;
                 _currentChunk = chunk.Buffer;
                 _currentOffset = 0;
+                _currentChunkStartPtsTicks = chunk.StartPtsTicks;
             }
 
             int available = _currentChunkSamples - _currentOffset;
@@ -302,22 +333,26 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
 
         Interlocked.Add(ref _framesConsumed, frameCount);
         Interlocked.Add(ref _framesInRing, -frameCount);
+        UpdatePositionTicks(sampleRate, channels);
         return frameCount;
     }
 
-    // ── Push mode (not supported — data comes from the internal decode thread) ──
+    /// <summary>
+    /// Recomputes <see cref="_positionTicks"/> from the current chunk's start PTS plus the
+    /// in-chunk sample offset.  Gives sample-accurate stream time even when the producer
+    /// hasn't enqueued a new chunk yet.
+    /// </summary>
+    private void UpdatePositionTicks(int sampleRate, int channels)
+    {
+        if (sampleRate <= 0) return;
+        long framesInChunk = _currentOffset / Math.Max(1, channels);
+        long offsetTicks   = framesInChunk * TimeSpan.TicksPerSecond / sampleRate;
+        Volatile.Write(ref _positionTicks, _currentChunkStartPtsTicks + offsetTicks);
+    }
 
-    /// <summary>Not supported. <see cref="FFmpegAudioChannel"/> is fed by its internal decode
-    /// thread; external writes would race with it and violate the <c>SingleWriter = true</c>
-    /// contract on the ring.</summary>
-    public ValueTask WriteAsync(ReadOnlyMemory<float> frames, CancellationToken ct = default)
-        => throw new NotSupportedException(
-            "FFmpegAudioChannel is decode-driven and does not accept external writes.");
-
-    /// <inheritdoc cref="WriteAsync"/>
-    public bool TryWrite(ReadOnlySpan<float> frames)
-        => throw new NotSupportedException(
-            "FFmpegAudioChannel is decode-driven and does not accept external writes.");
+    // ── Push mode not supported — data comes from the internal decode thread ──
+    // (FFmpegAudioChannel implements only IAudioChannel, not IWritableAudioChannel,
+    // so there's nothing to stub: the API surface no longer advertises writes.)
 
     // ── Seek ──────────────────────────────────────────────────────────────
 
@@ -327,11 +362,12 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
         _currentChunk  = null;
         _currentOffset = 0;
         _currentChunkSamples = 0;
+        _currentChunkStartPtsTicks = position.Ticks;
         while (_ringReader.TryRead(out var chunk))
             ReturnChunkToPool(chunk.Buffer);
         Interlocked.Exchange(ref _framesInRing, 0);
-        Interlocked.Exchange(ref _framesConsumed,
-            (long)(position.TotalSeconds * SourceFormat.SampleRate));
+        Interlocked.Exchange(ref _framesConsumed, 0);
+        Volatile.Write(ref _positionTicks, position.Ticks);
     }
 
 

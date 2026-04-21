@@ -1,10 +1,12 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
 using NDILib;
+using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
@@ -45,38 +47,56 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
     {
         public readonly float[] Buffer;
         public readonly int Samples;
-        public readonly long TimecodeTicks;
+        /// <summary>
+        /// Stream-time PTS (ticks) of the first sample in <see cref="Buffer"/>, or
+        /// <see cref="long.MinValue"/> if unknown. Propagated through the sink so the
+        /// write loop can stamp NDI timecodes in the same time domain as the video
+        /// path — preventing the first-frame wall-clock race from baking itself into
+        /// permanent A/V drift.
+        /// </summary>
+        public readonly long PtsTicks;
 
-        public PendingAudio(float[] buffer, int samples, long timecodeTicks)
+        public PendingAudio(float[] buffer, int samples, long ptsTicks)
         {
             Buffer = buffer;
             Samples = samples;
-            TimecodeTicks = timecodeTicks;
+            PtsTicks = ptsTicks;
         }
     }
 
-    private static readonly IReadOnlyList<PixelFormat> sBgraPrefs = [PixelFormat.Bgra32, PixelFormat.Rgba32];
-    private static readonly IReadOnlyList<PixelFormat> sRgbaPrefs = [PixelFormat.Rgba32, PixelFormat.Bgra32];
-    private static readonly IReadOnlyList<PixelFormat> sNv12Prefs = [PixelFormat.Nv12];
-    private static readonly IReadOnlyList<PixelFormat> sUyvyPrefs = [PixelFormat.Uyvy422];
-    private static readonly IReadOnlyList<PixelFormat> sI420Prefs = [PixelFormat.Yuv420p];
+    // ImmutableArray gives us a value-type, allocation-free slice that also advertises
+    // read-only intent in the type signature (IFormatCapabilities<PixelFormat>).
+    private static readonly ImmutableArray<PixelFormat> sBgraPrefs = [PixelFormat.Bgra32, PixelFormat.Rgba32];
+    private static readonly ImmutableArray<PixelFormat> sRgbaPrefs = [PixelFormat.Rgba32, PixelFormat.Bgra32];
+    private static readonly ImmutableArray<PixelFormat> sNv12Prefs = [PixelFormat.Nv12];
+    private static readonly ImmutableArray<PixelFormat> sUyvyPrefs = [PixelFormat.Uyvy422];
+    private static readonly ImmutableArray<PixelFormat> sI420Prefs = [PixelFormat.Yuv420p];
 
     private readonly NDISender _sender;
     private readonly NDIAvTimingContext _timing = new();
-    private readonly Lock _sendLock = new();
+    // Per NDI SDK §13 ("NDI-Send"): audio, video and metadata frames may be submitted
+    // to a sender "at any time, off any thread, and in any order".  We therefore keep
+    // send access thread-safe with *separate* locks per stream so a large RGBA
+    // SendVideo cannot block a concurrent SendAudio (which would starve downstream
+    // receivers — NDI audio timecode sensitivity is high).
+    private readonly Lock _videoSendLock = new();
+    private readonly Lock _audioSendLock = new();
 
     // Video path
     private readonly bool _hasVideo;
     private readonly VideoFormat _videoTargetFormat;
     private readonly ConcurrentQueue<byte[]> _videoPool = new();
-    private readonly ConcurrentQueue<PendingVideo> _videoPending = new();
-    private readonly SemaphoreSlim _videoPendingSignal = new(0);
+    private readonly PooledWorkQueue<PendingVideo> _videoWork = new();
     private readonly int _videoMaxPendingFrames;
-    private int _videoPendingFrames;
+    // Byte size of a single pooled video buffer.  Cached so ReceiveFrame can
+    // grow the pool lazily (rather than LOH-preallocating the worst-case
+    // backlog at construction) when steady-state demand outstrips the initial
+    // pool.  Growth is still bounded by <see cref="_videoMaxPendingFrames"/>
+    // because the work queue's reserve-slot gate rejects extra frames.
+    private readonly int _videoBufferBytes;
     private readonly BasicPixelFormatConverter _videoConverter = new();
-    private static readonly Lock sFfmpegLoadLock = new();
-    private static int sFfmpegLoadState;
     private long _videoPoolMissDrops;
+    private long _videoPoolLazyGrowths;
     private long _videoCapacityMissDrops;
     private long _videoFormatDrops;
     private long _videoQueueDrops;
@@ -92,13 +112,35 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
     private readonly IAudioResampler? _audioResampler;
     private readonly bool _ownsAudioResampler;
     private readonly ConcurrentQueue<float[]> _audioPool = new();
-    private readonly ConcurrentQueue<PendingAudio> _audioPending = new();
-    private readonly SemaphoreSlim _audioPendingSignal = new(0);
-    private int _audioPendingBuffers;
+    private readonly PooledWorkQueue<PendingAudio> _audioWork = new();
     private long _audioPoolMissDrops;
     private long _audioCapacityMissDrops;
     private long _audioQueueDrops;
     private readonly DriftCorrector? _audioDriftCorrector;
+
+    // A/V sync tracing — opt-in counters updated on the send paths so consumers
+    // (debug UIs, test apps) can derive the actual wall-clock submit cadence and
+    // observe video-vs-audio launch/drain offsets + current stamped timecodes.
+    // All reads use Volatile/Interlocked so a debug thread can poll without locking.
+    private readonly System.Diagnostics.Stopwatch _sinkClock = System.Diagnostics.Stopwatch.StartNew();
+    private long _firstVideoSubmitMs = -1;
+    private long _firstAudioSubmitMs = -1;
+    private long _lastVideoSubmitMs;
+    private long _lastAudioSubmitMs;
+    private long _videoFramesSubmitted;
+    private long _audioBuffersSubmitted;
+    private long _audioSamplesSubmitted;
+    private long _lastVideoTimecodeTicks = long.MinValue;
+    private long _lastAudioTimecodeTicks = long.MinValue;
+    private long _lastVideoPtsTicks = long.MinValue;
+    private long _lastAudioPtsTicks = long.MinValue;
+    // Sequential timestamping of a matched A/V pair so a reader can compute
+    // "at last video submit, what was the most recent audio submit position?"
+    // (i.e., how many ms of audio have been emitted by the time each video frame
+    // leaves the sink).  These are snapshots, not monotonic — use them for UI
+    // readout, not for correctness decisions.
+    private long _atLastVideoAudioMs;
+    private long _atLastAudioVideoMs;
 
     private Thread? _videoThread;
     private Thread? _audioThread;
@@ -170,6 +212,8 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             var videoPreset = NDIVideoPresetOptions.For(preset);
             if (videoPoolCount <= 0) videoPoolCount = videoPreset.PoolCount;
             if (videoMaxPendingFrames <= 0) videoMaxPendingFrames = videoPreset.MaxPendingFrames;
+
+
             _videoMaxPendingFrames = videoMaxPendingFrames;
 
             int w = _videoTargetFormat.Width > 0 ? _videoTargetFormat.Width : 1280;
@@ -179,7 +223,11 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             int srcBytes = GetVideoBufferBytes(v.PixelFormat, w, h);
             int dstBytes = GetVideoBufferBytes(_videoTargetFormat.PixelFormat, w, h);
             int bytes = Math.Max(srcBytes, dstBytes);
-            for (int i = 0; i < Math.Max(1, videoPoolCount); i++)
+            _videoBufferBytes = bytes;
+            // Only pre-allocate the preset's steady-state pool count; anything
+            // beyond is grown on demand via the lazy-grow path in ReceiveFrame.
+            int preallocate = Math.Max(1, videoPoolCount);
+            for (int i = 0; i < preallocate; i++)
                 _videoPool.Enqueue(new byte[bytes]);
         }
 
@@ -299,12 +347,6 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         if (!_hasVideo || Volatile.Read(ref _started) == 0)
             return;
 
-        if (Volatile.Read(ref _videoPendingFrames) >= _videoMaxPendingFrames)
-        {
-            Interlocked.Increment(ref _videoQueueDrops);
-            return;
-        }
-
         int bytes = frame.Data.Length;
         if (bytes <= 0)
         {
@@ -312,26 +354,61 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             return;
         }
 
+        // Atomic reserve-slot pattern so concurrent producers can't exceed the cap by N.
+        if (!_videoWork.TryReserveSlot(_videoMaxPendingFrames))
+        {
+            Interlocked.Increment(ref _videoQueueDrops);
+            return;
+        }
+
         if (!_videoPool.TryDequeue(out var dst))
         {
-            Interlocked.Increment(ref _videoPoolMissDrops);
-            return;
+            // Pool empty: grow lazily if we know the per-frame size.  The
+            // work-queue cap (reserved above) already bounds growth to
+            // _videoMaxPendingFrames, so we can't allocate unbounded memory.
+            // Only drop if we truly can't allocate (zero buffer size = sink
+            // wasn't configured for video).
+            if (_videoBufferBytes > 0)
+            {
+                dst = new byte[_videoBufferBytes];
+                Interlocked.Increment(ref _videoPoolLazyGrowths);
+            }
+            else
+            {
+                _videoWork.ReleaseReservation();
+                Interlocked.Increment(ref _videoPoolMissDrops);
+                return;
+            }
         }
 
         if (dst.Length < bytes)
         {
             _videoPool.Enqueue(dst);
+            _videoWork.ReleaseReservation();
             Interlocked.Increment(ref _videoCapacityMissDrops);
             return;
         }
 
         frame.Data.Span[..bytes].CopyTo(dst.AsSpan(0, bytes));
-        _videoPending.Enqueue(new PendingVideo(dst, frame.Width, frame.Height, frame.Pts.Ticks, frame.PixelFormat, bytes));
-        Interlocked.Increment(ref _videoPendingFrames);
-        _videoPendingSignal.Release();
+        _videoWork.EnqueueReserved(new PendingVideo(dst, frame.Width, frame.Height, frame.Pts.Ticks, frame.PixelFormat, bytes));
     }
 
     public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
+        => ReceiveBufferCore(buffer, frameCount, sourceFormat, long.MinValue);
+
+    /// <summary>
+    /// PTS-aware overload — carries the stream-time PTS of the first sample through to
+    /// the write loop so NDI timecodes for audio can share the video path's media-time
+    /// domain.  Without this, both streams fall back to <c>TimecodeSynthesize</c>
+    /// (wall-clock-at-submit), which bakes any decoder warm-up difference into a
+    /// permanent A/V offset — typically leaving video ahead of audio because the
+    /// video decoder produces frames sooner than the audio decoder.
+    /// </summary>
+    public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat, TimeSpan sourcePts)
+        => ReceiveBufferCore(buffer, frameCount, sourceFormat,
+            sourcePts == TimeSpan.MinValue ? long.MinValue : sourcePts.Ticks);
+
+    private void ReceiveBufferCore(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat, long sourcePtsTicks)
     {
         if (!_hasAudio || Volatile.Read(ref _started) == 0)
             return;
@@ -341,7 +418,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         // Compute rate-adjusted + drift-corrected output frame count (§6.2).
         int writeFrames = SinkBufferHelper.ComputeWriteFrames(
             frameCount, sourceFormat.SampleRate, _audioTargetFormat.SampleRate,
-            _audioDriftCorrector, Volatile.Read(ref _audioPendingBuffers));
+            _audioDriftCorrector, _audioWork.Count);
         int writeSamples = writeFrames * outCh;
 
         if (!_audioPool.TryDequeue(out var dest))
@@ -379,19 +456,20 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             return;
         }
 
-        if (Volatile.Read(ref _audioPendingBuffers) >= _audioMaxPendingBuffers)
+        // Atomic reserve-slot pattern to keep the cap honoured under racing producers.
+        if (!_audioWork.TryReserveSlot(_audioMaxPendingBuffers))
         {
             _audioPool.Enqueue(dest);
             Interlocked.Increment(ref _audioQueueDrops);
             return;
         }
 
-        int writtenFramesForClock = writtenSamples / outCh;
-        long startTicks = _timing.ReserveAudioTimecode(writtenFramesForClock, _audioTargetFormat.SampleRate);
-
-        _audioPending.Enqueue(new PendingAudio(dest, writtenSamples, startTicks));
-        Interlocked.Increment(ref _audioPendingBuffers);
-        _audioPendingSignal.Release();
+        // No explicit timecode is stamped here: the AudioWriteLoop derives a
+        // media-time timecode through NDIAvTimingContext so audio & video share one
+        // time domain (SDK §13.2 — explicit timecodes override synthesis).  The
+        // stream PTS travels with the buffer to keep sample-accurate accumulation
+        // anchored to the decoder's real clock.
+        _audioWork.EnqueueReserved(new PendingAudio(dest, writtenSamples, sourcePtsTicks));
     }
 
     public VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot()
@@ -406,13 +484,87 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             PassthroughFrames: Interlocked.Read(ref _videoPassthroughFrames),
             ConvertedFrames: Interlocked.Read(ref _videoConvertedFrames),
             DroppedFrames: dropped,
-            QueueDepth: Volatile.Read(ref _videoPendingFrames),
+            QueueDepth: _videoWork.Count,
             QueueDrops: queueDrops);
     }
+
+    /// <summary>
+    /// Immutable snapshot of A/V submission timing — lets debug surfaces see the
+    /// wall-clock times (relative to sink construction) of first / last video and
+    /// audio submits, the timecodes that were stamped, and the per-submit pair
+    /// offsets.  All times are in milliseconds unless named "Ticks" (100 ns units,
+    /// same convention as <see cref="TimeSpan.Ticks"/>).
+    /// </summary>
+    public readonly record struct AvSyncSnapshot(
+        long SinkUptimeMs,
+        long FirstVideoSubmitMs,
+        long FirstAudioSubmitMs,
+        long LastVideoSubmitMs,
+        long LastAudioSubmitMs,
+        long VideoFramesSubmitted,
+        long AudioBuffersSubmitted,
+        long AudioSamplesSubmitted,
+        long LastVideoTimecodeTicks,
+        long LastAudioTimecodeTicks,
+        long LastVideoPtsTicks,
+        long LastAudioPtsTicks,
+        long AudioMsAtLastVideoSubmit,
+        long VideoMsAtLastAudioSubmit)
+    {
+        /// <summary>
+        /// Wall-clock gap between first video and first audio submit.
+        /// Positive → video was submitted first (the typical cause of video-ahead-of-audio).
+        /// Returns <see cref="long.MinValue"/> if one side hasn't submitted yet.
+        /// </summary>
+        public long FirstSubmitGapMs =>
+            FirstVideoSubmitMs < 0 || FirstAudioSubmitMs < 0
+                ? long.MinValue
+                : FirstAudioSubmitMs - FirstVideoSubmitMs;
+
+        /// <summary>
+        /// Difference between the timecodes on the most recently submitted video frame
+        /// and audio buffer.  If both paths are in the same media-time domain this is
+        /// small (&lt; 1 buffer duration); a large constant value means we fell back to
+        /// <c>TimecodeSynthesize</c> on one side and explicit PTS on the other.
+        /// Ticks units; <see cref="long.MinValue"/> if either side is unset.
+        /// </summary>
+        public long LastTimecodeDeltaTicks =>
+            LastVideoTimecodeTicks == long.MinValue || LastAudioTimecodeTicks == long.MinValue
+                ? long.MinValue
+                : LastVideoTimecodeTicks - LastAudioTimecodeTicks;
+
+        /// <summary>
+        /// Difference between the stream PTS on the most recently submitted video frame
+        /// and audio buffer.  This is a media-time comparison (independent of NDI).
+        /// </summary>
+        public long LastPtsDeltaTicks =>
+            LastVideoPtsTicks == long.MinValue || LastAudioPtsTicks == long.MinValue
+                ? long.MinValue
+                : LastVideoPtsTicks - LastAudioPtsTicks;
+    }
+
+    /// <summary>Snapshot the current A/V submission timing counters.</summary>
+    public AvSyncSnapshot GetAvSyncSnapshot() => new(
+        SinkUptimeMs: _sinkClock.ElapsedMilliseconds,
+        FirstVideoSubmitMs: Interlocked.Read(ref _firstVideoSubmitMs),
+        FirstAudioSubmitMs: Interlocked.Read(ref _firstAudioSubmitMs),
+        LastVideoSubmitMs: Interlocked.Read(ref _lastVideoSubmitMs),
+        LastAudioSubmitMs: Interlocked.Read(ref _lastAudioSubmitMs),
+        VideoFramesSubmitted: Interlocked.Read(ref _videoFramesSubmitted),
+        AudioBuffersSubmitted: Interlocked.Read(ref _audioBuffersSubmitted),
+        AudioSamplesSubmitted: Interlocked.Read(ref _audioSamplesSubmitted),
+        LastVideoTimecodeTicks: Interlocked.Read(ref _lastVideoTimecodeTicks),
+        LastAudioTimecodeTicks: Interlocked.Read(ref _lastAudioTimecodeTicks),
+        LastVideoPtsTicks: Interlocked.Read(ref _lastVideoPtsTicks),
+        LastAudioPtsTicks: Interlocked.Read(ref _lastAudioPtsTicks),
+        AudioMsAtLastVideoSubmit: Interlocked.Read(ref _atLastVideoAudioMs),
+        VideoMsAtLastAudioSubmit: Interlocked.Read(ref _atLastAudioVideoMs));
 
     public void Dispose()
     {
         if (_disposed) return;
+        // Mark disposed FIRST so any in-flight thread observing _started / _disposed
+        // stops re-entering SendVideo/SendAudio before we tear down native resources.
         _disposed = true;
         Volatile.Write(ref _started, 0);
 
@@ -427,17 +579,18 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             _audioDriftCorrector?.CorrectionRatio ?? 1.0);
 
         _cts?.Cancel();
-        _videoThread?.Join(TimeSpan.FromSeconds(2));
-        _audioThread?.Join(TimeSpan.FromSeconds(2));
+        // NDI SendVideo on a congested network can genuinely take several seconds to
+        // return.  Allow more time here than the old 2 s so we don't race the drain
+        // phase with a still-running thread, which would corrupt the pool queues.
+        _videoThread?.Join(TimeSpan.FromSeconds(5));
+        _audioThread?.Join(TimeSpan.FromSeconds(5));
 
         // Drain pending queues so pooled buffers are not leaked.
-        while (_videoPending.TryDequeue(out var pv))
-            _videoPool.Enqueue(pv.Buffer);
-        while (_audioPending.TryDequeue(out var pa))
-            _audioPool.Enqueue(pa.Buffer);
+        _videoWork.Drain(pv => _videoPool.Enqueue(pv.Buffer));
+        _audioWork.Drain(pa => _audioPool.Enqueue(pa.Buffer));
 
-        _videoPendingSignal.Dispose();
-        _audioPendingSignal.Dispose();
+        _videoWork.Dispose();
+        _audioWork.Dispose();
         _videoConverter.Dispose();
         if (_ownsAudioResampler) _audioResampler?.Dispose();
     }
@@ -473,22 +626,18 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
     private static bool EnsureFfmpegLoaded()
     {
-        lock (sFfmpegLoadLock)
+        // FFmpegLoader.EnsureLoaded is already idempotent with its own internal lock.
+        // We catch failures here so the video write loop can fall back to a non-FFmpeg
+        // conversion path instead of tearing down the sink.
+        try
         {
-            int state = sFfmpegLoadState;
-            if (state == 1) return true;
-            if (state == -1) return false;
-            try
-            {
-                FFmpegLoader.EnsureLoaded();
-                sFfmpegLoadState = 1;
-                return true;
-            }
-            catch
-            {
-                sFfmpegLoadState = -1;
-                return false;
-            }
+            FFmpegLoader.EnsureLoaded();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "FFmpeg load failed; I210→RGBA path disabled for this sink");
+            return false;
         }
     }
 
@@ -675,15 +824,10 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
         while (!token.IsCancellationRequested)
         {
-            try
-            {
-                _videoPendingSignal.Wait(token);
-            }
-            catch (OperationCanceledException) { break; }
+            if (!_videoWork.WaitForItem(token)) break;
 
-            while (_videoPending.TryDequeue(out var pf))
+            while (_videoWork.TryDequeue(out var pf))
             {
-                Interlocked.Decrement(ref _videoPendingFrames);
 
                 try
                 {
@@ -778,7 +922,23 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
                         fixed (byte* p = &seg.Array[seg.Offset])
                         {
-                            _timing.ObserveVideoPts(pf.PtsTicks);
+                            // Stamp the NDI timecode with the frame's stream-time PTS (ticks,
+                            // 100 ns units — matches NDI's UTC-since-epoch convention closely
+                            // enough for receivers to align by).  Falling back to
+                            // TimecodeSynthesize (wall-clock-at-submit) creates a *permanent*
+                            // A/V offset whenever the audio decoder warms up later than the
+                            // video decoder: the first video submit gets a wall-clock stamp,
+                            // the first audio submit gets a later wall-clock stamp, and from
+                            // there `clockVideo`/`clockAudio` hold both paced at media rate —
+                            // keeping that warm-up delta baked in forever.  Using the stream
+                            // PTS as the timecode puts both streams in the same media-time
+                            // domain regardless of submit order.  Timestamp is still filled
+                            // in by the SDK (§21.1).
+
+                            long videoPts = pf.PtsTicks;
+                            long videoTimecode = videoPts >= 0 ? videoPts : NDIConstants.TimecodeSynthesize;
+                            if (videoPts >= 0)
+                                _timing.ObserveVideoPts(videoPts);
 
                             var vf = new NDIVideoFrameV2
                             {
@@ -789,15 +949,26 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                                 FrameRateD = fpsDen,
                                 PictureAspectRatio = pf.Height > 0 ? (float)pf.Width / pf.Height : 1f,
                                 FrameFormatType = NDIFrameFormatType.Progressive,
-                                Timecode = pf.PtsTicks,
+                                Timecode = videoTimecode,
                                 PData = (nint)p,
                                 LineStrideInBytes = VideoLineStride(sendFormat, pf.Width),
                                 PMetadata = nint.Zero,
-                                Timestamp = pf.PtsTicks
+                                Timestamp = NDIConstants.TimestampUndefined
                             };
 
-                            lock (_sendLock)
+                            lock (_videoSendLock)
                                 _sender.SendVideo(vf);
+
+                            // Diagnostics (post-send so the timestamp reflects when the frame
+                            // actually left the sender, including any clockVideo rate-limiting).
+                            long nowMs = _sinkClock.ElapsedMilliseconds;
+                            Interlocked.CompareExchange(ref _firstVideoSubmitMs, nowMs, -1);
+                            Interlocked.Exchange(ref _lastVideoSubmitMs, nowMs);
+                            Interlocked.Increment(ref _videoFramesSubmitted);
+                            Interlocked.Exchange(ref _lastVideoTimecodeTicks, videoTimecode);
+                            Interlocked.Exchange(ref _lastVideoPtsTicks, videoPts);
+                            Interlocked.Exchange(ref _atLastVideoAudioMs,
+                                Interlocked.Read(ref _lastAudioSubmitMs));
                         }
                     }
                     catch (NotSupportedException)
@@ -839,56 +1010,96 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
     {
         var token = _cts!.Token;
         int channels = _audioTargetFormat.Channels;
-        var planar = new float[_audioFramesPerBuffer * channels];
+        float[] planar = ArrayPool<float>.Shared.Rent(_audioFramesPerBuffer * channels);
 
-        while (!token.IsCancellationRequested)
+        try
         {
-            try
+            while (!token.IsCancellationRequested)
             {
-                _audioPendingSignal.Wait(token);
-            }
-            catch (OperationCanceledException) { break; }
+                if (!_audioWork.WaitForItem(token)) break;
 
-            while (_audioPending.TryDequeue(out var pending))
-            {
-                Interlocked.Decrement(ref _audioPendingBuffers);
-
-                var interleaved = pending.Buffer;
-                int sampleValues = pending.Samples;
-                int samplesPerChannel = sampleValues / channels;
-                int planarNeed = channels * samplesPerChannel;
-                if (planar.Length < planarNeed)
-                    planar = new float[planarNeed];
-
-                // Deinterleave: s-outer/c-inner gives sequential reads on the
-                // interleaved source buffer (better cache locality than c-outer/s-inner).
-                for (int s = 0; s < samplesPerChannel; s++)
+                while (_audioWork.TryDequeue(out var pending))
                 {
-                    int srcBase = s * channels;
-                    for (int c = 0; c < channels; c++)
-                        planar[c * samplesPerChannel + s] = interleaved[srcBase + c];
-                }
 
-                _audioPool.Enqueue(interleaved);
-
-                fixed (float* pData = planar)
-                {
-                    var frame = new NDIAudioFrameV3
+                    var interleaved = pending.Buffer;
+                    int sampleValues = pending.Samples;
+                    int samplesPerChannel = sampleValues / channels;
+                    int planarNeed = channels * samplesPerChannel;
+                    if (planar.Length < planarNeed)
                     {
-                        SampleRate = _audioTargetFormat.SampleRate,
-                        NoChannels = channels,
-                        NoSamples = samplesPerChannel,
-                        FourCC = NDIFourCCAudioType.Fltp,
-                        PData = (nint)pData,
-                        ChannelStrideInBytes = samplesPerChannel * sizeof(float),
-                        Timecode = pending.TimecodeTicks,
-                        Timestamp = pending.TimecodeTicks
-                    };
+                        ArrayPool<float>.Shared.Return(planar);
+                        planar = ArrayPool<float>.Shared.Rent(planarNeed);
+                    }
 
-                    lock (_sendLock)
-                        _sender.SendAudio(frame);
+                    // Deinterleave: s-outer/c-inner gives sequential reads on the
+                    // interleaved source buffer (better cache locality than c-outer/s-inner).
+                    for (int s = 0; s < samplesPerChannel; s++)
+                    {
+                        int srcBase = s * channels;
+                        for (int c = 0; c < channels; c++)
+                            planar[c * samplesPerChannel + s] = interleaved[srcBase + c];
+                    }
+
+                    _audioPool.Enqueue(interleaved);
+
+                    fixed (float* pData = planar)
+                    {
+                        // Derive a media-time timecode in the same domain as the video
+                        // path.  NDIAvTimingContext seeds from the first observed video
+                        // PTS (or 0 if audio leads) and reserves a sample-accurate slot
+                        // per buffer — this guarantees audio timecodes advance at exactly
+                        // the decoded sample rate and never drift against video.
+                        //
+                        // If the producer supplied a buffer-level PTS (router's PTS-aware
+                        // overload) and it deviates noticeably from the reserved cursor
+                        // (e.g. after a seek or an upstream buffer starvation), snap the
+                        // cursor to the PTS so we don't accumulate error silently.
+                        long reserved = _timing.ReserveAudioTimecode(samplesPerChannel, _audioTargetFormat.SampleRate);
+                        long audioTimecode = reserved;
+
+                        if (pending.PtsTicks >= 0)
+                        {
+                            long deltaTicks = pending.PtsTicks - reserved;
+                            long oneBufferTicks = (long)Math.Round(
+                                (double)samplesPerChannel * TimeSpan.TicksPerSecond / _audioTargetFormat.SampleRate);
+                            // Only realign on large jumps — normal sample-accurate drift
+                            // stays well under one buffer.  Anything larger is an upstream
+                            // discontinuity (seek / reset) we want to follow.
+                            if (Math.Abs(deltaTicks) > oneBufferTicks * 4)
+                                audioTimecode = pending.PtsTicks;
+                        }
+
+                        var frame = new NDIAudioFrameV3
+                        {
+                            SampleRate = _audioTargetFormat.SampleRate,
+                            NoChannels = channels,
+                            NoSamples = samplesPerChannel,
+                            FourCC = NDIFourCCAudioType.Fltp,
+                            PData = (nint)pData,
+                            ChannelStrideInBytes = samplesPerChannel * sizeof(float),
+                            Timecode = audioTimecode,
+                            Timestamp = NDIConstants.TimestampUndefined
+                        };
+
+                        lock (_audioSendLock)
+                            _sender.SendAudio(frame);
+
+                        long nowMs = _sinkClock.ElapsedMilliseconds;
+                        Interlocked.CompareExchange(ref _firstAudioSubmitMs, nowMs, -1);
+                        Interlocked.Exchange(ref _lastAudioSubmitMs, nowMs);
+                        Interlocked.Increment(ref _audioBuffersSubmitted);
+                        Interlocked.Add(ref _audioSamplesSubmitted, samplesPerChannel);
+                        Interlocked.Exchange(ref _lastAudioTimecodeTicks, audioTimecode);
+                        Interlocked.Exchange(ref _lastAudioPtsTicks, pending.PtsTicks);
+                        Interlocked.Exchange(ref _atLastAudioVideoMs,
+                            Interlocked.Read(ref _lastVideoSubmitMs));
+                    }
                 }
             }
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(planar);
         }
     }
 }

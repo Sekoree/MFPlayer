@@ -17,8 +17,13 @@ public interface IMediaChannel<TFrame> : IDisposable
 
     /// <summary>
     /// Pull mode — the output/mixer requests up to <paramref name="frameCount"/> frames.
-    /// Returns the actual number of frames written into <paramref name="dest"/>.
-    /// Implementations must be non-blocking; return 0 and fill silence on underrun.
+    /// Returns the number of frames with <i>non-silent</i> content actually produced;
+    /// any trailing frames up to <paramref name="frameCount"/> must be left zero-filled
+    /// by the implementation so callers can treat the tail as silence without an extra
+    /// clear.  Implementations must be non-blocking: on underrun, return the partial
+    /// count (possibly 0) and zero-fill the remainder.  <paramref name="dest"/> is always
+    /// sized to hold <c>frameCount × channels</c> elements for audio, or
+    /// <paramref name="frameCount"/> entries for video.
     /// </summary>
     int FillBuffer(Span<TFrame> dest, int frameCount);
 

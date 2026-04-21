@@ -32,7 +32,7 @@ Console.WriteLine("║   MFPlayer  —  NDI A/V Sender         ║");
 Console.WriteLine("╚═══════════════════════════════════════╝\n");
 
 // Set FFmpeg library path.
-ffmpeg.RootPath = "/lib";
+ffmpeg.RootPath = S.Media.FFmpeg.FFmpegLoader.ResolveDefaultSearchPath() ?? "/lib";
 
 // ── 1. Initialise NDI runtime ─────────────────────────────────────────────────
 

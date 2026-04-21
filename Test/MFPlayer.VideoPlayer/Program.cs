@@ -115,7 +115,7 @@ Console.WriteLine("╔═══════════════════�
 Console.WriteLine("║   MFPlayer  —  Video Player   ║");
 Console.WriteLine("╚═══════════════════════════════╝\n");
 
-ffmpeg.RootPath = "/lib";
+ffmpeg.RootPath = S.Media.FFmpeg.FFmpegLoader.ResolveDefaultSearchPath() ?? "/lib";
 
 // ── 1. Enter file path ───────────────────────────────────────────────────────
 
@@ -257,7 +257,14 @@ using (decoder)
                     || ndiMode.Equals("perf", StringComparison.OrdinalIgnoreCase)
                     || ndiMode.Equals("p", StringComparison.OrdinalIgnoreCase);
 
-                int sret = NDISender.Create(out ndiSender, senderName, clockVideo: false, clockAudio: false);
+                // Enable NDI's built-in rate clocking for BOTH streams.  SDK §13:
+                //   "If you are submitting audio and video of separate threads, then
+                //    having both clocked can be useful."
+                // NDIAVSink uses dedicated VideoThread + AudioThread, so the SDK's
+                // per-stream rate limiter is exactly what we want — it also smooths
+                // startup jitter so video doesn't run ahead of audio just because the
+                // audio decoder warms up slower than the video decoder.
+                int sret = NDISender.Create(out ndiSender, senderName, clockVideo: true, clockAudio: true);
                 if (sret != 0 || ndiSender == null)
                 {
                     Console.WriteLine($"  NDI disabled: sender creation failed ({sret}).");
@@ -319,6 +326,42 @@ using (decoder)
     // ── 6. Start playback ────────────────────────────────────────────────
 
     decoder.Start();
+
+    // Pre-roll: decoders (especially AAC audio with edit-list priming) can take
+    // ~1 s of wall-clock before they deliver their first sample.  If we start
+    // the video output + router immediately, the video decoder — which has no
+    // priming — streams out right away while audio lags by the warmup interval,
+    // producing:
+    //   • NDI sink: a permanent +1 s "video ahead of audio" offset (fixed by
+    //     in-sink PTS pacing, but at the cost of video running ~1 s behind
+    //     the local preview window).
+    //   • Local SDL: video playing at real-time while NDI lags behind.
+    //
+    // Waiting here for the audio channel to have *any* decoded samples before
+    // starting the rest of the pipeline collapses that asymmetry: SDL and NDI
+    // both begin at the same "audio-ready" origin, the in-sink pacing becomes
+    // a no-op (audio PTS is already live when the first video frame arrives),
+    // and SDL ↔ NDI stay aligned to within a few milliseconds.
+    if (decoder.AudioChannels.Count > 0)
+    {
+        var audioCh = decoder.AudioChannels[0];
+        var warmupSw = System.Diagnostics.Stopwatch.StartNew();
+        int lastReported = -1;
+        Console.Write("Waiting for audio decoder warmup… ");
+        while (audioCh.BufferAvailable == 0 && warmupSw.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            await Task.Delay(20);
+            int whole = (int)warmupSw.Elapsed.TotalSeconds;
+            if (whole != lastReported)
+            {
+                Console.Write($"{whole}s ");
+                lastReported = whole;
+            }
+        }
+        Console.WriteLine($"ready after {warmupSw.Elapsed.TotalMilliseconds:F0} ms " +
+            $"(audio.buf={audioCh.BufferAvailable} samples).");
+    }
+
     await videoOutput.StartAsync();
     await router.StartAsync();
 
@@ -331,10 +374,13 @@ using (decoder)
     var outputForStats = videoOutput;
     var channelForStats = videoChannel;
     var endpointForStats = ndiSink as IVideoEndpoint;
+    var ndiSinkForStats = ndiSink;
+    var audioChannelForStats = decoder.AudioChannels.Count > 0 ? decoder.AudioChannels[0] : null;
     var statsTask = Task.Run(async () =>
     {
         SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
         VideoEndpointDiagnosticsSnapshot? prevEndpoint = null;
+        NDIAVSink.AvSyncSnapshot? prevAvSync = null;
         double expectedFps = srcFmt.FrameRate > 0 ? srcFmt.FrameRate : 30.0;
 
         while (!cts.IsCancellationRequested)
@@ -353,6 +399,7 @@ using (decoder)
 
             var os = outputForStats.GetDiagnosticsSnapshot();
             var es = endpointForStats?.GetDiagnosticsSnapshot();
+            var avs = ndiSinkForStats?.GetAvSyncSnapshot();
 
             if (prevOutput.HasValue)
             {
@@ -394,10 +441,66 @@ using (decoder)
                     $"ex={exDelta,2}{speedMark}{exMark}");
                 Console.WriteLine($"         fmt=bgra:{bgraDelta,3} rgba:{rgbaDelta,3} nv12:{nv12Delta,3} y420:{y420Delta,3} y422p10:{y422P10Delta,3}");
                 Console.WriteLine($"         {endpointText}");
+
+                // ── NDI A/V submission timing ────────────────────────────────
+                if (avs.HasValue)
+                {
+                    var a1 = avs.Value;
+
+                    // Per-second deltas
+                    long vSubThisSec = 0, aSubThisSec = 0, aSamplesThisSec = 0;
+                    if (prevAvSync.HasValue)
+                    {
+                        var a0 = prevAvSync.Value;
+                        vSubThisSec = a1.VideoFramesSubmitted - a0.VideoFramesSubmitted;
+                        aSubThisSec = a1.AudioBuffersSubmitted - a0.AudioBuffersSubmitted;
+                        aSamplesThisSec = a1.AudioSamplesSubmitted - a0.AudioSamplesSubmitted;
+                    }
+
+                    string firstGap = a1.FirstSubmitGapMs == long.MinValue
+                        ? "--"
+                        : $"{a1.FirstSubmitGapMs,+5}ms";
+                    string tcDelta = a1.LastTimecodeDeltaTicks == long.MinValue
+                        ? "--"
+                        : $"{TimeSpan.FromTicks(a1.LastTimecodeDeltaTicks).TotalMilliseconds,+7:F1}ms";
+                    string ptsDelta = a1.LastPtsDeltaTicks == long.MinValue
+                        ? "--"
+                        : $"{TimeSpan.FromTicks(a1.LastPtsDeltaTicks).TotalMilliseconds,+7:F1}ms";
+
+                    // What the receiver "sees": at-last-video-submit, how far behind was audio?
+                    long pairGapMs = a1.LastVideoSubmitMs - a1.AudioMsAtLastVideoSubmit;
+                    string pairStr = a1.AudioMsAtLastVideoSubmit == 0 && a1.FirstAudioSubmitMs < 0
+                        ? "audio-not-started"
+                        : $"{pairGapMs,+5}ms (video@{a1.LastVideoSubmitMs}ms, audio@{a1.AudioMsAtLastVideoSubmit}ms)";
+
+                    string vTcStr = a1.LastVideoTimecodeTicks == long.MinValue ? "--"
+                        : a1.LastVideoTimecodeTicks == long.MaxValue ? "SYNTHESIZE"
+                        : $"{TimeSpan.FromTicks(a1.LastVideoTimecodeTicks).TotalMilliseconds:F1}ms";
+                    string aTcStr = a1.LastAudioTimecodeTicks == long.MinValue ? "--"
+                        : a1.LastAudioTimecodeTicks == long.MaxValue ? "SYNTHESIZE"
+                        : $"{TimeSpan.FromTicks(a1.LastAudioTimecodeTicks).TotalMilliseconds:F1}ms";
+                    string vPtsStr = a1.LastVideoPtsTicks == long.MinValue ? "--"
+                        : $"{TimeSpan.FromTicks(Math.Max(0, a1.LastVideoPtsTicks)).TotalMilliseconds:F1}ms";
+                    string aPtsStr = a1.LastAudioPtsTicks == long.MinValue ? "--"
+                        : $"{TimeSpan.FromTicks(Math.Max(0, a1.LastAudioPtsTicks)).TotalMilliseconds:F1}ms";
+
+                    string audioPosStr = audioChannelForStats != null
+                        ? Fmt(audioChannelForStats.Position)
+                        : "--";
+
+                    Console.WriteLine(
+                        $"         ndi v/s={vSubThisSec,3} a/s={aSubThisSec,3} ({aSamplesThisSec,5}smp) " +
+                        $"1st-gap={firstGap} pair-gap={pairStr}");
+                    Console.WriteLine(
+                        $"         ndi tc v={vTcStr} a={aTcStr} Δtc={tcDelta}   pts v={vPtsStr} a={aPtsStr} Δpts={ptsDelta}");
+                    Console.WriteLine(
+                        $"         ch audio.pos={audioPosStr} video.pos={Fmt(channelForStats.Position)} clock={Fmt(outputForStats.Clock.Position)}");
+                }
             }
 
             prevOutput = os;
             prevEndpoint = es;
+            prevAvSync = avs;
         }
     }, cts.Token);
 

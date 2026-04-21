@@ -15,10 +15,9 @@ namespace S.Media.Avalonia;
 /// </summary>
 public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoEndpoint, IFormatCapabilities<PixelFormat>
 {
-    private readonly Lock _gate = new();
     private readonly BasicPixelFormatConverter _converter = new();
+    private readonly VideoFrameSlot _latestFrame = new();
     private AvaloniaGlRenderer? _renderer;
-    private VideoFrame? _latestFrame;
     private bool _disposed;
     private bool _running;
 
@@ -60,11 +59,7 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoEndp
         frame.Data.Span.CopyTo(rented.AsSpan(0, bytes));
         var copied = new VideoFrame(frame.Width, frame.Height, frame.PixelFormat, rented.AsMemory(0, bytes), frame.Pts, new ArrayPoolOwner<byte>(rented));
 
-        lock (_gate)
-        {
-            _latestFrame?.MemoryOwner?.Dispose();
-            _latestFrame = copied;
-        }
+        _latestFrame.Set(copied);
 
         RequestNextFrameRendering();
     }
@@ -90,9 +85,7 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoEndp
         int viewportWidth = (int)Math.Max(1, Math.Round(Bounds.Width * scale));
         int viewportHeight = (int)Math.Max(1, Math.Round(Bounds.Height * scale));
 
-        VideoFrame? frame;
-        lock (_gate)
-            frame = _latestFrame;
+        var frame = _latestFrame.Peek();
 
         if (!frame.HasValue)
         {
@@ -130,11 +123,7 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoEndp
         _disposed = true;
         _running = false;
 
-        lock (_gate)
-        {
-            _latestFrame?.MemoryOwner?.Dispose();
-            _latestFrame = null;
-        }
+        _latestFrame.Clear();
 
         _renderer?.Dispose();
         _renderer = null;

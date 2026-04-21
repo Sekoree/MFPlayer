@@ -12,13 +12,26 @@ public sealed class NDIClock : MediaClockBase
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIClock));
 
     private readonly System.Diagnostics.Stopwatch _sw         = new();
-    private TimeSpan   _lastFramePosition;
-    private TimeSpan   _swAtLastFrame;
-    private bool       _running;
+    // All three tick fields are read on any thread (IMediaClock.Position consumers) and
+    // written on the capture thread (UpdateFromFrame).  Interlocked reads/writes avoid
+    // torn 64-bit reads on 32-bit hosts and provide a release/acquire barrier so consumers
+    // see a consistent snapshot of (lastFramePosition, swAtLastFrame).
+    private long       _lastFramePositionTicks;
+    private long       _swAtLastFrameTicks;
+    private volatile bool _running;
     private readonly double _sampleRate;
 
-    public override TimeSpan Position =>
-        _running ? _lastFramePosition + (_sw.Elapsed - _swAtLastFrame) : _lastFramePosition;
+    public override TimeSpan Position
+    {
+        get
+        {
+            if (!_running)
+                return TimeSpan.FromTicks(Interlocked.Read(ref _lastFramePositionTicks));
+            long lastFrame = Interlocked.Read(ref _lastFramePositionTicks);
+            long swAtLast  = Interlocked.Read(ref _swAtLastFrameTicks);
+            return TimeSpan.FromTicks(lastFrame + (_sw.Elapsed.Ticks - swAtLast));
+        }
+    }
 
     /// <summary>Nominal sample rate (exposed as a concrete property, no longer on IMediaClock).</summary>
     public double SampleRate => _sampleRate;
@@ -44,7 +57,7 @@ public sealed class NDIClock : MediaClockBase
     public override void Stop()
     {
         if (!_running) return;
-        Log.LogDebug("NDIClock stopping at position={Position}", _lastFramePosition);
+        Log.LogDebug("NDIClock stopping at position={Position}", TimeSpan.FromTicks(Interlocked.Read(ref _lastFramePositionTicks)));
         _running = false;
         _sw.Stop();
         base.Stop();
@@ -53,8 +66,8 @@ public sealed class NDIClock : MediaClockBase
     public override void Reset()
     {
         Log.LogDebug("NDIClock reset");
-        _lastFramePosition = TimeSpan.Zero;
-        _swAtLastFrame     = TimeSpan.Zero;
+        Interlocked.Exchange(ref _lastFramePositionTicks, 0);
+        Interlocked.Exchange(ref _swAtLastFrameTicks, 0);
         _sw.Reset();
     }
 
@@ -67,7 +80,10 @@ public sealed class NDIClock : MediaClockBase
     {
         // Guard: skip zero/negative and NDIlib_recv_timestamp_undefined (INT64_MAX = long.MaxValue).
         if (ndiTimestamp <= 0 || ndiTimestamp == long.MaxValue) return;
-        _lastFramePosition = TimeSpan.FromTicks(ndiTimestamp);
-        _swAtLastFrame     = _sw.Elapsed;
+        // Sample the stopwatch BEFORE publishing the new frame position so a concurrent
+        // reader never sees (newPos, oldSwAtLast) — which would produce a time jump.
+        long swNow = _sw.Elapsed.Ticks;
+        Interlocked.Exchange(ref _swAtLastFrameTicks, swNow);
+        Interlocked.Exchange(ref _lastFramePositionTicks, ndiTimestamp);
     }
 }

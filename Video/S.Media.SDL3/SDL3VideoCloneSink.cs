@@ -28,11 +28,10 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
         }
     }
 
-    private readonly Lock _gate = new();
     private readonly VideoFormat _format;
     private readonly int _width;
     private readonly int _height;
-    private VideoFrame? _latestFrame;
+    private readonly VideoFrameSlot _latestFrame = new();
 
     private nint _window;
     private nint _glContext;
@@ -142,11 +141,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
             frame.Pts,
             new ArrayPoolFrameOwner(rented));
 
-        lock (_gate)
-        {
-            _latestFrame?.MemoryOwner?.Dispose();
-            _latestFrame = copied;
-        }
+        _latestFrame.Set(copied);
     }
 
     private void RenderLoop()
@@ -176,9 +171,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
             if (_closeRequested)
                 break;
 
-            VideoFrame? frame;
-            lock (_gate)
-                frame = _latestFrame;
+            var frame = _latestFrame.Peek();
 
             if (frame.HasValue)
                 _renderer?.UploadAndDraw(frame.Value);
@@ -200,11 +193,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
 
         _ = StopAsync();
 
-        lock (_gate)
-        {
-            _latestFrame?.MemoryOwner?.Dispose();
-            _latestFrame = null;
-        }
+        _latestFrame.Clear();
 
         if (_window != nint.Zero && _glContext != nint.Zero)
         {

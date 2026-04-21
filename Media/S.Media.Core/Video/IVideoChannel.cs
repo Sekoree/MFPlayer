@@ -16,6 +16,13 @@ public interface IVideoChannel : IMediaChannel<VideoFrame>
     TimeSpan Position { get; }
 
     /// <summary>
+    /// Best-effort PTS of the next frame that would be returned by <see cref="IMediaChannel{TFrame}.FillBuffer"/>,
+    /// or an interpolated value for smooth drift readouts when no newer frame is buffered yet.
+    /// Defaults to <see cref="Position"/> for implementations that don't track the ring head.
+    /// </summary>
+    TimeSpan NextExpectedPts => Position;
+
+    /// <summary>
     /// Number of frames the internal ring buffer can hold.
     /// Configured at construction time.
     /// </summary>
@@ -30,4 +37,3 @@ public interface IVideoChannel : IMediaChannel<VideoFrame>
     /// </summary>
     event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 }
-

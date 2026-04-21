@@ -25,7 +25,7 @@ Console.WriteLine("╔═══════════════════�
 Console.WriteLine("║   MFPlayer  —  Simple Player  ║");
 Console.WriteLine("╚═══════════════════════════════╝\n");
 
-ffmpeg.RootPath = "/lib";
+ffmpeg.RootPath = S.Media.FFmpeg.FFmpegLoader.ResolveDefaultSearchPath() ?? "/lib";
 
 // ── 1. Initialise PortAudio ──────────────────────────────────────────────────
 

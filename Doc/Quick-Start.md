@@ -20,12 +20,14 @@ For a full main-output + NDI fan-out example, see
 using var output = new PortAudioOutput();
 output.Open(device, requestedFormat, framesPerBuffer: 512);
 
-using var avMixer = new AVMixer(output.HardwareFormat);
-avMixer.AttachAudioOutput(output);
-
-avMixer.AddAudioChannel(audioChannel, ChannelRouteMap.Identity(output.HardwareFormat.Channels));
+using var router = new AVRouter();
+var outputId = router.RegisterEndpoint(output);
+var channelId = router.RegisterInput(audioChannel);
+router.CreateRoute(channelId, outputId,
+    new AudioRouteOptions { ChannelMap = ChannelRouteMap.Identity(output.HardwareFormat.Channels) });
 
 decoder.Start();
+await router.StartAsync();
 await output.StartAsync();
 ```
 
@@ -35,23 +37,24 @@ await output.StartAsync();
 using var videoOutput = new SDL3VideoOutput();
 videoOutput.Open("MFPlayer", 1280, 720, videoChannel.SourceFormat);
 
-using var avMixer = new AVMixer(new AudioFormat(48000, 2), videoOutput.OutputFormat);
-avMixer.AttachVideoOutput(videoOutput);
-
-avMixer.AddVideoChannel(videoChannel);
+using var router = new AVRouter();
+var outputId = router.RegisterEndpoint(videoOutput);
+var channelId = router.RegisterInput(videoChannel);
+router.CreateRoute(channelId, outputId, new VideoRouteOptions());
 
 decoder.Start();
+await router.StartAsync();
 await videoOutput.StartAsync();
 ```
 
 ## 3) Add a Secondary Sink (fan-out)
 
 ```csharp
-avMixer.RegisterAudioSink(ndiSink, channels: 2);
-avMixer.RouteAudioChannelToSink(audioChannel.Id, ndiSink, ChannelRouteMap.Identity(2));
-
-avMixer.RegisterVideoSink(ndiSink);
-avMixer.RouteVideoChannelToSink(videoChannel.Id, ndiSink);
+// Any IAudioEndpoint / IVideoEndpoint / IAVEndpoint can be registered as a sink.
+var ndiId = router.RegisterEndpoint(ndiSink);
+router.CreateRoute(channelId, ndiId,
+    new AudioRouteOptions { ChannelMap = ChannelRouteMap.Identity(2) });
+router.CreateRoute(videoChannelId, ndiId, new VideoRouteOptions());
 ```
 
 ## 4) Loading from a Stream
@@ -76,7 +79,7 @@ allow forward-only playback.
 
 - Stop outputs/sinks first.
 - Stop decoder.
-- Dispose sinks, outputs, and mixer.
+- Dispose sinks, outputs, and router.
 
 Example:
 
@@ -85,7 +88,7 @@ await videoOutput.StopAsync();
 await output.StopAsync();
 
 decoder.Dispose();
-avMixer.Dispose();
+await router.DisposeAsync();
 ```
 
 ## Build/Run Samples

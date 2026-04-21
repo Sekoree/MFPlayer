@@ -3,14 +3,17 @@
 ## Choose Your API Level
 
 - Use `MediaPlayer` for fast open/play/pause/stop workflows and optional fan-out.
-- Use `AVMixer` when you need full explicit channel/sink routing control.
+- Use `AVRouter` when you need full explicit input/endpoint routing control.
 - See `MediaPlayer-Guide.md` for complete `MediaPlayer` examples and events.
 
-## Core Model (AVMixer)
+## Core Model (AVRouter)
 
-- Add channels to `AVMixer`.
-- Attach outputs to `AVMixer` (`AttachAudioOutput`, `AttachVideoOutput`).
-- Register sinks/endpoints and route channels explicitly.
+- Register audio / video *inputs* (channels) with `router.RegisterInput(channel)`.
+- Register *endpoints* (outputs, sinks, `IAVEndpoint`s) with `router.RegisterEndpoint(ep)`.
+- Wire them up with `router.CreateRoute(inputId, endpointId, options)` using
+  `AudioRouteOptions` / `VideoRouteOptions` as appropriate.
+- The router owns its internal clock by default; a `IClockCapableEndpoint` (e.g. a
+  hardware audio output) is auto-discovered and promoted to master when registered.
 
 ## Common Operations
 
@@ -34,58 +37,57 @@ var options = new NDISourceOptions
 ### Add/Remove channels
 
 ```csharp
-avMixer.AddAudioChannel(audioChannel, routeMap);
-avMixer.AddVideoChannel(videoChannel);
+var audioInputId = router.RegisterInput(audioChannel);
+var videoInputId = router.RegisterInput(videoChannel);
 
-avMixer.RemoveAudioChannel(audioChannel.Id);
-avMixer.RemoveVideoChannel(videoChannel.Id);
+router.UnregisterInput(audioInputId);
+router.UnregisterInput(videoInputId);
 ```
 
-### Register sinks
+### Register endpoints
 
 ```csharp
-avMixer.RegisterAudioSink(audioSink, channels: 2);
-avMixer.RegisterVideoSink(videoSink);
+var audioEpId = router.RegisterEndpoint(audioOutput);   // IAudioEndpoint
+var videoEpId = router.RegisterEndpoint(videoOutput);   // IVideoEndpoint
+var avEpId    = router.RegisterEndpoint(ndiSink);       // IAVEndpoint
 ```
 
 ### Route/unroute
 
 ```csharp
-avMixer.RouteAudioChannelToSink(audioChannel.Id, audioSink, routeMap);
-avMixer.UnrouteAudioChannelFromSink(audioChannel.Id, audioSink);
+var audioRoute = router.CreateRoute(audioInputId, audioEpId,
+    new AudioRouteOptions { ChannelMap = routeMap });
+var videoRoute = router.CreateRoute(videoInputId, videoEpId, new VideoRouteOptions());
 
-avMixer.RouteVideoChannelToSink(videoChannel.Id, videoSink);
-avMixer.UnrouteVideoChannelFromSink(videoSink);
+router.RemoveRoute(audioRoute);
+router.RemoveRoute(videoRoute);
 ```
 
 ### Endpoint adapters
 
-If you already have endpoint-style targets:
-
-```csharp
-avMixer.RegisterAudioEndpoint(audioEndpoint, channels: 2);
-avMixer.RegisterVideoEndpoint(videoEndpoint);
-
-avMixer.RouteVideoChannelToEndpoint(videoChannel.Id, videoEndpoint);
-```
+The router treats `IAudioEndpoint`, `IVideoEndpoint`, and combined `IAVEndpoint`
+uniformly — hardware outputs, fan-out sinks, and clone sinks all go through the
+same `RegisterEndpoint` / `CreateRoute` API.
 
 ## Audio Routing Notes
 
-- Explicit sink routes are recommended for deterministic fan-out.
+- Explicit routes produce deterministic fan-out.
 - Use `ChannelRouteMap.Identity(n)` for direct channel mapping.
 - For mono-to-stereo or downmix behavior, build a custom `ChannelRouteMap`.
 
 ## Video Routing Notes
 
-- Primary output render loop pulls via the attached presentation mixer.
-- Sink fan-out gets copies on the same clock domain.
-- Keep sink `ReceiveFrame(...)` non-blocking.
+- The router pushes frames to all video endpoints at the internal tick cadence.
+- A pull endpoint (e.g. SDL3 render window) consumes via an injected fill callback.
+- Keep endpoint `ReceiveFrame(...)` non-blocking.
 
 ## Lifecycle Guidance
 
-- Open outputs first, then attach/register/route, then start.
-- During shutdown: stop endpoints, unroute if needed, then dispose.
-- Disposing `AVMixer` cleans internal mixer resources it owns.
+- Open outputs first, then register inputs/endpoints/routes, then start.
+- During shutdown: stop endpoints, remove routes if needed, then dispose.
+- Disposing `AVRouter` drains internal queues and disposes auto-created resources
+  (e.g. resamplers it owns). Caller-owned endpoints and channels must still be
+  disposed separately.
 
 ## MediaPlayer Quick Reference
 

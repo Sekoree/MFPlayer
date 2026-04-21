@@ -57,7 +57,7 @@ public sealed class MainWindow : Window
     {
         try
         {
-            ffmpeg.RootPath = "/lib";
+            ffmpeg.RootPath = S.Media.FFmpeg.FFmpegLoader.ResolveDefaultSearchPath() ?? "/lib";
 
             string? hardwareDeviceType = GetOptionValue(_args, "--hw");
             bool forceSoftwareDecode = HasOption(_args, "--sw");

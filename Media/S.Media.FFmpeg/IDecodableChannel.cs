@@ -25,8 +25,6 @@ internal interface IDecodableChannel
     /// </summary>
     bool DecodePacketAndEnqueue(EncodedPacket ep, CancellationToken token);
 
-    /// <summary>Logs a decode-loop exception with channel-specific context.</summary>
-    void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep);
 
     /// <summary>Fires the channel's end-of-stream event.</summary>
     void RaiseEndOfStream();

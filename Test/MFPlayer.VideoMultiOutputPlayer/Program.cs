@@ -47,7 +47,7 @@ Console.WriteLine("╔═══════════════════�
 Console.WriteLine("║ MFPlayer — Video Multi-Output Player    ║");
 Console.WriteLine("╚══════════════════════════════════════════╝\n");
 
-ffmpeg.RootPath = "/lib";
+ffmpeg.RootPath = S.Media.FFmpeg.FFmpegLoader.ResolveDefaultSearchPath() ?? "/lib";
 
 Console.Write("Video file path: ");
 string filePath = (Console.ReadLine() ?? "").Trim('"', ' ');

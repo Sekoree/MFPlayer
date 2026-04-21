@@ -13,10 +13,15 @@ public interface IVideoEndpoint : IMediaEndpoint
     /// Called by the graph to deliver a video frame.
     /// Implementations MUST be non-blocking.
     /// </summary>
+    /// <remarks>
+    /// <b>Ownership:</b> the caller (router) owns <paramref name="frame"/>.<c>MemoryOwner</c>.
+    /// Implementations MUST NOT dispose it.  If the endpoint needs to retain the pixel data
+    /// past the call (e.g. to render on a later tick), it MUST copy the bytes into its own
+    /// buffer.  See <see cref="VideoFrame"/> docs for the full contract.
+    /// </remarks>
     void ReceiveFrame(in VideoFrame frame);
 
     /// <summary>Optional endpoint diagnostics snapshot.</summary>
     VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot()
         => VideoEndpointDiagnosticsSnapshot.Empty;
 }
-

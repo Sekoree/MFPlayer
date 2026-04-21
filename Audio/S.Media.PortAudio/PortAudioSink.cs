@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using PALib;
 using PALib.Types.Core;
+using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
@@ -50,8 +51,7 @@ public sealed class PortAudioSink : IAudioEndpoint
 
     // Lock-free pool: RT thread takes a buffer, write thread returns it.
     private readonly ConcurrentQueue<float[]> _pool    = new();
-    private readonly ConcurrentQueue<PendingWrite> _pending = new();
-    private readonly SemaphoreSlim _pendingSignal = new(0);
+    private readonly PooledWorkQueue<PendingWrite> _work = new();
 
     private Thread?                   _writeThread;
     private CancellationTokenSource?  _cts;
@@ -206,7 +206,7 @@ public sealed class PortAudioSink : IAudioEndpoint
         // Compute rate-adjusted + drift-corrected output frame count (§6.2).
         int writeFrames = SinkBufferHelper.ComputeWriteFrames(
             frameCount, sourceFormat.SampleRate, _targetFormat.SampleRate,
-            _driftCorrector, _pending.Count);
+            _driftCorrector, _work.Count);
         int writeSamples = writeFrames * outCh;
 
         // Borrow a pool buffer. RT path never allocates: drop when no capacity is available.
@@ -243,8 +243,7 @@ public sealed class PortAudioSink : IAudioEndpoint
                 frameCount, writeFrames, outCh);
         }
 
-        _pending.Enqueue(new PendingWrite(dest, writeSamples));
-        _pendingSignal.Release();
+        _work.Enqueue(new PendingWrite(dest, writeSamples));
     }
 
     // ── Write thread — calls Pa_WriteStream (blocking) ────────────────────
@@ -254,16 +253,9 @@ public sealed class PortAudioSink : IAudioEndpoint
         var token = _cts!.Token;
         while (!token.IsCancellationRequested)
         {
-            try
-            {
-                _pendingSignal.Wait(token);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            if (!_work.WaitForItem(token)) break;
 
-            while (_pending.TryDequeue(out var pending))
+            while (_work.TryDequeue(out var pending))
             {
                 // Use actual buffer length as the frame count so rate-adjusted writes are
                 // correct even when writeFrames != _framesPerBuffer.
@@ -324,12 +316,11 @@ public sealed class PortAudioSink : IAudioEndpoint
         _writeThread?.Join(TimeSpan.FromSeconds(2));
 
         // Drain pending writes so pooled buffers are not leaked.
-        while (_pending.TryDequeue(out var p))
-            _pool.Enqueue(p.Buffer);
+        _work.Drain(p => _pool.Enqueue(p.Buffer));
 
         Native.Pa_AbortStream(_stream);
         Native.Pa_CloseStream(_stream);
-        _pendingSignal.Dispose();
+        _work.Dispose();
         if (_ownsResampler)
             _resampler?.Dispose();
         Log.LogDebug("PortAudioSink '{Name}' disposed", Name);

@@ -12,7 +12,7 @@ namespace S.Media.Core;
 /// </remarks>
 public abstract class MediaClockBase : IMediaClock, IDisposable
 {
-    private readonly object  _tickLock = new();
+    private readonly Lock    _tickLock = new();
     private event Action<TimeSpan>? _tick;
     private readonly Timer   _tickTimer;
     private TimeSpan         _tickInterval;

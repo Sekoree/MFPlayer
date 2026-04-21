@@ -10,7 +10,7 @@ namespace S.Media.Core.Audio;
 /// Callers write interleaved float frames via <see cref="WriteAsync"/> or <see cref="TryWrite"/>;
 /// the mixer reads them via <see cref="FillBuffer"/> (non-blocking; fills silence on underrun).
 /// </summary>
-public sealed class AudioChannel : IAudioChannel
+public sealed class AudioChannel : IWritableAudioChannel
 {
     private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(AudioChannel));
 

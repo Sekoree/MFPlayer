@@ -71,6 +71,20 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     /// <summary>Creates a video route with explicit options.</summary>
     RouteId CreateRoute(InputId input, EndpointId endpoint, VideoRouteOptions options);
 
+    /// <summary>
+    /// Creates a route by pattern-matching on the concrete <see cref="IRouteOptions"/>
+    /// implementation (<see cref="AudioRouteOptions"/> or <see cref="VideoRouteOptions"/>).
+    /// Useful for generic code that builds the options object polymorphically.
+    /// </summary>
+    RouteId CreateRoute(InputId input, EndpointId endpoint, IRouteOptions options)
+        => options switch
+        {
+            AudioRouteOptions a => CreateRoute(input, endpoint, a),
+            VideoRouteOptions v => CreateRoute(input, endpoint, v),
+            _ => throw new ArgumentException(
+                $"Unsupported route options type: {options.GetType().FullName}", nameof(options)),
+        };
+
     /// <summary>Removes a route.</summary>
     void RemoveRoute(RouteId id);
 

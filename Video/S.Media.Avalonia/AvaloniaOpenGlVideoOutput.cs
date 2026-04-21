@@ -31,7 +31,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEnd
         long TextureReuseDraws,
         long CatchupSkips);
 
-    private readonly object _stateLock = new();
+    private readonly Lock _stateLock = new();
     private AvaloniaGlRenderer? _renderer;
     private VideoPtsClock? _clock;
     private volatile IMediaClock? _presentationClockOverride;

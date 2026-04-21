@@ -104,7 +104,8 @@ internal static class FFmpegDecodeWorkers
                 }
                 catch (Exception ex)
                 {
-                    owner.ReportDecodeLoopError(ex, currentEpoch, ep);
+                    Log.LogError(ex, "{Kind} stream={StreamIndex} decode-loop error: epoch={Epoch} packetEpoch={PacketEpoch} packetBytes={PacketBytes}",
+                        kind, owner.StreamIndex, currentEpoch, ep.SeekEpoch, ep.ActualLength);
                     break;
                 }
                 finally
@@ -123,20 +124,4 @@ internal static class FFmpegDecodeWorkers
             Log.LogDebug("{Kind} decode worker finished for stream {StreamIndex}, decoded {FrameCount} packets", kind, owner.StreamIndex, frameCount);
         }
     }
-
-    // ── Legacy wrappers — delegate to the generic RunAsync<T> ────────────
-
-    public static Task RunAudioAsync(
-        FFmpegAudioChannel owner,
-        ChannelReader<EncodedPacket> packetReader,
-        CancellationToken token,
-        ConcurrentQueue<EncodedPacket>? packetPool = null)
-        => RunAsync(owner, packetReader, token, packetPool);
-
-    public static Task RunVideoAsync(
-        FFmpegVideoChannel owner,
-        ChannelReader<EncodedPacket> packetReader,
-        CancellationToken token,
-        ConcurrentQueue<EncodedPacket>? packetPool = null)
-        => RunAsync(owner, packetReader, token, packetPool);
 }

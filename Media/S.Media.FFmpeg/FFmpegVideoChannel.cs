@@ -28,7 +28,6 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private AVCodecContext* _codecCtx;
     private SwsContext*     _sws;
     private AVFrame*        _frame;
-    private AVFrame*        _rgbFrame;
     private AVFrame*        _swFrame;   // temporary CPU-side frame when using hw decode
     private AVPacket*       _pkt;
     private int             _swsBufSize; // byte size of one converted frame
@@ -82,6 +81,26 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     /// <inheritdoc/>
     public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
     private long _positionTicks;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Returns the last presented PTS plus one nominal frame period derived from the
+    /// stream frame rate.  Used by <see cref="S.Media.Core.Routing.AVRouter.GetAvDrift"/>
+    /// to interpolate video position between frame-boundary PTS updates — without this,
+    /// any A/V drift readout sawtooths by ±½ frame period even on a perfectly synced stream.
+    /// </remarks>
+    public TimeSpan NextExpectedPts
+    {
+        get
+        {
+            long baseTicks = Volatile.Read(ref _positionTicks);
+            int num = Format.FrameRateNumerator;
+            int den = Format.FrameRateDenominator;
+            if (num <= 0 || den <= 0) return TimeSpan.FromTicks(baseTicks);
+            long framePeriodTicks = TimeSpan.TicksPerSecond * den / num;
+            return TimeSpan.FromTicks(baseTicks + framePeriodTicks);
+        }
+    }
 
     internal FFmpegVideoChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
@@ -137,12 +156,6 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
 
     public int LatestSeekEpoch => _latestSeekEpochProvider();
 
-    public void ReportDecodeLoopError(Exception ex, int currentEpoch, EncodedPacket ep)
-    {
-        Log.LogError(ex, "Video stream={StreamIndex} decode-loop error: epoch={Epoch} packetEpoch={PacketEpoch} packetBytes={PacketBytes}",
-            _streamIndex, currentEpoch, ep.SeekEpoch, ep.ActualLength);
-    }
-
     private void OpenCodec()
     {
         var codec = ffmpeg.avcodec_find_decoder(_stream->codecpar->codec_id);
@@ -170,7 +183,6 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             _streamIndex, codecName, _threadCount, _codecCtx->thread_count, _codecCtx->thread_type, _codecCtx->active_thread_type);
 
         _frame    = ffmpeg.av_frame_alloc();
-        _rgbFrame = ffmpeg.av_frame_alloc();
         _swFrame  = ffmpeg.av_frame_alloc();
         _pkt      = ffmpeg.av_packet_alloc();
     }
@@ -191,7 +203,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
 
     internal void StartDecoding(ConcurrentQueue<EncodedPacket>? packetPool = null)
     {
-        _decodeTask = FFmpegDecodeWorkers.RunVideoAsync(this, _packetReader, _cts.Token, packetPool);
+        _decodeTask = FFmpegDecodeWorkers.RunAsync(this, _packetReader, _cts.Token, packetPool);
     }
 
     public void ApplySeekEpoch(long seekPositionTicks)
@@ -200,6 +212,10 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         while (_ringReader.TryRead(out var vf))
             vf.MemoryOwner?.Dispose();
         Interlocked.Exchange(ref _framesInRing, 0);
+        // Reset the dequeued counter so the post-seek empty ring does not spuriously
+        // fire BufferUnderrun before the new epoch's first frame arrives.
+        Interlocked.Exchange(ref _framesDequeued, 0);
+        Volatile.Write(ref _positionTicks, seekPositionTicks);
     }
 
     private VideoFrame? ConvertFrame(AVFrame* frame)
@@ -234,23 +250,27 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             {
                 case PixelFormat.Yuv420p:
                 {
-                    // Plane layout: [Y (w×h)] [U (w/2 × h/2)] [V (w/2 × h/2)]
+                    // Plane layout: [Y (w×h)] [U ((w+1)/2 × (h+1)/2)] [V ((w+1)/2 × (h+1)/2)]
+                    // FFmpeg rounds odd dimensions up for chroma, so using (w+1)/2 avoids
+                    // an sws_scale out-of-bounds write when width or height is odd.
+                    int cW = (w + 1) / 2;
+                    int cH = (h + 1) / 2;
                     int ySize  = w * h;
-                    int uvSize = (w / 2) * (h / 2);
+                    int uvSize = cW * cH;
                     _dstDataArr[0] = pBuf;
                     _dstDataArr[1] = pBuf + ySize;
                     _dstDataArr[2] = pBuf + ySize + uvSize;
                     _dstDataArr[3] = null;
                     _dstStrideArr[0] = w;
-                    _dstStrideArr[1] = w / 2;
-                    _dstStrideArr[2] = w / 2;
+                    _dstStrideArr[1] = cW;
+                    _dstStrideArr[2] = cW;
                     _dstStrideArr[3] = 0;
                     ffmpeg.sws_scale(sws, _srcDataArr, _srcStrideArr, 0, h, _dstDataArr, _dstStrideArr);
                     break;
                 }
                 case PixelFormat.Nv12:
                 {
-                    // Plane layout: [Y (w×h)] [UV interleaved (w × h/2)]
+                    // Plane layout: [Y (w×h)] [UV interleaved (w × (h+1)/2)]
                     int ySize = w * h;
                     _dstDataArr[0] = pBuf;
                     _dstDataArr[1] = pBuf + ySize;
@@ -318,11 +338,15 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
                 }
                 case PixelFormat.Yuv420p10:
                 {
-                    // Planar 10-bit 4:2:0: Y, U, V planes, each stored as 16-bit LE samples
+                    // Planar 10-bit 4:2:0: Y, U, V planes, each stored as 16-bit LE samples.
+                    // Chroma dimensions round up for odd width/height (FFmpeg convention),
+                    // so use (w+1)/2 and (h+1)/2 to size buffers correctly.
+                    int cW = (w + 1) / 2;
+                    int cH = (h + 1) / 2;
                     int yStride = w * 2;            // 2 bytes per Y sample
-                    int uvStride = (w / 2) * 2;     // 2 bytes per chroma sample
+                    int uvStride = cW * 2;          // 2 bytes per chroma sample
                     int ySize = yStride * h;
-                    int uvSize = uvStride * (h / 2);
+                    int uvSize = uvStride * cH;
                     _dstDataArr[0] = pBuf;
                     _dstDataArr[1] = pBuf + ySize;
                     _dstDataArr[2] = pBuf + ySize + uvSize;
@@ -424,6 +448,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         while (_ringReader.TryRead(out var vf))
             vf.MemoryOwner?.Dispose();
         Interlocked.Exchange(ref _framesInRing, 0);
+        Interlocked.Exchange(ref _framesDequeued, 0);
         Volatile.Write(ref _positionTicks, position.Ticks);
     }
 
@@ -506,7 +531,6 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         Interlocked.Exchange(ref _framesInRing, 0);
 
         if (_frame    != null) fixed (AVFrame**        pp = &_frame)    ffmpeg.av_frame_free(pp);
-        if (_rgbFrame != null) fixed (AVFrame**        pp = &_rgbFrame) ffmpeg.av_frame_free(pp);
         if (_swFrame  != null) fixed (AVFrame**        pp = &_swFrame)  ffmpeg.av_frame_free(pp);
         if (_pkt      != null) fixed (AVPacket**       pp = &_pkt)      ffmpeg.av_packet_free(pp);
         if (_codecCtx != null) fixed (AVCodecContext** pp = &_codecCtx) ffmpeg.avcodec_free_context(pp);

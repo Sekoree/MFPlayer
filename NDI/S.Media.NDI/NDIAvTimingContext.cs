@@ -16,8 +16,21 @@ public sealed class NDIAvTimingContext
         Volatile.Write(ref _latestVideoPtsTicks, pts);
 
         // Seed audio timeline from video the first time we observe a usable video PTS.
-        if (Volatile.Read(ref _nextAudioTimecodeTicks) == long.MinValue)
-            Interlocked.CompareExchange(ref _nextAudioTimecodeTicks, pts, long.MinValue);
+        // If audio has already started from a 0 seed (because it flowed before the first
+        // video frame), re-origin it here so the two streams stay aligned — NDI receivers
+        // tolerate a one-shot timecode discontinuity before audible media.
+        long prev = Interlocked.CompareExchange(ref _nextAudioTimecodeTicks, pts, long.MinValue);
+        if (prev != long.MinValue && prev < pts)
+        {
+            // CAS-loop to advance the audio cursor to the video PTS.  Only bump forward;
+            // never move backward (that would repeat timecodes and confuse receivers).
+            while (true)
+            {
+                long current = Interlocked.Read(ref _nextAudioTimecodeTicks);
+                if (current >= pts) break;
+                if (Interlocked.CompareExchange(ref _nextAudioTimecodeTicks, pts, current) == current) break;
+            }
+        }
     }
 
     public long ReserveAudioTimecode(int writtenFrames, int sampleRate)

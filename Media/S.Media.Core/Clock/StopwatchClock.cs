@@ -19,15 +19,6 @@ public sealed class StopwatchClock : MediaClockBase
     {
     }
 
-    /// <summary>
-    /// Backwards-compatible constructor: accepts a sample rate and derives tick interval.
-    /// </summary>
-    /// <param name="sampleRate">Nominal sample rate (used to derive tick cadence for compatibility).</param>
-    /// <param name="tickInterval">How often Tick fires. Defaults to 20 ms.</param>
-    public StopwatchClock(double sampleRate, TimeSpan? tickInterval = null)
-        : base(tickInterval ?? TimeSpan.FromMilliseconds(20))
-    {
-    }
 
     // ── IMediaClock ────────────────────────────────────────────────────────
 

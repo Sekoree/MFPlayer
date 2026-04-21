@@ -55,11 +55,18 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     public YuvColorRange  SuggestedYuvColorRange  => (YuvColorRange)_suggestedRange;
 
     // Synthetic PTS fallback when NDI timestamps are undefined (0, negative, or MaxValue).
-    // Uses a monotonic stopwatch so the mixer can pace frames correctly.
+    // Uses a monotonic stopwatch so the mixer can pace frames correctly.  The stopwatch is
+    // re-origined on every real→synthetic transition so the produced PTS continues from
+    // the last real PTS instead of jumping backward to zero — §3.21 in Code-Review-Findings.
     private readonly Stopwatch _syntheticClock = new();
-    private bool _syntheticClockStarted;
+    private double _syntheticOriginSeconds;  // PTS value at which the stopwatch restarted.
     private bool _hasLastPts;
     private double _lastPtsSeconds;
+    // True while the last delivered PTS came from the synthetic clock.  When the source
+    // starts providing valid NDI timestamps again we must re-origin (lastPts := valid Ts)
+    // WITHOUT the forward-jump clamp kicking in — otherwise we'd be trapped on synthetic
+    // forever because the two clocks have unrelated epochs.
+    private bool _lastPtsWasSynthetic;
 
     public Guid  Id      { get; } = Guid.NewGuid();
     public bool  IsOpen  => !_disposed;
@@ -90,7 +97,13 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         var ring = Channel.CreateUnbounded<VideoFrame>(
             new UnboundedChannelOptions
             {
-                SingleReader = true,   // only FillBuffer reads — enables the faster lock-free path
+                // SingleReader MUST stay false: EnqueueFrame reads (to drop-oldest on
+                // capacity overflow) while FillBuffer reads from the consumer thread.
+                // Two distinct readers = the SingleReader fast path would produce lost
+                // wakeups and torn state.  The BoundedChannelFullMode.DropOldest option
+                // would let us enable SingleReader, but it silently drops the frame
+                // WITHOUT invoking MemoryOwner.Dispose — leaking pooled ArrayPool buffers.
+                SingleReader = false,
                 SingleWriter = true,
                 AllowSynchronousContinuations = false
             });
@@ -171,21 +184,46 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 // Without a valid advancing PTS the VideoMixer's drop-lag logic treats
                 // every frame as stale and drops them all, causing a frozen first frame.
                 bool hasValidTimestamp = frame.Timestamp > 0 && frame.Timestamp != long.MaxValue;
-                double tsSecs = hasValidTimestamp
-                    ? frame.Timestamp / 10_000_000.0
-                    : GetSyntheticPtsSeconds();
+                double tsSecs;
+                bool currentIsSynthetic;
+                if (hasValidTimestamp)
+                {
+                    tsSecs = frame.Timestamp / 10_000_000.0;
+                    currentIsSynthetic = false;
+                }
+                else
+                {
+                    // Real→synthetic transition: re-origin synthetic clock to continue from
+                    // the last real PTS, preventing a backward time step that would freeze
+                    // downstream mixers (they treat backward-PTS frames as stale).
+                    if (!_lastPtsWasSynthetic && _hasLastPts)
+                        ReoriginSyntheticClock(_lastPtsSeconds);
+                    tsSecs = GetSyntheticPtsSeconds();
+                    currentIsSynthetic = true;
+                }
 
                 // Some NDI sources emit non-monotonic or discontinuous timestamps
                 // around reconnect/format transitions. Those values make the mixer
                 // treat new frames as stale and pin output to an old frame.
-                if (_hasLastPts)
+                // Skip the clamp on the synthetic↔real transition — those two clocks
+                // have unrelated epochs, so a large delta is EXPECTED and legitimate.
+                bool clockModeChanged = _hasLastPts && (_lastPtsWasSynthetic != currentIsSynthetic);
+                if (_hasLastPts && !clockModeChanged)
                 {
                     const double MaxForwardJumpSeconds = 0.75;
                     if (tsSecs <= _lastPtsSeconds || (tsSecs - _lastPtsSeconds) > MaxForwardJumpSeconds)
+                    {
+                        // Real timestamp unusable — fall back to synthetic, re-origined
+                        // from the last good PTS so the transition is seamless.
+                        if (!_lastPtsWasSynthetic)
+                            ReoriginSyntheticClock(_lastPtsSeconds);
                         tsSecs = GetSyntheticPtsSeconds();
+                        currentIsSynthetic = true;
+                    }
                 }
 
                 _lastPtsSeconds = tsSecs;
+                _lastPtsWasSynthetic = currentIsSynthetic;
                 _hasLastPts = true;
 
                 var vf = new VideoFrame(
@@ -251,13 +289,27 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 
     private double GetSyntheticPtsSeconds()
     {
-        if (!_syntheticClockStarted)
+        if (!_syntheticClock.IsRunning)
         {
+            // First use: origin is 0 (or the last real PTS if we already have one,
+            // so an initial synthetic frame after some real ones continues monotonically).
+            _syntheticOriginSeconds = _hasLastPts ? _lastPtsSeconds : 0.0;
             _syntheticClock.Start();
-            _syntheticClockStarted = true;
         }
 
-        return _syntheticClock.Elapsed.TotalSeconds;
+        return _syntheticOriginSeconds + _syntheticClock.Elapsed.TotalSeconds;
+    }
+
+    /// <summary>
+    /// Re-origins the synthetic clock so the next <see cref="GetSyntheticPtsSeconds"/> call
+    /// returns a value ≥ <paramref name="originSeconds"/>.  Used when switching from real
+    /// NDI timestamps back to the synthetic fallback — without this, the synthetic clock's
+    /// elapsed-seconds would be far behind the last real PTS, producing a backward time step.
+    /// </summary>
+    private void ReoriginSyntheticClock(double originSeconds)
+    {
+        _syntheticOriginSeconds = originSeconds;
+        _syntheticClock.Restart();
     }
 
     private bool TryCopyFrameToTightBuffer(
