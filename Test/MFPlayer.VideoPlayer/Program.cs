@@ -365,6 +365,52 @@ using (decoder)
         if (!cts.IsCancellationRequested) cts.Cancel();
     };
 
+    // ── 5b. Auto-stop on end-of-stream ───────────────────────────────────
+    //
+    // EndOfStream fires as soon as the demuxer hits EOF, but the decoder's
+    // per-subscription rings (and NDI/PortAudio pending queues) still contain
+    // decoded frames/samples that have not reached an endpoint yet. Cancelling
+    // immediately would cut off the last few hundred ms of content. Instead,
+    // mark the event and let the drain task below await the ring drainage.
+    var videoEos = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var audioEos = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    videoChannel.EndOfStream += (_, _) => videoEos.TrySetResult();
+    IAudioChannel? audioChannelForEos = decoder.AudioChannels.Count > 0 ? decoder.AudioChannels[0] : null;
+    if (audioChannelForEos is not null)
+        audioChannelForEos.EndOfStream += (_, _) => audioEos.TrySetResult();
+    else
+        audioEos.TrySetResult(); // no audio track — nothing to wait for
+
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await Task.WhenAll(videoEos.Task, audioEos.Task).WaitAsync(cts.Token);
+
+            // Drain: wait until every channel's subscription rings have
+            // emptied (decoder produced everything AND consumers drained it).
+            // Polling at 20 ms is fine here — the grace window is governed by
+            // real content remaining, not poll granularity.
+            var drainStart = System.Diagnostics.Stopwatch.StartNew();
+            while (!cts.IsCancellationRequested && drainStart.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                int vQueued = videoChannel.BufferAvailable;
+                int aQueued = audioChannelForEos?.BufferAvailable ?? 0;
+                if (vQueued == 0 && aQueued == 0)
+                    break;
+                try { await Task.Delay(20, cts.Token); }
+                catch (OperationCanceledException) { break; }
+            }
+
+            if (!cts.IsCancellationRequested)
+            {
+                Console.WriteLine("\n[End of stream]");
+                cts.Cancel();
+            }
+        }
+        catch (OperationCanceledException) { }
+    });
+
     // ── 6. Start playback ────────────────────────────────────────────────
 
     decoder.Start();

@@ -45,7 +45,43 @@ public sealed record NDIAVSinkOptions
     /// <summary>External audio resampler. <see langword="null"/> creates a built-in LinearResampler.</summary>
     public IAudioResampler? AudioResampler { get; init; }
 
-    /// <summary>Enables clock-drift correction on the audio send path.</summary>
+    /// <summary>
+    /// Enables clock-drift correction on the audio send path.
+    /// <para/>
+    /// <b>Note:</b> the drift corrector is queue-depth driven and is only meaningful
+    /// when the NDI sender was created with <c>clockAudio:true</c> (SDK back-pressure).
+    /// On the typical async/unclocked send path the pending queue stays near zero and
+    /// the PI controller saturates at <c>+maxCorrection</c>, producing a permanent
+    /// +0.5 % rate skew — leave this <see langword="false"/> for <c>clockAudio:false</c>.
+    /// </summary>
     public bool EnableAudioDriftCorrection { get; init; }
+
+    /// <summary>
+    /// Threshold (in milliseconds) for treating a producer-PTS → cursor delta as a
+    /// discontinuity (seek / reset) that should re-anchor the audio timeline.
+    /// <para/>
+    /// Default is 500 ms.  Steady-state file-level offsets (AAC priming, container
+    /// edit-lists ~50–150 ms) stay absorbed by the sample-accurate cursor; only large
+    /// jumps re-anchor.  Lower this (e.g. 100 ms) if your pipeline performs short seeks
+    /// that must produce an immediate timecode realignment.
+    /// </summary>
+    public int AudioPtsDiscontinuityThresholdMs { get; init; } = 500;
+
+    /// <summary>
+    /// Threshold (in milliseconds) beyond which a lagging audio-timecode cursor is
+    /// snapped forward to the latest observed video PTS (underrun recovery).
+    /// <para/>
+    /// The audio cursor advances at the delivered sample-rate; if the audio decoder
+    /// briefly stalls (CPU spike, GC pause) the cursor will lag wall clock / video PTS.
+    /// When the lag exceeds this threshold, the next audio buffer is stamped with the
+    /// video PTS, preventing a transient stall from turning into a permanent A/V offset
+    /// at the receiver.  The missed audio window becomes a short silence.
+    /// <para/>
+    /// Default is 80 ms.  Lower this to keep A/V tighter (more frequent mini-dropouts
+    /// on stalls).  Higher values tolerate more stall before correcting but risk
+    /// permanent residual lag if the stall settles just below the threshold.
+    /// Set to 0 to disable underrun recovery entirely.
+    /// </summary>
+    public int AudioUnderrunRecoveryThresholdMs { get; init; } = 80;
 }
 

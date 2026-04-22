@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace S.Media.Core;
+namespace S.Media.Core.Clock;
 
 /// <summary>
 /// Clock backed by an external hardware time source (e.g. <c>Pa_GetStreamTime</c>).

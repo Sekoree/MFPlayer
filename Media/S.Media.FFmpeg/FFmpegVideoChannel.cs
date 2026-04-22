@@ -427,18 +427,14 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
 
     /// <summary>
     /// Legacy <c>FillBuffer</c> API — delegates to a lazily-created default subscription.
-    /// New callers should use <see cref="Subscribe"/> directly for proper fan-out.
+    /// New callers should use <see cref="Subscribe"/> directly for proper fan-out. Position
+    /// / dequeue tracking is handled inside the subscription via
+    /// <see cref="NotifyFrameDelivered"/>.
     /// </summary>
     public int FillBuffer(Span<VideoFrame> dest, int frameCount)
     {
         var sub = EnsureDefaultSubscription();
         int got = sub.FillBuffer(dest, frameCount);
-        if (got > 0)
-        {
-            // Position is updated from whatever the last frame's PTS was.
-            Volatile.Write(ref _positionTicks, dest[got - 1].Pts.Ticks);
-            Interlocked.Add(ref _framesDequeued, got);
-        }
         if (got == 0 && Interlocked.Read(ref _framesDequeued) > 0)
             RaiseBufferUnderrun();
         return got;
@@ -465,6 +461,19 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
                 new VideoSubscriptionOptions(_bufferDepth, VideoOverflowPolicy.Wait, "default"));
         }
         return _defaultSub;
+    }
+
+    /// <summary>
+    /// Called by a subscription whenever it hands a frame to its consumer, so that
+    /// <see cref="Position"/> reflects the last-delivered PTS regardless of which
+    /// fan-out path (legacy <see cref="FillBuffer"/>, <see cref="Subscribe"/>-based
+    /// pull, or router push) is driving playback.
+    /// </summary>
+    internal void NotifyFrameDelivered(long ptsTicks)
+    {
+        if (ptsTicks < 0) return;
+        Volatile.Write(ref _positionTicks, ptsTicks);
+        Interlocked.Increment(ref _framesDequeued);
     }
 
     internal void RemoveSubscription(FFmpegVideoSubscription sub)

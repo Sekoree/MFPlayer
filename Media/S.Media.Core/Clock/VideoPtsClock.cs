@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace S.Media.Core;
+namespace S.Media.Core.Clock;
 
 /// <summary>
 /// Video clock driven by presented frame PTS values.
@@ -90,15 +90,36 @@ public sealed class VideoPtsClock : MediaClockBase
         }
 
         var predicted = _lastPts + (swNow - _swAtLastPts);
+        var delta = pts - predicted;
 
-        // Never pull the clock backwards/behind current wall-clock progression.
-        if (pts <= predicted)
+        // Only re-anchor on a LARGE jump (seek / stream discontinuity).
+        //
+        // Small forward drift MUST be ignored here. The AVRouter already runs
+        // its own cross-origin drift correction (PtsDriftTracker) on the
+        // presentation path, which absorbs decoder-vs-wall offsets by walking
+        // the PTS origin in its *relative* comparison. If this clock ALSO
+        // chases the raw PTS forward by 20–40 ms chunks, the two correction
+        // loops form a positive feedback:
+        //
+        //   1) drift-tracker absorbs a small decoder-ahead offset → gate opens
+        //      for frames whose absolute PTS is slightly past clock.Position;
+        //   2) those frames are presented; this method re-anchors _lastPts
+        //      forward → clock.Position jumps;
+        //   3) gate (driven by the now-advanced clock) lets through frames
+        //      even further ahead — GOTO 2.
+        //
+        // Once the subscription ring fills at ~30 s of content the loop
+        // locks at the decoder's free-running rate (~2.3× realtime in the
+        // reported log). Limiting re-anchor to real seeks breaks the cycle
+        // while still letting the stopwatch interpolate at wall rate between
+        // anchors.
+        //
+        // A backward jump of any size is a seek; a forward jump larger than
+        // SeekThreshold is also a seek. Everything else is drift — ignore.
+        var seekThreshold = TimeSpan.FromMilliseconds(500);
+        if (delta >= TimeSpan.Zero && delta < seekThreshold)
             return;
-
-        // Ignore tiny forward jitter; only apply a meaningful resync correction.
-        double fps = FrameRate > 1 ? FrameRate : 30.0;
-        var minCorrection = TimeSpan.FromSeconds(0.5 / fps);
-        if (pts - predicted < minCorrection)
+        if (delta < TimeSpan.Zero && -delta < seekThreshold)
             return;
 
         _lastPts = pts;

@@ -1,4 +1,4 @@
-namespace S.Media.Core.Audio;
+namespace S.Media.Core.Errors;
 
 /// <summary>Thrown when a buffer underrun or overflow is detected and cannot be silently recovered.</summary>
 public sealed class BufferException : MediaException

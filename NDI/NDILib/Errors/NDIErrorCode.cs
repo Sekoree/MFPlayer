@@ -1,4 +1,4 @@
-namespace NDILib;
+namespace NDILib.Errors;
 
 /// <summary>Error codes specific to NDILib creation and initialisation failures.</summary>
 public enum NDIErrorCode

@@ -1,4 +1,4 @@
-namespace S.Media.Core;
+namespace S.Media.Core.Clock;
 
 /// <summary>Provides the current playback position and optional tick notifications for a media pipeline.</summary>
 public interface IMediaClock

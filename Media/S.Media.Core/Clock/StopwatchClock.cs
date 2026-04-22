@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace S.Media.Core;
+namespace S.Media.Core.Clock;
 
 /// <summary>
 /// Pure software clock backed by a <see cref="Stopwatch"/>.

@@ -75,12 +75,10 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
     private readonly NDISender _sender;
     private readonly NDIAvTimingContext _timing = new();
     // Per NDI SDK §13 ("NDI-Send"): audio, video and metadata frames may be submitted
-    // to a sender "at any time, off any thread, and in any order".  We therefore keep
-    // send access thread-safe with *separate* locks per stream so a large RGBA
-    // SendVideo cannot block a concurrent SendAudio (which would starve downstream
-    // receivers — NDI audio timecode sensitivity is high).
+    // to a sender "at any time, off any thread, and in any order".  The video send is
+    // protected because Dispose may flush concurrently with the video thread; audio is
+    // single-threaded (only AudioWriteLoop calls SendAudio) so it needs no lock.
     private readonly Lock _videoSendLock = new();
-    private readonly Lock _audioSendLock = new();
 
     // Video path
     private readonly bool _hasVideo;
@@ -128,8 +126,21 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
     private readonly PooledWorkQueue<PendingAudio> _audioWork = new();
     private long _audioPoolMissDrops;
     private long _audioCapacityMissDrops;
+    private long _audioPoolLazyGrowths;
     private long _audioQueueDrops;
     private readonly DriftCorrector? _audioDriftCorrector;
+    private readonly long _audioPtsDiscontinuityThresholdTicks;
+
+    // FFmpeg load state: tri-state guard so the per-frame RGB/BGR conversion path
+    // doesn't rebuild logger scopes on every frame when FFmpeg is unavailable.
+    // 0 = untried, 1 = loaded, -1 = failed (don't retry).
+    private int _ffmpegLoadState;
+
+    // Log-once guard for the synthesize-timecode fallback on the video path.
+    private int _loggedVideoSynthesizeFallback;
+
+    // Log-once guard for the channel remix path (source channels ≠ target channels).
+    private int _loggedChannelRemix;
 
     // A/V sync tracing — opt-in counters updated on the send paths so consumers
     // (debug UIs, test apps) can derive the actual wall-clock submit cadence and
@@ -196,10 +207,17 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         int audioPoolCount = 0,
         int audioMaxPendingBuffers = 0,
         IAudioResampler? audioResampler = null,
-        bool enableAudioDriftCorrection = false)
+        bool enableAudioDriftCorrection = false,
+        int audioPtsDiscontinuityThresholdMs = 500,
+        int audioUnderrunRecoveryThresholdMs = 80)
     {
         _sender = sender;
         Name = name ?? "NDIAVSink";
+
+        // Apply the underrun-recovery threshold to the shared timing context up front so
+        // the very first audio buffer sees the right policy.  Values <= 0 revert to the
+        // static default inside the context.
+        _timing.SetUnderrunRecoveryThresholdMs(audioUnderrunRecoveryThresholdMs);
 
         if (videoTargetFormat is { } v)
         {
@@ -258,7 +276,26 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
             if (audioResampler == null)
             {
-                _audioResampler = new LinearResampler();
+                // Default to SwrResampler (FFmpeg's sinc, high quality) when FFmpeg is
+                // available.  LinearResampler is a minimal fallback and its aliasing is
+                // audible on music content — the NDI sink is latency-sensitive, not
+                // quality-neutral, so we prefer Swr here by default.  Callers wanting the
+                // old behaviour can pass a LinearResampler explicitly via the options
+                // (or set AudioResampler to any other IAudioResampler implementation).
+                IAudioResampler? swr = null;
+                try
+                {
+                    FFmpegLoader.EnsureLoaded();
+                    swr = new SwrResampler();
+                }
+                catch (Exception ex)
+                {
+                    Log.LogWarning(ex,
+                        "NDIAVSink '{Name}': FFmpeg unavailable, falling back to LinearResampler " +
+                        "(lower quality — may sound grainy on 44.1↔48 kHz conversions).", Name);
+                }
+
+                _audioResampler = swr ?? new LinearResampler();
                 _ownsAudioResampler = true;
             }
             else
@@ -272,10 +309,26 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                 _audioPool.Enqueue(new float[_audioFramesPerBuffer * _audioTargetFormat.Channels * headroom]);
 
             if (enableAudioDriftCorrection)
+            {
+                // Drift correction is queue-depth driven — only meaningful when the
+                // sender back-pressures us (clockAudio:true). On the async/unclocked
+                // path the queue stays near zero → PI saturates at +maxCorrection,
+                // producing a permanent rate skew. We can't see the sender's clock
+                // flag from here, so just warn loudly.
+                Log.LogWarning(
+                    "NDIAVSink '{Name}': EnableAudioDriftCorrection=true. This is queue-depth driven and " +
+                    "only meaningful with clockAudio:true on the NDISender. On clockAudio:false (default) " +
+                    "the PI controller saturates and produces a permanent rate skew — disable this unless " +
+                    "you explicitly created the sender with clockAudio:true.", Name);
+
                 _audioDriftCorrector = new DriftCorrector(
                     targetDepth: Math.Max(1, _audioMaxPendingBuffers / 2),
                     ownerName: Name);
+            }
         }
+
+        _audioPtsDiscontinuityThresholdTicks = TimeSpan.FromMilliseconds(
+            audioPtsDiscontinuityThresholdMs > 0 ? audioPtsDiscontinuityThresholdMs : 500).Ticks;
 
         Log.LogInformation("Created NDIAVSink '{Name}': hasVideo={HasVideo}, hasAudio={HasAudio}, preset={Preset}",
             Name, _hasVideo, _hasAudio, preset);
@@ -304,7 +357,9 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         options?.AudioPoolCount ?? 0,
         options?.AudioMaxPendingBuffers ?? 0,
         options?.AudioResampler,
-        options?.EnableAudioDriftCorrection ?? false)
+        options?.EnableAudioDriftCorrection ?? false,
+        options?.AudioPtsDiscontinuityThresholdMs ?? 500,
+        options?.AudioUnderrunRecoveryThresholdMs ?? 80)
     { }
 
     public Task StartAsync(CancellationToken ct = default)
@@ -315,6 +370,29 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _audioDriftCorrector?.Reset();
+
+        // Reset the resampler's fractional phase / pending-tail buffer so a Stop →
+        // Start cycle begins from a clean state (otherwise the first new buffer
+        // interpolates against stale samples from the prior session).
+        _audioResampler?.Reset();
+
+        // Reset shared A/V timing so a Stop → Start cycle does not inherit a
+        // stale audio cursor from the previous session (which would resume
+        // audio timecodes from an arbitrary past point).
+        _timing.Reset();
+
+        // Drain any pending work left over from a prior session so stale PTS
+        // buffers don't leak into the new timeline.  Pooled buffers are
+        // returned to their pools so the upcoming session starts warm.
+        _audioWork.Drain(pa => _audioPool.Enqueue(pa.Buffer));
+        _videoWork.Drain(pv => _videoPool.Enqueue(pv.Buffer));
+
+        // Reset first-submit sentinels so the per-session stats reflect this
+        // session's launch, not the previous one.
+        Interlocked.Exchange(ref _firstVideoSubmitMs, -1);
+        Interlocked.Exchange(ref _firstAudioSubmitMs, -1);
+        Interlocked.Exchange(ref _loggedVideoSynthesizeFallback, 0);
+        Interlocked.Exchange(ref _loggedChannelRemix, 0);
 
         if (_hasVideo)
         {
@@ -439,6 +517,21 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
         int outCh = _audioTargetFormat.Channels;
 
+        // Channel-count reconciliation is the router's responsibility (AVRouter's channel
+        // map + endpoint-target-format handshake).  If we still see a mismatch here the
+        // router is misconfigured — log once, drop extra channels or zero-fill missing
+        // ones, and continue.  Mixing policy (e.g. surround → stereo downmix) is NOT the
+        // sink's job.
+        if (sourceFormat.Channels != outCh &&
+            Interlocked.CompareExchange(ref _loggedChannelRemix, 1, 0) == 0)
+        {
+            Log.LogWarning(
+                "NDIAVSink '{Name}': received audio with {SrcCh} channels but target is {DstCh}. " +
+                "The AVRouter should apply a channel map for this route.  Falling back to " +
+                "copy-min/zero-fill — surround mixing/downmix must happen in the router, not here.",
+                Name, sourceFormat.Channels, outCh);
+        }
+
         // Compute rate-adjusted + drift-corrected output frame count (§6.2).
         int writeFrames = SinkBufferHelper.ComputeWriteFrames(
             frameCount, sourceFormat.SampleRate, _audioTargetFormat.SampleRate,
@@ -447,15 +540,23 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
         if (!_audioPool.TryDequeue(out var dest))
         {
+            // Pool empty: allocate on demand.  The work-queue's reserve-slot
+            // gate (below) bounds the total buffer count to _audioMaxPendingBuffers,
+            // so growth is still capped.
+            dest = new float[writeSamples];
             Interlocked.Increment(ref _audioPoolMissDrops);
-            return;
+            Interlocked.Increment(ref _audioPoolLazyGrowths);
         }
 
         if (dest.Length < writeSamples)
         {
-            _audioPool.Enqueue(dest);
+            // Existing pool buffer too small (tick jitter or non-default
+            // DefaultFramesPerBuffer produced a larger-than-expected write).
+            // Replace it with a right-sized array rather than silently dropping
+            // the caller's audio — the upper bound is still the work-queue cap.
+            dest = new float[writeSamples];
             Interlocked.Increment(ref _audioCapacityMissDrops);
-            return;
+            Interlocked.Increment(ref _audioPoolLazyGrowths);
         }
 
         int writtenSamples;
@@ -661,7 +762,9 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         PixelFormat.Bgra32 or PixelFormat.Rgba32 => w * 4,
         PixelFormat.Uyvy422 => w * 2,
         PixelFormat.Nv12 or PixelFormat.Yuv420p => w,
-        _ => w * 4,
+        // Per NDI SDK (Processing.NDI.structs.h §line_stride_in_bytes):
+        // 0 tells the SDK to compute stride from FourCC and xres.
+        _ => 0,
     };
 
     private static int GetVideoBufferBytes(PixelFormat fmt, int width, int height) => fmt switch
@@ -685,19 +788,26 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         _ => NDIFourCCVideoType.Rgba,
     };
 
-    private static bool EnsureFfmpegLoaded()
+    private bool EnsureFfmpegLoaded()
     {
-        // FFmpegLoader.EnsureLoaded is already idempotent with its own internal lock.
-        // We catch failures here so the video write loop can fall back to a non-FFmpeg
-        // conversion path instead of tearing down the sink.
+        // Tri-state guard: 0 = untried, 1 = loaded, -1 = failed.  FFmpegLoader.EnsureLoaded
+        // is idempotent but on failure the per-frame RGB/BGR conversion path would
+        // rebuild a logger scope on every frame.  Cache the failure so subsequent frames
+        // cost nothing.
+        int state = Volatile.Read(ref _ffmpegLoadState);
+        if (state == 1) return true;
+        if (state == -1) return false;
+
         try
         {
             FFmpegLoader.EnsureLoaded();
+            Interlocked.Exchange(ref _ffmpegLoadState, 1);
             return true;
         }
         catch (Exception ex)
         {
-            Log.LogWarning(ex, "FFmpeg load failed; I210→RGBA path disabled for this sink");
+            if (Interlocked.Exchange(ref _ffmpegLoadState, -1) != -1)
+                Log.LogWarning(ex, "FFmpeg load failed; I210→RGBA path disabled for this sink");
             return false;
         }
     }
@@ -1008,7 +1118,19 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                         long videoPts = pf.PtsTicks;
                         long videoTimecode = videoPts >= 0 ? videoPts : NDIConstants.TimecodeSynthesize;
                         if (videoPts >= 0)
+                        {
                             _timing.ObserveVideoPts(videoPts);
+                        }
+                        else if (Interlocked.CompareExchange(ref _loggedVideoSynthesizeFallback, 1, 0) == 0)
+                        {
+                            // Warn once per session: the sink is pairing media-PTS audio
+                            // timecodes with wall-clock video timecodes, which creates
+                            // a permanent A/V offset at the receiver.
+                            Log.LogWarning(
+                                "NDIAVSink '{Name}': video frame arrived with no PTS — using NDI timecode-synthesize " +
+                                "on the video path.  If the audio path carries stream PTS this introduces a permanent " +
+                                "A/V offset at the receiver.  Upstream should supply valid video PTS.", Name);
+                        }
 
                         var vf = new NDIVideoFrameV2
                         {
@@ -1146,41 +1268,45 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
                     fixed (float* pData = planar)
                     {
-                        // Derive a media-time timecode in the same domain as the video
-                        // path.  NDIAvTimingContext seeds from the first observed video
-                        // PTS (or 0 if audio leads) and reserves a sample-accurate slot
-                        // per buffer — this guarantees audio timecodes advance at exactly
-                        // the decoded sample rate and never drift against video.
+                        // Derive the NDI audio timecode.
                         //
-                        // If the producer supplied a buffer-level PTS (router's PTS-aware
-                        // overload) and it deviates noticeably from the reserved cursor
-                        // (e.g. after a seek or an upstream buffer starvation), snap the
-                        // cursor to the PTS so we don't accumulate error silently.
-                        long reserved = _timing.ReserveAudioTimecode(samplesPerChannel, _audioTargetFormat.SampleRate);
-                        long audioTimecode = reserved;
-
-                        if (pending.PtsTicks >= 0)
+                        // Primary path: sample-counted cursor via the timing context
+                        // (`ReserveAudioTimecode`).  In steady state the router pushes
+                        // audio at wall-clock rate, so the cursor advances at wall-clock
+                        // rate — exactly matching the video path's PTS-based timecodes.
+                        //
+                        // On audio-decoder starvation (CPU spike, GC pause) the router
+                        // briefly pushes fewer/no buffers, so the cursor would naturally
+                        // lag.  The timing context snaps the cursor forward to the latest
+                        // video PTS whenever the lag exceeds the underrun-recovery
+                        // threshold (default 250 ms), so a transient decoder glitch can't
+                        // turn into a permanent A/V offset at the receiver.
+                        //
+                        // Discontinuity path: if the producer stream-PTS jumps forward
+                        // past the cursor by more than AudioPtsDiscontinuityThresholdMs
+                        // (default 500 ms) the source almost certainly seeked — re-anchor
+                        // the cursor to the new PTS so the NDI wire tc immediately
+                        // reflects the new media position.  Forward-only; backward jumps
+                        // keep the cursor stationary so wire tc stays monotonic.
+                        //
+                        // NB: we intentionally do NOT stamp from `pending.PtsTicks`
+                        // (producer stream PTS) on every buffer.  A previous revision did,
+                        // but that caused audio timecodes to permanently lag video after
+                        // any decoder underrun — the receiver then saw a persistent skew
+                        // that looked like "video sped up and never corrected".
+                        long audioTimecode;
+                        long cursorNow = _timing.NextAudioTimecodeTicks;
+                        if (pending.PtsTicks >= 0 &&
+                            cursorNow != long.MinValue &&
+                            pending.PtsTicks - cursorNow > _audioPtsDiscontinuityThresholdTicks)
                         {
-                            long deltaTicks = pending.PtsTicks - reserved;
-                            long oneBufferTicks = (long)Math.Round(
-                                (double)samplesPerChannel * TimeSpan.TicksPerSecond / _audioTargetFormat.SampleRate);
-
-                            // Only realign on very large jumps (seek/reset class).
-                            // Small/medium constant source offsets (e.g. AAC priming or
-                            // container edit-list offsets ~50-150 ms) should NOT be
-                            // baked into the sender timecodes, otherwise receivers report
-                            // a permanent A/V skew even when wall-clock submit cadence is
-                            // aligned. Keep the shared video-seeded timeline for those.
-                            //
-                            // Threshold = max(12 buffers, 500 ms):
-                            //  - 12 buffers catches real discontinuities quickly.
-                            //  - 500 ms ignores normal file-level A/V offsets.
-                            long discontinuityThresholdTicks = Math.Max(
-                                oneBufferTicks * 12,
-                                TimeSpan.FromMilliseconds(500).Ticks);
-
-                            if (Math.Abs(deltaTicks) > discontinuityThresholdTicks)
-                                audioTimecode = pending.PtsTicks;
+                            audioTimecode = _timing.AdvanceAudioCursorTo(
+                                pending.PtsTicks, samplesPerChannel, _audioTargetFormat.SampleRate);
+                        }
+                        else
+                        {
+                            audioTimecode = _timing.ReserveAudioTimecode(
+                                samplesPerChannel, _audioTargetFormat.SampleRate);
                         }
 
                         var frame = new NDIAudioFrameV3
@@ -1195,8 +1321,11 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                             Timestamp = NDIConstants.TimestampUndefined
                         };
 
-                        lock (_audioSendLock)
-                            _sender.SendAudio(frame);
+                        // SendAudio (NDIlib_send_send_audio_v3) is synchronous and copies the
+                        // payload before returning — no cross-thread contention on the planar
+                        // buffer, and no async-retention to manage.  The per-sink audio thread
+                        // is the only caller, so no send-lock is needed here.
+                        _sender.SendAudio(frame);
 
                         long nowMs = _sinkClock.ElapsedMilliseconds;
                         Interlocked.CompareExchange(ref _firstAudioSubmitMs, nowMs, -1);

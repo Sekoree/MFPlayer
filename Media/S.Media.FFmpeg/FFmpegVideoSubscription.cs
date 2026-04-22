@@ -114,6 +114,7 @@ internal sealed class FFmpegVideoSubscription : IVideoSubscription
         {
             Interlocked.Add(ref _queued, -filled);
             Interlocked.Add(ref _dequeued, filled);
+            _parent.NotifyFrameDelivered(dest[filled - 1].Pts.Ticks);
         }
         if (filled == 0 && Interlocked.Read(ref _dequeued) > 0)
             RaiseUnderrun();
@@ -126,6 +127,7 @@ internal sealed class FFmpegVideoSubscription : IVideoSubscription
         {
             Interlocked.Decrement(ref _queued);
             Interlocked.Increment(ref _dequeued);
+            _parent.NotifyFrameDelivered(frame.Pts.Ticks);
             return true;
         }
         frame = default;
