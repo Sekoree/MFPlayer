@@ -3,8 +3,27 @@ using S.Media.Core.Media;
 namespace S.Media.Core.Media.Endpoints;
 
 /// <summary>
-/// Receives audio buffers from the graph. Replaces <c>IAudioOutput</c>, <c>IAudioSink</c>,
-/// and <c>IAudioBufferEndpoint</c> with a single unified push contract.
+/// Receives audio buffers from the graph. This is the <b>single unified audio endpoint
+/// contract</b>: there is no separate "output" or "sink" interface. Replaces the legacy
+/// <c>IAudioOutput</c>, <c>IAudioSink</c>, and <c>IAudioBufferEndpoint</c> types with
+/// one push-based surface.
+///
+/// <para>
+/// Endpoints that are driven by a real-time hardware callback (e.g. a PortAudio callback
+/// stream) should additionally implement <see cref="IPullAudioEndpoint"/> — it is an
+/// opt-in capability mixin, not a separate kind of endpoint. The router's
+/// <c>RegisterEndpoint(IAudioEndpoint)</c> handles both cases via a runtime capability
+/// check, so users register every audio destination through one method.
+/// </para>
+///
+/// <para>
+/// Endpoints that can provide a hardware or software clock should additionally implement
+/// <see cref="IClockCapableEndpoint"/>; the router auto-registers it at
+/// <c>ClockPriority.Hardware</c>. The clock can be overridden per-session via
+/// <c>AVRouter.SetClock(...)</c> (priority <c>Override</c>) — e.g. to slave both PA
+/// playback and NDI send to a PTP genlock source. When the override is removed the
+/// resolver falls back to this endpoint's clock automatically.
+/// </para>
 /// </summary>
 public interface IAudioEndpoint : IMediaEndpoint
 {
@@ -36,7 +55,24 @@ public interface IAudioEndpoint : IMediaEndpoint
     /// </param>
     void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format, TimeSpan sourcePts)
         => ReceiveBuffer(buffer, frameCount, format);
+
+    /// <summary>
+    /// Optional: the audio format this push endpoint prefers to receive. When
+    /// non-<see langword="null"/>, the router uses this as the target of per-route
+    /// resampling/channel mapping so
+    /// <see cref="ReceiveBuffer(ReadOnlySpan{float}, int, AudioFormat)"/> is called at the
+    /// negotiated rate/channel count with no further conversion expected.
+    ///
+    /// <para>
+    /// For pull endpoints (<see cref="IPullAudioEndpoint"/>) the router always uses
+    /// <see cref="IPullAudioEndpoint.EndpointFormat"/> instead and this value is ignored.
+    /// </para>
+    ///
+    /// <para>
+    /// Default: <see langword="null"/> — endpoint accepts whatever the upstream mixer
+    /// produces (the pre-existing behaviour; per-route resamplers are not created
+    /// unless the endpoint advertises a format).
+    /// </para>
+    /// </summary>
+    AudioFormat? NegotiatedFormat => null;
 }
-
-
-

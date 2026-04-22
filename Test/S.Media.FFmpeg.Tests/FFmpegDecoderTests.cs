@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.FFmpeg.Tests.Helpers;
 using Xunit;
@@ -17,10 +18,18 @@ public sealed class FFmpegDecoderTests
     // ── Open / error handling ───────────────────────────────────────────────
 
     [Fact]
-    public void Open_InvalidPath_ThrowsInvalidOperationException()
+    public void Open_InvalidPath_ThrowsMediaOpenException()
     {
-        Assert.Throws<InvalidOperationException>(() =>
-            FFmpegDecoder.Open("/this/path/does/not/exist.wav"));
+        const string path = "/this/path/does/not/exist.wav";
+        var ex = Assert.Throws<MediaOpenException>(() => FFmpegDecoder.Open(path));
+        Assert.Equal(path, ex.ResourcePath);
+    }
+
+    [Fact]
+    public void Open_GarbageStream_ThrowsMediaOpenException()
+    {
+        using var ms = new MemoryStream(new byte[] { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 });
+        Assert.Throws<MediaOpenException>(() => FFmpegDecoder.Open(ms));
     }
 
     [Fact]

@@ -1,45 +1,51 @@
-# Clone Sinks (Parent-Owned)
+# Clone Video Endpoints (Parent-Owned)
 
-Clone sinks are secondary video targets created by a parent output.
+Clone video endpoints are secondary video targets created by a parent endpoint
+(e.g. a clone of an SDL3 window used for a preview pane or a fan-out render).
+
+> Terminology note (§1.1): the public surface uses **endpoint** uniformly.
+> Earlier docs called these "sinks"; the class names still contain the word
+> `CloneSink` until the §1.2 renames land.
 
 ## Why this model
 
 - Enforces backend compatibility (pixel format, thread model, renderer assumptions).
-- Keeps lifecycle safe: parent output can track and dispose all clones.
+- Keeps lifecycle safe: the parent endpoint can track and dispose all clones.
 - Simplifies app code: no manual clone constructor wiring.
 
 ## Avalonia
 
 ```csharp
-var clone = avaloniaOutput.CreateCloneSink("Preview");
+var clone = avaloniaEndpoint.CreateCloneSink("Preview");
 await clone.StartAsync();
 
-avMixer.RegisterVideoSink(clone);
-avMixer.RouteVideoChannelToSink(videoChannel.Id, clone);
+var cloneId = router.RegisterEndpoint(clone);
+var routeId = router.CreateRoute(videoInputId, cloneId);
 ```
 
 ## SDL3
 
 ```csharp
-var clone = sdlOutput.CreateCloneSink(title: "Program", width: 960, height: 540);
+var clone = sdlEndpoint.CreateCloneSink(title: "Program", width: 960, height: 540);
 await clone.StartAsync();
 
-avMixer.RegisterVideoSink(clone);
-avMixer.RouteVideoChannelToSink(videoChannel.Id, clone);
+var cloneId = router.RegisterEndpoint(clone);
+var routeId = router.CreateRoute(videoInputId, cloneId);
 ```
 
 ## Ownership and disposal
 
 - Treat clones as parent-owned.
 - Stop clones before teardown when possible.
-- Disposing the parent output disposes tracked clones.
+- Disposing the parent endpoint disposes tracked clones.
 
 ## Practical tip
 
-If a sink is only for temporary preview, unroute first, then stop and dispose to reduce render and copy work:
+If a clone is only for temporary preview, remove the route first, then stop and
+dispose to reduce render and copy work:
 
 ```csharp
-avMixer.UnrouteVideoChannelFromSink(clone);
+router.RemoveRoute(routeId);
 await clone.StopAsync();
 clone.Dispose();
 ```

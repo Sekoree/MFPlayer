@@ -191,24 +191,25 @@ using (ndiRuntime)
         var srcFmt       = audioChannel.SourceFormat;
         int outCh        = Math.Min(srcFmt.Channels, outChannels);
         var hwFmt        = new AudioFormat(srcFmt.SampleRate, outCh);
-        var routeMap     = BuildRouteMap(srcFmt.Channels, outCh);
+        var routeMap     = ChannelRouteMap.AutoStereoDownmix(srcFmt.Channels, outCh);
 
         Console.WriteLine($"  NDI audio:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
 
-        // PortAudioOutput.Open automatically falls back to the device's native
+        // PortAudioEndpoint.Create automatically falls back to the device's native
         // sample rate if the requested rate isn't supported (e.g. JACK at 44100 Hz
         // when NDI delivers 48000 Hz).  The AudioMixer resamples transparently.
         Console.Write("Opening output device… ");
-        using var output = new PortAudioOutput();
+        PortAudioEndpoint output;
         try
         {
-            output.Open(device, hwFmt, suggestedLatency: profile.AudioSuggestedLatency);
+            output = PortAudioEndpoint.Create(device, hwFmt, suggestedLatency: profile.AudioSuggestedLatency);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"FAILED\n  {ex.Message}");
             return;
         }
+        using var _outputScope = output;
         Console.WriteLine("OK");
 
         Console.WriteLine($"  Output:     {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
@@ -511,21 +512,4 @@ static NDIEndpointPreset PickNdiPreset()
     return NDIEndpointPreset.Balanced;
 }
 
-/// <summary>
-/// Builds a route map: mono → both stereo channels; multi-channel → straight-across up to min(src, dst).
-/// </summary>
-static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
-{
-    var b = new ChannelRouteMap.Builder();
-    if (srcChannels == 1 && dstChannels >= 2)
-    {
-        b.Route(0, 0).Route(0, 1);
-    }
-    else
-    {
-        int common = Math.Min(srcChannels, dstChannels);
-        for (int i = 0; i < common; i++) b.Route(i, i);
-    }
-    return b.Build();
-}
 

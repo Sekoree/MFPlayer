@@ -1,5 +1,6 @@
 using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 
 namespace S.Media.FFmpeg;
@@ -68,7 +69,7 @@ public sealed unsafe class SwrResampler : IAudioResampler
         }
 
         _swr = ffmpeg.swr_alloc();
-        if (_swr == null) throw new InvalidOperationException("swr_alloc failed.");
+        if (_swr == null) throw new MediaDecodeException("swr_alloc failed.");
 
         AVChannelLayout layout = default;
         ffmpeg.av_channel_layout_default(&layout, channels);
@@ -83,7 +84,7 @@ public sealed unsafe class SwrResampler : IAudioResampler
             AVSampleFormat.AV_SAMPLE_FMT_FLT, 0);
 
         int ret = ffmpeg.swr_init(_swr);
-        if (ret < 0) throw new InvalidOperationException($"swr_init failed: {ret}");
+        if (ret < 0) throw new MediaDecodeException($"swr_init failed: {ret}");
 
         _lastInRate   = inRate;
         _lastOutRate  = outRate;

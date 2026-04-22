@@ -4,8 +4,10 @@ using System.Numerics;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Mixing;
 using S.Media.Core.Video;
 
 namespace S.Media.Core.Routing;
@@ -34,7 +36,13 @@ public sealed class AVRouter : IAVRouter
         public readonly IAudioChannel? AudioChannel;
         public readonly IVideoChannel? VideoChannel;
         public float Volume = 1.0f;
-        public TimeSpan TimeOffset;
+        // §3.18 / B13: long-backed for Interlocked atomicity; TimeOffset is a wrapper.
+        public long TimeOffsetTicks;
+        public TimeSpan TimeOffset
+        {
+            get => TimeSpan.FromTicks(Interlocked.Read(ref TimeOffsetTicks));
+            set => Interlocked.Exchange(ref TimeOffsetTicks, value.Ticks);
+        }
         public bool Enabled = true;
 
         /// <summary>Peak sample level (absolute) measured after volume, before routing. Updated on RT thread.</summary>
@@ -160,6 +168,13 @@ public sealed class AVRouter : IAVRouter
     // callback below) — §5.1 of Code-Review-Findings.
     private readonly ConcurrentDictionary<RouteId, PtsDriftTracker> _pushVideoDrift = new();
     private readonly ConcurrentDictionary<RouteId, byte> _pushAudioFormatMismatchWarnings = new();
+
+    // §3.20 / EL3: rate-limit repeated push-tick exceptions. Log the first three,
+    // then every 100th, so a persistent fault doesn't flood the log while still
+    // producing periodic breadcrumbs. Counters are per-tick-loop (one per thread),
+    // touched only from the owning loop, so no synchronisation required.
+    private long _pushAudioErrorCount;
+    private long _pushVideoErrorCount;
 
     // Reusable 1-element scratch for PushVideoTick's IVideoChannel.FillBuffer calls.
     // Only the push-video thread touches this, so no synchronization is required.
@@ -335,12 +350,28 @@ public sealed class AVRouter : IAVRouter
 
     /// <summary>
     /// If the endpoint implements <see cref="IClockCapableEndpoint"/>, auto-register
-    /// its clock at <see cref="ClockPriority.Hardware"/> priority.
+    /// its clock. Priority resolution (review §4.8 / R11):
+    /// <list type="number">
+    ///   <item>If the endpoint overrode <see cref="IClockCapableEndpoint.DefaultPriority"/>
+    ///         (i.e. returned anything other than the interface default
+    ///         <see cref="ClockPriority.Hardware"/>), that value wins — virtual endpoints
+    ///         declare <see cref="ClockPriority.Internal"/>, NDI receive declares
+    ///         <see cref="ClockPriority.External"/>, etc.</item>
+    ///   <item>Otherwise fall back to
+    ///         <see cref="AVRouterOptions.DefaultEndpointClockPriority"/> so existing
+    ///         global overrides keep working.</item>
+    /// </list>
     /// </summary>
     private void AutoRegisterEndpointClock(IMediaEndpoint endpoint)
     {
         if (endpoint is IClockCapableEndpoint clockEp)
-            RegisterClock(clockEp.Clock, _options.DefaultEndpointClockPriority);
+        {
+            var endpointPref = clockEp.DefaultPriority;
+            var priority = endpointPref == ClockPriority.Hardware
+                ? _options.DefaultEndpointClockPriority
+                : endpointPref;
+            RegisterClock(clockEp.Clock, priority);
+        }
     }
 
     // ── IAVRouter: Routing ──────────────────────────────────────────────
@@ -348,15 +379,15 @@ public sealed class AVRouter : IAVRouter
     public RouteId CreateRoute(InputId input, EndpointId endpoint)
     {
         if (!_inputs.TryGetValue(input, out var inp))
-            throw new InvalidOperationException($"Input {input} is not registered.");
+            throw new MediaRoutingException($"Input {input} is not registered.");
         if (!_endpoints.TryGetValue(endpoint, out var ep))
-            throw new InvalidOperationException($"Endpoint {endpoint} is not registered.");
+            throw new MediaRoutingException($"Endpoint {endpoint} is not registered.");
 
         return inp.Kind switch
         {
             InputKind.Audio => CreateAudioRoute(inp, ep, new AudioRouteOptions()),
             InputKind.Video => CreateVideoRoute(inp, ep, new VideoRouteOptions()),
-            _ => throw new InvalidOperationException("Unknown input kind.")
+            _ => throw new MediaRoutingException("Unknown input kind.")
         };
     }
 
@@ -364,11 +395,11 @@ public sealed class AVRouter : IAVRouter
     {
         ArgumentNullException.ThrowIfNull(options);
         if (!_inputs.TryGetValue(input, out var inp))
-            throw new InvalidOperationException($"Input {input} is not registered.");
+            throw new MediaRoutingException($"Input {input} is not registered.");
         if (inp.Kind != InputKind.Audio)
-            throw new InvalidOperationException("Audio route options require an audio input.");
+            throw new MediaRoutingException("Audio route options require an audio input.");
         if (!_endpoints.TryGetValue(endpoint, out var ep))
-            throw new InvalidOperationException($"Endpoint {endpoint} is not registered.");
+            throw new MediaRoutingException($"Endpoint {endpoint} is not registered.");
 
         return CreateAudioRoute(inp, ep, options);
     }
@@ -377,11 +408,11 @@ public sealed class AVRouter : IAVRouter
     {
         ArgumentNullException.ThrowIfNull(options);
         if (!_inputs.TryGetValue(input, out var inp))
-            throw new InvalidOperationException($"Input {input} is not registered.");
+            throw new MediaRoutingException($"Input {input} is not registered.");
         if (inp.Kind != InputKind.Video)
-            throw new InvalidOperationException("Video route options require a video input.");
+            throw new MediaRoutingException("Video route options require a video input.");
         if (!_endpoints.TryGetValue(endpoint, out var ep))
-            throw new InvalidOperationException($"Endpoint {endpoint} is not registered.");
+            throw new MediaRoutingException($"Endpoint {endpoint} is not registered.");
 
         return CreateVideoRoute(inp, ep, options);
     }
@@ -398,7 +429,7 @@ public sealed class AVRouter : IAVRouter
     public void SetRouteEnabled(RouteId id, bool enabled)
     {
         if (!_routes.TryGetValue(id, out var route))
-            throw new InvalidOperationException($"Route {id} is not registered.");
+            throw new MediaRoutingException($"Route {id} is not registered.");
         Volatile.Write(ref route.Enabled, enabled);
     }
 
@@ -471,22 +502,29 @@ public sealed class AVRouter : IAVRouter
     public void SetInputVolume(InputId id, float volume)
     {
         if (!_inputs.TryGetValue(id, out var entry))
-            throw new InvalidOperationException($"Input {id} is not registered.");
-        entry.Volume = volume;
+            throw new MediaRoutingException($"Input {id} is not registered.");
+        // §3.18 / B13+R15: publish with Volatile.Write so the push/fill threads observe
+        // the new value on the next iteration even on weakly ordered architectures
+        // (ARM64). The float itself is 4 bytes and aligned, so the store is atomic.
+        Volatile.Write(ref entry.Volume, volume);
     }
 
     public void SetInputTimeOffset(InputId id, TimeSpan offset)
     {
         if (!_inputs.TryGetValue(id, out var entry))
-            throw new InvalidOperationException($"Input {id} is not registered.");
-        entry.TimeOffset = offset;
+            throw new MediaRoutingException($"Input {id} is not registered.");
+        // TimeSpan is a 64-bit struct; write the underlying ticks atomically so
+        // readers on 32-bit runtimes cannot tear (§3.18 / B13). 64-bit stores are
+        // atomic on 64-bit runtimes already, but Interlocked.Exchange is the
+        // cheapest universal guarantee.
+        Interlocked.Exchange(ref entry.TimeOffsetTicks, offset.Ticks);
     }
 
     public void SetInputEnabled(InputId id, bool enabled)
     {
         if (!_inputs.TryGetValue(id, out var entry))
-            throw new InvalidOperationException($"Input {id} is not registered.");
-        entry.Enabled = enabled;
+            throw new MediaRoutingException($"Input {id} is not registered.");
+        Volatile.Write(ref entry.Enabled, enabled);
     }
 
     // ── IAVRouter: Per-endpoint control ─────────────────────────────────
@@ -494,7 +532,7 @@ public sealed class AVRouter : IAVRouter
     public void SetEndpointGain(EndpointId id, float gain)
     {
         if (!_endpoints.TryGetValue(id, out var entry))
-            throw new InvalidOperationException($"Endpoint {id} is not registered.");
+            throw new MediaRoutingException($"Endpoint {id} is not registered.");
         entry.Gain = gain;
     }
 
@@ -507,9 +545,9 @@ public sealed class AVRouter : IAVRouter
     public TimeSpan GetAvDrift(InputId audioInput, InputId videoInput)
     {
         if (!_inputs.TryGetValue(audioInput, out var aEntry) || aEntry.Kind != InputKind.Audio)
-            throw new InvalidOperationException("Audio input not found.");
+            throw new MediaRoutingException("Audio input not found.");
         if (!_inputs.TryGetValue(videoInput, out var vEntry) || vEntry.Kind != InputKind.Video)
-            throw new InvalidOperationException("Video input not found.");
+            throw new MediaRoutingException("Video input not found.");
 
         // Compare both streams to the master clock rather than to each other directly.
         // This cancels out most of the wall-clock jitter that would otherwise appear as
@@ -561,7 +599,7 @@ public sealed class AVRouter : IAVRouter
     public float GetInputPeakLevel(InputId id)
     {
         if (!_inputs.TryGetValue(id, out var entry))
-            throw new InvalidOperationException($"Input {id} is not registered.");
+            throw new MediaRoutingException($"Input {id} is not registered.");
         return entry.PeakLevel;
     }
 
@@ -608,19 +646,26 @@ public sealed class AVRouter : IAVRouter
 
     private void DisposeCore()
     {
-
-        // Dispose auto-created resamplers
-        foreach (var route in _routes.Values)
+        // §3.13 / R9: tear down every route symmetrically through RemoveRouteInternal
+        // so per-route state (auto-resamplers, video subscriptions, push-video
+        // pending frames, drift trackers, mismatch-warning dedupe entries) is
+        // released even if the caller never explicitly removed routes. Without
+        // this, repeated router create→dispose cycles leaked subscriptions and
+        // bled the pool.
+        lock (_lock)
         {
-            if (route.OwnsResampler)
-                route.Resampler?.Dispose();
+            // Snapshot ids to avoid mutating the dictionary under enumeration.
+            var routeIds = _routes.Keys.ToArray();
+            foreach (var id in routeIds)
+            {
+                if (_routes.TryGetValue(id, out var route))
+                    RemoveRouteInternal(route);
+            }
         }
 
-        // Release any pooled video frames still cached per-route in the push
-        // pending slot so the pool doesn't bleed when the router is disposed
-        // before routes are removed. Per-route video subscriptions are drained
-        // by RemoveRouteInternal via each route.VideoSub.Dispose() path; this
-        // handles the "pending" slot pulled but not yet presented.
+        // Defensive: any video frames still pending in the router-scoped slot
+        // (shouldn't exist after the loop above, since RemoveRouteInternal also
+        // drains _pushVideoPending — but leave as a belt-and-braces guard).
         foreach (var kv in _pushVideoPending)
             kv.Value.MemoryOwner?.Dispose();
         _pushVideoPending.Clear();
@@ -658,11 +703,13 @@ public sealed class AVRouter : IAVRouter
     private RouteId CreateAudioRoute(InputEntry inp, EndpointEntry ep, AudioRouteOptions options)
     {
         if (ep.Audio is null)
-            throw new InvalidOperationException("Endpoint does not support audio.");
+            throw new MediaRoutingException("Endpoint does not support audio.");
 
         // Validate audio format compatibility if endpoint advertises capabilities
         if (ep.Audio is IFormatCapabilities<AudioFormat> caps && inp.AudioChannel is not null)
         {
+            System.Diagnostics.Debug.Assert(caps.SupportedFormats is not null,
+                "IFormatCapabilities<AudioFormat>.SupportedFormats must be non-null (§3.53 / CH9).");
             var srcFormat = inp.AudioChannel.SourceFormat;
             if (caps.SupportedFormats.Count > 0 && !caps.SupportedFormats.Contains(srcFormat))
             {
@@ -724,11 +771,13 @@ public sealed class AVRouter : IAVRouter
     private RouteId CreateVideoRoute(InputEntry inp, EndpointEntry ep, VideoRouteOptions options)
     {
         if (ep.Video is null)
-            throw new InvalidOperationException("Endpoint does not support video.");
+            throw new MediaRoutingException("Endpoint does not support video.");
 
         // Validate pixel format compatibility if endpoint advertises capabilities
         if (ep.Video is IFormatCapabilities<PixelFormat> caps && inp.VideoChannel is not null)
         {
+            System.Diagnostics.Debug.Assert(caps.SupportedFormats is not null,
+                "IFormatCapabilities<PixelFormat>.SupportedFormats must be non-null (§3.53 / CH9).");
             var srcFormat = inp.VideoChannel.SourceFormat;
             if (srcFormat.Width > 0 && caps.SupportedFormats.Count > 0)
             {
@@ -888,7 +937,9 @@ public sealed class AVRouter : IAVRouter
             }
             catch (Exception ex)
             {
-                Log.LogError(ex, "Error in audio push tick");
+                long n = Interlocked.Increment(ref _pushAudioErrorCount);
+                if (n <= 3 || n % 100 == 0)
+                    Log.LogError(ex, "Error in audio push tick (count={Count})", n);
             }
 
             // Sleep for the remaining cadence time
@@ -915,7 +966,9 @@ public sealed class AVRouter : IAVRouter
             }
             catch (Exception ex)
             {
-                Log.LogError(ex, "Error in video push tick");
+                long n = Interlocked.Increment(ref _pushVideoErrorCount);
+                if (n <= 3 || n % 100 == 0)
+                    Log.LogError(ex, "Error in video push tick (count={Count})", n);
             }
 
             long targetTicks = tickStart + videoCadenceTicks;
@@ -1025,7 +1078,7 @@ public sealed class AVRouter : IAVRouter
                 // Stream-time PTS of the first sample in the delivered buffer.  Seeded
                 // from the first active input's Position BEFORE its FillBuffer call,
                 // which is the read-head PTS that the upcoming samples will start at.
-                // Sinks that stamp media timecode (NDIAVSink) use this directly; other
+                // Sinks that stamp media timecode (NDIAVEndpoint) use this directly; other
                 // sinks see it discarded by the default <see cref="IAudioEndpoint.ReceiveBuffer"/>
                 // overload.  TimeSpan.MinValue means "no PTS" (all inputs empty).
                 TimeSpan bufferPts = TimeSpan.MinValue;
@@ -1070,9 +1123,11 @@ public sealed class AVRouter : IAVRouter
                     // Per-input peak metering (post-volume, pre-mix)
                     inp.PeakLevel = MeasurePeak(filledSpan);
 
-                    // Apply channel map if present
-                    if (route.BakedChannelMap is not null &&
-                        srcFormat.Channels != format.Channels)
+                    // §3.15 / R4: apply the baked channel map whenever one is
+                    // supplied, not only when channel counts differ — user-
+                    // defined maps can also reorder / attenuate equal-channel
+                    // streams (e.g. stereo L↔R swap, mid-side encode).
+                    if (route.BakedChannelMap is not null)
                     {
                         int mappedSamples = filled * format.Channels;
                         var mappedBuf = ArrayPool<float>.Shared.Rent(mappedSamples);
@@ -1476,84 +1531,21 @@ public sealed class AVRouter : IAVRouter
     /// Scatters interleaved source samples into interleaved destination samples
     /// using a pre-baked channel route table.
     /// </summary>
+    private static readonly IAudioMixer _mixer = DefaultAudioMixer.Instance;
+
     private static void ApplyChannelMap(
         ReadOnlySpan<float> src, Span<float> dest,
         (int dstCh, float gain)[][] bakedRoutes,
         int srcChannels, int dstChannels, int frameCount)
-    {
-        for (int f = 0; f < frameCount; f++)
-        {
-            int srcBase = f * srcChannels;
-            int dstBase = f * dstChannels;
-
-            for (int srcCh = 0; srcCh < bakedRoutes.Length; srcCh++)
-            {
-                float sample = src[srcBase + srcCh];
-                var targets = bakedRoutes[srcCh];
-                for (int t = 0; t < targets.Length; t++)
-                {
-                    var (dstCh, gain) = targets[t];
-                    if (dstCh < dstChannels)
-                        dest[dstBase + dstCh] += sample * gain;
-                }
-            }
-        }
-    }
+        => _mixer.ApplyChannelMap(src, dest, bakedRoutes, srcChannels, dstChannels, frameCount);
 
     private static void ApplyGain(Span<float> buffer, float gain)
-    {
-        int i = 0;
-        if (Vector.IsHardwareAccelerated && buffer.Length >= Vector<float>.Count)
-        {
-            var vGain = new Vector<float>(gain);
-            int simdLen = Vector<float>.Count;
-            for (; i + simdLen <= buffer.Length; i += simdLen)
-            {
-                var v = new Vector<float>(buffer[i..]);
-                (v * vGain).CopyTo(buffer[i..]);
-            }
-        }
-        for (; i < buffer.Length; i++)
-            buffer[i] *= gain;
-    }
+        => _mixer.ApplyGain(buffer, gain);
 
     private static void MixInto(Span<float> dest, ReadOnlySpan<float> src)
-    {
-        int len = Math.Min(dest.Length, src.Length);
-        int i = 0;
-        if (Vector.IsHardwareAccelerated && len >= Vector<float>.Count)
-        {
-            int simdLen = Vector<float>.Count;
-            for (; i + simdLen <= len; i += simdLen)
-            {
-                var d = new Vector<float>(dest[i..]);
-                var s = new Vector<float>(src[i..]);
-                (d + s).CopyTo(dest[i..]);
-            }
-        }
-        for (; i < len; i++)
-            dest[i] += src[i];
-    }
+        => _mixer.MixInto(dest, src);
 
     private static float MeasurePeak(ReadOnlySpan<float> buffer)
-    {
-        float peak = 0f;
-        int i = 0;
-        if (Vector.IsHardwareAccelerated && buffer.Length >= Vector<float>.Count)
-        {
-            var vMax = Vector<float>.Zero;
-            int simdLen = Vector<float>.Count;
-            for (; i + simdLen <= buffer.Length; i += simdLen)
-            {
-                var v = Vector.Abs(new Vector<float>(buffer[i..]));
-                vMax = Vector.Max(vMax, v);
-            }
-            for (int j = 0; j < Vector<float>.Count; j++)
-                peak = Math.Max(peak, vMax[j]);
-        }
-        for (; i < buffer.Length; i++)
-            peak = Math.Max(peak, Math.Abs(buffer[i]));
-        return peak;
-    }
+        => _mixer.MeasurePeak(buffer);
 }
 

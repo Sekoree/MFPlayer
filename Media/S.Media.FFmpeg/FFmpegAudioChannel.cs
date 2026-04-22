@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 
 namespace S.Media.FFmpeg;
@@ -122,14 +123,14 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     private void OpenCodec()
     {
         var codec = ffmpeg.avcodec_find_decoder(_stream->codecpar->codec_id);
-        if (codec == null) throw new InvalidOperationException("Audio codec not found.");
+        if (codec == null) throw new MediaOpenException("Audio codec not found.");
 
         _codecCtx = ffmpeg.avcodec_alloc_context3(codec);
         ffmpeg.avcodec_parameters_to_context(_codecCtx, _stream->codecpar);
         if (_threadCount >= 0)
             _codecCtx->thread_count = _threadCount; // 0 = FFmpeg auto
         int ret = ffmpeg.avcodec_open2(_codecCtx, codec, null);
-        if (ret < 0) throw new InvalidOperationException($"avcodec_open2 failed: {ret}");
+        if (ret < 0) throw new MediaOpenException($"avcodec_open2 failed: {ret}");
 
         // Use negotiated decoder values (more reliable than container codecpar on some formats).
         int rate = _codecCtx->sample_rate > 0 ? _codecCtx->sample_rate : SourceFormat.SampleRate;

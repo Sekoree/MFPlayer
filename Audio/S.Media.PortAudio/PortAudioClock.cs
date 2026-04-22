@@ -29,7 +29,7 @@ public sealed class PortAudioClock : HardwareClock
         return new PortAudioClock(box, sampleRate);
     }
 
-    /// <summary>Called by <see cref="PortAudioOutput"/> once the PA stream is open.</summary>
+    /// <summary>Called by <see cref="PortAudioEndpoint"/> once the PA stream is open.</summary>
     internal void SetStreamHandle(nint handle, int framesPerBuffer)
     {
         _ref.Value = handle;

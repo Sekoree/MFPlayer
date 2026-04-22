@@ -1,5 +1,6 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Routing;
@@ -82,7 +83,7 @@ public sealed record PlaybackFailedEventArgs(PlaybackFailureStage Stage, Excepti
 /// await player.StopAsync();
 /// </code>
 /// </remarks>
-public sealed class MediaPlayer : IDisposable
+public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 {
     private readonly AVRouter _router;
     private readonly List<IMediaEndpoint> _endpoints = [];
@@ -111,12 +112,6 @@ public sealed class MediaPlayer : IDisposable
 
     // ── Events ────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Raised (on a background thread) when all packets have been demuxed from
-    /// the current media source. Subscribe to cancel a wait handle or trigger the next track.
-    /// </summary>
-    [Obsolete("Use PlaybackCompleted with PlaybackCompletedReason.SourceEnded instead.")]
-    public event EventHandler? PlaybackEnded;
 
     /// <inheritdoc cref="PlaybackStateChangedEventArgs"/>
     public event EventHandler<PlaybackStateChangedEventArgs>? PlaybackStateChanged;
@@ -269,7 +264,7 @@ public sealed class MediaPlayer : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_decoder == null)
-            throw new InvalidOperationException("No media is open. Call OpenAsync first.");
+            throw new MediaException("No media is open. Call OpenAsync first.");
 
         try
         {
@@ -356,21 +351,98 @@ public sealed class MediaPlayer : IDisposable
         await PlayAsync(ct).ConfigureAwait(false);
     }
 
-    // ── IDisposable ───────────────────────────────────────────────────────────
+    /// <summary>
+    /// Awaits natural end-of-media (source EOF) or an unrecoverable playback
+    /// failure, whichever comes first. Returns the
+    /// <see cref="PlaybackCompletedReason"/> that ended the session.
+    ///
+    /// <para>
+    /// Intended to replace the hand-rolled <c>CancellationTokenSource</c> + EOF /
+    /// drain bookkeeping every test app currently reimplements. Honours
+    /// <paramref name="ct"/>; if cancellation fires before completion, the
+    /// player is left running (caller decides whether to <see cref="StopAsync"/>).
+    /// Closes review finding §4.3.
+    /// </para>
+    /// </summary>
+    /// <param name="drainGrace">
+    /// Extra wait after <see cref="PlaybackCompletedReason.SourceEnded"/> to let
+    /// the tail of already-buffered audio reach the hardware. Default 300 ms.
+    /// </param>
+    public async Task<PlaybackCompletedReason> WaitForCompletionAsync(
+        TimeSpan          drainGrace = default,
+        CancellationToken ct         = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (drainGrace == default) drainGrace = TimeSpan.FromMilliseconds(300);
 
+        var tcs = new TaskCompletionSource<PlaybackCompletedReason>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnCompleted(object? s, PlaybackCompletedEventArgs e) => tcs.TrySetResult(e.Reason);
+        void OnFailed(object? s, PlaybackFailedEventArgs e)       => tcs.TrySetException(e.Exception);
+
+        PlaybackCompleted += OnCompleted;
+        PlaybackFailed    += OnFailed;
+        try
+        {
+            using var reg = ct.Register(static state =>
+                ((TaskCompletionSource<PlaybackCompletedReason>)state!).TrySetCanceled(), tcs);
+
+            var reason = await tcs.Task.ConfigureAwait(false);
+
+            // Apply drain grace only on natural EOF so the hardware can finish
+            // playing what's already been pushed through the router.
+            if (reason == PlaybackCompletedReason.SourceEnded && drainGrace > TimeSpan.Zero)
+            {
+                try { await Task.Delay(drainGrace, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+            }
+
+            return reason;
+        }
+        finally
+        {
+            PlaybackCompleted -= OnCompleted;
+            PlaybackFailed    -= OnFailed;
+        }
+    }
+
+    // ── IDisposable / IAsyncDisposable ────────────────────────────────────────
+
+    /// <summary>
+    /// Synchronous disposal. Delegates to <see cref="DisposeAsync"/>; prefer the
+    /// async variant in async call-paths (closes review item §4.4, B19).
+    /// </summary>
     public void Dispose()
+    {
+        if (_disposed) return;
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Cooperatively stops the router + every registered endpoint, then disposes
+    /// the underlying <see cref="AVRouter"/>. Implements review item §4.4 (B19):
+    /// replaces the sync <c>StopAsync().GetAwaiter().GetResult()</c> fan-out
+    /// that could deadlock on single-threaded sync contexts.
+    /// </summary>
+    public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
 
         if (_isRunning)
         {
-            try { _router.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
+            try { await _router.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
             foreach (var ep in _endpoints)
             {
-                try { ep.StopAsync().GetAwaiter().GetResult(); } catch { /* best-effort */ }
+                try { await ep.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
             }
             _isRunning = false;
+        }
+
+        if (_decoder is { } dec)
+        {
+            try { await dec.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
         }
 
         ReleaseSession();
@@ -486,9 +558,6 @@ public sealed class MediaPlayer : IDisposable
             return;
         }
 
-#pragma warning disable CS0618 // Obsolete PlaybackEnded
-        PlaybackEnded?.Invoke(this, EventArgs.Empty);
-#pragma warning restore CS0618
         PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(PlaybackCompletedReason.SourceEnded));
     }
 

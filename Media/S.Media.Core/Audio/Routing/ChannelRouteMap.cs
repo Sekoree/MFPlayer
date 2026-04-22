@@ -127,5 +127,62 @@ public sealed class ChannelRouteMap
         for (int i = 0; i < common; i++) b.Route(i, i);
         return b.Build();
     }
+
+    /// <summary>
+    /// Automatic route map that additionally downmixes multi-channel content
+    /// (3+ source channels) into the first <paramref name="dstChannels"/> output
+    /// channels when <paramref name="dstChannels"/> is ≤ 2.
+    ///
+    /// <list type="bullet">
+    /// <item><paramref name="srcChannels"/> == 1, <paramref name="dstChannels"/> ≥ 2 → mono→stereo fan-out.</item>
+    /// <item><paramref name="srcChannels"/> == 2, <paramref name="dstChannels"/> == 1 → L+R → mono (0.5× each).</item>
+    /// <item><paramref name="srcChannels"/> ≥ 3, <paramref name="dstChannels"/> == 2 → ITU-R BS.775 5.1→stereo downmix
+    ///   (front + 0.707·center + 0.707·surround).</item>
+    /// <item>Otherwise falls back to <see cref="Auto(int,int)"/> passthrough.</item>
+    /// </list>
+    ///
+    /// <para>Closes review finding §4.2.</para>
+    /// </summary>
+    public static ChannelRouteMap AutoStereoDownmix(int srcChannels, int dstChannels)
+    {
+        if (srcChannels <= 0 || dstChannels <= 0) return Silence();
+
+        // Mono source → fan out.
+        if (srcChannels == 1) return dstChannels >= 2 ? MonoToStereo() : Identity(1);
+
+        // Stereo source, mono destination → average L+R.
+        if (srcChannels == 2 && dstChannels == 1)
+            return new Builder().Route(0, 0, 0.5f).Route(1, 0, 0.5f).Build();
+
+        // 5.1-ish source to stereo → ITU-R BS.775 downmix.
+        // FFmpeg/WAVE canonical order: FL FR FC LFE BL BR (+ side channels).
+        if (srcChannels >= 3 && dstChannels == 2)
+        {
+            const float c   = 0.7071067811865476f; // -3 dB
+            const float lfe = 0.0f;                // drop LFE in stereo downmix
+            var b = new Builder();
+            b.Route(0, 0);           // FL → L
+            b.Route(1, 1);           // FR → R
+            if (srcChannels >= 3)
+            {
+                b.Route(2, 0, c);    // FC → L (-3 dB)
+                b.Route(2, 1, c);    // FC → R (-3 dB)
+            }
+            if (srcChannels >= 4 && lfe > 0f)
+            {
+                b.Route(3, 0, lfe);  // LFE → L
+                b.Route(3, 1, lfe);  // LFE → R
+            }
+            if (srcChannels >= 5) { b.Route(4, 0, c); }  // BL/SL → L
+            if (srcChannels >= 6) { b.Route(5, 1, c); }  // BR/SR → R
+            // Additional channels (7.1+): pan to nearest side.
+            for (int i = 6; i < srcChannels; i++)
+                b.Route(i, (i % 2 == 0) ? 0 : 1, c);
+            return b.Build();
+        }
+
+        // Everything else: passthrough semantics.
+        return Auto(srcChannels, dstChannels);
+    }
 }
 

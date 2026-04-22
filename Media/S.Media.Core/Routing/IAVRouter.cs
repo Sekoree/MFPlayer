@@ -48,7 +48,7 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     EndpointId RegisterEndpoint(IVideoEndpoint endpoint);
 
     /// <summary>
-    /// Registers a dual-media endpoint (e.g. NDIAVSink).
+    /// Registers a dual-media endpoint (e.g. NDIAVEndpoint).
     /// A single registration handles both audio and video routing.
     /// </summary>
     EndpointId RegisterEndpoint(IAVEndpoint endpoint);

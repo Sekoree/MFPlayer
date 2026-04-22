@@ -320,7 +320,7 @@ using (decoder)
     // Optional: route the same active channel to an NDI A/V sink.
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
-    NDIAVSink? ndiSink = null;
+    NDIAVEndpoint? ndiSink = null;
 
     if (enableNdi)
     {
@@ -392,12 +392,12 @@ using (decoder)
                         routeMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
                     }
 
-                    ndiSink = new NDIAVSink(ndiSender, new NDIAVSinkOptions
+                    ndiSink = new NDIAVEndpoint(ndiSender, new NDIAVSinkOptions
                     {
                         VideoTargetFormat            = videoOutput.OutputFormat,
                         AudioTargetFormat            = ndiAudioFormat,
                         Preset                       = preset,
-                        Name                         = $"NDIAVSink({senderName})",
+                        Name                         = $"NDIAVEndpoint({senderName})",
                         PreferPerformanceOverQuality = preferPerformanceOverQuality,
                         AudioFramesPerBuffer         = 1024,
                         // Drift correction is queue-depth-controlled.  With
@@ -572,7 +572,7 @@ using (decoder)
     {
         SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
         VideoEndpointDiagnosticsSnapshot? prevEndpoint = null;
-        NDIAVSink.AvSyncSnapshot? prevAvSync = null;
+        NDIAVEndpoint.AvSyncSnapshot? prevAvSync = null;
         double? prevPtsDeltaMs = null;
         var pairGapWindowMs = new Queue<double>();
         var tcDeltaWindowMs = new Queue<double>();

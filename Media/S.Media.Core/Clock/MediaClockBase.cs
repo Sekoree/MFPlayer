@@ -54,7 +54,12 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
 
     private void OnTimerTick(object? state)
     {
-        if (!IsRunning) return;
+        // §3.30 / C1: timer callbacks may fire after Dispose() because
+        // System.Threading.Timer.Dispose() does not wait for in-flight callbacks.
+        // Observing _disposed here keeps subscribers from seeing a post-dispose
+        // position read (which some concrete Position implementations would
+        // compute off a stopped stopwatch and return stale values for).
+        if (_disposed || !IsRunning) return;
         Action<TimeSpan>? handler;
         lock (_tickLock) handler = _tick;
         handler?.Invoke(Position);

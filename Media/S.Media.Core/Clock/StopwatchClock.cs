@@ -61,6 +61,10 @@ public sealed class StopwatchClock : MediaClockBase
             _offset = TimeSpan.Zero;
         }
         _running = false;
+        // §3.31a / C6: stop the base-class tick timer so it doesn't keep firing
+        // (and observing _running == false via OnTimerTick) after a Reset that
+        // was not preceded by Stop. Cheap idempotent call.
+        base.Stop();
     }
 }
 

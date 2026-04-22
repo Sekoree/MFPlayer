@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Errors;
 
 namespace S.Media.FFmpeg;
 
@@ -25,6 +26,11 @@ internal sealed unsafe class StreamAvioContext : IDisposable
     private AVIOContext*     _avioCtx;
     private bool            _disposed;
 
+    // Most recent IO exception from the Read/Seek callbacks. Surfaced to the owning
+    // decoder so callers can distinguish a genuine broken stream from a natural EOF.
+    // Review item §3.3 / B9.
+    private Exception?      _lastIoError;
+
     // Must remain as fields (not locals) — prevents GC collection while native AVIO holds the function pointers.
     // ReSharper disable FieldCanBeMadeReadOnly.Local
     private readonly avio_alloc_context_read_packet _readDelegate;
@@ -36,6 +42,19 @@ internal sealed unsafe class StreamAvioContext : IDisposable
     /// <c>avformat_open_input</c>.
     /// </summary>
     public AVIOContext* Context => _avioCtx;
+
+    /// <summary>
+    /// Returns (and clears) the most recent IO exception surfaced from either the
+    /// Read or Seek callback, or <see langword="null"/> if the stream's last failure
+    /// was a legitimate EOF. Consumed by <c>FFmpegDecoder</c> to classify read
+    /// failures as <see cref="MediaDecodeException"/> rather than silent EOF.
+    /// </summary>
+    public Exception? ConsumeLastIoError()
+    {
+        var ex = _lastIoError;
+        _lastIoError = null;
+        return ex;
+    }
 
     /// <summary>
     /// Creates a custom AVIO context backed by <paramref name="stream"/>.
@@ -82,13 +101,15 @@ internal sealed unsafe class StreamAvioContext : IDisposable
         {
             ffmpeg.av_free(buffer);
             _gcHandle.Free();
-            throw new InvalidOperationException("avio_alloc_context returned null.");
+            throw new MediaOpenException("avio_alloc_context returned null.");
         }
     }
 
     /// <summary>
     /// AVIO read callback: int read_packet(void* opaque, byte* buf, int buf_size).
-    /// Returns number of bytes read, or AVERROR_EOF on end-of-stream.
+    /// Returns number of bytes read, <c>AVERROR_EOF</c> on end-of-stream, or
+    /// <c>AVERROR(EIO)</c> when the underlying stream throws (so the decoder can
+    /// distinguish broken-stream from clean EOF — review §3.3 / B9).
     /// </summary>
     private static int ReadPacket(void* opaque, byte* buf, int bufSize)
     {
@@ -107,9 +128,14 @@ internal sealed unsafe class StreamAvioContext : IDisposable
 
             return totalRead > 0 ? totalRead : ffmpeg.AVERROR_EOF;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return ffmpeg.AVERROR_EOF;
+            self._lastIoError = ex;
+            Log.LogWarning(ex, "StreamAvioContext.ReadPacket failed; returning AVERROR(EIO)");
+            // AVERROR(EIO) = -EIO = -5 on every POSIX and on Windows via MinGW's errno.h.
+            // FFmpeg.AutoGen does not expose EIO as a constant; hard-coding the value is
+            // safe because it's part of the AVERROR ABI.
+            return -5;
         }
     }
 
@@ -142,8 +168,10 @@ internal sealed unsafe class StreamAvioContext : IDisposable
 
             return stream.Seek(offset, origin);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            self._lastIoError = ex;
+            Log.LogWarning(ex, "StreamAvioContext.Seek failed; returning -1");
             return -1;
         }
     }

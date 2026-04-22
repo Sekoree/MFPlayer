@@ -103,9 +103,8 @@ using (decoder)
     var srcFmt       = audioChannel.SourceFormat;
 
     // Cap to stereo; use file's native sample rate on both outputs.
-    int outChannels = Math.Min(srcFmt.Channels, Math.Min(primaryDevice.MaxOutputChannels, 2));
-    var hwFmt       = new AudioFormat(srcFmt.SampleRate, outChannels);
-    var routeMap    = BuildRouteMap(srcFmt.Channels, outChannels);
+    var (hwFmt, routeMap) = AudioFormat.NegotiateFor(audioChannel, primaryDevice);
+    int outChannels       = hwFmt.Channels;
 
     Console.WriteLine("OK");
     Console.WriteLine($"  Source:   {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
@@ -114,15 +113,14 @@ using (decoder)
     // ── 8. Open primary output ───────────────────────────────────────────────
 
     Console.Write($"Opening primary device '{primaryDevice.Name}'… ");
-    var primaryOutput = new PortAudioOutput();
+    PortAudioEndpoint primaryOutput;
     try
     {
-        primaryOutput.Open(primaryDevice, hwFmt, framesPerBuffer: 512);
+        primaryOutput = PortAudioEndpoint.Create(primaryDevice, hwFmt, framesPerBuffer: 512);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"FAILED\n  {ex.Message}");
-        primaryOutput.Dispose();
         return;
     }
     Console.WriteLine("OK");
@@ -137,14 +135,15 @@ using (decoder)
     var negotiatedFmt = primaryOutput.HardwareFormat;
 
     Console.Write($"Opening secondary device '{secondaryDevice.Name}'… ");
-    PortAudioSink secondarySink;
+    PortAudioEndpoint secondarySink;
     try
     {
-        secondarySink = new PortAudioSink(
+        secondarySink = PortAudioEndpoint.Create(
             secondaryDevice,
-            targetFormat:   negotiatedFmt,
+            negotiatedFmt,
+            mode:            PortAudioDrivingMode.BlockingWrite,
             framesPerBuffer: 512,
-            name:           $"Sink({secondaryDevice.Name})");
+            name:            $"Sink({secondaryDevice.Name})");
     }
     catch (Exception ex)
     {
@@ -246,18 +245,4 @@ static void PrintDeviceList(List<AudioDeviceInfo> devices, string apiName)
                           $"{devices[i].DefaultSampleRate:0} Hz)");
 }
 
-static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
-{
-    var b = new ChannelRouteMap.Builder();
-    if (srcChannels == 1 && dstChannels >= 2)
-    {
-        b.Route(0, 0).Route(0, 1); // mono → both stereo channels
-    }
-    else
-    {
-        int common = Math.Min(srcChannels, dstChannels);
-        for (int i = 0; i < common; i++) b.Route(i, i);
-    }
-    return b.Build();
-}
 

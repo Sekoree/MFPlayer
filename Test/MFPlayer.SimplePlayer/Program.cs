@@ -100,30 +100,30 @@ using (decoder)
     var audioChannel = decoder.AudioChannels[0];
     var srcFmt       = audioChannel.SourceFormat;
 
-    // Cap output to stereo.
-    int outChannels = Math.Min(srcFmt.Channels, Math.Min(device.MaxOutputChannels, 2));
-    var hwFmt       = new AudioFormat(srcFmt.SampleRate, outChannels);
-    var routeMap    = BuildRouteMap(srcFmt.Channels, outChannels);
+    // NegotiateFor encapsulates the "cap to stereo + build route map" dance
+    // (mono→stereo fan-out, multi-ch→stereo downmix, passthrough otherwise).
+    var (hwFmt, routeMap) = AudioFormat.NegotiateFor(audioChannel, device);
 
     Console.WriteLine("OK");
     Console.WriteLine($"  Source:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
 
     // ── 6. Open output ───────────────────────────────────────────────────────
-    // PortAudioOutput.Open automatically falls back to the device's default
+    // PortAudioEndpoint.Create automatically falls back to the device's default
     // sample rate if the requested rate isn't supported.  The AudioMixer
     // resamples any source-rate ↔ output-rate mismatch transparently.
 
     Console.Write("Opening output device… ");
-    using var output = new PortAudioOutput();
+    PortAudioEndpoint output;
     try
     {
-        output.Open(device, hwFmt, framesPerBuffer: 0);
+        output = PortAudioEndpoint.Create(device, hwFmt, framesPerBuffer: 0);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"FAILED\n  {ex.Message}");
         return;
     }
+    using var _outputScope = output;
     Console.WriteLine("OK");
 
     Console.WriteLine($"  Output:  {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
@@ -303,22 +303,13 @@ static int PickNumber(string label, int min, int max)
 }
 
 // Builds a route map that handles mono->stereo fan-out and multi-channel->stereo clipping.
-static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
-{
-    var b = new ChannelRouteMap.Builder();
-    if (srcChannels == 1 && dstChannels >= 2)
-    {
-        // Mono source → both stereo channels.
-        b.Route(0, 0).Route(0, 1);
-    }
-    else
-    {
-        // Route up to min(src, dst) channels straight across.
-        int common = Math.Min(srcChannels, dstChannels);
-        for (int i = 0; i < common; i++) b.Route(i, i);
-    }
-    return b.Build();
-}
+// NOTE: kept as a small helper for any code path that still wants manual control;
+// everything in Main now uses AudioFormat.NegotiateFor which internally delegates to
+// ChannelRouteMap.AutoStereoDownmix.
+#pragma warning disable CS8321 // Local function is declared but never used
+static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels) =>
+    ChannelRouteMap.AutoStereoDownmix(srcChannels, dstChannels);
+#pragma warning restore CS8321
 
 
 static string FormatTime(TimeSpan ts)

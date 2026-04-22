@@ -176,26 +176,27 @@ using (ndiRuntime)
         var audioChannel = ndiSource.AudioChannel;
         var srcFmt       = audioChannel.SourceFormat;
         var hwFmt        = new AudioFormat(srcFmt.SampleRate, Math.Min(srcFmt.Channels, outChannels));
-        var routeMap     = BuildRouteMap(srcFmt.Channels, hwFmt.Channels);
+        var routeMap     = ChannelRouteMap.AutoStereoDownmix(srcFmt.Channels, hwFmt.Channels);
 
         Console.WriteLine($"  NDI audio:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
 
         // ── 8. Open PortAudio output ─────────────────────────────────────────
-        // PortAudioOutput.Open automatically falls back to the device's default
+        // PortAudioEndpoint.Create automatically falls back to the device's default
         // sample rate if the requested rate isn't supported.  The AudioMixer
         // resamples any source-rate ↔ output-rate mismatch transparently.
 
         Console.Write("Opening output device… ");
-        using var output = new PortAudioOutput();
+        PortAudioEndpoint output;
         try
         {
-            output.Open(device, hwFmt, framesPerBuffer: 1024);
+            output = PortAudioEndpoint.Create(device, hwFmt, framesPerBuffer: 1024);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"FAILED\n  {ex.Message}");
             return;
         }
+        using var _outputScope = output;
         Console.WriteLine("OK");
 
         Console.WriteLine($"  Output:     {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
@@ -308,21 +309,4 @@ static bool PickYesNo(string label, bool defaultValue)
     }
 }
 
-/// <summary>
-/// Builds a route map: mono → both stereo channels; multi-channel → straight-across up to min(src, dst).
-/// </summary>
-static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
-{
-    var b = new ChannelRouteMap.Builder();
-    if (srcChannels == 1 && dstChannels >= 2)
-    {
-        b.Route(0, 0).Route(0, 1); // mono → both stereo channels
-    }
-    else
-    {
-        int common = Math.Min(srcChannels, dstChannels);
-        for (int i = 0; i < common; i++) b.Route(i, i);
-    }
-    return b.Build();
-}
 

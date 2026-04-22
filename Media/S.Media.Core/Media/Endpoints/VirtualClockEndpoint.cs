@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Routing;
 
 namespace S.Media.Core.Media.Endpoints;
 
@@ -55,6 +56,13 @@ public sealed class VirtualClockEndpoint : IAudioEndpoint, IClockCapableEndpoint
     // ── IClockCapableEndpoint ────────────────────────────────────────────
 
     public IMediaClock Clock => _clock;
+
+    /// <summary>
+    /// Virtual endpoints use <see cref="ClockPriority.Internal"/> so they never
+    /// outrank a real hardware clock when both are registered on the same router
+    /// (review §4.8 / R11).
+    /// </summary>
+    public ClockPriority DefaultPriority => ClockPriority.Internal;
 
     // ── IDisposable ──────────────────────────────────────────────────────
 

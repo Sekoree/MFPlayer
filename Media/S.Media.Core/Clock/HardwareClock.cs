@@ -18,6 +18,13 @@ public class HardwareClock : MediaClockBase
     private TimeSpan           _lastValidPosition;
     private bool               _usingFallback;
 
+    // §3.31 / C5: debounce exit from fallback — require N consecutive valid hw
+    // reads before trusting the hardware timer again. A single flaky valid read
+    // during a driver stall would otherwise reset the fallback stopwatch,
+    // snapping Position backwards by the amount we'd interpolated.
+    private const int FallbackExitDebounce = 2;
+    private int _consecutiveValidReads;
+
     private volatile bool _running;
 
     /// <param name="secondsProvider">
@@ -61,10 +68,18 @@ public class HardwareClock : MediaClockBase
                 _fallbackLock.Enter(ref taken);
                 if (hw > 0.0)
                 {
-                    // Re-sync fallback whenever hardware is valid
+                    // Require N consecutive valid reads before trusting the hw
+                    // timer again (§3.31 / C5). While still debouncing, keep
+                    // returning the fallback-interpolated position so a single
+                    // flaky valid read cannot snap Position backwards.
                     if (_usingFallback)
                     {
+                        _consecutiveValidReads++;
+                        if (_consecutiveValidReads < FallbackExitDebounce)
+                            return _lastValidPosition + _fallbackSw.Elapsed;
+
                         _usingFallback = false;
+                        _consecutiveValidReads = 0;
                         _fallbackSw.Reset();
                     }
                     _lastValidPosition = TimeSpan.FromSeconds(hw);
@@ -72,6 +87,7 @@ public class HardwareClock : MediaClockBase
                 }
 
                 // Hardware unavailable — continue from last known position via stopwatch
+                _consecutiveValidReads = 0;
                 if (!_usingFallback)
                 {
                     _usingFallback = true;
@@ -103,6 +119,7 @@ public class HardwareClock : MediaClockBase
     {
         _lastValidPosition = TimeSpan.Zero;
         _usingFallback     = false;
+        _consecutiveValidReads = 0;
         _fallbackSw.Reset();
     }
 

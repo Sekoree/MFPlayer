@@ -5,10 +5,18 @@ namespace S.Media.Core;
 /// <summary>
 /// Producer/consumer queue paired with a <see cref="SemaphoreSlim"/> signal and
 /// an <see cref="Interlocked"/>-tracked depth counter.  Used by write-loop-style
-/// sinks (<c>NDIAVSink.VideoWriteLoop</c> / <c>AudioWriteLoop</c>,
-/// <c>PortAudioSink.WriteLoop</c>) to avoid re-implementing the same
-/// enqueue-signal / wait-dequeue triplet in every sink (§5.4 of
+/// endpoints (<c>NDIAVEndpoint.VideoWriteLoop</c> / <c>AudioWriteLoop</c>,
+/// <c>PortAudioEndpoint</c> in blocking-write mode) to avoid re-implementing the same
+/// enqueue-signal / wait-dequeue triplet in every endpoint (§5.4 of
 /// Code-Review-Findings).
+///
+/// <para>
+/// <b>Dispose contract:</b> <see cref="Dispose"/> only releases the signal semaphore —
+/// it does <b>not</b> drain the queue, so any items still in flight at Dispose time are
+/// silently lost. Callers must ensure producer quiescence before Dispose (typically by
+/// cancelling the producer CTS, joining the writer thread, and calling
+/// <see cref="Drain(Action{T})"/> to return rented buffers to their pool).
+/// </para>
 ///
 /// <para>
 /// Typical usage from a writer thread:

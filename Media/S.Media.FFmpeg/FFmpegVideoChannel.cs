@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
 
@@ -54,6 +55,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private bool _disposed;
     private readonly int _bufferDepth;
     private long _framesDequeued;   // tracks whether any frame has ever been pulled
+    private int  _hwTransferErrorLogged; // §3.6 / B22: log-once guard for av_hwframe_transfer_data failure
 
     public Guid  Id      { get; } = Guid.NewGuid();
     public bool  IsOpen  => !_disposed;
@@ -172,7 +174,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private void OpenCodec()
     {
         var codec = ffmpeg.avcodec_find_decoder(_stream->codecpar->codec_id);
-        if (codec == null) throw new InvalidOperationException("Video codec not found.");
+        if (codec == null) throw new MediaOpenException("Video codec not found.");
 
         _codecCtx = ffmpeg.avcodec_alloc_context3(codec);
         ffmpeg.avcodec_parameters_to_context(_codecCtx, _stream->codecpar);
@@ -189,7 +191,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             _codecCtx->hw_device_ctx = ffmpeg.av_buffer_ref(_hwDeviceCtx);
 
         int ret = ffmpeg.avcodec_open2(_codecCtx, codec, null);
-        if (ret < 0) throw new InvalidOperationException($"avcodec_open2 failed: {ret}");
+        if (ret < 0) throw new MediaOpenException($"avcodec_open2 failed: {ret}");
 
         string codecName = ffmpeg.avcodec_get_name(_codecCtx->codec_id);
         Log.LogInformation("Video stream={StreamIndex} codec={CodecName} threads(req={ReqThreads}, eff={EffThreads}) type(req={ReqType}, active={ActiveType})",
@@ -208,7 +210,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         const int swsBilinear = 2;
         _sws = ffmpeg.sws_getCachedContext(_sws, w, h, srcFmt, w, h, dstFmt,
             swsBilinear, null, null, null);
-        if (_sws == null) throw new InvalidOperationException("sws_getCachedContext failed.");
+        if (_sws == null) throw new MediaDecodeException("sws_getCachedContext failed.");
 
         _swsBufSize = ffmpeg.av_image_get_buffer_size(dstFmt, w, h, 1);
         return _sws;
@@ -629,11 +631,27 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             bool transferred = false;
             if (_hwDeviceCtx != null && _frame->hw_frames_ctx != null)
             {
-                if (ffmpeg.av_hwframe_transfer_data(_swFrame, _frame, 0) >= 0)
+                int transferRet = ffmpeg.av_hwframe_transfer_data(_swFrame, _frame, 0);
+                if (transferRet >= 0)
                 {
                     _swFrame->pts = _frame->pts;
                     decodedFrame  = _swFrame;
                     transferred   = true;
+                }
+                else
+                {
+                    // §3.6 / B22: transfer failed — skip this frame entirely rather
+                    // than silently presenting the raw hw-memory-backed _frame (which
+                    // would either crash sws_scale or produce garbage pixels). Log
+                    // once per channel so the operator sees the failure without
+                    // spamming the log on every failed frame.
+                    if (Interlocked.Exchange(ref _hwTransferErrorLogged, 1) == 0)
+                        Log.LogWarning(
+                            "Video stream={StreamIndex}: av_hwframe_transfer_data failed ({ReturnCode}); skipping frame. " +
+                            "Subsequent transfer failures on this channel will not be logged.",
+                            _streamIndex, transferRet);
+                    ffmpeg.av_frame_unref(_frame);
+                    continue;
                 }
             }
 

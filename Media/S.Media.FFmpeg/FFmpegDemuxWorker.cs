@@ -19,6 +19,8 @@ internal static class FFmpegDemuxWorker
         nint pktHandle = owner.AllocateDemuxPacket();
         var packetPool = owner.PacketPool;
         long packetCount = 0;
+        int  consecutiveRetries = 0;
+        const int maxConsecutiveRetries = 256;
         try
         {
             while (!token.IsCancellationRequested)
@@ -29,6 +31,7 @@ internal static class FFmpegDemuxWorker
                     switch (read)
                     {
                         case FFmpegDecoder.DemuxReadResult.Packet:
+                            consecutiveRetries = 0;
                             if (writer != null && packet != null)
                             {
                                 packetCount++;
@@ -45,6 +48,17 @@ internal static class FFmpegDemuxWorker
                             break;
 
                         case FFmpegDecoder.DemuxReadResult.Retry:
+                            // Back-off + bail-out so a stuck source never spins the CPU
+                            // (previously this was a tight `continue` — see §3.3 / B9).
+                            if (++consecutiveRetries > maxConsecutiveRetries)
+                            {
+                                Log.LogWarning("Demux worker exiting after {N} consecutive Retry results", consecutiveRetries);
+                                return;
+                            }
+                            if ((consecutiveRetries & 0xF) == 0)
+                                await Task.Delay(1, token).ConfigureAwait(false);
+                            else
+                                await Task.Yield();
                             continue;
 
                         case FFmpegDecoder.DemuxReadResult.Eof:
@@ -54,6 +68,10 @@ internal static class FFmpegDemuxWorker
 
                         case FFmpegDecoder.DemuxReadResult.Cancelled:
                             Log.LogDebug("Demux worker cancelled after {PacketCount} packets", packetCount);
+                            return;
+
+                        case FFmpegDecoder.DemuxReadResult.Fatal:
+                            Log.LogWarning("Demux worker stopping after fatal IO error (packets read: {PacketCount})", packetCount);
                             return;
                     }
                 }

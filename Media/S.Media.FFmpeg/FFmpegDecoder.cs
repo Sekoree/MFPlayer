@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
+using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.Core.Video;
 
@@ -140,7 +141,13 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         Packet,
         Retry,
         Eof,
-        Cancelled
+        Cancelled,
+        /// <summary>
+        /// Terminal, non-recoverable IO failure raised from the custom AVIO
+        /// callback (e.g. broken underlying Stream). OnError has already been
+        /// fired; the demux worker must stop without raising EndOfMedia.
+        /// </summary>
+        Fatal
     }
 
     private AVFormatContext*         _fmt;
@@ -149,6 +156,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private Task?                    _demuxTask;
     private CancellationTokenSource  _cts = new();
     private bool                     _disposed;
+    private string?                  _resourcePath;   // Path if opened via Open(string), null for Stream.
     private FFmpegDecoderOptions     _options = new();
 
     // ── Seek epoch protocol ──────────────────────────────────────────────
@@ -168,7 +176,10 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private readonly ReaderWriterLockSlim  _formatIoGate = new(LockRecursionPolicy.NoRecursion);
 
     private string?                  _activeHwDeviceType;
-    private readonly ILogger         _log;
+
+    // Review §3.7 / §Consistency: shared static logger instead of per-instance
+    // (decoder instances are short-lived; the per-instance field was gratuitous).
+    private static readonly ILogger  _log = FFmpegLogging.GetLogger(nameof(FFmpegDecoder));
 
     // Per stream-index → bounded packet channel
     private readonly Dictionary<int, Channel<EncodedPacket>> _queues = new();
@@ -219,9 +230,17 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     /// </summary>
     public event EventHandler? EndOfMedia;
 
+    /// <summary>
+    /// Raised (on a ThreadPool thread) when the demux loop encounters a non-EOF
+    /// read failure — typically a broken stream surfaced from the custom
+    /// <see cref="StreamAvioContext"/>. Review item §3.3 / B9. Subscribers get a
+    /// <see cref="MediaDecodeException"/> whose <see cref="Exception.InnerException"/>
+    /// is the underlying IO exception (if any).
+    /// </summary>
+    public event EventHandler<MediaDecodeException>? OnError;
+
     private FFmpegDecoder()
     {
-        _log = FFmpegLogging.GetLogger(nameof(FFmpegDecoder));
     }
 
     /// <summary>Opens a local file or URL and creates channel objects for each stream.</summary>
@@ -232,8 +251,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         FFmpegLoader.EnsureLoaded();
         var dec = new FFmpegDecoder();
         dec._options = NormalizeOptions(options ?? new FFmpegDecoderOptions());
-        dec._log.LogInformation("Opening media from path: {Path}", path);
-        dec._log.LogDebug("Options: QueueDepth={QueueDepth} AudioBuf={AudioBuf} VideoBuf={VideoBuf} Threads={Threads} HW={HW} Audio={Audio} Video={Video} PixFmt={PixFmt}",
+        _log.LogInformation("Opening media from path: {Path}", path);
+        _log.LogDebug("Options: QueueDepth={QueueDepth} AudioBuf={AudioBuf} VideoBuf={VideoBuf} Threads={Threads} HW={HW} Audio={Audio} Video={Video} PixFmt={PixFmt}",
             dec._options.PacketQueueDepth, dec._options.AudioBufferDepth, dec._options.VideoBufferDepth,
             dec._options.DecoderThreadCount, dec._options.PreferHardwareDecoding,
             dec._options.EnableAudio, dec._options.EnableVideo, dec._options.VideoTargetPixelFormat);
@@ -261,8 +280,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         FFmpegLoader.EnsureLoaded();
         var dec = new FFmpegDecoder();
         dec._options = NormalizeOptions(options ?? new FFmpegDecoderOptions());
-        dec._log.LogInformation("Opening media from Stream (CanSeek={CanSeek}, LeaveOpen={LeaveOpen})", stream.CanSeek, leaveOpen);
-        dec._log.LogDebug("Options: QueueDepth={QueueDepth} AudioBuf={AudioBuf} VideoBuf={VideoBuf} Threads={Threads} HW={HW} Audio={Audio} Video={Video} PixFmt={PixFmt}",
+        _log.LogInformation("Opening media from Stream (CanSeek={CanSeek}, LeaveOpen={LeaveOpen})", stream.CanSeek, leaveOpen);
+        _log.LogDebug("Options: QueueDepth={QueueDepth} AudioBuf={AudioBuf} VideoBuf={VideoBuf} Threads={Threads} HW={HW} Audio={Audio} Video={Video} PixFmt={PixFmt}",
             dec._options.PacketQueueDepth, dec._options.AudioBufferDepth, dec._options.VideoBufferDepth,
             dec._options.DecoderThreadCount, dec._options.PreferHardwareDecoding,
             dec._options.EnableAudio, dec._options.EnableVideo, dec._options.VideoTargetPixelFormat);
@@ -287,9 +306,10 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
     private void InitialiseFromPath(string path)
     {
+        _resourcePath = path;
         AVFormatContext* fmt = null;
         int ret = ffmpeg.avformat_open_input(&fmt, path, null, null);
-        if (ret < 0) throw new InvalidOperationException($"avformat_open_input failed: {ret}");
+        if (ret < 0) throw new MediaOpenException($"avformat_open_input failed: {ret}", path);
         _fmt = fmt;
         _log.LogDebug("avformat_open_input succeeded for path: {Path}", path);
 
@@ -306,7 +326,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         {
             _avioCtx.Dispose();
             _avioCtx = null;
-            throw new InvalidOperationException("avformat_alloc_context returned null.");
+            throw new MediaOpenException("avformat_alloc_context returned null.", _resourcePath);
         }
 
         fmt->pb = _avioCtx.Context;
@@ -316,7 +336,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         {
             _avioCtx.Dispose();
             _avioCtx = null;
-            throw new InvalidOperationException($"avformat_open_input (stream) failed: {ret}");
+            throw new MediaOpenException($"avformat_open_input (stream) failed: {ret}", _resourcePath);
         }
 
         _fmt = fmt;
@@ -327,7 +347,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private void DiscoverStreams()
     {
         int ret = ffmpeg.avformat_find_stream_info(_fmt, null);
-        if (ret < 0) throw new InvalidOperationException($"avformat_find_stream_info failed: {ret}");
+        if (ret < 0) throw new MediaOpenException($"avformat_find_stream_info failed: {ret}", _resourcePath);
 
         _log.LogDebug("Found {StreamCount} streams in container", (int)_fmt->nb_streams);
 
@@ -524,7 +544,10 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     public void Seek(TimeSpan position)
     {
         _log.LogInformation("Seeking to {Position}", position);
-        long ts = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
+        // §3.5 / B21: integer division from Ticks → AV_TIME_BASE units avoids the
+        // ±1 µs rounding error of (long)(TotalSeconds * AV_TIME_BASE) for positions
+        // that are exact multiples of 100 ns but not exactly representable as a double.
+        long ts = position.Ticks / (TimeSpan.TicksPerSecond / ffmpeg.AV_TIME_BASE);
         int epoch;
 
         _formatIoGate.EnterWriteLock();
@@ -578,6 +601,22 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         _log.LogError(ex, "Demux loop error");
     }
 
+    /// <summary>
+    /// Fires <see cref="OnError"/> on a ThreadPool thread so the demux loop is not
+    /// delayed by subscriber callbacks. Review §3.3 / B9.
+    /// </summary>
+    private void RaiseDemuxError(MediaDecodeException ex)
+    {
+        _log.LogError(ex, "Demux IO error surfaced to subscribers");
+        var handler = OnError;
+        if (handler == null) return;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h, e) = ((FFmpegDecoder, EventHandler<MediaDecodeException>, MediaDecodeException))s!;
+            try { h(self, e); } catch { /* subscriber errors must not crash the decoder */ }
+        }, (this, handler, ex));
+    }
+
     // ── Demux helpers used by FFmpegDemuxWorker ───────────────────────────
 
     internal nint AllocateDemuxPacket() => (nint)ffmpeg.av_packet_alloc();
@@ -626,7 +665,20 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             if (ret == ffmpeg.AVERROR_EOF)
                 return DemuxReadResult.Eof;
             if (ret < 0)
+            {
+                // Distinguish broken-stream (AVIO callback threw) from generic
+                // retry-able errors. Review §3.3 / B9. Broken streams are
+                // *terminal* — we raise OnError and return Eof so the demux
+                // worker stops cleanly instead of tight-looping on Retry.
+                var ioErr = _avioCtx?.ConsumeLastIoError();
+                if (ioErr != null)
+                {
+                    RaiseDemuxError(new MediaDecodeException(
+                        $"Demux read failed ({ret}): {ioErr.Message}", position: null, inner: ioErr));
+                    return DemuxReadResult.Fatal;
+                }
                 return DemuxReadResult.Retry;
+            }
 
             packetEpoch = Volatile.Read(ref _seekEpoch);
             seekPositionTicks = Volatile.Read(ref _seekPositionTicks);
@@ -771,6 +823,45 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         _avioCtx?.Dispose();
         _formatIoGate.Dispose();
         _log.LogDebug("FFmpegDecoder disposed");
+    }
+
+    /// <summary>
+    /// Cooperatively stops the demux task without tearing down FFmpeg resources.
+    /// Safe to call multiple times. Implements review item §4.5 (Concurrency #1):
+    /// async callers can <c>await StopAsync()</c> before <see cref="Dispose"/> to
+    /// avoid the 3-second <c>Wait</c> inside sync Dispose under load.
+    /// </summary>
+    /// <param name="ct">Cancellation token aborts the wait (not the decoder itself).</param>
+    public Task StopAsync(CancellationToken ct = default)
+    {
+        if (_disposed) return Task.CompletedTask;
+        try { _cts.Cancel(); } catch (ObjectDisposedException) { /* raced Dispose */ }
+
+        var t = _demuxTask;
+        return t == null ? Task.CompletedTask : FFmpegDecoderAsyncHelpers.AwaitDemuxStopAsync(this, t, ct);
+    }
+}
+
+/// <summary>
+/// Async helpers that live outside the <c>unsafe</c> <see cref="FFmpegDecoder"/>
+/// class so they can legally use <c>await</c> (C# forbids <c>await</c> in an
+/// unsafe context).
+/// </summary>
+internal static class FFmpegDecoderAsyncHelpers
+{
+    internal static async Task AwaitDemuxStopAsync(FFmpegDecoder self, Task demux, CancellationToken ct)
+    {
+        try
+        {
+            await demux.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { /* ct cancelled — leave demux to finish on its own */ }
+        catch (Exception ex)
+        {
+            // Mirror Dispose's error-reporting behaviour so callers don't see
+            // spurious background exceptions escape.
+            self.ReportDemuxLoopError(ex);
+        }
     }
 }
 

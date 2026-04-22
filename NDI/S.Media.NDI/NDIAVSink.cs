@@ -19,9 +19,9 @@ namespace S.Media.NDI;
 /// Consolidated NDI sink that can accept both audio and video and send them through one sender
 /// with a shared A/V timing context.
 /// </summary>
-public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
+public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
 {
-    private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAVSink));
+    private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAVEndpoint));
 
     private readonly struct PendingVideo
     {
@@ -194,7 +194,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
     public PixelFormat? PreferredFormat => _videoTargetFormat.PixelFormat;
 
-    public NDIAVSink(
+    public NDIAVEndpoint(
         NDISender sender,
         VideoFormat? videoTargetFormat = null,
         AudioFormat? audioTargetFormat = null,
@@ -212,7 +212,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         int audioUnderrunRecoveryThresholdMs = 80)
     {
         _sender = sender;
-        Name = name ?? "NDIAVSink";
+        Name = name ?? "NDIAVEndpoint";
 
         // Apply the underrun-recovery threshold to the shared timing context up front so
         // the very first audio buffer sees the right policy.  Values <= 0 revert to the
@@ -291,7 +291,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                 catch (Exception ex)
                 {
                     Log.LogWarning(ex,
-                        "NDIAVSink '{Name}': FFmpeg unavailable, falling back to LinearResampler " +
+                        "NDIAVEndpoint '{Name}': FFmpeg unavailable, falling back to LinearResampler " +
                         "(lower quality — may sound grainy on 44.1↔48 kHz conversions).", Name);
                 }
 
@@ -316,7 +316,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                 // producing a permanent rate skew. We can't see the sender's clock
                 // flag from here, so just warn loudly.
                 Log.LogWarning(
-                    "NDIAVSink '{Name}': EnableAudioDriftCorrection=true. This is queue-depth driven and " +
+                    "NDIAVEndpoint '{Name}': EnableAudioDriftCorrection=true. This is queue-depth driven and " +
                     "only meaningful with clockAudio:true on the NDISender. On clockAudio:false (default) " +
                     "the PI controller saturates and produces a permanent rate skew — disable this unless " +
                     "you explicitly created the sender with clockAudio:true.", Name);
@@ -330,21 +330,21 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         _audioPtsDiscontinuityThresholdTicks = TimeSpan.FromMilliseconds(
             audioPtsDiscontinuityThresholdMs > 0 ? audioPtsDiscontinuityThresholdMs : 500).Ticks;
 
-        Log.LogInformation("Created NDIAVSink '{Name}': hasVideo={HasVideo}, hasAudio={HasAudio}, preset={Preset}",
+        Log.LogInformation("Created NDIAVEndpoint '{Name}': hasVideo={HasVideo}, hasAudio={HasAudio}, preset={Preset}",
             Name, _hasVideo, _hasAudio, preset);
         if (_hasVideo)
-            Log.LogDebug("NDIAVSink '{Name}' video: {Width}x{Height} px={PixelFormat}, maxPending={MaxPending}",
+            Log.LogDebug("NDIAVEndpoint '{Name}' video: {Width}x{Height} px={PixelFormat}, maxPending={MaxPending}",
                 Name, _videoTargetFormat.Width, _videoTargetFormat.Height, _videoTargetFormat.PixelFormat, _videoMaxPendingFrames);
         if (_hasAudio)
-            Log.LogDebug("NDIAVSink '{Name}' audio: {SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}, maxPending={MaxPending}",
+            Log.LogDebug("NDIAVEndpoint '{Name}' audio: {SampleRate}Hz/{Channels}ch, fpb={FramesPerBuffer}, maxPending={MaxPending}",
                 Name, _audioTargetFormat.SampleRate, _audioTargetFormat.Channels, _audioFramesPerBuffer, _audioMaxPendingBuffers);
     }
 
     /// <summary>
-    /// Creates an <see cref="NDIAVSink"/> using an <see cref="NDIAVSinkOptions"/> record.
+    /// Creates an <see cref="NDIAVEndpoint"/> using an <see cref="NDIAVSinkOptions"/> record.
     /// This is the preferred constructor.
     /// </summary>
-    public NDIAVSink(NDISender sender, NDIAVSinkOptions? options) : this(
+    public NDIAVEndpoint(NDISender sender, NDIAVSinkOptions? options) : this(
         sender,
         options?.VideoTargetFormat,
         options?.AudioTargetFormat,
@@ -361,6 +361,29 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         options?.AudioPtsDiscontinuityThresholdMs ?? 500,
         options?.AudioUnderrunRecoveryThresholdMs ?? 80)
     { }
+
+    // ── Factories (§1.4) ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a fully-configured <see cref="NDIAVEndpoint"/> ready to register
+    /// on an <c>AVRouter</c>. Accepts the same options as the options-based
+    /// constructor but makes intent obvious at call sites and mirrors the
+    /// <c>PortAudioEndpoint.Create</c> pattern (§1.4).
+    /// </summary>
+    public static NDIAVEndpoint Create(NDISender sender, NDIAVSinkOptions? options = null) =>
+        new(sender, options);
+
+    /// <summary>
+    /// Shortcut factory: builds <see cref="NDIAVSinkOptions"/> inline from the
+    /// two most common format parameters and the preset.
+    /// </summary>
+    public static NDIAVEndpoint Create(
+        NDISender         sender,
+        VideoFormat?      videoTargetFormat = null,
+        AudioFormat?      audioTargetFormat = null,
+        NDIEndpointPreset preset            = NDIEndpointPreset.Balanced,
+        string?           name              = null) =>
+        new(sender, videoTargetFormat, audioTargetFormat, preset, name);
 
     public Task StartAsync(CancellationToken ct = default)
     {
@@ -416,7 +439,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             _audioThread.Start();
         }
 
-        Log.LogInformation("NDIAVSink '{Name}' started: videoThread={HasVideo}, audioThread={HasAudio}",
+        Log.LogInformation("NDIAVEndpoint '{Name}' started: videoThread={HasVideo}, audioThread={HasAudio}",
             Name, _hasVideo, _hasAudio);
         return Task.CompletedTask;
     }
@@ -426,7 +449,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         if (Interlocked.CompareExchange(ref _started, 0, 1) != 1)
             return;
 
-        Log.LogInformation("Stopping NDIAVSink '{Name}'", Name);
+        Log.LogInformation("Stopping NDIAVEndpoint '{Name}'", Name);
         _cts?.Cancel();
 
         await Task.Run(() => _videoThread?.Join(TimeSpan.FromSeconds(3)), ct).ConfigureAwait(false);
@@ -526,7 +549,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
             Interlocked.CompareExchange(ref _loggedChannelRemix, 1, 0) == 0)
         {
             Log.LogWarning(
-                "NDIAVSink '{Name}': received audio with {SrcCh} channels but target is {DstCh}. " +
+                "NDIAVEndpoint '{Name}': received audio with {SrcCh} channels but target is {DstCh}. " +
                 "The AVRouter should apply a channel map for this route.  Falling back to " +
                 "copy-min/zero-fill — surround mixing/downmix must happen in the router, not here.",
                 Name, sourceFormat.Channels, outCh);
@@ -700,7 +723,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         Volatile.Write(ref _started, 0);
 
         Log.LogInformation(
-            "Disposing NDIAVSink '{Name}': videoPassthrough={VideoPassthrough}, videoConverted={VideoConverted}, videoConversionDrops={VideoConversionDrops}, " +
+            "Disposing NDIAVEndpoint '{Name}': videoPassthrough={VideoPassthrough}, videoConverted={VideoConverted}, videoConversionDrops={VideoConversionDrops}, " +
             "videoPoolMissDrops={VideoPoolMissDrops}, videoCapacityDrops={VideoCapacityDrops}, videoFormatDrops={VideoFormatDrops}, videoQueueDrops={VideoQueueDrops}, " +
             "audioPoolMissDrops={AudioPoolMissDrops}, audioCapacityDrops={AudioCapacityDrops}, audioQueueDrops={AudioQueueDrops}, audioDriftRatio={AudioDriftRatio}",
             Name,
@@ -1127,7 +1150,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                             // timecodes with wall-clock video timecodes, which creates
                             // a permanent A/V offset at the receiver.
                             Log.LogWarning(
-                                "NDIAVSink '{Name}': video frame arrived with no PTS — using NDI timecode-synthesize " +
+                                "NDIAVEndpoint '{Name}': video frame arrived with no PTS — using NDI timecode-synthesize " +
                                 "on the video path.  If the audio path carries stream PTS this introduces a permanent " +
                                 "A/V offset at the receiver.  Upstream should supply valid video PTS.", Name);
                         }

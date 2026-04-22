@@ -6,8 +6,8 @@
 //   4. Press Enter or Ctrl+C to stop; auto-stops at end of file
 //
 // Pipeline
-//   FFmpegDecoder ──► FFmpegAudioChannel ──► AVRouter ──► NDIAVSink(audio) ──► NDISender
-//                 └─► FFmpegVideoChannel ──► AVRouter ──► NDIAVSink(video) ──╯
+//   FFmpegDecoder ──► FFmpegAudioChannel ──► AVRouter ──► NDIAVEndpoint(audio) ──► NDISender
+//                 └─► FFmpegVideoChannel ──► AVRouter ──► NDIAVEndpoint(video) ──╯
 //   VirtualClockEndpoint drives the master clock (Stopwatch-based, no hardware device needed)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -113,7 +113,7 @@ using (ndiRuntime)
         {
             var srcFmt = audioChannel.SourceFormat;
             ndiAudioFormat = new AudioFormat(48000, Math.Min(srcFmt.Channels, 2));
-            routeMap = BuildRouteMap(srcFmt.Channels, ndiAudioFormat.Value.Channels);
+            routeMap = ChannelRouteMap.AutoStereoDownmix(srcFmt.Channels, ndiAudioFormat.Value.Channels);
         }
 
         // ── Determine NDI video format ──
@@ -167,8 +167,8 @@ using (ndiRuntime)
             //
             //   VirtualClockEndpoint (clock master, no hardware device)
             //       └─► AVRouter
-            //               ├─► NDIAVSink (audio: interleaved→planar, SendAudio)
-            //               └─► NDIAVSink (video: pixel copy, SendVideo)
+            //               ├─► NDIAVEndpoint (audio: interleaved→planar, SendAudio)
+            //               └─► NDIAVEndpoint (video: pixel copy, SendVideo)
             //                       └─► NDISender ──► network
 
             const int framesPerBuffer = 1024; // ~21 ms @ 48 kHz
@@ -181,12 +181,12 @@ using (ndiRuntime)
                 //VideoPullDriftCorrectionGain = 0.002, 
             });
 
-            var ndiSink = new NDIAVSink(
+            var ndiSink = new NDIAVEndpoint(
                 sender,
                 videoTargetFormat: ndiVideoFormat,
                 audioTargetFormat: ndiAudioFormat,
                 audioFramesPerBuffer: framesPerBuffer,
-                name: $"NDIAVSink({senderName})");
+                name: $"NDIAVEndpoint({senderName})");
 
             using (ndiSink)
             {
@@ -365,21 +365,4 @@ using (ndiRuntime)
     } // decoder disposed
 } // ndiRuntime disposed
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-// Mono source -> both stereo channels; multi-channel -> straight-across up to min(src, dst).
-static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels)
-{
-    var b = new ChannelRouteMap.Builder();
-    if (srcChannels == 1 && dstChannels >= 2)
-    {
-        b.Route(0, 0).Route(0, 1);
-    }
-    else
-    {
-        int common = Math.Min(srcChannels, dstChannels);
-        for (int i = 0; i < common; i++) b.Route(i, i);
-    }
-    return b.Build();
-}
 

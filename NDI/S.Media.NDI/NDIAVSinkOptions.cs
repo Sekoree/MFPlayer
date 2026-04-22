@@ -4,7 +4,7 @@ using S.Media.Core.Media;
 namespace S.Media.NDI;
 
 /// <summary>
-/// Configuration options for <see cref="NDIAVSink"/>.
+/// Configuration options for <see cref="NDIAVEndpoint"/>.
 /// Follows the same options-record pattern as <c>NDISourceOptions</c> and <c>FFmpegDecoderOptions</c>.
 /// </summary>
 public sealed record NDIAVSinkOptions
@@ -18,7 +18,7 @@ public sealed record NDIAVSinkOptions
     /// <summary>Quality/performance preset that controls pool sizes and queue depths.</summary>
     public NDIEndpointPreset Preset { get; init; } = NDIEndpointPreset.Balanced;
 
-    /// <summary>Display name shown in NDI diagnostics. Defaults to "NDIAVSink".</summary>
+    /// <summary>Display name shown in NDI diagnostics. Defaults to "NDIAVEndpoint".</summary>
     public string? Name { get; init; }
 
     /// <summary>

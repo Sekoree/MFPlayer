@@ -119,7 +119,7 @@ using (decoder)
 
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
-    NDIAVSink? ndiSink = null;
+    NDIAVEndpoint? ndiSink = null;
 
     Console.Write("Enable NDI video sink? [y/N]: ");
     bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
@@ -163,12 +163,12 @@ using (decoder)
                         routeMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
                     }
 
-                    ndiSink = new NDIAVSink(
+                    ndiSink = new NDIAVEndpoint(
                         ndiSender,
                         videoOutput.OutputFormat,
                         audioTargetFormat: ndiAudioFormat,
                         preset: preset,
-                        name: $"NDIAVSink({senderName})",
+                        name: $"NDIAVEndpoint({senderName})",
                         videoPoolCount: 0,
                         videoMaxPendingFrames: 0,
                         audioFramesPerBuffer: 1024);
