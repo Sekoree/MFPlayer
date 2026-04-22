@@ -1,6 +1,202 @@
 # MFPlayer — API & Implementation Review
 
 *Review date: 2026-04-22. Read-only inspection; no source files were modified.*
+*Updated 2026-04-22 with framing notes §0 (Layering, Endpoint consolidation) following
+discussion with the repo owner. See the companion document
+[`Implementation-Checklist.md`](./Implementation-Checklist.md) for a ticklist-shaped
+version of the refactor roadmap.*
+
+---
+
+## 0. Framing (added post-review)
+
+### 0.1 Layering: `MediaPlayer` vs `AVRouter`
+
+These two types serve **different purposes** and are intentionally not merged:
+
+- **`S.Media.Core.Routing.AVRouter`** is the base of a much larger media
+  input/output routing system. It is the substrate for multi-source mixing,
+  timeline playback, clone fan-out, recording endpoints, and live/NDI
+  production graphs. It must stay minimal, composable, and free of "convenience"
+  behaviour that would be wrong for a non-playback use case. Every ergonomic
+  helper proposed below (builder, drain detection, auto-preroll, etc.) is
+  scoped to the facade layer unless it improves `AVRouter` correctness.
+- **`S.Media.FFmpeg.MediaPlayer`** is a thin facade over `AVRouter` intended for
+  simple single-file playback apps. The `MediaPlayerBuilder` proposal in
+  §"Proposed simplified API" lives *here*, not on `AVRouter`.
+
+Concretely:
+- Features like `WaitForCompletionAsync`, `OpenAndPlayAsync`,
+  `AddEndpointAsync`, and `PlaybackState` belong on `MediaPlayer`.
+- Features like per-route `LiveMode`, endpoint format capabilities, clock
+  registry policy, and PTS-aware mixing belong on `AVRouter`.
+- The review's tier breakdown already respects this split; the checklist
+  (`Implementation-Checklist.md` §0.1) calls it out explicitly.
+
+### 0.2 Audio endpoint consolidation (`IAudioEndpoint`)
+
+The repo owner asked whether the "Output" and "Sink" interfaces could be
+unified into a single `IAudioEndpoint`, mirroring the video side. **The
+interface-level consolidation is already complete**:
+
+- `IAudioEndpoint` (`Media/S.Media.Core/Media/Endpoints/IAudioEndpoint.cs`)
+  is the single unified push contract. Its XML doc literally states
+  *"Replaces `IAudioOutput`, `IAudioSink`, and `IAudioBufferEndpoint` with a
+  single unified push contract."*
+- `IPullAudioEndpoint : IAudioEndpoint` is an **optional capability mixin**
+  implemented by endpoints that are driven by an RT pull callback (hardware
+  outputs like PortAudio). It adds `FillCallback`, `EndpointFormat`,
+  `FramesPerBuffer`.
+- The video side has exactly the same shape: `IVideoEndpoint` (push) +
+  `IPullVideoEndpoint : IVideoEndpoint` (pull capability).
+- `AVRouter.RegisterEndpoint(IAudioEndpoint)` and
+  `RegisterEndpoint(IVideoEndpoint)` each branch internally on the capability
+  interface (`is IPullAudioEndpoint pull` at `AVRouter.cs:314, 640`;
+  analogous for video at `:316, 650`), so **users register every destination
+  through one method** and the router decides push vs pull at runtime.
+
+What is still confusing is therefore *not* the interfaces but:
+
+1. **Concrete class names** still split the world into "Output" vs "Sink":
+   `PortAudioOutput` vs `PortAudioSink`, `SDL3VideoOutput` vs `SDL3VideoCloneSink`,
+   `NDIAVSink`, `AvaloniaOpenGlVideoOutput`, etc. End users reasonably infer
+   that they are different kinds of objects that need to be plumbed differently,
+   even though `AVRouter` treats them identically.
+2. **Docs and examples** (`MediaPlayer-Guide.md`, `Quick-Start.md`,
+   `Usage-Guide.md`, `Clone-Sinks.md`) use both words, reinforcing the split.
+3. **`PortAudioOutput` exposes `Clock` only after `Open()`** (see **P1** / **CH8**
+   below), which conflates "Open the device" with "Register the endpoint" in
+   the user's mental model.
+
+Action plan (tracked in `Implementation-Checklist.md §1`):
+
+- Standardise public vocabulary on **"endpoint"** only; mark "output" / "sink"
+  as legacy in all XML and `Doc/`.
+- **Collapse to one concrete class per backend.** Under the existing interface
+  model, two concrete PortAudio types are not needed: both
+  `PortAudioOutput` (callback/pull) and `PortAudioSink` (blocking-write/push)
+  wrap a `Pa_OpenStream` handle, and `Pa_GetStreamTime` is a valid hardware
+  clock in both modes. Merge them into a single `PortAudioEndpoint` with a
+  `DrivingMode { Callback, BlockingWrite }` option (see §0.3 below for the
+  concrete shape). Same argument applies to `NDIAVSink`/`SDL3VideoOutput`
+  etc.: each backend gets one `*Endpoint` class. Breaking, with `[Obsolete]`
+  type-forwarders for one release:
+  - `PortAudioOutput` + `PortAudioSink` → `PortAudioEndpoint`.
+  - `NDIAVSink` → `NDIAVEndpoint`.
+  - `SDL3VideoOutput` → `SDL3VideoEndpoint`;
+    `SDL3VideoCloneSink` → `SDL3VideoCloneEndpoint`.
+  - `AvaloniaOpenGlVideoOutput` → `AvaloniaOpenGlVideoEndpoint` (and clone).
+- Merge "new + Open" into a single `Create(...)` factory on each concrete
+  endpoint, so `Clock` is always valid immediately after construction
+  (closes **P1** and **CH8**).
+- Add `IAudioEndpoint.NegotiatedFormat` (nullable) so push endpoints can
+  advertise a preferred rate/channel count, enabling route-level auto-resampling
+  in the router — closes **R5** without reintroducing a `SinkFormat`/`OutputFormat`
+  split.
+- `AVRouter.RegisterEndpoint` already figures out push vs pull at runtime; no
+  router API change is required. Document this explicitly in the XML on both
+  `IAudioEndpoint` and `IVideoEndpoint`.
+
+**Net result for end users:** one method (`AddEndpoint` on `MediaPlayer`,
+`RegisterEndpoint` on `AVRouter`), one interface family per media type
+(`IAudioEndpoint` / `IVideoEndpoint` / `IAVEndpoint`), and **exactly one
+concrete class per backend**, whose name carries no policy hints about
+"primary" vs "secondary" plumbing.
+
+### 0.3 `PortAudioClock` as an independent clock source
+
+Per the repo owner's follow-up: *"Could the `PortAudioOutput.Clock` perhaps be
+a separated class that can act as a clock for a Sink?"* — yes, and in fact
+it effectively already is. `Audio/S.Media.PortAudio/PortAudioClock.cs` is a
+standalone `IMediaClock` implementation derived from `HardwareClock`; it
+wraps a `HandleRef` over the PA stream handle and reads `Pa_GetStreamTime`.
+Nothing in it depends on the endpoint being driven in callback mode.
+
+So on the merged `PortAudioEndpoint`:
+
+```csharp
+public sealed class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint
+{
+    public enum DrivingMode { Callback, BlockingWrite }
+
+    public static PortAudioEndpoint Create(
+        AudioDeviceInfo device,
+        AudioFormat     format,
+        DrivingMode     mode             = DrivingMode.Callback,
+        int             framesPerBuffer  = 0);
+
+    public string       Name              { get; }
+    public AudioFormat  HardwareFormat    { get; }
+    public IMediaClock  Clock             { get; }     // PortAudioClock; valid from ctor
+    public DrivingMode  Mode              { get; }
+
+    // Implements IPullAudioEndpoint only when Mode == Callback (runtime downcast
+    // in AVRouter already handles this — no router change required).
+    // Implements IClockCapableEndpoint in BOTH modes — blocking-write users get
+    // a real hardware clock too.
+}
+```
+
+- **`Callback`** mode → zero-alloc RT pull path. Best for the primary hardware
+  output.
+- **`BlockingWrite`** mode → RT-safe push from any source thread with an
+  internal worker + PA blocking write. Best for secondary fan-out, and still
+  exposes a hardware clock because `Pa_GetStreamTime` works identically on a
+  blocking stream.
+- Push-only backends with no hardware clock (NDI send, file-writer) simply
+  don't implement `IClockCapableEndpoint`. That's the whole purpose of keeping
+  `IClockCapableEndpoint` as a capability mixin, and it means no extra
+  plumbing type is ever needed to express "I can receive audio *and*
+  provide a clock".
+
+Follow-up consequence: the test apps' common pattern of
+`using var output = new PortAudioOutput(); output.Open(...); router.SetClock(output.Clock);`
+collapses to a single-line `router.RegisterEndpoint(PortAudioEndpoint.Create(...))`
+(clock auto-registers at `Hardware` priority), whether the user picked
+callback or blocking-write mode. The checklist reflects this merge in §1.2.
+
+### 0.4 Clock selection: PA-recommended, but swappable
+
+Confirming the intended model for the merged endpoint:
+
+- Every `IClockCapableEndpoint` **auto-registers** its clock at
+  `ClockPriority.Hardware` when the endpoint is registered with the router
+  (existing behaviour, `AVRouter.cs:340-344`). So by default,
+  `router.RegisterEndpoint(paEndpoint)` installs the `PortAudioClock` as the
+  de-facto hardware clock and nothing else has to be done. This is the
+  **recommended** path for PA-only playback.
+- The clock is **not** owned by the endpoint in any exclusive sense. It is
+  just an entry in the router's priority-ranked registry
+  (`Internal < Hardware < External < Override`), and the resolver picks the
+  highest-priority currently-registered clock for every tick.
+- To swap in a different clock when another hardware source is also involved
+  (e.g. sending via NDI alongside PA), the user has two options:
+  ```csharp
+  router.RegisterClock(ndiClock, ClockPriority.External);   // outranks Hardware
+  // — or —
+  router.SetClock(ndiClock);                                // @ Override
+  ```
+  The PA endpoint's `PortAudioClock` stays registered at `Hardware` the whole
+  time; it simply loses the resolver race until the higher-priority entry is
+  unregistered, at which point the resolver **automatically falls back** to
+  the PA clock without any code change.
+- Note on terminology: the framework's current *send*-side NDI endpoint
+  (`NDIAVSink` / future `NDIAVEndpoint`) is **not** `IClockCapableEndpoint`.
+  `NDIClock` as it exists today is a *receive*-side class derived from
+  sender-stamped timestamps. In real production the hardware clock for an
+  NDI send is usually the PA device or a PTP/genlock source, not NDI itself;
+  the two natural patterns are PA-clocked (default) or PTP-clocked
+  (`SetClock(ptpClock)`). If a future NDI **sender** wants to advertise a
+  clock, it can implement `IClockCapableEndpoint` and auto-register at
+  `Hardware` like PA does — no router change needed.
+- Known rough edge (executive finding #8): the router's internal tick
+  cadence is decoupled from `Clock.Position`. Swapping in a clock that
+  doesn't advance in lock-step with wall time can cause silent drift.
+  Tracked in the checklist as §4.9 (`ActiveClockChanged` event) + §6.7
+  (per-axis cadence auto-derived from the active clock) + §5.5 (auto-derive
+  tick cadence from registered endpoints).
+
+---
 
 ## Executive summary (top-impact findings)
 
