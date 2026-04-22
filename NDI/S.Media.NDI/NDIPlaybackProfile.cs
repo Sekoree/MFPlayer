@@ -23,7 +23,7 @@ namespace S.Media.NDI;
 /// if (profile.ResetClockOrigin)
 ///     videoOutput.ResetClockOrigin();
 ///
-/// avMixer.VideoLiveMode = profile.VideoLiveMode;
+/// avMixer.BypassVideoPtsScheduling = profile.BypassVideoPtsScheduling;
 ///
 /// await Task.WhenAll(
 ///     avSource.WaitForAudioBufferAsync(profile.AudioPreBufferChunks, ct),
@@ -59,11 +59,14 @@ public sealed record NDIPlaybackProfile
     public int VideoPreBufferFrames { get; init; } = 2;
 
     /// <summary>
-    /// When <see langword="true"/>, the video mixer should bypass PTS scheduling and
-    /// always present the newest available frame. Ideal for live monitoring.
-    /// Set on <c>IAVRouter.VideoLiveMode</c>.
+    /// When <see langword="true"/>, the router bypasses per-frame PTS scheduling for
+    /// video push endpoints and simply forwards the newest available frame on every
+    /// push tick.  Use only for live-monitor scenarios where frame-accurate pacing
+    /// is not required — it trades PTS correctness for the lowest achievable
+    /// presentation latency.  Disabled on every preset: callers opt in explicitly.
+    /// Set on <c>IAVRouter.BypassVideoPtsScheduling</c>.
     /// </summary>
-    public bool VideoLiveMode { get; init; }
+    public bool BypassVideoPtsScheduling { get; init; }
 
     /// <summary>
     /// When <see langword="true"/>, the video output should use adaptive VSync
@@ -101,7 +104,7 @@ public sealed record NDIPlaybackProfile
             AudioSuggestedLatency  = 128.0 / 48000.0,   // ~2.7 ms
             AudioPreBufferChunks   = 1,
             VideoPreBufferFrames   = 1,
-            VideoLiveMode          = true,
+            BypassVideoPtsScheduling = false,
             AdaptiveVSync          = true,
             ResetClockOrigin       = true,
             LowLatencyPolling      = true,
@@ -113,7 +116,7 @@ public sealed record NDIPlaybackProfile
             AudioSuggestedLatency  = 256.0 / 48000.0,   // ~5.3 ms
             AudioPreBufferChunks   = 1,
             VideoPreBufferFrames   = 1,
-            VideoLiveMode          = true,
+            BypassVideoPtsScheduling = false,
             AdaptiveVSync          = true,
             ResetClockOrigin       = true,
             LowLatencyPolling      = true,
@@ -125,7 +128,7 @@ public sealed record NDIPlaybackProfile
             AudioSuggestedLatency  = 0,
             AudioPreBufferChunks   = 4,
             VideoPreBufferFrames   = 3,
-            VideoLiveMode          = false,
+            BypassVideoPtsScheduling          = false,
             AdaptiveVSync          = false,
             ResetClockOrigin       = false,
             LowLatencyPolling      = false,
@@ -137,7 +140,7 @@ public sealed record NDIPlaybackProfile
             AudioSuggestedLatency  = 0,
             AudioPreBufferChunks   = 3,
             VideoPreBufferFrames   = 2,
-            VideoLiveMode          = false,
+            BypassVideoPtsScheduling          = false,
             AdaptiveVSync          = false,
             ResetClockOrigin       = false,
             LowLatencyPolling      = false,

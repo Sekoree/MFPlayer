@@ -140,7 +140,14 @@ public sealed class LinearResampler : IAudioResampler
         // normalised to be relative to the new pending window origin (always < step
         // in steady state).  This carry mechanism is what makes the resampler
         // stateful and allows seamless buffer-boundary interpolation.
-        long consumed = Math.Min((long)_phase, totalFrames);
+        //
+        // Keep at least ONE pending frame on cross-rate paths so the next call
+        // always has a valid interpolation neighbour at the boundary.  Without
+        // this, request sizes that consume the full effective window (common with
+        // rounded nominal frame counts) leave pending=0, forcing the boundary
+        // sample to clamp s1=s0 and creating periodic micro-clicks.
+        long maxConsumable = totalFrames > 0 ? totalFrames - 1L : 0L;
+        long consumed = Math.Min((long)_phase, maxConsumable);
         _pendingFrames = (int)(totalFrames - consumed);
 
         if (_pendingFrames > 0)

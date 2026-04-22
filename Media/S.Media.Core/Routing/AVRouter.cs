@@ -40,12 +40,6 @@ public sealed class AVRouter : IAVRouter
         /// <summary>Peak sample level (absolute) measured after volume, before routing. Updated on RT thread.</summary>
         public float PeakLevel;
 
-        /// <summary>
-        /// Last video frame dequeued from this input (by any consumer).
-        /// Allows push endpoints to forward the same frame that a pull endpoint already presented,
-        /// avoiding ring-buffer contention when both pull and push endpoints share an input.
-        /// </summary>
-        public VideoFrame? LastVideoFrame;
 
         public InputEntry(InputId id, IAudioChannel ch)
         {
@@ -102,6 +96,12 @@ public sealed class AVRouter : IAVRouter
         public IAudioResampler? Resampler;
         public bool OwnsResampler; // if we auto-created the resampler
 
+        // Video-specific: per-route subscription into the input channel's frame stream.
+        // Each (input, endpoint) pair owns its own bounded queue — the decoder fans
+        // each frame out to every subscription, so pull (SDL3/Avalonia) and push
+        // (NDI, clone sinks) no longer race for frames on a shared ring.
+        public IVideoSubscription? VideoSub;
+
         public RouteEntry(RouteId id, InputId inputId, EndpointId endpointId, InputKind kind)
         {
             Id = id; InputId = inputId; EndpointId = endpointId; Kind = kind;
@@ -145,21 +145,23 @@ public sealed class AVRouter : IAVRouter
     // Prevents truncation drift when computing frame counts from elapsed seconds.
     private readonly ConcurrentDictionary<EndpointId, double> _pushAudioFrameAccumulators = new();
 
-    // Per-input pending video frame for push endpoints.
-    // When a frame is pulled from the ring but its PTS is ahead of the clock,
+    // Per-route pending video frame for push endpoints.
+    // When a frame is pulled from the subscription but its PTS is ahead of the clock,
     // it is cached here instead of being dropped.  The next push tick retries it.
-    private readonly ConcurrentDictionary<InputId, VideoFrame> _pushVideoPending = new();
+    // Keyed by RouteId (not InputId) so N push endpoints on the same input each own
+    // their own pending — otherwise they would clobber each other's gate-cache.
+    private readonly ConcurrentDictionary<RouteId, VideoFrame> _pushVideoPending = new();
 
-    // Per-input push video drift correction origin.
+    // Per-route push video drift correction origin.
     // Tracks PTS↔clock offset and applies smooth proportional correction so
     // sub-frame drift converges to zero without ±½-frame oscillation.
     // See PtsDriftTracker for the shared state machine (also used by the pull
     // callback below) — §5.1 of Code-Review-Findings.
-    private readonly ConcurrentDictionary<InputId, PtsDriftTracker> _pushVideoDrift = new();
+    private readonly ConcurrentDictionary<RouteId, PtsDriftTracker> _pushVideoDrift = new();
 
     // Reusable 1-element scratch for PushVideoTick's IVideoChannel.FillBuffer calls.
     // Only the push-video thread touches this, so no synchronization is required.
-    private VideoFrame[]? _pushOneFrameBuf;
+    // (Kept only for legacy audio scratch parity; video fan-out now reads subs directly.)
 
     // ── Constructor ─────────────────────────────────────────────────────
 
@@ -248,21 +250,14 @@ public sealed class AVRouter : IAVRouter
     {
         lock (_lock)
         {
-            if (!_inputs.TryRemove(id, out var entry)) return;
+            if (!_inputs.TryRemove(id, out _)) return;
 
-            // Remove all routes from this input
+            // Remove all routes from this input (RemoveRouteInternal disposes each
+            // route's subscription and releases per-route push-video bookkeeping).
             var toRemove = _routes.Values.Where(r => r.InputId == id).ToList();
             foreach (var route in toRemove)
                 RemoveRouteInternal(route);
 
-            // Release any pooled video buffers still held for this input.
-            if (_pushVideoPending.TryRemove(id, out var pending))
-                pending.MemoryOwner?.Dispose();
-            // NOTE: LastVideoFrame is a *borrowed* reference published by the pull endpoint
-            // (it aliases that endpoint's own _lastPresentedFrame).  The pull endpoint owns
-            // disposal; clearing the slot here without disposing avoids a double-free.
-            entry.LastVideoFrame = null;
-            _pushVideoDrift.TryRemove(id, out _);
 
             Log.LogDebug("Input unregistered: {Id}", id);
         }
@@ -440,7 +435,14 @@ public sealed class AVRouter : IAVRouter
         {
             _clockRegistry.RemoveAll(e => e.Priority == ClockPriority.Override);
             if (clock is not null)
+            {
+                // Remove any prior registration of this same clock (e.g. the
+                // auto Hardware-priority one added by RegisterEndpoint) so the
+                // registry only contains the Override entry. Keeps the clock
+                // list clean and makes diagnostic logs unambiguous.
+                _clockRegistry.RemoveAll(e => ReferenceEquals(e.Clock, clock));
                 _clockRegistry.Add((clock, ClockPriority.Override, _clockRegistrationOrder++));
+            }
             ResolveActiveClock();
         }
         Log.LogInformation("Clock override {Action}: {Type} → active={Active}",
@@ -496,7 +498,7 @@ public sealed class AVRouter : IAVRouter
 
     // ── IAVRouter: Video ────────────────────────────────────────────────
 
-    public bool VideoLiveMode { get; set; }
+    public bool BypassVideoPtsScheduling { get; set; }
 
     // ── IAVRouter: Diagnostics ──────────────────────────────────────────
 
@@ -527,8 +529,11 @@ public sealed class AVRouter : IAVRouter
         long raw       = audioLead - videoLead; // +ve → audio ahead of video
 
         // One-pole IIR smoothing so a human-readable UI number doesn't flicker.
-        // α = 0.1 converges ~1 s at 100 Hz sampling.
-        const double Alpha = 0.1;
+        // α = 0.4 converges in ≈250 ms at 100 Hz sampling — responsive enough that
+        // the displayed value tracks real drift closely (so tightening the
+        // correction gains is visible to the user) while still swallowing
+        // single-sample PTS-quantization noise.
+        const double Alpha = 0.4;
         lock (_driftEmaLock)
         {
             if (!_driftEmaValid)
@@ -576,7 +581,7 @@ public sealed class AVRouter : IAVRouter
             r.Resampler is not null)).ToArray();
 
         return new RouterDiagnosticsSnapshot(
-            IsRunning, Clock.Position, VideoLiveMode,
+            IsRunning, Clock.Position, BypassVideoPtsScheduling,
             inputSnapshots, endpointSnapshots, routeSnapshots);
     }
 
@@ -608,12 +613,11 @@ public sealed class AVRouter : IAVRouter
                 route.Resampler?.Dispose();
         }
 
-        // Release any pooled video frames still cached per-input so the pool
-        // doesn't bleed when the router is disposed before inputs are unregistered.
-        // NOTE: LastVideoFrame is owned by the pull endpoint's _lastPresentedFrame
-        // (see UnregisterInput); null the slot without disposing to avoid double-free.
-        foreach (var entry in _inputs.Values)
-            entry.LastVideoFrame = null;
+        // Release any pooled video frames still cached per-route in the push
+        // pending slot so the pool doesn't bleed when the router is disposed
+        // before routes are removed. Per-route video subscriptions are drained
+        // by RemoveRouteInternal via each route.VideoSub.Dispose() path; this
+        // handles the "pending" slot pulled but not yet presented.
         foreach (var kv in _pushVideoPending)
             kv.Value.MemoryOwner?.Dispose();
         _pushVideoPending.Clear();
@@ -750,6 +754,23 @@ public sealed class AVRouter : IAVRouter
                 Gain = options.Gain,
             };
 
+            // Create a private subscription into the input channel so this endpoint
+            // never races other consumers for frames. Push endpoints use DropOldest
+            // (slow push must not stall the decoder); pull endpoints use Wait with
+            // a deeper queue (vsync-paced, they are the pace-setter).
+            //
+            // Push capacity = 4: gives ~4 push-ticks of headroom against transient
+            // stalls.  Lower values tempt frame loss when tick timing quantises
+            // against the source frame rate (e.g. 24 fps vs 5 ms tick).
+            if (inp.VideoChannel is not null)
+            {
+                bool isPull = ep.Video is IPullVideoEndpoint;
+                route.VideoSub = inp.VideoChannel.Subscribe(new VideoSubscriptionOptions(
+                    Capacity: isPull ? Math.Max(_options.DefaultFramesPerBuffer, inp.VideoChannel.BufferDepth) : 4,
+                    OverflowPolicy: isPull ? VideoOverflowPolicy.Wait : VideoOverflowPolicy.DropOldest,
+                    DebugName: $"{inp.Id}->{ep.Id}"));
+            }
+
             _routes[routeId] = route;
             RebuildVideoRouteSnapshot();
 
@@ -765,6 +786,16 @@ public sealed class AVRouter : IAVRouter
 
         if (route.OwnsResampler)
             route.Resampler?.Dispose();
+
+        // Dispose the per-route video subscription so its queued frames release
+        // their refcounts (pool rentals return) and the decoder stops fanning
+        // frames out to it.
+        route.VideoSub?.Dispose();
+        route.VideoSub = null;
+        // Per-route push-video bookkeeping must also be released when the route is gone.
+        if (_pushVideoPending.TryRemove(route.Id, out var pending))
+            pending.MemoryOwner?.Dispose();
+        _pushVideoDrift.TryRemove(route.Id, out _);
 
         if (route.Kind == InputKind.Audio)
             RebuildAudioRouteSnapshot();
@@ -1069,168 +1100,101 @@ public sealed class AVRouter : IAVRouter
         long earlyToleranceTicks = _options.VideoPtsEarlyTolerance.Ticks;
         int maxCatchUp = _options.VideoMaxCatchUpFramesPerTick;
 
-        // VideoFrame is a managed record struct (contains ReadOnlyMemory<byte>/IDisposable?) so
-        // it can't live on the stack via stackalloc.  A single reusable 1-element array avoids
-        // the per-iteration allocation the previous `new VideoFrame[1]` pattern caused.
-        var oneFrame = _pushOneFrameBuf ??= new VideoFrame[1];
-
-        // Per-tick cache of router-pulled frames keyed by input.
-        //
-        // When the router itself pulls a fresh VideoFrame from the ring (no pull endpoint
-        // on the same input has published via <see cref="InputEntry.LastVideoFrame"/>), the
-        // router owns the <see cref="VideoFrame.MemoryOwner"/> rental and must dispose it
-        // after fan-out to all push endpoints on that input.  The cache lets N push
-        // endpoints sharing one input reuse a single pull rather than competing for
-        // independent ring reads.
-        //
-        // Allocation-sensitive: most videos have exactly one push endpoint per input, so
-        // the dictionary is lazy-init and typically stays empty.
-        Dictionary<InputId, VideoFrame>? routerOwnedFrames = null;
-
-        try
+        foreach (var route in routes)
         {
-            foreach (var route in routes)
+            if (!Volatile.Read(ref route.Enabled)) continue;
+            if (!_inputs.TryGetValue(route.InputId, out var inp) || !inp.Enabled) continue;
+            if (!_endpoints.TryGetValue(route.EndpointId, out var ep)) continue;
+            if (ep.Video is null or IPullVideoEndpoint) continue; // skip pull endpoints
+            if (route.VideoSub is null) continue; // route has no input channel (shouldn't happen)
+
+            // 1) Try the per-route pending frame (pulled last tick but was too early).
+            VideoFrame candidate;
+            bool haveCandidate = _pushVideoPending.TryRemove(route.Id, out candidate);
+
+            if (!haveCandidate)
             {
-                if (!Volatile.Read(ref route.Enabled)) continue;
-                if (!_inputs.TryGetValue(route.InputId, out var inp) || !inp.Enabled) continue;
-                if (!_endpoints.TryGetValue(route.EndpointId, out var ep)) continue;
-                if (ep.Video is null or IPullVideoEndpoint) continue; // skip pull endpoints
+                // 2) Pull a fresh frame from this route's private subscription. The
+                // decoder fans each frame out to every subscription, so pulling here
+                // does not race any other endpoint's subscription.
+                if (!route.VideoSub.TryRead(out candidate))
+                    continue;
+            }
 
-                var channel = inp.VideoChannel!;
+            bool didCatchUp = false;
 
-                // 1) Borrow path — a pull endpoint published a fresh frame via
-                // <see cref="InputEntry.LastVideoFrame"/>.  The pull endpoint owns the
-                // buffer (via its own _lastPresentedFrame) so we read-and-clear without
-                // disposing; the slot being empty on the next push tick means "pull
-                // endpoint hasn't advanced since we last forwarded", and we will fall
-                // through to our own pending/ring path instead of re-sending a stale frame.
-                var borrowed = inp.LastVideoFrame;
-                if (borrowed.HasValue)
+            // 3) PTS gate with smooth drift correction (unless live mode).
+            if (!BypassVideoPtsScheduling)
+            {
+                var drift = _pushVideoDrift.GetOrAdd(route.Id, _ => new PtsDriftTracker());
+
+                // Same self-feedback seeding alignment as the pull-video path
+                // (see VideoPresentCallbackForEndpoint for the long-form note):
+                // if the master clock hasn't yet caught up to the first frame's
+                // PTS, the post-UpdateFromFrame jump would otherwise leave the
+                // drift tracker permanently biased.
+                bool pushFirstSeed = !drift.HasOrigin;
+                long pushSeedClockTicks = clockPos.Ticks < candidate.Pts.Ticks
+                    ? candidate.Pts.Ticks
+                    : clockPos.Ticks;
+                drift.SeedIfNeeded(candidate.Pts.Ticks, pushSeedClockTicks);
+
+                long relativeClockTicks = drift.RelativeClock(clockPos.Ticks);
+                long relativePtsTicks   = drift.RelativePts(candidate.Pts.Ticks, inp.TimeOffset.Ticks);
+
+                // Too early — cache for next tick.
+                if (relativePtsTicks > relativeClockTicks + earlyToleranceTicks)
                 {
-                    inp.LastVideoFrame = null;
-                    var frame = borrowed.Value;
-                    ep.Video.ReceiveFrame(in frame);
+                    if (_pushVideoPending.TryGetValue(route.Id, out var stale))
+                        stale.MemoryOwner?.Dispose();
+                    _pushVideoPending[route.Id] = candidate;
                     continue;
                 }
 
-                // 2) Re-use a router-owned frame pulled earlier this tick for another push
-                // endpoint on the same input — avoids two independent ring reads.
-                if (routerOwnedFrames is not null &&
-                    routerOwnedFrames.TryGetValue(inp.Id, out var sharedCandidate))
+                // Catch-up: if this frame is late and newer frames are queued, skip
+                // forward up to maxCatchUp frames. Skipped frames release their refs.
+                if (maxCatchUp > 0)
                 {
-                    ep.Video.ReceiveFrame(in sharedCandidate);
-                    continue;
-                }
-
-                // 3) Try the pending frame (pulled last tick but was too early).
-                VideoFrame candidate;
-                bool haveCandidate = _pushVideoPending.TryRemove(inp.Id, out candidate);
-
-                if (!haveCandidate)
-                {
-                    // 4) Pull a fresh frame from the ring buffer.
-                    oneFrame[0] = default;
-                    int got = channel.FillBuffer(oneFrame, 1);
-                    if (got == 0) continue;
-                    candidate = oneFrame[0];
-                }
-
-                bool didCatchUp = false;
-
-                // 5) PTS gate with smooth drift correction (unless live mode).
-                if (!VideoLiveMode)
-                {
-                    var drift = _pushVideoDrift.GetOrAdd(inp.Id, _ => new PtsDriftTracker());
-
-                    // Same self-feedback seeding alignment as the pull-video path
-                    // (see VideoPresentCallbackForEndpoint for the long-form note):
-                    // if the master clock hasn't yet caught up to the first frame's
-                    // PTS, the post-UpdateFromFrame jump would otherwise leave the
-                    // drift tracker permanently biased.
-                    bool pushFirstSeed = !drift.HasOrigin;
-                    long pushSeedClockTicks = clockPos.Ticks < candidate.Pts.Ticks
-                        ? candidate.Pts.Ticks
-                        : clockPos.Ticks;
-                    drift.SeedIfNeeded(candidate.Pts.Ticks, pushSeedClockTicks);
-
-                    long relativeClockTicks = drift.RelativeClock(clockPos.Ticks);
-                    long relativePtsTicks   = drift.RelativePts(candidate.Pts.Ticks, inp.TimeOffset.Ticks);
-
-                    // Too early — cache for next tick.
-                    if (relativePtsTicks > relativeClockTicks + earlyToleranceTicks)
+                    for (int skip = 0; skip < maxCatchUp; skip++)
                     {
-                        // Any existing pending frame must be released before overwriting.
-                        if (_pushVideoPending.TryGetValue(inp.Id, out var stale))
-                            stale.MemoryOwner?.Dispose();
-                        _pushVideoPending[inp.Id] = candidate;
-                        continue;
-                    }
+                        if (!route.VideoSub.TryRead(out var next)) break;
 
-                    // Catch-up: if this frame is late and the ring has newer frames,
-                    // skip forward up to maxCatchUp frames to find the latest frame
-                    // whose PTS is still <= clock.  Skipped frames must have their
-                    // pool-rented buffers returned so the pool doesn't bleed.
-                    if (maxCatchUp > 0)
-                    {
-                        for (int skip = 0; skip < maxCatchUp; skip++)
+                        long nextRelPts = drift.RelativePts(next.Pts.Ticks, inp.TimeOffset.Ticks);
+
+                        if (nextRelPts > relativeClockTicks + earlyToleranceTicks)
                         {
-                            oneFrame[0] = default;
-                            int peeked = channel.FillBuffer(oneFrame, 1);
-                            if (peeked == 0) break;
-
-                            var next = oneFrame[0];
-                            long nextRelPts = drift.RelativePts(next.Pts.Ticks, inp.TimeOffset.Ticks);
-
-                            if (nextRelPts > relativeClockTicks + earlyToleranceTicks)
-                            {
-                                // Next frame is too early — cache it and present the
-                                // current candidate (the latest "on time" frame).
-                                if (_pushVideoPending.TryGetValue(inp.Id, out var stale))
-                                    stale.MemoryOwner?.Dispose();
-                                _pushVideoPending[inp.Id] = next;
-                                break;
-                            }
-
-                            // Next frame is also on-time or late — skip the current
-                            // candidate (release its buffer) and promote next.
-                            candidate.MemoryOwner?.Dispose();
-                            candidate = next;
-                            relativePtsTicks = nextRelPts;
-                            didCatchUp = true;
+                            // Next frame is too early — cache it and present the
+                            // current candidate (the latest "on time" frame).
+                            if (_pushVideoPending.TryGetValue(route.Id, out var stale))
+                                stale.MemoryOwner?.Dispose();
+                            _pushVideoPending[route.Id] = next;
+                            break;
                         }
-                    }
 
-                    // Smooth drift correction applied AFTER catch-up, using the PTS of the
-                    // frame that will actually be presented.  The integrator has two
-                    // guardrails (inside PtsDriftTracker.IntegrateError):
-                    //   • Dead-band = tolerance/2 silences the ±½-frame quantization bias.
-                    // And we skip integration on ticks where catch-up fired — the error at
-                    // that point reflects decoder lag, not a real PTS↔clock offset.
-                    // Also skip on the first-seed tick (clock hasn't been anchored yet).
-                    if (!didCatchUp && !pushFirstSeed)
-                        drift.IntegrateError(
-                            relativePtsTicks, relativeClockTicks,
-                            earlyToleranceTicks,
-                            _options.VideoPushDriftCorrectionGain);
+                        // Next frame is also on-time or late — skip the current
+                        // candidate (release its buffer) and promote next.
+                        candidate.MemoryOwner?.Dispose();
+                        candidate = next;
+                        relativePtsTicks = nextRelPts;
+                        didCatchUp = true;
+                    }
                 }
 
-                // Remember this router-owned candidate for any remaining push endpoint
-                // on the same input, and fan out to this endpoint.
-                (routerOwnedFrames ??= new Dictionary<InputId, VideoFrame>())[inp.Id] = candidate;
-                ep.Video.ReceiveFrame(in candidate);
+                // Smooth drift correction applied AFTER catch-up, using the PTS of the
+                // frame that will actually be presented. See PtsDriftTracker.IntegrateError
+                // for dead-band and gating semantics.
+                if (!didCatchUp && !pushFirstSeed)
+                    drift.IntegrateError(
+                        relativePtsTicks, relativeClockTicks,
+                        earlyToleranceTicks,
+                        _options.VideoPushDriftCorrectionGain);
             }
-        }
-        finally
-        {
-            // Dispose router-owned candidates after all push endpoints on each input
-            // have had a chance to copy the pixel data.  Push endpoints (NDIAVSink,
-            // SDL3VideoCloneSink, AvaloniaOpenGlVideoCloneSink) copy synchronously
-            // inside ReceiveFrame so the buffer can be returned here without a race.
-            if (routerOwnedFrames is not null)
-            {
-                foreach (var kv in routerOwnedFrames)
-                    kv.Value.MemoryOwner?.Dispose();
-            }
+
+            // Forward to the push endpoint (push endpoints copy the buffer synchronously
+            // inside ReceiveFrame), then release our refcount — the rental returns to
+            // the pool when every other subscriber also releases.
+            ep.Video.ReceiveFrame(in candidate);
+            candidate.MemoryOwner?.Dispose();
         }
     }
 
@@ -1357,8 +1321,6 @@ public sealed class AVRouter : IAVRouter
         private VideoFrame? _lastPresentedFrame;
         private long _lastPresentedRelativePts = long.MinValue;
 
-        // Reusable 1-element FillBuffer scratch — endpoint's render thread is the single owner.
-        private VideoFrame[]? _oneFrameBuf;
 
         public VideoPresentCallbackForEndpoint(AVRouter router, EndpointEntry endpoint)
         {
@@ -1372,7 +1334,6 @@ public sealed class AVRouter : IAVRouter
             if (!_router._running) return false;
 
             var routes = _router._videoRouteSnapshot;
-            var oneFrame = _oneFrameBuf ??= new VideoFrame[1];
             for (int i = 0; i < routes.Length; i++)
             {
                 var route = routes[i];
@@ -1380,8 +1341,7 @@ public sealed class AVRouter : IAVRouter
 
                 if (!_router._inputs.TryGetValue(route.InputId, out var inp) || !inp.Enabled)
                     continue;
-
-                var channel = inp.VideoChannel!;
+                if (route.VideoSub is null) continue;
 
                 // Try the cached pending frame first (it was too early last tick)
                 VideoFrame candidate;
@@ -1392,11 +1352,11 @@ public sealed class AVRouter : IAVRouter
                 }
                 else
                 {
-                    oneFrame[0] = default;
-                    int got = channel.FillBuffer(oneFrame, 1);
-                    if (got == 0)
+                    if (!route.VideoSub.TryRead(out candidate))
                     {
-                        // No new frame — re-present the last one if available
+                        // No new frame in our private subscription — re-present the
+                        // last one if available.  Other consumers of the same input
+                        // have their own subscriptions; we don't share a ring.
                         if (_lastPresentedFrame.HasValue)
                         {
                             frame = _lastPresentedFrame.Value;
@@ -1404,36 +1364,13 @@ public sealed class AVRouter : IAVRouter
                         }
                         continue;
                     }
-                    candidate = oneFrame[0];
                 }
 
                 // PTS check (unless live mode)
-                if (!_router.VideoLiveMode)
+                if (!_router.BypassVideoPtsScheduling)
                 {
-                    // Drift-tracker seed alignment (no-NDI 165fps runaway fix).
-                    //
-                    // VideoPtsClock.UpdateFromFrame — invoked by the render loop
-                    // IMMEDIATELY AFTER this method returns — jumps _lastPts to
-                    // the first presented frame's PTS and advances at wall rate
-                    // from there.  If we seed the drift tracker with the
-                    // *pre-jump* clockPosition (which is TimeSpan.Zero for a
-                    // freshly-started VideoPtsClock) while the PTS is non-zero
-                    // (edit-list offset, HLS mid-stream, etc.), from the next
-                    // render onward:
-                    //   relativeClock = currentClock − 0         ≈ firstPts + wall
-                    //   relativePts   = candidatePts − firstPts  ≈ content progress
-                    // → relativeClock permanently leads relativePts by firstPts,
-                    // silently disabling the "too early" gate so every vsync
-                    // presents a new frame (observed as 165fps pacing on 24fps
-                    // content — 6.9× real time).
-                    //
-                    // Mitigation: if clockPosition is behind the frame's PTS at
-                    // seed time, assume the clock will jump up to PTS on the
-                    // imminent UpdateFromFrame and use PTS for ClockOrigin.  The
-                    // first frame must still be allowed to present (to give that
-                    // UpdateFromFrame a chance to fire), otherwise we'd deadlock
-                    // with the gate permanently failing.  Externally-driven
-                    // clocks (audio hardware, NDI recv) never enter this branch.
+                    // Drift-tracker seed alignment (no-NDI 165fps runaway fix) — see
+                    // the long-form note on the original implementation; unchanged.
                     bool firstSeed = !_drift.HasOrigin;
                     long seedClockTicks = clockPosition.Ticks < candidate.Pts.Ticks
                         ? candidate.Pts.Ticks
@@ -1445,13 +1382,10 @@ public sealed class AVRouter : IAVRouter
                     long toleranceTicks     = _router._options.VideoPtsEarlyTolerance.Ticks;
 
                     // First-ever frame: skip the gate so the presentation pipeline
-                    // (and therefore Clock.Position) gets initialized.  Subsequent
-                    // frames use the correctly-aligned origin.
+                    // (and therefore Clock.Position) gets initialized.
                     if (!firstSeed && relativePtsTicks > relativeClockTicks + toleranceTicks)
                     {
                         // Too early — cache for next tick instead of losing it.
-                        // Dispose any stale pending before overwriting so pool buffers
-                        // aren't leaked on rapid-fire early frames.
                         if (_pendingFrame.HasValue)
                             _pendingFrame.Value.MemoryOwner?.Dispose();
                         _pendingFrame = candidate;
@@ -1465,11 +1399,7 @@ public sealed class AVRouter : IAVRouter
                         continue;
                     }
 
-                    // Drift correction with dead-band silences the ±½-frame quantization
-                    // bias that would otherwise ramp the origin forward every tick.
-                    // Skip on the first-seed frame: at that moment relativeClock is
-                    // still pre-UpdateFromFrame, so the integrator would see a spurious
-                    // negative error and push PtsOrigin in the wrong direction.
+                    // Drift correction with dead-band (unchanged).
                     if (!firstSeed)
                     {
                         _drift.IntegrateError(
@@ -1480,18 +1410,15 @@ public sealed class AVRouter : IAVRouter
                     _lastPresentedRelativePts = relativePtsTicks;
                 }
 
-                // Dispose the previously held last-presented frame before replacing —
-                // the pull endpoint owns the buffer lifetime for <see cref="VideoFrame.MemoryOwner"/>
-                // and must return the rental to <see cref="System.Buffers.ArrayPool{T}"/> when a
-                // fresh frame arrives.  Without this the pool silently falls back to GC allocations.
-                // (We also publish to <see cref="InputEntry.LastVideoFrame"/> so push endpoints
-                // can borrow; the push path does not dispose — ownership stays here.)
+                // Release the previously held last-presented frame's ref before
+                // replacing. With ref-counted buffers (RefCountedVideoBuffer) a
+                // release-then-retain on the same instance is safe; when the new
+                // candidate is a different buffer, this returns the old rental.
                 if (_lastPresentedFrame.HasValue &&
                     !ReferenceEquals(_lastPresentedFrame.Value.MemoryOwner, candidate.MemoryOwner))
                     _lastPresentedFrame.Value.MemoryOwner?.Dispose();
 
                 _lastPresentedFrame = candidate;
-                inp.LastVideoFrame = candidate;
                 frame = candidate;
                 return true;
             }

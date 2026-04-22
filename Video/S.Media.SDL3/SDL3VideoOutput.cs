@@ -39,6 +39,10 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     public readonly record struct DiagnosticsSnapshot(
         long LoopIterations,
         long PresentedFrames,
+        long UniqueFrames,
+        long DroppedFrames,
+        long TextureUploads,
+        long TextureReuseDraws,
         long BlackFrames,
         long BgraFrames,
         long RgbaFrames,
@@ -74,6 +78,17 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     private VsyncMode                _vsyncMode = VsyncMode.On;
     private long                     _loopIterations;
     private long                     _presentedFrames;
+    // Distinct source frames presented (counts UploadAndDraw calls, not vsync
+    // redraws of the same frame). Divided by elapsed time this is the real
+    // content frame rate; _presentedFrames includes re-presentations and
+    // therefore tracks the display refresh rate.
+    private long                     _uniqueFrames;
+    // Frames dropped by the render-loop catch-up path (stale frames skipped
+    // because a newer frame was available and the presentation clock had
+    // already moved past them by more than _catchupLagThreshold).
+    private long                     _droppedFrames;
+    private long                     _textureUploads;
+    private long                     _textureReuseDraws;
     private long                     _blackFrames;
     private long                     _bgraFrames;
     private long                     _rgbaFrames;
@@ -99,6 +114,31 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     private long   _hudLastTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
     private int    _hudFrameCount;
     private double _hudFps;
+    // Unique-frame FPS (content rate, not display-refresh rate).
+    private long   _hudLastUniqueTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    private long   _hudLastUniqueFrames;
+    private double _hudUniqueFps;
+
+    // ── Catch-up / texture-reuse (render thread only) ─────────────────────
+    // Mirror of the Avalonia output's catch-up + texture-reuse logic. When
+    // the render loop falls behind the presentation clock by more than
+    // _catchupLagThreshold we pull additional frames from the ring (up to
+    // _maxCatchupPullsPerRender) and drop the stale ones instead of happily
+    // presenting an old frame per vsync — which would cause the SDL3 output
+    // to visibly lag behind the audio/NDI path after any stall.
+    private TimeSpan _catchupLagThreshold = TimeSpan.FromMilliseconds(45);
+    private int      _maxCatchupPullsPerRender = 6;
+
+    // Identity of the last frame uploaded to the GPU. When the pull callback
+    // returns the same frame (empty ring → re-presented last frame), we skip
+    // the glTexSubImage2D upload entirely and just redraw the existing GPU
+    // textures. Avoids ~2 GB/s of PCIe traffic on 4K @ 60 Hz and removes the
+    // driver-implicit texture sync that was contributing to frame stalls.
+    private bool                  _hasUploadedFrame;
+    private int                   _lastUploadedWidth;
+    private int                   _lastUploadedHeight;
+    private TimeSpan              _lastUploadedPts;
+    private ReadOnlyMemory<byte>  _lastUploadedData;
 
     // ── SDL init ref-counting ─────────────────────────────────────────────
     // Multiple SDL3VideoOutput instances may coexist; only the last Dispose
@@ -183,9 +223,37 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         set => _vsyncMode = value;
     }
 
+    /// <summary>
+    /// When the presentation clock is more than this threshold ahead of the
+    /// pulled frame's PTS, the render loop drains additional stale frames
+    /// from the ring (up to <see cref="MaxCatchupPullsPerRender"/>) to catch
+    /// back up. Defaults to 45 ms.
+    /// </summary>
+    public TimeSpan CatchupLagThreshold
+    {
+        get => _catchupLagThreshold;
+        set => _catchupLagThreshold = value <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : value;
+    }
+
+    /// <summary>
+    /// Maximum number of additional pull-callback invocations per render-loop
+    /// iteration when catching up from a stall. Each successful extra pull
+    /// discards the previous (stale) frame and counts as one dropped frame.
+    /// Defaults to 6.
+    /// </summary>
+    public int MaxCatchupPullsPerRender
+    {
+        get => _maxCatchupPullsPerRender;
+        set => _maxCatchupPullsPerRender = value < 0 ? 0 : value;
+    }
+
     public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
         LoopIterations: Interlocked.Read(ref _loopIterations),
         PresentedFrames: Interlocked.Read(ref _presentedFrames),
+        UniqueFrames: Interlocked.Read(ref _uniqueFrames),
+        DroppedFrames: Interlocked.Read(ref _droppedFrames),
+        TextureUploads: Interlocked.Read(ref _textureUploads),
+        TextureReuseDraws: Interlocked.Read(ref _textureReuseDraws),
         BlackFrames: Interlocked.Read(ref _blackFrames),
         BgraFrames: Interlocked.Read(ref _bgraFrames),
         RgbaFrames: Interlocked.Read(ref _rgbaFrames),
@@ -479,6 +547,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
 
                 // ── Present frame ─────────────────────────────────────────
                 VideoFrame? frame = null;
+                TimeSpan clockPosition = TimeSpan.Zero;
 
                 var presentCb = PresentCallback;
                 if (presentCb is not null)
@@ -488,7 +557,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                     if (presentationClock == null)
                         throw new InvalidOperationException("Presentation clock is not available.");
 
-                    var clockPosition = presentationClock.Position;
+                    clockPosition = presentationClock.Position;
                     if (externalClock != null)
                     {
                         long rawTicks = clockPosition.Ticks;
@@ -505,14 +574,46 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
 
                     if (presentCb.TryPresentNext(clockPosition, out var cbFrame))
                         frame = cbFrame;
+
+                    // ── Catch-up: if this frame is already stale, drop it and
+                    // pull newer ones from the ring until we're back in sync
+                    // (or run out of budget / newer frames). This mirrors the
+                    // AvaloniaOpenGlVideoOutput catch-up loop and is what makes
+                    // the router push-path (NDI) look smooth; without it the
+                    // SDL3 pull-path drains at exactly one frame per vsync and
+                    // can never recover from a stall.
+                    if (frame.HasValue)
+                    {
+                        var vf = frame.Value;
+                        for (int i = 0; i < _maxCatchupPullsPerRender; i++)
+                        {
+                            if (vf.Pts + _catchupLagThreshold >= clockPosition)
+                                break;
+
+                            if (!presentCb.TryPresentNext(clockPosition, out var nf))
+                                break;
+
+                            // Ring is empty → callback re-presented the same frame.
+                            if (nf.Pts == vf.Pts &&
+                                nf.Width == vf.Width &&
+                                nf.Height == vf.Height &&
+                                nf.Data.Equals(vf.Data))
+                                break;
+
+                            vf = nf;
+                            Interlocked.Increment(ref _droppedFrames);
+                        }
+                        frame = vf;
+                    }
                 }
 
                 if (frame.HasValue)
                 {
-                    _renderer!.SetVideoSize(frame.Value.Width, frame.Value.Height);
+                    var vf = frame.Value;
+                    _renderer!.SetVideoSize(vf.Width, vf.Height);
 
 
-                    switch (frame.Value.PixelFormat)
+                    switch (vf.PixelFormat)
                     {
                         case PixelFormat.Bgra32:
                             Interlocked.Increment(ref _bgraFrames);
@@ -537,9 +638,34 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                             break;
                     }
 
-                    _renderer!.UploadAndDraw(frame.Value);
+                    // Texture-reuse: if the pull callback returned the same frame
+                    // (empty ring → re-present last) skip the glTexSubImage2D
+                    // upload entirely and just redraw the GPU-resident textures.
+                    bool sameAsUploaded = _hasUploadedFrame &&
+                                          vf.Width == _lastUploadedWidth &&
+                                          vf.Height == _lastUploadedHeight &&
+                                          vf.Pts == _lastUploadedPts &&
+                                          vf.Data.Equals(_lastUploadedData);
+
+                    if (sameAsUploaded)
+                    {
+                        _renderer!.DrawLastFrame();
+                        Interlocked.Increment(ref _textureReuseDraws);
+                    }
+                    else
+                    {
+                        _renderer!.UploadAndDraw(vf);
+                        _hasUploadedFrame     = true;
+                        _lastUploadedWidth    = vf.Width;
+                        _lastUploadedHeight   = vf.Height;
+                        _lastUploadedPts      = vf.Pts;
+                        _lastUploadedData     = vf.Data;
+                        Interlocked.Increment(ref _textureUploads);
+                        Interlocked.Increment(ref _uniqueFrames);
+                    }
+
                     if (_presentationClockOverride == null)
-                        _clock!.UpdateFromFrame(frame.Value.Pts);
+                        _clock!.UpdateFromFrame(vf.Pts);
                     Interlocked.Increment(ref _presentedFrames);
                 }
                 else
@@ -560,6 +686,18 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                         _hudFps = _hudFrameCount / elapsed;
                         _hudFrameCount = 0;
                         _hudLastTimestamp = now;
+
+                        // Content FPS from unique (uploaded) frames. Reveals when
+                        // the display is refreshing at 60 Hz but the actual video
+                        // is running at half that because frames are being
+                        // re-presented — the exact bug the texture-reuse path
+                        // was masking previously.
+                        long uniqueNow = Interlocked.Read(ref _uniqueFrames);
+                        double uniqueElapsed = (double)(now - _hudLastUniqueTimestamp) / System.Diagnostics.Stopwatch.Frequency;
+                        if (uniqueElapsed > 0.0)
+                            _hudUniqueFps = (uniqueNow - _hudLastUniqueFrames) / uniqueElapsed;
+                        _hudLastUniqueFrames = uniqueNow;
+                        _hudLastUniqueTimestamp = now;
                     }
 
                     var stats = new HudStats
@@ -567,15 +705,16 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                         Width = _outputFormat.Width,
                         Height = _outputFormat.Height,
                         PixelFormat = _outputFormat.PixelFormat,
-                        Fps = _hudFps,
+                        Fps = _hudUniqueFps > 0 ? _hudUniqueFps : _hudFps,
                         InputWidth = _inputFormat.Width,
                         InputHeight = _inputFormat.Height,
                         InputFps = _inputFormat.FrameRate,
                         InputPixelFormat = _inputFormat.PixelFormat,
-                        PresentedFrames = Interlocked.Read(ref _presentedFrames),
+                        PresentedFrames = Interlocked.Read(ref _uniqueFrames),
                         BlackFrames = Interlocked.Read(ref _blackFrames),
-                        DroppedFrames = Interlocked.Read(ref _renderExceptions),
+                        DroppedFrames = Interlocked.Read(ref _droppedFrames),
                         ClockPosition = ((_presentationClockOverride ?? _clock)?.Position ?? TimeSpan.Zero),
+                        ExtraLine1 = $"reuse: {Interlocked.Read(ref _textureReuseDraws)}  uploads: {Interlocked.Read(ref _textureUploads)}",
                     };
                     _renderer!.DrawHud(stats.ToLines());
                 }
@@ -610,8 +749,10 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         if (_disposed) return;
         _disposed = true;
 
-        Log.LogInformation("Disposing SDL3VideoOutput: presented={Presented}, black={Black}, renderExceptions={RenderExceptions}, resizeEvents={ResizeEvents}",
-            Interlocked.Read(ref _presentedFrames), Interlocked.Read(ref _blackFrames),
+        Log.LogInformation("Disposing SDL3VideoOutput: presented={Presented}, unique={Unique}, dropped={Dropped}, textureReuse={Reuse}, black={Black}, renderExceptions={RenderExceptions}, resizeEvents={ResizeEvents}",
+            Interlocked.Read(ref _presentedFrames), Interlocked.Read(ref _uniqueFrames),
+            Interlocked.Read(ref _droppedFrames), Interlocked.Read(ref _textureReuseDraws),
+            Interlocked.Read(ref _blackFrames),
             Interlocked.Read(ref _renderExceptions), Interlocked.Read(ref _resizeEvents));
 
         // Stop the render loop if it is still running.

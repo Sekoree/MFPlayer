@@ -49,19 +49,24 @@ public sealed class DriftCorrector
     /// </param>
     /// <param name="kp">
     /// Proportional gain. Controls how aggressively the controller responds to
-    /// instantaneous queue deviations. Default 2 × 10⁻³.
+    /// instantaneous queue deviations. Default 1 × 10⁻². Converges a 1-buffer
+    /// offset in a few seconds; lower values (e.g. 2 × 10⁻³) trade convergence
+    /// speed for immunity to transient queue-depth noise.
     /// </param>
     /// <param name="ki">
-    /// Integral gain. Eliminates residual steady-state error over time. Default 1 × 10⁻⁵.
+    /// Integral gain. Eliminates residual steady-state error over time. Default 5 × 10⁻⁵.
     /// </param>
     /// <param name="maxCorrection">
-    /// Maximum ratio deviation from 1.0 (e.g. 0.005 = ±0.5 %). Default 0.005.
+    /// Maximum ratio deviation from 1.0 (e.g. 0.005 = ±0.5 %). Default 0.005
+    /// (≈±8 cents of pitch shift — inaudible). Raise to 0.01 for faster
+    /// convergence on large initial offsets at the cost of slightly audible
+    /// pitch modulation on sustained tones.
     /// </param>
     public DriftCorrector(
         int     targetDepth,
         string? ownerName     = null,
-        double  kp            = 2e-3,
-        double  ki            = 1e-5,
+        double  kp            = 1e-2,
+        double  ki            = 5e-5,
         double  maxCorrection = 0.005)
     {
         _targetDepth   = Math.Max(0, targetDepth);

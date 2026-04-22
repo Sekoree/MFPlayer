@@ -243,6 +243,15 @@ internal sealed unsafe class GLRenderer : IDisposable
     // Set via ScalingFilter property (render thread reads, any thread writes).
     private volatile int _scalingFilter = (int)ScalingFilter.Bicubic;
 
+    // ── Last-drawn frame tracking (for DrawLastFrame / texture reuse) ─────
+    // Set at the tail of each UploadAndDrawXxx. Used by DrawLastFrame() to
+    // re-run only the draw portion of the pipeline (without re-uploading
+    // texture data) when the video output decides the frame did not change.
+    private PixelFormat _lastDrawnFormat;
+    private int         _lastDrawnW;
+    private int         _lastDrawnH;
+    private bool        _hasLastDrawn;
+
     // ── HUD state ──────────────────────────────────────────────────────────
     private uint _hudProgram;
     private uint _hudVao;
@@ -702,6 +711,18 @@ internal sealed unsafe class GLRenderer : IDisposable
             _texHeight = h;
         }
 
+        DrawRgbaFromTextures(w, h);
+        _lastDrawnFormat = frame.PixelFormat;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawRgbaFromTextures(int w, int h)
+    {
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _texture);
+
         bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_program);
@@ -747,6 +768,20 @@ internal sealed unsafe class GLRenderer : IDisposable
 
         _texWidthNv12 = w;
         _texHeightNv12 = h;
+
+        DrawNv12FromTextures(w, h);
+        _lastDrawnFormat = PixelFormat.Nv12;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawNv12FromTextures(int w, int h)
+    {
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY);
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureUv);
 
         bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
@@ -808,6 +843,22 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthI420 = w;
         _texHeightI420 = h;
 
+        DrawI420FromTextures(w, h);
+        _lastDrawnFormat = PixelFormat.Yuv420p;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawI420FromTextures(int w, int h)
+    {
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY);
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureU);
+        _glActiveTexture(GL_TEXTURE2);
+        _glBindTexture(GL_TEXTURE_2D, _textureV);
+
         bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programI420);
@@ -867,6 +918,22 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthI422P10 = w;
         _texHeightI422P10 = h;
 
+        DrawI422P10FromTextures(w, h);
+        _lastDrawnFormat = PixelFormat.Yuv422p10;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawI422P10FromTextures(int w, int h)
+    {
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY422P10);
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureU422P10);
+        _glActiveTexture(GL_TEXTURE2);
+        _glBindTexture(GL_TEXTURE_2D, _textureV422P10);
+
         bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programI422P10);
@@ -914,9 +981,16 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (!EnsureFboUyvy(w, h))
             return; // FBO unavailable — skip this frame
 
+        DrawUyvy422FromTextures(w, h);
+        _lastDrawnFormat = PixelFormat.Uyvy422;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawUyvy422FromTextures(int w, int h)
+    {
         // ── Pass 1: Decode UYVY → RGB at native resolution into FBO ──────
-        // Re-bind UYVY texture — EnsureFboUyvy may have changed the TEXTURE0 binding
-        // when creating/recreating the FBO texture (first frame or resolution change).
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureUyvy);
         _glBindFramebuffer(GL_FRAMEBUFFER, _fboUyvy);
@@ -936,7 +1010,6 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBindFramebuffer(GL_FRAMEBUFFER, 0);
         _glViewport(_vpX, _vpY, _vpW, _vpH);
         _glClear(GL_COLOR_BUFFER_BIT);
-        // Select between bilinear passthrough and Catmull-Rom bicubic for pass 2.
         uint pass2Prog = (ScalingFilter)_scalingFilter == ScalingFilter.Bicubic
             ? _programBicubic
             : _programFbo;
@@ -1114,6 +1187,20 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthP010  = w;
         _texHeightP010 = h;
 
+        DrawP010FromTextures(w, h);
+        _lastDrawnFormat = PixelFormat.P010;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawP010FromTextures(int w, int h)
+    {
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureP010Y);
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureP010UV);
+
         bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programP010);
@@ -1165,6 +1252,22 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthYuv444p  = w;
         _texHeightYuv444p = h;
 
+        DrawYuv444pFromTextures(w, h);
+        _lastDrawnFormat = PixelFormat.Yuv444p;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawYuv444pFromTextures(int w, int h)
+    {
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureY444p);
+        _glActiveTexture(GL_TEXTURE1);
+        _glBindTexture(GL_TEXTURE_2D, _textureU444p);
+        _glActiveTexture(GL_TEXTURE2);
+        _glBindTexture(GL_TEXTURE_2D, _textureV444p);
+
         bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programYuv444p);
@@ -1198,6 +1301,18 @@ internal sealed unsafe class GLRenderer : IDisposable
         _texWidthGray8  = w;
         _texHeightGray8 = h;
 
+        DrawGray8FromTextures(w, h);
+        _lastDrawnFormat = PixelFormat.Gray8;
+        _lastDrawnW = w;
+        _lastDrawnH = h;
+        _hasLastDrawn = true;
+    }
+
+    private void DrawGray8FromTextures(int w, int h)
+    {
+        _glActiveTexture(GL_TEXTURE0);
+        _glBindTexture(GL_TEXTURE_2D, _textureGray8);
+
         bool useFbo = BeginFboIfNeeded(w, h);
         _glClear(GL_COLOR_BUFFER_BIT);
         _glUseProgram(_programGray8);
@@ -1205,6 +1320,54 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
         if (useFbo) BlitFboToScreen();
+    }
+
+    /// <summary>
+    /// Re-runs the draw pipeline for the last successfully uploaded frame, reusing
+    /// the GPU-resident textures without any PCIe upload. Callers (e.g. the SDL3
+    /// render loop) should call this instead of <see cref="UploadAndDraw"/> when the
+    /// pull callback returns a frame identical to the previously presented one, so
+    /// we avoid redundant <c>glTexSubImage2D</c> calls on every vsync.
+    /// </summary>
+    public void DrawLastFrame()
+    {
+        if (!_hasLastDrawn || _lastDrawnW <= 0 || _lastDrawnH <= 0)
+        {
+            DrawBlack();
+            return;
+        }
+
+        switch (_lastDrawnFormat)
+        {
+            case PixelFormat.Bgra32:
+            case PixelFormat.Rgba32:
+                DrawRgbaFromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            case PixelFormat.Nv12:
+                DrawNv12FromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            case PixelFormat.Yuv420p:
+                DrawI420FromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            case PixelFormat.Yuv422p10:
+                DrawI422P10FromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            case PixelFormat.Uyvy422:
+                DrawUyvy422FromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            case PixelFormat.P010:
+                DrawP010FromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            case PixelFormat.Yuv444p:
+                DrawYuv444pFromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            case PixelFormat.Gray8:
+                DrawGray8FromTextures(_lastDrawnW, _lastDrawnH);
+                break;
+            default:
+                DrawBlack();
+                break;
+        }
     }
 
     private int GetColorMatrixValue(int width, int height)

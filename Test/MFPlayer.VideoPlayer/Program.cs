@@ -52,10 +52,25 @@ static NDIEndpointPreset ParseNDIPreset(string? text)
     var s = (text ?? string.Empty).Trim();
     if (s.Equals("safe", StringComparison.OrdinalIgnoreCase) || s.Equals("s", StringComparison.OrdinalIgnoreCase))
         return NDIEndpointPreset.Safe;
+    // UltraLowLatency proved too aggressive for stable long-form playback in this
+    // app; fold it into LowLatency unless a future profile adds explicit safety
+    // guards (larger jitter headroom, adaptive fallback, etc.).
+    if (s.Equals("ultralowlatency", StringComparison.OrdinalIgnoreCase) || s.Equals("ultra", StringComparison.OrdinalIgnoreCase) || s.Equals("u", StringComparison.OrdinalIgnoreCase))
+        return NDIEndpointPreset.LowLatency;
     if (s.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) || s.Equals("low", StringComparison.OrdinalIgnoreCase) || s.Equals("l", StringComparison.OrdinalIgnoreCase))
         return NDIEndpointPreset.LowLatency;
     return NDIEndpointPreset.Balanced;
 }
+
+// Map an NDI endpoint preset to a router tick cadence.  The router drains push
+// endpoints and fires its internal clock at this rate, so tighter presets need
+// a tighter tick or frames sit idle in the router's push subscription for up
+// to one full tick before reaching the NDI sink.
+static TimeSpan RouterTickFor(NDIEndpointPreset preset) => preset switch
+{
+    NDIEndpointPreset.LowLatency      => TimeSpan.FromMilliseconds(5),  // ~200 Hz
+    _                                 => TimeSpan.FromMilliseconds(10), // 100 Hz (default)
+};
 
 static ChannelRouteMap BuildAudioRouteMap(int srcChannels, int dstChannels)
 {
@@ -132,6 +147,18 @@ if (!File.Exists(filePath))
 
 Console.Write("Enable NDI video sink? [y/N]: ");
 bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
+
+// Ask the preset up-front: it also controls the router's internal tick cadence,
+// which must be known before the AVRouter is constructed.
+var ndiPreset = NDIEndpointPreset.LowLatency;
+if (enableNdi)
+{
+    Console.Write("NDI preset [Safe/Balanced/LowLatency] (default LowLatency): ");
+    var presetText = Console.ReadLine();
+    ndiPreset = string.IsNullOrWhiteSpace(presetText)
+        ? NDIEndpointPreset.LowLatency
+        : ParseNDIPreset(presetText);
+}
 
 // ── 2. Open decoder ──────────────────────────────────────────────────────────
 
@@ -216,7 +243,13 @@ using (decoder)
 
     // ── 4. Wire up ───────────────────────────────────────────────────────
 
-    using var router = new AVRouter();
+    using var router = new AVRouter(new AVRouterOptions
+    {
+        // Tighter tick cadence → frames sit in the push subscription for less time
+        // before being flushed to the NDI sink.  Higher CPU at tighter values
+        // (the spin-wait tail in PushVideoThreadLoop).
+        InternalTickCadence = enableNdi ? RouterTickFor(ndiPreset) : TimeSpan.FromMilliseconds(10),
+    });
     var videoEpId = router.RegisterEndpoint(videoOutput);
     router.SetClock(videoOutput.Clock);
 
@@ -247,8 +280,7 @@ using (decoder)
                 string senderName = (Console.ReadLine() ?? string.Empty).Trim();
                 if (string.IsNullOrEmpty(senderName)) senderName = "MFPlayer NDI Video";
 
-                Console.Write("NDI preset [Safe/Balanced/LowLatency] (default Balanced): ");
-                var preset = ParseNDIPreset(Console.ReadLine());
+                var preset = ndiPreset;
 
                 Console.Write("NDI mode [quality/performance] (default quality): ");
                 var ndiMode = (Console.ReadLine() ?? string.Empty).Trim();
@@ -257,14 +289,15 @@ using (decoder)
                     || ndiMode.Equals("perf", StringComparison.OrdinalIgnoreCase)
                     || ndiMode.Equals("p", StringComparison.OrdinalIgnoreCase);
 
-                // Enable NDI's built-in rate clocking for BOTH streams.  SDK §13:
-                //   "If you are submitting audio and video of separate threads, then
-                //    having both clocked can be useful."
-                // NDIAVSink uses dedicated VideoThread + AudioThread, so the SDK's
-                // per-stream rate limiter is exactly what we want — it also smooths
-                // startup jitter so video doesn't run ahead of audio just because the
-                // audio decoder warms up slower than the video decoder.
-                int sret = NDISender.Create(out ndiSender, senderName, clockVideo: true, clockAudio: true);
+                // Disable NDI's SDK rate-clock.  With clockVideo/clockAudio=true the
+                // SDK blocks each send until the next nominal frame boundary, adding
+                // up to one full frame of wall-clock latency between what SDL3
+                // presents locally and what NDI receivers see.  We pace the streams
+                // ourselves via the router's push tick + NDIAvTimingContext (shared
+                // timecodes stamped from the master clock), and the audio-warmup
+                // gate below ensures both outputs start from the same origin, so
+                // the SDK's per-stream limiter is pure added delay.
+                int sret = NDISender.Create(out ndiSender, senderName, clockVideo: false, clockAudio: false);
                 if (sret != 0 || ndiSender == null)
                 {
                     Console.WriteLine($"  NDI disabled: sender creation failed ({sret}).");
@@ -283,16 +316,25 @@ using (decoder)
                         routeMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
                     }
 
-                    ndiSink = new NDIAVSink(
-                        ndiSender,
-                        videoOutput.OutputFormat,
-                        audioTargetFormat: ndiAudioFormat,
-                        preset: preset,
-                        name: $"NDIAVSink({senderName})",
-                        preferPerformanceOverQuality: preferPerformanceOverQuality,
-                        videoPoolCount: 0,
-                        videoMaxPendingFrames: 0,
-                        audioFramesPerBuffer: 1024);
+                    ndiSink = new NDIAVSink(ndiSender, new NDIAVSinkOptions
+                    {
+                        VideoTargetFormat            = videoOutput.OutputFormat,
+                        AudioTargetFormat            = ndiAudioFormat,
+                        Preset                       = preset,
+                        Name                         = $"NDIAVSink({senderName})",
+                        PreferPerformanceOverQuality = preferPerformanceOverQuality,
+                        AudioFramesPerBuffer         = 1024,
+                        // Drift correction is queue-depth-controlled.  With
+                        // clockAudio:false the NDI SDK no longer back-pressures
+                        // sends, so the pending queue stays near zero forever →
+                        // the corrector saturates at +maxCorrection and runs the
+                        // audio resampler permanently fast (→ cumulative
+                        // distortion from the last-frame-hold padding + audio
+                        // pulling ahead of video).  Leave it OFF on the async
+                        // send path; A↔V alignment is handled by stamped
+                        // timecodes (NDIAvTimingContext), not rate nudging.
+                        EnableAudioDriftCorrection   = false,
+                    });
                     var ndiEpId = router.RegisterEndpoint(ndiSink);
                     router.CreateRoute(videoInputId, ndiEpId);
                     await ndiSink.StartAsync();

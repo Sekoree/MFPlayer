@@ -36,4 +36,13 @@ public interface IVideoChannel : IMediaChannel<VideoFrame>
     /// after at least one frame has been seen, indicating a genuine decoder underrun.
     /// </summary>
     event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
+
+    /// <summary>
+    /// Subscribe to the frame stream. Each subscription gets its own bounded queue so
+    /// multiple consumers do not race for frames. Implementations that don't support
+    /// native fan-out may return a thin wrapper over <see cref="IMediaChannel{TFrame}.FillBuffer"/> —
+    /// in that case, at most one subscription should be alive at a time.
+    /// </summary>
+    IVideoSubscription Subscribe(VideoSubscriptionOptions options)
+        => new FillBufferSubscription(this, options);
 }

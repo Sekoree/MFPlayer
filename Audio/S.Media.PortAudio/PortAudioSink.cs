@@ -225,7 +225,10 @@ public sealed class PortAudioSink : IAudioEndpoint
 
         if (sourceFormat.SampleRate != _targetFormat.SampleRate)
         {
-            // Cross-rate: resampler output sized for the drift-corrected frame count.
+            // Cross-rate: call the resampler with the nominal output size and
+            // apply drift correction to its output via hold/trim.  Passing the
+            // drift-inflated writeFrames directly to the resampler would
+            // over-advance its internal phase (see SinkBufferHelper.ResampleWithDrift).
             var rs = _resampler;
             if (rs == null)
             {
@@ -234,7 +237,11 @@ public sealed class PortAudioSink : IAudioEndpoint
                 return;
             }
 
-            rs.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _targetFormat.SampleRate);
+            int actualSamples = SinkBufferHelper.ResampleWithDrift(
+                rs, buffer, dest.AsSpan(0, writeSamples),
+                sourceFormat, _targetFormat.SampleRate, outCh, writeFrames);
+            writeSamples = actualSamples;
+            writeFrames = outCh > 0 ? actualSamples / outCh : 0;
         }
         else
         {

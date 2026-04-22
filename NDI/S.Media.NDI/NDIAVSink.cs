@@ -104,6 +104,19 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
     private long _videoConvertedFrames;
     private long _videoConversionDrops;
 
+    // ── Async video send retention ─────────────────────────────────────────
+    // NDIlib_send_send_video_async_v2 returns immediately; the SDK keeps a
+    // reference to the submitted buffer until the NEXT async send (or until a
+    // flush/sync send).  The buffer must therefore remain pinned and its
+    // backing resources must not be recycled until we issue the next send.
+    // These fields hold the one in-flight frame's resources.  They are only
+    // touched by the video thread (plus Dispose after the thread has joined),
+    // so no locking is required.
+    private GCHandle _pendingAsyncPin;
+    private byte[]? _pendingAsyncPoolBuffer;     // pf.Buffer to return to _videoPool
+    private byte[]? _pendingAsyncScratch;        // rented from ArrayPool<byte>.Shared
+    private IDisposable? _pendingAsyncTempOwner; // VideoConverter.Convert result owner
+
     // Audio path
     private readonly bool _hasAudio;
     private readonly AudioFormat _audioTargetFormat;
@@ -340,6 +353,17 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
         await Task.Run(() => _videoThread?.Join(TimeSpan.FromSeconds(3)), ct).ConfigureAwait(false);
         await Task.Run(() => _audioThread?.Join(TimeSpan.FromSeconds(3)), ct).ConfigureAwait(false);
+
+        // Flush and release the last pending async video send so the pin and
+        // backing buffers don't leak between Stop → Start → Stop cycles.  Safe
+        // to call even when no frames were ever sent (FlushAsync on an idle
+        // sender is a no-op; ReleasePendingAsyncVideo tolerates empty state).
+        if (_hasVideo)
+        {
+            try { lock (_videoSendLock) _sender.FlushAsync(); }
+            catch (Exception ex) { Log.LogDebug(ex, "NDI flush-async on stop failed: {Message}", ex.Message); }
+            ReleasePendingAsyncVideo();
+        }
     }
 
     public void ReceiveFrame(in VideoFrame frame)
@@ -437,9 +461,15 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         int writtenSamples;
         if (_audioResampler != null && sourceFormat.SampleRate != _audioTargetFormat.SampleRate)
         {
-            // Cross-rate: resampler output sized for the drift-corrected frame count.
-            int writtenFrames = _audioResampler.Resample(buffer, dest.AsSpan(0, writeSamples), sourceFormat, _audioTargetFormat.SampleRate);
-            writtenSamples = Math.Clamp(writtenFrames, 0, writeFrames) * outCh;
+            // Cross-rate: let SinkBufferHelper call the resampler with the nominal
+            // output size (so its phase advances by exactly one buffer) and then
+            // apply drift correction as a post-pass hold/trim on the output.
+            // Passing the drift-inflated writeFrames directly to the resampler
+            // would over-advance its internal phase, desynchronising cross-buffer
+            // state and producing audible distortion.
+            writtenSamples = SinkBufferHelper.ResampleWithDrift(
+                _audioResampler, buffer, dest.AsSpan(0, writeSamples),
+                sourceFormat, _audioTargetFormat.SampleRate, outCh, writeFrames);
         }
         else
         {
@@ -585,6 +615,17 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         _videoThread?.Join(TimeSpan.FromSeconds(5));
         _audioThread?.Join(TimeSpan.FromSeconds(5));
 
+        // Flush any pending async video send and release its pinned buffer.
+        // FlushAsync() calls NDIlib_send_send_video_async_v2(instance, NULL),
+        // which tells the SDK it's done with the last submitted buffer.  After
+        // this call returns it is safe to unpin and recycle.
+        if (_hasVideo)
+        {
+            try { lock (_videoSendLock) _sender.FlushAsync(); }
+            catch (Exception ex) { Log.LogDebug(ex, "NDI flush-async on stop failed: {Message}", ex.Message); }
+            ReleasePendingAsyncVideo();
+        }
+
         // Drain pending queues so pooled buffers are not leaked.
         _videoWork.Drain(pv => _videoPool.Enqueue(pv.Buffer));
         _audioWork.Drain(pa => _audioPool.Enqueue(pa.Buffer));
@@ -593,6 +634,26 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
         _audioWork.Dispose();
         _videoConverter.Dispose();
         if (_ownsAudioResampler) _audioResampler?.Dispose();
+    }
+
+    /// <summary>
+    /// Releases the resources retained for the most recently issued async video
+    /// send.  Safe to call when nothing is pending (all fields are null/default).
+    /// Must be called on the video thread (or after it has joined).
+    /// </summary>
+    private void ReleasePendingAsyncVideo()
+    {
+        if (_pendingAsyncPin.IsAllocated)
+            _pendingAsyncPin.Free();
+        _pendingAsyncPin = default;
+
+        var tempOwner = _pendingAsyncTempOwner; _pendingAsyncTempOwner = null;
+        var scratch   = _pendingAsyncScratch;   _pendingAsyncScratch   = null;
+        var poolBuf   = _pendingAsyncPoolBuffer; _pendingAsyncPoolBuffer = null;
+
+        tempOwner?.Dispose();
+        if (scratch != null) ArrayPool<byte>.Shared.Return(scratch);
+        if (poolBuf != null) _videoPool.Enqueue(poolBuf);
     }
 
     private static int VideoLineStride(PixelFormat fmt, int w) => fmt switch
@@ -828,6 +889,11 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
             while (_videoWork.TryDequeue(out var pf))
             {
+                // True once this frame's pool buffer + conversion scratch are
+                // handed off to _pendingAsync* for retention past SendVideoAsync.
+                // If the send never issues (conversion error, format mismatch,
+                // exception), the outer/inner finally blocks reclaim them.
+                bool handedOff = false;
 
                 try
                 {
@@ -920,56 +986,84 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                             continue;
                         }
 
-                        fixed (byte* p = &seg.Array[seg.Offset])
+                        // Pin the payload array for the async send.  NDI's async API
+                        // (send_video_async_v2) returns immediately but the SDK keeps
+                        // a pointer to this buffer until the NEXT async send or a
+                        // flush — so the pin must outlive this loop iteration.
+                        var sendHandle = GCHandle.Alloc(seg.Array, GCHandleType.Pinned);
+                        nint sendPtr = Marshal.UnsafeAddrOfPinnedArrayElement(seg.Array, seg.Offset);
+
+                        // Stamp the NDI timecode with the frame's stream-time PTS (ticks,
+                        // 100 ns units — matches NDI's UTC-since-epoch convention closely
+                        // enough for receivers to align by).  Falling back to
+                        // TimecodeSynthesize (wall-clock-at-submit) creates a *permanent*
+                        // A/V offset whenever the audio decoder warms up later than the
+                        // video decoder: the first video submit gets a wall-clock stamp,
+                        // the first audio submit gets a later wall-clock stamp, and from
+                        // there `clockVideo`/`clockAudio` hold both paced at media rate —
+                        // keeping that warm-up delta baked in forever.  Using the stream
+                        // PTS as the timecode puts both streams in the same media-time
+                        // domain regardless of submit order.  Timestamp is still filled
+                        // in by the SDK (§21.1).
+                        long videoPts = pf.PtsTicks;
+                        long videoTimecode = videoPts >= 0 ? videoPts : NDIConstants.TimecodeSynthesize;
+                        if (videoPts >= 0)
+                            _timing.ObserveVideoPts(videoPts);
+
+                        var vf = new NDIVideoFrameV2
                         {
-                            // Stamp the NDI timecode with the frame's stream-time PTS (ticks,
-                            // 100 ns units — matches NDI's UTC-since-epoch convention closely
-                            // enough for receivers to align by).  Falling back to
-                            // TimecodeSynthesize (wall-clock-at-submit) creates a *permanent*
-                            // A/V offset whenever the audio decoder warms up later than the
-                            // video decoder: the first video submit gets a wall-clock stamp,
-                            // the first audio submit gets a later wall-clock stamp, and from
-                            // there `clockVideo`/`clockAudio` hold both paced at media rate —
-                            // keeping that warm-up delta baked in forever.  Using the stream
-                            // PTS as the timecode puts both streams in the same media-time
-                            // domain regardless of submit order.  Timestamp is still filled
-                            // in by the SDK (§21.1).
+                            Xres = pf.Width,
+                            Yres = pf.Height,
+                            FourCC = ToFourCc(sendFormat),
+                            FrameRateN = fpsNum,
+                            FrameRateD = fpsDen,
+                            PictureAspectRatio = pf.Height > 0 ? (float)pf.Width / pf.Height : 1f,
+                            FrameFormatType = NDIFrameFormatType.Progressive,
+                            Timecode = videoTimecode,
+                            PData = sendPtr,
+                            LineStrideInBytes = VideoLineStride(sendFormat, pf.Width),
+                            PMetadata = nint.Zero,
+                            Timestamp = NDIConstants.TimestampUndefined
+                        };
 
-                            long videoPts = pf.PtsTicks;
-                            long videoTimecode = videoPts >= 0 ? videoPts : NDIConstants.TimecodeSynthesize;
-                            if (videoPts >= 0)
-                                _timing.ObserveVideoPts(videoPts);
-
-                            var vf = new NDIVideoFrameV2
-                            {
-                                Xres = pf.Width,
-                                Yres = pf.Height,
-                                FourCC = ToFourCc(sendFormat),
-                                FrameRateN = fpsNum,
-                                FrameRateD = fpsDen,
-                                PictureAspectRatio = pf.Height > 0 ? (float)pf.Width / pf.Height : 1f,
-                                FrameFormatType = NDIFrameFormatType.Progressive,
-                                Timecode = videoTimecode,
-                                PData = (nint)p,
-                                LineStrideInBytes = VideoLineStride(sendFormat, pf.Width),
-                                PMetadata = nint.Zero,
-                                Timestamp = NDIConstants.TimestampUndefined
-                            };
-
+                        // Issue the async send.  The SDK takes a reference to the
+                        // pinned buffer and returns immediately; the previous send's
+                        // buffer is now guaranteed to be free (this call is the event
+                        // that releases it, per NDI SDK §12.4).
+                        try
+                        {
                             lock (_videoSendLock)
-                                _sender.SendVideo(vf);
-
-                            // Diagnostics (post-send so the timestamp reflects when the frame
-                            // actually left the sender, including any clockVideo rate-limiting).
-                            long nowMs = _sinkClock.ElapsedMilliseconds;
-                            Interlocked.CompareExchange(ref _firstVideoSubmitMs, nowMs, -1);
-                            Interlocked.Exchange(ref _lastVideoSubmitMs, nowMs);
-                            Interlocked.Increment(ref _videoFramesSubmitted);
-                            Interlocked.Exchange(ref _lastVideoTimecodeTicks, videoTimecode);
-                            Interlocked.Exchange(ref _lastVideoPtsTicks, videoPts);
-                            Interlocked.Exchange(ref _atLastVideoAudioMs,
-                                Interlocked.Read(ref _lastAudioSubmitMs));
+                                _sender.SendVideoAsync(vf);
                         }
+                        catch
+                        {
+                            // Send failed before any SDK retention: free the pin now.
+                            sendHandle.Free();
+                            throw;
+                        }
+
+                        // The prior pending send's resources are now safe to reclaim.
+                        ReleasePendingAsyncVideo();
+
+                        // Hand off this send's resources to the "pending" slot — they
+                        // will be released on the next iteration's ReleasePendingAsyncVideo
+                        // (or on shutdown via FlushAsync + ReleasePendingAsyncVideo).
+                        _pendingAsyncPin        = sendHandle;
+                        _pendingAsyncPoolBuffer = pf.Buffer;
+                        _pendingAsyncScratch    = scratchBuffer;
+                        _pendingAsyncTempOwner  = tempOwner;
+                        handedOff = true;
+
+                        // Diagnostics (post-submit: reflects the async-enqueue time,
+                        // which is effectively "now" since async returns immediately).
+                        long nowMs = _sinkClock.ElapsedMilliseconds;
+                        Interlocked.CompareExchange(ref _firstVideoSubmitMs, nowMs, -1);
+                        Interlocked.Exchange(ref _lastVideoSubmitMs, nowMs);
+                        Interlocked.Increment(ref _videoFramesSubmitted);
+                        Interlocked.Exchange(ref _lastVideoTimecodeTicks, videoTimecode);
+                        Interlocked.Exchange(ref _lastVideoPtsTicks, videoPts);
+                        Interlocked.Exchange(ref _atLastVideoAudioMs,
+                            Interlocked.Read(ref _lastAudioSubmitMs));
                     }
                     catch (NotSupportedException)
                     {
@@ -978,9 +1072,14 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                     }
                     finally
                     {
-                        tempOwner?.Dispose();
-                        if (scratchBuffer != null)
-                            ArrayPool<byte>.Shared.Return(scratchBuffer);
+                        // Only release conversion scratch / temp-owner locally when
+                        // the send did NOT hand them off to the pending-async slot.
+                        if (!handedOff)
+                        {
+                            tempOwner?.Dispose();
+                            if (scratchBuffer != null)
+                                ArrayPool<byte>.Shared.Return(scratchBuffer);
+                        }
                     }
                 }
 
@@ -991,7 +1090,10 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                 }
                 finally
                 {
-                    _videoPool.Enqueue(pf.Buffer);
+                    // Same policy as the inner finally: only return pf.Buffer when
+                    // it hasn't been handed off to the async-retention slot.
+                    if (!handedOff)
+                        _videoPool.Enqueue(pf.Buffer);
                 }
             }
         }
@@ -1062,10 +1164,22 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                             long deltaTicks = pending.PtsTicks - reserved;
                             long oneBufferTicks = (long)Math.Round(
                                 (double)samplesPerChannel * TimeSpan.TicksPerSecond / _audioTargetFormat.SampleRate);
-                            // Only realign on large jumps — normal sample-accurate drift
-                            // stays well under one buffer.  Anything larger is an upstream
-                            // discontinuity (seek / reset) we want to follow.
-                            if (Math.Abs(deltaTicks) > oneBufferTicks * 4)
+
+                            // Only realign on very large jumps (seek/reset class).
+                            // Small/medium constant source offsets (e.g. AAC priming or
+                            // container edit-list offsets ~50-150 ms) should NOT be
+                            // baked into the sender timecodes, otherwise receivers report
+                            // a permanent A/V skew even when wall-clock submit cadence is
+                            // aligned. Keep the shared video-seeded timeline for those.
+                            //
+                            // Threshold = max(12 buffers, 500 ms):
+                            //  - 12 buffers catches real discontinuities quickly.
+                            //  - 500 ms ignores normal file-level A/V offsets.
+                            long discontinuityThresholdTicks = Math.Max(
+                                oneBufferTicks * 12,
+                                TimeSpan.FromMilliseconds(500).Ticks);
+
+                            if (Math.Abs(deltaTicks) > discontinuityThresholdTicks)
                                 audioTimecode = pending.PtsTicks;
                         }
 

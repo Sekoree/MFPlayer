@@ -130,7 +130,7 @@ using (ndiRuntime)
     var preset  = PickNdiPreset();
     var profile = NDIPlaybackProfile.For(preset);
     Console.WriteLine($"NDI profile: preset={preset}, audioCapture={profile.AudioFramesPerCapture}smp, " +
-                      $"liveMode={profile.VideoLiveMode}, adaptiveVSync={profile.AdaptiveVSync}");
+                      $"liveMode={profile.BypassVideoPtsScheduling}, adaptiveVSync={profile.AdaptiveVSync}");
 
     // ── 6. Open NDI source by name (async discovery + auto-reconnect) ────────
 
@@ -297,9 +297,9 @@ using (ndiRuntime)
             var videoEpId = router.RegisterEndpoint(videoOutput);
             videoInputId = router.RegisterVideoInput(videoChannel);
             router.CreateRoute(videoInputId.Value, videoEpId);
-            router.VideoLiveMode = profile.VideoLiveMode;
+            router.BypassVideoPtsScheduling = profile.BypassVideoPtsScheduling;
 
-            if (profile.VideoLiveMode)
+            if (profile.BypassVideoPtsScheduling)
                 Console.WriteLine("  VideoMixer: LiveMode=ON (newest-frame, no PTS scheduling)");
         }
 

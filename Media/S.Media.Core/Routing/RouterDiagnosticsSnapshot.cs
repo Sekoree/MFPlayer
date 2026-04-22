@@ -4,7 +4,7 @@ namespace S.Media.Core.Routing;
 public sealed record RouterDiagnosticsSnapshot(
     bool IsRunning,
     TimeSpan ClockPosition,
-    bool VideoLiveMode,
+    bool BypassVideoPtsScheduling,
     IReadOnlyList<InputDiagnostics> Inputs,
     IReadOnlyList<EndpointDiagnostics> Endpoints,
     IReadOnlyList<RouteDiagnostics> Routes);

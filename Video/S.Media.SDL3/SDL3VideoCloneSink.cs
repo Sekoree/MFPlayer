@@ -42,6 +42,14 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
     private bool _disposed;
     private bool _running;
 
+    // Identity of the last frame uploaded to the GPU — used to skip
+    // glTexSubImage2D when the same frame is still the latest.
+    private bool                 _hasUploadedFrame;
+    private int                  _lastUploadedWidth;
+    private int                  _lastUploadedHeight;
+    private TimeSpan             _lastUploadedPts;
+    private ReadOnlyMemory<byte> _lastUploadedData;
+
     public string Name { get; }
     public bool IsRunning => _running;
 
@@ -174,9 +182,31 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
             var frame = _latestFrame.Peek();
 
             if (frame.HasValue)
-                _renderer?.UploadAndDraw(frame.Value);
+            {
+                var vf = frame.Value;
+                bool sameAsUploaded = _hasUploadedFrame &&
+                                      vf.Width == _lastUploadedWidth &&
+                                      vf.Height == _lastUploadedHeight &&
+                                      vf.Pts == _lastUploadedPts &&
+                                      vf.Data.Equals(_lastUploadedData);
+                if (sameAsUploaded)
+                {
+                    _renderer?.DrawLastFrame();
+                }
+                else
+                {
+                    _renderer?.UploadAndDraw(vf);
+                    _hasUploadedFrame   = true;
+                    _lastUploadedWidth  = vf.Width;
+                    _lastUploadedHeight = vf.Height;
+                    _lastUploadedPts    = vf.Pts;
+                    _lastUploadedData   = vf.Data;
+                }
+            }
             else
+            {
                 _renderer?.DrawBlack();
+            }
 
             SDL.GLSwapWindow(_window);
         }

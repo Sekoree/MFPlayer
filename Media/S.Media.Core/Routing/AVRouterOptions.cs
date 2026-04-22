@@ -30,7 +30,15 @@ public record AVRouterOptions
     /// <summary>
     /// How far ahead of the clock a video frame's PTS may be before it is
     /// held back for the next tick. Default: 5 ms.
-    /// Smaller values = tighter PTS gating but more "too-early" retries.
+    /// <para>
+    /// The dead-band used by <see cref="VideoPullDriftCorrectionGain"/> /
+    /// <see cref="VideoPushDriftCorrectionGain"/> is <c>VideoPtsEarlyTolerance / 2</c>.
+    /// It MUST stay larger than the natural measurement noise of the system
+    /// (monitor-vsync quantization, source-frame-duration quantization,
+    /// push-tick granularity) — otherwise the drift integrator chases noise
+    /// and walks the PTS origin, causing spurious "too-early" frame drops.
+    /// Typical safe values: 3–8 ms.
+    /// </para>
     /// </summary>
     public TimeSpan VideoPtsEarlyTolerance { get; init; } = TimeSpan.FromMilliseconds(5);
 
@@ -48,9 +56,12 @@ public record AVRouterOptions
     /// <see cref="VideoPtsEarlyTolerance"/> / 2 and suppressed on frames where the
     /// catch-up loop had to skip (so the integrator doesn't fight the loop).
     /// Range: 0.0 (disabled) – 1.0 (instant snap).
-    /// Default: 0.02 (2 % per frame — converges sub-frame error in ~50 frames).
+    /// Default: 0.05 (5 % per frame — converges sub-frame error in ~20 frames
+    /// once outside the dead-band).  Higher gains (e.g. 0.15) combined with a
+    /// narrow dead-band can make the integrator chase measurement noise and
+    /// walk the PTS origin; see the note on <see cref="VideoPtsEarlyTolerance"/>.
     /// </summary>
-    public double VideoPullDriftCorrectionGain { get; init; } = 0.02;
+    public double VideoPullDriftCorrectionGain { get; init; } = 0.05;
 
     /// <summary>
     /// Drift correction gain for the push video path's PTS origin adjustment.
@@ -61,8 +72,11 @@ public record AVRouterOptions
     /// <c>gain × (error − sign(error) × deadband)</c> so sub-frame drift
     /// converges smoothly to zero without fighting frame-skipping catch-up.
     /// Range: 0.0 (disabled) – 1.0 (instant snap).
-    /// Default: 0.03 (3 % per frame — converges 8 ms drift in ~15 frames at 60 fps).
+    /// Default: 0.08 (8 % per frame — converges 8 ms drift in ~12 frames at
+    /// 60 fps once outside the dead-band).  Higher gains combined with a
+    /// narrow dead-band cause origin-walking; see the note on
+    /// <see cref="VideoPtsEarlyTolerance"/>.
     /// </summary>
-    public double VideoPushDriftCorrectionGain { get; init; } = 0.03;
+    public double VideoPushDriftCorrectionGain { get; init; } = 0.08;
 }
 

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
@@ -39,12 +40,19 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private Task?                    _decodeTask;
     private CancellationTokenSource  _cts = new();
 
-    private readonly ChannelReader<VideoFrame> _ringReader;
-    private readonly ChannelWriter<VideoFrame> _ringWriter;
+    // Per-subscriber fan-out: each subscriber owns a bounded queue. The decoder
+    // publishes every converted frame to all active subscribers, ref-counting the
+    // underlying pool rental so slow consumers don't leak and fast consumers don't
+    // starve. Replaces the old single-ring / multi-reader model that caused the
+    // pull/push frame-race bug documented in Doc/SDL3-Playback-Investigation.md.
+    private readonly Lock _subsLock = new();
+    private ImmutableArray<FFmpegVideoSubscription> _subs = ImmutableArray<FFmpegVideoSubscription>.Empty;
+    // Lazy default subscription for legacy FillBuffer callers (tests, mostly).
+    // AVRouter now uses Subscribe() explicitly.
+    private FFmpegVideoSubscription? _defaultSub;
 
     private bool _disposed;
     private readonly int _bufferDepth;
-    private long _framesInRing;
     private long _framesDequeued;   // tracks whether any frame has ever been pulled
 
     public Guid  Id      { get; } = Guid.NewGuid();
@@ -52,7 +60,21 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     public bool  CanSeek => true;
 
     public int BufferDepth     => _bufferDepth;
-    public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
+    public int BufferAvailable
+    {
+        get
+        {
+            // Report the max queued count across active subscriptions — best proxy for
+            // "how much is buffered ahead" in a fan-out world.
+            int max = 0;
+            foreach (var s in _subs)
+            {
+                int c = s.Count;
+                if (c > max) max = c;
+            }
+            return max;
+        }
+    }
 
     public event EventHandler? EndOfStream;
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
@@ -107,7 +129,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
                                  AVBufferRef*   hwDeviceCtx       = null,
                                  PixelFormat?   targetPixelFormat = PixelFormat.Bgra32,
                                  int            threadCount       = 0,
-                                 int            bufferDepth       = 4,
+                                 int            bufferDepth       = 8,
                                  Func<int>?     latestSeekEpochProvider = null)
     {
         _streamIndex        = streamIndex;
@@ -135,15 +157,6 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         SuggestedYuvColorMatrix = MapSuggestedYuvColorMatrix((AVColorSpace)cp->color_space);
         SuggestedYuvColorRange = MapSuggestedYuvColorRange((AVColorRange)cp->color_range);
 
-        var ring = Channel.CreateBounded<VideoFrame>(
-            new BoundedChannelOptions(bufferDepth)
-            {
-                FullMode     = BoundedChannelFullMode.Wait,
-                SingleReader = false,
-                SingleWriter = true
-            });
-        _ringReader = ring.Reader;
-        _ringWriter = ring.Writer;
 
         OpenCodec();
     }
@@ -209,9 +222,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     public void ApplySeekEpoch(long seekPositionTicks)
     {
         ffmpeg.avcodec_flush_buffers(_codecCtx);
-        while (_ringReader.TryRead(out var vf))
-            vf.MemoryOwner?.Dispose();
-        Interlocked.Exchange(ref _framesInRing, 0);
+        foreach (var s in _subs) s.Flush();
         // Reset the dequeued counter so the post-seek empty ring does not spuriously
         // fire BufferUnderrun before the new epoch's first frame arrives.
         Interlocked.Exchange(ref _framesDequeued, 0);
@@ -228,10 +239,11 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         double tbSeconds = _stream->time_base.num / (double)_stream->time_base.den;
         var pts = SafePts(frame->pts, tbSeconds);
 
-        // Rent a buffer from the pool. The VideoFrame carries an ArrayPoolOwner so
-        // the consumer can return it by calling frame.MemoryOwner?.Dispose().
+        // Rent a buffer from the pool. The VideoFrame carries an ArrayPoolOwner
+        // wrapped in a ref-counted buffer so multiple subscribers share a single
+        // rental; the rental returns to the pool when the last subscriber releases.
         var rented = ArrayPool<byte>.Shared.Rent(_swsBufSize);
-        var owner  = new ArrayPoolOwner<byte>(rented);
+        var owner  = new RefCountedVideoBuffer(new ArrayPoolOwner<byte>(rented));
 
         _srcDataArr[0] = frame->data[0];
         _srcDataArr[1] = frame->data[1];
@@ -411,24 +423,58 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         _                     => 4  // BGRA32, RGBA32, UYVY422 all 4 bytes/px
     };
 
-    // ── IMediaChannel<VideoFrame> pull ────────────────────────────────────
+    // ── IMediaChannel<VideoFrame> pull (legacy shim) ──────────────────────
 
+    /// <summary>
+    /// Legacy <c>FillBuffer</c> API — delegates to a lazily-created default subscription.
+    /// New callers should use <see cref="Subscribe"/> directly for proper fan-out.
+    /// </summary>
     public int FillBuffer(Span<VideoFrame> dest, int frameCount)
     {
-        int filled = 0;
-        for (int i = 0; i < frameCount; i++)
+        var sub = EnsureDefaultSubscription();
+        int got = sub.FillBuffer(dest, frameCount);
+        if (got > 0)
         {
-            if (!_ringReader.TryRead(out var vf)) break;
-            dest[i] = vf;
-            Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
-            Interlocked.Increment(ref _framesDequeued);
-            filled++;
+            // Position is updated from whatever the last frame's PTS was.
+            Volatile.Write(ref _positionTicks, dest[got - 1].Pts.Ticks);
+            Interlocked.Add(ref _framesDequeued, got);
         }
-        if (filled > 0)
-            Interlocked.Add(ref _framesInRing, -filled);
-        if (filled == 0 && Interlocked.Read(ref _framesDequeued) > 0)
+        if (got == 0 && Interlocked.Read(ref _framesDequeued) > 0)
             RaiseBufferUnderrun();
-        return filled;
+        return got;
+    }
+
+    /// <inheritdoc/>
+    public IVideoSubscription Subscribe(VideoSubscriptionOptions options)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var sub = new FFmpegVideoSubscription(this, options);
+        lock (_subsLock)
+        {
+            _subs = _subs.Add(sub);
+        }
+        return sub;
+    }
+
+    private FFmpegVideoSubscription EnsureDefaultSubscription()
+    {
+        if (_defaultSub is not null) return _defaultSub;
+        lock (_subsLock)
+        {
+            _defaultSub ??= (FFmpegVideoSubscription)Subscribe(
+                new VideoSubscriptionOptions(_bufferDepth, VideoOverflowPolicy.Wait, "default"));
+        }
+        return _defaultSub;
+    }
+
+    internal void RemoveSubscription(FFmpegVideoSubscription sub)
+    {
+        lock (_subsLock)
+        {
+            _subs = _subs.Remove(sub);
+            if (ReferenceEquals(_defaultSub, sub))
+                _defaultSub = null;
+        }
     }
 
     private void RaiseBufferUnderrun()
@@ -445,9 +491,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
 
     public void Seek(TimeSpan position)
     {
-        while (_ringReader.TryRead(out var vf))
-            vf.MemoryOwner?.Dispose();
-        Interlocked.Exchange(ref _framesInRing, 0);
+        foreach (var s in _subs) s.Flush();
         Interlocked.Exchange(ref _framesDequeued, 0);
         Volatile.Write(ref _positionTicks, position.Ticks);
     }
@@ -526,9 +570,16 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         }
         CompleteDecodeLoop();
 
-        while (_ringReader.TryRead(out var vf))
-            vf.MemoryOwner?.Dispose();
-        Interlocked.Exchange(ref _framesInRing, 0);
+        // Flush and dispose all subscriptions so any remaining queued frames'
+        // refcounts are released (and the pool rentals returned).
+        ImmutableArray<FFmpegVideoSubscription> subsSnap;
+        lock (_subsLock)
+        {
+            subsSnap = _subs;
+            _subs = ImmutableArray<FFmpegVideoSubscription>.Empty;
+            _defaultSub = null;
+        }
+        foreach (var s in subsSnap) s.Dispose();
 
         if (_frame    != null) fixed (AVFrame**        pp = &_frame)    ffmpeg.av_frame_free(pp);
         if (_swFrame  != null) fixed (AVFrame**        pp = &_swFrame)  ffmpeg.av_frame_free(pp);
@@ -580,22 +631,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             var vf = ConvertFrame(decodedFrame);
             if (vf.HasValue)
             {
-                var w = _ringWriter.WriteAsync(vf.Value, token);
-                if (!w.IsCompletedSuccessfully)
-                {
-                    try { w.AsTask().GetAwaiter().GetResult(); }
-                    catch (OperationCanceledException)
-                    {
-                        vf.Value.MemoryOwner?.Dispose();
-                        return false;
-                    }
-                    catch (ChannelClosedException)
-                    {
-                        vf.Value.MemoryOwner?.Dispose();
-                        return false;
-                    }
-                }
-                Interlocked.Increment(ref _framesInRing);
+                PublishToSubscribers(vf.Value, token);
             }
             ffmpeg.av_frame_unref(_frame);
             if (transferred) ffmpeg.av_frame_unref(_swFrame);
@@ -604,7 +640,41 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         return true;
     }
 
-    public void CompleteDecodeLoop() => _ringWriter.TryComplete();
+    /// <summary>
+    /// Fan-out publish: each active subscription gets a retained reference to the
+    /// same pooled buffer. A subscriber on <see cref="VideoOverflowPolicy.Wait"/>
+    /// may block this call; a subscriber on <c>DropOldest</c> / <c>DropNewest</c>
+    /// cannot stall the decoder.
+    /// </summary>
+    private void PublishToSubscribers(VideoFrame frame, CancellationToken token)
+    {
+        var subs = _subs; // immutable snapshot — tear-free read
+        if (subs.Length == 0)
+        {
+            // No subscribers — release the buffer immediately.
+            frame.MemoryOwner?.Dispose();
+            return;
+        }
+
+        // The rental already holds one ref (created by RefCountedVideoBuffer ctor).
+        // Acquire (subs.Length - 1) additional refs so each sub holds one.
+        if (frame.MemoryOwner is RefCountedVideoBuffer rb)
+            for (int i = 1; i < subs.Length; i++) rb.Retain();
+
+        for (int i = 0; i < subs.Length; i++)
+        {
+            if (!subs[i].TryPublish(frame, token))
+            {
+                // Publish failed (sub is disposed / cancelled) — release this sub's ref.
+                frame.MemoryOwner?.Dispose();
+            }
+        }
+    }
+
+    public void CompleteDecodeLoop()
+    {
+        foreach (var s in _subs) s.CompleteWriter();
+    }
 
     public void RaiseEndOfStream()
     {

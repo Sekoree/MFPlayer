@@ -147,7 +147,7 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     /// When <see langword="true"/>, video presentation bypasses PTS-based scheduling and
     /// always presents the newest frame. Suitable for live NDI monitoring.
     /// </summary>
-    bool VideoLiveMode { get; set; }
+    bool BypassVideoPtsScheduling { get; set; }
 
     // ── Diagnostics ────────────────────────────────────────────────────
 
