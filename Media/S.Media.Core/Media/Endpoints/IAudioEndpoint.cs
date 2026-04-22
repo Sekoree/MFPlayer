@@ -30,6 +30,18 @@ public interface IAudioEndpoint : IMediaEndpoint
     /// <summary>
     /// Called by the graph to deliver mixed/forwarded audio.
     /// Implementations MUST be non-blocking on the RT thread.
+    /// <para>
+    /// <b>§3.50 / CH4 — prefer the PTS-aware overload:</b> this overload discards any
+    /// stream PTS, so endpoints that need to stamp media timecodes (NDI, SMPTE ST 2110,
+    /// recording muxers) MUST override the PTS-aware
+    /// <see cref="ReceiveBuffer(ReadOnlySpan{float}, int, AudioFormat, TimeSpan)"/>
+    /// overload instead. The default implementation of the PTS overload forwards here
+    /// so plain playback sinks (push-only PortAudio) continue to work unchanged, but the
+    /// forward is one-way: overriding this method alone silently skips PTS delivery.
+    /// A future release will mark this overload <c>[Obsolete]</c> once every in-tree
+    /// timecoded sink has been migrated — implementers of <b>new</b> timecoded sinks
+    /// should override the PTS overload today.
+    /// </para>
     /// </summary>
     void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format);
 

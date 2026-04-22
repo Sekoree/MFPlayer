@@ -9,7 +9,7 @@
 ## Core Model (AVRouter)
 
 - Register audio / video *inputs* (channels) with `router.RegisterAudioInput(channel)` / `router.RegisterVideoInput(channel)`.
-- Register *endpoints* (outputs, sinks, `IAVEndpoint`s) with `router.RegisterEndpoint(ep)`.
+- Register *endpoints* (playback destinations — hardware, fan-out, clone, `IAVEndpoint`s) with `router.RegisterEndpoint(ep)`.
 - Wire them up with `router.CreateRoute(inputId, endpointId, options)` using
   `AudioRouteOptions` / `VideoRouteOptions` as appropriate.
 - The router owns its internal clock by default; a `IClockCapableEndpoint` (e.g. a
@@ -66,8 +66,8 @@ router.RemoveRoute(videoRoute);
 ### Endpoint adapters
 
 The router treats `IAudioEndpoint`, `IVideoEndpoint`, and combined `IAVEndpoint`
-uniformly — hardware outputs, fan-out sinks, and clone sinks all go through the
-same `RegisterEndpoint` / `CreateRoute` API.
+uniformly — hardware endpoints, fan-out endpoints, and clone endpoints all go
+through the same `RegisterEndpoint` / `CreateRoute` API.
 
 ## Audio Routing Notes
 
@@ -115,5 +115,4 @@ Events:
 - `PlaybackStateChanged`
 - `PlaybackCompleted`
 - `PlaybackFailed`
-- `PlaybackEnded` (compatibility signal)
 

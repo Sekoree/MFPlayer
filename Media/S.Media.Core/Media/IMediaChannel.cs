@@ -24,6 +24,16 @@ public interface IMediaChannel<TFrame> : IDisposable
     /// count (possibly 0) and zero-fill the remainder.  <paramref name="dest"/> is always
     /// sized to hold <c>frameCount × channels</c> elements for audio, or
     /// <paramref name="frameCount"/> entries for video.
+    /// <para>
+    /// <b>Single-reader invariant (§3.48 / CH1):</b> implementations assume exactly one
+    /// concurrent caller of <see cref="FillBuffer"/> per channel. Two routes sharing the
+    /// same channel via the router are currently serialized by the router's per-endpoint
+    /// iteration; callers that want independent fan-out must use the channel's
+    /// <c>Subscribe(...)</c> facility (where the channel supports it — e.g.
+    /// <c>FFmpegVideoChannel</c>) instead of calling <see cref="FillBuffer"/> from multiple
+    /// threads. Concurrent <see cref="FillBuffer"/> callers produce undefined frame ordering
+    /// and can tear the channel's internal read cursor.
+    /// </para>
     /// </summary>
     int FillBuffer(Span<TFrame> dest, int frameCount);
 

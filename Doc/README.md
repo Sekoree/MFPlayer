@@ -7,7 +7,7 @@ This folder contains current documentation for both `MediaPlayer` and `AVRouter`
 1. `Quick-Start.md` - fast setup path for audio, video, and fan-out.
 2. `MediaPlayer-Guide.md` - high-level playback API, events, and fan-out examples (including NDI).
 3. `Usage-Guide.md` - day-to-day API usage patterns.
-4. `Clone-Sinks.md` - parent-owned clone sink usage for Avalonia and SDL3.
+4. `Clone-Sinks.md` - parent-owned clone endpoint usage for Avalonia and SDL3.
 5. `AVMixer-Refactor-Plan.md` - historical refactor plan that led to today's `AVRouter` endpoint-based routing model.
 
 ## Current Architecture (Short)
@@ -15,8 +15,8 @@ This folder contains current documentation for both `MediaPlayer` and `AVRouter`
 - `MediaPlayer` is the high-level playback convenience entry point.
 - `AVRouter` is the explicit routing/orchestration entry point.
 - `AudioMixer` and `VideoMixer` are internal implementation details.
-- Outputs and sinks are endpoints (`IMediaEndpoint`) that are attached and routed through `AVRouter`.
-- Clone sinks are created by parent outputs (for example `CreateCloneSink(...)`) and owned by the parent lifecycle.
+- Every destination is an **endpoint** (`IMediaEndpoint`) attached and routed through `AVRouter`. "Output" and "sink" are legacy class-name suffixes; the public vocabulary is *endpoint*.
+- Clone endpoints are created by parent endpoints (for example `CreateCloneSink(...)`) and owned by the parent lifecycle.
 
 ## Layering (§0.1 framing decision)
 
@@ -43,6 +43,6 @@ See `API-Implementation-Review.md` §"Layering" for the rationale and
 - `Test/MFPlayer.SimplePlayer` - audio playback.
 - `Test/MFPlayer.NDIPlayer` - audio-focused NDI receive sample with latency presets.
 - `Test/MFPlayer.NDIAutoPlayer` - auto-discovery + auto-reconnect NDI A/V sample with latency presets.
-- `Test/MFPlayer.VideoPlayer` - video playback with optional NDI sink.
-- `Test/MFPlayer.MultiOutputPlayer` - one audio source to multiple outputs.
+- `Test/MFPlayer.VideoPlayer` - video playback with optional NDI endpoint.
+- `Test/MFPlayer.MultiOutputPlayer` - one audio source to multiple endpoints.
 - `Test/MFPlayer.AvaloniaVideoPlayer` - embedded Avalonia video output.

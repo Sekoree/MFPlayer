@@ -6,54 +6,53 @@ This guide shows quick setup paths for both `MediaPlayer` and `AVRouter`.
 
 ```csharp
 using var player = new MediaPlayer();
-player.AddEndpoint(audioOutput);
-player.AddEndpoint(videoOutput);
+player.AddEndpoint(audioEndpoint);
+player.AddEndpoint(videoEndpoint);
 await player.OpenAsync("media.mp4");
 await player.PlayAsync();
 ```
 
-For playback events and extra output/sink fan-out helpers, see `MediaPlayer-Guide.md`.
-For a full main-output + NDI fan-out example, see
+For playback events and extra endpoint fan-out helpers, see `MediaPlayer-Guide.md`.
+For a full main-endpoint + NDI fan-out example, see
 `MediaPlayer-Guide.md#end-to-end-main-output--ndi-fan-out`.
 
 ## 1) Audio Playback (PortAudio)
 
 ```csharp
-using var output = new PortAudioOutput();
-output.Open(device, requestedFormat, framesPerBuffer: 512);
+using var endpoint = PortAudioEndpoint.Create(device, requestedFormat, framesPerBuffer: 512);
 
 using var router = new AVRouter();
-var outputId = router.RegisterEndpoint(output);
-var channelId = router.RegisterAudioInput(audioChannel);
-router.CreateRoute(channelId, outputId,
-    new AudioRouteOptions { ChannelMap = ChannelRouteMap.Identity(output.HardwareFormat.Channels) });
+var endpointId = router.RegisterEndpoint(endpoint);
+var channelId  = router.RegisterAudioInput(audioChannel);
+router.CreateRoute(channelId, endpointId,
+    new AudioRouteOptions { ChannelMap = ChannelRouteMap.Identity(endpoint.HardwareFormat.Channels) });
 
 decoder.Start();
 await router.StartAsync();
-await output.StartAsync();
+await endpoint.StartAsync();
 ```
 
 ## 2) Video Playback (SDL3)
 
 ```csharp
-using var videoOutput = new SDL3VideoOutput();
-videoOutput.Open("MFPlayer", 1280, 720, videoChannel.SourceFormat);
+using var videoEndpoint = new SDL3VideoOutput(); // renamed to SDL3VideoEndpoint in a future release
+videoEndpoint.Open("MFPlayer", 1280, 720, videoChannel.SourceFormat);
 
 using var router = new AVRouter();
-var outputId = router.RegisterEndpoint(videoOutput);
-var channelId = router.RegisterVideoInput(videoChannel);
-router.CreateRoute(channelId, outputId, new VideoRouteOptions());
+var endpointId = router.RegisterEndpoint(videoEndpoint);
+var channelId  = router.RegisterVideoInput(videoChannel);
+router.CreateRoute(channelId, endpointId, new VideoRouteOptions());
 
 decoder.Start();
 await router.StartAsync();
-await videoOutput.StartAsync();
+await videoEndpoint.StartAsync();
 ```
 
-## 3) Add a Secondary Sink (fan-out)
+## 3) Add a Secondary Endpoint (fan-out)
 
 ```csharp
-// Any IAudioEndpoint / IVideoEndpoint / IAVEndpoint can be registered as a sink.
-var ndiId = router.RegisterEndpoint(ndiSink);
+// Any IAudioEndpoint / IVideoEndpoint / IAVEndpoint can be registered as a fan-out destination.
+var ndiId = router.RegisterEndpoint(ndiEndpoint);
 router.CreateRoute(channelId, ndiId,
     new AudioRouteOptions { ChannelMap = ChannelRouteMap.Identity(2) });
 router.CreateRoute(videoChannelId, ndiId, new VideoRouteOptions());

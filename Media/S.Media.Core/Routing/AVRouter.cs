@@ -122,6 +122,13 @@ public sealed class AVRouter : IAVRouter
     private readonly ConcurrentDictionary<EndpointId, EndpointEntry> _endpoints = new();
     private readonly ConcurrentDictionary<RouteId, RouteEntry> _routes = new();
 
+    // §3.16 / R7: COW snapshot of endpoint entries rebuilt under _lock whenever
+    // Register/Unregister mutates _endpoints. The push-tick enumerates this array
+    // instead of .Values so it cannot observe a half-initialised endpoint during
+    // the SetupPull* → _endpoints[id]=entry → AutoRegisterEndpointClock window
+    // (which, before §3.17, ran outside the lock).
+    private volatile EndpointEntry[] _endpointsSnapshot = [];
+
     // Snapshot arrays for lock-free RT iteration (copy-on-write pattern)
     private volatile RouteEntry[] _audioRouteSnapshot = [];
     private volatile RouteEntry[] _videoRouteSnapshot = [];
@@ -143,6 +150,11 @@ public sealed class AVRouter : IAVRouter
     private long _clockRegistrationOrder;
     private volatile IMediaClock? _resolvedClock;
     private Thread? _pushThread;
+    // §3.19 / R19+R20: cancellation token for the push threads so StopAsync can
+    // unblock an in-flight WaitUntil spin/sleep immediately instead of waiting
+    // for the 5 ms cadence tick to notice _running==false. Rebuilt per Start so
+    // a second Start after Stop gets a fresh token.
+    private CancellationTokenSource? _pushCts;
     private volatile bool _running;
     private volatile bool _disposed;
 
@@ -198,11 +210,15 @@ public sealed class AVRouter : IAVRouter
         {
             if (_running) return Task.CompletedTask;
             _running = true;
+            _pushCts = new CancellationTokenSource();
 
             _internalClock.Start();
 
-            // Start a dedicated high-resolution push thread
-            _pushThread = new Thread(PushThreadLoop)
+            // Start a dedicated high-resolution push thread. The threads read
+            // _pushCts.Token via a captured copy so StopAsync's cancellation is
+            // observed even if the field is replaced by a subsequent Start.
+            var token = _pushCts.Token;
+            _pushThread = new Thread(() => PushThreadLoop(token))
             {
                 Name = "AVRouter-PushTick",
                 IsBackground = true,
@@ -218,15 +234,31 @@ public sealed class AVRouter : IAVRouter
 
     public Task StopAsync(CancellationToken ct = default)
     {
+        Thread? threadToJoin;
+        CancellationTokenSource? ctsToDispose;
         lock (_lock)
         {
             if (!_running) return Task.CompletedTask;
             _running = false;
 
-            // Wait for push thread to exit
-            _pushThread?.Join(timeout: TimeSpan.FromSeconds(2));
+            // §3.19: cancel before releasing the lock so WaitUntil wakes
+            // immediately and the Join below completes in tens of
+            // microseconds rather than the 2-second safety timeout.
+            ctsToDispose = _pushCts;
+            _pushCts = null;
+            threadToJoin = _pushThread;
             _pushThread = null;
+        }
 
+        try { ctsToDispose?.Cancel(); } catch (ObjectDisposedException) { /* raced */ }
+        // Join outside the router lock so the push threads' own reads of
+        // _inputs / _endpoints (which do not lock) never fight for _lock
+        // against a stopping caller.
+        threadToJoin?.Join(timeout: TimeSpan.FromSeconds(2));
+        ctsToDispose?.Dispose();
+
+        lock (_lock)
+        {
             _internalClock.Stop();
 
             Log.LogInformation("AVRouter stopped");
@@ -285,38 +317,56 @@ public sealed class AVRouter : IAVRouter
     public EndpointId RegisterEndpoint(IAudioEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        var id = EndpointId.New();
-        var entry = new EndpointEntry(id, endpoint);
-        SetupPullAudio(entry, endpoint);
-        _endpoints[id] = entry;
-        AutoRegisterEndpointClock(endpoint);
-        Log.LogDebug("Audio endpoint registered: {Id} ({Name})", id, endpoint.Name);
-        return id;
+        // §3.17 / R8: run the whole Setup → _endpoints[id]=entry → snapshot rebuild →
+        // clock auto-register sequence under _lock so concurrent push ticks never
+        // observe a half-initialised endpoint (entry visible but FillCallback not
+        // yet attached, or clock not yet registered).
+        lock (_lock)
+        {
+            var id = EndpointId.New();
+            var entry = new EndpointEntry(id, endpoint);
+            SetupPullAudio(entry, endpoint);
+            PreallocateScratch(id, endpoint);
+            _endpoints[id] = entry;
+            RebuildEndpointsSnapshot();
+            AutoRegisterEndpointClock(endpoint);
+            Log.LogDebug("Audio endpoint registered: {Id} ({Name})", id, endpoint.Name);
+            return id;
+        }
     }
 
     public EndpointId RegisterEndpoint(IVideoEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        var id = EndpointId.New();
-        var entry = new EndpointEntry(id, endpoint);
-        SetupPullVideo(entry, endpoint);
-        _endpoints[id] = entry;
-        AutoRegisterEndpointClock(endpoint);
-        Log.LogDebug("Video endpoint registered: {Id} ({Name})", id, endpoint.Name);
-        return id;
+        lock (_lock)
+        {
+            var id = EndpointId.New();
+            var entry = new EndpointEntry(id, endpoint);
+            SetupPullVideo(entry, endpoint);
+            _endpoints[id] = entry;
+            RebuildEndpointsSnapshot();
+            AutoRegisterEndpointClock(endpoint);
+            Log.LogDebug("Video endpoint registered: {Id} ({Name})", id, endpoint.Name);
+            return id;
+        }
     }
 
     public EndpointId RegisterEndpoint(IAVEndpoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        var id = EndpointId.New();
-        var entry = new EndpointEntry(id, endpoint);
-        SetupPullAudio(entry, endpoint);
-        SetupPullVideo(entry, endpoint);
-        _endpoints[id] = entry;
-        AutoRegisterEndpointClock(endpoint);
-        Log.LogDebug("AV endpoint registered: {Id} ({Name})", id, endpoint.Name);
-        return id;
+        lock (_lock)
+        {
+            var id = EndpointId.New();
+            var entry = new EndpointEntry(id, endpoint);
+            SetupPullAudio(entry, endpoint);
+            SetupPullVideo(entry, endpoint);
+            PreallocateScratch(id, endpoint);
+            _endpoints[id] = entry;
+            RebuildEndpointsSnapshot();
+            AutoRegisterEndpointClock(endpoint);
+            Log.LogDebug("AV endpoint registered: {Id} ({Name})", id, endpoint.Name);
+            return id;
+        }
     }
 
     public void UnregisterEndpoint(EndpointId id)
@@ -324,6 +374,7 @@ public sealed class AVRouter : IAVRouter
         lock (_lock)
         {
             if (!_endpoints.TryRemove(id, out var entry)) return;
+            RebuildEndpointsSnapshot();
 
             // Detach pull callback
             if (entry.Audio is IPullAudioEndpoint pull)
@@ -346,6 +397,45 @@ public sealed class AVRouter : IAVRouter
 
             Log.LogDebug("Endpoint unregistered: {Id}", id);
         }
+    }
+
+    private void RebuildEndpointsSnapshot()
+    {
+        // Caller must hold _lock. .Values on ConcurrentDictionary is snapshot-like
+        // but not guaranteed-consistent under concurrent mutation; taking it
+        // inside the lock is sufficient because all mutations go through _lock.
+        _endpointsSnapshot = _endpoints.Values.ToArray();
+    }
+
+    /// <summary>
+    /// §3.14 / R6: pre-allocate the per-endpoint scratch buffer at registration
+    /// time using the endpoint's preferred frame count and channel count, so the
+    /// first push/fill tick never hits <see cref="ConcurrentDictionary{TKey,TValue}.AddOrUpdate"/>
+    /// on an RT thread. If the endpoint exposes no hint, fall back to a
+    /// conservative 2048-float buffer (≈ 512 frames × 4 channels) which is
+    /// big enough that the common case never reallocates.
+    /// </summary>
+    private void PreallocateScratch(EndpointId id, IAudioEndpoint audio)
+    {
+        int channels;
+        int framesPerBuffer;
+        if (audio is IPullAudioEndpoint pull)
+        {
+            channels = Math.Max(1, pull.EndpointFormat.Channels);
+            framesPerBuffer = Math.Max(1, pull.FramesPerBuffer);
+        }
+        else
+        {
+            var hint = audio.NegotiatedFormat;
+            channels = Math.Max(1, hint?.Channels ?? 2);
+            framesPerBuffer = _options.DefaultFramesPerBuffer > 0
+                ? _options.DefaultFramesPerBuffer
+                : 512;
+        }
+
+        int minSize = framesPerBuffer * channels;
+        if (minSize < 2048) minSize = 2048;
+        _scratchBuffers[id] = new float[minSize];
     }
 
     /// <summary>
@@ -439,33 +529,56 @@ public sealed class AVRouter : IAVRouter
 
     public IMediaClock Clock => _resolvedClock ?? _internalClock;
 
+    /// <summary>
+    /// §4.9 / R10: raised on the caller's thread (outside <c>_clockLock</c>) whenever
+    /// <see cref="Clock"/> changes as a result of <see cref="RegisterClock"/>,
+    /// <see cref="UnregisterClock"/>, or <see cref="SetClock"/>. The event argument is
+    /// the new active clock (never null — the internal fallback is surfaced when the
+    /// registry is empty). Subscribers may call back into the router safely because
+    /// the lock is released before the invocation.
+    /// </summary>
+    public event Action<IMediaClock>? ActiveClockChanged;
+
     public void RegisterClock(IMediaClock clock, ClockPriority priority = ClockPriority.Hardware)
     {
+        IMediaClock? previous;
+        IMediaClock current;
         lock (_clockLock)
         {
+            previous = _resolvedClock;
             _clockRegistry.RemoveAll(e => ReferenceEquals(e.Clock, clock));
             _clockRegistry.Add((clock, priority, _clockRegistrationOrder++));
             ResolveActiveClock();
+            current = Clock; // internal fallback if registry is empty
         }
         Log.LogInformation("Clock registered: {Type} at priority {Priority} → active={Active}",
-            clock.GetType().Name, priority, Clock.GetType().Name);
+            clock.GetType().Name, priority, current.GetType().Name);
+        RaiseActiveClockChangedIfChanged(previous, current);
     }
 
     public void UnregisterClock(IMediaClock clock)
     {
+        IMediaClock? previous;
+        IMediaClock current;
         lock (_clockLock)
         {
+            previous = _resolvedClock;
             int removed = _clockRegistry.RemoveAll(e => ReferenceEquals(e.Clock, clock));
             if (removed > 0) ResolveActiveClock();
+            current = Clock;
         }
         Log.LogInformation("Clock unregistered: {Type} → active={Active}",
-            clock.GetType().Name, Clock.GetType().Name);
+            clock.GetType().Name, current.GetType().Name);
+        RaiseActiveClockChangedIfChanged(previous, current);
     }
 
     public void SetClock(IMediaClock? clock)
     {
+        IMediaClock? previous;
+        IMediaClock current;
         lock (_clockLock)
         {
+            previous = _resolvedClock;
             _clockRegistry.RemoveAll(e => e.Priority == ClockPriority.Override);
             if (clock is not null)
             {
@@ -477,11 +590,30 @@ public sealed class AVRouter : IAVRouter
                 _clockRegistry.Add((clock, ClockPriority.Override, _clockRegistrationOrder++));
             }
             ResolveActiveClock();
+            current = Clock;
         }
         Log.LogInformation("Clock override {Action}: {Type} → active={Active}",
             clock is null ? "cleared" : "set",
             clock?.GetType().Name ?? "(none)",
-            Clock.GetType().Name);
+            current.GetType().Name);
+        RaiseActiveClockChangedIfChanged(previous, current);
+    }
+
+    private void RaiseActiveClockChangedIfChanged(IMediaClock? previous, IMediaClock current)
+    {
+        // Compare against the _previous_ resolved clock — not Clock (which falls
+        // back to the internal clock when the registry is empty). Transitioning
+        // between (non-null registry entry) and (null → internal) is a real
+        // change and must fire; transitioning from internal to internal is not.
+        var previousActive = previous ?? _internalClock;
+        if (ReferenceEquals(previousActive, current)) return;
+        var handler = ActiveClockChanged;
+        if (handler is null) return;
+        try { handler(current); }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "ActiveClockChanged subscriber threw; continuing.");
+        }
     }
 
     private void ResolveActiveClock()
@@ -576,10 +708,19 @@ public sealed class AVRouter : IAVRouter
         const double Alpha = 0.4;
         lock (_driftEmaLock)
         {
-            if (!_driftEmaValid)
+            // §3.54 / R16: single-pair EMA. When the caller polls a different
+            // (audioInput, videoInput) pair from the previous call, reset the
+            // filter so the new pair is not contaminated by the previous one's
+            // history. Full per-pair keying is tracked as §6.9; this is the
+            // minimum viable correctness fix.
+            if (!_driftEmaValid ||
+                _driftEmaAudioInput != audioInput ||
+                _driftEmaVideoInput != videoInput)
             {
                 _driftEmaTicks = raw;
                 _driftEmaValid = true;
+                _driftEmaAudioInput = audioInput;
+                _driftEmaVideoInput = videoInput;
             }
             else
             {
@@ -590,11 +731,14 @@ public sealed class AVRouter : IAVRouter
     }
 
     // EMA state for GetAvDrift — kept on the router because it's a smoothed diagnostic
-    // readout shared across all audio↔video pairings.  For multi-pair scenarios a
-    // per-pair dictionary would be more accurate, but single-pair is the common case.
+    // readout shared across all audio↔video pairings. Only one pair is tracked at a
+    // time (§3.54); the filter resets when the caller switches pairs. §6.9 will
+    // promote this to a per-pair dictionary for multi-pair scenarios.
     private readonly Lock _driftEmaLock = new();
     private long _driftEmaTicks;
     private bool _driftEmaValid;
+    private InputId _driftEmaAudioInput;
+    private InputId _driftEmaVideoInput;
 
     public float GetInputPeakLevel(InputId id)
     {
@@ -902,14 +1046,14 @@ public sealed class AVRouter : IAVRouter
 
     // ── Push tick (drives push endpoints) ───────────────────────────────
 
-    private void PushThreadLoop()
+    private void PushThreadLoop(CancellationToken ct)
     {
         var cadence = _options.InternalTickCadence;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long audioCadenceTicks = (long)(cadence.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
 
         // Video push runs on its own thread so large frame copies don't block audio delivery.
-        var videoThread = new Thread(PushVideoThreadLoop)
+        var videoThread = new Thread(() => PushVideoThreadLoop(ct))
         {
             Name = "AVRouter-PushVideo",
             IsBackground = true,
@@ -922,7 +1066,7 @@ public sealed class AVRouter : IAVRouter
         // This eliminates audio speed fluctuations caused by Thread.Sleep jitter.
         long lastAudioSw = sw.ElapsedTicks;
 
-        while (_running)
+        while (_running && !ct.IsCancellationRequested)
         {
             long tickStart = sw.ElapsedTicks;
             long elapsedSw = tickStart - lastAudioSw;
@@ -942,21 +1086,22 @@ public sealed class AVRouter : IAVRouter
                     Log.LogError(ex, "Error in audio push tick (count={Count})", n);
             }
 
-            // Sleep for the remaining cadence time
+            // Sleep for the remaining cadence time — cancellation-aware so StopAsync
+            // unblocks us in tens of microseconds (§3.19 / R19+R20).
             long targetTicks = tickStart + audioCadenceTicks;
-            WaitUntil(sw, targetTicks);
+            WaitUntil(sw, targetTicks, ct);
         }
 
         videoThread.Join(TimeSpan.FromSeconds(2));
     }
 
-    private void PushVideoThreadLoop()
+    private void PushVideoThreadLoop(CancellationToken ct)
     {
         var cadence = _options.InternalTickCadence;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long videoCadenceTicks = (long)(cadence.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
 
-        while (_running)
+        while (_running && !ct.IsCancellationRequested)
         {
             long tickStart = sw.ElapsedTicks;
 
@@ -972,7 +1117,7 @@ public sealed class AVRouter : IAVRouter
             }
 
             long targetTicks = tickStart + videoCadenceTicks;
-            WaitUntil(sw, targetTicks);
+            WaitUntil(sw, targetTicks, ct);
         }
     }
 
@@ -981,8 +1126,9 @@ public sealed class AVRouter : IAVRouter
     /// Linux's <c>Thread.Sleep</c> granularity is ~1–4 ms; at a 10 ms cadence that is ±10–40%
     /// jitter, directly modulating the audio frame-count-per-tick (§4.10).  We coarse-sleep
     /// up to ~3 ms short of the deadline, then spin-wait the tail for microsecond accuracy.
+    /// The wait is cancellation-aware so StopAsync can unblock it immediately (§3.19).
     /// </summary>
-    private static void WaitUntil(System.Diagnostics.Stopwatch sw, long targetTicks)
+    private static void WaitUntil(System.Diagnostics.Stopwatch sw, long targetTicks, CancellationToken ct)
     {
         long remaining = targetTicks - sw.ElapsedTicks;
         if (remaining <= 0) return;
@@ -994,11 +1140,18 @@ public sealed class AVRouter : IAVRouter
         {
             int sleepMs = (int)((remaining - coarseThresholdTicks) * 1000L / System.Diagnostics.Stopwatch.Frequency);
             if (sleepMs > 0)
-                Thread.Sleep(sleepMs);
+            {
+                // WaitHandle.WaitOne on the cancellation handle returns true when
+                // cancelled, giving us an immediate wake without throwing.
+                if (ct.WaitHandle.WaitOne(sleepMs)) return;
+            }
         }
 
         while (sw.ElapsedTicks < targetTicks)
+        {
+            if (ct.IsCancellationRequested) return;
             Thread.SpinWait(20);
+        }
     }
 
     private void PushAudioTick(double elapsedSeconds)
@@ -1006,12 +1159,11 @@ public sealed class AVRouter : IAVRouter
         var routesByEp = _audioRoutesByEndpoint;
         if (routesByEp.Count == 0) return;
 
-        // Collect push endpoints that have at least one active route
-        // and accumulate all routes into a single buffer per endpoint.
-        // (No dedup set needed — _endpoints is keyed by EndpointId, so
-        // iterating .Values visits each endpoint exactly once.)
-
-        foreach (var ep in _endpoints.Values)
+        // §3.16 / R7: iterate the COW endpoint snapshot (rebuilt under _lock
+        // during Register/Unregister) so this tick cannot observe a
+        // half-initialised endpoint.
+        var endpointsSnapshot = _endpointsSnapshot;
+        foreach (var ep in endpointsSnapshot)
         {
             if (ep.Audio is null or IPullAudioEndpoint) continue;
             if (!routesByEp.TryGetValue(ep.Id, out var routes) || routes.Length == 0) continue;
@@ -1225,9 +1377,14 @@ public sealed class AVRouter : IAVRouter
                 // Too early — cache for next tick.
                 if (relativePtsTicks > relativeClockTicks + earlyToleranceTicks)
                 {
-                    if (_pushVideoPending.TryGetValue(route.Id, out var stale))
-                        stale.MemoryOwner?.Dispose();
-                    _pushVideoPending[route.Id] = candidate;
+                    // §3.12 / B12+R17: atomic swap. AddOrUpdate's updater runs
+                    // under the bucket lock, so concurrent RemoveRouteInternal
+                    // (which calls TryRemove on this key) cannot see or
+                    // double-dispose an intermediate state.
+                    _pushVideoPending.AddOrUpdate(
+                        route.Id,
+                        candidate,
+                        (_, stale) => { stale.MemoryOwner?.Dispose(); return candidate; });
                     continue;
                 }
 
@@ -1245,9 +1402,10 @@ public sealed class AVRouter : IAVRouter
                         {
                             // Next frame is too early — cache it and present the
                             // current candidate (the latest "on time" frame).
-                            if (_pushVideoPending.TryGetValue(route.Id, out var stale))
-                                stale.MemoryOwner?.Dispose();
-                            _pushVideoPending[route.Id] = next;
+                            _pushVideoPending.AddOrUpdate(
+                                route.Id,
+                                next,
+                                (_, stale) => { stale.MemoryOwner?.Dispose(); return next; });
                             break;
                         }
 
@@ -1519,12 +1677,19 @@ public sealed class AVRouter : IAVRouter
 
     private float[] GetOrCreateScratch(EndpointId id, int minSize)
     {
+        // §3.14 / R6: race-free atomic growth. The previous "TryGetValue → new →
+        // indexer assign" sequence had a three-step window in which two concurrent
+        // Register + push-tick callers could lose one buffer and duplicate the
+        // other. AddOrUpdate runs its factories under the bucket lock, so the
+        // grown buffer is published atomically. In the fast path (size already
+        // sufficient) we avoid AddOrUpdate entirely.
         if (_scratchBuffers.TryGetValue(id, out var buf) && buf.Length >= minSize)
             return buf;
 
-        var newBuf = new float[minSize];
-        _scratchBuffers[id] = newBuf;
-        return newBuf;
+        return _scratchBuffers.AddOrUpdate(
+            id,
+            _ => new float[minSize],
+            (_, existing) => existing.Length >= minSize ? existing : new float[minSize]);
     }
 
     /// <summary>

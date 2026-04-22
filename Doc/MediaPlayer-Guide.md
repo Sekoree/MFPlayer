@@ -1,7 +1,7 @@
 # MediaPlayer Guide
 
 `MediaPlayer` is the highest-level playback API in this repository.
-Use it when you want a simple open/play/pause/stop flow and optional fan-out to extra sinks.
+Use it when you want a simple open/play/pause/stop flow and optional fan-out to extra endpoints.
 
 ## Basic audio playback
 
@@ -38,7 +38,6 @@ await player.PlayAsync();
 - `PlaybackStateChanged` for transport state transitions.
 - `PlaybackCompleted` for completion reason (`SourceEnded`, `StoppedByUser`, `ReplacedByOpen`, `Faulted`).
 - `PlaybackFailed` with stage + exception for recovery/telemetry.
-- `PlaybackEnded` remains for compatibility and maps to source end signaling.
 
 Example:
 
@@ -53,7 +52,7 @@ player.PlaybackFailed += (_, e) =>
     Console.WriteLine($"failed in {e.Stage}: {e.Exception.Message}");
 ```
 
-## Add extra outputs/sinks (fan-out)
+## Add extra endpoints (fan-out)
 
 Use `AddEndpoint(...)` / `RemoveEndpoint(...)` for runtime fan-out.
 
@@ -140,7 +139,7 @@ if (player.Router is { } router)
 
 ## Notes
 
-- Open outputs before creating `MediaPlayer`.
-- `MediaPlayer` does not own externally created outputs/sinks/endpoints.
+- Open endpoints before creating `MediaPlayer`.
+- `MediaPlayer` does not own externally created endpoints.
 - For fully custom multi-channel routing workflows, use `AVRouter` directly.
 

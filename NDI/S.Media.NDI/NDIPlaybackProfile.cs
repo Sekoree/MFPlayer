@@ -1,11 +1,11 @@
 namespace S.Media.NDI;
 
 /// <summary>
-/// Bundles all output-side latency configuration derived from an <see cref="NDIEndpointPreset"/>.
+/// Bundles all endpoint-side latency configuration derived from an <see cref="NDIEndpointPreset"/>.
 /// <para>
 /// Creating playback infrastructure for live NDI monitoring currently requires coordinating
 /// many independent knobs: audio buffer size, PortAudio suggested latency, VSync mode,
-/// video mixer live-mode, pre-buffer depths, and clock-origin reset.  This record derives
+/// router live-mode bypass, pre-buffer depths, and clock-origin reset.  This record derives
 /// all of those from a single <see cref="NDIEndpointPreset"/>, giving the library consumer
 /// one object to flow through setup code.
 /// </para>
@@ -16,14 +16,14 @@ namespace S.Media.NDI;
 ///
 /// avSource = await NDIAVChannel.OpenByNameAsync(name, options, ct);
 ///
-/// output.Open(device, hwFmt, suggestedLatency: profile.AudioSuggestedLatency);
+/// audioEndpoint.Open(device, hwFmt, suggestedLatency: profile.AudioSuggestedLatency);
 ///
 /// if (profile.AdaptiveVSync)
-///     videoOutput.VsyncMode = VsyncMode.Adaptive;   // S.Media.SDL3
+///     videoEndpoint.VsyncMode = VsyncMode.Adaptive;   // S.Media.SDL3
 /// if (profile.ResetClockOrigin)
-///     videoOutput.ResetClockOrigin();
+///     videoEndpoint.ResetClockOrigin();
 ///
-/// avMixer.BypassVideoPtsScheduling = profile.BypassVideoPtsScheduling;
+/// router.BypassVideoPtsScheduling = profile.BypassVideoPtsScheduling;
 ///
 /// await Task.WhenAll(
 ///     avSource.WaitForAudioBufferAsync(profile.AudioPreBufferChunks, ct),

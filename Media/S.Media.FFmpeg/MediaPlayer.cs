@@ -202,7 +202,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         if (idx < 0) return;
         var epId = _endpointIds[idx];
 
-        if (_isRunning)
+        if (IsActive)
             endpoint.StopAsync().GetAwaiter().GetResult();
 
         _router.UnregisterEndpoint(epId);
@@ -280,7 +280,6 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
             await _router.StartAsync(ct).ConfigureAwait(false);
 
-            _isRunning = true;
             SetState(PlaybackState.Playing);
         }
         catch (Exception ex)
@@ -430,14 +429,13 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (_isRunning)
+        if (IsActive)
         {
             try { await _router.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
             foreach (var ep in _endpoints)
             {
                 try { await ep.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
             }
-            _isRunning = false;
         }
 
         if (_decoder is { } dec)
@@ -452,7 +450,13 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     // ── Private ───────────────────────────────────────────────────────────────
 
-    private volatile bool _isRunning;
+    /// <summary>
+    /// Whether the player is currently running (endpoints/router have been
+    /// started and not yet stopped). Single source of truth derived from
+    /// <see cref="_state"/> — closes the §4.11 <c>_isRunning</c> duplication
+    /// noted in the review.
+    /// </summary>
+    private bool IsActive => _state is PlaybackState.Playing or PlaybackState.Paused;
 
     private void RegisterEndpointAndMaybeStart(IMediaEndpoint endpoint, EndpointId id, bool audio, bool video)
     {
@@ -460,7 +464,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         _endpointIds.Add(id);
         AutoRouteToEndpoint(id, audio, video);
 
-        if (_isRunning)
+        if (IsActive)
             endpoint.StartAsync().GetAwaiter().GetResult();
     }
 
@@ -520,7 +524,6 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             {
                 try { await ep.StopAsync(ct).ConfigureAwait(false); } catch { /* best-effort */ }
             }
-            _isRunning = false;
         }
         ReleaseSession();
         if (hadSession && closeReason.HasValue)

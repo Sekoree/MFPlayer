@@ -49,9 +49,35 @@ public sealed class PooledWorkQueue<T> : IDisposable
     private readonly ConcurrentQueue<T> _queue = new();
     private readonly SemaphoreSlim _signal = new(0, int.MaxValue);
     private int _count;
+    private volatile bool _completed;
 
     /// <summary>Approximate current queue depth.</summary>
     public int Count => Volatile.Read(ref _count);
+
+    /// <summary>
+    /// §4.10 / PQ1: returns <see langword="true"/> after <see cref="Complete"/> has
+    /// been called. Once set, no further items will be accepted by
+    /// <see cref="Enqueue"/>, <see cref="EnqueueReserved"/> or
+    /// <see cref="TryEnqueueWithCap"/>, and <see cref="WaitForItem"/> returns
+    /// <see langword="false"/> as soon as the queue drains.
+    /// </summary>
+    public bool IsCompleted => _completed;
+
+    /// <summary>
+    /// §4.10 / PQ1: signals producers are finished. Consumers draining via
+    /// <see cref="WaitForItem"/> + <see cref="TryDequeue"/> will observe
+    /// <see cref="WaitForItem"/> returning <see langword="false"/> once the queue
+    /// is empty, allowing a clean loop exit without cancellation tokens.
+    /// Idempotent; the completion signal also unblocks a single waiting consumer.
+    /// </summary>
+    public void Complete()
+    {
+        if (_completed) return;
+        _completed = true;
+        // Release once so a consumer parked in WaitForItem wakes and observes
+        // IsCompleted. Subsequent WaitForItem calls short-circuit on the flag.
+        try { _signal.Release(); } catch (ObjectDisposedException) { /* disposed */ }
+    }
 
     /// <summary>
     /// Atomically reserves a slot (incrementing <see cref="Count"/>) iff the
@@ -94,15 +120,49 @@ public sealed class PooledWorkQueue<T> : IDisposable
     }
 
     /// <summary>
-    /// Blocks the consumer thread until an item is available or
-    /// <paramref name="ct"/> is cancelled.  Returns <see langword="false"/> when
-    /// cancellation fires so the outer loop can break without an exception.
+    /// §4.10 / PQ4: atomic reserve + enqueue with a hard cap. Returns
+    /// <see langword="false"/> when the queue is already at <paramref name="cap"/>
+    /// depth or has been <see cref="Complete">completed</see>. Unlike the two-step
+    /// <see cref="TryReserveSlot"/> + <see cref="EnqueueReserved"/> pattern, this
+    /// method cannot leak a reservation if the caller throws between the two
+    /// steps — the slot is either filled or never taken.
+    /// </summary>
+    public bool TryEnqueueWithCap(T item, int cap)
+    {
+        if (_completed) return false;
+        if (!TryReserveSlot(cap)) return false;
+        try
+        {
+            _queue.Enqueue(item);
+            _signal.Release();
+            return true;
+        }
+        catch
+        {
+            // Unreachable in practice (ConcurrentQueue.Enqueue does not throw)
+            // but keep the invariant: release the reservation on failure.
+            ReleaseReservation();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Blocks the consumer thread until an item is available, <paramref name="ct"/>
+    /// is cancelled, or the queue has been <see cref="Complete">completed</see>
+    /// and drained. Returns <see langword="false"/> on cancellation or completed+empty
+    /// so the outer loop can break without an exception.
     /// </summary>
     public bool WaitForItem(CancellationToken ct)
     {
+        // §4.10 / PQ1: completed + empty → exit immediately so the consumer loop
+        // terminates after the producer calls Complete() and the queue drains.
+        if (_completed && _queue.IsEmpty) return false;
         try
         {
             _signal.Wait(ct);
+            // The signal may have been released by Complete() rather than by a
+            // real enqueue; re-check empty + completed after waking.
+            if (_completed && _queue.IsEmpty) return false;
             return true;
         }
         catch (OperationCanceledException)

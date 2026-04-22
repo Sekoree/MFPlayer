@@ -125,6 +125,16 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     /// </summary>
     void SetClock(IMediaClock? clock);
 
+    /// <summary>
+    /// Raised on the caller's thread whenever <see cref="Clock"/> changes as a result
+    /// of <see cref="RegisterClock"/>, <see cref="UnregisterClock"/>, or
+    /// <see cref="SetClock"/>. The argument is the new active clock (never null —
+    /// the internal fallback is surfaced when the registry is empty). Fires only on
+    /// real transitions; re-registering the same clock or a no-op update does not
+    /// refire. Review §4.9 / R10.
+    /// </summary>
+    event Action<IMediaClock>? ActiveClockChanged;
+
     // ── Per-input control ──────────────────────────────────────────────
 
     /// <summary>Sets the volume for an audio input. No-op for video inputs.</summary>
