@@ -1,6 +1,6 @@
 # MFPlayer Docs
 
-This folder contains current documentation for both `MediaPlayer` and `AVMixer` API surfaces.
+This folder contains current documentation for both `MediaPlayer` and `AVRouter` API surfaces.
 
 ## Read This First
 
@@ -8,14 +8,14 @@ This folder contains current documentation for both `MediaPlayer` and `AVMixer` 
 2. `MediaPlayer-Guide.md` - high-level playback API, events, and fan-out examples (including NDI).
 3. `Usage-Guide.md` - day-to-day API usage patterns.
 4. `Clone-Sinks.md` - parent-owned clone sink usage for Avalonia and SDL3.
-5. `AVMixer-Refactor-Plan.md` - architecture plan to decouple `AVMixer` from outputs (Phase 1) and timeline scheduling (Phase 2 outline).
+5. `AVMixer-Refactor-Plan.md` - historical refactor plan that led to today's `AVRouter` endpoint-based routing model.
 
 ## Current Architecture (Short)
 
 - `MediaPlayer` is the high-level playback convenience entry point.
-- `AVMixer` is the explicit routing/orchestration entry point.
+- `AVRouter` is the explicit routing/orchestration entry point.
 - `AudioMixer` and `VideoMixer` are internal implementation details.
-- Outputs and sinks are endpoints (`IMediaEndpoint`) that are attached and routed through `AVMixer`.
+- Outputs and sinks are endpoints (`IMediaEndpoint`) that are attached and routed through `AVRouter`.
 - Clone sinks are created by parent outputs (for example `CreateCloneSink(...)`) and owned by the parent lifecycle.
 
 ## Sample Apps

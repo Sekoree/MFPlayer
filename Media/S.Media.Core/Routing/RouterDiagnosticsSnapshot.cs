@@ -29,5 +29,6 @@ public sealed record RouteDiagnostics(
     string Kind,
     bool Enabled,
     float Gain,
+    TimeSpan TimeOffset,
     bool HasResampler);
 

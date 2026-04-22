@@ -93,6 +93,7 @@ public sealed class AVRouter : IAVRouter
         public ChannelRouteMap? ChannelMap;
         public (int dstCh, float gain)[][]? BakedChannelMap; // pre-computed from ChannelMap
         public float Gain = 1.0f;
+        public TimeSpan TimeOffset;
         public IAudioResampler? Resampler;
         public bool OwnsResampler; // if we auto-created the resampler
 
@@ -158,6 +159,7 @@ public sealed class AVRouter : IAVRouter
     // See PtsDriftTracker for the shared state machine (also used by the pull
     // callback below) — §5.1 of Code-Review-Findings.
     private readonly ConcurrentDictionary<RouteId, PtsDriftTracker> _pushVideoDrift = new();
+    private readonly ConcurrentDictionary<RouteId, byte> _pushAudioFormatMismatchWarnings = new();
 
     // Reusable 1-element scratch for PushVideoTick's IVideoChannel.FillBuffer calls.
     // Only the push-video thread touches this, so no synchronization is required.
@@ -578,6 +580,7 @@ public sealed class AVRouter : IAVRouter
 
         var routeSnapshots = _routes.Values.Select(r => new RouteDiagnostics(
             r.Id, r.InputId, r.EndpointId, r.Kind.ToString(), r.Enabled, r.Gain,
+            r.TimeOffset,
             r.Resampler is not null)).ToArray();
 
         return new RouterDiagnosticsSnapshot(
@@ -677,6 +680,7 @@ public sealed class AVRouter : IAVRouter
             var route = new RouteEntry(routeId, inp.Id, ep.Id, InputKind.Audio)
             {
                 Gain = options.Gain,
+                TimeOffset = options.TimeOffset,
                 ChannelMap = options.ChannelMap,
                 Resampler = options.Resampler,
             };
@@ -752,6 +756,7 @@ public sealed class AVRouter : IAVRouter
             var route = new RouteEntry(routeId, inp.Id, ep.Id, InputKind.Video)
             {
                 Gain = options.Gain,
+                TimeOffset = options.TimeOffset,
             };
 
             // Create a private subscription into the input channel so this endpoint
@@ -796,6 +801,7 @@ public sealed class AVRouter : IAVRouter
         if (_pushVideoPending.TryRemove(route.Id, out var pending))
             pending.MemoryOwner?.Dispose();
         _pushVideoDrift.TryRemove(route.Id, out _);
+        _pushAudioFormatMismatchWarnings.TryRemove(route.Id, out _);
 
         if (route.Kind == InputKind.Audio)
             RebuildAudioRouteSnapshot();
@@ -987,6 +993,21 @@ public sealed class AVRouter : IAVRouter
                         _pushAudioFrameAccumulators[ep.Id] = exact - framesPerBuffer;
                     }
                 }
+                else if (fmt.SampleRate != outFormat.Value.SampleRate ||
+                         fmt.Channels != outFormat.Value.Channels)
+                {
+                    if (_pushAudioFormatMismatchWarnings.TryAdd(route.Id, 0))
+                    {
+                        Log.LogWarning(
+                            "Push audio route {Route} ({Input}->{Endpoint}) skipped due to format mismatch. " +
+                            "Expected {ExpectedRate}Hz/{ExpectedCh}ch, got {ActualRate}Hz/{ActualCh}ch. " +
+                            "Use homogeneous route formats or route-level resampling before push endpoints.",
+                            route.Id, route.InputId, route.EndpointId,
+                            outFormat.Value.SampleRate, outFormat.Value.Channels,
+                            fmt.SampleRate, fmt.Channels);
+                    }
+                    continue;
+                }
                 break;
             }
 
@@ -1017,6 +1038,8 @@ public sealed class AVRouter : IAVRouter
 
                     var channel = inp.AudioChannel!;
                     var srcFormat = channel.SourceFormat;
+                    if (srcFormat.SampleRate != format.SampleRate || srcFormat.Channels != format.Channels)
+                        continue;
                     int srcSamples = framesPerBuffer * srcFormat.Channels;
 
                     var scratch = GetOrCreateScratch(ep.Id, srcSamples);
@@ -1034,7 +1057,8 @@ public sealed class AVRouter : IAVRouter
                     int filled = channel.FillBuffer(srcSpan, framesPerBuffer);
                     if (filled == 0) continue;
                     if (filled > maxFilled) maxFilled = filled;
-                    if (bufferPts == TimeSpan.MinValue) bufferPts = ptsBeforeFill;
+                    if (bufferPts == TimeSpan.MinValue)
+                        bufferPts = ptsBeforeFill + inp.TimeOffset + route.TimeOffset;
 
                     var filledSpan = srcSpan[..(filled * srcFormat.Channels)];
 
@@ -1140,7 +1164,8 @@ public sealed class AVRouter : IAVRouter
                 drift.SeedIfNeeded(candidate.Pts.Ticks, pushSeedClockTicks);
 
                 long relativeClockTicks = drift.RelativeClock(clockPos.Ticks);
-                long relativePtsTicks   = drift.RelativePts(candidate.Pts.Ticks, inp.TimeOffset.Ticks);
+                long routeOffsetTicks   = inp.TimeOffset.Ticks + route.TimeOffset.Ticks;
+                long relativePtsTicks   = drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
 
                 // Too early — cache for next tick.
                 if (relativePtsTicks > relativeClockTicks + earlyToleranceTicks)
@@ -1159,7 +1184,7 @@ public sealed class AVRouter : IAVRouter
                     {
                         if (!route.VideoSub.TryRead(out var next)) break;
 
-                        long nextRelPts = drift.RelativePts(next.Pts.Ticks, inp.TimeOffset.Ticks);
+                        long nextRelPts = drift.RelativePts(next.Pts.Ticks, routeOffsetTicks);
 
                         if (nextRelPts > relativeClockTicks + earlyToleranceTicks)
                         {
@@ -1377,7 +1402,8 @@ public sealed class AVRouter : IAVRouter
                         : clockPosition.Ticks;
                     _drift.SeedIfNeeded(candidate.Pts.Ticks, seedClockTicks);
 
-                    long relativePtsTicks   = _drift.RelativePts(candidate.Pts.Ticks, inp.TimeOffset.Ticks);
+                    long routeOffsetTicks   = inp.TimeOffset.Ticks + route.TimeOffset.Ticks;
+                    long relativePtsTicks   = _drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
                     long relativeClockTicks = _drift.RelativeClock(clockPosition.Ticks);
                     long toleranceTicks     = _router._options.VideoPtsEarlyTolerance.Ticks;
 

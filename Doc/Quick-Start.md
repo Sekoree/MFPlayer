@@ -1,11 +1,13 @@
 # Quick Start
 
-This guide shows quick setup paths for both `MediaPlayer` and `AVMixer`.
+This guide shows quick setup paths for both `MediaPlayer` and `AVRouter`.
 
 ## 0) Fastest path (`MediaPlayer`)
 
 ```csharp
-using var player = new MediaPlayer(audioOutput, videoOutput);
+using var player = new MediaPlayer();
+player.AddEndpoint(audioOutput);
+player.AddEndpoint(videoOutput);
 await player.OpenAsync("media.mp4");
 await player.PlayAsync();
 ```
@@ -22,7 +24,7 @@ output.Open(device, requestedFormat, framesPerBuffer: 512);
 
 using var router = new AVRouter();
 var outputId = router.RegisterEndpoint(output);
-var channelId = router.RegisterInput(audioChannel);
+var channelId = router.RegisterAudioInput(audioChannel);
 router.CreateRoute(channelId, outputId,
     new AudioRouteOptions { ChannelMap = ChannelRouteMap.Identity(output.HardwareFormat.Channels) });
 
@@ -39,7 +41,7 @@ videoOutput.Open("MFPlayer", 1280, 720, videoChannel.SourceFormat);
 
 using var router = new AVRouter();
 var outputId = router.RegisterEndpoint(videoOutput);
-var channelId = router.RegisterInput(videoChannel);
+var channelId = router.RegisterVideoInput(videoChannel);
 router.CreateRoute(channelId, outputId, new VideoRouteOptions());
 
 decoder.Start();

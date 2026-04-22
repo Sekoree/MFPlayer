@@ -8,7 +8,7 @@
 
 ## Core Model (AVRouter)
 
-- Register audio / video *inputs* (channels) with `router.RegisterInput(channel)`.
+- Register audio / video *inputs* (channels) with `router.RegisterAudioInput(channel)` / `router.RegisterVideoInput(channel)`.
 - Register *endpoints* (outputs, sinks, `IAVEndpoint`s) with `router.RegisterEndpoint(ep)`.
 - Wire them up with `router.CreateRoute(inputId, endpointId, options)` using
   `AudioRouteOptions` / `VideoRouteOptions` as appropriate.
@@ -37,8 +37,8 @@ var options = new NDISourceOptions
 ### Add/Remove channels
 
 ```csharp
-var audioInputId = router.RegisterInput(audioChannel);
-var videoInputId = router.RegisterInput(videoChannel);
+var audioInputId = router.RegisterAudioInput(audioChannel);
+var videoInputId = router.RegisterVideoInput(videoChannel);
 
 router.UnregisterInput(audioInputId);
 router.UnregisterInput(videoInputId);
@@ -92,16 +92,21 @@ same `RegisterEndpoint` / `CreateRoute` API.
 ## MediaPlayer Quick Reference
 
 ```csharp
-using var player = new MediaPlayer(audioOutput, videoOutput);
+using var player = new MediaPlayer();
+player.AddEndpoint(audioOutput);
+player.AddEndpoint(videoOutput);
 await player.OpenAsync("file.mp4");
 await player.PlayAsync();
 
-player.AddAudioSink(extraAudioSink, channels: 2);
-player.AddVideoSink(extraVideoSink);
+player.AddEndpoint(extraAudioSink);
+player.AddEndpoint(extraVideoSink);
 
 await player.PauseAsync();
 player.Seek(TimeSpan.FromSeconds(30));
 await player.PlayAsync();
+
+player.RemoveEndpoint(extraAudioSink);
+player.RemoveEndpoint(extraVideoSink);
 await player.StopAsync();
 ```
 

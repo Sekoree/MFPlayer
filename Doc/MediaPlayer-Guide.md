@@ -12,7 +12,8 @@ using S.Media.PortAudio;
 using var output = new PortAudioOutput();
 output.Open(device, requestedFormat, framesPerBuffer: 512);
 
-using var player = new MediaPlayer(audioOutput: output);
+using var player = new MediaPlayer();
+player.AddEndpoint(output);
 await player.OpenAsync("music.mp3");
 await player.PlayAsync();
 
@@ -23,7 +24,9 @@ await player.StopAsync();
 ## Basic audio + video playback
 
 ```csharp
-using var player = new MediaPlayer(audioOutput, videoOutput);
+using var player = new MediaPlayer();
+player.AddEndpoint(audioOutput);
+player.AddEndpoint(videoOutput);
 await player.OpenAsync("movie.mp4");
 await player.PlayAsync();
 ```
@@ -52,38 +55,32 @@ player.PlaybackFailed += (_, e) =>
 
 ## Add extra outputs/sinks (fan-out)
 
-For advanced routing, either use `player.Mixer` directly, or use convenience methods.
+Use `AddEndpoint(...)` / `RemoveEndpoint(...)` for runtime fan-out.
 
-### Add an audio sink
+### Add an audio endpoint
 
 ```csharp
-// Auto-routes first decoded audio channel when available.
-player.AddAudioSink(audioSink, channels: 2);
-
-// Explicit route map variant.
-player.AddAudioSink(audioSink, routeMap: ChannelRouteMap.Identity(2), channels: 2);
+player.AddEndpoint(audioSink);
 ```
 
-### Add a video sink
+### Add a video endpoint
 
 ```csharp
-player.AddVideoSink(videoSink);
+player.AddEndpoint(videoSink);
 ```
 
-### Add endpoint adapters
+### Add A/V endpoint
 
 ```csharp
-player.AddAudioEndpoint(audioEndpoint, channels: 2);
-player.AddVideoEndpoint(videoEndpoint);
+player.AddEndpoint(avEndpoint);
 ```
 
 ### Remove fan-out targets
 
 ```csharp
-player.RemoveAudioSink(audioSink);
-player.RemoveVideoSink(videoSink);
-player.RemoveAudioEndpoint(audioEndpoint);
-player.RemoveVideoEndpoint(videoEndpoint);
+player.RemoveEndpoint(audioSink);
+player.RemoveEndpoint(videoSink);
+player.RemoveEndpoint(avEndpoint);
 ```
 
 ### End-to-end: main output + NDI fan-out
@@ -110,12 +107,13 @@ using var ndiSink = new NDIAVSink(sender, new NDIAVSinkOptions
     AudioTargetFormat = new S.Media.Core.Audio.AudioFormat(48000, 2)
 });
 
-using var player = new MediaPlayer(audioOutput, videoOutput);
+using var player = new MediaPlayer();
+player.AddEndpoint(audioOutput);
+player.AddEndpoint(videoOutput);
 await player.OpenAsync("movie.mp4");
 
 // Fan out decoded A/V from the same player session.
-player.AddVideoSink(ndiSink);
-player.AddAudioSink(ndiSink, channels: 2);
+player.AddEndpoint(ndiSink);
 
 await ndiSink.StartAsync();
 await player.PlayAsync();
@@ -123,21 +121,20 @@ await player.PlayAsync();
 // ... playback ...
 
 await player.StopAsync();
-player.RemoveAudioSink(ndiSink);
-player.RemoveVideoSink(ndiSink);
+player.RemoveEndpoint(ndiSink);
 await ndiSink.StopAsync();
 ```
 
 For a full interactive sample with optional NDI enablement and diagnostics, see
 `Test/MFPlayer.VideoPlayer/Program.cs`.
 
-## Access mixer directly
+## Access router directly
 
 ```csharp
-if (player.Mixer is { } mixer)
+if (player.Router is { } router)
 {
-    // Full IAVMixer API is available.
-    mixer.RegisterAudioSink(audioSink, channels: 2);
+    // Full IAVRouter API is available.
+    var id = router.RegisterEndpoint(audioSink);
 }
 ```
 
@@ -145,5 +142,5 @@ if (player.Mixer is { } mixer)
 
 - Open outputs before creating `MediaPlayer`.
 - `MediaPlayer` does not own externally created outputs/sinks/endpoints.
-- For fully custom multi-channel routing workflows, use `AVMixer` directly.
+- For fully custom multi-channel routing workflows, use `AVRouter` directly.
 

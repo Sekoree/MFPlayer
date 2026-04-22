@@ -1279,7 +1279,7 @@ public sealed class NDIAVSink : IAVEndpoint, IFormatCapabilities<PixelFormat>
                         // briefly pushes fewer/no buffers, so the cursor would naturally
                         // lag.  The timing context snaps the cursor forward to the latest
                         // video PTS whenever the lag exceeds the underrun-recovery
-                        // threshold (default 250 ms), so a transient decoder glitch can't
+                        // threshold (default 80 ms), so a transient decoder glitch can't
                         // turn into a permanent A/V offset at the receiver.
                         //
                         // Discontinuity path: if the producer stream-PTS jumps forward

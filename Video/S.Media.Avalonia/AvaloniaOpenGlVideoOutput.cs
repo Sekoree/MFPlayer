@@ -120,6 +120,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEnd
         _yuvBt709 = bt709;
         _yuvLimitedRange = limitedRange;
         _yuvColorMatrix = bt709 ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
+        _lastAutoMatrix = YuvColorMatrix.Auto;
+        _lastAutoRange = YuvColorRange.Auto;
         _renderer?.SetYuvHints(bt709, limitedRange);
     }
 
@@ -133,6 +135,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEnd
         _yuvColorMatrix = matrix;
         _yuvBt709 = matrix == YuvColorMatrix.Bt709;
         _yuvLimitedRange = limitedRange;
+        _lastAutoMatrix = YuvColorMatrix.Auto;
+        _lastAutoRange = YuvColorRange.Auto;
         _renderer?.SetYuvHints(matrix, limitedRange);
     }
 
@@ -140,6 +144,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEnd
     public void ResetYuvHints()
     {
         _hasYuvHintsOverride = false;
+        _lastAutoMatrix = YuvColorMatrix.Auto;
+        _lastAutoRange = YuvColorRange.Auto;
         _renderer?.ResetYuvHintsToAuto();
     }
 
@@ -265,6 +271,8 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEnd
         _renderer.ScalingFilter = (ScalingFilter)_scalingFilter;
         if (_hasYuvHintsOverride)
             _renderer.SetYuvHints(_yuvColorMatrix, _yuvLimitedRange);
+        else
+            ApplyAutoYuvHintsIfNeeded(_outputFormat.Width, _outputFormat.Height);
         _hasUploadedFrame = false;
         _lastUploadedData = default;
     }
@@ -339,6 +347,7 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEnd
                 if (frame.HasValue)
                 {
                     var vf = frame.Value;
+                    ApplyAutoYuvHintsIfNeeded(vf.Width, vf.Height);
 
                     // If decode/render falls behind, skip stale frames up to a bounded budget.
                     for (int i = 0; i < _maxCatchupPullsPerRender; i++)
@@ -466,5 +475,23 @@ public sealed class AvaloniaOpenGlVideoOutput : OpenGlControlBase, IPullVideoEnd
         }
 
         return clone;
+    }
+
+    private void ApplyAutoYuvHintsIfNeeded(int width, int height)
+    {
+        if (_renderer == null || _hasYuvHintsOverride)
+            return;
+
+        int resolvedWidth = width > 0 ? width : 1280;
+        int resolvedHeight = height > 0 ? height : 720;
+        var resolvedRange = YuvAutoPolicy.ResolveRange(YuvColorRange.Auto);
+        var resolvedMatrix = YuvAutoPolicy.ResolveMatrix(YuvColorMatrix.Auto, resolvedWidth, resolvedHeight);
+
+        if (_lastAutoRange == resolvedRange && _lastAutoMatrix == resolvedMatrix)
+            return;
+
+        _renderer.SetYuvHints(resolvedMatrix, resolvedRange == YuvColorRange.Limited);
+        _lastAutoRange = resolvedRange;
+        _lastAutoMatrix = resolvedMatrix;
     }
 }

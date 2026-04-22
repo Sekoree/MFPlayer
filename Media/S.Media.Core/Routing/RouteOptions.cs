@@ -29,6 +29,12 @@ public record AudioRouteOptions : IRouteOptions
     public float Gain { get; init; } = 1.0f;
 
     /// <summary>
+    /// Route-specific media-time offset applied on top of any input offset.
+    /// Positive values delay this route; negative values advance it.
+    /// </summary>
+    public TimeSpan TimeOffset { get; init; } = TimeSpan.Zero;
+
+    /// <summary>
     /// Optional resampler for this route. When <see langword="null"/> and source/endpoint
     /// sample rates differ, the router auto-creates a <see cref="LinearResampler"/>.
     /// </summary>
@@ -42,5 +48,11 @@ public record VideoRouteOptions : IRouteOptions
 {
     /// <summary>Route-level gain/opacity (future use). Default 1.0.</summary>
     public float Gain { get; init; } = 1.0f;
+
+    /// <summary>
+    /// Route-specific media-time offset applied on top of any input offset.
+    /// Positive values delay this route; negative values advance it.
+    /// </summary>
+    public TimeSpan TimeOffset { get; init; } = TimeSpan.Zero;
 }
 

@@ -185,28 +185,19 @@ public sealed class MediaPlayer : IDisposable
     /// </summary>
     public void AddEndpoint(IAudioEndpoint endpoint)
     {
-        var id = _router.RegisterEndpoint(endpoint);
-        _endpoints.Add(endpoint);
-        _endpointIds.Add(id);
-        AutoRouteToEndpoint(id, audio: true, video: false);
+        RegisterEndpointAndMaybeStart(endpoint, _router.RegisterEndpoint(endpoint), audio: true, video: false);
     }
 
     /// <summary>Registers a video endpoint.</summary>
     public void AddEndpoint(IVideoEndpoint endpoint)
     {
-        var id = _router.RegisterEndpoint(endpoint);
-        _endpoints.Add(endpoint);
-        _endpointIds.Add(id);
-        AutoRouteToEndpoint(id, audio: false, video: true);
+        RegisterEndpointAndMaybeStart(endpoint, _router.RegisterEndpoint(endpoint), audio: false, video: true);
     }
 
     /// <summary>Registers a dual audio+video endpoint.</summary>
     public void AddEndpoint(IAVEndpoint endpoint)
     {
-        var id = _router.RegisterEndpoint(endpoint);
-        _endpoints.Add(endpoint);
-        _endpointIds.Add(id);
-        AutoRouteToEndpoint(id, audio: true, video: true);
+        RegisterEndpointAndMaybeStart(endpoint, _router.RegisterEndpoint(endpoint), audio: true, video: true);
     }
 
     /// <summary>Removes a previously added endpoint.</summary>
@@ -215,6 +206,10 @@ public sealed class MediaPlayer : IDisposable
         int idx = _endpoints.IndexOf(endpoint);
         if (idx < 0) return;
         var epId = _endpointIds[idx];
+
+        if (_isRunning)
+            endpoint.StopAsync().GetAwaiter().GetResult();
+
         _router.UnregisterEndpoint(epId);
         _endpoints.RemoveAt(idx);
         _endpointIds.RemoveAt(idx);
@@ -386,6 +381,16 @@ public sealed class MediaPlayer : IDisposable
     // ── Private ───────────────────────────────────────────────────────────────
 
     private volatile bool _isRunning;
+
+    private void RegisterEndpointAndMaybeStart(IMediaEndpoint endpoint, EndpointId id, bool audio, bool video)
+    {
+        _endpoints.Add(endpoint);
+        _endpointIds.Add(id);
+        AutoRouteToEndpoint(id, audio, video);
+
+        if (_isRunning)
+            endpoint.StartAsync().GetAwaiter().GetResult();
+    }
 
     private void AttachDecoder(FFmpegDecoder decoder)
     {

@@ -121,9 +121,16 @@ static string RangeLabel(YuvColorRange r) => r switch
     _ => "auto"
 };
 
-await RunAsync();
+var cli = ParseArgs(args);
+if (cli.ShowHelp)
+{
+    PrintUsage();
+    return;
+}
 
-static async Task RunAsync()
+await RunAsync(cli);
+
+static async Task RunAsync(CliOptions cli)
 {
 
 Console.WriteLine("╔═══════════════════════════════╗");
@@ -134,8 +141,21 @@ ffmpeg.RootPath = S.Media.FFmpeg.FFmpegLoader.ResolveDefaultSearchPath() ?? "/li
 
 // ── 1. Enter file path ───────────────────────────────────────────────────────
 
-Console.Write("Video file path: ");
-string filePath = (Console.ReadLine() ?? "").Trim('"', ' ');
+string filePath;
+if (!string.IsNullOrWhiteSpace(cli.FilePath))
+{
+    filePath = cli.FilePath.Trim('"', ' ');
+}
+else if (cli.NoPrompt)
+{
+    Console.WriteLine("No input file provided. Use --file <path>.");
+    return;
+}
+else
+{
+    Console.Write("Video file path: ");
+    filePath = (Console.ReadLine() ?? "").Trim('"', ' ');
+}
 
 if (!File.Exists(filePath))
 {
@@ -145,19 +165,34 @@ if (!File.Exists(filePath))
 
 // ── 1b. Ask about NDI early (determines whether we need audio) ───────────────
 
-Console.Write("Enable NDI video sink? [y/N]: ");
-bool enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
+bool enableNdi;
+if (cli.EnableNdi.HasValue)
+{
+    enableNdi = cli.EnableNdi.Value;
+}
+else if (cli.NoPrompt)
+{
+    enableNdi = false;
+}
+else
+{
+    Console.Write("Enable NDI video sink? [y/N]: ");
+    enableNdi = (Console.ReadLine() ?? string.Empty).Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
+}
 
 // Ask the preset up-front: it also controls the router's internal tick cadence,
 // which must be known before the AVRouter is constructed.
-var ndiPreset = NDIEndpointPreset.LowLatency;
+var ndiPreset = cli.NdiPreset ?? NDIEndpointPreset.LowLatency;
 if (enableNdi)
 {
-    Console.Write("NDI preset [Safe/Balanced/LowLatency] (default LowLatency): ");
-    var presetText = Console.ReadLine();
-    ndiPreset = string.IsNullOrWhiteSpace(presetText)
-        ? NDIEndpointPreset.LowLatency
-        : ParseNDIPreset(presetText);
+    if (!cli.NdiPreset.HasValue && !cli.NoPrompt)
+    {
+        Console.Write("NDI preset [Safe/Balanced/LowLatency] (default LowLatency): ");
+        var presetText = Console.ReadLine();
+        ndiPreset = string.IsNullOrWhiteSpace(presetText)
+            ? NDIEndpointPreset.LowLatency
+            : ParseNDIPreset(presetText);
+    }
 }
 
 // ── 2. Open decoder ──────────────────────────────────────────────────────────
@@ -216,18 +251,40 @@ using (decoder)
             initialWindow.Height,
             srcFmt);
 
-        Console.Write($"YUV shader range [auto/full/limited] (default {RangeLabel(suggestedRange)}): ");
-        string? rangeText = Console.ReadLine();
-        selectedRange = string.IsNullOrWhiteSpace(rangeText)
-            ? suggestedRange
-            : ParseYuvColorRange(rangeText);
+        if (cli.YuvRange.HasValue)
+        {
+            selectedRange = cli.YuvRange.Value;
+        }
+        else if (cli.NoPrompt)
+        {
+            selectedRange = suggestedRange;
+        }
+        else
+        {
+            Console.Write($"YUV shader range [auto/full/limited] (default {RangeLabel(suggestedRange)}): ");
+            string? rangeText = Console.ReadLine();
+            selectedRange = string.IsNullOrWhiteSpace(rangeText)
+                ? suggestedRange
+                : ParseYuvColorRange(rangeText);
+        }
         videoOutput.YuvColorRange = selectedRange;
 
-        Console.Write($"YUV shader matrix [auto/601/709] (default {MatrixLabel(suggestedMatrix)}): ");
-        string? matrixText = Console.ReadLine();
-        selectedMatrix = string.IsNullOrWhiteSpace(matrixText)
-            ? suggestedMatrix
-            : ParseYuvColorMatrix(matrixText);
+        if (cli.YuvMatrix.HasValue)
+        {
+            selectedMatrix = cli.YuvMatrix.Value;
+        }
+        else if (cli.NoPrompt)
+        {
+            selectedMatrix = suggestedMatrix;
+        }
+        else
+        {
+            Console.Write($"YUV shader matrix [auto/601/709] (default {MatrixLabel(suggestedMatrix)}): ");
+            string? matrixText = Console.ReadLine();
+            selectedMatrix = string.IsNullOrWhiteSpace(matrixText)
+                ? suggestedMatrix
+                : ParseYuvColorMatrix(matrixText);
+        }
         videoOutput.YuvColorMatrix = selectedMatrix;
 
         var resolvedRange = YuvAutoPolicy.ResolveRange(selectedRange);
@@ -254,7 +311,11 @@ using (decoder)
     router.SetClock(videoOutput.Clock);
 
     var videoInputId = router.RegisterVideoInput(videoChannel);
-    router.CreateRoute(videoInputId, videoEpId);
+    var localVideoDelay = TimeSpan.FromMilliseconds(cli.LocalVideoDelayMs ?? 0);
+    router.CreateRoute(videoInputId, videoEpId, new VideoRouteOptions
+    {
+        TimeOffset = localVideoDelay,
+    });
 
     // Optional: route the same active channel to an NDI A/V sink.
     NDIRuntime? ndiRuntime = null;
@@ -276,18 +337,33 @@ using (decoder)
             }
             else
             {
-                Console.Write("NDI source name [MFPlayer NDI Video]: ");
-                string senderName = (Console.ReadLine() ?? string.Empty).Trim();
+                string senderName = cli.NdiSenderName ?? string.Empty;
+                if (!cli.NoPrompt)
+                    Console.Write("NDI source name [MFPlayer NDI Video]: ");
+                if (string.IsNullOrWhiteSpace(senderName) && !cli.NoPrompt)
+                    senderName = (Console.ReadLine() ?? string.Empty).Trim();
                 if (string.IsNullOrEmpty(senderName)) senderName = "MFPlayer NDI Video";
 
                 var preset = ndiPreset;
 
-                Console.Write("NDI mode [quality/performance] (default quality): ");
-                var ndiMode = (Console.ReadLine() ?? string.Empty).Trim();
-                bool preferPerformanceOverQuality =
-                    ndiMode.Equals("performance", StringComparison.OrdinalIgnoreCase)
-                    || ndiMode.Equals("perf", StringComparison.OrdinalIgnoreCase)
-                    || ndiMode.Equals("p", StringComparison.OrdinalIgnoreCase);
+                bool preferPerformanceOverQuality;
+                if (cli.NdiPreferPerformance.HasValue)
+                {
+                    preferPerformanceOverQuality = cli.NdiPreferPerformance.Value;
+                }
+                else if (cli.NoPrompt)
+                {
+                    preferPerformanceOverQuality = false;
+                }
+                else
+                {
+                    Console.Write("NDI mode [quality/performance] (default quality): ");
+                    var ndiMode = (Console.ReadLine() ?? string.Empty).Trim();
+                    preferPerformanceOverQuality =
+                        ndiMode.Equals("performance", StringComparison.OrdinalIgnoreCase)
+                        || ndiMode.Equals("perf", StringComparison.OrdinalIgnoreCase)
+                        || ndiMode.Equals("p", StringComparison.OrdinalIgnoreCase);
+                }
 
                 // Disable NDI's SDK rate-clock.  With clockVideo/clockAudio=true the
                 // SDK blocks each send until the next nominal frame boundary, adding
@@ -336,17 +412,27 @@ using (decoder)
                         EnableAudioDriftCorrection   = false,
                     });
                     var ndiEpId = router.RegisterEndpoint(ndiSink);
-                    router.CreateRoute(videoInputId, ndiEpId);
+                    var ndiDelay = TimeSpan.FromMilliseconds(cli.NdiDelayMs ?? 0);
+                    router.CreateRoute(videoInputId, ndiEpId, new VideoRouteOptions
+                    {
+                        TimeOffset = ndiDelay,
+                    });
                     await ndiSink.StartAsync();
 
                     if (decoder.AudioChannels.Count > 0 && routeMap != null)
                     {
                         var sourceAudioChannel = decoder.AudioChannels[0];
                         var audioInputId = router.RegisterAudioInput(sourceAudioChannel);
-                        router.CreateRoute(audioInputId, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
+                        router.CreateRoute(audioInputId, ndiEpId, new AudioRouteOptions
+                        {
+                            ChannelMap = routeMap,
+                            TimeOffset = ndiDelay,
+                        });
                     }
 
                     Console.WriteLine($"  NDI sink enabled: {senderName} ({preset}, mode={(preferPerformanceOverQuality ? "perf" : "quality")})");
+                    if (ndiDelay != TimeSpan.Zero || localVideoDelay != TimeSpan.Zero)
+                        Console.WriteLine($"  Route delays: local-video={localVideoDelay.TotalMilliseconds:+0;-0;0} ms, ndi={ndiDelay.TotalMilliseconds:+0;-0;0} ms");
                     if (decoder.AudioChannels.Count > 0)
                         Console.WriteLine("  NDI audio enabled from source audio track.");
                 }
@@ -358,6 +444,24 @@ using (decoder)
 
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+    if (cli.AutoStopSeconds.HasValue && cli.AutoStopSeconds.Value > 0)
+    {
+        int autoStopSeconds = cli.AutoStopSeconds.Value;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(autoStopSeconds), cts.Token);
+                if (!cts.IsCancellationRequested)
+                {
+                    Console.WriteLine($"\n[Auto stop after {autoStopSeconds}s]");
+                    cts.Cancel();
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
 
     videoOutput.WindowClosed += () =>
     {
@@ -455,7 +559,7 @@ using (decoder)
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Close the window or press [Ctrl+C] to stop.");
-    if (!Console.IsInputRedirected)
+    if (!cli.NoPrompt && !Console.IsInputRedirected)
         Console.WriteLine("Press [Enter] to stop.");
     Console.WriteLine();
 
@@ -469,7 +573,13 @@ using (decoder)
         SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
         VideoEndpointDiagnosticsSnapshot? prevEndpoint = null;
         NDIAVSink.AvSyncSnapshot? prevAvSync = null;
+        double? prevPtsDeltaMs = null;
+        var pairGapWindowMs = new Queue<double>();
+        var tcDeltaWindowMs = new Queue<double>();
         double expectedFps = srcFmt.FrameRate > 0 ? srcFmt.FrameRate : 30.0;
+        double expectedFrameMs = expectedFps > 0 ? 1000.0 / expectedFps : 0.0;
+        const int rollingWindow = 60;
+        const int ndiSampleRate = 48000;
 
         while (!cts.IsCancellationRequested)
         {
@@ -496,6 +606,7 @@ using (decoder)
 
                 long renderDelta = o1.LoopIterations - o0.LoopIterations;
                 long presentDelta = o1.PresentedFrames - o0.PresentedFrames;
+                long contentDelta = o1.UniqueFrames - o0.UniqueFrames;
                 long blackDelta = o1.BlackFrames - o0.BlackFrames;
                 long bgraDelta = o1.BgraFrames - o0.BgraFrames;
                 long rgbaDelta = o1.RgbaFrames - o0.RgbaFrames;
@@ -503,7 +614,7 @@ using (decoder)
                 long y420Delta = o1.Yuv420pFrames - o0.Yuv420pFrames;
                 long y422P10Delta = o1.Yuv422p10Frames - o0.Yuv422p10Frames;
                 long exDelta = o1.RenderExceptions - o0.RenderExceptions;
-                string speedMark = presentDelta < Math.Max(1, (long)Math.Round(expectedFps * 0.75)) ? " slow" : "";
+                string speedMark = contentDelta < Math.Max(1, (long)Math.Round(expectedFps * 0.75)) ? " slow" : "";
                 string exMark = exDelta > 0 ? " ex" : "";
 
                 string endpointText = "ep=n/a";
@@ -525,7 +636,7 @@ using (decoder)
 
                 Console.WriteLine(
                     $"[vstats] clock={Fmt(outputForStats.Clock.Position)} src={Fmt(channelForStats.Position)} " +
-                    $"fps={presentDelta,3}/{expectedFps,5:F1} r={renderDelta,4} p={presentDelta,4} b={blackDelta,3} " +
+                    $"fps(content={contentDelta,3}/{expectedFps,5:F1}, display={presentDelta,3}) r={renderDelta,4} p={presentDelta,4} b={blackDelta,3} " +
                     $"ex={exDelta,2}{speedMark}{exMark}");
                 Console.WriteLine($"         fmt=bgra:{bgraDelta,3} rgba:{rgbaDelta,3} nv12:{nv12Delta,3} y420:{y420Delta,3} y422p10:{y422P10Delta,3}");
                 Console.WriteLine($"         {endpointText}");
@@ -554,12 +665,23 @@ using (decoder)
                     string ptsDelta = a1.LastPtsDeltaTicks == long.MinValue
                         ? "--"
                         : $"{TimeSpan.FromTicks(a1.LastPtsDeltaTicks).TotalMilliseconds,+7:F1}ms";
+                    double? tcDeltaMs = a1.LastTimecodeDeltaTicks == long.MinValue
+                        ? null
+                        : TimeSpan.FromTicks(a1.LastTimecodeDeltaTicks).TotalMilliseconds;
+                    double? ptsDeltaMs = a1.LastPtsDeltaTicks == long.MinValue
+                        ? null
+                        : TimeSpan.FromTicks(a1.LastPtsDeltaTicks).TotalMilliseconds;
 
                     // What the receiver "sees": at-last-video-submit, how far behind was audio?
                     long pairGapMs = a1.LastVideoSubmitMs - a1.AudioMsAtLastVideoSubmit;
                     string pairStr = a1.AudioMsAtLastVideoSubmit == 0 && a1.FirstAudioSubmitMs < 0
                         ? "audio-not-started"
                         : $"{pairGapMs,+5}ms (video@{a1.LastVideoSubmitMs}ms, audio@{a1.AudioMsAtLastVideoSubmit}ms)";
+
+                    if (a1.AudioMsAtLastVideoSubmit != 0 || a1.FirstAudioSubmitMs >= 0)
+                        PushRollingSample(pairGapWindowMs, pairGapMs, rollingWindow);
+                    if (tcDeltaMs.HasValue)
+                        PushRollingSample(tcDeltaWindowMs, tcDeltaMs.Value, rollingWindow);
 
                     string vTcStr = a1.LastVideoTimecodeTicks == long.MinValue ? "--"
                         : a1.LastVideoTimecodeTicks == long.MaxValue ? "SYNTHESIZE"
@@ -581,6 +703,30 @@ using (decoder)
                         $"1st-gap={firstGap} pair-gap={pairStr}");
                     Console.WriteLine(
                         $"         ndi tc v={vTcStr} a={aTcStr} Δtc={tcDelta}   pts v={vPtsStr} a={aPtsStr} Δpts={ptsDelta}");
+
+                    double? audioBufferMs = aSubThisSec > 0
+                        ? (aSamplesThisSec / (double)aSubThisSec) * 1000.0 / ndiSampleRate
+                        : null;
+                    string tcNorm = tcDeltaMs.HasValue && audioBufferMs is > 0
+                        ? $"{tcDeltaMs.Value / audioBufferMs.Value,+6:F2}x"
+                        : "--";
+                    string ptsNorm = ptsDeltaMs.HasValue && expectedFrameMs > 0
+                        ? $"{ptsDeltaMs.Value / expectedFrameMs,+6:F2}x"
+                        : "--";
+
+                    string discontinuity = "";
+                    if (ptsDeltaMs.HasValue && prevPtsDeltaMs.HasValue && expectedFrameMs > 0)
+                    {
+                        double deltaStep = Math.Abs(ptsDeltaMs.Value - prevPtsDeltaMs.Value);
+                        if (deltaStep > expectedFrameMs * 1.25)
+                            discontinuity = " *pts-jump";
+                    }
+                    if (ptsDeltaMs.HasValue)
+                        prevPtsDeltaMs = ptsDeltaMs.Value;
+
+                    Console.WriteLine(
+                        $"         ndi norm Δtc/buf={tcNorm} Δpts/frame={ptsNorm}{discontinuity} " +
+                        $"pair-gap p50/p95={FormatRollingStats(pairGapWindowMs)} Δtc p50/p95={FormatRollingStats(tcDeltaWindowMs)}");
                     Console.WriteLine(
                         $"         ch audio.pos={audioPosStr} video.pos={Fmt(channelForStats.Position)} clock={Fmt(outputForStats.Clock.Position)}");
                 }
@@ -593,7 +739,7 @@ using (decoder)
     }, cts.Token);
 
     // Wait for Ctrl+C, Enter (interactive only), window close, or cancellation.
-    if (!Console.IsInputRedirected)
+    if (!cli.NoPrompt && !Console.IsInputRedirected)
         _ = Task.Run(() => { Console.ReadLine(); cts.Cancel(); });
     try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); }
     catch (OperationCanceledException) { }
@@ -615,6 +761,177 @@ using (decoder)
 }
 
 }
+
+static void PrintUsage()
+{
+    Console.WriteLine("MFPlayer.VideoPlayer options:");
+    Console.WriteLine("  --file <path>                Video file path (non-interactive)");
+    Console.WriteLine("  --ndi <on|off>               Enable/disable NDI sink");
+    Console.WriteLine("  --ndi-preset <safe|balanced|lowlatency>");
+    Console.WriteLine("  --ndi-name <name>            NDI sender/source name");
+    Console.WriteLine("  --ndi-mode <quality|performance>");
+    Console.WriteLine("  --ndi-delay-ms <ms>          Delay only NDI route(s) by ms");
+    Console.WriteLine("  --local-video-delay-ms <ms>  Delay local SDL video route by ms");
+    Console.WriteLine("  --yuv-range <auto|full|limited>");
+    Console.WriteLine("  --yuv-matrix <auto|601|709>");
+    Console.WriteLine("  --auto-stop-sec <seconds>    Auto-stop timer");
+    Console.WriteLine("  --no-prompt                  Disable all interactive prompts");
+    Console.WriteLine("  --help                       Show this help");
+}
+
+static CliOptions ParseArgs(string[] args)
+{
+    var cli = new CliOptions();
+    int i = 0;
+
+    while (i < args.Length)
+    {
+        string a = args[i];
+        switch (a)
+        {
+            case "--help":
+            case "-h":
+                cli.ShowHelp = true;
+                i++;
+                break;
+
+            case "--no-prompt":
+                cli.NoPrompt = true;
+                i++;
+                break;
+
+            case "--file":
+                if (i + 1 < args.Length) cli.FilePath = args[++i];
+                i++;
+                break;
+
+            case "--ndi":
+                if (i + 1 < args.Length) cli.EnableNdi = ParseOnOff(args[++i]);
+                i++;
+                break;
+
+            case "--ndi-preset":
+                if (i + 1 < args.Length) cli.NdiPreset = ParseNDIPreset(args[++i]);
+                i++;
+                break;
+
+            case "--ndi-name":
+                if (i + 1 < args.Length) cli.NdiSenderName = args[++i];
+                i++;
+                break;
+
+            case "--ndi-mode":
+                if (i + 1 < args.Length)
+                {
+                    var mode = args[++i];
+                    cli.NdiPreferPerformance =
+                        mode.Equals("performance", StringComparison.OrdinalIgnoreCase)
+                        || mode.Equals("perf", StringComparison.OrdinalIgnoreCase)
+                        || mode.Equals("p", StringComparison.OrdinalIgnoreCase);
+                }
+                i++;
+                break;
+
+            case "--yuv-range":
+                if (i + 1 < args.Length) cli.YuvRange = ParseYuvColorRange(args[++i]);
+                i++;
+                break;
+
+            case "--ndi-delay-ms":
+                if (i + 1 < args.Length && double.TryParse(args[++i], out var ndiDelayMs))
+                    cli.NdiDelayMs = ndiDelayMs;
+                i++;
+                break;
+
+            case "--local-video-delay-ms":
+                if (i + 1 < args.Length && double.TryParse(args[++i], out var localDelayMs))
+                    cli.LocalVideoDelayMs = localDelayMs;
+                i++;
+                break;
+
+            case "--yuv-matrix":
+                if (i + 1 < args.Length) cli.YuvMatrix = ParseYuvColorMatrix(args[++i]);
+                i++;
+                break;
+
+            case "--auto-stop-sec":
+                if (i + 1 < args.Length && int.TryParse(args[++i], out var sec) && sec > 0)
+                    cli.AutoStopSeconds = sec;
+                i++;
+                break;
+
+            default:
+                // First positional arg is treated as --file for convenience.
+                if (!a.StartsWith("-", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(cli.FilePath))
+                    cli.FilePath = a;
+                i++;
+                break;
+        }
+    }
+
+    return cli;
+}
+
+static void PushRollingSample(Queue<double> window, double value, int maxSamples)
+{
+    window.Enqueue(value);
+    while (window.Count > maxSamples)
+        window.Dequeue();
+}
+
+static string FormatRollingStats(Queue<double> window)
+{
+    if (window.Count == 0)
+        return "--/--";
+
+    var samples = window.ToArray();
+    Array.Sort(samples);
+    double p50 = Percentile(samples, 0.50);
+    double p95 = Percentile(samples, 0.95);
+    return $"{p50:+0.0;-0.0;0.0}ms/{p95:+0.0;-0.0;0.0}ms";
+}
+
+static double Percentile(double[] sortedSamples, double percentile)
+{
+    if (sortedSamples.Length == 0)
+        return 0;
+
+    if (percentile <= 0) return sortedSamples[0];
+    if (percentile >= 1) return sortedSamples[^1];
+
+    double index = percentile * (sortedSamples.Length - 1);
+    int lo = (int)Math.Floor(index);
+    int hi = (int)Math.Ceiling(index);
+    if (lo == hi) return sortedSamples[lo];
+    double t = index - lo;
+    return sortedSamples[lo] + (sortedSamples[hi] - sortedSamples[lo]) * t;
+}
+
+static bool ParseOnOff(string value)
+{
+    return value.Equals("on", StringComparison.OrdinalIgnoreCase)
+           || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+           || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+           || value.Equals("y", StringComparison.OrdinalIgnoreCase)
+           || value.Equals("1", StringComparison.OrdinalIgnoreCase);
+}
+
+sealed class CliOptions
+{
+    public string? FilePath { get; set; }
+    public bool? EnableNdi { get; set; }
+    public NDIEndpointPreset? NdiPreset { get; set; }
+    public string? NdiSenderName { get; set; }
+    public bool? NdiPreferPerformance { get; set; }
+    public YuvColorRange? YuvRange { get; set; }
+    public YuvColorMatrix? YuvMatrix { get; set; }
+    public double? NdiDelayMs { get; set; }
+    public double? LocalVideoDelayMs { get; set; }
+    public int? AutoStopSeconds { get; set; }
+    public bool NoPrompt { get; set; }
+    public bool ShowHelp { get; set; }
+}
+
 
 
 

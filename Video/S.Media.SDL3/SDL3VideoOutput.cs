@@ -163,13 +163,16 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         {
             var range  = NormalizeColorRange(value.Range);
             var matrix = NormalizeColorMatrix(value.Matrix);
-            _hasYuvHintsOverride = true;
+            _hasYuvHintsOverride = range != YuvColorRange.Auto || matrix != YuvColorMatrix.Auto;
             _yuvColorRange  = (int)range;
             _yuvColorMatrix = (int)matrix;
+            _lastAutoRange = YuvColorRange.Auto;
+            _lastAutoMatrix = YuvColorMatrix.Auto;
             if (_renderer != null)
             {
-                _renderer.YuvColorRange  = range;
-                _renderer.YuvColorMatrix = matrix;
+                ApplyResolvedYuvHints(
+                    _outputFormat.Width > 0 ? _outputFormat.Width : _inputFormat.Width,
+                    _outputFormat.Height > 0 ? _outputFormat.Height : _inputFormat.Height);
             }
         }
     }
@@ -404,8 +407,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
 
         // ── GL renderer (context is current on this thread) ───────────────
         _renderer = new GLRenderer();
-        _renderer.YuvColorRange  = (YuvColorRange)_yuvColorRange;
-        _renderer.YuvColorMatrix = (YuvColorMatrix)_yuvColorMatrix;
+        ApplyResolvedYuvHints(_outputFormat.Width, _outputFormat.Height);
         _renderer.ScalingFilter  = (ScalingFilter)_scalingFilter;
 
         // Query actual physical pixel size — on HiDPI/scaled displays the pixel
@@ -610,6 +612,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                 if (frame.HasValue)
                 {
                     var vf = frame.Value;
+                    ApplyResolvedYuvHints(vf.Width, vf.Height);
                     _renderer!.SetVideoSize(vf.Width, vf.Height);
 
 
@@ -806,6 +809,35 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         return value is YuvColorMatrix.Auto or YuvColorMatrix.Bt601 or YuvColorMatrix.Bt709
             ? value
             : YuvColorMatrix.Auto;
+    }
+
+    private void ApplyResolvedYuvHints(int width, int height)
+    {
+        if (_renderer == null)
+            return;
+
+        int resolvedWidth = width > 0 ? width : 1280;
+        int resolvedHeight = height > 0 ? height : 720;
+
+        var requestedRange = (YuvColorRange)_yuvColorRange;
+        var requestedMatrix = (YuvColorMatrix)_yuvColorMatrix;
+        var resolvedRange = YuvAutoPolicy.ResolveRange(requestedRange);
+        var resolvedMatrix = YuvAutoPolicy.ResolveMatrix(requestedMatrix, resolvedWidth, resolvedHeight);
+
+        if (_hasYuvHintsOverride)
+        {
+            _renderer.YuvColorRange = resolvedRange;
+            _renderer.YuvColorMatrix = resolvedMatrix;
+            return;
+        }
+
+        if (_lastAutoRange == resolvedRange && _lastAutoMatrix == resolvedMatrix)
+            return;
+
+        _renderer.YuvColorRange = resolvedRange;
+        _renderer.YuvColorMatrix = resolvedMatrix;
+        _lastAutoRange = resolvedRange;
+        _lastAutoMatrix = resolvedMatrix;
     }
 
     public SDL3VideoCloneSink CreateCloneSink(string? title = null, int? width = null, int? height = null)
