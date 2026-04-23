@@ -35,7 +35,7 @@ await endpoint.StartAsync();
 ## 2) Video Playback (SDL3)
 
 ```csharp
-using var videoEndpoint = new SDL3VideoOutput(); // renamed to SDL3VideoEndpoint in a future release
+using var videoEndpoint = new SDL3VideoEndpoint(); // renamed to SDL3VideoEndpoint in a future release
 videoEndpoint.Open("MFPlayer", 1280, 720, videoChannel.SourceFormat);
 
 using var router = new AVRouter();

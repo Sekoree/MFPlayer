@@ -231,7 +231,7 @@ using (ndiRuntime)
         catch (Exception ex)
         {
             Console.WriteLine($"FAILED\n  {ex.Message}");
-            ndiSource.Stop();
+            ndiSource.StopClock();
             return;
         }
         Console.WriteLine("OK");
@@ -265,7 +265,7 @@ using (ndiRuntime)
 
         Console.Write("\nStopping… ");
         await output.StopAsync();
-        ndiSource.Stop();
+        ndiSource.StopClock();
         Console.WriteLine("Done.");
     }
 }

@@ -20,18 +20,42 @@ public interface IAudioChannel : IMediaChannel<float>
 
     /// <summary>Per-channel linear volume multiplier. Range: 0.0 – 1.0 (can exceed 1.0 for gain).</summary>
     /// <remarks>
-    /// <b>§3.56 / §0.4.5 decision — Keep + legacy (XML-only for now):</b> the setter is
-    /// retained for legacy direct-channel callers. Routed playback should prefer
-    /// <c>AVRouter.SetInputVolume(inputId, volume)</c>, which participates in per-input
-    /// peak metering and the upcoming per-route gain automation (§7.3). The setter will
-    /// be marked <c>[Obsolete]</c> once in-tree callers (MediaPlayer facade, SimplePlayer
-    /// test app) migrate to the router-level API — tracked under the §5.1
-    /// MediaPlayerBuilder pass so all call sites move together.
+    /// <b>§3.56 / §0.4.5 decision — Keep + legacy:</b> the setter is retained for
+    /// legacy direct-channel callers but is marked <c>[Obsolete]</c> as of the
+    /// 2026-04-23 fifth pass. Routed playback should use
+    /// <c>AVRouter.SetInputVolume(inputId, volume)</c>, which participates in
+    /// per-input peak metering and per-route gain automation (§7.3). The
+    /// in-tree <c>MediaPlayer</c> facade has already been migrated; future
+    /// major versions may remove the setter entirely, but the getter stays
+    /// non-obsolete because diagnostic / meter code legitimately reads it.
     /// </remarks>
-    float Volume { get; set; }
+    float Volume
+    {
+        get;
+        [Obsolete("Channel-level Volume is legacy — use AVRouter.SetInputVolume(inputId, volume) so per-input peak metering and per-route gain automation stay coherent. See Implementation-Checklist.md §3.56.")]
+        set;
+    }
 
-    /// <summary>Current playback position, derived from samples consumed.</summary>
+    /// <summary>
+    /// Current playback position, derived from samples consumed by the RT pull
+    /// callback. Advances as <see cref="IMediaChannel{T}.FillBuffer"/> runs.
+    /// </summary>
     TimeSpan Position { get; }
+
+    /// <summary>
+    /// PTS of the <em>next</em> sample that will be produced by <see cref="IMediaChannel{T}.FillBuffer"/>.
+    /// For most channels this equals <see cref="Position"/>, but for channels
+    /// that pre-read a chunk into a scratch buffer (e.g. decoder-driven pull
+    /// channels) <see cref="ReadHeadPosition"/> can be ahead of
+    /// <see cref="Position"/> by up to one chunk. Used by diagnostics and by
+    /// the router's drift tracker to avoid the "Position updates after the
+    /// read" ambiguity flagged by §3.49 / CH2.
+    /// <para>
+    /// Default implementation returns <see cref="Position"/>; channels that
+    /// need the distinction override it.
+    /// </para>
+    /// </summary>
+    TimeSpan ReadHeadPosition => Position;
 
     /// <summary>
     /// Number of full source-format frames the internal ring buffer can hold.

@@ -68,8 +68,11 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         {
             // Report the max queued count across active subscriptions — best proxy for
             // "how much is buffered ahead" in a fan-out world.
+            // §3.8 — local snapshot of the immutable array so a concurrent
+            // Subscribe/Unsubscribe that swaps `_subs` cannot tear this loop.
+            var subs = _subs;
             int max = 0;
-            foreach (var s in _subs)
+            foreach (var s in subs)
             {
                 int c = s.Count;
                 if (c > max) max = c;
@@ -78,7 +81,16 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         }
     }
 
+    /// <summary>
+    /// §2.8 — raised on the demux worker thread once the last decoded frame has
+    /// been published to subscribers. Handlers must not block; chain via
+    /// <c>Task.Run</c>.
+    /// </summary>
     public event EventHandler? EndOfStream;
+    /// <summary>
+    /// §2.8 — raised on the <see cref="ThreadPool"/> (detached from the render
+    /// thread so handler work cannot stall the GPU upload path).
+    /// </summary>
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
     /// <summary>Target pixel format. Defaults to Bgra32.</summary>
@@ -224,7 +236,9 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     public void ApplySeekEpoch(long seekPositionTicks)
     {
         ffmpeg.avcodec_flush_buffers(_codecCtx);
-        foreach (var s in _subs) s.Flush();
+        // §3.8 — local snapshot so concurrent Subscribe/Unsubscribe does not tear the loop.
+        var subs = _subs;
+        foreach (var s in subs) s.Flush();
         // Reset the dequeued counter so the post-seek empty ring does not spuriously
         // fire BufferUnderrun before the new epoch's first frame arrives.
         Interlocked.Exchange(ref _framesDequeued, 0);
@@ -459,6 +473,13 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         if (_defaultSub is not null) return _defaultSub;
         lock (_subsLock)
         {
+            // §3.55 / review Concurrency #10 — double-dispose guard.
+            // Without this check a concurrent Dispose can null-out `_defaultSub`
+            // between the outer fast-path read and the lock, and a new
+            // subscription would then be created against an already-disposed
+            // channel, leaking resources and producing an ObjectDisposed at
+            // first frame.  Re-check under the lock after acquiring it.
+            ObjectDisposedException.ThrowIf(_disposed, this);
             _defaultSub ??= (FFmpegVideoSubscription)Subscribe(
                 new VideoSubscriptionOptions(_bufferDepth, VideoOverflowPolicy.Wait, "default"));
         }
@@ -502,7 +523,10 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
 
     public void Seek(TimeSpan position)
     {
-        foreach (var s in _subs) s.Flush();
+        // §3.8 — snapshot the immutable array so a concurrent Subscribe/Unsubscribe
+        // that swaps `_subs` cannot tear this loop.
+        var subs = _subs;
+        foreach (var s in subs) s.Flush();
         Interlocked.Exchange(ref _framesDequeued, 0);
         Volatile.Write(ref _positionTicks, position.Ticks);
     }
@@ -690,9 +714,25 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
 
         for (int i = 0; i < subs.Length; i++)
         {
-            if (!subs[i].TryPublish(frame, token))
+            bool published;
+            try
             {
-                // Publish failed (sub is disposed / cancelled) — release this sub's ref.
+                // §3.9 — isolate TryPublish exceptions: a single misbehaving
+                // subscription must not leak its ref-count share nor skip
+                // publish for the remaining subs. On any exception we treat
+                // the publish as failed (release this sub's ref) and carry
+                // on with the next sub.
+                published = subs[i].TryPublish(frame, token);
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning(ex, "Video subscription TryPublish threw; treating as failed publish");
+                published = false;
+            }
+
+            if (!published)
+            {
+                // Publish failed (sub is disposed / cancelled / threw) — release this sub's ref.
                 frame.MemoryOwner?.Dispose();
             }
         }
@@ -700,7 +740,9 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
 
     public void CompleteDecodeLoop()
     {
-        foreach (var s in _subs) s.CompleteWriter();
+        // §3.8 — local snapshot (ImmutableArray is tear-free but we keep the pattern uniform).
+        var subs = _subs;
+        foreach (var s in subs) s.CompleteWriter();
     }
 
     public void RaiseEndOfStream()

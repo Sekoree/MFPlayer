@@ -135,7 +135,7 @@ using (decoder)
 
     var inputId = router.RegisterAudioInput(audioChannel);
     router.CreateRoute(inputId, epId, new AudioRouteOptions { ChannelMap = routeMap });
-    audioChannel.Volume = 1.0f;
+    router.SetInputVolume(inputId, 1.0f);
 
     if (srcFmt.SampleRate != output.HardwareFormat.SampleRate)
         Console.WriteLine($"  Resampling: {srcFmt.SampleRate} → {output.HardwareFormat.SampleRate} Hz (AudioMixer)");
@@ -237,13 +237,13 @@ using (decoder)
 
                 case ConsoleKey.UpArrow:
                     volume = Math.Clamp(volume + 0.05f, 0.0f, 2.0f);
-                    audioChannel.Volume = volume;
+                    router.SetInputVolume(inputId, volume);
                     Console.WriteLine($"[volume] {volume:0.00}");
                     break;
 
                 case ConsoleKey.DownArrow:
                     volume = Math.Clamp(volume - 0.05f, 0.0f, 2.0f);
-                    audioChannel.Volume = volume;
+                    router.SetInputVolume(inputId, volume);
                     Console.WriteLine($"[volume] {volume:0.00}");
                     break;
             }

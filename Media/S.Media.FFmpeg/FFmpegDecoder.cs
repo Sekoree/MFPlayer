@@ -590,8 +590,27 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     {
         try
         {
-            // Keep seek control-path non-blocking: best effort only.
-            return writer.TryWrite(packet);
+            // Fast path: ring has room — publish immediately.
+            if (writer.TryWrite(packet)) return true;
+
+            // §3.1 / B1 — flush-reliability fallback. The ring is full. If
+            // we silently dropped the flush sentinel here, stale pre-seek
+            // packets would remain in the queue and frames emitted from
+            // them would carry the new post-seek epoch but the wrong PTS
+            // → audible/visible rewind-then-black after the seek. Fall
+            // back to a bounded async write so the decode worker has a
+            // brief window to drain one slot. 50 ms is well below any
+            // perceptible Seek latency but long enough to ride out the
+            // typical decode-loop scheduling jitter.
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+            var w = writer.WriteAsync(packet, cts.Token);
+            if (w.IsCompletedSuccessfully) return true;
+            try
+            {
+                w.AsTask().GetAwaiter().GetResult();
+                return true;
+            }
+            catch (OperationCanceledException) { return false; }
         }
         catch (ChannelClosedException) { return false; }
     }
@@ -773,13 +792,20 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
     /// <summary>
     /// Disposes the decoder, stopping all threads and releasing unmanaged FFmpeg resources.
-    /// <para><b>Teardown order:</b></para>
+    /// <para><b>Teardown order</b> (§3.2 / B2+B3):</para>
     /// <list type="number">
-    ///   <item>Cancel the CTS → unblocks demux and decode workers.</item>
-    ///   <item>Dispose channels → completes their output rings and decode tasks.</item>
-    ///   <item>Wait on the demux task (3 s timeout) → ensures av_read_frame is not in flight.</item>
+    ///   <item>Cancel the CTS → signals the demux worker to exit.</item>
+    ///   <item>Wait on the demux task (3 s timeout) → the demux worker stops calling
+    ///         <c>av_read_frame</c> and completes every packet-queue writer, so no
+    ///         in-flight <c>q.Writer.WriteAsync</c> can race the channel dispose below.</item>
+    ///   <item>Dispose channels → each cancels its own decode task, drains its ring and
+    ///         releases per-channel FFmpeg state (codec ctx, swr, sws, frames).</item>
     ///   <item>Release HW device context (if any).</item>
-    ///   <item>Close the AVFormatContext (and the custom AVIO context if opened from a Stream).</item>
+    ///   <item>Take the format write-lock and close the AVFormatContext — belt-and-braces
+    ///         guard against an any demux-read that slipped through the cancel (shouldn't
+    ///         happen after the join, but correctness is cheap here).</item>
+    ///   <item>Dispose the custom AVIO context (if opened from a Stream) and release
+    ///         <see cref="_formatIoGate"/>.</item>
     /// </list>
     /// <para>
     /// <b>Note:</b> The 3-second blocking wait on <c>_demuxTask</c> can deadlock if Dispose
@@ -795,9 +821,11 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         _log.LogInformation("Disposing FFmpegDecoder");
         _cts.Cancel();
 
-        foreach (var ch in _audioChannelsImpl) ch.Dispose();
-        foreach (var ch in _videoChannelsImpl) ch.Dispose();
-
+        // §3.2 / B2 — join the demux task BEFORE disposing channels so the
+        // demux worker's in-flight WriteAsync calls cannot race an
+        // already-completed ring. If the cooperative cancel times out
+        // (3 s), fall through to channel disposal anyway — it is always
+        // safe for the demux side.
         if (_demuxTask != null)
         {
             try { _demuxTask.Wait(TimeSpan.FromSeconds(3)); }
@@ -807,17 +835,36 @@ public sealed unsafe class FFmpegDecoder : IDisposable
             }
         }
 
+        foreach (var ch in _audioChannelsImpl) ch.Dispose();
+        foreach (var ch in _videoChannelsImpl) ch.Dispose();
+
         if (_hwDeviceCtx != null)
             fixed (AVBufferRef** pp = &_hwDeviceCtx)
                 ffmpeg.av_buffer_unref(pp);
 
+        // §3.2 / B3 — close the format context under the write lock so a
+        // demux read that somehow slipped past the cancel (or a future
+        // caller that bypasses the documented teardown order) cannot
+        // execute av_read_frame concurrently with avformat_close_input
+        // and touch freed state.
         if (_fmt != null)
         {
-            if (_avioCtx != null)
-                _fmt->pb = null;
+            bool lockTaken = false;
+            try
+            {
+                _formatIoGate.EnterWriteLock();
+                lockTaken = true;
 
-            fixed (AVFormatContext** pp = &_fmt)
-                ffmpeg.avformat_close_input(pp);
+                if (_avioCtx != null)
+                    _fmt->pb = null;
+
+                fixed (AVFormatContext** pp = &_fmt)
+                    ffmpeg.avformat_close_input(pp);
+            }
+            finally
+            {
+                if (lockTaken) _formatIoGate.ExitWriteLock();
+            }
         }
 
         _avioCtx?.Dispose();

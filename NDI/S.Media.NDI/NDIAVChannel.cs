@@ -16,7 +16,7 @@ public sealed class NDIAVChannel : IDisposable
     private long _videoDriftOriginTicks;
     private int _hasDriftOrigin;
 
-    public IAudioChannel AudioChannel { get; }
+    public IAudioChannel? AudioChannel { get; }
     public IVideoChannel? VideoChannel { get; }
     public NDIClock Clock => _source.Clock;
     public NDISourceState State => _source.State;
@@ -30,9 +30,13 @@ public sealed class NDIAVChannel : IDisposable
     private NDIAVChannel(NDISource source)
     {
         _source = source;
-        AudioChannel = source.AudioChannel
-            ?? throw new InvalidOperationException("The selected NDI source has no audio stream.");
+        // §3.47 / N14 — NDI|HX / PTZ previews are legitimately video-only.
+        // Let consumers branch on null instead of refusing them with an exception.
+        AudioChannel = source.AudioChannel;
         VideoChannel = source.VideoChannel;
+        if (AudioChannel is null && VideoChannel is null)
+            throw new InvalidOperationException(
+                "The selected NDI source has neither audio nor video — nothing to route.");
     }
 
     public static NDIAVChannel Open(NDIDiscoveredSource source, NDISourceOptions? options = null)
@@ -67,7 +71,7 @@ public sealed class NDIAVChannel : IDisposable
     /// </summary>
     public void StartAudioCapture() => _source.StartAudioCapture();
 
-    public void Stop() => _source.Stop();
+    public void Stop() => _source.StopClock();
 
     /// <summary>
     /// Waits until the audio capture ring reaches a minimum number of chunks.
@@ -110,7 +114,9 @@ public sealed class NDIAVChannel : IDisposable
     /// </summary>
     public bool TryGetAvDrift(out TimeSpan drift)
     {
-        if (VideoChannel == null)
+        // §3.47 — both channels are nullable now. Drift is only meaningful
+        // when we have at least one of each kind to compare.
+        if (VideoChannel is null || AudioChannel is null)
         {
             drift = TimeSpan.Zero;
             return false;

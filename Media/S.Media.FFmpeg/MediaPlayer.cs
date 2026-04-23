@@ -105,21 +105,67 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     /// <summary>
     /// Creates a <see cref="MediaPlayer"/>. Endpoints can be added before or after construction.
     /// </summary>
-    public MediaPlayer()
+    public MediaPlayer() : this(routerOptions: null)
     {
-        _router = new AVRouter();
     }
+
+    /// <summary>
+    /// Creates a <see cref="MediaPlayer"/> with custom router options — used by
+    /// <see cref="MediaPlayerBuilder"/> so callers can tune clock selection, tick
+    /// cadence and mixer behaviour without constructing an <see cref="AVRouter"/>
+    /// by hand. Kept <c>internal</c> because public surface should go through the
+    /// builder (§5.1 / review §"Proposed simplified API").
+    /// </summary>
+    internal MediaPlayer(AVRouterOptions? routerOptions)
+    {
+        _router = new AVRouter(routerOptions);
+    }
+
+    /// <summary>
+    /// Starts a fluent <see cref="MediaPlayerBuilder"/> so endpoints, clock,
+    /// decoder/router options and an error handler can be declared up-front,
+    /// then the fully-wired <see cref="MediaPlayer"/> materialises on
+    /// <see cref="MediaPlayerBuilder.Build"/>. Closes review item §5.1.
+    /// </summary>
+    public static MediaPlayerBuilder Create() => new();
+
+    /// <summary>
+    /// Default <see cref="FFmpegDecoderOptions"/> applied when
+    /// <see cref="OpenAsync(string, FFmpegDecoderOptions?, CancellationToken)"/>
+    /// is called with a <see langword="null"/> options argument. Set by
+    /// <see cref="MediaPlayerBuilder.WithDecoderOptions"/>; <see langword="null"/>
+    /// (default) falls back to <see cref="FFmpegDecoder"/>'s built-in defaults.
+    /// </summary>
+    internal FFmpegDecoderOptions? DefaultDecoderOptions { get; set; }
 
     // ── Events ────────────────────────────────────────────────────────────────
 
 
     /// <inheritdoc cref="PlaybackStateChangedEventArgs"/>
+    /// <remarks>
+    /// §2.8 — dispatched synchronously on the thread that drove the state change
+    /// (typically the caller of <c>PlayAsync</c>/<c>PauseAsync</c>/<c>StopAsync</c>,
+    /// or the decoder completion thread for the final <c>Stopped</c> transition).
+    /// Handlers must not block; offload heavy work to <see cref="Task.Run(Action)"/>.
+    /// </remarks>
     public event EventHandler<PlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
     /// <inheritdoc cref="PlaybackCompletedEventArgs"/>
+    /// <remarks>
+    /// §2.8 — dispatched on the decoder's completion thread (the one that observed
+    /// <c>EndOfMedia</c>). Handlers that start another playback should use
+    /// <c>Task.Run</c> to avoid reentering the decoder lifecycle from its own
+    /// completion callback.
+    /// </remarks>
     public event EventHandler<PlaybackCompletedEventArgs>? PlaybackCompleted;
 
     /// <inheritdoc cref="PlaybackFailedEventArgs"/>
+    /// <remarks>
+    /// §2.8 — dispatched on whichever thread observed the failure (demux worker,
+    /// decode worker, RT push thread). Handlers must not block; the player is
+    /// already transitioning to <see cref="PlaybackState.Stopped"/> when this
+    /// fires.
+    /// </remarks>
     public event EventHandler<PlaybackFailedEventArgs>? PlaybackFailed;
 
     // ── Properties ───────────────────────────────────────────────────────────
@@ -210,6 +256,46 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         _endpointIds.RemoveAt(idx);
     }
 
+    /// <summary>
+    /// Async counterpart to <see cref="AddEndpoint(IAudioEndpoint)"/> — closes review
+    /// item §4.4 / B19. Registers the endpoint with the router and, if the player
+    /// is already running, starts the endpoint cooperatively via
+    /// <see cref="IMediaEndpoint.StartAsync"/> instead of the legacy sync
+    /// <c>GetAwaiter().GetResult()</c> that could deadlock single-threaded sync
+    /// contexts.
+    /// </summary>
+    public Task AddEndpointAsync(IAudioEndpoint endpoint, CancellationToken ct = default)
+        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint),
+            audio: true, video: false, ct);
+
+    /// <inheritdoc cref="AddEndpointAsync(IAudioEndpoint, CancellationToken)"/>
+    public Task AddEndpointAsync(IVideoEndpoint endpoint, CancellationToken ct = default)
+        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint),
+            audio: false, video: true, ct);
+
+    /// <inheritdoc cref="AddEndpointAsync(IAudioEndpoint, CancellationToken)"/>
+    public Task AddEndpointAsync(IAVEndpoint endpoint, CancellationToken ct = default)
+        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint),
+            audio: true, video: true, ct);
+
+    /// <summary>
+    /// Async counterpart to <see cref="RemoveEndpoint"/>. Stops the endpoint
+    /// cooperatively if the player is active, then unregisters it from the router.
+    /// </summary>
+    public async Task RemoveEndpointAsync(IMediaEndpoint endpoint, CancellationToken ct = default)
+    {
+        int idx = _endpoints.IndexOf(endpoint);
+        if (idx < 0) return;
+        var epId = _endpointIds[idx];
+
+        if (IsActive)
+            await endpoint.StopAsync(ct).ConfigureAwait(false);
+
+        _router.UnregisterEndpoint(epId);
+        _endpoints.RemoveAt(idx);
+        _endpointIds.RemoveAt(idx);
+    }
+
     // ── Open ──────────────────────────────────────────────────────────────────
 
     /// <summary>Opens the media file and prepares the pipeline.</summary>
@@ -223,7 +309,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         try
         {
             await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen).ConfigureAwait(false);
-            AttachDecoder(FFmpegDecoder.Open(path, options));
+            AttachDecoder(FFmpegDecoder.Open(path, options ?? DefaultDecoderOptions));
             SetState(PlaybackState.Ready);
         }
         catch (Exception ex)
@@ -246,7 +332,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         try
         {
             await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen).ConfigureAwait(false);
-            AttachDecoder(FFmpegDecoder.Open(stream, options, leaveOpen));
+            AttachDecoder(FFmpegDecoder.Open(stream, options ?? DefaultDecoderOptions, leaveOpen));
             SetState(PlaybackState.Ready);
         }
         catch (Exception ex)
@@ -263,11 +349,12 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     public async Task PlayAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_decoder == null)
-            throw new MediaException("No media is open. Call OpenAsync first.");
 
         try
         {
+            if (_decoder == null)
+                throw new MediaException("No media is open. Call OpenAsync first.");
+
             if (!_decoderStarted)
             {
                 _decoder.Start();
@@ -468,13 +555,25 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             endpoint.StartAsync().GetAwaiter().GetResult();
     }
 
+    private async Task RegisterEndpointAndMaybeStartAsync(IMediaEndpoint endpoint, EndpointId id, bool audio, bool video, CancellationToken ct)
+    {
+        _endpoints.Add(endpoint);
+        _endpointIds.Add(id);
+        AutoRouteToEndpoint(id, audio, video);
+
+        if (IsActive)
+            await endpoint.StartAsync(ct).ConfigureAwait(false);
+    }
+
     private void AttachDecoder(FFmpegDecoder decoder)
     {
         if (decoder.FirstAudioChannel is { } audioCh)
         {
             var inputId = _router.RegisterAudioInput(audioCh);
             _audioInputId = inputId;
-            audioCh.Volume = _volume;
+            // §3.56 — publish volume via the router input (new world) rather than
+            // via the channel-level setter which is now [Obsolete].
+            _router.SetInputVolume(inputId, _volume);
 
             // Create routes to all audio-capable endpoints
             for (int i = 0; i < _endpoints.Count; i++)

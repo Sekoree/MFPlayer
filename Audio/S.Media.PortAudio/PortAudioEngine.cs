@@ -8,6 +8,16 @@ namespace S.Media.PortAudio;
 /// <summary>
 /// Enumerates PortAudio host APIs and devices, and manages Pa_Initialize / Pa_Terminate.
 /// One instance per application; call <see cref="Initialize"/> before creating any output.
+/// <para>
+/// <b>§3.28a / P7 — single-instance contract:</b> PortAudio's native
+/// <c>Pa_Initialize</c> / <c>Pa_Terminate</c> pair keeps an internal refcount,
+/// but this wrapper does <em>not</em> replicate it. Create exactly one
+/// <see cref="PortAudioEngine"/> for the lifetime of the process, and let the
+/// owning DI container / <c>using</c> scope drive its disposal. Creating two
+/// engines and disposing one of them will tear PortAudio down for the other —
+/// a latent footgun. If you need a multi-engine story (tests, plugin hosts),
+/// wrap access behind a reference-counted façade.
+/// </para>
 /// </summary>
 public sealed class PortAudioEngine : IAudioEngine
 {

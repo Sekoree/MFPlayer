@@ -93,7 +93,7 @@ using (decoder)
     if (audioChannel != null)
         Console.WriteLine($"  Audio: {audioChannel.SourceFormat}");
 
-    using var videoOutput = new SDL3VideoOutput();
+    using var videoOutput = new SDL3VideoEndpoint();
     Console.Write("Opening SDL3 video output... ");
     try
     {

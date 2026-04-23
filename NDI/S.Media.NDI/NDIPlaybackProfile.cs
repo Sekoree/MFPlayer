@@ -41,7 +41,7 @@ public sealed record NDIPlaybackProfile
     /// <summary>
     /// Suggested PortAudio output latency in seconds.
     /// 0 = let the driver / device choose (safest default).
-    /// Passed to <c>PortAudioOutput.Open(suggestedLatency:)</c>.
+    /// Passed to <c>PortAudioEndpoint.Open(suggestedLatency:)</c>.
     /// </summary>
     public double AudioSuggestedLatency { get; init; }
 
@@ -76,7 +76,7 @@ public sealed record NDIPlaybackProfile
     public bool AdaptiveVSync { get; init; }
 
     /// <summary>
-    /// When <see langword="true"/>, call <c>SDL3VideoOutput.ResetClockOrigin()</c> after
+    /// When <see langword="true"/>, call <c>SDL3VideoEndpoint.ResetClockOrigin()</c> after
     /// wiring the presentation clock so the first frame is never classified as "late".
     /// </summary>
     public bool ResetClockOrigin { get; init; }

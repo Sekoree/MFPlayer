@@ -6,7 +6,7 @@ NDI source / sink adapters for `S.Media.Core`.
   pull-mode `IAudioChannel` / `IVideoChannel` with an `NDIClock` slaved to sender
   timestamps.  Falls back to a synthetic monotonic clock (re-origined per
   real↔synthetic transition) when the sender provides undefined timestamps.
-- `NDIAVSink` — an `IAVEndpoint` that fans a pipeline's audio+video out through a
+- `NDIAVEndpoint` — an `IAVEndpoint` that fans a pipeline's audio+video out through a
   single NDI sender with a shared `NDIAvTimingContext` for aligned timecodes.
   Separate `_videoSendLock` / `_audioSendLock` allow concurrent RGBA sends without
   blocking audio (per NDI SDK §13: "frames may be sent … at any time, off any

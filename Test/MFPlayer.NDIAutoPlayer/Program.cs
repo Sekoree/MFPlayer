@@ -187,7 +187,8 @@ using (ndiRuntime)
 
         // ── 8. Wire up audio pipeline ────────────────────────────────────────
 
-        var audioChannel = avSource.AudioChannel;
+        var audioChannel = avSource.AudioChannel
+            ?? throw new InvalidOperationException("NDIAutoPlayer requires an NDI source with audio.");
         var srcFmt       = audioChannel.SourceFormat;
         int outCh        = Math.Min(srcFmt.Channels, outChannels);
         var hwFmt        = new AudioFormat(srcFmt.SampleRate, outCh);
@@ -219,7 +220,7 @@ using (ndiRuntime)
         // ── 8b. Wire up video pipeline (if available) ─────────────────────────
 
         var videoChannel = avSource.VideoChannel;
-        SDL3VideoOutput? videoOutput = null;
+        SDL3VideoEndpoint? videoOutput = null;
 
         if (videoChannel != null)
         {
@@ -256,7 +257,7 @@ using (ndiRuntime)
             }
 
             var (winW, winH) = FitWithin(videoFormat.Width, videoFormat.Height, 2560, 1440);
-            videoOutput = new SDL3VideoOutput();
+            videoOutput = new SDL3VideoEndpoint();
             try
             {
                 if (profile.AdaptiveVSync)

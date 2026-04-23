@@ -241,7 +241,7 @@ using (decoder)
     // ── 3. Open video output ─────────────────────────────────────────────
 
     Console.Write("Creating SDL3 video output… ");
-    using var videoOutput = new SDL3VideoOutput();
+    using var videoOutput = new SDL3VideoEndpoint();
     YuvColorRange selectedRange;
     YuvColorMatrix selectedMatrix;
     try
@@ -570,7 +570,7 @@ using (decoder)
     var audioChannelForStats = decoder.AudioChannels.Count > 0 ? decoder.AudioChannels[0] : null;
     var statsTask = Task.Run(async () =>
     {
-        SDL3VideoOutput.DiagnosticsSnapshot? prevOutput = null;
+        SDL3VideoEndpoint.DiagnosticsSnapshot? prevOutput = null;
         VideoEndpointDiagnosticsSnapshot? prevEndpoint = null;
         NDIAVEndpoint.AvSyncSnapshot? prevAvSync = null;
         double? prevPtsDeltaMs = null;

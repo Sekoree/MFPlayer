@@ -80,6 +80,13 @@ internal sealed class FFmpegVideoSubscription : IVideoSubscription
             case VideoOverflowPolicy.DropOldest:
             default:
             {
+                // §3.10 — DropOldest ref-count invariant:
+                // `_queued` is incremented exactly once per successful
+                // `_writer.TryWrite` and decremented exactly once per
+                // `_reader.TryRead`. Each evicted frame's `MemoryOwner` is
+                // disposed at most once here (caller owns the retry frame's
+                // ref until the final loss path at line 99). A Debug.Assert
+                // pins the non-negative invariant for the evict step.
                 // Try direct write; on full, evict the oldest and retry.
                 for (int attempt = 0; attempt < 4; attempt++)
                 {
@@ -90,7 +97,9 @@ internal sealed class FFmpegVideoSubscription : IVideoSubscription
                     }
                     if (_reader.TryRead(out var evicted))
                     {
-                        Interlocked.Decrement(ref _queued);
+                        long after = Interlocked.Decrement(ref _queued);
+                        System.Diagnostics.Debug.Assert(after >= 0,
+                            "DropOldest evicted a frame while _queued was already 0 — ref-count torn.");
                         evicted.MemoryOwner?.Dispose();
                     }
                     if (_disposed) return false;

@@ -120,7 +120,14 @@ public sealed class NDIReceiverSettings
 {
     public NDIRecvColorFormat ColorFormat    { get; init; } = NDIRecvColorFormat.Fastest;
     public NDIRecvBandwidth   Bandwidth      { get; init; } = NDIRecvBandwidth.Highest;
-    public bool               AllowVideoFields { get; init; } = true;
+    /// <summary>
+    /// Whether the receiver accepts interlaced/fielded video. §3.47j / N23: defaults
+    /// to <see langword="false"/> because the current framesync path always pulls
+    /// <c>Progressive</c> frames — allowing fields is pure bandwidth/CPU waste.
+    /// Set to <see langword="true"/> only when integrating directly with the raw
+    /// receiver and consuming fielded content.
+    /// </summary>
+    public bool               AllowVideoFields { get; init; } = false;
     public string?            ReceiverName   { get; init; }
 }
 

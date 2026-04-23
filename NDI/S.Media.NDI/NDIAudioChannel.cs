@@ -35,20 +35,33 @@ internal sealed class NDIAudioChannel : IAudioChannel
     private readonly int                 _waitPollMs;
 
     private Thread?                  _captureThread;
-    private CancellationTokenSource  _cts = new();
+    private CancellationTokenSource? _cts;
+    private int                      _captureStartedFlag;  // §3.46 — 0/1 CAS guard
 
     // DropOldest mode: when the ring is full the channel atomically removes the oldest
     // item itself — no separate TryRead from the capture thread, which previously raced
     // with the RT thread's TryRead and caused audible 1024-frame skips (cracks).
-    // SingleReader = true: only the RT thread calls TryRead → faster lock-free path.
+    // §3.47b / N9 — switched from `BoundedChannelFullMode.DropOldest` to manual
+    // drop-oldest on an unbounded channel because the bounded mode silently
+    // discards overflow without our pool ever seeing the evicted array, leaking
+    // `float[]` allocations into the GC heap over time. The manual drain path
+    // (TryRead → return to pool → TryWrite new) also keeps `_framesProduced`
+    // strictly monotonic: we only increment it for chunks we actually enqueued,
+    // and the evicted chunks decrement the implied in-flight count via a
+    // matching ring-counter Decrement.
     private readonly Channel<float[]>       _ring;
     private readonly ChannelReader<float[]> _ringReader;
     private readonly ChannelWriter<float[]> _ringWriter;
+    // §3.47b — explicit in-flight counter so we don't rely on Channel internals
+    // to tell us when the ring is at capacity.
+    private long _framesInRing;
 
     // Pre-allocated buffer pool: ringCapacity + 4 arrays, each sized for one NDI capture block.
     private readonly ConcurrentQueue<float[]> _pool = new();
     private readonly int _framesPerCapture;
     private readonly int _ringCapacity;           // actual ring slot count (≥ bufferDepth)
+    // §4.20 / N10 — log-once set for unsupported audio FourCCs encountered on capture.
+    private readonly HashSet<NDIFourCCAudioType> _unsupportedAudioFourCcLogged = [];
 
     private float[]? _currentChunk;
     private int      _currentOffset;
@@ -68,11 +81,11 @@ internal sealed class NDIAudioChannel : IAudioChannel
     {
         get
         {
-            // produced − consumed gives an upper bound; cap at ring capacity because
-            // BoundedChannelFullMode.DropOldest silently discards excess chunks.
-            long inFlight = Interlocked.Read(ref _framesProduced) - Interlocked.Read(ref _framesConsumed);
-            long cap = (long)_ringCapacity * _framesPerCapture;
-            return (int)Math.Max(0, Math.Min(inFlight, cap));
+            // §3.47b — read the explicit in-flight counter (set by the manual
+            // drop-oldest path). Multiply by frames-per-chunk to match the
+            // IAudioChannel contract (frames, not chunks).
+            long chunks = Interlocked.Read(ref _framesInRing);
+            return (int)Math.Max(0, Math.Min(chunks, _ringCapacity)) * _framesPerCapture;
         }
     }
 
@@ -123,12 +136,16 @@ internal sealed class NDIAudioChannel : IAudioChannel
         int minSlotsForHeadroom = (int)Math.Ceiling(sampleRate * 0.1 / _framesPerCapture);
         _ringCapacity = Math.Max(bufferDepth, minSlotsForHeadroom);
 
-        _ring = Channel.CreateBounded<float[]>(
-            new BoundedChannelOptions(_ringCapacity)
+        _ring = Channel.CreateUnbounded<float[]>(
+            new UnboundedChannelOptions
             {
-                FullMode     = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,   // only RT thread reads
-                SingleWriter = true
+                // SingleReader MUST stay false: the capture thread TryReads (to
+                // evict the oldest chunk on full) while the RT thread TryReads
+                // during FillBuffer. Two distinct readers = lost wakeups under
+                // SingleReader=true.
+                SingleReader = false,
+                SingleWriter = true,
+                AllowSynchronousContinuations = false
             });
         _ringReader = _ring.Reader;
         _ringWriter = _ring.Writer;
@@ -146,6 +163,23 @@ internal sealed class NDIAudioChannel : IAudioChannel
 
     public void StartCapture()
     {
+        // §3.41 — refuse to start a disposed channel; previously the latched _cts.Token
+        // would silently capture cancellation already requested by Dispose, leaving the
+        // capture thread to spin once and exit with no diagnostic.
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // §3.46 — atomic "already started" guard. The legacy code allowed two concurrent
+        // capture threads if StartCapture raced itself, both racing _frameSync.
+        if (Interlocked.CompareExchange(ref _captureStartedFlag, 1, 0) != 0)
+        {
+            Log.LogDebug("NDIAudioChannel.StartCapture called twice; ignoring second invocation");
+            return;
+        }
+
+        // §3.41 — fresh CTS per Start so a previous Dispose / stop cannot pre-cancel
+        // the new capture loop.
+        _cts = new CancellationTokenSource();
+
         Log.LogInformation("Starting NDIAudioChannel capture thread");
         _captureThread = new Thread(CaptureLoop)
         {
@@ -175,7 +209,11 @@ internal sealed class NDIAudioChannel : IAudioChannel
         // Thread.Sleep wakeup jitter is compensated each cycle — no cumulative drift.
         var  sw             = Stopwatch.StartNew();
         long expectedTicks  = 0L;
-        var  token          = _cts.Token;
+        // Snapshot the per-start CTS so a Dispose-after-Start that nulls _cts cannot
+        // throw NRE inside the loop.
+        var  cts            = _cts;
+        if (cts is null) return;
+        var  token          = cts.Token;
 
         while (!token.IsCancellationRequested)
         {
@@ -205,17 +243,32 @@ internal sealed class NDIAudioChannel : IAudioChannel
             expectedTicks += _captureIntervalTicks;
 
             // ── Capture ───────────────────────────────────────────────────────
+            NDIAudioFrameV3 frame = default;
+            bool haveFrame = false;
             try
             {
-                NDIAudioFrameV3 frame;
                 lock (_frameSyncGate)
                 {
                     _frameSync.CaptureAudio(out frame,
                         _requestedSampleRate, _requestedChannels, _framesPerCapture);
                 }
+                haveFrame = true;
 
                 // Guard: no samples or null data pointer → framesync returning silence placeholder.
                 if (frame.NoSamples <= 0 || frame.PData == nint.Zero) continue;
+
+                // §4.20 / N10 — PlanarToInterleaved assumes the canonical Fltp FourCC
+                // layout (32-bit float planar, channel stride in bytes).
+                if (frame.FourCC != NDIFourCCAudioType.Fltp)
+                {
+                    if (_unsupportedAudioFourCcLogged.Add(frame.FourCC))
+                    {
+                        Log.LogWarning(
+                            "NDIAudioChannel: unsupported audio FourCC={FourCC}; expected Fltp. Frame dropped.",
+                            frame.FourCC);
+                    }
+                    continue;
+                }
 
                 _clock.UpdateFromFrame(frame.Timestamp);
 
@@ -232,20 +285,52 @@ internal sealed class NDIAudioChannel : IAudioChannel
                 }
 
                 PlanarToInterleaved(frame, buf);
-                lock (_frameSyncGate)
-                    _frameSync.FreeAudio(frame); // release NDI buffer as soon as data is copied
 
-                // With DropOldest mode the channel handles overflow atomically — no
-                // separate TryRead loop here.  TryWrite returns false only after Dispose.
+                // §3.47b — manual drop-oldest on an unbounded channel. We
+                // explicitly evict the oldest chunk (returning it to the pool)
+                // before enqueueing the new one, so the pool size stays stable
+                // and `_framesProduced` only counts chunks that were actually
+                // enqueued without subsequent eviction.
+                if (Interlocked.Read(ref _framesInRing) >= _ringCapacity)
+                {
+                    if (_ringReader.TryRead(out var evicted))
+                    {
+                        long afterEvict = Interlocked.Decrement(ref _framesInRing);
+                        Debug.Assert(afterEvict >= 0,
+                            "NDIAudioChannel._framesInRing went negative on manual drop-oldest");
+                        _pool.Enqueue(evicted);
+                    }
+                }
+
                 if (_ringWriter.TryWrite(buf))
+                {
+                    Interlocked.Increment(ref _framesInRing);
                     Interlocked.Add(ref _framesProduced, frame.NoSamples);
+                }
                 else
+                {
+                    // TryWrite on an unbounded channel fails only after Complete.
                     _pool.Enqueue(buf);
+                }
             }
+            catch (OperationCanceledException) { /* cooperative */ }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {
-                Log.LogWarning(ex, "NDIAudioChannel capture-loop error, retrying");
+                // §3.44 / N6 — narrow log + type tag; the `finally` block still
+                // frees the NDI buffer we captured above.
+                Log.LogWarning(ex, "NDIAudioChannel capture-loop error [{ExceptionType}], retrying",
+                    ex.GetType().Name);
                 Thread.Sleep(10);
+            }
+            finally
+            {
+                // §3.44 / N6 — FreeAudio unconditionally; previously any `continue`
+                // branch that skipped the free leaked the NDI internal buffer.
+                if (haveFrame && frame.PData != nint.Zero)
+                {
+                    try { lock (_frameSyncGate) _frameSync.FreeAudio(frame); }
+                    catch (Exception ex) { Log.LogWarning(ex, "FreeAudio threw"); }
+                }
             }
         }
     }
@@ -321,6 +406,10 @@ internal sealed class NDIAudioChannel : IAudioChannel
                     }
                     return consumed;
                 }
+                // §3.47b — pair every TryRead with a matching _framesInRing decrement.
+                long afterRead = Interlocked.Decrement(ref _framesInRing);
+                Debug.Assert(afterRead >= 0,
+                    "NDIAudioChannel._framesInRing went negative on FillBuffer");
                 _currentOffset = 0;
             }
             int available = _currentChunk.Length - _currentOffset;
@@ -348,9 +437,20 @@ internal sealed class NDIAudioChannel : IAudioChannel
         _disposed = true;
         Log.LogInformation("Disposing NDIAudioChannel: framesConsumed={FramesConsumed}",
             Interlocked.Read(ref _framesConsumed));
-        _cts.Cancel();
+        var cts = Interlocked.Exchange(ref _cts, null);
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { }
         _captureThread?.Join(TimeSpan.FromSeconds(2));
+        cts?.Dispose();
         _ringWriter.TryComplete();
+
+        // §3.47h (cosmetic) — return any leftover ring chunks to the pool so a
+        // diagnostic dump after Dispose shows zero pool churn rather than the
+        // rented-but-never-returned tail.
+        while (_ringReader.TryRead(out var chunk))
+        {
+            Interlocked.Decrement(ref _framesInRing);
+            _pool.Enqueue(chunk);
+        }
     }
 }
 

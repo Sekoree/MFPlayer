@@ -28,7 +28,7 @@ public sealed class MainWindow : Window
     };
 
     private readonly string[] _args;
-    private readonly AvaloniaOpenGlVideoOutput _videoOutput;
+    private readonly AvaloniaOpenGlVideoEndpoint _videoOutput;
     private FFmpegDecoder? _decoder;
     private bool _started;
     private bool _shutdown;
@@ -46,7 +46,7 @@ public sealed class MainWindow : Window
         Width = 1280;
         Height = 720;
 
-        _videoOutput = new AvaloniaOpenGlVideoOutput();
+        _videoOutput = new AvaloniaOpenGlVideoEndpoint();
         Content = _videoOutput;
 
         Opened += OnOpened;
@@ -150,7 +150,7 @@ public sealed class MainWindow : Window
 
         _diagTask = Task.Run(async () =>
         {
-            AvaloniaOpenGlVideoOutput.DiagnosticsSnapshot? prevOut = null;
+            AvaloniaOpenGlVideoEndpoint.DiagnosticsSnapshot? prevOut = null;
             TimeSpan? prevClock = null;
             TimeSpan? prevSrc = null;
             long prevWallTicks = 0;

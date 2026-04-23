@@ -13,7 +13,7 @@ namespace S.Media.Avalonia;
 /// Clone/preview sink for Avalonia. Can be registered on a router to mirror video
 /// without creating an extra decoder instance.
 /// </summary>
-public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoEndpoint, IFormatCapabilities<PixelFormat>
+public sealed class AvaloniaOpenGlVideoCloneEndpoint : OpenGlControlBase, IVideoEndpoint, IFormatCapabilities<PixelFormat>
 {
     private readonly BasicPixelFormatConverter _converter = new();
     private readonly VideoFrameSlot _latestFrame = new();
@@ -26,7 +26,7 @@ public sealed class AvaloniaOpenGlVideoCloneSink : OpenGlControlBase, IVideoEndp
     public IReadOnlyList<PixelFormat> SupportedFormats { get; } = [PixelFormat.Rgba32, PixelFormat.Bgra32];
     public PixelFormat? PreferredFormat => PixelFormat.Rgba32;
 
-    internal AvaloniaOpenGlVideoCloneSink(string? name = null)
+    internal AvaloniaOpenGlVideoCloneEndpoint(string? name = null)
     {
         Name = name ?? "AvaloniaCloneSink";
         Width = double.NaN;

@@ -24,7 +24,11 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     private readonly NDIClock      _clock;
 
     private Thread?                  _captureThread;
-    private CancellationTokenSource  _cts = new();
+    // §3.41 — per-start CTS (nullable, rebuilt on each StartCapture) so a prior Dispose /
+    // stop cannot pre-cancel the new capture loop.
+    private CancellationTokenSource? _cts;
+    // §3.46 — atomic "already started" guard. Mirrors NDIAudioChannel.
+    private int                      _captureStartedFlag;
 
     // Lock-free ring: unbounded channel (writes always succeed) + manual capacity enforcement.
     // "Drop oldest" is implemented by draining one frame from the reader before each write
@@ -115,6 +119,19 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 
     public void StartCapture()
     {
+        // §3.41 — refuse to start a disposed channel.
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // §3.46 — atomic "already started" guard (matches NDIAudioChannel).
+        if (Interlocked.CompareExchange(ref _captureStartedFlag, 1, 0) != 0)
+        {
+            Log.LogDebug("NDIVideoChannel.StartCapture called twice; ignoring second invocation");
+            return;
+        }
+
+        // §3.41 — fresh CTS per Start.
+        _cts = new CancellationTokenSource();
+
         Log.LogInformation("Starting NDIVideoChannel capture thread");
         _captureThread = new Thread(CaptureLoop)
         {
@@ -139,18 +156,25 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 
     private void CaptureLoop()
     {
-        var token = _cts.Token;
+        // §3.41 — snapshot the per-start CTS so a Dispose-after-Start that clears
+        // _cts cannot NRE inside the loop.
+        var cts = _cts;
+        if (cts is null) return;
+        var token = cts.Token;
         while (!token.IsCancellationRequested)
         {
+            NDIVideoFrameV2 frame = default;
+            bool haveFrame = false;
             try
             {
-                NDIVideoFrameV2 frame;
                 lock (_frameSyncGate)
                     _frameSync.CaptureVideo(out frame);
+                haveFrame = true;
 
                 // When PData is null the framesync has no frame yet — nothing to free.
                 if (frame.PData == nint.Zero)
                 {
+                    haveFrame = false;
                     Thread.Sleep(5);
                     continue;
                 }
@@ -159,8 +183,6 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 // We MUST still free it; skipping FreeVideo leaks the internal NDI buffer.
                 if (frame.Xres == 0 || frame.Yres == 0)
                 {
-                    lock (_frameSyncGate)
-                        _frameSync.FreeVideo(frame);
                     Thread.Sleep(5);
                     continue;
                 }
@@ -168,21 +190,13 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 _clock.UpdateFromFrame(frame.Timestamp);
 
                 if (!TryCopyFrameToTightBuffer(frame, out var pixFmt, out var rented, out var totalBytes))
-                {
-                    lock (_frameSyncGate)
-                        _frameSync.FreeVideo(frame);
                     continue;
-                }
 
-                lock (_frameSyncGate)
-                    _frameSync.FreeVideo(frame); // release NDI buffer as soon as data is copied
                 var owner  = new NDIVideoFrameOwner(rented);
 
                 // Use the NDI timestamp when available; fall back to a local monotonic
                 // clock when the source provides undefined timestamps (0, negative, or
                 // long.MaxValue / NDIlib_recv_timestamp_undefined).
-                // Without a valid advancing PTS the VideoMixer's drop-lag logic treats
-                // every frame as stale and drops them all, causing a frozen first frame.
                 bool hasValidTimestamp = frame.Timestamp > 0 && frame.Timestamp != long.MaxValue;
                 double tsSecs;
                 bool currentIsSynthetic;
@@ -193,28 +207,18 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 }
                 else
                 {
-                    // Real→synthetic transition: re-origin synthetic clock to continue from
-                    // the last real PTS, preventing a backward time step that would freeze
-                    // downstream mixers (they treat backward-PTS frames as stale).
                     if (!_lastPtsWasSynthetic && _hasLastPts)
                         ReoriginSyntheticClock(_lastPtsSeconds);
                     tsSecs = GetSyntheticPtsSeconds();
                     currentIsSynthetic = true;
                 }
 
-                // Some NDI sources emit non-monotonic or discontinuous timestamps
-                // around reconnect/format transitions. Those values make the mixer
-                // treat new frames as stale and pin output to an old frame.
-                // Skip the clamp on the synthetic↔real transition — those two clocks
-                // have unrelated epochs, so a large delta is EXPECTED and legitimate.
                 bool clockModeChanged = _hasLastPts && (_lastPtsWasSynthetic != currentIsSynthetic);
                 if (_hasLastPts && !clockModeChanged)
                 {
                     const double MaxForwardJumpSeconds = 0.75;
                     if (tsSecs <= _lastPtsSeconds || (tsSecs - _lastPtsSeconds) > MaxForwardJumpSeconds)
                     {
-                        // Real timestamp unusable — fall back to synthetic, re-origined
-                        // from the last good PTS so the transition is seamless.
                         if (!_lastPtsWasSynthetic)
                             ReoriginSyntheticClock(_lastPtsSeconds);
                         tsSecs = GetSyntheticPtsSeconds();
@@ -239,36 +243,25 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 lock (_formatLock)
                     _sourceFormat = new VideoFormat(frame.Xres, frame.Yres, pixFmt, fpsNum, fpsDen);
 
-                // Extract YUV color-space hints from NDI frame metadata (if present).
-                // NDI does not have a structured color-space field; senders embed optional
-                // XML such as <ndi_color_space colorspace="BT.709" range="Limited"/>.
                 var (matrix, range) = ParseNdiColorMeta(frame.Metadata);
                 _suggestedMatrix = (int)matrix;
                 _suggestedRange  = (int)range;
 
                 EnqueueFrame(vf);
 
-                // Throttle: sleep for roughly ¼ of a frame interval so the capture loop
-                // wakes up ~4× per frame, keeping end-to-end video latency under ~5 ms
-                // while still being gentle on the CPU (a 1 ms floor prevents busy-spinning
-                // on high-frame-rate or unknown-rate sources).
+                // Throttle: sleep for roughly ¼ of a frame interval.
                 double fpsNow;
                 lock (_formatLock) fpsNow = _sourceFormat.FrameRate;
                 int sleepMs = fpsNow > 0
-                    ? Math.Max(1, (int)(250.0 / fpsNow))   // ¼ frame interval, min 1 ms
+                    ? Math.Max(1, (int)(250.0 / fpsNow))
                     : 4;
 
-                // OPT-7: In low-latency mode, use Stopwatch-based spin-wait instead of
-                // Thread.Sleep(1) which has 1–4 ms granularity on Linux.  This yields
-                // microsecond-accurate wakeup, cutting up to ~3 ms of jitter per frame.
                 if (_preferLowLatency)
                 {
                     long waitTicks = Stopwatch.Frequency * sleepMs / 1000;
                     long deadline = Stopwatch.GetTimestamp() + waitTicks;
-                    // Coarse sleep for anything > ~3 ms to keep CPU gentle.
                     if (sleepMs > 3)
                         Thread.Sleep(sleepMs - 3);
-                    // Spin-wait the remaining tail for microsecond accuracy.
                     while (Stopwatch.GetTimestamp() < deadline)
                         Thread.SpinWait(20);
                 }
@@ -277,12 +270,26 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                     Thread.Sleep(sleepMs);
                 }
             }
+            catch (OperationCanceledException) { /* cooperative */ }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {
-                // Swallow per-frame errors so a transient bad frame does not
-                // crash the background thread (and consequently the process).
-                Log.LogWarning(ex, "NDIVideoChannel capture-loop error, retrying");
+                // §3.44 / N6 — narrow the catch: anything other than OCE is logged as
+                // a real error, not silently swallowed as routine. Transient bad
+                // frames do not take down the thread, but the error is visible.
+                Log.LogWarning(ex, "NDIVideoChannel capture-loop error [{ExceptionType}], retrying",
+                    ex.GetType().Name);
                 Thread.Sleep(10);
+            }
+            finally
+            {
+                // §3.44 / N6 — FreeVideo is unconditional when we successfully
+                // captured. Previously the `continue` branches leaked the NDI
+                // buffer if any exception landed between CaptureVideo and Free.
+                if (haveFrame && frame.PData != nint.Zero)
+                {
+                    try { lock (_frameSyncGate) _frameSync.FreeVideo(frame); }
+                    catch (Exception ex) { Log.LogWarning(ex, "FreeVideo threw"); }
+                }
             }
         }
     }
@@ -423,6 +430,17 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 
     private static bool CopyI420(in NDIVideoFrameV2 frame, out byte[] rented, out int totalBytes)
     {
+        // §3.47a / N8 — I420 chroma-stride heuristic.
+        // NDI does not expose per-plane strides; the wire format gives us only
+        // `LineStrideInBytes` for the Y plane. The SDK convention (and the
+        // reference sample code) derives the chroma stride as `Y_stride / 2`
+        // because each chroma plane is horizontally sub-sampled 2:1. Padded
+        // sources where the Y plane is aligned to 16/32/64 bytes still satisfy
+        // this: the aligned Y stride stays a multiple of 2, so `Y_stride / 2`
+        // remains the correct padded chroma stride. The `Math.Max(uvRowBytes, …)`
+        // is a belt-and-braces guard for the pathological zero-stride frame
+        // (observed once in SDK 5 on a misbehaving sender) where we fall back to
+        // the unpadded row size rather than dividing by two into a zero stride.
         int w = frame.Xres;
         int h = frame.Yres;
         int yRowBytes = w;
@@ -467,7 +485,9 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         for (int i = 0; i < frameCount; i++)
         {
             if (!_ringReader.TryRead(out var vf)) break;
-            Interlocked.Decrement(ref _framesInRing);
+            long after = Interlocked.Decrement(ref _framesInRing);
+            // §3.47e — invariant: _framesInRing must never go negative.
+            Debug.Assert(after >= 0, "NDIVideoChannel._framesInRing went negative on FillBuffer");
             dest[i] = vf;
             Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
             Interlocked.Increment(ref _framesDequeued);
@@ -497,11 +517,20 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         if (_disposed) return;
         _disposed = true;
         Log.LogInformation("Disposing NDIVideoChannel");
-        _cts.Cancel();
+        var cts = Interlocked.Exchange(ref _cts, null);
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { }
         _captureThread?.Join(TimeSpan.FromSeconds(2));
+        cts?.Dispose();
         _ringWriter.TryComplete();
         while (_ringReader.TryRead(out var frame))
+        {
+            // §3.47e — keep the counter invariant intact on drain so a
+            // post-Dispose BufferAvailable read reports 0, not a stale count.
+            Interlocked.Decrement(ref _framesInRing);
             frame.MemoryOwner?.Dispose();
+        }
+        Debug.Assert(Interlocked.Read(ref _framesInRing) >= 0,
+            "NDIVideoChannel._framesInRing went negative after Dispose drain");
     }
 
     private void EnqueueFrame(in VideoFrame frame)
@@ -511,7 +540,10 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         {
             if (_ringReader.TryRead(out var dropped))
             {
-                Interlocked.Decrement(ref _framesInRing);
+                long after = Interlocked.Decrement(ref _framesInRing);
+                // §3.47e — strict accounting: every decrement must pair with a
+                // prior increment from EnqueueFrame (or a drain in Dispose).
+                Debug.Assert(after >= 0, "NDIVideoChannel._framesInRing went negative on drop-oldest");
                 dropped.MemoryOwner?.Dispose();
             }
         }
@@ -528,26 +560,73 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     /// Returns <see cref="YuvColorMatrix.Auto"/> / <see cref="YuvColorRange.Auto"/> when
     /// no metadata is present or the tag is absent — the renderer will fall back to the
     /// resolution-based heuristic in <see cref="YuvAutoPolicy"/>.
+    /// <para>
+    /// §3.47i / N22 — uses a bounded attribute-text extractor rather than a raw
+    /// <c>Contains("BT.709")</c> scan so a sender metadata payload that mentions
+    /// BT.2020 in a comment or other tag (e.g. <c>&lt;note&gt;not BT.2020&lt;/note&gt;</c>)
+    /// cannot mis-classify the color space.
+    /// </para>
     /// </summary>
     private static (YuvColorMatrix Matrix, YuvColorRange Range) ParseNdiColorMeta(string? xml)
     {
-        if (xml is null) return (YuvColorMatrix.Auto, YuvColorRange.Auto);
+        if (string.IsNullOrEmpty(xml)) return (YuvColorMatrix.Auto, YuvColorRange.Auto);
 
-        var matrix = xml.Contains("BT.2020", StringComparison.OrdinalIgnoreCase)
-            ? YuvColorMatrix.Bt2020
-            : xml.Contains("BT.709", StringComparison.OrdinalIgnoreCase)
-                ? YuvColorMatrix.Bt709
-                : xml.Contains("BT.601", StringComparison.OrdinalIgnoreCase)
-                    ? YuvColorMatrix.Bt601
-                    : YuvColorMatrix.Auto;
+        // Target only attribute values inside <ndi_color_space …/>; fall back to the
+        // whole string if the tag is absent.
+        string scope = xml;
+        int tagStart = xml.IndexOf("<ndi_color_space", StringComparison.OrdinalIgnoreCase);
+        if (tagStart >= 0)
+        {
+            int tagEnd = xml.IndexOf('>', tagStart);
+            if (tagEnd > tagStart)
+                scope = xml.Substring(tagStart, tagEnd - tagStart + 1);
+        }
 
-        var range = xml.Contains("Full", StringComparison.OrdinalIgnoreCase)
-            ? YuvColorRange.Full
-            : xml.Contains("Limited", StringComparison.OrdinalIgnoreCase)
-                ? YuvColorRange.Limited
-                : YuvColorRange.Auto;
+        string? colorspace = TryReadAttribute(scope, "colorspace");
+        string? range = TryReadAttribute(scope, "range");
 
-        return (matrix, range);
+        YuvColorMatrix matrix = colorspace switch
+        {
+            not null when colorspace.Contains("2020", StringComparison.OrdinalIgnoreCase) => YuvColorMatrix.Bt2020,
+            not null when colorspace.Contains("709",  StringComparison.OrdinalIgnoreCase) => YuvColorMatrix.Bt709,
+            not null when colorspace.Contains("601",  StringComparison.OrdinalIgnoreCase) => YuvColorMatrix.Bt601,
+            _ => YuvColorMatrix.Auto,
+        };
+
+        YuvColorRange yr = range switch
+        {
+            not null when range.Contains("Full",    StringComparison.OrdinalIgnoreCase) => YuvColorRange.Full,
+            not null when range.Contains("Limited", StringComparison.OrdinalIgnoreCase) => YuvColorRange.Limited,
+            _ => YuvColorRange.Auto,
+        };
+
+        return (matrix, yr);
+    }
+
+    private static string? TryReadAttribute(string scope, string name)
+    {
+        int idx = scope.IndexOf(name, StringComparison.OrdinalIgnoreCase);
+        while (idx >= 0)
+        {
+            int eq = idx + name.Length;
+            // Skip whitespace.
+            while (eq < scope.Length && char.IsWhiteSpace(scope[eq])) eq++;
+            if (eq < scope.Length && scope[eq] == '=')
+            {
+                eq++;
+                while (eq < scope.Length && char.IsWhiteSpace(scope[eq])) eq++;
+                if (eq < scope.Length && (scope[eq] == '"' || scope[eq] == '\''))
+                {
+                    char quote = scope[eq];
+                    int valStart = eq + 1;
+                    int valEnd = scope.IndexOf(quote, valStart);
+                    if (valEnd > valStart)
+                        return scope.Substring(valStart, valEnd - valStart);
+                }
+            }
+            idx = scope.IndexOf(name, idx + 1, StringComparison.OrdinalIgnoreCase);
+        }
+        return null;
     }
 }
 

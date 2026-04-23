@@ -79,7 +79,16 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
 
     public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
+    /// <summary>
+    /// §2.8 — raised on the <see cref="ThreadPool"/> (detached from the RT pull
+    /// callback so handler work cannot stall the audio hardware callback).
+    /// </summary>
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
+    /// <summary>
+    /// §2.8 — raised on the demux worker thread after the last decoded sample
+    /// has been enqueued. Handlers must not block; use <c>Task.Run</c> to
+    /// chain further work.
+    /// </summary>
     public event EventHandler? EndOfStream;
 
     private bool _disposed;
@@ -228,6 +237,16 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
                 try { w.AsTask().GetAwaiter().GetResult(); }
                 catch (OperationCanceledException)
                 {
+                    ReturnChunkToPool(converted.Value.Buffer);
+                    return false;
+                }
+                catch (ChannelClosedException)
+                {
+                    // §3.4 / B10 — the ring was completed concurrently
+                    // (seek-flush race, Dispose on another thread). Before
+                    // this guard the rented float[] leaked because
+                    // WriteAsync threw before `_framesInRing` was bumped
+                    // and the chunk was never returned to `_chunkPool`.
                     ReturnChunkToPool(converted.Value.Buffer);
                     return false;
                 }

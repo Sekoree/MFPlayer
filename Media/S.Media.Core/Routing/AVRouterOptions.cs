@@ -78,5 +78,35 @@ public record AVRouterOptions
     /// <see cref="VideoPtsEarlyTolerance"/>.
     /// </summary>
     public double VideoPushDriftCorrectionGain { get; init; } = 0.08;
+
+    // ── Audio preroll (§5.4) ────────────────────────────────────────────
+
+    /// <summary>
+    /// §5.4 — before the router's first tick is released, wait until every
+    /// registered audio input has at least this many frames decoded. Paired with
+    /// <see cref="WaitForAudioPreroll"/>: the shorter of the two deadlines wins.
+    /// Default: 0 (preroll disabled; first frame goes out immediately).
+    ///
+    /// <para>
+    /// Intended as the framework primitive behind
+    /// <c>MediaPlayerBuilder.WithAutoPreroll(...)</c>. Eliminates the "video
+    /// presents before audio is ready → AV-sync glitch in the first ~100 ms"
+    /// warmup block every non-trivial test app reimplements. Only honoured when
+    /// at least one audio input and one pull-video endpoint are present — a
+    /// pure-audio or pure-video graph has no AV race to protect against, so
+    /// preroll is skipped even when set.
+    /// </para>
+    /// </summary>
+    public int MinBufferedFramesPerInput { get; init; } = 0;
+
+    /// <summary>
+    /// §5.4 — hard deadline for the preroll wait started when
+    /// <see cref="MinBufferedFramesPerInput"/> is positive. If any input still
+    /// has too few frames when the deadline hits, the router starts anyway and
+    /// logs a warning. Default: 1 s — long enough to ride out a fresh HTTP
+    /// stream's TCP slow-start, short enough that a local file opens visibly
+    /// without delay.
+    /// </summary>
+    public TimeSpan WaitForAudioPreroll { get; init; } = TimeSpan.FromSeconds(1);
 }
 

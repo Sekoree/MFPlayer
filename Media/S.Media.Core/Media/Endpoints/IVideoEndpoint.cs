@@ -26,7 +26,7 @@ namespace S.Media.Core.Media.Endpoints;
 public interface IVideoEndpoint : IMediaEndpoint
 {
     /// <summary>
-    /// Called by the graph to deliver a video frame.
+    /// Legacy frame-delivery overload. Called by the graph to deliver a video frame.
     /// Implementations MUST be non-blocking.
     /// </summary>
     /// <remarks>
@@ -36,13 +36,38 @@ public interface IVideoEndpoint : IMediaEndpoint
     /// buffer.  See <see cref="VideoFrame"/> docs for the full contract.
     ///
     /// <para>
-    /// <b>Experimental — ref-counted ownership is planned:</b> a future
-    /// <c>VideoFrameHandle</c> will replace the "router disposes after the call" dance with
-    /// explicit per-endpoint <c>Retain()</c>/<c>Release()</c> so fan-out to N endpoints
-    /// shares a single buffer. Endpoints that copy today will continue to work unchanged.
+    /// Endpoints that want zero-copy retention should override
+    /// <see cref="ReceiveFrame(in VideoFrameHandle)"/> instead — that overload exposes
+    /// <see cref="VideoFrameHandle.Retain"/> / <see cref="VideoFrameHandle.Release"/> so
+    /// fan-out to N endpoints shares a single pool rental (§3.11 / B15+B16+R18+CH7).
     /// </para>
     /// </remarks>
     void ReceiveFrame(in VideoFrame frame);
+
+    /// <summary>
+    /// Ref-counted frame delivery. Called by the router in place of
+    /// <see cref="ReceiveFrame(in VideoFrame)"/> so endpoints can opt into zero-copy
+    /// retention by calling <see cref="VideoFrameHandle.Retain"/> during the call and
+    /// <see cref="VideoFrameHandle.Release"/> later on their own schedule.
+    ///
+    /// <para>
+    /// The default implementation forwards to the legacy <see cref="ReceiveFrame(in VideoFrame)"/>
+    /// overload, preserving the existing "router disposes after the call" contract so legacy
+    /// endpoints keep working unchanged. Endpoints that need fast-path retention override this
+    /// method; endpoints that copy the bytes during the call need not override.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// <b>Ownership:</b> the router holds one refcount for the duration of this call.
+    /// Endpoints that need the data past the call must call
+    /// <see cref="VideoFrameHandle.Retain"/> before returning and exactly one matching
+    /// <see cref="VideoFrameHandle.Release"/> when they are done.
+    /// </remarks>
+    void ReceiveFrame(in VideoFrameHandle handle)
+    {
+        var frame = handle.Frame;
+        ReceiveFrame(in frame);
+    }
 
     /// <summary>Optional endpoint diagnostics snapshot.</summary>
     VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot()

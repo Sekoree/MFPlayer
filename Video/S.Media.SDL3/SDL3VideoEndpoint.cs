@@ -32,9 +32,9 @@ public enum VsyncMode
 /// vsync-driven render loop on a dedicated thread.
 /// Analogous to <c>PortAudioOutput</c> for audio.
 /// </summary>
-public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
+public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver
 {
-    private static readonly ILogger Log = SDL3VideoLogging.GetLogger(nameof(SDL3VideoOutput));
+    private static readonly ILogger Log = SDL3VideoLogging.GetLogger(nameof(SDL3VideoEndpoint));
 
     public readonly record struct DiagnosticsSnapshot(
         long LoopIterations,
@@ -139,15 +139,21 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     private int                   _lastUploadedHeight;
     private TimeSpan              _lastUploadedPts;
     private ReadOnlyMemory<byte>  _lastUploadedData;
+    // §3.33 / S3, S12 — identity key for texture-reuse. `ReadOnlyMemory<byte>.Equals`
+    // is structural (array ref + offset + length), so after an ArrayPool rental is
+    // returned and a coincidentally-identical array is re-rented the old key can
+    // falsely match and skip the upload → stale texture. Keying on the MemoryOwner
+    // reference (identity-compared via ReferenceEquals) plus Pts/W/H rules this out.
+    private System.IDisposable? _lastUploadedMemoryOwner;
 
     // ── SDL init ref-counting ─────────────────────────────────────────────
-    // Multiple SDL3VideoOutput instances may coexist; only the last Dispose
+    // Multiple SDL3VideoEndpoint instances may coexist; only the last Dispose
     // call should invoke SDL.Quit.
     private static int _sdlRefCount;
     private bool _sdlInitOwned;
 
     private readonly Lock _cloneLock = new();
-    private SDL3VideoCloneSink[] _clones = [];
+    private SDL3VideoCloneEndpoint[] _clones = [];
 
     // ── YUV shader config ─────────────────────────────────────────────────
 
@@ -189,6 +195,24 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     {
         get => (YuvColorMatrix)_yuvColorMatrix;
         set => YuvConfig = new((YuvColorRange)_yuvColorRange, value);
+    }
+
+    /// <summary>
+    /// §5.3 — receive color-matrix hint from the source channel at route-creation
+    /// time. Preserves any explicit value the caller already set: <see cref="YuvColorMatrix.Auto"/>
+    /// / <see cref="YuvColorRange.Auto"/> hints are ignored, and we only overwrite
+    /// the current value when it is itself <c>Auto</c>. Thread-safe — <see cref="YuvConfig"/>
+    /// publishes via <see cref="Interlocked.Exchange(ref int, int)"/> so the render
+    /// thread picks up the new value on the next frame.
+    /// </summary>
+    public void ApplyColorMatrixHint(YuvColorMatrix matrix, YuvColorRange range)
+    {
+        var currentMatrix = (YuvColorMatrix)_yuvColorMatrix;
+        var currentRange  = (YuvColorRange)_yuvColorRange;
+        var newMatrix = currentMatrix == YuvColorMatrix.Auto && matrix != YuvColorMatrix.Auto ? matrix : currentMatrix;
+        var newRange  = currentRange  == YuvColorRange.Auto  && range  != YuvColorRange.Auto  ? range  : currentRange;
+        if (newMatrix != currentMatrix || newRange != currentRange)
+            YuvConfig = new(newRange, newMatrix);
     }
 
     /// <summary>
@@ -283,7 +307,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     public bool ShowHud { get; set; }
 
     /// <inheritdoc/>
-    public string Name => "SDL3VideoOutput";
+    public string Name => "SDL3VideoEndpoint";
 
     /// <summary>Clock driven by video PTS.</summary>
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
@@ -313,8 +337,10 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     public void OverridePresentationClock(IMediaClock? clock)
     {
         _presentationClockOverride = clock;
-        Volatile.Write(ref _hasPresentationClockOrigin, 0);
-        Volatile.Write(ref _presentationClockOriginTicks, 0);
+        // §3.40b / S5 — clear ticks *first*, then flag, so observers can never see
+        // `hasOrigin==0 && ticks==<stale>` on a weakly-ordered CPU.
+        Interlocked.Exchange(ref _presentationClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hasPresentationClockOrigin, 0);
     }
 
     /// <summary>
@@ -332,8 +358,11 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
 
         long ticks = clock.Position.Ticks;
         if (ticks < 0) ticks = 0;
-        Volatile.Write(ref _presentationClockOriginTicks, ticks);
-        Volatile.Write(ref _hasPresentationClockOrigin, 1);
+        // §3.40b / S5 — set ticks first, then flag (Interlocked provides a
+        // sequentially-consistent barrier on both slots so no torn read can
+        // observe `hasOrigin==1 && ticks==<stale>`).
+        Interlocked.Exchange(ref _presentationClockOriginTicks, ticks);
+        Interlocked.Exchange(ref _hasPresentationClockOrigin, 1);
         Log.LogInformation("Presentation clock origin set deterministically: {OriginMs:F2} ms",
             TimeSpan.FromTicks(ticks).TotalMilliseconds);
     }
@@ -450,7 +479,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         if (_outputFormat.Width > 0 && _outputFormat.Height > 0)
             _renderer.SetVideoSize(_outputFormat.Width, _outputFormat.Height);
 
-        Log.LogInformation("Opened SDL3VideoOutput: '{Title}' {Width}x{Height} px={PixelFormat}, fps={FrameRate}",
+        Log.LogInformation("Opened SDL3VideoEndpoint: '{Title}' {Width}x{Height} px={PixelFormat}, fps={FrameRate}",
             title, _outputFormat.Width, _outputFormat.Height, _outputFormat.PixelFormat, _outputFormat.FrameRate);
     }
 
@@ -465,19 +494,20 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _closeRequested = false;
-        Volatile.Write(ref _hasPresentationClockOrigin, 0);
-        Volatile.Write(ref _presentationClockOriginTicks, 0);
+        // §3.40b — ticks first then flag; see OverridePresentationClock.
+        Interlocked.Exchange(ref _presentationClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hasPresentationClockOrigin, 0);
 
         _renderThread = new Thread(RenderLoop)
         {
-            Name         = "SDL3VideoOutput.Render",
+            Name         = "SDL3VideoEndpoint.Render",
             IsBackground = true
         };
         _renderThread.Start();
 
         _clock!.Start();
         _isRunning = true;
-        Log.LogInformation("SDL3VideoOutput started");
+        Log.LogInformation("SDL3VideoEndpoint started");
         return Task.CompletedTask;
     }
 
@@ -486,7 +516,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
     {
         if (!_isRunning) return Task.CompletedTask;
 
-        Log.LogInformation("Stopping SDL3VideoOutput");
+        Log.LogInformation("Stopping SDL3VideoEndpoint");
         return Task.Run(() =>
         {
             _clock?.Stop();
@@ -506,6 +536,10 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
             Interlocked.Increment(ref _glMakeCurrentFailures);
             Log.LogError("SDL_GL_MakeCurrent failed: {Error}", SDL.GetError());
             _isRunning = false;
+            // §3.40c / S7 — also signal close so Dispose completes promptly
+            // and any `WindowClosed` subscribers get notified of the failure.
+            _closeRequested = true;
+            RaiseWindowClosedAsync();
             return;
         }
 
@@ -574,7 +608,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                         clockPosition = TimeSpan.FromTicks(relTicks);
                     }
 
-                    if (presentCb.TryPresentNext(clockPosition, out var cbFrame))
+                    if (presentCb.TryPresentNext(clockPosition, out VideoFrame cbFrame))
                         frame = cbFrame;
 
                     // ── Catch-up: if this frame is already stale, drop it and
@@ -592,7 +626,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                             if (vf.Pts + _catchupLagThreshold >= clockPosition)
                                 break;
 
-                            if (!presentCb.TryPresentNext(clockPosition, out var nf))
+                            if (!presentCb.TryPresentNext(clockPosition, out VideoFrame nf))
                                 break;
 
                             // Ring is empty → callback re-presented the same frame.
@@ -644,11 +678,12 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                     // Texture-reuse: if the pull callback returned the same frame
                     // (empty ring → re-present last) skip the glTexSubImage2D
                     // upload entirely and just redraw the GPU-resident textures.
+                    // §3.33 / S3, S12 — identity-based match via MemoryOwner reference.
                     bool sameAsUploaded = _hasUploadedFrame &&
                                           vf.Width == _lastUploadedWidth &&
                                           vf.Height == _lastUploadedHeight &&
                                           vf.Pts == _lastUploadedPts &&
-                                          vf.Data.Equals(_lastUploadedData);
+                                          ReferenceEquals(vf.MemoryOwner, _lastUploadedMemoryOwner);
 
                     if (sameAsUploaded)
                     {
@@ -658,11 +693,12 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
                     else
                     {
                         _renderer!.UploadAndDraw(vf);
-                        _hasUploadedFrame     = true;
-                        _lastUploadedWidth    = vf.Width;
-                        _lastUploadedHeight   = vf.Height;
-                        _lastUploadedPts      = vf.Pts;
-                        _lastUploadedData     = vf.Data;
+                        _hasUploadedFrame        = true;
+                        _lastUploadedWidth       = vf.Width;
+                        _lastUploadedHeight      = vf.Height;
+                        _lastUploadedPts         = vf.Pts;
+                        _lastUploadedData        = vf.Data;
+                        _lastUploadedMemoryOwner = vf.MemoryOwner;
                         Interlocked.Increment(ref _textureUploads);
                         Interlocked.Increment(ref _uniqueFrames);
                     }
@@ -728,8 +764,12 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
             catch (Exception ex)
             {
                 long ec = Interlocked.Increment(ref _renderExceptions);
+                // §3.40d / S10 — tag the concrete exception type so log readers
+                // can grep for a single failure mode across the rate-limited
+                // samples (counts 1/2/3 then every 100th).
                 if (ec <= 3 || ec % 100 == 0)
-                    Log.LogError(ex, "Render-loop exception (count={Count})", ec);
+                    Log.LogError(ex, "Render-loop exception [{ExceptionType}] (count={Count})",
+                        ex.GetType().Name, ec);
             }
         }
 
@@ -741,8 +781,29 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         {
             _isRunning = false;
             _clock?.Stop();
-            WindowClosed?.Invoke();
+            RaiseWindowClosedAsync();
         }
+    }
+
+    /// <summary>
+    /// §3.32 / S1 — dispatches the <see cref="WindowClosed"/> event on the
+    /// ThreadPool rather than synchronously on the render thread. A common
+    /// handler pattern is <c>endpoint.Dispose()</c>; Dispose joins the render
+    /// thread with a 3-second timeout, so raising the event on the render
+    /// thread would self-deadlock. ThreadPool dispatch breaks the cycle.
+    /// Exceptions raised by handlers are logged so a buggy handler cannot
+    /// take down the pool worker.
+    /// </summary>
+    private void RaiseWindowClosedAsync()
+    {
+        var handler = WindowClosed;
+        if (handler is null) return;
+        ThreadPool.QueueUserWorkItem(static state =>
+        {
+            var (h, log) = ((Action handler, ILogger log))state!;
+            try { h(); }
+            catch (Exception ex) { log.LogError(ex, "WindowClosed handler threw"); }
+        }, (handler, Log));
     }
 
     // ── Dispose ───────────────────────────────────────────────────────────
@@ -752,7 +813,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         if (_disposed) return;
         _disposed = true;
 
-        Log.LogInformation("Disposing SDL3VideoOutput: presented={Presented}, unique={Unique}, dropped={Dropped}, textureReuse={Reuse}, black={Black}, renderExceptions={RenderExceptions}, resizeEvents={ResizeEvents}",
+        Log.LogInformation("Disposing SDL3VideoEndpoint: presented={Presented}, unique={Unique}, dropped={Dropped}, textureReuse={Reuse}, black={Black}, renderExceptions={RenderExceptions}, resizeEvents={ResizeEvents}",
             Interlocked.Read(ref _presentedFrames), Interlocked.Read(ref _uniqueFrames),
             Interlocked.Read(ref _droppedFrames), Interlocked.Read(ref _textureReuseDraws),
             Interlocked.Read(ref _blackFrames),
@@ -770,9 +831,16 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         // GL resources must be destroyed with the context current.
         if (_window != nint.Zero && _glContext != nint.Zero)
         {
-            SDL.GLMakeCurrent(_window, _glContext);
-            _renderer?.Dispose();
-            SDL.GLDestroyContext(_glContext);
+            // §3.40e / S11 — MakeCurrent + renderer.Dispose + DestroyContext
+            // can all fault if the context was already invalidated (user-closed
+            // window, driver reset). We guard each one separately so a failure
+            // in the middle of the cleanup sequence still lets the rest run.
+            try { SDL.GLMakeCurrent(_window, _glContext); }
+            catch (Exception ex) { Log.LogWarning(ex, "SDL.GLMakeCurrent threw during Dispose"); }
+            try { _renderer?.Dispose(); }
+            catch (Exception ex) { Log.LogWarning(ex, "Renderer.Dispose threw (context may be gone)"); }
+            try { SDL.GLDestroyContext(_glContext); }
+            catch (Exception ex) { Log.LogWarning(ex, "SDL.GLDestroyContext threw during Dispose"); }
             _glContext = nint.Zero;
         }
 
@@ -840,12 +908,12 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         _lastAutoMatrix = resolvedMatrix;
     }
 
-    public SDL3VideoCloneSink CreateCloneSink(string? title = null, int? width = null, int? height = null)
+    public SDL3VideoCloneEndpoint CreateCloneSink(string? title = null, int? width = null, int? height = null)
     {
         if (_window == nint.Zero)
             throw new InvalidOperationException("Call Open() before creating clone sinks.");
 
-        var clone = new SDL3VideoCloneSink(
+        var clone = new SDL3VideoCloneEndpoint(
             _outputFormat,
             title: title,
             width: width ?? Math.Max(1, _outputFormat.Width),
@@ -854,7 +922,7 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
         lock (_cloneLock)
         {
             var old = _clones;
-            var neo = new SDL3VideoCloneSink[old.Length + 1];
+            var neo = new SDL3VideoCloneEndpoint[old.Length + 1];
             old.CopyTo(neo, 0);
             neo[^1] = clone;
             _clones = neo;
@@ -865,21 +933,65 @@ public sealed class SDL3VideoOutput : IPullVideoEndpoint, IClockCapableEndpoint
 
     internal static void AcquireSdlVideo()
     {
+        // §3.40 / S14 — guarantee the refcount is rolled back even if
+        // SDL.Init throws (rather than just returning false). Without the
+        // try/finally a managed exception from SDL bindings would leak a
+        // refcount slot, making the process effectively "SDL-initialised"
+        // for the rest of its lifetime.
         if (Interlocked.Increment(ref _sdlRefCount) != 1)
             return;
 
-        if (SDL.Init(SDL.InitFlags.Video))
-            return;
+        bool initialised = false;
+        try
+        {
+            initialised = SDL.Init(SDL.InitFlags.Video);
+            if (initialised) return;
 
-        Interlocked.Decrement(ref _sdlRefCount);
-        var err = SDL.GetError();
-        throw new InvalidOperationException($"SDL_Init failed: {err}");
+            var err = SDL.GetError();
+            throw new InvalidOperationException($"SDL_Init failed: {err}");
+        }
+        finally
+        {
+            if (!initialised)
+                Interlocked.Decrement(ref _sdlRefCount);
+        }
     }
 
     internal static void ReleaseSdlVideo()
     {
         if (Interlocked.Decrement(ref _sdlRefCount) == 0)
             SDL.Quit();
+    }
+
+    // ── §1.4 single-step factory ──────────────────────────────────────────
+
+    /// <summary>
+    /// Single-step factory (§1.4 / CH8 / P1): constructs a
+    /// <see cref="SDL3VideoEndpoint"/>, opens its window, and returns a
+    /// ready-to-register instance whose <see cref="Clock"/> is valid from the
+    /// moment the caller receives it. Equivalent to
+    /// <c>new SDL3VideoEndpoint()</c> followed by <see cref="Open"/>.
+    /// </summary>
+    /// <param name="title">Window title.</param>
+    /// <param name="width">Initial window width in pixels.</param>
+    /// <param name="height">Initial window height in pixels.</param>
+    /// <param name="format">
+    /// Preferred output <see cref="VideoFormat"/>. If <see langword="null"/>,
+    /// defaults to a <paramref name="width"/>×<paramref name="height"/> BGRA32
+    /// surface at 30 fps — the endpoint will auto-negotiate a better pixel
+    /// format at route creation time via <see cref="IFormatCapabilities{TFormat}"/>.
+    /// </param>
+    /// <param name="vsync">Initial <see cref="SDL3.VsyncMode"/>; defaults to <see cref="VsyncMode.On"/>.</param>
+    public static SDL3VideoEndpoint ForWindow(
+        string       title,
+        int          width  = 1280,
+        int          height = 720,
+        VideoFormat? format = null,
+        VsyncMode    vsync  = VsyncMode.On)
+    {
+        var ep = new SDL3VideoEndpoint { VsyncMode = vsync };
+        ep.Open(title, width, height, format ?? VideoFormat.Create(width, height, PixelFormat.Bgra32, 30));
+        return ep;
     }
 }
 

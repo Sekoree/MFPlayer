@@ -3,7 +3,7 @@
 Minimal Avalonia sample app that plays one video stream using:
 
 - `S.Media.FFmpeg` (`FFmpegDecoder`, video-only)
-- `S.Media.Avalonia` (`AvaloniaOpenGlVideoOutput`)
+- `S.Media.Avalonia` (`AvaloniaOpenGlVideoEndpoint`)
 
 ## Run
 

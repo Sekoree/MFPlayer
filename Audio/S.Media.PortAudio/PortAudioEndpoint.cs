@@ -232,6 +232,19 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
 
     // ── Start / Stop ──────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Starts the underlying PortAudio stream and transitions the endpoint
+    /// into the running state.
+    /// <para>
+    /// <b>§3.28b / P4 — blocking behaviour:</b> <c>Pa_StartStream</c> can block
+    /// for 100–300 ms on the WASAPI exclusive-mode backend while the audio
+    /// engine negotiates buffer alignment with the driver. For most use cases
+    /// (shared-mode devices, JACK, ALSA) it returns in well under 10 ms. If
+    /// you are starting many endpoints in parallel and have identified this
+    /// as a wall-clock hotspot, wrap the call in <see cref="Task.Run(Action)"/>
+    /// at the call site so the starts can proceed concurrently.
+    /// </para>
+    /// </summary>
     public virtual Task StartAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -308,7 +321,26 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
         public IAudioFillCallback? FillCallback
         {
             get => _fillCallback;
-            set => _fillCallback = value;
+            set
+            {
+                // §3.51 / CH5 — volatile swap + brief spin for in-flight fills.
+                // Without the spin, the router's "Unregister" path
+                //     pull.FillCallback = null;
+                //     // ... tear down EndpointEntry ...
+                // can race a PA callback that is still mid-Fill with the old
+                // reference, producing use-after-free on the captured
+                // EndpointEntry. `_fillCallback` is already volatile, so the
+                // write alone is visible; the spin ensures the callback has
+                // fully exited managed code before the caller proceeds.
+                _fillCallback = value;
+                if (value is null)
+                {
+                    var spin = new SpinWait();
+                    int iterations = 0;
+                    while (Volatile.Read(ref _callbackInFlight) != 0 && iterations++ < 10_000)
+                        spin.SpinOnce();
+                }
+            }
         }
 
         public AudioFormat EndpointFormat => _hardwareFormat;

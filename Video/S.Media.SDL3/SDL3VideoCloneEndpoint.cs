@@ -8,9 +8,9 @@ namespace S.Media.SDL3;
 
 /// <summary>
 /// Parent-owned SDL3 clone sink that mirrors frames into its own window.
-/// Instances are created via <see cref="SDL3VideoOutput.CreateCloneSink"/>.
+/// Instances are created via <see cref="SDL3VideoEndpoint.CreateCloneSink"/>.
 /// </summary>
-public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<PixelFormat>
+public sealed class SDL3VideoCloneEndpoint : IVideoEndpoint, IFormatCapabilities<PixelFormat>
 {
     private sealed class ArrayPoolFrameOwner : IMemoryOwner<byte>
     {
@@ -49,6 +49,8 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
     private int                  _lastUploadedHeight;
     private TimeSpan             _lastUploadedPts;
     private ReadOnlyMemory<byte> _lastUploadedData;
+    // §3.33 / S3, S12 — identity key for texture-reuse (see SDL3VideoEndpoint).
+    private IDisposable?  _lastUploadedMemoryOwner;
 
     public string Name { get; }
     public bool IsRunning => _running;
@@ -58,14 +60,14 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
 
     public PixelFormat? PreferredFormat => PixelFormat.Bgra32;
 
-    internal SDL3VideoCloneSink(VideoFormat format, string? title, int width, int height)
+    internal SDL3VideoCloneEndpoint(VideoFormat format, string? title, int width, int height)
     {
         _format = format;
         _width = Math.Max(1, width);
         _height = Math.Max(1, height);
         Name = title ?? "SDL3CloneSink";
 
-        SDL3VideoOutput.AcquireSdlVideo();
+        SDL3VideoEndpoint.AcquireSdlVideo();
 
         SDL.GLSetAttribute(SDL.GLAttr.ContextMajorVersion, 3);
         SDL.GLSetAttribute(SDL.GLAttr.ContextMinorVersion, 3);
@@ -75,7 +77,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
         _window = SDL.CreateWindow(Name, _width, _height, SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable | SDL.WindowFlags.HighPixelDensity);
         if (_window == nint.Zero)
         {
-            SDL3VideoOutput.ReleaseSdlVideo();
+            SDL3VideoEndpoint.ReleaseSdlVideo();
             throw new InvalidOperationException($"SDL_CreateWindow failed: {SDL.GetError()}");
         }
 
@@ -84,7 +86,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
         {
             SDL.DestroyWindow(_window);
             _window = nint.Zero;
-            SDL3VideoOutput.ReleaseSdlVideo();
+            SDL3VideoEndpoint.ReleaseSdlVideo();
             throw new InvalidOperationException($"SDL_GL_CreateContext failed: {SDL.GetError()}");
         }
 
@@ -188,7 +190,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
                                       vf.Width == _lastUploadedWidth &&
                                       vf.Height == _lastUploadedHeight &&
                                       vf.Pts == _lastUploadedPts &&
-                                      vf.Data.Equals(_lastUploadedData);
+                                      ReferenceEquals(vf.MemoryOwner, _lastUploadedMemoryOwner);
                 if (sameAsUploaded)
                 {
                     _renderer?.DrawLastFrame();
@@ -201,6 +203,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
                     _lastUploadedHeight = vf.Height;
                     _lastUploadedPts    = vf.Pts;
                     _lastUploadedData   = vf.Data;
+                    _lastUploadedMemoryOwner = vf.MemoryOwner;
                 }
             }
             else
@@ -227,9 +230,11 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
 
         if (_window != nint.Zero && _glContext != nint.Zero)
         {
-            SDL.GLMakeCurrent(_window, _glContext);
-            _renderer?.Dispose();
-            SDL.GLDestroyContext(_glContext);
+            // §3.40e / S11 — guard each GL teardown step so a fault in one
+            // step does not leak the remaining ones.
+            try { SDL.GLMakeCurrent(_window, _glContext); } catch { /* context may be gone */ }
+            try { _renderer?.Dispose(); } catch { /* ditto */ }
+            try { SDL.GLDestroyContext(_glContext); } catch { /* ditto */ }
             _glContext = nint.Zero;
         }
 
@@ -244,7 +249,7 @@ public sealed class SDL3VideoCloneSink : IVideoEndpoint, IFormatCapabilities<Pix
         _renderThread = null;
         _renderer = null;
 
-        SDL3VideoOutput.ReleaseSdlVideo();
+        SDL3VideoEndpoint.ReleaseSdlVideo();
     }
 }
 

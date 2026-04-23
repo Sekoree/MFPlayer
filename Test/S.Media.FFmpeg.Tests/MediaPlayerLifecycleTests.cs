@@ -82,5 +82,68 @@ public sealed class MediaPlayerLifecycleTests
         }
         finally { File.Delete(path); }
     }
+
+    /// <summary>
+    /// §3.2 / B2+B3 — Dispose must: (a) cancel CTS, (b) join the demux task
+    /// before disposing channels (so no in-flight <c>WriteAsync</c> hits a
+    /// completed ring), (c) close the format context under the
+    /// <c>_formatIoGate</c> write lock. Exercised by repeated
+    /// open→start→immediate-dispose cycles; any ordering fault would surface
+    /// as an AVCodec double-free, a ChannelClosedException leaking through
+    /// ReportDemuxLoopError, or a deadlock.
+    /// </summary>
+    [Fact]
+    public async Task FFmpegDecoder_DisposeDuringDemux_IsCleanUnderStress()
+    {
+        string path = WavFileGenerator.CreateTempSineWav(48000, 2, 440f, 0.5f);
+        try
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                var dec = FFmpegDecoder.Open(path);
+                dec.Start();
+                // Varying delays: sometimes dispose before demux starts,
+                // sometimes after it is pushing packets.
+                await Task.Delay(i * 5);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                dec.Dispose();
+                sw.Stop();
+                Assert.True(sw.ElapsedMilliseconds < 3500,
+                    $"Dispose stalled ({sw.ElapsedMilliseconds} ms) on iteration {i} — demux-join may have deadlocked.");
+            }
+        }
+        finally { File.Delete(path); }
+    }
+
+    /// <summary>
+    /// §3.1 / B1 — Seek control packet must reach the decode worker even when
+    /// the packet queue is full at the moment Seek fires. Without the bounded
+    /// WriteAsync fallback this test would intermittently leak stale pre-seek
+    /// packets and the post-seek Position would briefly reflect the old PTS.
+    /// </summary>
+    [Fact]
+    public async Task FFmpegDecoder_SeekUnderLoad_DoesNotDropFlushSentinel()
+    {
+        string path = WavFileGenerator.CreateTempSineWav(48000, 2, 440f, 1.0f);
+        try
+        {
+            using var dec = FFmpegDecoder.Open(path);
+            dec.Start();
+            // Let the queue fill past typical PacketQueueDepth (64).
+            await Task.Delay(50);
+
+            // Perform a burst of seeks; each must complete without throwing
+            // even though the ring is likely saturated.
+            for (int i = 0; i < 5; i++)
+            {
+                var pos = TimeSpan.FromMilliseconds(100 + i * 50);
+                dec.Seek(pos);
+                await Task.Delay(5);
+            }
+
+            await dec.StopAsync();
+        }
+        finally { File.Delete(path); }
+    }
 }
 

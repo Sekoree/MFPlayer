@@ -1,10 +1,8 @@
 using System.Buffers;
 using System.Collections.Concurrent;
-using System.Numerics;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
-using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Mixing;
@@ -38,11 +36,7 @@ public sealed class AVRouter : IAVRouter
         public float Volume = 1.0f;
         // §3.18 / B13: long-backed for Interlocked atomicity; TimeOffset is a wrapper.
         public long TimeOffsetTicks;
-        public TimeSpan TimeOffset
-        {
-            get => TimeSpan.FromTicks(Interlocked.Read(ref TimeOffsetTicks));
-            set => Interlocked.Exchange(ref TimeOffsetTicks, value.Ticks);
-        }
+        public TimeSpan TimeOffset => TimeSpan.FromTicks(Interlocked.Read(ref TimeOffsetTicks));
         public bool Enabled = true;
 
         /// <summary>Peak sample level (absolute) measured after volume, before routing. Updated on RT thread.</summary>
@@ -70,8 +64,6 @@ public sealed class AVRouter : IAVRouter
         public readonly IVideoEndpoint? Video;
         public float Gain = 1.0f;
 
-        // For pull audio endpoints: the fill callback we install
-        public AudioFillCallbackForEndpoint? AudioFillCb;
 
         public EndpointEntry(EndpointId id, IAudioEndpoint ep)
         {
@@ -137,9 +129,10 @@ public sealed class AVRouter : IAVRouter
     // or endpoint is added/removed so push-tick hot paths can grab the per-endpoint
     // route list in O(1) instead of rescanning the full snapshot each endpoint
     // (previously O(E·R) per tick; now O(E + R) total) — §4.2 of Code-Review-Findings.
+    // Only the audio side is cached: PushVideoTick iterates the flat route
+    // snapshot directly (one subscription per route), so a per-endpoint group
+    // would be unused overhead.
     private volatile Dictionary<EndpointId, RouteEntry[]> _audioRoutesByEndpoint =
-        new();
-    private volatile Dictionary<EndpointId, RouteEntry[]> _videoRoutesByEndpoint =
         new();
 
     // ── Clock ───────────────────────────────────────────────────────────
@@ -161,6 +154,16 @@ public sealed class AVRouter : IAVRouter
     // ── Scratch buffers (lazy, per-endpoint) ────────────────────────────
 
     private readonly ConcurrentDictionary<EndpointId, float[]> _scratchBuffers = new();
+    // §3.26 / P3 — per-endpoint output scratch sized to the endpoint's output
+    // format × FramesPerBuffer. The pull-audio callback path used to rent two
+    // pooled buffers per RT tick (one for the resampler output, one for the
+    // channel-map output); both are now served from this pre-rented buffer so
+    // the RT thread never hits `ArrayPool.Rent` in steady state. Writes are
+    // serialised by PortAudio's callback contract (one Fill invocation per
+    // endpoint at a time), so a single shared buffer per endpoint is safe —
+    // the push-tick path still rents from the pool because it can overlap
+    // multiple endpoints on one tick thread.
+    private readonly ConcurrentDictionary<EndpointId, float[]> _outputScratchBuffers = new();
 
     // Per-endpoint fractional frame accumulator for time-aware push audio.
     // Prevents truncation drift when computing frame counts from elapsed seconds.
@@ -229,7 +232,65 @@ public sealed class AVRouter : IAVRouter
                 _options.InternalTickCadence.TotalMilliseconds);
         }
 
-        return Task.CompletedTask;
+        // §5.4 — optional audio preroll: hold the caller in StartAsync until
+        // every audio input has decoded enough frames for the first video tick
+        // to hit the screen without an AV-sync glitch. Only activates when the
+        // graph actually has both audio and a pull-video endpoint (no race to
+        // protect against otherwise) and MinBufferedFramesPerInput > 0.
+        // Runs OUTSIDE _lock so RegisterEndpoint / CreateRoute calls during
+        // preroll aren't blocked.
+        return WaitForAudioPrerollAsync(ct);
+    }
+
+    private async Task WaitForAudioPrerollAsync(CancellationToken ct)
+    {
+        int minFrames = _options.MinBufferedFramesPerInput;
+        if (minFrames <= 0) return;
+
+        // Snapshot inputs + endpoints once; preroll is a one-shot at Start time.
+        var audioInputs = _inputs.Values
+            .Where(e => e.Kind == InputKind.Audio && e.AudioChannel is not null)
+            .Select(e => e.AudioChannel!)
+            .ToArray();
+        bool hasPullVideoEndpoint = _endpointsSnapshot
+            .Any(e => e.Video is IPullVideoEndpoint);
+
+        if (audioInputs.Length == 0 || !hasPullVideoEndpoint) return;
+
+        var deadline = _options.WaitForAudioPreroll;
+        if (deadline <= TimeSpan.Zero) return;
+
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadlineCts.CancelAfter(deadline);
+        var start = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            while (!deadlineCts.IsCancellationRequested)
+            {
+                bool allReady = true;
+                foreach (var ch in audioInputs)
+                {
+                    if (ch.BufferAvailable < minFrames) { allReady = false; break; }
+                }
+                if (allReady)
+                {
+                    Log.LogDebug("Audio preroll reached {Frames} frames on {Count} input(s) in {Ms}ms.",
+                        minFrames, audioInputs.Length, start.ElapsedMilliseconds);
+                    return;
+                }
+                try { await Task.Delay(TimeSpan.FromMilliseconds(10), deadlineCts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+        finally
+        {
+            if (ct.IsCancellationRequested) ct.ThrowIfCancellationRequested();
+            if (deadlineCts.IsCancellationRequested)
+            {
+                Log.LogWarning("Audio preroll deadline ({DeadlineMs}ms) hit with {Count} input(s) still below {MinFrames} frames; starting anyway.",
+                    deadline.TotalMilliseconds, audioInputs.Length, minFrames);
+            }
+        }
     }
 
     public Task StopAsync(CancellationToken ct = default)
@@ -393,6 +454,7 @@ public sealed class AVRouter : IAVRouter
                 RemoveRouteInternal(route);
 
             _scratchBuffers.TryRemove(id, out _);
+            _outputScratchBuffers.TryRemove(id, out _);
             _pushAudioFrameAccumulators.TryRemove(id, out _);
 
             Log.LogDebug("Endpoint unregistered: {Id}", id);
@@ -410,7 +472,7 @@ public sealed class AVRouter : IAVRouter
     /// <summary>
     /// §3.14 / R6: pre-allocate the per-endpoint scratch buffer at registration
     /// time using the endpoint's preferred frame count and channel count, so the
-    /// first push/fill tick never hits <see cref="ConcurrentDictionary{TKey,TValue}.AddOrUpdate"/>
+    /// first push/fill tick never hits <see cref="ConcurrentDictionary{TKey,TValue}.AddOrUpdate(TKey, Func{TKey, TValue}, Func{TKey, TValue, TValue})"/>
     /// on an RT thread. If the endpoint exposes no hint, fall back to a
     /// conservative 2048-float buffer (≈ 512 frames × 4 channels) which is
     /// big enough that the common case never reallocates.
@@ -436,6 +498,13 @@ public sealed class AVRouter : IAVRouter
         int minSize = framesPerBuffer * channels;
         if (minSize < 2048) minSize = 2048;
         _scratchBuffers[id] = new float[minSize];
+
+        // §3.26 / P3 — pre-rent the output-format scratch for pull endpoints so
+        // the resampler and channel-map paths in AudioFillCallbackForEndpoint.Fill
+        // never hit ArrayPool.Rent on the RT thread. Size matches the input
+        // scratch (both are frames×channels-bounded) so one constant covers both.
+        if (audio is IPullAudioEndpoint)
+            _outputScratchBuffers[id] = new float[minSize];
     }
 
     /// <summary>
@@ -705,7 +774,7 @@ public sealed class AVRouter : IAVRouter
         // the displayed value tracks real drift closely (so tightening the
         // correction gains is visible to the user) while still swallowing
         // single-sample PTS-quantization noise.
-        const double Alpha = 0.4;
+        const double alpha = 0.4;
         lock (_driftEmaLock)
         {
             // §3.54 / R16: single-pair EMA. When the caller polls a different
@@ -724,7 +793,7 @@ public sealed class AVRouter : IAVRouter
             }
             else
             {
-                _driftEmaTicks = (long)(_driftEmaTicks * (1 - Alpha) + raw * Alpha);
+                _driftEmaTicks = (long)(_driftEmaTicks * (1 - alpha) + raw * alpha);
             }
             return TimeSpan.FromTicks(_driftEmaTicks);
         }
@@ -828,9 +897,9 @@ public sealed class AVRouter : IAVRouter
     {
         if (ep is IPullAudioEndpoint pull)
         {
-            var cb = new AudioFillCallbackForEndpoint(this, entry);
-            entry.AudioFillCb = cb;
-            pull.FillCallback = cb;
+            // The endpoint itself holds the callback via FillCallback; no router-side
+            // keepalive is needed because _endpoints[id] = entry already roots entry.
+            pull.FillCallback = new AudioFillCallbackForEndpoint(this, entry);
         }
     }
 
@@ -849,13 +918,31 @@ public sealed class AVRouter : IAVRouter
         if (ep.Audio is null)
             throw new MediaRoutingException("Endpoint does not support audio.");
 
-        // Validate audio format compatibility if endpoint advertises capabilities
+        // Validate audio format compatibility if endpoint advertises capabilities.
+        // ReSharper disable once SuspiciousTypeConversion.Global — no concrete
+        // IAudioEndpoint in-tree implements IFormatCapabilities<AudioFormat> yet,
+        // but the contract is public so forward-compat implementations (user code
+        // or future endpoint assemblies) may light it up.
         if (ep.Audio is IFormatCapabilities<AudioFormat> caps && inp.AudioChannel is not null)
         {
-            System.Diagnostics.Debug.Assert(caps.SupportedFormats is not null,
-                "IFormatCapabilities<AudioFormat>.SupportedFormats must be non-null (§3.53 / CH9).");
+            // §6.10 / R22 / CH9 — promoted from Debug.Assert to throw; an endpoint
+            // that implements IFormatCapabilities<AudioFormat> but returns a null
+            // list is a contract bug and the router cannot fulfil the route.
+            if (caps.SupportedFormats is null)
+                throw new MediaRoutingException(
+                    $"Endpoint {ep.Id} implements IFormatCapabilities<AudioFormat> " +
+                    "but returned null SupportedFormats. See §6.10 / R22 / CH9.");
             var srcFormat = inp.AudioChannel.SourceFormat;
-            if (caps.SupportedFormats.Count > 0 && !caps.SupportedFormats.Contains(srcFormat))
+            if (caps.SupportedFormats.Count == 0)
+            {
+                // Documented contract: empty list == "unknown, try anything" —
+                // log at Debug so the warning isn't noisy but the configuration
+                // is still discoverable.
+                Log.LogDebug(
+                    "Audio route {Input}→{Endpoint}: endpoint advertises empty SupportedFormats " +
+                    "(§6.10 contract: treated as \"accept anything\").", inp.Id, ep.Id);
+            }
+            else if (!caps.SupportedFormats.Contains(srcFormat))
             {
                 Log.LogWarning(
                     "Audio route {Input}→{Endpoint}: source format {SrcFormat} " +
@@ -920,8 +1007,11 @@ public sealed class AVRouter : IAVRouter
         // Validate pixel format compatibility if endpoint advertises capabilities
         if (ep.Video is IFormatCapabilities<PixelFormat> caps && inp.VideoChannel is not null)
         {
-            System.Diagnostics.Debug.Assert(caps.SupportedFormats is not null,
-                "IFormatCapabilities<PixelFormat>.SupportedFormats must be non-null (§3.53 / CH9).");
+            // §6.10 / R22 / CH9 — same promotion as the audio path above.
+            if (caps.SupportedFormats is null)
+                throw new MediaRoutingException(
+                    $"Endpoint {ep.Id} implements IFormatCapabilities<PixelFormat> " +
+                    "but returned null SupportedFormats. See §6.10 / R22 / CH9.");
             var srcFormat = inp.VideoChannel.SourceFormat;
             if (srcFormat.Width > 0 && caps.SupportedFormats.Count > 0)
             {
@@ -972,6 +1062,26 @@ public sealed class AVRouter : IAVRouter
             _routes[routeId] = route;
             RebuildVideoRouteSnapshot();
 
+            // §5.3 — auto-propagate color-matrix hint from source → endpoint at
+            // route creation so callers don't have to thread it by hand. Only
+            // fires when both sides opt in; the receiver is expected to treat
+            // Auto/Auto as "no change" and to preserve any explicit value the
+            // caller previously set via a concrete property.
+            if (inp.VideoChannel is IVideoColorMatrixHint hint &&
+                ep.Video is IVideoColorMatrixReceiver sink)
+            {
+                try
+                {
+                    sink.ApplyColorMatrixHint(hint.SuggestedYuvColorMatrix, hint.SuggestedYuvColorRange);
+                }
+                catch (Exception ex)
+                {
+                    Log.LogWarning(ex,
+                        "ApplyColorMatrixHint threw on endpoint {Endpoint}; continuing with endpoint defaults.",
+                        ep.Id);
+                }
+            }
+
             Log.LogDebug("Video route created: {Route} ({Input}→{Endpoint})", routeId, inp.Id, ep.Id);
             return routeId;
         }
@@ -1015,7 +1125,6 @@ public sealed class AVRouter : IAVRouter
     {
         var arr = _routes.Values.Where(r => r.Kind == InputKind.Video).ToArray();
         _videoRouteSnapshot = arr;
-        _videoRoutesByEndpoint = GroupByEndpoint(arr);
     }
 
     private static Dictionary<EndpointId, RouteEntry[]> GroupByEndpoint(RouteEntry[] routes)
@@ -1428,11 +1537,14 @@ public sealed class AVRouter : IAVRouter
                         _options.VideoPushDriftCorrectionGain);
             }
 
-            // Forward to the push endpoint (push endpoints copy the buffer synchronously
-            // inside ReceiveFrame), then release our refcount — the rental returns to
-            // the pool when every other subscriber also releases.
-            ep.Video.ReceiveFrame(in candidate);
-            candidate.MemoryOwner?.Dispose();
+            // §3.11 / B15+B16+R18+CH7 — forward through the ref-counted handle
+            // overload. Endpoints that need the data past the call call
+            // `handle.Retain()` inside ReceiveFrame; this Release below drops the
+            // router's implicit ref, and the rental returns to the pool only once
+            // every other subscriber has released as well.
+            var handle = new VideoFrameHandle(in candidate);
+            ep.Video.ReceiveFrame(in handle);
+            handle.Release();
         }
     }
 
@@ -1493,36 +1605,34 @@ public sealed class AVRouter : IAVRouter
                 // Per-input peak metering (post-volume, pre-mix)
                 inp.PeakLevel = MeasurePeak(filledSpan);
 
-                // Apply channel map + resample, then mix into dest
+                // Apply channel map + resample, then mix into dest.
+                // §3.26 / P3 — the two per-route output buffers (resampler and
+                // channel-map) are served from the endpoint's pre-rented output
+                // scratch, so the RT thread does not call ArrayPool.Rent in
+                // steady state. The two paths are mutually exclusive per route,
+                // and PortAudio serialises Fill invocations per stream, so one
+                // shared scratch is safe.
                 if (route.Resampler is not null)
                 {
                     int outSamples = frameCount * endpointFormat.Channels;
-                    var rented = ArrayPool<float>.Shared.Rent(outSamples);
-                    try
-                    {
-                        var resampledBuf = rented.AsSpan(0, outSamples);
-                        resampledBuf.Clear();
-                        int outFrames = route.Resampler.Resample(
-                            filledSpan, resampledBuf, srcFormat, endpointFormat.SampleRate);
-                        // Channel map is already handled by resampler output format
-                        MixInto(dest, resampledBuf[..(outFrames * endpointFormat.Channels)]);
-                    }
-                    finally { ArrayPool<float>.Shared.Return(rented); }
+                    var outScratch = _router.GetOrCreateOutputScratch(_endpoint.Id, outSamples);
+                    var resampledBuf = outScratch.AsSpan(0, outSamples);
+                    resampledBuf.Clear();
+                    int outFrames = route.Resampler.Resample(
+                        filledSpan, resampledBuf, srcFormat, endpointFormat.SampleRate);
+                    // Channel map is already handled by resampler output format
+                    MixInto(dest, resampledBuf[..(outFrames * endpointFormat.Channels)]);
                 }
                 else if (route.BakedChannelMap is not null)
                 {
                     // Apply channel routing: scatter src channels → dest channels
                     int mappedSamples = filled * endpointFormat.Channels;
-                    var rented = ArrayPool<float>.Shared.Rent(mappedSamples);
-                    try
-                    {
-                        var mapped = rented.AsSpan(0, mappedSamples);
-                        mapped.Clear();
-                        ApplyChannelMap(filledSpan, mapped, route.BakedChannelMap,
-                            srcFormat.Channels, endpointFormat.Channels, filled);
-                        MixInto(dest, mapped);
-                    }
-                    finally { ArrayPool<float>.Shared.Return(rented); }
+                    var outScratch = _router.GetOrCreateOutputScratch(_endpoint.Id, mappedSamples);
+                    var mapped = outScratch.AsSpan(0, mappedSamples);
+                    mapped.Clear();
+                    ApplyChannelMap(filledSpan, mapped, route.BakedChannelMap,
+                        srcFormat.Channels, endpointFormat.Channels, filled);
+                    MixInto(dest, mapped);
                 }
                 else
                 {
@@ -1557,7 +1667,6 @@ public sealed class AVRouter : IAVRouter
         // Rate limiting: hold the last presented frame so the render loop
         // (which may run faster than the content frame rate) doesn't drain the ring.
         private VideoFrame? _lastPresentedFrame;
-        private long _lastPresentedRelativePts = long.MinValue;
 
 
         public VideoPresentCallbackForEndpoint(AVRouter router, EndpointEntry endpoint)
@@ -1645,8 +1754,6 @@ public sealed class AVRouter : IAVRouter
                             relativePtsTicks, relativeClockTicks, toleranceTicks,
                             _router._options.VideoPullDriftCorrectionGain);
                     }
-
-                    _lastPresentedRelativePts = relativePtsTicks;
                 }
 
                 // Release the previously held last-presented frame's ref before
@@ -1693,24 +1800,44 @@ public sealed class AVRouter : IAVRouter
     }
 
     /// <summary>
+    /// §3.26 / P3 — RT-safe accessor for the per-endpoint output scratch.
+    /// Fast path is a single <c>TryGetValue</c> + length check, so the RT thread
+    /// does not allocate in steady state. On the rare grow path (larger
+    /// <c>frameCount</c> than the pre-rented size, or endpoint registered
+    /// without a pull hint) we fall back to <see cref="ArrayPool{T}"/>: that
+    /// allocation is gated behind a size mismatch and is documented as the
+    /// slow path.
+    /// </summary>
+    private float[] GetOrCreateOutputScratch(EndpointId id, int minSize)
+    {
+        if (_outputScratchBuffers.TryGetValue(id, out var buf) && buf.Length >= minSize)
+            return buf;
+
+        return _outputScratchBuffers.AddOrUpdate(
+            id,
+            _ => new float[minSize],
+            (_, existing) => existing.Length >= minSize ? existing : new float[minSize]);
+    }
+
+    /// <summary>
     /// Scatters interleaved source samples into interleaved destination samples
     /// using a pre-baked channel route table.
     /// </summary>
-    private static readonly IAudioMixer _mixer = DefaultAudioMixer.Instance;
+    private static readonly IAudioMixer Mixer = DefaultAudioMixer.Instance;
 
     private static void ApplyChannelMap(
         ReadOnlySpan<float> src, Span<float> dest,
         (int dstCh, float gain)[][] bakedRoutes,
         int srcChannels, int dstChannels, int frameCount)
-        => _mixer.ApplyChannelMap(src, dest, bakedRoutes, srcChannels, dstChannels, frameCount);
+        => Mixer.ApplyChannelMap(src, dest, bakedRoutes, srcChannels, dstChannels, frameCount);
 
     private static void ApplyGain(Span<float> buffer, float gain)
-        => _mixer.ApplyGain(buffer, gain);
+        => Mixer.ApplyGain(buffer, gain);
 
     private static void MixInto(Span<float> dest, ReadOnlySpan<float> src)
-        => _mixer.MixInto(dest, src);
+        => Mixer.MixInto(dest, src);
 
     private static float MeasurePeak(ReadOnlySpan<float> buffer)
-        => _mixer.MeasurePeak(buffer);
+        => Mixer.MeasurePeak(buffer);
 }
 

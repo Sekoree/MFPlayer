@@ -38,6 +38,30 @@ MFPlayer exposes two tiers of public surface:
 See `API-Implementation-Review.md` §"Layering" for the rationale and
 `Implementation-Checklist.md` §0.1 for the audit trail.
 
+## Obsoletion Policy (§0.4.3 framing decision)
+
+When a public class is renamed (for example `SDL3VideoOutput` →
+`SDL3VideoEndpoint`, `NDIAVSink` → `NDIAVEndpoint`):
+
+1. The old name is kept for **one** release as a public type-forwarder:
+   ```csharp
+   [Obsolete("Renamed to FooEndpoint. This type-forwarder will be removed in the next release.", error: false)]
+   public sealed class FooOld : FooEndpoint { }
+   ```
+   A dedicated `*Legacy.cs` file holds the forwarder (see
+   `NDIAVSinkLegacy.cs`, `SDL3VideoOutputLegacy.cs`,
+   `AvaloniaOpenGlVideoOutputLegacy.cs`).
+2. In the release **after**, the forwarder is either promoted to
+   `error: true` for one more release or deleted outright (implementer's
+   choice based on user-facing impact).
+3. Clone endpoints with internal constructors obtainable only via a parent
+   `Create*` method **do not** require forwarders — `var`-typed / implicit
+   callers migrate transparently; explicit type annotations are rare.
+4. **Exception:** the PortAudio `PortAudioOutput` / `PortAudioSink` types
+   were deleted outright in an earlier pass, predating this policy. Their
+   callers were migrated inline. This is the one grandfathered case and is
+   not the template going forward.
+
 ## Sample Apps
 
 - `Test/MFPlayer.SimplePlayer` - audio playback.

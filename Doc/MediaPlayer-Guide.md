@@ -98,7 +98,7 @@ using var runtime = ndiRuntime ?? throw new InvalidOperationException("Failed to
 NDISender.Create(out var ndiSender, "MFPlayer NDI", clockVideo: false, clockAudio: false);
 using var sender = ndiSender ?? throw new InvalidOperationException("Failed to create NDI sender.");
 
-using var ndiSink = new NDIAVSink(sender, new NDIAVSinkOptions
+using var ndiSink = new NDIAVEndpoint(sender, new NDIAVSinkOptions
 {
     Name = "MFPlayer NDI Sink",
     Preset = NDIEndpointPreset.Balanced,
@@ -143,3 +143,40 @@ if (player.Router is { } router)
 - `MediaPlayer` does not own externally created endpoints.
 - For fully custom multi-channel routing workflows, use `AVRouter` directly.
 
+## Clock selection (§1.4b)
+
+The router owns a priority-ranked clock registry. Every clock-capable endpoint
+is auto-registered when you call `RegisterEndpoint` (or add it via the
+`MediaPlayer` facade), at the priority exposed by
+`IClockCapableEndpoint.DefaultPriority`:
+
+| Endpoint kind                             | Default priority        |
+|-------------------------------------------|-------------------------|
+| Local hardware output (PortAudio, SDL3)   | `ClockPriority.Hardware`|
+| Network receive clock (NDI receive, PTP)  | `ClockPriority.External`|
+| Virtual / stopwatch                       | `ClockPriority.Internal`|
+
+The resolver picks the highest-priority clock currently registered. Concrete
+scenarios:
+
+- **Default PA-only playback.** `RegisterEndpoint(paEndpoint)` ⇒ the
+  `PortAudioClock` wins at `Hardware`. No extra code needed.
+- **PA playback + NDI send slaved to a PTP genlock source.** Register your PTP
+  clock with `router.RegisterClock(ptpClock, ClockPriority.External)` — it
+  outranks the PA clock for this session. Remove it later with
+  `router.UnregisterClock(ptpClock)` and the resolver *automatically* falls
+  back to the PA clock with no re-plumbing.
+- **Hard override for a single session.** `router.SetClock(otherClock)`
+  registers at `ClockPriority.Override` and outranks every other entry.
+  Clearing it restores the priority-based resolution.
+- **NDI send endpoints do not provide a clock today.** `NDIClock` is a
+  *receive*-side type derived from sender-stamped timestamps. When NDI is on
+  the send side, the natural choices are the PA clock (default) or a
+  PTP/`SetClock` override. A future NDI sender can opt in by implementing
+  `IClockCapableEndpoint`.
+
+> **Known rough edge:** the router's internal tick cadence is currently
+> decoupled from `Clock.Position`. That is tracked under checklist §4.9
+> (`ActiveClockChanged` event), §5.5 (auto cadence derivation) and §6.7
+> (per-axis tick cadence) and does not affect *which* clock is chosen — only
+> how frequently the resolver is re-evaluated.

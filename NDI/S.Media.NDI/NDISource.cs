@@ -150,6 +150,12 @@ public sealed class NDISource : IDisposable
     private Thread? _watchThread;
     private readonly CancellationTokenSource _watchCts = new();
 
+    // §3.42 / N1, N2, N19 — session gate serialises reconnect (`recv_connect`) and
+    // framesync create/destroy against teardown. The capture threads themselves
+    // do NOT take this gate — they use the per-frame `_frameSyncGate`s on the
+    // channels — so a reconnect cannot glitch audio while the gate is held.
+    private readonly Lock _sessionGate = new();
+
     private volatile NDISourceState _state = NDISourceState.Disconnected;
     private bool _disposed;
 
@@ -167,6 +173,13 @@ public sealed class NDISource : IDisposable
 
     /// <summary>
     /// Raised when the connection state changes (e.g. Connected → Reconnecting → Connected).
+    /// <para>
+    /// §3.47f — the event args' <see cref="NDISourceStateChangedEventArgs.NewState"/>
+    /// is authoritative for the state at the moment of the transition. The
+    /// <see cref="State"/> property may already have advanced to a later
+    /// state by the time a handler runs (dispatch happens on the
+    /// <see cref="ThreadPool"/>, so multiple transitions can queue up).
+    /// </para>
     /// </summary>
     public event EventHandler<NDISourceStateChangedEventArgs>? StateChanged;
 
@@ -208,8 +221,10 @@ public sealed class NDISource : IDisposable
         if (ret != 0 || receiver == null)
             throw new InvalidOperationException($"NDIReceiver.Create failed: {ret}");
 
-        receiver.Connect(source);
-
+        // §3.47g / N20 — create the framesync BEFORE connecting the receiver,
+        // matching the reference SDK sample order. Connecting first can cause
+        // the initial frame or two to be lost before the framesync is ready to
+        // receive them.
         ret = NDIFrameSync.Create(out var frameSync, receiver);
         if (ret != 0 || frameSync == null)
         {
@@ -217,7 +232,18 @@ public sealed class NDISource : IDisposable
             throw new InvalidOperationException($"NDIFrameSync.Create failed: {ret}");
         }
 
-        var clock = new NDIClock();
+        try
+        {
+            receiver.Connect(source);
+        }
+        catch
+        {
+            frameSync.Dispose();
+            receiver.Dispose();
+            throw;
+        }
+
+        var clock = new NDIClock(sampleRate: options.SampleRate);
         // Each channel gets its own lock — the NDI FrameSync API is internally thread-safe
         // for concurrent audio/video captures on the same instance, so there is no need to
         // share a gate.  A shared gate caused audio capture to stall while video held the
@@ -293,7 +319,20 @@ public sealed class NDISource : IDisposable
         Log.LogInformation("OpenByNameAsync: found source '{FoundName}' at {Url}",
             found.Value.Name, found.Value.UrlAddress ?? "(no url)");
 
-        var ndiSource = Open(found.Value, options);
+        NDISource ndiSource;
+        try
+        {
+            ndiSource = Open(found.Value, options);
+        }
+        catch
+        {
+            // §3.47c / N13 — the discovery finder was kept alive for the Open
+            // call; if Open itself throws (receiver/framesync creation or connect
+            // failure), dispose the finder before propagating or we leak the
+            // mDNS discovery threads for the lifetime of the process.
+            finder.Dispose();
+            throw;
+        }
         ndiSource._sourceNamePattern = sourceName;
 
         // Keep finder alive for reconnection if auto-reconnect is enabled.
@@ -381,12 +420,22 @@ public sealed class NDISource : IDisposable
         StartAudioCapture();
     }
 
-    /// <summary>Stops the clock. Capture threads continue running until <see cref="Dispose"/> is called.</summary>
-    public void Stop()
+    /// <summary>
+    /// Stops the media clock only. Capture threads continue running until
+    /// <see cref="Dispose"/> is called. Renamed from <c>Stop</c> in §3.45 to
+    /// make the narrow scope explicit.
+    /// </summary>
+    public void StopClock()
     {
-        Log.LogInformation("Stopping NDISource");
+        Log.LogInformation("Stopping NDISource clock");
         Clock.Stop();
     }
+
+    /// <summary>
+    /// Legacy alias for <see cref="StopClock"/>. Prefer <c>StopClock</c>.
+    /// </summary>
+    [Obsolete("Renamed to StopClock() in §3.45 — this method only stops the media clock, not capture. Use StopClock() or Dispose() explicitly.")]
+    public void Stop() => StopClock();
 
     /// <summary>
     /// Waits until the underlying NDI audio ring reaches a minimum number of chunks.
@@ -471,7 +520,11 @@ public sealed class NDISource : IDisposable
                 Log.LogWarning(ex, "NDISource watch-loop error");
             }
 
-            token.WaitHandle.WaitOne(_options.ConnectionCheckIntervalMs);
+            // §3.47d / N15 — WaitOne returns `true` when the token fires; the
+            // next iteration would otherwise spend one extra
+            // ConnectionCheckIntervalMs hanging around. Exit immediately.
+            if (token.WaitHandle.WaitOne(_options.ConnectionCheckIntervalMs))
+                break;
         }
     }
 
@@ -479,30 +532,37 @@ public sealed class NDISource : IDisposable
     {
         if (token.IsCancellationRequested) return;
 
-        // If we have a finder and a name pattern, rediscover the source.
-        // This handles the case where the source's IP changed after a restart.
-        if (_finder != null && _sourceNamePattern != null)
+        // §3.42 — serialise reconnect against Dispose so the receiver/framesync
+        // cannot be torn down mid-Connect.
+        lock (_sessionGate)
         {
-            Log.LogDebug("Reconnect: searching for source matching '{Pattern}' via finder", _sourceNamePattern);
-            _finder.WaitForSources(1000);
-            if (token.IsCancellationRequested) return;
+            if (_disposed || token.IsCancellationRequested) return;
 
-            var sources = _finder.GetCurrentSources();
-            var found = MatchSource(sources, _sourceNamePattern);
-            if (found.HasValue)
+            // If we have a finder and a name pattern, rediscover the source.
+            // This handles the case where the source's IP changed after a restart.
+            if (_finder != null && _sourceNamePattern != null)
             {
-                Log.LogDebug("Reconnect: rediscovered '{SourceName}', reconnecting receiver", found.Value.Name);
-                _connectedSource = found.Value;
-                _receiver.Connect(found.Value);
-                return;
+                Log.LogDebug("Reconnect: searching for source matching '{Pattern}' via finder", _sourceNamePattern);
+                _finder.WaitForSources(1000);
+                if (token.IsCancellationRequested) return;
+
+                var sources = _finder.GetCurrentSources();
+                var found = MatchSource(sources, _sourceNamePattern);
+                if (found.HasValue)
+                {
+                    Log.LogDebug("Reconnect: rediscovered '{SourceName}', reconnecting receiver", found.Value.Name);
+                    _connectedSource = found.Value;
+                    _receiver.Connect(found.Value);
+                    return;
+                }
+                Log.LogDebug("Reconnect: source not yet visible, will retry");
             }
-            Log.LogDebug("Reconnect: source not yet visible, will retry");
-        }
-        else if (_connectedSource.HasValue)
-        {
-            // Direct reconnect with the original source reference.
-            Log.LogDebug("Reconnect: retrying connection to '{SourceName}'", _connectedSource.Value.Name);
-            _receiver.Connect(_connectedSource.Value);
+            else if (_connectedSource.HasValue)
+            {
+                // Direct reconnect with the original source reference.
+                Log.LogDebug("Reconnect: retrying connection to '{SourceName}'", _connectedSource.Value.Name);
+                _receiver.Connect(_connectedSource.Value);
+            }
         }
     }
 
@@ -643,13 +703,20 @@ public sealed class NDISource : IDisposable
         _watchThread?.Join(TimeSpan.FromSeconds(2));
         _watchCts.Dispose();
 
-        Clock.Stop();
-        AudioChannel?.Dispose();
-        VideoChannel?.Dispose();
-        _frameSync.Dispose();
-        _receiver.Dispose();
-        _finder?.Dispose();
-        Clock.Dispose();
+        // §3.42 — take the session gate so any in-flight reconnect attempt
+        // completes before we tear the receiver/framesync down. The capture
+        // threads use their own per-channel `_frameSyncGate` locks, so this
+        // only blocks on reconnect/state work, not on the RT hot path.
+        lock (_sessionGate)
+        {
+            Clock.Stop();
+            AudioChannel?.Dispose();
+            VideoChannel?.Dispose();
+            _frameSync.Dispose();
+            _receiver.Dispose();
+            _finder?.Dispose();
+            Clock.Dispose();
+        }
     }
 }
 

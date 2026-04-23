@@ -17,7 +17,7 @@ public static class YuvAutoPolicy
     /// </para>
     /// <para>
     /// Override this by setting an explicit <see cref="YuvColorRange.Full"/> value on
-    /// <c>SDL3VideoOutput.YuvColorRange</c>, or implement <c>IVideoColorMatrixHint</c>
+    /// <c>SDL3VideoEndpoint.YuvColorRange</c>, or implement <c>IVideoColorMatrixHint</c>
     /// on the channel to supply per-stream metadata (e.g. NDI Full-range sources).
     /// </para>
     /// </summary>
