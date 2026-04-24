@@ -59,10 +59,18 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     // as milliseconds for convenience.
     internal int MaxForwardPtsJumpMs { get; set; } = 750;
 
-    /// <summary>§4.17 / N7 — raised once per distinct unsupported video FourCC.</summary>
+    /// <summary>
+    /// §4.17 / N7 — raised once per distinct unsupported video FourCC.
+    /// <para>§2.8 — dispatched on the NDI video capture thread. Handlers must be fast
+    /// and must not call back into the capture path.</para>
+    /// </summary>
     public event EventHandler<NDIUnsupportedFourCcEventArgs>? UnsupportedFourCc;
 
-    /// <summary>§4.17 / N11 — raised when the source format changes between two consecutive frames.</summary>
+    /// <summary>
+    /// §4.17 / N11 — raised when the source format changes between two consecutive frames.
+    /// <para>§2.8 — dispatched on the NDI video capture thread. Handler timing is bounded
+    /// by the incoming frame rate; do not block.</para>
+    /// </summary>
     public event EventHandler<NDIVideoFormatChangedEventArgs>? FormatChanged;
 
     // IVideoColorMatrixHint — updated from NDI frame metadata on the capture thread;
@@ -95,9 +103,12 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     public int   BufferDepth     => _ringCapacity;
     public int   BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
+    /// <summary>§2.8 — NDI live sources have no defined end-of-stream; never raised.</summary>
 #pragma warning disable CS0067  // NDI streams have no defined EOF; event may be used in future
     public event EventHandler? EndOfStream;
 #pragma warning restore CS0067
+    /// <summary>§2.8 — raised on the NDI video capture thread when the ring drains.
+    /// Handlers must be non-blocking.</summary>
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
     /// <inheritdoc/>
@@ -588,7 +599,8 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         Log.LogInformation("Disposing NDIVideoChannel");
         var cts = Interlocked.Exchange(ref _cts, null);
         try { cts?.Cancel(); } catch (ObjectDisposedException) { }
-        _captureThread?.Join(TimeSpan.FromSeconds(2));
+        // §3.42 / N19 — loop-join instead of hard 2 s timeout.
+        LoopJoin(_captureThread, "video-capture");
         cts?.Dispose();
         _ringWriter.TryComplete();
         while (_ringReader.TryRead(out var frame))
@@ -600,6 +612,19 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         }
         Debug.Assert(Interlocked.Read(ref _framesInRing) >= 0,
             "NDIVideoChannel._framesInRing went negative after Dispose drain");
+    }
+
+    private static void LoopJoin(Thread? thread, string name)
+    {
+        if (thread is null) return;
+        int timeoutMs = 500;
+        while (!thread.Join(timeoutMs))
+        {
+            Log.LogWarning(
+                "NDI {ThreadName} thread still alive after {Timeout} ms — retrying join",
+                name, timeoutMs);
+            timeoutMs = Math.Min(timeoutMs * 2, 5_000);
+        }
     }
 
     private void EnqueueFrame(in VideoFrame frame)

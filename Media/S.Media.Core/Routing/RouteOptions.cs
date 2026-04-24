@@ -76,5 +76,19 @@ public record VideoRouteOptions : IRouteOptions
     /// get 4). Values &lt; 1 are coerced to 1.
     /// </summary>
     public int? Capacity { get; init; }
+
+    /// <summary>
+    /// §6.1 / R23 — when <see langword="true"/>, this route bypasses the PTS
+    /// gate and drift correction, delivering every decoded frame immediately.
+    /// Use for live-preview sinks (HDMI monitors, low-latency displays) that
+    /// must show the newest frame regardless of clock alignment.
+    /// <para>
+    /// Push-mode routes: the PTS "too early" hold-back and catch-up skip are
+    /// both disabled.  Pull-mode routes: the origin-based gate in
+    /// <c>VideoPresentCallbackForEndpoint</c> is likewise skipped.
+    /// </para>
+    /// Default: <see langword="false"/> (scheduled, PTS-gated delivery).
+    /// </summary>
+    public bool LiveMode { get; init; }
 }
 

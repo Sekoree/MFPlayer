@@ -243,17 +243,18 @@ public sealed class NDISource : IDisposable
     public event EventHandler<NDISourceStateChangedEventArgs>? StateChanged;
 
     /// <summary>
-    /// §4.17 / N7 — raised (log-once per FourCC) when either the video or
-    /// audio capture thread encounters a FourCC the library cannot decode.
-    /// Check <see cref="NDIUnsupportedFourCcEventArgs.IsAudio"/> to dispatch.
+    /// §4.17 / N7 — raised once per distinct unsupported FourCC encountered by either
+    /// the video or audio capture thread. Check <see cref="NDIUnsupportedFourCcEventArgs.IsAudio"/>
+    /// to dispatch. <para>§2.8 — dispatched synchronously on the NDI capture thread;
+    /// handlers must be fast and must not re-enter the capture path.</para>
     /// </summary>
     public event EventHandler<NDIUnsupportedFourCcEventArgs>? UnsupportedFourCc;
 
     /// <summary>
-    /// §4.17 / N11 — raised when the NDI source's video format changes
-    /// (dimensions, pixel format, or frame rate) between two consecutive
-    /// frames. Never raised on the first frame. Video-only — audio format
-    /// changes are rare in NDI and fire no event today.
+    /// §4.17 / N11 — raised when the NDI source's video format changes (dimensions,
+    /// pixel format, or frame rate) between two consecutive frames. Never raised on
+    /// the first frame. <para>§2.8 — dispatched on the NDI video capture thread.
+    /// Handlers must be non-blocking.</para>
     /// </summary>
     public event EventHandler<NDIVideoFormatChangedEventArgs>? VideoFormatChanged;
 
@@ -811,7 +812,10 @@ public sealed class NDISource : IDisposable
         Log.LogInformation("Disposing NDISource");
 
         _watchCts.Cancel();
-        _watchThread?.Join(TimeSpan.FromSeconds(2));
+        // §3.42 / N19 — loop-join instead of hard 2 s timeout so a slow
+        // `_finder.WaitForSources` inside TryReconnect cannot leave the watch
+        // thread alive when we enter the session-gate teardown below.
+        LoopJoin(_watchThread, "watch");
         _watchCts.Dispose();
 
         // §3.42 — take the session gate so any in-flight reconnect attempt
@@ -827,6 +831,19 @@ public sealed class NDISource : IDisposable
             _receiver.Dispose();
             _finder?.Dispose();
             Clock.Dispose();
+        }
+    }
+
+    private static void LoopJoin(Thread? thread, string name)
+    {
+        if (thread is null) return;
+        int timeoutMs = 500;
+        while (!thread.Join(timeoutMs))
+        {
+            Log.LogWarning(
+                "NDI {ThreadName} thread still alive after {Timeout} ms — retrying join",
+                name, timeoutMs);
+            timeoutMs = Math.Min(timeoutMs * 2, 5_000);
         }
     }
 }

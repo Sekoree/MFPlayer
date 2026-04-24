@@ -221,4 +221,97 @@ public sealed class ChannelRouteMapTests
 
         Assert.Equal(3, baked[0].Length);
     }
+
+    // ── Auto ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Auto_MonoToStereo_FansOutToBothChannels()
+    {
+        var map   = ChannelRouteMap.Auto(srcChannels: 1, dstChannels: 2);
+        var baked = map.BakeRoutes(1);
+
+        // Mono source must reach dst 0 and dst 1.
+        var dsts = baked[0].Select(r => r.dstCh).OrderBy(x => x).ToArray();
+        Assert.Equal([0, 1], dsts);
+    }
+
+    [Fact]
+    public void Auto_StereoToStereo_IsIdentity()
+    {
+        var map   = ChannelRouteMap.Auto(srcChannels: 2, dstChannels: 2);
+        var baked = map.BakeRoutes(2);
+
+        Assert.Single(baked[0]);
+        Assert.Equal(0, baked[0][0].dstCh);
+        Assert.Single(baked[1]);
+        Assert.Equal(1, baked[1][0].dstCh);
+    }
+
+    [Fact]
+    public void Auto_SixChannelToStereo_PassesThroughFirstTwo()
+    {
+        var map   = ChannelRouteMap.Auto(srcChannels: 6, dstChannels: 2);
+        var baked = map.BakeRoutes(6);
+
+        // Only channels 0 and 1 get a route; channels 2–5 are silent.
+        Assert.Single(baked[0]); Assert.Equal(0, baked[0][0].dstCh);
+        Assert.Single(baked[1]); Assert.Equal(1, baked[1][0].dstCh);
+        for (int i = 2; i < 6; i++)
+            Assert.Empty(baked[i]);
+    }
+
+    [Fact]
+    public void Auto_MonoToMono_SinglePassthrough()
+    {
+        var map   = ChannelRouteMap.Auto(srcChannels: 1, dstChannels: 1);
+        var baked = map.BakeRoutes(1);
+
+        Assert.Single(baked[0]);
+        Assert.Equal(0, baked[0][0].dstCh);
+        Assert.Equal(1.0f, baked[0][0].gain);
+    }
+
+    // ── AutoStereoDownmix ─────────────────────────────────────────────────
+
+    [Fact]
+    public void AutoStereoDownmix_StereoToMono_AveragesLR()
+    {
+        var map   = ChannelRouteMap.AutoStereoDownmix(srcChannels: 2, dstChannels: 1);
+        var baked = map.BakeRoutes(2);
+
+        // Both L and R must route to dst 0 at 0.5× gain.
+        Assert.Single(baked[0]); Assert.Equal(0, baked[0][0].dstCh); Assert.Equal(0.5f, baked[0][0].gain);
+        Assert.Single(baked[1]); Assert.Equal(0, baked[1][0].dstCh); Assert.Equal(0.5f, baked[1][0].gain);
+    }
+
+    [Fact]
+    public void AutoStereoDownmix_5_1_ToStereo_ContainsCenterAtMinus3dB()
+    {
+        // 5.1 source (6 channels) → stereo: center (ch 2) must fan to both L and R at -3 dB.
+        const float c = 0.7071067811865476f;
+        var map   = ChannelRouteMap.AutoStereoDownmix(srcChannels: 6, dstChannels: 2);
+        var baked = map.BakeRoutes(6);
+
+        var centerRoutes = baked[2].OrderBy(r => r.dstCh).ToArray();
+        Assert.Equal(2, centerRoutes.Length);
+        Assert.Equal(0, centerRoutes[0].dstCh); Assert.Equal(c, centerRoutes[0].gain, 6);
+        Assert.Equal(1, centerRoutes[1].dstCh); Assert.Equal(c, centerRoutes[1].gain, 6);
+    }
+
+    [Fact]
+    public void AutoStereoDownmix_MonoToStereo_FansOut()
+    {
+        var map   = ChannelRouteMap.AutoStereoDownmix(srcChannels: 1, dstChannels: 2);
+        var baked = map.BakeRoutes(1);
+
+        var dsts = baked[0].Select(r => r.dstCh).OrderBy(x => x).ToArray();
+        Assert.Equal([0, 1], dsts);
+    }
+
+    [Fact]
+    public void AutoStereoDownmix_ZeroChannels_ReturnsSilence()
+    {
+        var map = ChannelRouteMap.AutoStereoDownmix(srcChannels: 0, dstChannels: 2);
+        Assert.Empty(map.Routes);
+    }
 }

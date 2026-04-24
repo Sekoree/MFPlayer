@@ -32,5 +32,6 @@ public sealed record RouteDiagnostics(
     bool Enabled,
     float Gain,
     TimeSpan TimeOffset,
-    bool HasResampler);
+    bool HasResampler,
+    bool LiveMode = false);
 

@@ -298,8 +298,9 @@ using (ndiRuntime)
         {
             var videoEpId = router.RegisterEndpoint(videoOutput);
             videoInputId = router.RegisterVideoInput(videoChannel);
-            router.CreateRoute(videoInputId.Value, videoEpId);
-            router.BypassVideoPtsScheduling = profile.BypassVideoPtsScheduling;
+            // §6.1 / R23: per-route LiveMode replaces the global BypassVideoPtsScheduling.
+            router.CreateRoute(videoInputId.Value, videoEpId,
+                new VideoRouteOptions { LiveMode = profile.BypassVideoPtsScheduling });
 
             if (profile.BypassVideoPtsScheduling)
                 Console.WriteLine("  VideoMixer: LiveMode=ON (newest-frame, no PTS scheduling)");

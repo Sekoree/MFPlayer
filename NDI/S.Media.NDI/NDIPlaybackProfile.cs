@@ -59,13 +59,18 @@ public sealed record NDIPlaybackProfile
     public int VideoPreBufferFrames { get; init; } = 2;
 
     /// <summary>
-    /// When <see langword="true"/>, the router bypasses per-frame PTS scheduling for
-    /// video push endpoints and simply forwards the newest available frame on every
-    /// push tick.  Use only for live-monitor scenarios where frame-accurate pacing
-    /// is not required — it trades PTS correctness for the lowest achievable
-    /// presentation latency.  Disabled on every preset: callers opt in explicitly.
-    /// Set on <c>IAVRouter.BypassVideoPtsScheduling</c>.
+    /// When <see langword="true"/>, the video route should use
+    /// <see cref="S.Media.Core.Routing.VideoRouteOptions.LiveMode"/> — bypasses
+    /// per-frame PTS scheduling and forwards the newest frame on every push tick.
+    /// Use for live-monitor scenarios; trades PTS correctness for minimum latency.
+    /// Disabled on every preset; callers opt in explicitly.
     /// </summary>
+    /// <remarks>
+    /// Pass this value as <c>VideoRouteOptions { LiveMode = profile.BypassVideoPtsScheduling }</c>
+    /// to <c>router.CreateRoute(videoInputId, videoEpId, options)</c>.
+    /// The legacy <c>IAVRouter.BypassVideoPtsScheduling</c> global flag is
+    /// <c>[Obsolete]</c> as of §6.1.
+    /// </remarks>
     public bool BypassVideoPtsScheduling { get; init; }
 
     /// <summary>

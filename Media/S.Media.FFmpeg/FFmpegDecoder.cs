@@ -244,18 +244,19 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     }
 
     /// <summary>
-    /// Raised when the demux loop reaches the end of the media file/stream.
-    /// Fired once on a ThreadPool thread after all encoded packets have been queued;
-    /// the audio/video channels may still have buffered frames to drain.
+    /// §2.8 — raised once on a <see cref="ThreadPool"/> thread when the demux loop
+    /// reaches the end of the media file/stream. Audio/video channels may still have
+    /// buffered frames to drain; wait for their <c>EndOfStream</c> events before
+    /// closing the pipeline.
     /// </summary>
     public event EventHandler? EndOfMedia;
 
     /// <summary>
-    /// Raised (on a ThreadPool thread) when the demux loop encounters a non-EOF
-    /// read failure — typically a broken stream surfaced from the custom
-    /// <see cref="StreamAvioContext"/>. Review item §3.3 / B9. Subscribers get a
+    /// §2.8 — raised on a <see cref="ThreadPool"/> thread when the demux loop
+    /// encounters a non-EOF read failure (typically a broken stream surfaced from
+    /// <see cref="StreamAvioContext"/>). Review item §3.3 / B9. Subscribers get a
     /// <see cref="MediaDecodeException"/> whose <see cref="Exception.InnerException"/>
-    /// is the underlying IO exception (if any).
+    /// is the underlying IO exception (if any). Handlers must not block.
     /// </summary>
     public event EventHandler<MediaDecodeException>? OnError;
 

@@ -116,6 +116,20 @@ public sealed class AVRouter : IAVRouter
         // each frame out to every subscription, so pull (SDL3/Avalonia) and push
         // (NDI, clone sinks) no longer race for frames on a shared ring.
         public IVideoSubscription? VideoSub;
+        // §6.1 / R23 — per-route live-mode bypass; set from VideoRouteOptions.LiveMode.
+        public bool LiveMode;
+
+        // §6.2 / R14 — per-route PTS drift state. Two separate trackers because the
+        // push tick thread and the pull render thread have independent phase origins and
+        // run at different cadences; sharing one tracker would corrupt both paths.
+        public readonly PtsDriftTracker PushDrift = new();
+        public readonly PtsDriftTracker PullDrift  = new();
+
+        // Pull-path per-route cache: frame that was too early last tick; last successfully
+        // presented frame for re-display when the ring is momentarily empty.
+        // Written only from the render thread — no synchronisation needed.
+        public VideoFrame? PullPendingFrame;
+        public VideoFrame? PullLastPresentedFrame;
 
         public RouteEntry(RouteId id, InputId inputId, EndpointId endpointId, InputKind kind)
         {
@@ -190,12 +204,9 @@ public sealed class AVRouter : IAVRouter
     // their own pending — otherwise they would clobber each other's gate-cache.
     private readonly ConcurrentDictionary<RouteId, VideoFrame> _pushVideoPending = new();
 
-    // Per-route push video drift correction origin.
-    // Tracks PTS↔clock offset and applies smooth proportional correction so
-    // sub-frame drift converges to zero without ±½-frame oscillation.
-    // See PtsDriftTracker for the shared state machine (also used by the pull
-    // callback below) — §5.1 of Code-Review-Findings.
-    private readonly ConcurrentDictionary<RouteId, PtsDriftTracker> _pushVideoDrift = new();
+    // §6.2 / R14: push + pull drift trackers moved onto RouteEntry (PushDrift / PullDrift)
+    // so each route has independent PTS-origin state regardless of how many routes share
+    // the same endpoint. _pushVideoDrift ConcurrentDictionary removed.
     private readonly ConcurrentDictionary<RouteId, byte> _pushAudioFormatMismatchWarnings = new();
 
     // §3.20 / EL3: rate-limit repeated push-tick exceptions. Log the first three,
@@ -841,6 +852,11 @@ public sealed class AVRouter : IAVRouter
 
     // ── IAVRouter: Video ────────────────────────────────────────────────
 
+    /// <summary>
+    /// Legacy router-wide PTS bypass. Prefer <see cref="VideoRouteOptions.LiveMode"/>
+    /// per-route so a preview sink can be live while a recording sink stays scheduled.
+    /// </summary>
+    [Obsolete("Use VideoRouteOptions.LiveMode per-route instead. §6.1 / R23")]
     public bool BypassVideoPtsScheduling { get; set; }
 
     // ── IAVRouter: Diagnostics ──────────────────────────────────────────
@@ -947,11 +963,14 @@ public sealed class AVRouter : IAVRouter
         var routeSnapshots = _routes.Values.Select(r => new RouteDiagnostics(
             r.Id, r.InputId, r.EndpointId, r.Kind.ToString(), r.Enabled, r.Gain,
             r.TimeOffset,
-            r.Resampler is not null)).ToArray();
+            r.Resampler is not null,
+            r.LiveMode)).ToArray();
 
+#pragma warning disable CS0618 // reading own legacy property for diagnostics compatibility
         return new RouterDiagnosticsSnapshot(
             IsRunning, Clock.Position, BypassVideoPtsScheduling,
             inputSnapshots, endpointSnapshots, routeSnapshots);
+#pragma warning restore CS0618
     }
 
     // ── IDisposable / IAsyncDisposable ──────────────────────────────────
@@ -1164,6 +1183,7 @@ public sealed class AVRouter : IAVRouter
             {
                 Gain = options.Gain,
                 TimeOffset = options.TimeOffset,
+                LiveMode = options.LiveMode, // §6.1 / R23
             };
 
             // Create a private subscription into the input channel so this endpoint
@@ -1242,10 +1262,15 @@ public sealed class AVRouter : IAVRouter
         // frames out to it.
         route.VideoSub?.Dispose();
         route.VideoSub = null;
-        // Per-route push-video bookkeeping must also be released when the route is gone.
+        // Release push-pending cache and pull-path per-route state.
         if (_pushVideoPending.TryRemove(route.Id, out var pending))
             pending.MemoryOwner?.Dispose();
-        _pushVideoDrift.TryRemove(route.Id, out _);
+        // §6.2 / R14: drift trackers live on RouteEntry — nothing to remove from a dict.
+        // Release the pull-path cached frames to avoid ref-count leaks.
+        route.PullPendingFrame?.MemoryOwner?.Dispose();
+        route.PullPendingFrame = null;
+        // PullLastPresentedFrame is a re-display copy and not ref-counted from here.
+        route.PullLastPresentedFrame = null;
         _pushAudioFormatMismatchWarnings.TryRemove(route.Id, out _);
 
         if (route.Kind == InputKind.Audio)
@@ -1691,9 +1716,15 @@ public sealed class AVRouter : IAVRouter
             bool didCatchUp = false;
 
             // 3) PTS gate with smooth drift correction (unless live mode).
-            if (!BypassVideoPtsScheduling)
+            // §6.1 / R23: per-route LiveMode takes precedence; global BypassVideoPtsScheduling
+            // is a legacy fallback for callers that set the flag before per-route options existed.
+#pragma warning disable CS0618
+            if (!route.LiveMode && !BypassVideoPtsScheduling)
+#pragma warning restore CS0618
             {
-                var drift = _pushVideoDrift.GetOrAdd(route.Id, _ => new PtsDriftTracker());
+                // §6.2 / R14: use route.PushDrift (per-route on RouteEntry) instead of
+                // a ConcurrentDictionary lookup — O(1) field access, no GC pressure.
+                var drift = route.PushDrift;
 
                 // Same self-feedback seeding alignment as the pull-video path
                 // (see VideoPresentCallbackForEndpoint for the long-form note):
@@ -1900,17 +1931,10 @@ public sealed class AVRouter : IAVRouter
         private readonly AVRouter _router;
         private readonly EndpointEntry _endpoint;
 
-        // Cross-clock drift compensation (shared state machine with push path).
-        private readonly PtsDriftTracker _drift = new();
-
-        // Cache a frame that was fetched but too early to present, so it's
-        // retried on the next render tick instead of being lost.
-        private VideoFrame? _pendingFrame;
-        private InputId _pendingInputId;
-
-        // Rate limiting: hold the last presented frame so the render loop
-        // (which may run faster than the content frame rate) doesn't drain the ring.
-        private VideoFrame? _lastPresentedFrame;
+        // §6.2 / R14: per-route state (_drift, pending, lastPresented) moved onto
+        // RouteEntry so each route has independent phase origins. The callback no
+        // longer keeps singleton fields for these — route.PullDrift / PullPendingFrame /
+        // PullLastPresentedFrame are used directly in TryPresentNext.
 
 
         public VideoPresentCallbackForEndpoint(AVRouter router, EndpointEntry endpoint)
@@ -1934,43 +1958,47 @@ public sealed class AVRouter : IAVRouter
                     continue;
                 if (route.VideoSub is null) continue;
 
-                // Try the cached pending frame first (it was too early last tick)
+                // §6.2 / R14: all per-route state lives on RouteEntry.
+                // Try the cached pending frame first (it was too early last tick).
                 VideoFrame candidate;
-                if (_pendingFrame.HasValue && _pendingInputId == route.InputId)
+                if (route.PullPendingFrame.HasValue)
                 {
-                    candidate = _pendingFrame.Value;
-                    _pendingFrame = null;
+                    candidate = route.PullPendingFrame.Value;
+                    route.PullPendingFrame = null;
                 }
                 else
                 {
                     if (!route.VideoSub.TryRead(out candidate))
                     {
-                        // No new frame in our private subscription — re-present the
-                        // last one if available.  Other consumers of the same input
-                        // have their own subscriptions; we don't share a ring.
-                        if (_lastPresentedFrame.HasValue)
+                        // No new frame — re-present the last one to avoid black.
+                        if (route.PullLastPresentedFrame.HasValue)
                         {
-                            frame = _lastPresentedFrame.Value;
+                            frame = route.PullLastPresentedFrame.Value;
                             return true;
                         }
                         continue;
                     }
                 }
 
-                // PTS check (unless live mode)
-                if (!_router.BypassVideoPtsScheduling)
+                // §6.1 / R23: PTS check — skip when this route is in live mode or
+                // the legacy global bypass is on.
+#pragma warning disable CS0618
+                if (!route.LiveMode && !_router.BypassVideoPtsScheduling)
+#pragma warning restore CS0618
                 {
-                    // Drift-tracker seed alignment (no-NDI 165fps runaway fix) — see
-                    // the long-form note on the original implementation; unchanged.
-                    bool firstSeed = !_drift.HasOrigin;
+                    // §6.2 / R14: use route.PullDrift — independent from the push
+                    // tracker (route.PushDrift) since the two paths run on different
+                    // threads with different tick cadences.
+                    var drift = route.PullDrift;
+                    bool firstSeed = !drift.HasOrigin;
                     long seedClockTicks = clockPosition.Ticks < candidate.Pts.Ticks
                         ? candidate.Pts.Ticks
                         : clockPosition.Ticks;
-                    _drift.SeedIfNeeded(candidate.Pts.Ticks, seedClockTicks);
+                    drift.SeedIfNeeded(candidate.Pts.Ticks, seedClockTicks);
 
                     long routeOffsetTicks   = inp.TimeOffset.Ticks + route.TimeOffset.Ticks;
-                    long relativePtsTicks   = _drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
-                    long relativeClockTicks = _drift.RelativeClock(clockPosition.Ticks);
+                    long relativePtsTicks   = drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
+                    long relativeClockTicks = drift.RelativeClock(clockPosition.Ticks);
                     long toleranceTicks     = _router._options.VideoPtsEarlyTolerance.Ticks;
 
                     // First-ever frame: skip the gate so the presentation pipeline
@@ -1978,14 +2006,13 @@ public sealed class AVRouter : IAVRouter
                     if (!firstSeed && relativePtsTicks > relativeClockTicks + toleranceTicks)
                     {
                         // Too early — cache for next tick instead of losing it.
-                        if (_pendingFrame.HasValue)
-                            _pendingFrame.Value.MemoryOwner?.Dispose();
-                        _pendingFrame = candidate;
-                        _pendingInputId = route.InputId;
+                        if (route.PullPendingFrame.HasValue)
+                            route.PullPendingFrame.Value.MemoryOwner?.Dispose();
+                        route.PullPendingFrame = candidate;
                         // Re-present last frame to avoid black
-                        if (_lastPresentedFrame.HasValue)
+                        if (route.PullLastPresentedFrame.HasValue)
                         {
-                            frame = _lastPresentedFrame.Value;
+                            frame = route.PullLastPresentedFrame.Value;
                             return true;
                         }
                         continue;
@@ -1994,30 +2021,32 @@ public sealed class AVRouter : IAVRouter
                     // Drift correction with dead-band (unchanged).
                     if (!firstSeed)
                     {
-                        _drift.IntegrateError(
+                        drift.IntegrateError(
                             relativePtsTicks, relativeClockTicks, toleranceTicks,
                             _router._options.VideoPullDriftCorrectionGain);
                     }
                 }
 
-                // Release the previously held last-presented frame's ref before
-                // replacing. With ref-counted buffers (RefCountedVideoBuffer) a
-                // release-then-retain on the same instance is safe; when the new
-                // candidate is a different buffer, this returns the old rental.
-                if (_lastPresentedFrame.HasValue &&
-                    !ReferenceEquals(_lastPresentedFrame.Value.MemoryOwner, candidate.MemoryOwner))
-                    _lastPresentedFrame.Value.MemoryOwner?.Dispose();
+                // Release the previously held last-presented frame's ref before replacing.
+                if (route.PullLastPresentedFrame.HasValue &&
+                    !ReferenceEquals(route.PullLastPresentedFrame.Value.MemoryOwner, candidate.MemoryOwner))
+                    route.PullLastPresentedFrame.Value.MemoryOwner?.Dispose();
 
-                _lastPresentedFrame = candidate;
+                route.PullLastPresentedFrame = candidate;
                 frame = candidate;
                 return true;
             }
 
-            // No route produced a frame — re-present last if available
-            if (_lastPresentedFrame.HasValue)
+            // No route produced a frame — re-present last if any route has one
+            for (int i = 0; i < routes.Length; i++)
             {
-                frame = _lastPresentedFrame.Value;
-                return true;
+                var r = routes[i];
+                if (r.EndpointId != _endpoint.Id) continue;
+                if (r.PullLastPresentedFrame.HasValue)
+                {
+                    frame = r.PullLastPresentedFrame.Value;
+                    return true;
+                }
             }
 
             return false;

@@ -41,7 +41,17 @@ public sealed class AudioChannel : IWritableAudioChannel
 
     public int BufferAvailable => (int)Math.Max(0, Interlocked.Read(ref _framesInRing));
 
+    /// <summary>
+    /// §2.8 — raised on the publisher's thread (whoever drains the ring via
+    /// <see cref="IMediaChannel{TFrame}.FillBuffer"/> or <see cref="Complete"/>).
+    /// Handlers must be non-blocking.
+    /// </summary>
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
+
+    /// <summary>
+    /// §2.8 — dispatched on a <see cref="ThreadPool"/> thread (not the caller of
+    /// <see cref="Complete"/>). Handlers are free to interact with the audio pipeline.
+    /// </summary>
     public event EventHandler? EndOfStream;
 
     /// <summary>

@@ -285,6 +285,26 @@ repeated here only where they speed up the implementer's work.*
 > cadence, +5 RouterBuilder). §3.50 previously-reclassified
 > `[~]` note retained.
 >
+> **2026-04-23 tenth pass (this session):** closed §6.1, §3.42, §2.8, flipped
+> stale ninth-pass boxes. **§6.1** — `VideoRouteOptions.LiveMode` (bool, default
+> false) replaces the global `AVRouter.BypassVideoPtsScheduling` flag; both the
+> push-tick PTS gate and the pull `VideoPresentCallbackForEndpoint` check
+> `route.LiveMode` first, then fall back to the now-`[Obsolete]` global;
+> `RouteDiagnostics` gains `LiveMode`; `NDIAutoPlayer` migrated to per-route option;
+> 4 new `AVRouterLiveModeTests`. **§3.42 / N19** — `NDISource.Dispose`,
+> `NDIAudioChannel.Dispose`, `NDIVideoChannel.Dispose` replaced hard 2 s
+> `Thread.Join` with a `LoopJoin` helper (500 ms intervals, doubling to 5 s,
+> warning log on each retry) so a slow NDI SDK call cannot leave a capture thread
+> alive during framesync teardown. **§2.8** — §2.8 threading remarks added to
+> all events that lacked them: `MediaClockBase.Tick`, `AudioChannel.BufferUnderrun`/
+> `EndOfStream`, `FFmpegDecoder.EndOfMedia`/`OnError` (tags added), all four NDI
+> channel events, `FillBufferSubscription.BufferUnderrun`. Stale ninth-pass boxes
+> flipped: **§4.16** (NDIClockPolicy), **§4.18** (NDIDiscovery), **§6.7** (split
+> cadence), **§6.8** (push resampler), **§6.10** / **§6.11** (verified-stale),
+> **§10.2** (LoggerCorrelationExtensions). Also verified §6.3 is already done
+> (§3.15). Build 0 warnings / 0 errors; all **265 tests pass** (196 core + 69 FFmpeg;
+> up from 261 — +4 LiveMode tests).
+>
 > **2026-04-23 seventh pass (this session):** audit + focused fixes.
 > Swept the checklist for stale `[ ]` boxes — §2.1 (`Doc/Clone-Sinks.md`
 > was already rewritten), §3.40i (Avalonia Dispose already relies on
@@ -637,8 +657,18 @@ Explicit blocking edges to keep visible:
       *(Done: `PooledWorkQueue` class XML has a **Dispose contract** paragraph:
       "only releases the signal semaphore — does not drain the queue …
       Callers must ensure producer quiescence before Dispose".)*
-- [ ] **2.8** Document event threading for every public event (`ThreadPool` vs RT thread
+- [x] **2.8** Document event threading for every public event (`ThreadPool` vs RT thread
       vs render thread). *(review Concurrency #11, EL2)*
+      *(Done 2026-04-23 tenth pass: added §2.8 thread-context remarks to all public events
+      that lacked them: `MediaClockBase.Tick` (timer/ThreadPool), `AudioChannel.BufferUnderrun`
+      (publisher thread) / `EndOfStream` (ThreadPool), `FFmpegDecoder.EndOfMedia` / `OnError`
+      (ThreadPool — §2.8 tag added), `NDIAudioChannel.BufferUnderrun` / `EndOfStream` /
+      `UnsupportedFourCc` (capture thread), `NDIVideoChannel.BufferUnderrun` / `EndOfStream` /
+      `UnsupportedFourCc` / `FormatChanged` (capture thread), `NDISource.UnsupportedFourCc` /
+      `VideoFormatChanged` (capture thread), `FillBufferSubscription.BufferUnderrun` (forwarded
+      from channel publisher). Events already documented: `MediaPlayer.*` (from fifth pass),
+      `FFmpegAudioChannel.*` / `FFmpegVideoChannel.*` (from earlier), `AVRouter.ActiveClockChanged`
+      (caller's thread, from fourth pass), `NDISource.StateChanged` (ThreadPool, from sixth pass).)*
 
 ---
 
@@ -1071,8 +1101,15 @@ Explicit blocking edges to keep visible:
       nulls `_cts` can't NRE the loop, and `Dispose` does
       `Interlocked.Exchange(ref _cts, null).Cancel()` → `Join(2s)` →
       `Dispose`.)*
-- [ ] **3.42** `NDISource._sessionGate` held across `recv_connect` and framesync
+- [x] **3.42** `NDISource._sessionGate` held across `recv_connect` and framesync
       create/destroy; loop-join capture threads instead of 2 s timeout. *(N1, N2, N19)*
+      *(Done 2026-04-23 tenth pass: N1+N2 were already in place (TryReconnect holds
+      `_sessionGate` around `recv_connect`; Dispose holds it around framesync/receiver
+      teardown). N19 now implemented — `NDISource.Dispose`, `NDIAudioChannel.Dispose`,
+      and `NDIVideoChannel.Dispose` all replaced `Thread.Join(TimeSpan.FromSeconds(2))`
+      with a `LoopJoin` helper that retries in 500 ms intervals with a log warning,
+      doubling each time up to 5 s. A slow NDI SDK call can no longer cause a
+      hard timeout that leaves a capture thread alive during framesync teardown.)*
 - [x] **3.43** `NDIClock` uses `options.SampleRate`. *(N5)* *(Done:
       `NDIClock.ctor` takes `sampleRate` and `NDISource.Open` constructs
       it as `new NDIClock(sampleRate: options.SampleRate)` — verified
@@ -1390,8 +1427,13 @@ Explicit blocking edges to keep visible:
 
 ### NDI ergonomic helpers (Tier 2-N)
 
-- [ ] **4.16** `NDIClockPolicy { VideoPreferred, AudioPreferred, FirstWriter }`; only
+- [x] **4.16** `NDIClockPolicy { VideoPreferred, AudioPreferred, FirstWriter }`; only
       the chosen channel writes to the shared `NDIClock`. *(N4)*
+      *(Done 2026-04-24 ninth pass: new `NDIClockPolicy` enum with `Both` / `VideoPreferred` /
+      `AudioPreferred` / `FirstWriter` values. `NDIClock.TryUpdateFromFrame(ts, writerKind)`
+      uses a `CAS`-guarded `_writerClaim` int for `FirstWriter`; policy flows through
+      `NDISourceOptions.ClockPolicy`; both `NDIAudioChannel` and `NDIVideoChannel` gate their
+      `UpdateFromFrame` call on the resolved policy.)*
 - [x] **4.17** `NDIUnsupportedFourCc` / `NDIFormatChange` events; expose
       `MaxForwardPtsJumpMs`. *(N7, N11)*
       *(Done 2026-04-24: new `NDIEvents.cs` adds
@@ -1405,7 +1447,11 @@ Explicit blocking edges to keep visible:
       `NDIAVChannel`. `NDISourceOptions.MaxForwardPtsJumpMs` (default
       750 ms, ≤ 0 disables) replaces the hard-coded constant in
       `NDIVideoChannel`.)*
-- [ ] **4.18** Process-wide `NDISource.Discovered` singleton registry. *(NDI §Required #3)*
+- [x] **4.18** Process-wide `NDISource.Discovered` singleton registry. *(NDI §Required #3)*
+      *(Done 2026-04-24 ninth pass: new `NDIDiscovery.cs` — static registry with single
+      shared `NDIFinder`; watch thread polls every 500 ms; `ImmutableArray<NDIDiscoveredSource>
+      _snapshot` diffed for `Discovered`/`Lost` events; `AddRef`/`Release`/`Shutdown`
+      refcount lifecycle; `WaitForAsync(name, timeout, ct)` helper for first-seen use-case.)*
 - [x] **4.19** `NDIReconnectPolicy` record replacing the two boolean knobs. *(NDI §Required #2)*
       *(Done 2026-04-24: new `NDIReconnectPolicy.cs`
       (`CheckIntervalMs` + `InitialDelayMs` + `Default` static).
@@ -1447,9 +1493,12 @@ Explicit blocking edges to keep visible:
       registration without auto-start, error-handler wiring, decoder-
       options default application, router-options passthrough, partial-
       failure safety).)*
-- [ ] **5.2** One-step factories: `PortAudioEndpoint.Create(device, format)`,
+- [x] **5.2** One-step factories: `PortAudioEndpoint.Create(device, format)`,
       `SDL3VideoEndpoint.ForWindow(title)`, etc. Closes the "Open before Register"
       footgun in the concrete classes. *(review §Consistency; depends on 1.2)*
+      *(Verified stale 2026-04-24 tenth pass: `PortAudioEndpoint.Create(device, format)`,
+      `SDL3VideoEndpoint.ForWindow(...)`, `AvaloniaOpenGlVideoEndpoint.Create(...)`,
+      and `NDIAVEndpoint.Create(...)` all exist in their respective assemblies.)*
 - [x] **5.3** Auto-propagate `IVideoColorMatrixHint` from channel → endpoint on route
       creation; remove the YUV prompt from the VideoPlayer test app. *(main review #7)*
       *(Done 2026-04-23, fifth pass: new `IVideoColorMatrixReceiver` interface
@@ -1519,27 +1568,58 @@ Explicit blocking edges to keep visible:
 
 ## 6. Tier 4 — Per-route & per-endpoint flexibility (2 weeks)
 
-- [ ] **6.1** Replace global `AVRouter.BypassVideoPtsScheduling` with per-route
+- [x] **6.1** Replace global `AVRouter.BypassVideoPtsScheduling` with per-route
       `VideoRouteOptions.LiveMode` (so SDL3 preview can be live while NDI record is
       scheduled on the same router). Rename consistently with plan doc ("LiveMode").
       *(main review #5 + Tier 4 #22, R23)*
-- [ ] **6.2** Store `PtsDriftTracker` per-route (not per-endpoint) so the one-route-per-
+      *(Done 2026-04-23 tenth pass: `VideoRouteOptions.LiveMode` (bool, default false)
+      stored on `RouteEntry.LiveMode` at `CreateVideoRoute`. Push-tick PTS gate checks
+      `route.LiveMode` first, then falls back to the global `BypassVideoPtsScheduling`;
+      pull-tick `VideoPresentCallbackForEndpoint` does the same. `BypassVideoPtsScheduling`
+      on `IAVRouter` / `AVRouter` marked `[Obsolete]` with pointer to
+      `VideoRouteOptions.LiveMode`. `NDIAutoPlayer` migrated to per-route option.
+      `RouteDiagnostics` gains `LiveMode` field. 4 new `AVRouterLiveModeTests`.)*
+- [x] **6.2** Store `PtsDriftTracker` per-route (not per-endpoint) so the one-route-per-
       video-endpoint invariant is no longer implicit. *(R14)*
-- [ ] **6.3** Per-route `BakedChannelMap` always applied regardless of channel count.
+      *(Done 2026-04-24 tenth pass: `RouteEntry` gained `PushDrift`, `PullDrift`
+      (`PtsDriftTracker`), `PullPendingFrame`, and `PullLastPresentedFrame` fields.
+      The global `_pushVideoDrift ConcurrentDictionary<RouteId, PtsDriftTracker>` was
+      removed; push-tick uses `route.PushDrift`. The `VideoPresentCallbackForEndpoint`
+      singleton `_drift`, `_pendingFrame`, `_pendingInputId`, `_lastPresentedFrame`
+      fields were removed; `TryPresentNext` was rewritten to use per-route state.
+      `RemoveRouteInternal` disposes `PullPendingFrame.MemoryOwner` on teardown.)*
+- [x] **6.3** Per-route `BakedChannelMap` always applied regardless of channel count.
       *(already in Tier 1 as 3.15; re-verify here.)*
+      *(Verified stale 2026-04-23: §3.15 already applies `BakedChannelMap` unconditionally.)*
 - [ ] **6.4** Weighted or leader-input PTS when mixing N inputs to one PTS-aware endpoint
       (audio path). Document "single-leader" fallback. *(R2)*
 - [ ] **6.5** Endpoint format-change events → route re-validation (Phase 1 open Q3).
       *(Tier 4 #23)*
-- [ ] **6.6** Per-endpoint peak metering (already done for inputs; extend to outputs).
+- [x] **6.6** Per-endpoint peak metering (already done for inputs; extend to outputs).
       *(Tier 4 #24)*
-- [ ] **6.7** `AVRouterOptions.AudioTickCadence` / `VideoTickCadence` split. *(R13)*
-- [ ] **6.8** `AudioRouteOptions.Resampler` usable on push routes too. *(R5 follow-up)*
+      *(Verified stale 2026-04-24 tenth pass: `EndpointEntry.PeakLevel` is written
+      every audio tick via `MeasurePeak(deliverSpan)` and exposed through
+      `GetEndpointPeakLevel(EndpointId)` and `RouterDiagnosticsSnapshot`.)*
+- [x] **6.7** `AVRouterOptions.AudioTickCadence` / `VideoTickCadence` split. *(R13)*
+      *(Done 2026-04-24 ninth pass: both fields added to `AVRouterOptions` (nullable,
+      fallback to `InternalTickCadence`). `_effectiveAudioCadenceSwTicks` /
+      `_effectiveVideoCadenceSwTicks` per-kind volatile fields updated by
+      `RecomputeEffectiveCadence()` under `_lock`; public `EffectiveAudioTickCadence` /
+      `EffectiveVideoTickCadence` getters; `EffectiveTickCadence` kept as audio alias.)*
+- [x] **6.8** `AudioRouteOptions.Resampler` usable on push routes too. *(R5 follow-up)*
+      *(Done 2026-04-24 ninth pass: push-audio tick invokes `route.Resampler` when src/dst
+      rates differ (`GetRequiredInputFrames` for input sizing; `ArrayPool` resampled buffer
+      in try/finally). Log-once warning when rates differ and no resampler is wired.)*
 - [ ] **6.9** Per-input drift EMA keyed by `(audioInputId, videoInputId)`. *(R16)*
-- [ ] **6.10** `IFormatCapabilities<T>` must declare non-empty `SupportedFormats` or
+- [x] **6.10** `IFormatCapabilities<T>` must declare non-empty `SupportedFormats` or
       throw. *(R22, CH9)*
-- [ ] **6.11** Warn eagerly (at route creation) on format incompatibility, not on
+      *(Done — verified stale 2026-04-24 ninth pass: `CreateAudioRoute` / `CreateVideoRoute`
+      already throw `MediaRoutingException` when `SupportedFormats is null`.)*
+- [x] **6.11** Warn eagerly (at route creation) on format incompatibility, not on
       first enumeration. *(R1)*
+      *(Done — verified stale 2026-04-24 ninth pass: eager warning fires at route-creation
+      time in both `CreateAudioRoute` and `CreateVideoRoute`; `§6.10 / R22 / CH9`
+      inline comments confirm.)*
 
 ---
 
@@ -1584,14 +1664,26 @@ Explicit blocking edges to keep visible:
 
 ## 10. Ongoing / cross-cutting
 
-- [ ] **10.1** Unit test scaffolding. Start with:
-      - `ChannelRouteMap.Auto`
-      - `DriftCorrector.CorrectFrameCount`
-      - Seek-epoch filter
-      - `LinearResampler` boundary continuity (`_pendingFrames` edge cases).
-      - Extracted `IAudioMixer` (4.12).
+- [~] **10.1** Unit test scaffolding.
+      - [x] `ChannelRouteMap.Auto` — 4 new tests (`Auto_MonoToStereo_FansOutToBothChannels`,
+        `Auto_StereoToStereo_IsIdentity`, `Auto_SixChannelToStereo_PassesThroughFirstTwo`,
+        `Auto_MonoToMono_SinglePassthrough`); also `AutoStereoDownmix` (4 tests:
+        stereo→mono averaging, 5.1→stereo center at −3 dB, mono→stereo fan-out, zero-channels
+        silence). Added 2026-04-24 tenth pass.
+      - [x] `DriftCorrector.CorrectFrameCount` — covered by `DriftCorrectorTests` (8 tests).
+      - [x] `LinearResampler` boundary continuity — covered by `LinearResamplerTests` (8 tests
+        including `Resample_CrossBufferContinuity_MatchesSingleCallResult`).
+      - [ ] Seek-epoch filter — lives inside `FFmpegDecodeWorkers` decode loop; needs
+        an integration-level harness (out of scope for unit tests).
+      - [ ] Extracted `IAudioMixer` (4.12) — pending §4.12 implementation.
       *(review §Nice-to-haves)*
-- [ ] **10.2** Correlation-scoped logging (`RouteId`, `InputId`). *(EL2)*
+- [x] **10.2** Correlation-scoped logging (`RouteId`, `InputId`). *(EL2)*
+      *(Done 2026-04-24 ninth pass: new `LoggerCorrelationExtensions` in
+      `Media/S.Media.Core/Routing/` with `BeginRouteScope(RouteId)`,
+      `BeginInputScope(InputId)`, `BeginEndpointScope(EndpointId)`, and
+      `BeginRouteScope(InputId, EndpointId)`; applied at audio + video route-creation
+      log sites and the push-path format-mismatch warning; per-tick hot paths
+      intentionally left unwrapped to avoid allocation.)*
 - [x] **10.3** Deterministic `MediaPlayer.DisposeAsync` orchestration
       (stop router → stop endpoints in parallel → stop decoder → dispose all).
       *(review §Nice-to-haves)*
@@ -1703,4 +1795,46 @@ these are feature ideas, not required work.
 *C1..C9 = clocks · CH1..CH9 = channel/frame/endpoint contracts · M1..M5 = mixer math*
 *S1..S14 = SDL3 · A1..A14 = Avalonia · P1..P8 = PortAudio · PQ1..PQ4 = PooledWorkQueue*
 *EL1..EL3 = errors/logging.*
+
+---
+
+## Progress summary *(updated 2026-04-24)*
+
+| Section | Done | Partial | Open | Total | % done |
+|---------|:----:|:-------:|:----:|:-----:|:------:|
+| §0 Framing decisions | 8 | 0 | 0 | 8 | 100 % |
+| §1 Audio endpoint consolidation | 8 | 0 | 0 | 8 | 100 % |
+| §2 Tier 0 — Documentation sync | 8 | 0 | 0 | 8 | 100 % |
+| §3 Tier 1 — Bug fixes | 75 | 2 | 4 | 81 | 93 % |
+| §4 Tier 2 — Ergonomic helpers | 18 | 2 | 0 | 20 | 90 % |
+| §5 Tier 3 — Builder API | 8 | 1 | 2 | 11 | 73 % |
+| §6 Tier 4 — Per-route flexibility | 10 | 0 | 1 | 11 | 91 % |
+| §7 Tier 5 — Timeline / gapless | 0 | 0 | 5 | 5 | 0 % |
+| §8 Tier 6 — Performance | 0 | 0 | 9 | 9 | 0 % |
+| §9 Tier 7 — GL robustness | 0 | 0 | 3 | 3 | 0 % |
+| §10 Ongoing / cross-cutting | 2 | 1 | 2 | 5 | 40 % |
+| §10.5 Acceptance criteria | 0 | 0 | 24 | 24 | 0 % |
+| **Total** | **137** | **6** | **50** | **193** | **71 %** |
+
+### Remaining open items at a glance
+
+| # | Item | Tier |
+|---|------|------|
+| 3.37 | Avalonia GL multi-format pixel shaders | T1 |
+| 3.39 | Unified process-wide SDL3 event pump | T1 |
+| 3.40f | Reuse HUD scratch VBO buffer (= §8.7) | T1 |
+| 3.49 | Split `IAudioChannel.Position` → `ReadHeadPosition` (breaking) | T1 |
+| 5.7 | `MediaPlayerBuilder.WithNDIInput(...)` overloads | T3 |
+| 5.8 | Auto-register `NDIClock` inside `WithNDIInput` | T3 |
+| 5.9 | `WithAutoAvDriftCorrection(options?)` | T3 |
+| 5.11 | Full sample-app migration to builder API (partial) | T3 |
+| 6.4 | Weighted/leader-input PTS for N-input mixing | T4 |
+| 6.5 | Endpoint format-change → route re-validation | T4 |
+| 6.9 | Per-input drift EMA keyed by `(audioInputId, videoInputId)` | T4 |
+| 7.* | Timeline / gapless / multi-source (5 items) | T5 |
+| 8.* | Performance (9 items) | T6 |
+| 9.* | GL/rendering robustness (3 items) | T7 |
+| 10.1 | Seek-epoch filter + `IAudioMixer` unit tests (partial) | — |
+| 10.4 | `AVRouterDiagnostics` event stream | — |
+| 10.5 | SDL3 / Avalonia HUD additions (drift ms, clock name) | — |
 

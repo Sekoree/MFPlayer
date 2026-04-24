@@ -154,9 +154,10 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     // ── Video-specific ─────────────────────────────────────────────────
 
     /// <summary>
-    /// When <see langword="true"/>, video presentation bypasses PTS-based scheduling and
-    /// always presents the newest frame. Suitable for live NDI monitoring.
+    /// Legacy router-wide PTS bypass. Prefer <see cref="VideoRouteOptions.LiveMode"/>
+    /// per route so a preview sink can be live while a recording sink is scheduled.
     /// </summary>
+    [Obsolete("Use VideoRouteOptions.LiveMode per-route instead. §6.1 / R23")]
     bool BypassVideoPtsScheduling { get; set; }
 
     // ── Diagnostics ────────────────────────────────────────────────────

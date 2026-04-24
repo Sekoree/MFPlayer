@@ -34,6 +34,7 @@ internal sealed class FillBufferSubscription : IVideoSubscription
     public int Count       => _channel.BufferAvailable;
     public bool IsCompleted => _disposed;
 
+    /// <summary>§2.8 — forwarded from the underlying channel on the channel's publisher thread.</summary>
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
     public int FillBuffer(Span<VideoFrame> dest, int frameCount)

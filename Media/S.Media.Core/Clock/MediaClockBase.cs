@@ -31,6 +31,12 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     public          TimeSpan TickCadence => _tickInterval;
     public abstract bool     IsRunning  { get; }
 
+    /// <summary>
+    /// §2.8 — raised on the <see cref="System.Threading.Timer"/> callback thread (a
+    /// <see cref="ThreadPool"/> thread). Handlers must be non-blocking; heavy work should
+    /// be offloaded to <see cref="Task.Run(Action)"/> or a dedicated thread.
+    /// The argument is the current <see cref="Position"/> snapshot at tick time.
+    /// </summary>
     public event Action<TimeSpan>? Tick
     {
         add    { lock (_tickLock) _tick += value; }

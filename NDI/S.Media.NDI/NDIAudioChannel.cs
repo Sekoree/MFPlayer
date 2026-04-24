@@ -63,7 +63,11 @@ internal sealed class NDIAudioChannel : IAudioChannel
     // §4.20 / N10 — log-once set for unsupported audio FourCCs encountered on capture.
     private readonly HashSet<NDIFourCCAudioType> _unsupportedAudioFourCcLogged = [];
 
-    /// <summary>§4.17 / N7 — raised once per distinct unsupported audio FourCC.</summary>
+    /// <summary>
+    /// §4.17 / N7 — raised once per distinct unsupported audio FourCC.
+    /// <para>§2.8 — dispatched on the NDI audio capture thread. Handlers must be fast;
+    /// do not block or call back into the capture path.</para>
+    /// </summary>
     public event EventHandler<NDIUnsupportedFourCcEventArgs>? UnsupportedFourCc;
 
     private float[]? _currentChunk;
@@ -92,8 +96,16 @@ internal sealed class NDIAudioChannel : IAudioChannel
         }
     }
 
+    /// <summary>
+    /// §2.8 — raised on the NDI audio capture thread when the ring drains
+    /// below threshold. Handlers must be non-blocking.
+    /// </summary>
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
+    /// <summary>
+    /// §2.8 — NDI live sources have no defined end-of-stream; this event exists
+    /// for interface compatibility and is never raised in practice.
+    /// </summary>
 #pragma warning disable CS0067  // NDI streams have no defined EOF; event may be used in future
     public event EventHandler? EndOfStream;
 #pragma warning restore CS0067
@@ -469,7 +481,11 @@ internal sealed class NDIAudioChannel : IAudioChannel
             Interlocked.Read(ref _framesConsumed));
         var cts = Interlocked.Exchange(ref _cts, null);
         try { cts?.Cancel(); } catch (ObjectDisposedException) { }
-        _captureThread?.Join(TimeSpan.FromSeconds(2));
+        // §3.42 / N19 — loop-join: retry until the capture thread actually exits
+        // rather than giving up after a hard timeout. The thread's CTS is cancelled
+        // above so it will exit promptly once any in-flight FreeAudio / framesync
+        // call returns; the loop guards against a slow SDK call that takes > 2 s.
+        LoopJoin(_captureThread, "audio-capture");
         cts?.Dispose();
         _ringWriter.TryComplete();
 
@@ -480,6 +496,21 @@ internal sealed class NDIAudioChannel : IAudioChannel
         {
             Interlocked.Decrement(ref _framesInRing);
             _pool.Enqueue(chunk);
+        }
+    }
+
+    // §3.42 / N19 — retry join in a loop so a slow NDI SDK call cannot leave the
+    // caller holding a stale (post-Dispose) reference to the capture thread's resources.
+    private static void LoopJoin(Thread? thread, string name)
+    {
+        if (thread is null) return;
+        int timeoutMs = 500;
+        while (!thread.Join(timeoutMs))
+        {
+            Log.LogWarning(
+                "NDI {ThreadName} thread still alive after {Timeout} ms — retrying join",
+                name, timeoutMs);
+            timeoutMs = Math.Min(timeoutMs * 2, 5_000);
         }
     }
 }
