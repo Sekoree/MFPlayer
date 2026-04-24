@@ -15,8 +15,32 @@ public record AVRouterOptions
     /// Internal clock tick cadence when no override clock is set.
     /// Controls push-endpoint delivery rate and channel drain rate.
     /// Default: 10 ms (~100 Hz).
+    /// <para>
+    /// §6.7 / R13 — for mixed A/V graphs where the audio thread wants to
+    /// run faster than the video thread (e.g. 5 ms audio ticks vs 16.7 ms
+    /// video ticks), set <see cref="AudioTickCadence"/> and
+    /// <see cref="VideoTickCadence"/> explicitly. Their defaults fall
+    /// back to this value.
+    /// </para>
     /// </summary>
     public TimeSpan InternalTickCadence { get; init; } = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>
+    /// §6.7 / R13 — push-audio-tick cadence. <see langword="null"/>
+    /// (default) means "use <see cref="InternalTickCadence"/>" plus the
+    /// endpoint auto-derive rule from §5.5
+    /// (<see cref="AVRouter.EffectiveTickCadence"/>). Set explicitly to
+    /// run the audio push thread on a different schedule than the video
+    /// push thread.
+    /// </summary>
+    public TimeSpan? AudioTickCadence { get; init; }
+
+    /// <summary>
+    /// §6.7 / R13 — push-video-tick cadence. <see langword="null"/>
+    /// (default) matches the audio cadence. Typical values: 16.7 ms
+    /// @ 60 fps, 40 ms @ 25 fps, 5 ms for low-latency preview.
+    /// </summary>
+    public TimeSpan? VideoTickCadence { get; init; }
 
     /// <summary>
     /// Default <see cref="ClockPriority"/> assigned to clocks auto-discovered from
@@ -108,5 +132,19 @@ public record AVRouterOptions
     /// without delay.
     /// </summary>
     public TimeSpan WaitForAudioPreroll { get; init; } = TimeSpan.FromSeconds(1);
+
+    // ── Mixer protection (§4.13) ────────────────────────────────────────
+
+    /// <summary>
+    /// §4.13 / M2 — if non-<see langword="null"/>, the router applies
+    /// <see cref="IAudioMixer.ApplySoftClip"/> to every audio endpoint's
+    /// post-map buffer using this threshold. Samples whose absolute value
+    /// exceeds the threshold are softly rounded off with a tanh-ish curve;
+    /// signal inside the threshold is untouched. Typical values: 0.95–0.99.
+    /// <see langword="null"/> leaves hard-clip-on-DAC as the default (the
+    /// historical behaviour). Per-endpoint overrides can be layered later
+    /// via Tier-4 route options.
+    /// </summary>
+    public float? SoftClipThreshold { get; init; }
 }
 

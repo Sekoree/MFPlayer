@@ -64,6 +64,34 @@ public sealed class AvaloniaOpenGlVideoCloneEndpoint : OpenGlControlBase, IVideo
         RequestNextFrameRendering();
     }
 
+    /// <summary>
+    /// §3.38 / A3 — ref-counted zero-copy fast path. Ref-counted frames are
+    /// retained and parked in <see cref="_latestFrame"/> without copying the
+    /// pixels. <see cref="VideoFrameSlot.Set"/> releases the previously-held
+    /// frame's ref when a new one arrives. Non-ref-counted frames fall back to
+    /// the copy path in the legacy overload.
+    /// </summary>
+    public void ReceiveFrame(in VideoFrameHandle handle)
+    {
+        if (!_running || _disposed)
+            return;
+
+        if (!handle.IsRefCounted)
+        {
+            var legacy = handle.Frame;
+            ReceiveFrame(in legacy);
+            return;
+        }
+
+        if (handle.Frame.Data.Length <= 0)
+            return;
+
+        handle.Retain();
+        _latestFrame.Set(handle.Frame);
+
+        RequestNextFrameRendering();
+    }
+
     protected override void OnOpenGlInit(GlInterface gl)
     {
         _renderer ??= new AvaloniaGlRenderer();

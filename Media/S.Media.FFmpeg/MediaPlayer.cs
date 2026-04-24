@@ -506,10 +506,24 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// Cooperatively stops the router + every registered endpoint, then disposes
-    /// the underlying <see cref="AVRouter"/>. Implements review item §4.4 (B19):
-    /// replaces the sync <c>StopAsync().GetAwaiter().GetResult()</c> fan-out
-    /// that could deadlock on single-threaded sync contexts.
+    /// Cooperatively stops the router + every registered endpoint + the
+    /// decoder, then disposes the underlying <see cref="AVRouter"/>.
+    /// Implements review items §4.4 (B19) + §10.3 — the sequence is:
+    /// <list type="number">
+    ///   <item>Stop the router so no new push ticks fire at endpoints in
+    ///         teardown.</item>
+    ///   <item>Stop every registered endpoint <b>in parallel</b>
+    ///         (<see cref="Task.WhenAll(Task[])"/>) — endpoint
+    ///         <c>StopAsync</c>s are independent (they own their own
+    ///         render/capture threads) so serialising them would add
+    ///         0–N×(slowest stop) to tear-down for no gain.</item>
+    ///   <item>Stop the decoder so demux/decode threads join cooperatively.</item>
+    ///   <item>Release the session and dispose the router.</item>
+    /// </list>
+    /// Every step is best-effort: a faulty endpoint StopAsync cannot block
+    /// the subsequent steps from running. Endpoints are owned by the
+    /// caller (see <see cref="AddEndpoint(IAudioEndpoint)"/>) — we stop
+    /// them but do not dispose them.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
@@ -519,9 +533,23 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         if (IsActive)
         {
             try { await _router.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
-            foreach (var ep in _endpoints)
+
+            // §10.3 — parallel endpoint stop. Each StopAsync gets its own
+            // try/catch wrapper task so one faulty endpoint cannot short-
+            // circuit the WhenAll; all results are discarded.
+            if (_endpoints.Count > 0)
             {
-                try { await ep.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
+                var stops = new Task[_endpoints.Count];
+                for (int i = 0; i < _endpoints.Count; i++)
+                {
+                    var ep = _endpoints[i];
+                    stops[i] = Task.Run(async () =>
+                    {
+                        try { await ep.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
+                    });
+                }
+                try { await Task.WhenAll(stops).ConfigureAwait(false); }
+                catch { /* swallowed — per-endpoint try already caught */ }
             }
         }
 

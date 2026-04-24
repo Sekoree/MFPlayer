@@ -27,6 +27,20 @@ public sealed class NDIAVChannel : IDisposable
         remove => _source.StateChanged -= value;
     }
 
+    /// <summary>§4.17 / N7 — forwarded from <see cref="NDISource"/>.</summary>
+    public event EventHandler<NDIUnsupportedFourCcEventArgs>? UnsupportedFourCc
+    {
+        add => _source.UnsupportedFourCc += value;
+        remove => _source.UnsupportedFourCc -= value;
+    }
+
+    /// <summary>§4.17 / N11 — forwarded from <see cref="NDISource"/>.</summary>
+    public event EventHandler<NDIVideoFormatChangedEventArgs>? VideoFormatChanged
+    {
+        add => _source.VideoFormatChanged += value;
+        remove => _source.VideoFormatChanged -= value;
+    }
+
     private NDIAVChannel(NDISource source)
     {
         _source = source;

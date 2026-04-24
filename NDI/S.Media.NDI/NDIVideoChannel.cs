@@ -48,6 +48,23 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     private long _positionTicks;
     private long _framesDequeued;
 
+    // §4.17 / N11 — last-seen format so we know when to raise FormatChanged.
+    // Written only from the capture thread; reads inside the capture thread
+    // need no lock. External reads use `_formatLock` via `SourceFormat`.
+    private VideoFormat _lastPublishedFormat;
+    private bool _hasPublishedFormat;
+
+    // §4.17 / N11 — ticks-based jump tolerance. NDI timestamps are 100 ns
+    // ticks; the capture loop compares in seconds but the option is exposed
+    // as milliseconds for convenience.
+    internal int MaxForwardPtsJumpMs { get; set; } = 750;
+
+    /// <summary>§4.17 / N7 — raised once per distinct unsupported video FourCC.</summary>
+    public event EventHandler<NDIUnsupportedFourCcEventArgs>? UnsupportedFourCc;
+
+    /// <summary>§4.17 / N11 — raised when the source format changes between two consecutive frames.</summary>
+    public event EventHandler<NDIVideoFormatChangedEventArgs>? FormatChanged;
+
     // IVideoColorMatrixHint — updated from NDI frame metadata on the capture thread;
     // read by the render thread; Volatile ensures visibility without a lock.
     private volatile int _suggestedMatrix = (int)YuvColorMatrix.Auto;
@@ -89,11 +106,15 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     /// <inheritdoc/>
     public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
 
-    public NDIVideoChannel(NDIFrameSync frameSync, NDIClock clock, Lock? frameSyncGate = null, int bufferDepth = 4, bool preferLowLatency = false)
+    // §4.16 / N4 — see NDIAudioChannel for the shared semantics.
+    private readonly NDIClockPolicy _clockPolicy;
+
+    public NDIVideoChannel(NDIFrameSync frameSync, NDIClock clock, Lock? frameSyncGate = null, int bufferDepth = 4, bool preferLowLatency = false, NDIClockPolicy clockPolicy = NDIClockPolicy.Both)
     {
         _frameSync = frameSync;
         _frameSyncGate = frameSyncGate ?? new Lock();
         _clock     = clock;
+        _clockPolicy = clockPolicy;
         _ringCapacity = Math.Max(1, bufferDepth);
         _preferLowLatency = preferLowLatency;
         _waitPollMs = _preferLowLatency ? 2 : 10;
@@ -187,7 +208,20 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                     continue;
                 }
 
-                _clock.UpdateFromFrame(frame.Timestamp);
+                // §4.16 / N4 — mirror of the audio-side policy switch. Both
+                // + VideoPreferred always write; AudioPreferred skips here;
+                // FirstWriter uses the CAS on the clock.
+                switch (_clockPolicy)
+                {
+                    case NDIClockPolicy.Both:
+                    case NDIClockPolicy.VideoPreferred:
+                        _clock.UpdateFromFrame(frame.Timestamp);
+                        break;
+                    case NDIClockPolicy.FirstWriter:
+                        _clock.TryUpdateFromFrame(frame.Timestamp, NDIClock.WriterClaimVideo);
+                        break;
+                    // AudioPreferred: skip.
+                }
 
                 if (!TryCopyFrameToTightBuffer(frame, out var pixFmt, out var rented, out var totalBytes))
                     continue;
@@ -216,8 +250,11 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 bool clockModeChanged = _hasLastPts && (_lastPtsWasSynthetic != currentIsSynthetic);
                 if (_hasLastPts && !clockModeChanged)
                 {
-                    const double MaxForwardJumpSeconds = 0.75;
-                    if (tsSecs <= _lastPtsSeconds || (tsSecs - _lastPtsSeconds) > MaxForwardJumpSeconds)
+                    // §4.17 / N11 — configurable forward-jump tolerance (default 750 ms).
+                    // Values ≤ 0 disable the forward-jump clamp entirely (use with care:
+                    // the synthetic fallback will not re-origin on network hiccups).
+                    double maxJumpSeconds = MaxForwardPtsJumpMs > 0 ? MaxForwardPtsJumpMs / 1000.0 : double.PositiveInfinity;
+                    if (tsSecs <= _lastPtsSeconds || (tsSecs - _lastPtsSeconds) > maxJumpSeconds)
                     {
                         if (!_lastPtsWasSynthetic)
                             ReoriginSyntheticClock(_lastPtsSeconds);
@@ -240,8 +277,22 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 // Update source format from the live stream dimensions / pixel format.
                 int fpsNum = frame.FrameRateN > 0 ? frame.FrameRateN : 30000;
                 int fpsDen = frame.FrameRateD > 0 ? frame.FrameRateD : 1001;
+                var newFormat = new VideoFormat(frame.Xres, frame.Yres, pixFmt, fpsNum, fpsDen);
                 lock (_formatLock)
-                    _sourceFormat = new VideoFormat(frame.Xres, frame.Yres, pixFmt, fpsNum, fpsDen);
+                    _sourceFormat = newFormat;
+
+                // §4.17 / N11 — raise FormatChanged on transitions only. The
+                // first frame establishes the format; subsequent frames that
+                // differ in any dimension trigger the event for downstream
+                // listeners (texture resize, mux reinit).
+                if (_hasPublishedFormat && !FormatsEquivalent(_lastPublishedFormat, newFormat))
+                {
+                    var prev = _lastPublishedFormat;
+                    try { FormatChanged?.Invoke(this, new NDIVideoFormatChangedEventArgs(prev, newFormat)); }
+                    catch (Exception ex) { Log.LogWarning(ex, "FormatChanged handler threw"); }
+                }
+                _lastPublishedFormat = newFormat;
+                _hasPublishedFormat = true;
 
                 var (matrix, range) = ParseNdiColorMeta(frame.Metadata);
                 _suggestedMatrix = (int)matrix;
@@ -319,6 +370,19 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         _syntheticClock.Restart();
     }
 
+    /// <summary>
+    /// §4.17 / N11 — equivalence test used by <see cref="FormatChanged"/> to
+    /// gate redundant events. Compares width, height, pixel format, and the
+    /// numerator/denominator pair so two nominally-equivalent refreshes of
+    /// the same format (e.g. NDI updating its FPS fraction each frame) do
+    /// not spam listeners.
+    /// </summary>
+    private static bool FormatsEquivalent(VideoFormat a, VideoFormat b)
+        => a.Width == b.Width
+        && a.Height == b.Height
+        && a.PixelFormat == b.PixelFormat
+        && Math.Abs(a.FrameRate - b.FrameRate) < 0.01;
+
     private bool TryCopyFrameToTightBuffer(
         in NDIVideoFrameV2 frame,
         out PixelFormat pixelFormat,
@@ -331,10 +395,15 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 
         if (!TryMapFourCc(frame.FourCC, out pixelFormat))
         {
+            // §4.17 / N7 — log + event on first encounter of each distinct
+            // FourCC. Per-FourCC dedup means a buggy sender streaming
+            // unsupported frames only fires one event + one log per kind.
             if (_unsupportedFourCcLogged.Add(frame.FourCC))
             {
                 Log.LogWarning("NDIVideoChannel unsupported FourCC={FourCC} ({FourCCInt}) x={Width} y={Height} stride={Stride}; frame dropped",
                     frame.FourCC, (uint)frame.FourCC, frame.Xres, frame.Yres, frame.LineStrideInBytes);
+                try { UnsupportedFourCc?.Invoke(this, new NDIUnsupportedFourCcEventArgs((uint)frame.FourCC, isAudio: false)); }
+                catch (Exception ex) { Log.LogWarning(ex, "UnsupportedFourCc handler threw"); }
             }
             return false;
         }

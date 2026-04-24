@@ -60,6 +60,10 @@ public sealed class NDIClock : MediaClockBase
         Log.LogDebug("NDIClock stopping at position={Position}", TimeSpan.FromTicks(Interlocked.Read(ref _lastFramePositionTicks)));
         _running = false;
         _sw.Stop();
+        // §4.16 / N4 — drop the writer claim so a fresh Start can pick a new
+        // leader. Without this a restart would stay with whichever channel
+        // claimed the lead last time even if the policy intended the other.
+        ResetWriterClaim();
         base.Stop();
     }
 
@@ -68,6 +72,7 @@ public sealed class NDIClock : MediaClockBase
         Log.LogDebug("NDIClock reset");
         Interlocked.Exchange(ref _lastFramePositionTicks, 0);
         Interlocked.Exchange(ref _swAtLastFrameTicks, 0);
+        ResetWriterClaim();
         _sw.Reset();
     }
 
@@ -86,4 +91,43 @@ public sealed class NDIClock : MediaClockBase
         Interlocked.Exchange(ref _swAtLastFrameTicks, swNow);
         Interlocked.Exchange(ref _lastFramePositionTicks, ndiTimestamp);
     }
+
+    // §4.16 / N4 — atomic "first writer wins" claim. 0 = unclaimed, 1 = audio,
+    // 2 = video. Once set, only the matching caller successfully commits an
+    // update; the other side's TryUpdateFromFrame is a no-op. Reset on Stop
+    // so a restart behaves like a fresh session.
+    private int _writerClaim;
+
+    internal const int WriterClaimAudio = 1;
+    internal const int WriterClaimVideo = 2;
+
+    /// <summary>
+    /// §4.16 / N4 — called by the capture loop under <see cref="NDIClockPolicy.FirstWriter"/>.
+    /// Returns <see langword="true"/> when the caller has (or has just won)
+    /// the writer claim and updated the clock; <see langword="false"/> when
+    /// the other side owns the lead and this call was ignored.
+    /// </summary>
+    internal bool TryUpdateFromFrame(long ndiTimestamp, int writerKind)
+    {
+        if (ndiTimestamp <= 0 || ndiTimestamp == long.MaxValue) return false;
+
+        int current = Volatile.Read(ref _writerClaim);
+        if (current == 0)
+        {
+            // Race: attempt to claim the lead. Losers see the winner's value
+            // and fall through to the "not leader" branch below.
+            current = Interlocked.CompareExchange(ref _writerClaim, writerKind, 0);
+            if (current == 0) current = writerKind;
+        }
+        if (current != writerKind) return false;
+
+        UpdateFromFrame(ndiTimestamp);
+        return true;
+    }
+
+    /// <summary>
+    /// §4.16 / N4 — resets the writer claim so a fresh Start can pick a new
+    /// leader. Called from <see cref="Stop"/> (paired with the restart path).
+    /// </summary>
+    internal void ResetWriterClaim() => Interlocked.Exchange(ref _writerClaim, 0);
 }

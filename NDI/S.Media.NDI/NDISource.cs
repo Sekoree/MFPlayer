@@ -67,16 +67,69 @@ public sealed class NDISourceOptions
     public NDIReceiverSettings? ReceiverSettings { get; init; }
 
     /// <summary>
-    /// When <see langword="true"/>, monitors the connection and automatically reconnects
-    /// if the NDI source goes offline. Default: <see langword="false"/>.
+    /// §4.19 — reconnect policy. <see langword="null"/> (default) disables auto-reconnect.
+    /// <c>new NDIReconnectPolicy()</c> enables it with the library defaults (2 s interval).
+    /// Prefer this over the legacy <see cref="AutoReconnect"/> / <see cref="ConnectionCheckIntervalMs"/>
+    /// pair — the record collapses the two-flag coordination into one value and will let
+    /// future knobs (max backoff, retry limit) land without another flag cluster.
     /// </summary>
+    public NDIReconnectPolicy? ReconnectPolicy { get; init; }
+
+    /// <summary>
+    /// Legacy flag. When <see langword="true"/>, monitors the connection and automatically
+    /// reconnects if the NDI source goes offline. Default: <see langword="false"/>.
+    /// <para>
+    /// §4.19 — superseded by <see cref="ReconnectPolicy"/>; kept for source compatibility.
+    /// The effective policy is <see cref="ReconnectPolicy"/> when non-<see langword="null"/>,
+    /// otherwise derived from this flag + <see cref="ConnectionCheckIntervalMs"/>.
+    /// </para>
+    /// </summary>
+    [Obsolete("§4.19 — use ReconnectPolicy instead. Will remain for one release.", error: false)]
     public bool AutoReconnect { get; init; } = false;
 
     /// <summary>
-    /// How often (in milliseconds) to check the connection status when
+    /// Legacy knob. How often (in ms) to check the connection status when
     /// <see cref="AutoReconnect"/> is enabled. Default: 2000.
+    /// <para>
+    /// §4.19 — superseded by <see cref="NDIReconnectPolicy.CheckIntervalMs"/>.
+    /// </para>
     /// </summary>
+    [Obsolete("§4.19 — use ReconnectPolicy.CheckIntervalMs instead. Will remain for one release.", error: false)]
     public int ConnectionCheckIntervalMs { get; init; } = 2000;
+
+    /// <summary>
+    /// §4.19 — resolved reconnect policy. Returns <see cref="ReconnectPolicy"/>
+    /// when set, else reconstructs one from the legacy flags, else <see langword="null"/>
+    /// meaning "do not reconnect". Internal — <see cref="NDISource"/> reads this
+    /// instead of the raw flags.
+    /// </summary>
+#pragma warning disable CS0618 // bridging legacy flags; [Obsolete] warns callers, not this internal resolver
+    internal NDIReconnectPolicy? ResolveReconnectPolicy()
+        => ReconnectPolicy ?? (AutoReconnect
+            ? new NDIReconnectPolicy(CheckIntervalMs: ConnectionCheckIntervalMs)
+            : null);
+#pragma warning restore CS0618
+
+    /// <summary>
+    /// §4.17 / N11 — maximum forward-jump (ms) the NDI video capture loop
+    /// tolerates in the source-provided PTS before it falls back to the
+    /// synthetic stopwatch clock for the offending frame. Values ≤ 0
+    /// disable the jump clamp entirely. Default: 750 ms — rides out a
+    /// typical network-stall reconnect without letting a malicious
+    /// timestamp skew the player's clock.
+    /// </summary>
+    public int MaxForwardPtsJumpMs { get; init; } = 750;
+
+    /// <summary>
+    /// §4.16 / N4 — which NDI capture channel writes timestamps into the
+    /// shared <see cref="NDIClock"/>. Default <see cref="NDIClockPolicy.Both"/>
+    /// preserves the legacy behaviour for source-compat; new code should
+    /// pick <see cref="NDIClockPolicy.VideoPreferred"/> for A/V sources
+    /// (eliminates the sub-frame jitter from two channels racing for clock
+    /// authority) or <see cref="NDIClockPolicy.FirstWriter"/> when the
+    /// arrival order is unpredictable.
+    /// </summary>
+    public NDIClockPolicy ClockPolicy { get; init; } = NDIClockPolicy.Both;
 
     /// <summary>
     /// Settings for the <see cref="NDIFinder"/> used by <see cref="NDISource.OpenByNameAsync"/>.
@@ -117,7 +170,13 @@ public sealed class NDISourceOptions
             LowLatency            = profile.LowLatencyPolling,
             AudioFramesPerCapture = profile.AudioFramesPerCapture,
             EnableVideo           = true,
+            // §4.19 — enable reconnect via the new record. Parallel legacy
+            // AutoReconnect=true retained for source-compat so callers that
+            // read the presets' flags still see the expected value.
+            ReconnectPolicy       = NDIReconnectPolicy.Default,
+#pragma warning disable CS0618
             AutoReconnect         = true,
+#pragma warning restore CS0618
             FinderSettings        = new NDIFinderSettings { ShowLocalSources = true },
         };
     }
@@ -183,6 +242,21 @@ public sealed class NDISource : IDisposable
     /// </summary>
     public event EventHandler<NDISourceStateChangedEventArgs>? StateChanged;
 
+    /// <summary>
+    /// §4.17 / N7 — raised (log-once per FourCC) when either the video or
+    /// audio capture thread encounters a FourCC the library cannot decode.
+    /// Check <see cref="NDIUnsupportedFourCcEventArgs.IsAudio"/> to dispatch.
+    /// </summary>
+    public event EventHandler<NDIUnsupportedFourCcEventArgs>? UnsupportedFourCc;
+
+    /// <summary>
+    /// §4.17 / N11 — raised when the NDI source's video format changes
+    /// (dimensions, pixel format, or frame rate) between two consecutive
+    /// frames. Never raised on the first frame. Video-only — audio format
+    /// changes are rare in NDI and fire no event today.
+    /// </summary>
+    public event EventHandler<NDIVideoFormatChangedEventArgs>? VideoFormatChanged;
+
     private NDISource(
         NDIReceiver      receiver,
         NDIFrameSync     frameSync,
@@ -199,6 +273,21 @@ public sealed class NDISource : IDisposable
         _audioChannelImpl = audio as NDIAudioChannel;
         _videoChannelImpl = video as NDIVideoChannel;
         _options     = options;
+
+        // §4.17 / N7, N11 — forward channel-level events onto the public
+        // source surface so host apps don't reach through the IAudioChannel /
+        // IVideoChannel interfaces. Propagate the forward-jump tolerance
+        // option; values ≤ 0 disable the clamp entirely inside the channel.
+        if (_videoChannelImpl is not null)
+        {
+            _videoChannelImpl.MaxForwardPtsJumpMs = options.MaxForwardPtsJumpMs;
+            _videoChannelImpl.UnsupportedFourCc += (s, e) => UnsupportedFourCc?.Invoke(this, e);
+            _videoChannelImpl.FormatChanged     += (s, e) => VideoFormatChanged?.Invoke(this, e);
+        }
+        if (_audioChannelImpl is not null)
+        {
+            _audioChannelImpl.UnsupportedFourCc += (s, e) => UnsupportedFourCc?.Invoke(this, e);
+        }
     }
 
     // ── Factory: Open by discovered source ──────────────────────────────────
@@ -248,19 +337,30 @@ public sealed class NDISource : IDisposable
         // for concurrent audio/video captures on the same instance, so there is no need to
         // share a gate.  A shared gate caused audio capture to stall while video held the
         // lock during the Marshal.Copy of a full video frame (~8 MB for 1080p UYVY).
+        // §4.16 / N4 — when VideoPreferred is requested but video is disabled,
+        // fall back to AudioPreferred so the audio channel still writes the
+        // clock (otherwise the clock never advances). Mirror for
+        // AudioPreferred on video-only sources — resolved just below where
+        // the video channel is constructed.
+        var effectiveClockPolicy = options.ClockPolicy;
+        if (effectiveClockPolicy == NDIClockPolicy.VideoPreferred && !options.EnableVideo)
+            effectiveClockPolicy = NDIClockPolicy.AudioPreferred;
+
         var audio = new NDIAudioChannel(frameSync, clock,
             frameSyncGate: null,   // creates its own per-channel Lock
             sampleRate:  options.SampleRate,
             channels:    options.Channels,
             bufferDepth: resolvedAudioDepth,
             preferLowLatency: options.LowLatency,
-            framesPerCapture: options.AudioFramesPerCapture);
+            framesPerCapture: options.AudioFramesPerCapture,
+            clockPolicy: effectiveClockPolicy);
         var video = options.EnableVideo
-            ? new NDIVideoChannel(frameSync, clock, frameSyncGate: null, bufferDepth: resolvedVideoDepth, preferLowLatency: options.LowLatency)
+            ? new NDIVideoChannel(frameSync, clock, frameSyncGate: null, bufferDepth: resolvedVideoDepth, preferLowLatency: options.LowLatency, clockPolicy: effectiveClockPolicy)
             : null;
 
-        Log.LogInformation("Opened NDISource: source={SourceName}, sampleRate={SampleRate}, channels={Channels}, queueDepth={QueueDepth}, audioDepth={AudioDepth}, videoDepth={VideoDepth}, lowLatency={LowLatency}, enableVideo={EnableVideo}, autoReconnect={AutoReconnect}",
-            source.Name, options.SampleRate, options.Channels, resolvedQueueDepth, resolvedAudioDepth, resolvedVideoDepth, options.LowLatency, options.EnableVideo, options.AutoReconnect);
+        Log.LogInformation("Opened NDISource: source={SourceName}, sampleRate={SampleRate}, channels={Channels}, queueDepth={QueueDepth}, audioDepth={AudioDepth}, videoDepth={VideoDepth}, lowLatency={LowLatency}, enableVideo={EnableVideo}, reconnect={Reconnect}",
+            source.Name, options.SampleRate, options.Channels, resolvedQueueDepth, resolvedAudioDepth, resolvedVideoDepth, options.LowLatency, options.EnableVideo,
+            options.ResolveReconnectPolicy() is { } p ? $"every {p.EffectiveCheckIntervalMs}ms" : "off");
 
         var ndiSource = new NDISource(receiver, frameSync, clock, audio, video, options);
         ndiSource._connectedSource = source;
@@ -335,8 +435,9 @@ public sealed class NDISource : IDisposable
         }
         ndiSource._sourceNamePattern = sourceName;
 
-        // Keep finder alive for reconnection if auto-reconnect is enabled.
-        if (options.AutoReconnect)
+        // §4.19 — keep finder alive when reconnect is requested by either API:
+        // the new ReconnectPolicy record or the legacy AutoReconnect flag.
+        if (options.ResolveReconnectPolicy() is not null)
             ndiSource._finder = finder;
         else
             finder.Dispose();
@@ -373,9 +474,16 @@ public sealed class NDISource : IDisposable
         _started = true;
         Log.LogInformation("Starting NDISource common components (clock + watchdog)");
         Clock.Start();
-        if (_options.AutoReconnect)
+        // §4.19 — resolve the policy once at start time so later option
+        // mutation doesn't race the watchdog. null = no reconnect.
+        _resolvedReconnect = _options.ResolveReconnectPolicy();
+        if (_resolvedReconnect is not null)
             StartWatchThread();
     }
+
+    // §4.19 — resolved reconnect policy, captured at Start so the watchdog
+    // reads a stable value.
+    private NDIReconnectPolicy? _resolvedReconnect;
 
     /// <summary>
     /// Starts only the video capture thread (and the internal clock / watchdog).
@@ -480,8 +588,11 @@ public sealed class NDISource : IDisposable
     private void WatchLoop()
     {
         var token = _watchCts.Token;
+        // §4.19 — watchdog always runs under a resolved policy (StartWatchThread
+        // is only reached when EnsureCommonStarted resolved a non-null one).
+        var policy = _resolvedReconnect ?? NDIReconnectPolicy.Default;
         // Give the initial connection a moment to establish.
-        if (!token.WaitHandle.WaitOne(Math.Max(500, _options.ConnectionCheckIntervalMs)))
+        if (!token.WaitHandle.WaitOne(Math.Max(policy.EffectiveInitialDelayMs, policy.EffectiveCheckIntervalMs)))
         {
             // cancelled during initial wait
             if (token.IsCancellationRequested) return;
@@ -523,7 +634,7 @@ public sealed class NDISource : IDisposable
             // §3.47d / N15 — WaitOne returns `true` when the token fires; the
             // next iteration would otherwise spend one extra
             // ConnectionCheckIntervalMs hanging around. Exit immediately.
-            if (token.WaitHandle.WaitOne(_options.ConnectionCheckIntervalMs))
+            if (token.WaitHandle.WaitOne(policy.EffectiveCheckIntervalMs))
                 break;
         }
     }

@@ -72,4 +72,13 @@ public interface IVideoEndpoint : IMediaEndpoint
     /// <summary>Optional endpoint diagnostics snapshot.</summary>
     VideoEndpointDiagnosticsSnapshot GetDiagnosticsSnapshot()
         => VideoEndpointDiagnosticsSnapshot.Empty;
+
+    /// <summary>
+    /// §5.5 — preferred router push cadence for this endpoint (typically one
+    /// frame-time: 16.7 ms @ 60 fps, 40 ms @ 25 fps, etc.). See
+    /// <see cref="IAudioEndpoint.NominalTickCadence"/> for the full
+    /// semantics; the router picks the minimum across all endpoints.
+    /// <see langword="null"/> (default) means "no preference".
+    /// </summary>
+    TimeSpan? NominalTickCadence => null;
 }

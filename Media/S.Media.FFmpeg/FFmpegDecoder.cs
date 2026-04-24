@@ -59,6 +59,26 @@ public sealed class FFmpegDecoderOptions
     /// Set to <see cref="PixelFormat.Rgba32"/> for renderers that use RGBA uploads.
     /// </summary>
     public PixelFormat? VideoTargetPixelFormat { get; init; } = PixelFormat.Bgra32;
+
+    /// <summary>
+    /// §4.7 — when set, <see cref="FFmpegAudioChannel"/> configures its
+    /// internal SWR to produce Float32 samples at this rate and channel
+    /// count. The channel's reported <see cref="IAudioChannel.SourceFormat"/>
+    /// matches, so the router recognises source == endpoint and skips its
+    /// per-route resampler — eliminating the redundant second conversion
+    /// when the sole audio endpoint has a well-known target rate (e.g.
+    /// 48 kHz stereo for NDI or a PortAudio hardware stream).
+    ///
+    /// <para>
+    /// <see langword="null"/> (default) keeps the historical behaviour:
+    /// SWR passes rate/channels through from the source and only converts
+    /// sample format (planar → interleaved). The builder sets this
+    /// automatically when exactly one audio endpoint with a known format
+    /// is wired up; manual callers should only set it when they know
+    /// there will be a single audio endpoint consuming the channel.
+    /// </para>
+    /// </summary>
+    public AudioFormat? AudioTargetFormat { get; init; }
 }
 
 /// <summary>
@@ -388,7 +408,8 @@ public sealed unsafe class FFmpegDecoder : IDisposable
                 audio.Add(new FFmpegAudioChannel(i, stream, q.Reader,
                     threadCount: _options.DecoderThreadCount,
                     bufferDepth: _options.AudioBufferDepth,
-                    latestSeekEpochProvider: () => Volatile.Read(ref _seekEpoch)));
+                    latestSeekEpochProvider: () => Volatile.Read(ref _seekEpoch),
+                    targetFormat: _options.AudioTargetFormat));
 
                 _log.LogInformation("Stream {Index}: audio channel opened (SampleRate={SampleRate}, Channels={Channels}, Codec={Codec})",
                     i, codecPars->sample_rate, codecPars->ch_layout.nb_channels, codecPars->codec_id);

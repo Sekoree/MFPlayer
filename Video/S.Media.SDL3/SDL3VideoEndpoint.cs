@@ -103,6 +103,12 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
     private long                     _glMakeCurrentFailures;
     private volatile int             _yuvColorRange = (int)YuvColorRange.Auto;
     private volatile int             _yuvColorMatrix = (int)YuvColorMatrix.Auto;
+
+    // §3.34 / S6 — pending-change flag for YUV hints. Setters flip this to
+    // 1 instead of calling ApplyResolvedYuvHints directly (which would
+    // touch `_renderer` off the render thread); the render loop consumes
+    // it at the top of each tick under the GL context.
+    private int                      _yuvHintsDirty;
     // Set to true when the user explicitly overrides the YUV hints; suppresses auto-detect.
     private volatile bool            _hasYuvHintsOverride;
     private volatile int             _scalingFilter = (int)ScalingFilter.Bicubic;
@@ -174,12 +180,12 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
             _yuvColorMatrix = (int)matrix;
             _lastAutoRange = YuvColorRange.Auto;
             _lastAutoMatrix = YuvColorMatrix.Auto;
-            if (_renderer != null)
-            {
-                ApplyResolvedYuvHints(
-                    _outputFormat.Width > 0 ? _outputFormat.Width : _inputFormat.Width,
-                    _outputFormat.Height > 0 ? _outputFormat.Height : _inputFormat.Height);
-            }
+            // §3.34 / S6 — defer to the render loop. ApplyResolvedYuvHints
+            // writes to `_renderer`'s YUV fields; calling it from the
+            // caller's thread is a race against the render thread's
+            // per-frame apply. The render loop checks `_yuvHintsDirty` at
+            // the top of each tick under the GL context.
+            Interlocked.Exchange(ref _yuvHintsDirty, 1);
         }
     }
 
@@ -551,6 +557,16 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
 
             try
             {
+                // §3.34 / S6 — consume any pending YUV-hint change under the
+                // GL context. Setters flip `_yuvHintsDirty` instead of
+                // calling ApplyResolvedYuvHints directly.
+                if (Interlocked.Exchange(ref _yuvHintsDirty, 0) == 1)
+                {
+                    int w = _outputFormat.Width > 0 ? _outputFormat.Width : _inputFormat.Width;
+                    int h = _outputFormat.Height > 0 ? _outputFormat.Height : _inputFormat.Height;
+                    ApplyResolvedYuvHints(w, h);
+                }
+
                 // ── Event pump ────────────────────────────────────────────
                 while (SDL.PollEvent(out var evt))
                 {
@@ -908,6 +924,22 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
         _lastAutoMatrix = resolvedMatrix;
     }
 
+    /// <summary>
+    /// Creates a clone endpoint that can be registered on the router and wired
+    /// into a per-source route, mirroring this parent's video output into a
+    /// secondary window. See `Doc/Clone-Sinks.md` for the full wiring contract
+    /// (§3.40a / S2, S4).
+    /// <para>
+    /// The clone is a standalone <see cref="IVideoEndpoint"/> — the router
+    /// delivers frames to it through the normal
+    /// <see cref="IVideoEndpoint.ReceiveFrame(in VideoFrameHandle)"/> path;
+    /// this parent does <b>not</b> tee frames internally. The returned clone is
+    /// tracked here so a parent <see cref="Dispose"/> cascades disposal as a
+    /// safety net; callers with finer control should
+    /// <c>RemoveRoute</c> + <c>UnregisterEndpoint</c> + <c>clone.Dispose()</c>
+    /// in that order before disposing the parent.
+    /// </para>
+    /// </summary>
     public SDL3VideoCloneEndpoint CreateCloneSink(string? title = null, int? width = null, int? height = null)
     {
         if (_window == nint.Zero)

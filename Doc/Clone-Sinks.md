@@ -7,6 +7,25 @@ Clone video endpoints are secondary video targets created by a parent endpoint
 > Earlier docs called these "sinks"; the class names still contain the word
 > `CloneSink` until the §1.2 renames land.
 
+## Wiring contract (§3.40a / S2, S4)
+
+A clone endpoint is a **standalone endpoint** from the router's point of view.
+The parent does **not** tee frames to it internally; instead, the user
+registers the clone on the router like any other endpoint and creates a
+per-source route so the router pushes frames to it through the normal
+`ReceiveFrame` path. This is model (b) in the §3.40a review finding.
+
+- A clone's `CreateCloneSink(...)` factory is a convenience that enforces
+  backend compatibility (pixel format, thread model, renderer assumptions).
+- The parent keeps a tracking list of the clones it issues so
+  `parent.Dispose()` **cascade-disposes** the clones. This is a safety net
+  for teardown — callers who need finer control should unregister and
+  dispose clones explicitly before disposing the parent (see below).
+- `ReceiveFrame` on an already-disposed clone is a no-op (the clone checks
+  its `_disposed` flag), so a parent-dispose-during-active-route is safe
+  but noisy — the router may log a few push-tick exceptions before it
+  realises the endpoint is gone.
+
 ## Why this model
 
 - Enforces backend compatibility (pixel format, thread model, renderer assumptions).
@@ -37,7 +56,21 @@ var routeId = router.CreateRoute(videoInputId, cloneId);
 
 - Treat clones as parent-owned.
 - Stop clones before teardown when possible.
-- Disposing the parent endpoint disposes tracked clones.
+- Disposing the parent endpoint cascade-disposes tracked clones (safety
+  net); the router continues to push frames to them until it observes the
+  route-level side effect of dispose, so unregistering the clone first is
+  always the cleaner path.
+
+**Recommended teardown order** (when you want zero push-tick warnings):
+
+```csharp
+router.RemoveRoute(cloneRouteId);
+router.UnregisterEndpoint(cloneId);
+await clone.StopAsync();
+clone.Dispose();
+// ...later, when the parent really goes away:
+parent.Dispose();            // cascade is a no-op; clone is already disposed
+```
 
 ## Practical tip
 

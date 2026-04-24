@@ -1,5 +1,6 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
+using S.Media.Core.Video;
 
 namespace S.Media.Core.Routing;
 
@@ -54,5 +55,26 @@ public record VideoRouteOptions : IRouteOptions
     /// Positive values delay this route; negative values advance it.
     /// </summary>
     public TimeSpan TimeOffset { get; init; } = TimeSpan.Zero;
+
+    /// <summary>
+    /// §5.6 — overflow policy for this route's private video subscription.
+    /// <see langword="null"/> keeps the router's default: <see cref="VideoOverflowPolicy.Wait"/>
+    /// for pull endpoints (vsync-paced pace-setters) and
+    /// <see cref="VideoOverflowPolicy.DropOldest"/> for push endpoints (stale
+    /// content is useless). Setting an explicit value overrides that choice —
+    /// e.g. force <see cref="VideoOverflowPolicy.DropOldest"/> on a pull
+    /// endpoint that should favour live content over completeness, or
+    /// <see cref="VideoOverflowPolicy.DropNewest"/> to protect an archival
+    /// sink whose queue must not reorder.
+    /// </summary>
+    public VideoOverflowPolicy? OverflowPolicy { get; init; }
+
+    /// <summary>
+    /// §5.6 — subscription queue capacity for this route. <see langword="null"/>
+    /// keeps the router's default (pull endpoints get
+    /// <c>max(DefaultFramesPerBuffer, channel.BufferDepth)</c>; push endpoints
+    /// get 4). Values &lt; 1 are coerced to 1.
+    /// </summary>
+    public int? Capacity { get; init; }
 }
 

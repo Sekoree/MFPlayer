@@ -63,6 +63,9 @@ internal sealed class NDIAudioChannel : IAudioChannel
     // §4.20 / N10 — log-once set for unsupported audio FourCCs encountered on capture.
     private readonly HashSet<NDIFourCCAudioType> _unsupportedAudioFourCcLogged = [];
 
+    /// <summary>§4.17 / N7 — raised once per distinct unsupported audio FourCC.</summary>
+    public event EventHandler<NDIUnsupportedFourCcEventArgs>? UnsupportedFourCc;
+
     private float[]? _currentChunk;
     private int      _currentOffset;
     private long     _framesConsumed;
@@ -103,6 +106,11 @@ internal sealed class NDIAudioChannel : IAudioChannel
     /// <param name="framesPerCapture">Samples per NDI capture call. Smaller values reduce latency
     /// but increase CPU overhead from more frequent calls. Default 1024 (~21 ms @ 48 kHz);
     /// use 256 (~5.3 ms) or 512 (~10.7 ms) for low-latency paths.</param>
+    // §4.16 / N4 — clock-write policy resolved at construction. Null means
+    // "legacy: always write". For FirstWriter the channel always calls
+    // TryUpdateFromFrame and relies on the NDIClock CAS.
+    private readonly NDIClockPolicy _clockPolicy;
+
     public NDIAudioChannel(
         NDIFrameSync frameSync,
         NDIClock     clock,
@@ -111,11 +119,13 @@ internal sealed class NDIAudioChannel : IAudioChannel
         int          channels    = 2,
         int          bufferDepth = 16,
         bool         preferLowLatency = false,
-        int          framesPerCapture = 1024)
+        int          framesPerCapture = 1024,
+        NDIClockPolicy clockPolicy = NDIClockPolicy.Both)
     {
         _frameSync            = frameSync;
         _frameSyncGate        = frameSyncGate ?? new Lock();
         _clock                = clock;
+        _clockPolicy          = clockPolicy;
         _requestedSampleRate  = sampleRate;
         _requestedChannels    = channels;
         BufferDepth           = bufferDepth;
@@ -261,16 +271,36 @@ internal sealed class NDIAudioChannel : IAudioChannel
                 // layout (32-bit float planar, channel stride in bytes).
                 if (frame.FourCC != NDIFourCCAudioType.Fltp)
                 {
+                    // §4.17 / N7 — first-sighting of a new FourCC logs + fires
+                    // the public event. Subsequent frames with the same
+                    // FourCC are silently dropped (the original log-once
+                    // behaviour is preserved).
                     if (_unsupportedAudioFourCcLogged.Add(frame.FourCC))
                     {
                         Log.LogWarning(
                             "NDIAudioChannel: unsupported audio FourCC={FourCC}; expected Fltp. Frame dropped.",
                             frame.FourCC);
+                        try { UnsupportedFourCc?.Invoke(this, new NDIUnsupportedFourCcEventArgs((uint)frame.FourCC, isAudio: true)); }
+                        catch (Exception ex) { Log.LogWarning(ex, "UnsupportedFourCc handler threw"); }
                     }
                     continue;
                 }
 
-                _clock.UpdateFromFrame(frame.Timestamp);
+                // §4.16 / N4 — clock-policy-aware write. AudioPreferred and
+                // Both always write; VideoPreferred skips here so the video
+                // channel is the sole leader; FirstWriter uses the NDIClock
+                // CAS so whichever channel publishes first wins.
+                switch (_clockPolicy)
+                {
+                    case NDIClockPolicy.Both:
+                    case NDIClockPolicy.AudioPreferred:
+                        _clock.UpdateFromFrame(frame.Timestamp);
+                        break;
+                    case NDIClockPolicy.FirstWriter:
+                        _clock.TryUpdateFromFrame(frame.Timestamp, NDIClock.WriterClaimAudio);
+                        break;
+                    // VideoPreferred: skip — video channel is the sole writer.
+                }
 
                 // Borrow from pool (fallback to new alloc on pool exhaustion or size mismatch).
                 int totalSamples = frame.NoSamples * frame.NoChannels;

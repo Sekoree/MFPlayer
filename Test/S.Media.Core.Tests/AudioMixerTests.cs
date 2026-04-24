@@ -154,5 +154,82 @@ public sealed class AudioMixerTests
         var ex = Record.Exception(() => Mixer.FlushDenormalsToZero());
         Assert.Null(ex);
     }
+
+    // ── CountOverflows (§4.13 / M2) ─────────────────────────────────────────
+
+    [Fact]
+    public void CountOverflows_EmptyBuffer_ReturnsZero()
+        => Assert.Equal(0, Mixer.CountOverflows(ReadOnlySpan<float>.Empty));
+
+    [Fact]
+    public void CountOverflows_NoneExceedOne_ReturnsZero()
+    {
+        var buffer = new float[] { 0.5f, -0.5f, 1.0f, -1.0f, 0f, 0.99f };
+        Assert.Equal(0, Mixer.CountOverflows(buffer));
+    }
+
+    [Fact]
+    public void CountOverflows_CountsBothSignsPastUnity()
+    {
+        var buffer = new float[] { 1.1f, -1.01f, 0.5f, -0.99f, 2.0f, -3.0f };
+        Assert.Equal(4, Mixer.CountOverflows(buffer));
+    }
+
+    [Fact]
+    public void CountOverflows_SimdSized_CountsCorrectly()
+    {
+        var buffer = new float[256];
+        int expected = 0;
+        for (int i = 0; i < buffer.Length; i++)
+        {
+            buffer[i] = i % 8 == 0 ? 1.5f : 0.5f;
+            if (i % 8 == 0) expected++;
+        }
+        Assert.Equal(expected, Mixer.CountOverflows(buffer));
+    }
+
+    // ── ApplySoftClip (§4.13 / M2) ──────────────────────────────────────────
+
+    [Fact]
+    public void ApplySoftClip_EmptyBuffer_NoOp()
+    {
+        Span<float> buffer = [];
+        Mixer.ApplySoftClip(buffer);
+        // no throw, no state to check
+    }
+
+    [Fact]
+    public void ApplySoftClip_BelowThreshold_Untouched()
+    {
+        float[] buffer = [0.1f, -0.5f, 0.9f, -0.9f];
+        var copy = (float[])buffer.Clone();
+        Mixer.ApplySoftClip(buffer, 0.95f);
+        Assert.Equal(copy, buffer);
+    }
+
+    [Fact]
+    public void ApplySoftClip_AboveThreshold_StaysSignedAndBounded()
+    {
+        float[] buffer = [1.5f, -2.0f, 5.0f, -10.0f];
+        Mixer.ApplySoftClip(buffer, 0.9f);
+
+        foreach (var v in buffer)
+        {
+            Assert.True(Math.Abs(v) < 1.0f, $"soft-clipped sample {v} must stay under ±1.0");
+            Assert.True(Math.Abs(v) > 0.9f, $"soft-clipped sample {v} must exceed the threshold");
+        }
+        Assert.True(buffer[0] > 0, "sign of positive sample preserved");
+        Assert.True(buffer[1] < 0, "sign of negative sample preserved");
+    }
+
+    [Fact]
+    public void ApplySoftClip_MonotonicInAbsoluteValue()
+    {
+        float[] buffer = [1.01f, 1.5f, 3.0f, 10.0f];
+        Mixer.ApplySoftClip(buffer, 0.9f);
+        for (int i = 1; i < buffer.Length; i++)
+            Assert.True(buffer[i] >= buffer[i - 1],
+                $"soft-clip must be monotonically non-decreasing in |input|; {buffer[i-1]} → {buffer[i]}");
+    }
 }
 

@@ -108,5 +108,55 @@ public sealed class DefaultAudioMixer : IAudioMixer
         // a correctness issue — only a missed perf opportunity on denormal-heavy
         // workloads.
     }
+
+    /// <inheritdoc />
+    public int CountOverflows(ReadOnlySpan<float> buffer)
+    {
+        int count = 0;
+        int i = 0;
+        if (Vector.IsHardwareAccelerated && buffer.Length >= Vector<float>.Count)
+        {
+            int simdLen = Vector<float>.Count;
+            var vOne = new Vector<float>(1.0f);
+            for (; i + simdLen <= buffer.Length; i += simdLen)
+            {
+                var v = Vector.Abs(new Vector<float>(buffer[i..]));
+                // GreaterThan → lanes are -1 (all-bits-set) on match; Sum of the
+                // negated mask gives the number of matches.
+                var mask = Vector.GreaterThan(v, vOne);
+                for (int j = 0; j < simdLen; j++)
+                    if (mask[j] != 0) count++;
+            }
+        }
+        for (; i < buffer.Length; i++)
+            if (Math.Abs(buffer[i]) > 1.0f) count++;
+        return count;
+    }
+
+    /// <inheritdoc />
+    public void ApplySoftClip(Span<float> buffer, float threshold = 0.98f)
+    {
+        // tanh-ish curve above the threshold. We avoid MathF.Tanh per-sample by
+        // using a cheap rational approximation (x / (1 + |x|)) rescaled so the
+        // knee tangent continues smoothly from the linear region. This is the
+        // classic Chebyshev / Padé soft-clip: audibly transparent up to the
+        // threshold, gentle above it, asymptotic to ±(threshold + (1-threshold)).
+        if (threshold <= 0f || threshold >= 1f || buffer.IsEmpty)
+            return;
+
+        float t = threshold;
+        float range = 1f - t;
+
+        for (int i = 0; i < buffer.Length; i++)
+        {
+            float s = buffer[i];
+            float abs = Math.Abs(s);
+            if (abs <= t) continue;
+
+            float excess = abs - t;
+            float shaped = excess / (1f + excess / range);  // ∈ [0, range)
+            buffer[i] = MathF.CopySign(t + shaped, s);
+        }
+    }
 }
 

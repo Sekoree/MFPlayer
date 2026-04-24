@@ -20,7 +20,9 @@ public sealed record InputDiagnostics(
 public sealed record EndpointDiagnostics(
     EndpointId Id,
     string Kind,
-    float Gain);
+    float Gain,
+    float PeakLevel = 0f,
+    long OverflowSamplesTotal = 0L);
 
 public sealed record RouteDiagnostics(
     RouteId Id,

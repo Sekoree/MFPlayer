@@ -93,11 +93,16 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
 
     private bool _disposed;
 
+    // §4.7 — optional target format the decoder should produce directly,
+    // eliminating the router's per-route resampler when source == endpoint.
+    private readonly AudioFormat? _targetFormat;
+
     internal FFmpegAudioChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
                                  int threadCount  = 0,
                                  int bufferDepth  = 16,
-                                 Func<int>? latestSeekEpochProvider = null)
+                                 Func<int>? latestSeekEpochProvider = null,
+                                 AudioFormat? targetFormat = null)
     {
         _streamIndex  = streamIndex;
         _stream       = stream;
@@ -105,6 +110,7 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
         BufferDepth   = bufferDepth;
         _threadCount  = threadCount;
         _latestSeekEpochProvider = latestSeekEpochProvider ?? (() => 0);
+        _targetFormat = targetFormat;
 
         var cp = stream->codecpar;
         // Seed from codecpar; OpenCodec() will refine from the opened codec context.
@@ -144,7 +150,11 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
         // Use negotiated decoder values (more reliable than container codecpar on some formats).
         int rate = _codecCtx->sample_rate > 0 ? _codecCtx->sample_rate : SourceFormat.SampleRate;
         int ch   = _codecCtx->ch_layout.nb_channels > 0 ? _codecCtx->ch_layout.nb_channels : SourceFormat.Channels;
-        SourceFormat = new AudioFormat(rate, ch);
+
+        // §4.7 — when the caller supplied a target format, reshape SWR and
+        // announce it as the SourceFormat so the router recognises source ==
+        // endpoint and skips its resampler. Otherwise pass source through.
+        SourceFormat = _targetFormat ?? new AudioFormat(rate, ch);
 
         _frame = ffmpeg.av_frame_alloc();
         _pkt   = ffmpeg.av_packet_alloc();
@@ -159,12 +169,23 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
                 ffmpeg.swr_free(pp);
 
         _swr = ffmpeg.swr_alloc();
-        AVChannelLayout layout = _codecCtx->ch_layout;
+        AVChannelLayout inLayout  = _codecCtx->ch_layout;
 
-        ffmpeg.av_opt_set_chlayout(_swr, "in_chlayout",  &layout, 0);
-        ffmpeg.av_opt_set_chlayout(_swr, "out_chlayout", &layout, 0);
+        // §4.7 — output channel layout: default to the source layout, switch
+        // to a synthesised default layout when a target channel count was
+        // requested.
+        AVChannelLayout outLayout = inLayout;
+        int outRate = _codecCtx->sample_rate;
+        if (_targetFormat is { } tf)
+        {
+            outRate = tf.SampleRate;
+            ffmpeg.av_channel_layout_default(&outLayout, tf.Channels);
+        }
+
+        ffmpeg.av_opt_set_chlayout(_swr, "in_chlayout",  &inLayout,  0);
+        ffmpeg.av_opt_set_chlayout(_swr, "out_chlayout", &outLayout, 0);
         ffmpeg.av_opt_set_int(_swr, "in_sample_rate",  _codecCtx->sample_rate, 0);
-        ffmpeg.av_opt_set_int(_swr, "out_sample_rate", _codecCtx->sample_rate, 0);
+        ffmpeg.av_opt_set_int(_swr, "out_sample_rate", outRate, 0);
         ffmpeg.av_opt_set_sample_fmt(_swr, "in_sample_fmt",
             _codecCtx->sample_fmt, 0);
         ffmpeg.av_opt_set_sample_fmt(_swr, "out_sample_fmt",
@@ -261,15 +282,18 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     private AudioChunk? ConvertFrame()
     {
         int samples   = _frame->nb_samples;
-        int channels  = _frame->ch_layout.nb_channels;
+        int frameChannels = _frame->ch_layout.nb_channels;
+        int sourceCodecChannels = _codecCtx->ch_layout.nb_channels;
 
         // Guard against transient channel-count mismatch: the codec context was opened with
-        // SourceFormat.Channels; if a frame arrives with a different count (e.g. mono-island
+        // a known layout; if a frame arrives with a different count (e.g. mono-island
         // packet inside a stereo stream), downstream mixers would see the wrong layout.
-        if (channels != SourceFormat.Channels)
+        // Compare against the codec's declared channel count, not the target format
+        // (§4.7: `SourceFormat` now reports the target when a reshape is in effect).
+        if (frameChannels != sourceCodecChannels)
         {
-            Log.LogWarning("Audio stream={StreamIndex} frame channel count {FrameChannels} != declared {DeclaredChannels}; dropping frame.",
-                _streamIndex, channels, SourceFormat.Channels);
+            Log.LogWarning("Audio stream={StreamIndex} frame channel count {FrameChannels} != codec declared {DeclaredChannels}; dropping frame.",
+                _streamIndex, frameChannels, sourceCodecChannels);
             return null;
         }
 
@@ -278,8 +302,18 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
         double tbSeconds = _stream->time_base.num / (double)_stream->time_base.den;
         long framePtsTicks = FFmpegVideoChannel.SafePts(_frame->pts, tbSeconds).Ticks;
 
-        int maxSamples = samples * channels;
-        var outBuf = RentChunkBuffer(maxSamples);
+        // §4.7 — compute the target output-sample capacity accounting for any
+        // rate change SWR performs. `av_rescale_rnd` with AV_ROUND_UP + a small
+        // margin covers SWR's internal buffering delay on the first calls.
+        int outRate = SourceFormat.SampleRate;
+        int inRate  = _codecCtx->sample_rate;
+        int outChannels = SourceFormat.Channels;
+        int outMaxSamples = (outRate == inRate)
+            ? samples
+            : (int)ffmpeg.av_rescale_rnd(samples, outRate, inRate, AVRounding.AV_ROUND_UP) + 16;
+
+        int outBufSize = outMaxSamples * outChannels;
+        var outBuf = RentChunkBuffer(outBufSize);
 
         fixed (float* pOut = outBuf)
         {
@@ -288,14 +322,14 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
             byte** inData = stackalloc byte*[8];
             for (uint i = 0; i < 8; i++) inData[i] = _frame->data[i];
 
-            int written = ffmpeg.swr_convert(_swr, &outPtr, samples, inData, samples);
+            int written = ffmpeg.swr_convert(_swr, &outPtr, outMaxSamples, inData, samples);
             if (written <= 0)
             {
                 ReturnChunkToPool(outBuf);
                 return null;
             }
 
-            int writtenSamples = written * channels;
+            int writtenSamples = written * outChannels;
             return new AudioChunk(outBuf, writtenSamples, framePtsTicks);
         }
     }

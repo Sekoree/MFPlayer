@@ -64,6 +64,20 @@ public sealed class AVRouter : IAVRouter
         public readonly IVideoEndpoint? Video;
         public float Gain = 1.0f;
 
+        // §4.15 / R24, M3 — per-endpoint peak level measured post-map and
+        // post-gain, immediately before ReceiveBuffer. Reflects what the
+        // endpoint actually consumes (channel map attenuation, endpoint
+        // gain) — more meaningful for a VU meter than the pre-map
+        // per-input reading.
+        public float PeakLevel;
+
+        // §4.13 / M2 — running total of samples that exceeded ±1.0 pre-clip.
+        // Rolled over each tick via a swap: `OverflowSamplesThisTick` feeds
+        // the diagnostics snapshot and is cleared on read; the cumulative
+        // total lives in `OverflowSamplesTotal`.
+        public long OverflowSamplesTotal;
+        public long OverflowSamplesThisTick;
+
 
         public EndpointEntry(EndpointId id, IAudioEndpoint ep)
         {
@@ -201,6 +215,11 @@ public sealed class AVRouter : IAVRouter
     {
         _options = options ?? new AVRouterOptions();
         _internalClock = new StopwatchClock(_options.InternalTickCadence);
+        // §5.5 / §6.7 — seed both effective cadences from the options so the
+        // push loops have valid values even before any endpoint registers
+        // (the router may tick briefly with no endpoints during Start/Stop).
+        _effectiveAudioCadenceSwTicks = ToSwTicks(_options.AudioTickCadence ?? _options.InternalTickCadence);
+        _effectiveVideoCadenceSwTicks = ToSwTicks(_options.VideoTickCadence ?? _options.InternalTickCadence);
     }
 
     // ── IAVRouter: Lifecycle ────────────────────────────────────────────
@@ -467,7 +486,90 @@ public sealed class AVRouter : IAVRouter
         // but not guaranteed-consistent under concurrent mutation; taking it
         // inside the lock is sufficient because all mutations go through _lock.
         _endpointsSnapshot = _endpoints.Values.ToArray();
+        RecomputeEffectiveCadence();
     }
+
+    // §5.5 — effective push-tick cadences. Starts at the options value and is
+    // recomputed on every Register/Unregister: when any registered endpoint
+    // advertises a lower NominalTickCadence, the router picks that so a fast
+    // hardware endpoint isn't held back by the 10 ms default. Read as stopwatch
+    // ticks (monotonic) in the push loops so we never pay the TimeSpan math cost
+    // on the RT path.
+    //
+    // §6.7 — split audio + video cadence so a mixed graph can run audio at
+    // 5 ms ticks while video runs at the frame cadence (~16.7 ms @ 60 fps).
+    // The audio derivation considers only audio-capable endpoint hints; the
+    // video derivation considers only video-capable ones.
+    private long _effectiveAudioCadenceSwTicks;
+    private long _effectiveVideoCadenceSwTicks;
+
+    private static long ToSwTicks(TimeSpan ts)
+        => (long)(ts.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+
+    private void RecomputeEffectiveCadence()
+    {
+        // §6.7 — derive audio and video cadence independently. Options
+        // precedence: AudioTickCadence / VideoTickCadence when set, else
+        // InternalTickCadence for both. Endpoint hints only lower the value,
+        // never raise it.
+        TimeSpan audioBase = _options.AudioTickCadence ?? _options.InternalTickCadence;
+        TimeSpan videoBase = _options.VideoTickCadence ?? _options.InternalTickCadence;
+        TimeSpan audioBest = audioBase;
+        TimeSpan videoBest = videoBase;
+
+        foreach (var ep in _endpointsSnapshot)
+        {
+            if (ep.Audio?.NominalTickCadence is { } a && a < audioBest)
+                audioBest = a < TimeSpan.FromMilliseconds(1) ? TimeSpan.FromMilliseconds(1) : a;
+            if (ep.Video?.NominalTickCadence is { } v && v < videoBest)
+                videoBest = v < TimeSpan.FromMilliseconds(1) ? TimeSpan.FromMilliseconds(1) : v;
+        }
+
+        Volatile.Write(ref _effectiveAudioCadenceSwTicks, ToSwTicks(audioBest));
+        Volatile.Write(ref _effectiveVideoCadenceSwTicks, ToSwTicks(videoBest));
+    }
+
+    /// <summary>
+    /// §5.5 / §6.7 — current effective audio push-tick cadence. Combines
+    /// <c>AVRouterOptions.AudioTickCadence</c> (or
+    /// <c>InternalTickCadence</c> fallback) with the lowest
+    /// <c>IAudioEndpoint.NominalTickCadence</c> across registered audio
+    /// endpoints. Exposed for diagnostics and tests.
+    /// </summary>
+    public TimeSpan EffectiveAudioTickCadence
+    {
+        get
+        {
+            long swTicks = Volatile.Read(ref _effectiveAudioCadenceSwTicks);
+            return swTicks > 0
+                ? TimeSpan.FromSeconds((double)swTicks / System.Diagnostics.Stopwatch.Frequency)
+                : (_options.AudioTickCadence ?? _options.InternalTickCadence);
+        }
+    }
+
+    /// <summary>
+    /// §5.5 / §6.7 — current effective video push-tick cadence. Video sibling
+    /// of <see cref="EffectiveAudioTickCadence"/>.
+    /// </summary>
+    public TimeSpan EffectiveVideoTickCadence
+    {
+        get
+        {
+            long swTicks = Volatile.Read(ref _effectiveVideoCadenceSwTicks);
+            return swTicks > 0
+                ? TimeSpan.FromSeconds((double)swTicks / System.Diagnostics.Stopwatch.Frequency)
+                : (_options.VideoTickCadence ?? _options.InternalTickCadence);
+        }
+    }
+
+    /// <summary>
+    /// §5.5 / §6.7 — legacy accessor equivalent to
+    /// <see cref="EffectiveAudioTickCadence"/> (audio is the primary push
+    /// driver and matches the historical single-cadence behaviour). Kept
+    /// for existing callers and tests; new code should use the audio /
+    /// video sibling explicitly.
+    /// </summary>
+    public TimeSpan EffectiveTickCadence => EffectiveAudioTickCadence;
 
     /// <summary>
     /// §3.14 / R6: pre-allocate the per-endpoint scratch buffer at registration
@@ -816,6 +918,18 @@ public sealed class AVRouter : IAVRouter
         return entry.PeakLevel;
     }
 
+    /// <summary>
+    /// §4.15 / R24, M3 — peak level currently delivered to the given audio
+    /// endpoint, measured post-channel-map and post-endpoint-gain. Returns
+    /// 0 for video-only endpoints.
+    /// </summary>
+    public float GetEndpointPeakLevel(EndpointId id)
+    {
+        if (!_endpoints.TryGetValue(id, out var entry))
+            throw new MediaRoutingException($"Endpoint {id} is not registered.");
+        return entry.PeakLevel;
+    }
+
     public RouterDiagnosticsSnapshot GetDiagnosticsSnapshot()
     {
         // Lock-free: ConcurrentDictionary.Values returns an eventually-consistent snapshot
@@ -827,7 +941,8 @@ public sealed class AVRouter : IAVRouter
             i.Id, i.Kind.ToString(), i.Enabled, i.Volume, i.PeakLevel, i.TimeOffset)).ToArray();
 
         var endpointSnapshots = _endpoints.Values.Select(e => new EndpointDiagnostics(
-            e.Id, e.Kind.ToString(), e.Gain)).ToArray();
+            e.Id, e.Kind.ToString(), e.Gain, e.PeakLevel,
+            Interlocked.Read(ref e.OverflowSamplesTotal))).ToArray();
 
         var routeSnapshots = _routes.Values.Select(r => new RouteDiagnostics(
             r.Id, r.InputId, r.EndpointId, r.Kind.ToString(), r.Enabled, r.Gain,
@@ -994,6 +1109,15 @@ public sealed class AVRouter : IAVRouter
             _routes[routeId] = route;
             RebuildAudioRouteSnapshot();
 
+            // §10.2 / EL2 — correlation scope: the creation log record
+            // carries { RouteId, InputId, EndpointId } so consumers can
+            // filter the audit trail without reparsing the message.
+            using var _ = Log.BeginScope(new Dictionary<string, object>
+            {
+                ["RouteId"] = routeId.ToString(),
+                ["InputId"] = inp.Id.ToString(),
+                ["EndpointId"] = ep.Id.ToString(),
+            });
             Log.LogDebug("Audio route created: {Route} ({Input}→{Endpoint})", routeId, inp.Id, ep.Id);
             return routeId;
         }
@@ -1053,9 +1177,20 @@ public sealed class AVRouter : IAVRouter
             if (inp.VideoChannel is not null)
             {
                 bool isPull = ep.Video is IPullVideoEndpoint;
+                // §5.6 — route-level override of capacity + overflow policy.
+                // Defaults are the historical behaviour (pull = Wait + deep
+                // queue, push = DropOldest + 4); callers can pin either value
+                // via VideoRouteOptions.
+                int defaultCapacity = isPull
+                    ? Math.Max(_options.DefaultFramesPerBuffer, inp.VideoChannel.BufferDepth)
+                    : 4;
+                int capacity = options.Capacity is int c ? Math.Max(1, c) : defaultCapacity;
+                VideoOverflowPolicy overflow = options.OverflowPolicy
+                    ?? (isPull ? VideoOverflowPolicy.Wait : VideoOverflowPolicy.DropOldest);
+
                 route.VideoSub = inp.VideoChannel.Subscribe(new VideoSubscriptionOptions(
-                    Capacity: isPull ? Math.Max(_options.DefaultFramesPerBuffer, inp.VideoChannel.BufferDepth) : 4,
-                    OverflowPolicy: isPull ? VideoOverflowPolicy.Wait : VideoOverflowPolicy.DropOldest,
+                    Capacity: capacity,
+                    OverflowPolicy: overflow,
                     DebugName: $"{inp.Id}->{ep.Id}"));
             }
 
@@ -1082,6 +1217,13 @@ public sealed class AVRouter : IAVRouter
                 }
             }
 
+            // §10.2 / EL2 — correlation scope (video sibling).
+            using var _ = Log.BeginScope(new Dictionary<string, object>
+            {
+                ["RouteId"] = routeId.ToString(),
+                ["InputId"] = inp.Id.ToString(),
+                ["EndpointId"] = ep.Id.ToString(),
+            });
             Log.LogDebug("Video route created: {Route} ({Input}→{Endpoint})", routeId, inp.Id, ep.Id);
             return routeId;
         }
@@ -1157,9 +1299,7 @@ public sealed class AVRouter : IAVRouter
 
     private void PushThreadLoop(CancellationToken ct)
     {
-        var cadence = _options.InternalTickCadence;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        long audioCadenceTicks = (long)(cadence.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
 
         // Video push runs on its own thread so large frame copies don't block audio delivery.
         var videoThread = new Thread(() => PushVideoThreadLoop(ct))
@@ -1195,6 +1335,11 @@ public sealed class AVRouter : IAVRouter
                     Log.LogError(ex, "Error in audio push tick (count={Count})", n);
             }
 
+            // §5.5 / §6.7 — re-read the audio cadence each tick so a
+            // register/unregister (or options change) can speed up / slow
+            // down the audio push without bouncing the router.
+            long audioCadenceTicks = Volatile.Read(ref _effectiveAudioCadenceSwTicks);
+
             // Sleep for the remaining cadence time — cancellation-aware so StopAsync
             // unblocks us in tens of microseconds (§3.19 / R19+R20).
             long targetTicks = tickStart + audioCadenceTicks;
@@ -1206,12 +1351,13 @@ public sealed class AVRouter : IAVRouter
 
     private void PushVideoThreadLoop(CancellationToken ct)
     {
-        var cadence = _options.InternalTickCadence;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        long videoCadenceTicks = (long)(cadence.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
 
         while (_running && !ct.IsCancellationRequested)
         {
+            // §5.5 / §6.7 — re-read per-tick so endpoint Register/Unregister
+            // reshapes the video push cadence without a Stop/Start bounce.
+            long videoCadenceTicks = Volatile.Read(ref _effectiveVideoCadenceSwTicks);
             long tickStart = sw.ElapsedTicks;
 
             try
@@ -1352,9 +1498,47 @@ public sealed class AVRouter : IAVRouter
 
                     var channel = inp.AudioChannel!;
                     var srcFormat = channel.SourceFormat;
-                    if (srcFormat.SampleRate != format.SampleRate || srcFormat.Channels != format.Channels)
+
+                    // §6.8 — per-route resampler on the push path. Rates that
+                    // don't match the endpoint format are handled by the
+                    // route's Resampler when present; otherwise the route is
+                    // skipped with a log-once warning (preserves the prior
+                    // "homogeneous format required" contract for routes the
+                    // caller did not opt into resampling on).
+                    bool needsResample = srcFormat.SampleRate != format.SampleRate;
+                    if (needsResample && route.Resampler is null)
+                    {
+                        // Log-once per route via a HashSet we already track
+                        // for this exact purpose.
+                        if (_pushAudioFormatMismatchWarnings.TryAdd(route.Id, 0))
+                        {
+                            // §10.2 / EL2 — correlation scope so filters on
+                            // RouteId = X surface this warning alongside the
+                            // route's creation / removal records.
+                            using var _corrScope = Log.BeginRouteScope(route.Id);
+                            Log.LogWarning(
+                                "Push audio route {Route} ({Input}->{Endpoint}) source rate " +
+                                "{SrcRate}Hz != endpoint rate {DstRate}Hz and no Resampler " +
+                                "is wired — frames dropped. Set AudioRouteOptions.Resampler " +
+                                "to enable push-path rate conversion (§6.8).",
+                                route.Id, route.InputId, route.EndpointId,
+                                srcFormat.SampleRate, format.SampleRate);
+                        }
                         continue;
-                    int srcSamples = framesPerBuffer * srcFormat.Channels;
+                    }
+
+                    // Channel-count conversion without a map also means we
+                    // have no way to produce the right layout — skip.
+                    if (srcFormat.Channels != format.Channels && route.BakedChannelMap is null)
+                        continue;
+
+                    // Pull size: when resampling, ask the resampler how many
+                    // input frames it needs to produce `framesPerBuffer`
+                    // output frames (accounts for internally-buffered phase).
+                    int inputFrames = needsResample
+                        ? route.Resampler!.GetRequiredInputFrames(framesPerBuffer, srcFormat, format.SampleRate)
+                        : framesPerBuffer;
+                    int srcSamples = inputFrames * srcFormat.Channels;
 
                     var scratch = GetOrCreateScratch(ep.Id, srcSamples);
                     var srcSpan = scratch.AsSpan(0, srcSamples);
@@ -1368,9 +1552,8 @@ public sealed class AVRouter : IAVRouter
                     // channel per input anyway.
                     var ptsBeforeFill = channel.Position;
 
-                    int filled = channel.FillBuffer(srcSpan, framesPerBuffer);
+                    int filled = channel.FillBuffer(srcSpan, inputFrames);
                     if (filled == 0) continue;
-                    if (filled > maxFilled) maxFilled = filled;
                     if (bufferPts == TimeSpan.MinValue)
                         bufferPts = ptsBeforeFill + inp.TimeOffset + route.TimeOffset;
 
@@ -1381,30 +1564,58 @@ public sealed class AVRouter : IAVRouter
                     if (Math.Abs(route.Gain - 1.0f) > 1e-6f)
                         ApplyGain(filledSpan, route.Gain);
 
-                    // Per-input peak metering (post-volume, pre-mix)
+                    // Per-input peak metering (post-volume, pre-mix, pre-resample)
                     inp.PeakLevel = MeasurePeak(filledSpan);
 
-                    // §3.15 / R4: apply the baked channel map whenever one is
-                    // supplied, not only when channel counts differ — user-
-                    // defined maps can also reorder / attenuate equal-channel
-                    // streams (e.g. stereo L↔R swap, mid-side encode).
-                    if (route.BakedChannelMap is not null)
+                    // §6.8 — apply the resampler if wired. The output
+                    // buffer is sized for `framesPerBuffer` frames at the
+                    // source channel count; channel-map conversion runs on
+                    // the resampled output. `srcFramesOut` tracks the frame
+                    // count *after* resample for mix / maxFilled accounting.
+                    ReadOnlySpan<float> outSpan = filledSpan;
+                    int srcFramesOut = filled;
+                    float[]? resampledBuf = null;
+                    if (needsResample)
                     {
-                        int mappedSamples = filled * format.Channels;
-                        var mappedBuf = ArrayPool<float>.Shared.Rent(mappedSamples);
-                        try
-                        {
-                            var mapped = mappedBuf.AsSpan(0, mappedSamples);
-                            mapped.Clear();
-                            ApplyChannelMap(filledSpan, mapped, route.BakedChannelMap,
-                                srcFormat.Channels, format.Channels, filled);
-                            MixInto(dest, mapped);
-                        }
-                        finally { ArrayPool<float>.Shared.Return(mappedBuf); }
+                        int rsSamples = framesPerBuffer * srcFormat.Channels;
+                        resampledBuf = ArrayPool<float>.Shared.Rent(rsSamples);
+                        var rsSpan = resampledBuf.AsSpan(0, rsSamples);
+                        rsSpan.Clear();
+                        int outFrames = route.Resampler!.Resample(filledSpan, rsSpan, srcFormat, format.SampleRate);
+                        outSpan = rsSpan[..(outFrames * srcFormat.Channels)];
+                        srcFramesOut = outFrames;
                     }
-                    else
+                    if (srcFramesOut > maxFilled) maxFilled = srcFramesOut;
+
+                    try
                     {
-                        MixInto(dest, filledSpan);
+                        // §3.15 / R4: apply the baked channel map whenever one is
+                        // supplied, not only when channel counts differ — user-
+                        // defined maps can also reorder / attenuate equal-channel
+                        // streams (e.g. stereo L↔R swap, mid-side encode).
+                        if (route.BakedChannelMap is not null)
+                        {
+                            int mappedSamples = srcFramesOut * format.Channels;
+                            var mappedBuf = ArrayPool<float>.Shared.Rent(mappedSamples);
+                            try
+                            {
+                                var mapped = mappedBuf.AsSpan(0, mappedSamples);
+                                mapped.Clear();
+                                ApplyChannelMap(outSpan, mapped, route.BakedChannelMap,
+                                    srcFormat.Channels, format.Channels, srcFramesOut);
+                                MixInto(dest, mapped);
+                            }
+                            finally { ArrayPool<float>.Shared.Return(mappedBuf); }
+                        }
+                        else
+                        {
+                            MixInto(dest, outSpan);
+                        }
+                    }
+                    finally
+                    {
+                        if (resampledBuf is not null)
+                            ArrayPool<float>.Shared.Return(resampledBuf);
                     }
                 }
 
@@ -1417,14 +1628,30 @@ public sealed class AVRouter : IAVRouter
                 // its correct stream PTS.
                 if (maxFilled > 0)
                 {
+                    var deliverSpan = dest[..(maxFilled * format.Channels)];
                     if (Math.Abs(ep.Gain - 1.0f) > 1e-6f)
-                        ApplyGain(dest[..(maxFilled * format.Channels)], ep.Gain);
+                        ApplyGain(deliverSpan, ep.Gain);
 
-                    ep.Audio.ReceiveBuffer(
-                        dest[..(maxFilled * format.Channels)],
-                        maxFilled,
-                        format,
-                        bufferPts);
+                    // §4.13 / M2 — overflow diagnostic: count samples whose
+                    // absolute value would clip on a conventional DAC, then
+                    // optionally round them off with the mixer's soft-clip
+                    // curve. Count is recorded pre-soft-clip so diagnostics
+                    // reflect what the raw mix tried to produce.
+                    int overflows = DefaultAudioMixer.Instance.CountOverflows(deliverSpan);
+                    if (overflows > 0)
+                    {
+                        Interlocked.Add(ref ep.OverflowSamplesTotal, overflows);
+                        Interlocked.Exchange(ref ep.OverflowSamplesThisTick, overflows);
+                    }
+                    if (_options.SoftClipThreshold is float t && overflows > 0)
+                        DefaultAudioMixer.Instance.ApplySoftClip(deliverSpan, t);
+
+                    // §4.15 / R24, M3 — per-endpoint peak meter sampled after
+                    // channel-map, endpoint-gain and (optional) soft-clip,
+                    // just before ReceiveBuffer.
+                    ep.PeakLevel = MeasurePeak(deliverSpan);
+
+                    ep.Audio.ReceiveBuffer(deliverSpan, maxFilled, format, bufferPts);
                 }
             }
             finally { ArrayPool<float>.Shared.Return(destBuf); }
@@ -1644,6 +1871,23 @@ public sealed class AVRouter : IAVRouter
             // Apply endpoint gain
             if (Math.Abs(_endpoint.Gain - 1.0f) > 1e-6f)
                 ApplyGain(dest, _endpoint.Gain);
+
+            // §4.13 / M2 — overflow + optional soft-clip, mirroring the
+            // push-path so RT-callback endpoints see the same protection.
+            int overflows = DefaultAudioMixer.Instance.CountOverflows(dest);
+            if (overflows > 0)
+            {
+                Interlocked.Add(ref _endpoint.OverflowSamplesTotal, overflows);
+                Interlocked.Exchange(ref _endpoint.OverflowSamplesThisTick, overflows);
+            }
+            if (_router._options.SoftClipThreshold is float t && overflows > 0)
+                DefaultAudioMixer.Instance.ApplySoftClip(dest, t);
+
+            // §4.15 / R24, M3 — per-endpoint peak meter sampled post-map,
+            // post-gain, post-soft-clip. Matches the push-path symmetry so
+            // VU meters read the same signal the endpoint consumes
+            // regardless of driving mode (RT callback vs router push).
+            _endpoint.PeakLevel = MeasurePeak(dest);
         }
     }
 

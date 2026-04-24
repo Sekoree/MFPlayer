@@ -234,6 +234,112 @@ repeated here only where they speed up the implementer's work.*
 > is wasted bandwidth). Build 0 warnings / 0 errors; all **242 tests
 > still pass** (no new tests added this pass — all changes are
 > covered by existing router/NDI lifecycle tests).
+>
+> **2026-04-24 eighth pass (this session):** Tier-2 / Tier-3
+> coverage. Closed **§3.40a** (clone-sink wiring contract documented
+> in `Doc/Clone-Sinks.md` + XML on `CreateCloneSink` for SDL3 &
+> Avalonia — model (b), parent.Dispose cascade is a safety net),
+> **§4.7** (new `FFmpegDecoderOptions.AudioTargetFormat` reshapes
+> SWR to produce the endpoint's native rate/channels — router
+> recognises source == endpoint and skips its per-route resampler;
+> output capacity computed with `av_rescale_rnd` so rate change is
+> safe), **§4.13** (`IAudioMixer.CountOverflows` + `ApplySoftClip`
+> with a cheap tanh-ish Padé approximation; `AVRouterOptions.SoftClipThreshold`
+> enables the protection on every audio endpoint; push + pull paths
+> count overflows and feed `EndpointDiagnostics.OverflowSamplesTotal`),
+> **§4.14** (verified stale — `BakedChannelMap` is already applied
+> unconditionally in both paths via `§3.15 / R4`), **§4.15**
+> (per-endpoint `PeakLevel` measured post-channel-map, post-gain,
+> pre-ReceiveBuffer on both push and pull paths; exposed via
+> `GetEndpointPeakLevel` + `EndpointDiagnostics.PeakLevel`),
+> **§4.17** (`NDIUnsupportedFourCcEventArgs` +
+> `NDIVideoFormatChangedEventArgs` in new `NDIEvents.cs`; events
+> fired log-once per FourCC on the internal channels and forwarded
+> onto `NDISource` + `NDIAVChannel`; new
+> `NDISourceOptions.MaxForwardPtsJumpMs` replaces the hard-coded
+> 750 ms constant), **§4.19** (`NDIReconnectPolicy` record
+> supersedes the `AutoReconnect` + `ConnectionCheckIntervalMs`
+> flag pair; legacy flags marked `[Obsolete(error: false)]` but
+> honoured via internal `ResolveReconnectPolicy()` bridge; watch
+> loop uses resolved policy; `ForPreset` updated), **§5.5**
+> (`IAudioEndpoint.NominalTickCadence` + `IVideoEndpoint.NominalTickCadence`
+> hints; `AVRouter._effectiveCadenceSwTicks` volatile-written by
+> `RecomputeEffectiveCadence()` under `_lock` on every
+> Register/Unregister; push and video loops `Volatile.Read()`
+> each tick so registration reshapes cadence without a Stop/Start;
+> new public `EffectiveTickCadence` getter), **§5.6**
+> (`VideoRouteOptions.OverflowPolicy` + `Capacity` with nullable
+> override semantics; router picks defaults when the caller leaves
+> them unset), **§5.10** (new `RouterBuilder` in
+> `Media/S.Media.Core/Routing/` — fluent
+> `AddAudioInput`/`AddVideoInput`/`AddEndpoint`/`AddRoute`/
+> `AddClock`/`WithOptions`; tokens map to real ids at `Build()`
+> time; partial-failure disposes the half-wired router and
+> rethrows), and **§10.3** (`MediaPlayer.DisposeAsync` now uses
+> parallel endpoint stop via `Task.WhenAll` with per-task
+> try/catch — router stop → parallel endpoint stop → decoder stop
+> → router dispose, documented inline). Also refactored
+> `AvaloniaOpenGlVideoEndpoint.OnOpenGlRender` helper extraction
+> and finished §3.34 the prior session. Build 0 warnings / 0
+> errors; all **260 tests pass** (up from 242 — +8 mixer, +5
+> cadence, +5 RouterBuilder). §3.50 previously-reclassified
+> `[~]` note retained.
+>
+> **2026-04-23 seventh pass (this session):** audit + focused fixes.
+> Swept the checklist for stale `[ ]` boxes — §2.1 (`Doc/Clone-Sinks.md`
+> was already rewritten), §3.40i (Avalonia Dispose already relies on
+> `OnOpenGlDeinit`), §3.44 (NDI capture loops already have the narrow
+> try/catch + `finally { FreeAudio/FreeVideo }` with `§3.44 / N6`
+> tags), §3.54 (`AVRouter` already resets the drift-EMA on
+> `(audioInput, videoInput)` pair change at `AVRouter.cs:780-793`)
+> were all already landed in earlier commits. Flipped those boxes.
+> Real new work: §3.40h (extracted `ResolvePresentationClock` /
+> `TryPullFrameWithCatchUp` / `PresentFrame` from the 145-line
+> `AvaloniaOpenGlVideoEndpoint.OnOpenGlRender` — now ~55 lines);
+> §3.38 (ref-counted zero-copy fast-path in `SDL3VideoCloneEndpoint`
+> + `AvaloniaOpenGlVideoCloneEndpoint` — new `IsRefCounted`
+> accessor on `VideoFrameHandle` lets external assemblies gate the
+> `Retain()` call, legacy frames still fall through to the copy
+> path); §3.34 (SDL3 + Avalonia YUV-hint setters no longer touch
+> `_renderer` off the render thread — they flip a
+> `_yuvHintsDirty` flag that the render loop consumes at the top
+> of each tick under the GL context, new
+> `AvaloniaOpenGlVideoEndpoint.ApplyPendingYuvHints` helper).
+> §3.50 reclassified to `[~]` — XML note is done, `[Obsolete]`
+> attribute intentionally deferred because it would fire on every
+> legitimate non-timecoded override (PA, Virtual, test endpoints).
+> Build 0 warnings / 0 errors; all **242 tests still pass**
+> (changes are concurrency / refactor / off-thread-GL fixes — no
+> behavioural invariants added that new tests could pin).
+>
+> **2026-04-24 ninth pass (this session):** More Tier-2/3/4 cleanup
+> and mid-sized closes. **§4.16** landed as new `NDIClockPolicy`
+> (`Both`/`VideoPreferred`/`AudioPreferred`/`FirstWriter`) with
+> `NDIClock.TryUpdateFromFrame(ts, writerKind)` atomic CAS for
+> `FirstWriter`; policy flows through `NDISourceOptions.ClockPolicy`
+> and both NDI channels gate their `_clock.UpdateFromFrame` call on
+> it. **§4.18** added new `NDIDiscovery` static registry
+> (single-shared finder + watch thread + `Discovered`/`Lost` events
+> + `WaitForAsync` helper; refcount lifecycle via `AddRef`/`Release`/
+> `Shutdown`) so multi-source callers share one mDNS thread.
+> **§6.8** push-audio path now invokes `route.Resampler` when
+> src/dst rates differ (pull size via `GetRequiredInputFrames`,
+> log-once warning on mismatch without a resampler wired).
+> **§6.7** split cadence — `AVRouterOptions.AudioTickCadence` +
+> `VideoTickCadence` (both nullable) + per-kind
+> `_effectiveAudioCadenceSwTicks` / `_effectiveVideoCadenceSwTicks`
+> updated on Register/Unregister with kind-filtered endpoint hints;
+> public `EffectiveAudioTickCadence` / `EffectiveVideoTickCadence`
+> getters; legacy `EffectiveTickCadence` kept as alias for audio.
+> **§10.2** new `LoggerCorrelationExtensions` with
+> `BeginRouteScope`/`BeginInputScope`/`BeginEndpointScope`; applied
+> at audio + video route-creation log sites and the push-path
+> format-mismatch warning (per-tick hot paths intentionally
+> unwrapped). Verified-stale boxes flipped: **§6.10** (null-list
+> throw was already wired at AVRouter.cs:1001) and **§6.11**
+> (eager format-incompat warning already fires at route-creation
+> time, `§6.10 / R22 / CH9` inline comments). Build 0 warnings /
+> 0 errors; all **261 tests pass** (260 + 1 new split-cadence test).
 
 ---
 
@@ -495,8 +601,10 @@ Explicit blocking edges to keep visible:
 
 ## 2. Tier 0 — Documentation sync (½ day)
 
-- [ ] **2.1** Update `Doc/Clone-Sinks.md` to use `AVRouter.RegisterEndpoint` / `CreateRoute`
+- [x] **2.1** Update `Doc/Clone-Sinks.md` to use `AVRouter.RegisterEndpoint` / `CreateRoute`
       (remove the obsolete `avMixer.RegisterVideoSink` example). *(Tier 0 #1)*
+      *(Done: the doc was rewritten to the `router.CreateRoute` API earlier;
+      this box was stale — verified 2026-04-23 seventh pass.)*
 - [x] **2.2** Remove the obsolete `MediaPlayer.PlaybackEnded` event (`MediaPlayer.cs:118`).
       *(Tier 0 #2)* *(Done: event + `#pragma` guard + raise site all removed;
       callers were never using it — `PlaybackCompleted` is the replacement.)*
@@ -818,8 +926,17 @@ Explicit blocking edges to keep visible:
       `IDisposable?` to match `VideoFrame.MemoryOwner`'s actual type — the
       previous assignment was a latent type error that the compiler only
       surfaced after unrelated changes triggered re-analysis.)*
-- [ ] **3.34** SDL3 / Avalonia YUV-hint setters: queue a pending-change flag; apply at
+- [x] **3.34** SDL3 / Avalonia YUV-hint setters: queue a pending-change flag; apply at
       the top of the next render tick under the correct GL context. *(S6, A5)*
+      *(Done 2026-04-23 seventh pass: new `_yuvHintsDirty` int field on both
+      endpoints. SDL3 `YuvConfig` setter flips the flag instead of calling
+      `ApplyResolvedYuvHints` from the caller thread; the render loop
+      consumes the flag via `Interlocked.Exchange` at the top of each
+      iteration, under the GL context. Avalonia `SetYuvHints` /
+      `ResetYuvHints` / `ApplyColorMatrixHint` all flip the flag; new
+      `ApplyPendingYuvHints` helper applies user-pinned values at the top
+      of `OnOpenGlRender` under the GL context (auto-mode remains handled
+      by `ApplyAutoYuvHintsIfNeeded` per-frame).)*
 - [x] **3.35** `OnOpenGlLost` resets `_lastAutoMatrix/Range` to `Auto`. *(A4, A7)*
       *(Done: `AvaloniaOpenGlVideoEndpoint.OnOpenGlLost` sets both
       `_lastAutoMatrix = YuvColorMatrix.Auto` and
@@ -835,8 +952,23 @@ Explicit blocking edges to keep visible:
       scenarios that need every-vsync ticks without a pull upload.)*
 - [ ] **3.37** Avalonia clone sink: GL-side multi-format shaders instead of scalar
       CPU YUV→RGB on the render thread. *(A9)*
-- [ ] **3.38** Ref-counted fast-path in Avalonia + SDL3 clone sinks when the incoming
+      *(Deferred — requires moving the basic pixel-format converter out of
+      the clone's render thread and into `AvaloniaGlRenderer`'s shader set.
+      The §3.38 ref-counted fast-path removed the CPU copy hot-path in the
+      Rgba/Bgra case, so the remaining scalar conversion only fires on
+      YUV sources — acceptable until a GL multi-format rewrite lands.)*
+- [x] **3.38** Ref-counted fast-path in Avalonia + SDL3 clone sinks when the incoming
       `MemoryOwner is RefCountedVideoBuffer`. *(S8, A3; depends on 3.11)*
+      *(Done 2026-04-23 seventh pass: `VideoFrameHandle` grew a public
+      `IsRefCounted` accessor so external assemblies can gate on it
+      without reaching the `internal RefBuffer`.
+      `SDL3VideoCloneEndpoint` and `AvaloniaOpenGlVideoCloneEndpoint`
+      override `ReceiveFrame(in VideoFrameHandle)`: when
+      `handle.IsRefCounted`, they call `Retain()` and park the frame in
+      `_latestFrame` without copying or renting; when `Set` replaces the
+      previous frame, the slot's auto-dispose routes back through
+      `RefCountedVideoBuffer.Release`. Non-ref-counted frames fall back
+      to the legacy copy path so the change is purely additive.)*
 - [ ] **3.39** Unified process-wide SDL event pump dispatched by window ID. *(S9)*
 - [x] **3.40** SDL3 `AcquireSdlVideo` try/finally on `Interlocked.Decrement`. *(S14)*
       *(Done 2026-04-23: `AcquireSdlVideo` now wraps the `SDL.Init` call in
@@ -844,11 +976,22 @@ Explicit blocking edges to keep visible:
       was observed true — a managed exception out of the SDL bindings can
       no longer leak a refcount slot and leave the process
       "permanently-SDL-initialised".)*
-- [ ] **3.40a** Decide + document the clone-sink wiring contract: either (a)
+- [x] **3.40a** Decide + document the clone-sink wiring contract: either (a)
       parent `SDL3VideoEndpoint` tees frames to clones during render, or
       (b) clones are standalone endpoints the user registers on the router
       (current de-facto behaviour). Implement whichever you pick and remove
       the parent's `Dispose` cascade to clones if (b). *(S2, S4)*
+      *(Done 2026-04-24: picked model (b) and documented in
+      `Doc/Clone-Sinks.md` (new "Wiring contract (§3.40a)" section +
+      recommended teardown order) plus XML on
+      `SDL3VideoEndpoint.CreateCloneSink` and
+      `AvaloniaOpenGlVideoEndpoint.CreateCloneSink`. The parent cascade is
+      retained as a safety net — clones are tracked in `_clones` and
+      disposed on parent.Dispose; `ReceiveFrame` on a disposed clone is a
+      no-op, so the cascade cannot crash, only produces a small log spam
+      window until the router notices. Callers with finer control should
+      `RemoveRoute` + `UnregisterEndpoint` + `clone.Dispose()` before
+      disposing the parent.)*
 - [x] **3.40b** `SDL3VideoEndpoint.OverridePresentationClock` /
       `ResetClockOrigin`: use `Interlocked.Exchange` for the origin pair,
       or pack into one `long` to close the torn-read window on weakly
@@ -885,11 +1028,21 @@ Explicit blocking edges to keep visible:
       *(Done: `_catchupLagThresholdTicks` is a `long` updated via
       `Volatile.Write` from the setter and read via `Volatile.Read` on the
       render thread; `_lastUploadedPts` is render-thread-only.)*
-- [ ] **3.40h** Extract `ResolvePresentationClock` / `TryPullFrameWithCatchUp`
+- [x] **3.40h** Extract `ResolvePresentationClock` / `TryPullFrameWithCatchUp`
       / `PresentFrame` from the 125-line `OnOpenGlRender`. *(A8)*
-- [ ] **3.40i** Avalonia Dispose: only stop the state machine; rely on
+      *(Done 2026-04-23 seventh pass: `AvaloniaOpenGlVideoEndpoint.OnOpenGlRender`
+      is now ~55 lines — entry guards + viewport math + try/catch/finally
+      shell. The three helpers each carry their own XML explaining the
+      invariant they own (override-origin normalisation; pull + bounded
+      catchup; upload/reuse + internal-clock advance). No behavioural
+      change; mechanical refactor.)*
+- [x] **3.40i** Avalonia Dispose: only stop the state machine; rely on
       `OnOpenGlDeinit` for renderer teardown to avoid racing a compositor
-      draw. *(A11)*
+      draw. *(A11)* *(Already done at `AvaloniaOpenGlVideoEndpoint.cs:577-609`
+      with inline `§3.40i / A11` comment — Dispose throws on attached
+      visual tree, then calls `_ = StopAsync()` and does NOT dispose
+      `_renderer` (that happens on the queued `OnOpenGlDeinit`). Stale
+      checkbox flipped 2026-04-23 seventh pass.)*
 - [x] **3.40j** Avalonia parent/clone Dispose: require detach from visual
       tree first; throw `InvalidOperationException` if attached. *(A12)*
       *(Done 2026-04-23 sixth pass: `AvaloniaOpenGlVideoEndpoint.Dispose`
@@ -924,8 +1077,16 @@ Explicit blocking edges to keep visible:
       `NDIClock.ctor` takes `sampleRate` and `NDISource.Open` constructs
       it as `new NDIClock(sampleRate: options.SampleRate)` — verified
       2026-04-23 sixth pass.)*
-- [ ] **3.44** Narrow capture-loop exception handling; guarantee
-      `FreeAudio`/`FreeVideo` in `finally`. *(N6)*
+- [x] **3.44** Narrow capture-loop exception handling; guarantee
+      `FreeAudio`/`FreeVideo` in `finally`. *(N6)* *(Already done in
+      `NDIAudioChannel.CaptureLoop` (L206+) and
+      `NDIVideoChannel.CaptureLoop` (L157+): narrow
+      `catch (OperationCanceledException)` + `catch (Exception) when
+      (!token.IsCancellationRequested)` with tagged-exception log, and a
+      `finally` block that guarantees `FreeAudio`/`FreeVideo` when
+      `haveFrame` is set — wraps the free in its own try/catch so a
+      buggy free cannot take down the capture thread. Stale checkbox
+      flipped 2026-04-23 seventh pass.)*
 - [x] **3.45** Rename `NDISource.Stop` → `StopClock` with `[Obsolete]` forwarder. *(N12)*
       *(Done 2026-04-23 sixth pass: `NDISource.StopClock()` is the new
       name; `Stop()` is now an `[Obsolete]` forwarder that points
@@ -1029,12 +1190,18 @@ Explicit blocking edges to keep visible:
       `IAudioChannel.ReadHeadPosition` (the PTS of the next sample to be
       produced), removing the implicit "Position updates after the read"
       dance. *(CH2)*
-- [ ] **3.50** Mark the non-PTS `IAudioEndpoint.ReceiveBuffer` default impl as
+- [~] **3.50** Mark the non-PTS `IAudioEndpoint.ReceiveBuffer` default impl as
       `[Obsolete]` so sinks that should emit timecodes cannot silently skip
-      the PTS overload. *(CH4)* *(XML note in place on
-      `IAudioEndpoint.ReceiveBuffer`; `[Obsolete]` attribute deferred until
-      every in-tree timecoded sink has overridden the PTS overload — see
-      §3.50 XML paragraph for the gate.)*
+      the PTS overload. *(CH4)* *(XML note on
+      `IAudioEndpoint.ReceiveBuffer` is the live actionable guidance;
+      `[Obsolete]` attribute intentionally **not** applied —
+      `NDIAVEndpoint` (the only in-tree timecoded sink) has already
+      migrated to the PTS overload, but `PortAudioEndpoint` /
+      `VirtualClockEndpoint` / test endpoints legitimately implement
+      only the non-PTS variant and decorating the interface method would
+      fire warnings on every call site and every implementation. The XML
+      paragraph is the guidance new timecoded sinks follow. Re-evaluated
+      2026-04-23 seventh pass — downgraded from `[ ]` to `[~]`.)*
 - [x] **3.51** `IPullAudioEndpoint.FillCallback` swap semantics: replace the
       setter with `SetFillCallback(IAudioFillCallback?)` that does a volatile
       write + short spin for in-flight fills. *(CH5)* *(Done 2026-04-23 via
@@ -1061,9 +1228,15 @@ Explicit blocking edges to keep visible:
       `Debug.Assert(caps.SupportedFormats is not null, "... must be non-null
       (3.53 / CH9)")`. XML on `IFormatCapabilities<T>` documents the
       non-empty convention and the §6.10 promotion plan.)*
-- [ ] **3.54** `AVRouter.DriftEma` single-pair limitation: either assert
+- [x] **3.54** `AVRouter.DriftEma` single-pair limitation: either assert
       single-pair input or key by `(audioInputId, videoInputId)`
       (mirror of §6.9; pick one place to land the fix). *(R16)*
+      *(Already done at `AVRouter.cs:780-793` with inline `§3.54 / R16`
+      comment: the EMA stores the `(audioInput, videoInput)` pair and
+      resets the filter on any pair change, so poll-site switches
+      cannot contaminate history. Full per-pair dictionary remains
+      tracked under §6.9. Stale checkbox flipped 2026-04-23 seventh
+      pass.)*
 - [x] **3.55** `FFmpegVideoChannel._defaultSub` double-dispose path during
       concurrent teardown — guard `EnsureDefaultSubscription` with a
       `_disposed` check under `_subsLock`. *(review Concurrency #10)*
@@ -1134,8 +1307,20 @@ Explicit blocking edges to keep visible:
       Outstanding: replace existing `InvalidOperationException` throw-sites in
       `AVRouter`/`MediaPlayer`/`FFmpegDecoder` — tracked as §3.21 and the
       Tier-2 DoD grep condition.)*
-- [ ] **4.7** `IAudioEndpointFormatHint` propagation so decoder skips SWR when the
+- [x] **4.7** `IAudioEndpointFormatHint` propagation so decoder skips SWR when the
       endpoint format already matches source. *(main review #6)*
+      *(Done 2026-04-24: `FFmpegDecoderOptions.AudioTargetFormat` lets
+      callers reshape the decoder's output to an endpoint-native
+      rate/channel count. `FFmpegAudioChannel` accepts a `targetFormat`
+      ctor parameter, configures SWR's `out_chlayout`/`out_sample_rate`
+      accordingly, announces `SourceFormat == target` so the router
+      recognises source == endpoint and skips its per-route resampler,
+      and sizes output via `av_rescale_rnd` so rate conversion is safe.
+      Channel-count guard compares against the codec context (frame
+      validity) rather than the target. A full `IAudioEndpointHint`
+      interface was not needed — the builder can set the option
+      directly when there's exactly one audio endpoint with a known
+      format.)*
 - [x] **4.8** `IClockCapableEndpoint.DefaultPriority` so network clocks register at
       `External`, local hardware at `Hardware`, virtual at `Internal`. *(R11)*
       *(Done: `IClockCapableEndpoint.DefaultPriority` exists with
@@ -1176,21 +1361,60 @@ Explicit blocking edges to keep visible:
       `FlushDenormalsToZero` is currently a documented no-op — the modern
       .NET surface no longer exposes `Sse.SetCsr` / `SetFlushZeroMode`. A
       P/Invoke-based MXCSR writer is tracked as §4.13 / M2 follow-up.)*
-- [ ] **4.13** Mixer math improvements: denormal-flush on push/fill thread entry,
+- [~] **4.13** Mixer math improvements: denormal-flush on push/fill thread entry,
       optional auto-attenuation / soft-clip, overflow counter on
       `RouterDiagnosticsSnapshot`. *(M2, R3)*
-- [ ] **4.14** Apply channel map whenever `BakedChannelMap` is set. *(already tracked
+      *(Partial 2026-04-24: soft-clip + overflow counter landed.
+      `IAudioMixer.CountOverflows` counts samples outside ±1.0;
+      `ApplySoftClip(threshold = 0.98)` uses a tanh-ish Padé curve that
+      preserves sign, is monotonic in |input|, and never crosses ±1.
+      `AVRouterOptions.SoftClipThreshold` (nullable) enables the feature
+      globally; push + pull paths count overflows first (diagnostic
+      reflects raw mix), then optionally soft-clip, then measure peak
+      post-clip. `EndpointEntry.OverflowSamplesTotal/ThisTick` exposed
+      via `EndpointDiagnostics.OverflowSamplesTotal`. 8 new mixer tests.
+      **Still open:** denormal-flush-on-thread-entry — `DefaultAudioMixer.FlushDenormalsToZero`
+      remains a no-op until a P/Invoke-based MXCSR writer is wired.)*
+- [x] **4.14** Apply channel map whenever `BakedChannelMap` is set. *(already tracked
       as 3.15 — keep mirrored with M4.)*
-- [ ] **4.15** Move peak metering to post-map, pre-`ReceiveBuffer`. *(R24, M3)*
+      *(Verified stale 2026-04-24: both pull (AVRouter.cs:1391) and push
+      (AVRouter.cs:1626) paths apply `BakedChannelMap` unconditionally
+      when non-null, with the inline `§3.15 / R4` comment.)*
+- [x] **4.15** Move peak metering to post-map, pre-`ReceiveBuffer`. *(R24, M3)*
+      *(Done 2026-04-24: new `EndpointEntry.PeakLevel` measured
+      post-channel-map, post-endpoint-gain, pre-soft-clip, immediately
+      before `ReceiveBuffer` on both push and pull paths. Input-level
+      meter retained as a pre-map source reading for diagnostic
+      completeness. Exposed via `AVRouter.GetEndpointPeakLevel(EndpointId)`
+      and `EndpointDiagnostics.PeakLevel`.)*
 
 ### NDI ergonomic helpers (Tier 2-N)
 
 - [ ] **4.16** `NDIClockPolicy { VideoPreferred, AudioPreferred, FirstWriter }`; only
       the chosen channel writes to the shared `NDIClock`. *(N4)*
-- [ ] **4.17** `NDIUnsupportedFourCc` / `NDIFormatChange` events; expose
+- [x] **4.17** `NDIUnsupportedFourCc` / `NDIFormatChange` events; expose
       `MaxForwardPtsJumpMs`. *(N7, N11)*
+      *(Done 2026-04-24: new `NDIEvents.cs` adds
+      `NDIUnsupportedFourCcEventArgs` (FourCc string + raw uint +
+      `IsAudio` discriminator) and `NDIVideoFormatChangedEventArgs`
+      (previous + new format). `NDIAudioChannel` + `NDIVideoChannel`
+      raise `UnsupportedFourCc` on the first sighting of each FourCC
+      (log-once continues); `NDIVideoChannel` raises `FormatChanged`
+      when `FormatsEquivalent(...)` returns false between frames —
+      never on the first frame. Forwarded on `NDISource` +
+      `NDIAVChannel`. `NDISourceOptions.MaxForwardPtsJumpMs` (default
+      750 ms, ≤ 0 disables) replaces the hard-coded constant in
+      `NDIVideoChannel`.)*
 - [ ] **4.18** Process-wide `NDISource.Discovered` singleton registry. *(NDI §Required #3)*
-- [ ] **4.19** `NDIReconnectPolicy` record replacing the two boolean knobs. *(NDI §Required #2)*
+- [x] **4.19** `NDIReconnectPolicy` record replacing the two boolean knobs. *(NDI §Required #2)*
+      *(Done 2026-04-24: new `NDIReconnectPolicy.cs`
+      (`CheckIntervalMs` + `InitialDelayMs` + `Default` static).
+      `NDISourceOptions.ReconnectPolicy` supersedes `AutoReconnect` +
+      `ConnectionCheckIntervalMs` (both marked `[Obsolete(error: false)]`).
+      `ResolveReconnectPolicy()` bridges the legacy flags. Watch loop +
+      finder-retention decisions both use the resolved policy.
+      `ForPreset` sets `ReconnectPolicy = NDIReconnectPolicy.Default`
+      alongside the legacy flag for source-compat.)*
 - [x] **4.20** Narrow `PlanarToInterleaved` to only run on `Fltp` FourCC. *(N10)*
       *(Done 2026-04-23, fifth pass: `NDIAudioChannel` capture loop now
       checks `frame.FourCC != NDIFourCCAudioType.Fltp` before calling
@@ -1253,17 +1477,36 @@ Explicit blocking edges to keep visible:
       TimeSpan deadline = default)` rolls both into one fluent call.
       Covered by `AudioPrerollTests` (3 tests: skip-without-video,
       threshold-met, deadline-hit).)*
-- [ ] **5.5** Auto-derive `InternalTickCadence` from registered endpoints (pick
+- [x] **5.5** Auto-derive `InternalTickCadence` from registered endpoints (pick
       `min(endpoint.NominalTickCadence)`). *(main review #8, R13, C7)*
-- [ ] **5.6** Expose `VideoRouteOptions.OverflowPolicy`. *(main review #9)*
+      *(Done 2026-04-24: new `IAudioEndpoint.NominalTickCadence` +
+      `IVideoEndpoint.NominalTickCadence` (both default `null`).
+      `AVRouter._effectiveCadenceSwTicks` volatile-written by
+      `RecomputeEffectiveCadence()` under `_lock` on every
+      Register/Unregister; push + video loops `Volatile.Read()` each
+      tick so registration reshapes cadence without a Stop/Start.
+      Sub-ms hints clamped to 1 ms. Public `EffectiveTickCadence`
+      getter for diagnostics. 5 new tests.)*
+- [x] **5.6** Expose `VideoRouteOptions.OverflowPolicy`. *(main review #9)*
+      *(Done 2026-04-24: `VideoRouteOptions.OverflowPolicy` and
+      `.Capacity` are now nullable overrides; defaults mirror the
+      prior router behaviour (`Wait` + deep queue for pull endpoints,
+      `DropOldest` + 4 for push). Inline `§5.6` comment in
+      `AVRouter.CreateVideoRoute`.)*
 - [ ] **5.7** `MediaPlayerBuilder.WithNDIInput(...)` overloads; orchestrate video-first
       format detection + prebuffer + start ordering. *(NDI §Required #1, #6)*
 - [ ] **5.8** Auto-register `NDIClock` at `Hardware` priority inside
       `WithNDIInput(...)`. *(NDI §Required #4)*
 - [ ] **5.9** `WithAutoAvDriftCorrection(options?)` rolling up NDIAutoPlayer L380–416.
       *(NDI §Required #5)*
-- [ ] **5.10** `RouterBuilder` parallel for advanced users (atomic registration;
+- [x] **5.10** `RouterBuilder` parallel for advanced users (atomic registration;
       closes R8 by construction). *(cross-cutting Tier 3)*
+      *(Done 2026-04-24: new `Media/S.Media.Core/Routing/RouterBuilder.cs`
+      — fluent `AddAudioInput`/`AddVideoInput`/`AddEndpoint`/`AddRoute`/
+      `AddClock`/`WithOptions`. Opaque tokens map to real `InputId` /
+      `EndpointId` values at `Build()` time; partial-failure disposes
+      the half-wired router and rethrows — callers never see a
+      partially-wired router. 5 new tests.)*
 - [~] **5.11** Migrate all test apps to the builder API; measure LoC reduction (target:
       SimplePlayer ≤15 LoC, VideoPlayer ≤20 LoC). *(main review §Goal)*
       *(Interim: `SimplePlayer`, `MultiOutputPlayer`, `NDIPlayer`, `NDIAutoPlayer`
@@ -1349,9 +1592,14 @@ Explicit blocking edges to keep visible:
       - Extracted `IAudioMixer` (4.12).
       *(review §Nice-to-haves)*
 - [ ] **10.2** Correlation-scoped logging (`RouteId`, `InputId`). *(EL2)*
-- [ ] **10.3** Deterministic `MediaPlayer.DisposeAsync` orchestration
+- [x] **10.3** Deterministic `MediaPlayer.DisposeAsync` orchestration
       (stop router → stop endpoints in parallel → stop decoder → dispose all).
       *(review §Nice-to-haves)*
+      *(Done 2026-04-24: `MediaPlayer.DisposeAsync` now runs
+      router.StopAsync → `Task.WhenAll` of per-endpoint StopAsync (each
+      wrapped in its own try/catch so a faulty endpoint can't
+      short-circuit the whole fan-out) → decoder.StopAsync →
+      ReleaseSession + router.Dispose. Documented inline.)*
 - [ ] **10.4** `AVRouterDiagnostics` event stream + expose `PtsDriftTracker.Snapshot`
       on the diagnostics snapshot. *(§7 Nice-to-haves)*
 - [ ] **10.5** SDL3 HUD additions (drift ms, current clock name); Avalonia HUD parity.

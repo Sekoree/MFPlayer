@@ -74,6 +74,12 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
     private YuvColorMatrix _lastAutoMatrix = YuvColorMatrix.Auto;
     private YuvColorRange  _lastAutoRange  = YuvColorRange.Auto;
 
+    // §3.34 / A5 — pending-change flag for user-pinned YUV hints. Setters
+    // mutate the state fields from any thread and flip this to 1; the
+    // render tick picks it up under the GL context and forwards to the
+    // renderer. Avoids touching `_renderer` off-thread.
+    private int _yuvHintsDirty;
+
     // §3.40g / A6 — stored as long ticks and accessed via Volatile.Read/Write so
     // cross-thread setters (UI thread ↔ render thread) cannot observe a torn
     // TimeSpan on 32-bit runtimes.
@@ -149,7 +155,10 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         _yuvColorMatrix = bt709 ? YuvColorMatrix.Bt709 : YuvColorMatrix.Bt601;
         _lastAutoMatrix = YuvColorMatrix.Auto;
         _lastAutoRange = YuvColorRange.Auto;
-        _renderer?.SetYuvHints(bt709, limitedRange);
+        // §3.34 / A5 — defer the renderer write to the next render tick
+        // (which owns the GL context). The fields above are read by the
+        // render thread under `_yuvHintsDirty`-gated apply.
+        Interlocked.Exchange(ref _yuvHintsDirty, 1);
     }
 
     /// <summary>
@@ -164,7 +173,8 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         _yuvLimitedRange = limitedRange;
         _lastAutoMatrix = YuvColorMatrix.Auto;
         _lastAutoRange = YuvColorRange.Auto;
-        _renderer?.SetYuvHints(matrix, limitedRange);
+        // §3.34 / A5 — defer the renderer write to the next render tick.
+        Interlocked.Exchange(ref _yuvHintsDirty, 1);
     }
 
     /// <summary>Resets YUV hints to auto-detect from frame resolution.</summary>
@@ -173,7 +183,11 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         _hasYuvHintsOverride = false;
         _lastAutoMatrix = YuvColorMatrix.Auto;
         _lastAutoRange = YuvColorRange.Auto;
-        _renderer?.ResetYuvHintsToAuto();
+        // §3.34 / A5 — defer. The render tick applies "Auto" via
+        // ApplyAutoYuvHintsIfNeeded on the next frame; we additionally
+        // flip the dirty flag so an explicit ResetYuvHintsToAuto call
+        // fires even before the first frame arrives.
+        Interlocked.Exchange(ref _yuvHintsDirty, 1);
     }
 
     /// <summary>YUV color range used by the GL shaders. Equivalent to calling <see cref="SetYuvHints(YuvColorMatrix,bool)"/>.</summary>
@@ -208,9 +222,10 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         {
             _lastAutoMatrix = newMatrix;
             _lastAutoRange = newLimited ? YuvColorRange.Limited : YuvColorRange.Full;
-            _renderer?.SetYuvHints(newMatrix, newLimited);
             _yuvColorMatrix = newMatrix;
             _yuvLimitedRange = newLimited;
+            // §3.34 / A5 — defer the renderer write to the next render tick.
+            Interlocked.Exchange(ref _yuvHintsDirty, 1);
         }
     }
 
@@ -404,6 +419,11 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         int viewportWidth = (int)Math.Max(1, Math.Round(Bounds.Width * scale));
         int viewportHeight = (int)Math.Max(1, Math.Round(Bounds.Height * scale));
 
+        // §3.34 / A5 — apply any queued user-pinned YUV hints under the GL
+        // context. `ApplyAutoYuvHintsIfNeeded` below handles the Auto path.
+        if (Interlocked.Exchange(ref _yuvHintsDirty, 0) == 1)
+            ApplyPendingYuvHints();
+
         // §3.36 — track whether we actually uploaded a frame this tick so the
         // finally block can decide whether to re-arm the render timer.
         bool uploadedThisTick = false;
@@ -417,99 +437,12 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
                 return;
             }
 
-            var externalClock = _presentationClockOverride;
-            var presentationClock = externalClock ?? _clock;
-            if (presentationClock == null)
-                throw new InvalidOperationException("Presentation clock is not available.");
+            var (_, clockPosition, hasOverride) = ResolvePresentationClock();
 
-            var clockPosition = presentationClock.Position;
-            if (externalClock != null)
+            if (TryPullFrameWithCatchUp(clockPosition, out VideoFrame vf))
             {
-                long rawTicks = clockPosition.Ticks;
-                if (rawTicks < 0) rawTicks = 0;
-
-                if (Interlocked.CompareExchange(ref _hasPresentationClockOrigin, 1, 0) == 0)
-                    Volatile.Write(ref _presentationClockOriginTicks, rawTicks);
-
-                long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
-                long relTicks = rawTicks - originTicks;
-                if (relTicks < 0) relTicks = 0;
-                clockPosition = TimeSpan.FromTicks(relTicks);
-            }
-
-            var frame = (VideoFrame?)null;
-
-            var presentCb = PresentCallback;
-            if (presentCb is not null)
-            {
-                if (presentCb.TryPresentNext(clockPosition, out VideoFrame cbFrame))
-                    frame = cbFrame;
-            }
-
-                if (frame.HasValue)
-                {
-                    var vf = frame.Value;
-                    ApplyAutoYuvHintsIfNeeded(vf.Width, vf.Height);
-
-                    // If decode/render falls behind, skip stale frames up to a bounded budget.
-                    for (int i = 0; i < _maxCatchupPullsPerRender; i++)
-                    {
-                        if (vf.Pts + TimeSpan.FromTicks(Volatile.Read(ref _catchupLagThresholdTicks)) >= clockPosition)
-                            break;
-
-                        VideoFrame? next = null;
-                        if (presentCb is not null)
-                        {
-                            next = presentCb.TryPresentNext(clockPosition, out VideoFrame nf) ? nf : null;
-                        }
-                        if (!next.HasValue)
-                            break;
-
-                        var nvf = next.Value;
-                        if (nvf.Pts == vf.Pts &&
-                            nvf.Width == vf.Width &&
-                            nvf.Height == vf.Height &&
-                            nvf.Data.Equals(vf.Data))
-                            break;
-
-                        vf = nvf;
-                        Interlocked.Increment(ref _catchupSkips);
-                    }
-
-
-                // Renderer natively handles all GPU-uploadable formats (Rgba32, Bgra32, Nv12,
-                // Yuv420p, Yuv422p10, Uyvy422, P010, Yuv444p, Gray8). Unknown formats render black.
-                // §3.33 / A2 — identity-based reuse gate: ReferenceEquals on MemoryOwner
-                // plus Pts/W/H rules out the ArrayPool-rental false-match on
-                // `ReadOnlyMemory<byte>.Equals` (structural over array ref + offset + length).
-                bool sameAsUploaded = _hasUploadedFrame &&
-                                      vf.Width == _lastUploadedWidth &&
-                                      vf.Height == _lastUploadedHeight &&
-                                      vf.Pts == _lastUploadedPts &&
-                                      ReferenceEquals(vf.MemoryOwner, _lastUploadedMemoryOwner);
-
-                if (sameAsUploaded)
-                {
-                    _renderer.DrawLastTexture(fb, viewportWidth, viewportHeight);
-                    Interlocked.Increment(ref _textureReuseDraws);
-                }
-                else
-                {
-                    _renderer.UploadAndDraw(vf, fb, viewportWidth, viewportHeight);
-                    _hasUploadedFrame = true;
-                    _lastUploadedWidth = vf.Width;
-                    _lastUploadedHeight = vf.Height;
-                    _lastUploadedPts = vf.Pts;
-                    _lastUploadedData = vf.Data;
-                    _lastUploadedMemoryOwner = vf.MemoryOwner;
-                    Interlocked.Increment(ref _textureUploads);
-                }
-
+                PresentFrame(in vf, fb, viewportWidth, viewportHeight, hasOverride);
                 uploadedThisTick = true;
-
-                if (_presentationClockOverride == null)
-                    _clock.UpdateFromFrame(vf.Pts);
-                Interlocked.Increment(ref _presentedFrames);
             }
             else
             {
@@ -535,6 +468,124 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
             if (_isRunning && (uploadedThisTick || LiveMode))
                 RequestNextFrameRendering();
         }
+    }
+
+    /// <summary>
+    /// §3.40h / A8 — resolve the presentation clock and compute the tick's
+    /// clock position, applying the <see cref="_presentationClockOverride"/>
+    /// origin offset so the override appears to start at zero on the first
+    /// call. Returns the clock, the normalised position, and whether the
+    /// override path was active (the override owner drives PTS updates
+    /// externally, so the internal clock's <c>UpdateFromFrame</c> must be
+    /// skipped).
+    /// </summary>
+    private (IMediaClock Clock, TimeSpan Position, bool HasOverride) ResolvePresentationClock()
+    {
+        var externalClock = _presentationClockOverride;
+        var presentationClock = externalClock ?? _clock;
+        if (presentationClock == null)
+            throw new InvalidOperationException("Presentation clock is not available.");
+
+        var clockPosition = presentationClock.Position;
+        if (externalClock != null)
+        {
+            long rawTicks = clockPosition.Ticks;
+            if (rawTicks < 0) rawTicks = 0;
+
+            if (Interlocked.CompareExchange(ref _hasPresentationClockOrigin, 1, 0) == 0)
+                Volatile.Write(ref _presentationClockOriginTicks, rawTicks);
+
+            long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
+            long relTicks = rawTicks - originTicks;
+            if (relTicks < 0) relTicks = 0;
+            clockPosition = TimeSpan.FromTicks(relTicks);
+        }
+
+        return (presentationClock, clockPosition, externalClock != null);
+    }
+
+    /// <summary>
+    /// §3.40h / A8 — pull the next frame from <see cref="PresentCallback"/>
+    /// and, if it is behind the clock, walk forward up to
+    /// <see cref="_maxCatchupPullsPerRender"/> times to catch up. Returns
+    /// <see langword="false"/> when no frame is available for this tick.
+    /// </summary>
+    private bool TryPullFrameWithCatchUp(TimeSpan clockPosition, out VideoFrame vf)
+    {
+        vf = default;
+
+        var presentCb = PresentCallback;
+        if (presentCb is null)
+            return false;
+
+        if (!presentCb.TryPresentNext(clockPosition, out VideoFrame cbFrame))
+            return false;
+
+        vf = cbFrame;
+
+        // If decode/render falls behind, skip stale frames up to a bounded budget.
+        for (int i = 0; i < _maxCatchupPullsPerRender; i++)
+        {
+            if (vf.Pts + TimeSpan.FromTicks(Volatile.Read(ref _catchupLagThresholdTicks)) >= clockPosition)
+                break;
+
+            if (!presentCb.TryPresentNext(clockPosition, out VideoFrame nvf))
+                break;
+
+            if (nvf.Pts == vf.Pts &&
+                nvf.Width == vf.Width &&
+                nvf.Height == vf.Height &&
+                nvf.Data.Equals(vf.Data))
+                break;
+
+            vf = nvf;
+            Interlocked.Increment(ref _catchupSkips);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// §3.40h / A8 — upload (or reuse) the texture for <paramref name="vf"/>
+    /// and advance the internal <see cref="VideoPtsClock"/> when the
+    /// presentation clock override is not in control. Renderer natively
+    /// handles all GPU-uploadable formats (Rgba32, Bgra32, Nv12, Yuv420p,
+    /// Yuv422p10, Uyvy422, P010, Yuv444p, Gray8); unknown formats render
+    /// black upstream.
+    /// </summary>
+    private void PresentFrame(in VideoFrame vf, int fb, int viewportWidth, int viewportHeight, bool hasOverride)
+    {
+        ApplyAutoYuvHintsIfNeeded(vf.Width, vf.Height);
+
+        // §3.33 / A2 — identity-based reuse gate: ReferenceEquals on MemoryOwner
+        // plus Pts/W/H rules out the ArrayPool-rental false-match on
+        // `ReadOnlyMemory<byte>.Equals` (structural over array ref + offset + length).
+        bool sameAsUploaded = _hasUploadedFrame &&
+                              vf.Width == _lastUploadedWidth &&
+                              vf.Height == _lastUploadedHeight &&
+                              vf.Pts == _lastUploadedPts &&
+                              ReferenceEquals(vf.MemoryOwner, _lastUploadedMemoryOwner);
+
+        if (sameAsUploaded)
+        {
+            _renderer!.DrawLastTexture(fb, viewportWidth, viewportHeight);
+            Interlocked.Increment(ref _textureReuseDraws);
+        }
+        else
+        {
+            _renderer!.UploadAndDraw(vf, fb, viewportWidth, viewportHeight);
+            _hasUploadedFrame = true;
+            _lastUploadedWidth = vf.Width;
+            _lastUploadedHeight = vf.Height;
+            _lastUploadedPts = vf.Pts;
+            _lastUploadedData = vf.Data;
+            _lastUploadedMemoryOwner = vf.MemoryOwner;
+            Interlocked.Increment(ref _textureUploads);
+        }
+
+        if (!hasOverride)
+            _clock!.UpdateFromFrame(vf.Pts);
+        Interlocked.Increment(ref _presentedFrames);
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -608,6 +659,22 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         _clock?.Dispose();
     }
 
+    /// <summary>
+    /// Creates a clone endpoint that can be registered on the router and wired
+    /// into a per-source route, mirroring this parent's video output into a
+    /// secondary control. See `Doc/Clone-Sinks.md` for the full wiring contract
+    /// (§3.40a / S2, S4).
+    /// <para>
+    /// The clone is a standalone <see cref="IVideoEndpoint"/> — the router
+    /// delivers frames to it through the normal
+    /// <see cref="IVideoEndpoint.ReceiveFrame(in VideoFrameHandle)"/> path;
+    /// this parent does <b>not</b> tee frames internally. The returned clone
+    /// is tracked here so a parent <see cref="Dispose"/> cascades disposal as
+    /// a safety net; callers with finer control should
+    /// <c>RemoveRoute</c> + <c>UnregisterEndpoint</c> + <c>clone.Dispose()</c>
+    /// in that order before disposing the parent.
+    /// </para>
+    /// </summary>
     public AvaloniaOpenGlVideoCloneEndpoint CreateCloneSink(string? name = null)
     {
         if (!_isOpen)
@@ -642,5 +709,22 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         _renderer.SetYuvHints(resolvedMatrix, resolvedRange == YuvColorRange.Limited);
         _lastAutoRange = resolvedRange;
         _lastAutoMatrix = resolvedMatrix;
+    }
+
+    /// <summary>
+    /// §3.34 / A5 — applies user-pinned YUV hints to the renderer under the
+    /// GL context. Called at the top of <see cref="OnOpenGlRender"/> when a
+    /// setter has flipped <see cref="_yuvHintsDirty"/>. Auto-mode hints are
+    /// handled separately by <see cref="ApplyAutoYuvHintsIfNeeded"/>.
+    /// </summary>
+    private void ApplyPendingYuvHints()
+    {
+        if (_renderer == null)
+            return;
+
+        if (_hasYuvHintsOverride)
+            _renderer.SetYuvHints(_yuvColorMatrix, _yuvLimitedRange);
+        else
+            _renderer.ResetYuvHintsToAuto();
     }
 }

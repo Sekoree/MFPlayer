@@ -154,6 +154,42 @@ public sealed class SDL3VideoCloneEndpoint : IVideoEndpoint, IFormatCapabilities
         _latestFrame.Set(copied);
     }
 
+    /// <summary>
+    /// §3.38 / S8 — ref-counted zero-copy fast path. When the incoming frame is
+    /// backed by a <see cref="RefCountedVideoBuffer"/> (the common case now
+    /// that <see cref="AVRouter"/> produces handles), we
+    /// <see cref="VideoFrameHandle.Retain"/> and park the frame in
+    /// <see cref="_latestFrame"/> without allocating a new pool rental or
+    /// copying the pixels. <see cref="VideoFrameSlot.Set"/> disposes the
+    /// previously-held frame's <c>MemoryOwner</c>, which routes back to
+    /// <see cref="RefCountedVideoBuffer.Release"/>, closing the retain/release
+    /// pair deterministically.
+    ///
+    /// <para>
+    /// Non-ref-counted frames (legacy producers, test fixtures) fall back to
+    /// the copy path in the legacy overload so there is no behavioural
+    /// regression.
+    /// </para>
+    /// </summary>
+    public void ReceiveFrame(in VideoFrameHandle handle)
+    {
+        if (!_running || _disposed)
+            return;
+
+        if (!handle.IsRefCounted)
+        {
+            var legacy = handle.Frame;
+            ReceiveFrame(in legacy);
+            return;
+        }
+
+        if (handle.Frame.Data.Length <= 0)
+            return;
+
+        handle.Retain();
+        _latestFrame.Set(handle.Frame);
+    }
+
     private void RenderLoop()
     {
         if (!SDL.GLMakeCurrent(_window, _glContext))

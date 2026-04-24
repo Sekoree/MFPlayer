@@ -87,4 +87,21 @@ public interface IAudioEndpoint : IMediaEndpoint
     /// </para>
     /// </summary>
     AudioFormat? NegotiatedFormat => null;
+
+    /// <summary>
+    /// §5.5 — preferred router push cadence for this endpoint. When the
+    /// router registers an endpoint that advertises this value, it picks the
+    /// minimum across all registered endpoints as its effective push-tick
+    /// cadence, so a fast hardware endpoint doesn't have to wait for a slow
+    /// one to tick. <see langword="null"/> (default) means "no preference —
+    /// use <c>AVRouterOptions.InternalTickCadence</c>".
+    ///
+    /// <para>
+    /// Typical values: 5–10 ms for low-latency live / network audio,
+    /// 20–40 ms for file playback through deep hardware buffers. Values
+    /// below 1 ms are clamped to 1 ms so a misconfigured endpoint cannot
+    /// spin the push thread.
+    /// </para>
+    /// </summary>
+    TimeSpan? NominalTickCadence => null;
 }

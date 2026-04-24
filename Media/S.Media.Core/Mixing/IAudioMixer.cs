@@ -55,5 +55,25 @@ public interface IAudioMixer
     /// without hardware support. Review item M2 / §4.13.
     /// </summary>
     void FlushDenormalsToZero();
+
+    /// <summary>
+    /// §4.13 / M2 — counts the number of samples in <paramref name="buffer"/>
+    /// whose absolute value exceeds 1.0 (digital overflow relative to Float32
+    /// PCM's conventional full-scale range). Cheap enough to run on every
+    /// RT tick.
+    /// </summary>
+    int CountOverflows(ReadOnlySpan<float> buffer);
+
+    /// <summary>
+    /// §4.13 / M2 — applies a tanh-based soft-clipping curve that gently
+    /// rounds off samples outside <c>±threshold</c> so transient overshoots
+    /// distort musically instead of clipping hard. Samples inside the
+    /// threshold are untouched. Expect a small monotonic gain reduction on
+    /// high peaks — callers that want digitally-exact audio should leave
+    /// this off and rely on a limiter upstream.
+    /// </summary>
+    /// <param name="buffer">Interleaved PCM samples — modified in place.</param>
+    /// <param name="threshold">Linear amplitude above which soft-clipping engages. Default 0.98.</param>
+    void ApplySoftClip(Span<float> buffer, float threshold = 0.98f);
 }
 

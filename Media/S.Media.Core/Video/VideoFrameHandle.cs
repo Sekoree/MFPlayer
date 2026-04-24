@@ -87,6 +87,16 @@ public readonly struct VideoFrameHandle : IEquatable<VideoFrameHandle>
     public bool IsValid => Frame.Width > 0 && Frame.Height > 0;
 
     /// <summary>
+    /// <see langword="true"/> when the frame is backed by a
+    /// <see cref="RefCountedVideoBuffer"/> and <see cref="Retain"/> would
+    /// therefore succeed. Endpoints that support a zero-copy fast path
+    /// (clone sinks — §3.38, async GPU upload) gate on this before calling
+    /// <see cref="Retain"/>. Non-ref-counted frames MUST be copied during
+    /// the <c>ReceiveFrame</c> call.
+    /// </summary>
+    public bool IsRefCounted => RefBuffer is not null;
+
+    /// <summary>
     /// Increments the underlying refcount so the pool rental survives past
     /// the current <c>ReceiveFrame</c> call. The caller MUST call
     /// <see cref="Release"/> exactly once per <see cref="Retain"/>.
