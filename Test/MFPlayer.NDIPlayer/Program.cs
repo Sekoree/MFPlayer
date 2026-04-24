@@ -9,10 +9,8 @@
 
 using NDILib;
 using S.Media.Core.Audio;
-using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Media.Endpoints;
-using S.Media.Core.Routing;
+using S.Media.FFmpeg;
 using S.Media.NDI;
 using S.Media.PortAudio;
 
@@ -98,7 +96,6 @@ using (ndiRuntime)
     NDIDiscoveredSource[] sources;
     using (finder)
     {
-        // Poll up to 5 s in 1 s increments; stop early if sources appear.
         sources = [];
         for (int attempt = 0; attempt < 5; attempt++)
         {
@@ -142,7 +139,7 @@ using (ndiRuntime)
 
     Console.Write($"\nConnecting to '{selectedSource.Name}'… ");
 
-    int outChannels = Math.Min(device.MaxOutputChannels, 2); // cap to stereo
+    int outChannels = Math.Min(device.MaxOutputChannels, 2);
 
     NDISource ndiSource;
     try
@@ -153,7 +150,7 @@ using (ndiRuntime)
             Channels         = outChannels,
             QueueBufferDepth = NDILatencyPreset.FromQueueDepth(queueDepth),
             LowLatency       = lowLatencyPolling,
-            EnableVideo      = false   // audio-only path
+            EnableVideo      = false
         });
     }
     catch (Exception ex)
@@ -176,14 +173,10 @@ using (ndiRuntime)
         var audioChannel = ndiSource.AudioChannel;
         var srcFmt       = audioChannel.SourceFormat;
         var hwFmt        = new AudioFormat(srcFmt.SampleRate, Math.Min(srcFmt.Channels, outChannels));
-        var routeMap     = ChannelRouteMap.AutoStereoDownmix(srcFmt.Channels, hwFmt.Channels);
 
         Console.WriteLine($"  NDI audio:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
 
         // ── 8. Open PortAudio output ─────────────────────────────────────────
-        // PortAudioEndpoint.Create automatically falls back to the device's default
-        // sample rate if the requested rate isn't supported.  The AudioMixer
-        // resamples any source-rate ↔ output-rate mismatch transparently.
 
         Console.Write("Opening output device… ");
         PortAudioEndpoint output;
@@ -198,35 +191,30 @@ using (ndiRuntime)
         }
         using var _outputScope = output;
         Console.WriteLine("OK");
-
         Console.WriteLine($"  Output:     {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
 
-        using var router = new AVRouter();
-        var epId = router.RegisterEndpoint(output);
-        router.SetClock(output.Clock);
+        // ── 9. Build player pipeline ─────────────────────────────────────────
 
-        var inputId = router.RegisterAudioInput(audioChannel);
-        router.CreateRoute(inputId, epId, new AudioRouteOptions { ChannelMap = routeMap });
+        using var player = MediaPlayer.Create()
+            .WithAudioOutput(output)
+            .WithAudioInput(audioChannel)
+            .Build();
 
-        // ── 9. Start ─────────────────────────────────────────────────────────
+        // ── 10. Start ────────────────────────────────────────────────────────
 
         Console.Write("Starting… ");
         try
         {
             ndiSource.Start();
 
-            // Pre-buffer: let the capture thread fill a few ring chunks before opening
-            // the hardware stream.  Without this the RT callback fires on an empty ring and
-            // underruns repeatedly during the first ~300 ms of playback.
-            // 8 chunks × 1024 frames @ 48 kHz ≈ 170 ms of headroom; also absorbs OS
-            // scheduler jitter between the capture thread's Sleep wakeups.
+            // Pre-buffer: let the capture thread fill a few ring chunks before
+            // opening the hardware stream.
             Console.Write("buffering… ");
             using var preCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             try   { await ndiSource.WaitForAudioBufferAsync(8, preCts.Token); }
-            catch (OperationCanceledException) { /* timed out — proceed with whatever arrived */ }
+            catch (OperationCanceledException) { /* timed out — proceed */ }
 
-            await output.StartAsync();
-            await router.StartAsync();
+            await player.PlayAsync();
         }
         catch (Exception ex)
         {
@@ -242,29 +230,26 @@ using (ndiRuntime)
         var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-        // Console.ReadLine() returns null when stdin is at EOF (e.g. Rider's piped
-        // console after the user finishes the selection prompts).  Guard against that
-        // so the only way to stop is an actual Enter key-press or Ctrl+C.
         _ = Task.Run(() =>
         {
             while (!cts.IsCancellationRequested)
             {
                 var line = Console.ReadLine();
-                if (line != null)          // user pressed Enter
+                if (line != null)
                 {
                     cts.Cancel();
                     break;
                 }
-                Thread.Sleep(200);         // stdin at EOF — keep waiting for Ctrl+C
+                Thread.Sleep(200);
             }
         });
         try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); }
         catch (OperationCanceledException) { }
 
-        // ── 10. Stop ─────────────────────────────────────────────────────────
+        // ── 11. Stop ─────────────────────────────────────────────────────────
 
         Console.Write("\nStopping… ");
-        await output.StopAsync();
+        await player.StopAsync();
         ndiSource.StopClock();
         Console.WriteLine("Done.");
     }
@@ -308,5 +293,3 @@ static bool PickYesNo(string label, bool defaultValue)
         Console.WriteLine("  Please enter y/yes or n/no.");
     }
 }
-
-

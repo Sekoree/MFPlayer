@@ -30,32 +30,8 @@ public interface IAudioEndpoint : IMediaEndpoint
     /// <summary>
     /// Called by the graph to deliver mixed/forwarded audio.
     /// Implementations MUST be non-blocking on the RT thread.
-    /// <para>
-    /// <b>§3.50 / CH4 — prefer the PTS-aware overload:</b> this overload discards any
-    /// stream PTS, so endpoints that need to stamp media timecodes (NDI, SMPTE ST 2110,
-    /// recording muxers) MUST override the PTS-aware
-    /// <see cref="ReceiveBuffer(ReadOnlySpan{float}, int, AudioFormat, TimeSpan)"/>
-    /// overload instead. The default implementation of the PTS overload forwards here
-    /// so plain playback sinks (push-only PortAudio) continue to work unchanged, but the
-    /// forward is one-way: overriding this method alone silently skips PTS delivery.
-    /// A future release will mark this overload <c>[Obsolete]</c> once every in-tree
-    /// timecoded sink has been migrated — implementers of <b>new</b> timecoded sinks
-    /// should override the PTS overload today.
-    /// </para>
-    /// </summary>
-    void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format);
-
-    /// <summary>
-    /// Timestamped variant: delivers mixed audio together with the <b>stream-time PTS
-    /// of the first sample</b> in <paramref name="buffer"/>.  Sinks that need to emit
-    /// media timecodes (e.g. NDI, SMPTE ST 2110) should override this and ignore the
-    /// simpler <see cref="ReceiveBuffer(ReadOnlySpan{float}, int, AudioFormat)"/> path.
-    ///
-    /// <para>
-    /// The default implementation discards the PTS and forwards to
-    /// <see cref="ReceiveBuffer(ReadOnlySpan{float}, int, AudioFormat)"/> so plain
-    /// playback sinks continue to work unchanged.
-    /// </para>
+    /// Delivers audio together with the <b>stream-time PTS of the first sample</b>
+    /// in <paramref name="buffer"/>.
     /// </summary>
     /// <param name="buffer">Interleaved PCM data, <c>frameCount × format.Channels</c> samples.</param>
     /// <param name="frameCount">Number of frames in <paramref name="buffer"/>.</param>
@@ -65,14 +41,13 @@ public interface IAudioEndpoint : IMediaEndpoint
     /// the upstream channel's <c>Position</c> at the moment of the read.  May be
     /// <see cref="TimeSpan.Zero"/> before the first successful decoder read.
     /// </param>
-    void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format, TimeSpan sourcePts)
-        => ReceiveBuffer(buffer, frameCount, format);
+    void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format, TimeSpan sourcePts);
 
     /// <summary>
     /// Optional: the audio format this push endpoint prefers to receive. When
     /// non-<see langword="null"/>, the router uses this as the target of per-route
     /// resampling/channel mapping so
-    /// <see cref="ReceiveBuffer(ReadOnlySpan{float}, int, AudioFormat)"/> is called at the
+    /// <see cref="ReceiveBuffer(ReadOnlySpan{float}, int, AudioFormat, TimeSpan)"/> is called at the
     /// negotiated rate/channel count with no further conversion expected.
     ///
     /// <para>

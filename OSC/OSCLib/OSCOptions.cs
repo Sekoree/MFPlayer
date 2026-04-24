@@ -101,7 +101,6 @@ public sealed class OSCServerOptions
     /// available for application-level scheduling inside message handlers.
     /// </para>
     /// </summary>
-    [Obsolete("This property is not yet consumed by the server dispatch pipeline. All bundles are dispatched immediately. Reserved for future timetag scheduling support.")]
     public bool IgnoreTimeTagScheduling { get; init; } = true;
 
     /// <summary>

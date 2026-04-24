@@ -20,6 +20,7 @@ public record struct HudStats
     public long BlackFrames;
     public long DroppedFrames;
     public TimeSpan ClockPosition;
+    public string? ClockName;
     public TimeSpan Drift;
     public string? ExtraLine1;
     public string? ExtraLine2;
@@ -43,6 +44,8 @@ public record struct HudStats
         if (DroppedFrames > 0)
             lines.Add($"dropped: {DroppedFrames}");
         lines.Add($"clock: {ClockPosition:hh\\:mm\\:ss\\.fff}");
+        if (!string.IsNullOrWhiteSpace(ClockName))
+            lines.Add($"clock src: {ClockName}");
         if (Drift != TimeSpan.Zero)
             lines.Add($"drift: {Drift.TotalMilliseconds:+0.0;-0.0}ms");
         if (ExtraLine1 is not null) lines.Add(ExtraLine1);
@@ -50,4 +53,3 @@ public record struct HudStats
         return lines.ToArray();
     }
 }
-

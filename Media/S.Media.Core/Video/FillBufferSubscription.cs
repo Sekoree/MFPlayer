@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
 
@@ -21,6 +22,8 @@ internal sealed class FillBufferSubscription : IVideoSubscription
     private readonly IVideoChannel _channel;
     private readonly VideoSubscriptionOptions _options;
     private bool _disposed;
+    // §3.48 / CH1 — single-reader reentrancy guard (Debug builds only).
+    private int _fillBufferActive;
 
     public FillBufferSubscription(IVideoChannel channel, VideoSubscriptionOptions options)
     {
@@ -38,7 +41,19 @@ internal sealed class FillBufferSubscription : IVideoSubscription
     public event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 
     public int FillBuffer(Span<VideoFrame> dest, int frameCount)
-        => _disposed ? 0 : _channel.FillBuffer(dest, frameCount);
+    {
+        // §3.48 / CH1 — assert single-reader invariant in debug builds.
+        Debug.Assert(Interlocked.Exchange(ref _fillBufferActive, 1) == 0,
+            "FillBufferSubscription.FillBuffer called concurrently — the contract requires single-threaded pull.");
+        try
+        {
+            return _disposed ? 0 : _channel.FillBuffer(dest, frameCount);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _fillBufferActive, 0);
+        }
+    }
 
     private readonly VideoFrame[] _oneFrame = new VideoFrame[1];
 

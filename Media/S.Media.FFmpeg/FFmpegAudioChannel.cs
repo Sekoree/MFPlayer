@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
@@ -62,6 +63,12 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     private long     _positionTicks; // interpolated stream-PTS of the last sample consumed
     private long     _framesInRing;   // frame-accurate ring occupancy (not chunk count)
 
+    // §3.49 / seek — bumped by FillBuffer (RT thread) after it has drained any
+    // stale chunks left in the ring by a user-thread Seek. The drop-on-next-fill
+    // mechanism avoids racing the RT callback against user-thread ring mutation:
+    // whoever bumps _seekEpoch signals the RT thread, which owns the drain.
+    private int      _rtObservedSeekEpoch;
+
     // ── IAudioChannel ─────────────────────────────────────────────────────
     public Guid        Id           { get; } = Guid.NewGuid();
     public AudioFormat SourceFormat { get; private set; }
@@ -92,6 +99,9 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     public event EventHandler? EndOfStream;
 
     private bool _disposed;
+
+    // §3.48 / CH1 — single-reader reentrancy guard (Debug builds only).
+    private int _fillBufferActive;
 
     // §4.7 — optional target format the decoder should produce directly,
     // eliminating the router's per-route resampler when source == endpoint.
@@ -204,11 +214,10 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
     public void ApplySeekEpoch(long seekPositionTicks)
     {
         ffmpeg.avcodec_flush_buffers(_codecCtx);
-        ReturnCurrentChunkToPool();
-        _currentChunk  = null;
-        _currentOffset = 0;
-        _currentChunkSamples = 0;
-        _currentChunkStartPtsTicks = seekPositionTicks;
+        // _currentChunk / _currentOffset / _currentChunkSamples are owned by the
+        // RT pull thread (FillBuffer). The RT thread observes the bumped
+        // LatestSeekEpoch and discards its own mid-copy chunk on the next
+        // callback — we do NOT touch those fields here, which would race.
         while (_ringReader.TryRead(out var chunk))
             ReturnChunkToPool(chunk.Buffer);
         Interlocked.Exchange(ref _framesInRing, 0);
@@ -338,57 +347,85 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
 
     public int FillBuffer(Span<float> dest, int frameCount)
     {
-        int channels     = SourceFormat.Channels;
-        int sampleRate   = SourceFormat.SampleRate;
-        int totalSamples = frameCount * channels;
-        int filled       = 0;
-
-        while (filled < totalSamples)
+        // §3.48 / CH1 — assert single-reader invariant in debug builds.
+        Debug.Assert(Interlocked.Exchange(ref _fillBufferActive, 1) == 0,
+            "FFmpegAudioChannel.FillBuffer called concurrently — the contract requires single-threaded pull.");
+        try
         {
-            if (_currentChunk == null || _currentOffset >= _currentChunkSamples)
+            int channels     = SourceFormat.Channels;
+            int sampleRate   = SourceFormat.SampleRate;
+            int totalSamples = frameCount * channels;
+            int filled       = 0;
+
+            // Seek-epoch drain (RT thread, single-owner of chunk state).
+            // When a user thread bumps the decoder's seek epoch, the RT
+            // callback is the only thread that can safely discard the
+            // pre-seek chunk it was mid-copying plus any pre-seek chunks
+            // still queued in the ring. Output silence this callback and
+            // let the decode worker refill with post-seek audio.
+            int latestEpoch = LatestSeekEpoch;
+            if (latestEpoch != _rtObservedSeekEpoch)
             {
-                ReturnCurrentChunkToPool();
-                if (!_ringReader.TryRead(out var chunk))
-                {
-                    dest[filled..].Clear();
-                    int consumed = filled / channels;
-                    int dropped  = (totalSamples - filled) / channels;
-                    if (consumed > 0)
-                    {
-                        Interlocked.Add(ref _framesConsumed, consumed);
-                        Interlocked.Add(ref _framesInRing, -consumed);
-                        UpdatePositionTicks(sampleRate, channels);
-                    }
-                    if (dropped > 0)
-                    {
-                        var state = (Self: this, Pos: Position, Dropped: dropped);
-                        ThreadPool.QueueUserWorkItem(static s =>
-                        {
-                            var (self, pos, d) = ((FFmpegAudioChannel, TimeSpan, int))s!;
-                            self.BufferUnderrun?.Invoke(self, new BufferUnderrunEventArgs(pos, d));
-                        }, state);
-                    }
-                    return consumed;
-                }
-                _currentChunkSamples = chunk.Samples;
-                _currentChunk = chunk.Buffer;
-                _currentOffset = 0;
-                _currentChunkStartPtsTicks = chunk.StartPtsTicks;
+                ReturnCurrentChunkToPool(); // nulls _currentChunk + offset + samples
+                while (_ringReader.TryRead(out var stale))
+                    ReturnChunkToPool(stale.Buffer);
+                Interlocked.Exchange(ref _framesInRing, 0);
+                _rtObservedSeekEpoch = latestEpoch;
+                dest.Clear();
+                return 0;
             }
 
-            int available = _currentChunkSamples - _currentOffset;
-            int needed    = totalSamples - filled;
-            int toCopy    = Math.Min(available, needed);
+            while (filled < totalSamples)
+            {
+                if (_currentChunk == null || _currentOffset >= _currentChunkSamples)
+                {
+                    ReturnCurrentChunkToPool();
+                    if (!_ringReader.TryRead(out var chunk))
+                    {
+                        dest[filled..].Clear();
+                        int consumed = filled / channels;
+                        int dropped  = (totalSamples - filled) / channels;
+                        if (consumed > 0)
+                        {
+                            Interlocked.Add(ref _framesConsumed, consumed);
+                            Interlocked.Add(ref _framesInRing, -consumed);
+                            UpdatePositionTicks(sampleRate, channels);
+                        }
+                        if (dropped > 0)
+                        {
+                            var state = (Self: this, Pos: Position, Dropped: dropped);
+                            ThreadPool.QueueUserWorkItem(static s =>
+                            {
+                                var (self, pos, d) = ((FFmpegAudioChannel, TimeSpan, int))s!;
+                                self.BufferUnderrun?.Invoke(self, new BufferUnderrunEventArgs(pos, d));
+                            }, state);
+                        }
+                        return consumed;
+                    }
+                    _currentChunkSamples = chunk.Samples;
+                    _currentChunk = chunk.Buffer;
+                    _currentOffset = 0;
+                    _currentChunkStartPtsTicks = chunk.StartPtsTicks;
+                }
 
-            _currentChunk.AsSpan(_currentOffset, toCopy).CopyTo(dest[filled..]);
-            filled         += toCopy;
-            _currentOffset += toCopy;
+                int available = _currentChunkSamples - _currentOffset;
+                int needed    = totalSamples - filled;
+                int toCopy    = Math.Min(available, needed);
+
+                _currentChunk.AsSpan(_currentOffset, toCopy).CopyTo(dest[filled..]);
+                filled         += toCopy;
+                _currentOffset += toCopy;
+            }
+
+            Interlocked.Add(ref _framesConsumed, frameCount);
+            Interlocked.Add(ref _framesInRing, -frameCount);
+            UpdatePositionTicks(sampleRate, channels);
+            return frameCount;
         }
-
-        Interlocked.Add(ref _framesConsumed, frameCount);
-        Interlocked.Add(ref _framesInRing, -frameCount);
-        UpdatePositionTicks(sampleRate, channels);
-        return frameCount;
+        finally
+        {
+            Interlocked.Exchange(ref _fillBufferActive, 0);
+        }
     }
 
     /// <summary>
@@ -412,11 +449,11 @@ internal sealed unsafe class FFmpegAudioChannel : IAudioChannel, IDecodableChann
 
     public void Seek(TimeSpan position)
     {
-        ReturnCurrentChunkToPool();
-        _currentChunk  = null;
-        _currentOffset = 0;
-        _currentChunkSamples = 0;
-        _currentChunkStartPtsTicks = position.Ticks;
+        // Mirror of ApplySeekEpoch — called by FFmpegDecoder.Seek on the user
+        // thread so Position updates before the decode worker picks up the
+        // flush sentinel. _currentChunk is owned by the RT FillBuffer caller
+        // and MUST NOT be touched here; the RT path drops it on the next
+        // callback when it observes the bumped LatestSeekEpoch.
         while (_ringReader.TryRead(out var chunk))
             ReturnChunkToPool(chunk.Buffer);
         Interlocked.Exchange(ref _framesInRing, 0);

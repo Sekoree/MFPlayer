@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Rendering;
+using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
@@ -38,7 +39,14 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
     private volatile IMediaClock? _presentationClockOverride;
     private long _presentationClockOriginTicks;
     private int _hasPresentationClockOrigin;
+    // HUD-only drift baseline for cross-domain clock/PTS pairs (e.g. PortAudio
+    // clock vs absolute NDI PTS). Uses atomic/volatile publication because
+    // public API paths can reset from non-render threads.
+    private long _hudDriftClockOriginTicks;
+    private long _hudDriftPtsOriginTicks;
+    private int _hasHudDriftOrigin;
     private VideoFormat _outputFormat;
+    private VideoFormat _inputFormat;
     private bool _hasYuvHintsOverride;
     private bool _yuvBt709;
     private bool _yuvLimitedRange;
@@ -47,6 +55,9 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
     private bool _isOpen;
     private bool _isRunning;
     private bool _disposed;
+    private long _renderPacingIntervalTicks;
+    private long _nextRenderRequestDueTicks;
+    private int _renderRequestScheduled;
 
     private long _renderCalls;
     private long _presentedFrames;
@@ -57,6 +68,14 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
     private long _textureUploads;
     private long _textureReuseDraws;
     private long _catchupSkips;
+
+    // HUD FPS measurement (render thread only).
+    private long _hudLastTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    private int _hudFrameCount;
+    private double _hudFps;
+    private long _hudLastUniqueTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    private long _hudLastUniqueFrames;
+    private double _hudUniqueFps;
 
     private bool _hasUploadedFrame;
     private int _lastUploadedWidth;
@@ -120,10 +139,19 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
     public VideoFormat OutputFormat => _outputFormat;
 
     /// <summary>
-    /// When <see langword="true"/>, a diagnostic HUD overlay is rendered on top of the video.
+    /// When <see langword="true"/>, a diagnostic HUD overlay is rendered on top
+    /// of the video, including clock source and frame drift.
     /// Thread-safe: can be toggled from any thread at any time.
     /// </summary>
     public bool ShowHud { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, re-render requests are paced to the current
+    /// input FPS hint instead of continuously ticking at display cadence.
+    /// This reduces CPU/GPU work for low-FPS sources. Default is
+    /// <see langword="false"/>.
+    /// </summary>
+    public bool LimitRenderToInputFps { get; set; }
 
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
 
@@ -245,14 +273,28 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
     }
 
     /// <summary>
+    /// Updates the source-format hint used by HUD diagnostics.
+    /// Useful for live sources whose format/FPS can change at runtime.
+    /// </summary>
+    public void SetInputFormatHint(VideoFormat format)
+    {
+        lock (_stateLock)
+            _inputFormat = format;
+    }
+
+    /// <summary>
     /// Overrides the render-loop presentation clock.
     /// Set this to an audio hardware clock to keep video pacing aligned with audio.
     /// </summary>
     public void OverridePresentationClock(IMediaClock? clock)
     {
         _presentationClockOverride = clock;
-        Volatile.Write(ref _hasPresentationClockOrigin, 0);
-        Volatile.Write(ref _presentationClockOriginTicks, 0);
+        // Clear ticks first then flag so observers can never see a stale origin.
+        Interlocked.Exchange(ref _presentationClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hasPresentationClockOrigin, 0);
+        Interlocked.Exchange(ref _hudDriftClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hudDriftPtsOriginTicks, 0);
+        Interlocked.Exchange(ref _hasHudDriftOrigin, 0);
     }
 
     /// <summary>
@@ -318,6 +360,8 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
                 throw new InvalidOperationException("Output is already open.");
 
             _outputFormat = format;
+            lock (_stateLock)
+                _inputFormat = format;
             _clock = new VideoPtsClock(frameRate: _outputFormat.FrameRate > 0 ? _outputFormat.FrameRate : 30);
             _isOpen = true;
         }
@@ -338,10 +382,16 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
 
         _clock!.Start();
         _isRunning = true;
-        Volatile.Write(ref _hasPresentationClockOrigin, 0);
-        Volatile.Write(ref _presentationClockOriginTicks, 0);
+        Volatile.Write(ref _renderPacingIntervalTicks, 0);
+        Volatile.Write(ref _nextRenderRequestDueTicks, 0);
+        Interlocked.Exchange(ref _renderRequestScheduled, 0);
+        Interlocked.Exchange(ref _presentationClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hasPresentationClockOrigin, 0);
+        Interlocked.Exchange(ref _hudDriftClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hudDriftPtsOriginTicks, 0);
+        Interlocked.Exchange(ref _hasHudDriftOrigin, 0);
         Log.LogInformation("AvaloniaOpenGlVideoEndpoint started");
-        RequestNextFrameRendering();
+        ScheduleNextFrameRendering(forceImmediate: true);
         return Task.CompletedTask;
     }
 
@@ -353,6 +403,9 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         Log.LogInformation("Stopping AvaloniaOpenGlVideoEndpoint");
         _isRunning = false;
         _clock?.Stop();
+        Volatile.Write(ref _renderPacingIntervalTicks, 0);
+        Volatile.Write(ref _nextRenderRequestDueTicks, 0);
+        Interlocked.Exchange(ref _renderRequestScheduled, 0);
         // Release the last-uploaded frame reference so the ArrayPool rental can be returned.
         _hasUploadedFrame = false;
         _lastUploadedData = default;
@@ -398,6 +451,8 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         _hasUploadedFrame = false;
         _lastUploadedData = default;
         _lastUploadedMemoryOwner = null;
+        lock (_stateLock)
+            _inputFormat = _outputFormat;
         // §3.35 / A4, A7 — auto-hint tracking must return to `Auto` so the next
         // OnOpenGlInit re-applies resolved hints instead of believing they are
         // already live on a brand-new renderer.
@@ -427,6 +482,12 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
         // §3.36 — track whether we actually uploaded a frame this tick so the
         // finally block can decide whether to re-arm the render timer.
         bool uploadedThisTick = false;
+        TimeSpan clockPosition = TimeSpan.Zero;
+        TimeSpan hudClockPosition = TimeSpan.Zero;
+        TimeSpan hudDrift = TimeSpan.Zero;
+        string hudClockName = ((_presentationClockOverride ?? _clock)?.GetType().Name) ?? "n/a";
+        VideoFrame hudFrame = default;
+        bool hasHudFrame = false;
 
         try
         {
@@ -437,18 +498,37 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
                 return;
             }
 
-            var (_, clockPosition, hasOverride) = ResolvePresentationClock();
+            var (clock, resolvedClockPosition, hasOverride, resolvedHudClockPosition) = ResolvePresentationClock();
+            clockPosition = resolvedClockPosition;
+            hudClockPosition = resolvedHudClockPosition;
+            hudClockName = hasOverride
+                ? $"{clock.GetType().Name} (override)"
+                : clock.GetType().Name;
 
             if (TryPullFrameWithCatchUp(clockPosition, out VideoFrame vf))
             {
                 PresentFrame(in vf, fb, viewportWidth, viewportHeight, hasOverride);
                 uploadedThisTick = true;
+                hudDrift = hasOverride
+                    ? ComputeHudRelativeDrift(clockPosition, vf.Pts)
+                    : clockPosition - vf.Pts;
+                hudFrame = vf;
+                hasHudFrame = true;
             }
             else
             {
                 _renderer.DrawBlack(fb, viewportWidth, viewportHeight);
                 Interlocked.Increment(ref _blackFrames);
+                if (_hasUploadedFrame)
+                {
+                    hudDrift = hasOverride
+                        ? ComputeHudRelativeDrift(clockPosition, _lastUploadedPts)
+                        : clockPosition - _lastUploadedPts;
+                }
             }
+
+            if (ShowHud)
+                DrawHudOverlay(fb, viewportWidth, viewportHeight, hudClockPosition, hudClockName, hasHudFrame, in hudFrame, hudDrift);
         }
         catch (Exception ex)
         {
@@ -465,21 +545,110 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
             // upload actually happened (or LiveMode is on). The previous
             // unconditional RequestNextFrameRendering caused a busy-loop when
             // the mixer had no new frame, pinning the UI thread to 100%.
-            if (_isRunning && (uploadedThisTick || LiveMode))
-                RequestNextFrameRendering();
+            if (_isRunning)
+            {
+                if (uploadedThisTick || LiveMode)
+                {
+                    ScheduleNextFrameRendering();
+                }
+                else if (!_hasUploadedFrame)
+                {
+                    // Bootstrap pull mode: if the very first frame isn't ready on
+                    // the initial tick, keep polling at a low cadence so playback
+                    // can start once decode produces data (instead of dead-starting
+                    // at clock/source = 0 forever).
+                    QueueRenderRequest(TimeSpan.FromMilliseconds(5));
+                }
+            }
         }
+    }
+
+    private void DrawHudOverlay(
+        int fb,
+        int viewportWidth,
+        int viewportHeight,
+        TimeSpan hudClockPosition,
+        string clockName,
+        bool hasFrame,
+        in VideoFrame frame,
+        TimeSpan drift)
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        double elapsed = (double)(now - _hudLastTimestamp) / System.Diagnostics.Stopwatch.Frequency;
+        _hudFrameCount++;
+        if (elapsed >= 1.0)
+        {
+            _hudFps = _hudFrameCount / elapsed;
+            _hudFrameCount = 0;
+            _hudLastTimestamp = now;
+
+            long uniqueNow = Interlocked.Read(ref _textureUploads);
+            double uniqueElapsed = (double)(now - _hudLastUniqueTimestamp) / System.Diagnostics.Stopwatch.Frequency;
+            if (uniqueElapsed > 0.0)
+                _hudUniqueFps = (uniqueNow - _hudLastUniqueFrames) / uniqueElapsed;
+            _hudLastUniqueFrames = uniqueNow;
+            _hudLastUniqueTimestamp = now;
+        }
+
+        VideoFormat inputFormatSnapshot;
+        lock (_stateLock)
+        {
+            if (hasFrame)
+            {
+                int fpsNum = _inputFormat.FrameRateNumerator > 0 ? _inputFormat.FrameRateNumerator : 30000;
+                int fpsDen = _inputFormat.FrameRateDenominator > 0 ? _inputFormat.FrameRateDenominator : 1001;
+                _inputFormat = new VideoFormat(frame.Width, frame.Height, frame.PixelFormat, fpsNum, fpsDen);
+            }
+            inputFormatSnapshot = _inputFormat;
+        }
+
+        int inputWidth = hasFrame ? frame.Width : (_lastUploadedWidth > 0 ? _lastUploadedWidth : inputFormatSnapshot.Width);
+        int inputHeight = hasFrame ? frame.Height : (_lastUploadedHeight > 0 ? _lastUploadedHeight : inputFormatSnapshot.Height);
+        PixelFormat inputPixelFormat = hasFrame
+            ? frame.PixelFormat
+            : (_hasUploadedFrame ? inputFormatSnapshot.PixelFormat : _outputFormat.PixelFormat);
+
+        double displayFps = _hudFps;
+        if (displayFps < 0 || double.IsNaN(displayFps) || double.IsInfinity(displayFps))
+            displayFps = 0;
+        double contentFps = _hudUniqueFps;
+        if (contentFps < 0 || double.IsNaN(contentFps) || double.IsInfinity(contentFps))
+            contentFps = 0;
+        double inputFps = inputFormatSnapshot.FrameRate;
+
+        var stats = new HudStats
+        {
+            Width = _outputFormat.Width,
+            Height = _outputFormat.Height,
+            PixelFormat = _outputFormat.PixelFormat,
+            Fps = displayFps,
+            InputWidth = inputWidth,
+            InputHeight = inputHeight,
+            InputFps = inputFps,
+            InputPixelFormat = inputPixelFormat,
+            PresentedFrames = Interlocked.Read(ref _presentedFrames),
+            BlackFrames = Interlocked.Read(ref _blackFrames),
+            DroppedFrames = Interlocked.Read(ref _catchupSkips),
+            ClockPosition = hudClockPosition,
+            ClockName = clockName,
+            Drift = drift,
+            ExtraLine1 = contentFps > 0
+                ? $"fps content: {contentFps:F1}  display: {displayFps:F1}"
+                : $"fps content: n/a  display: {displayFps:F1}",
+            ExtraLine2 = $"reuse: {Interlocked.Read(ref _textureReuseDraws)}  uploads: {Interlocked.Read(ref _textureUploads)}",
+        };
+
+        _renderer!.DrawHud(stats.ToLines(), fb, viewportWidth, viewportHeight);
     }
 
     /// <summary>
     /// §3.40h / A8 — resolve the presentation clock and compute the tick's
-    /// clock position, applying the <see cref="_presentationClockOverride"/>
-    /// origin offset so the override appears to start at zero on the first
-    /// call. Returns the clock, the normalised position, and whether the
-    /// override path was active (the override owner drives PTS updates
-    /// externally, so the internal clock's <c>UpdateFromFrame</c> must be
-    /// skipped).
+    /// clock position. The raw clock position is returned for scheduling, while
+    /// a HUD-only display position is normalised to 0 for override clocks so
+    /// absolute domains remain readable in the overlay.
+    /// Returns the clock, raw position, override flag, and HUD display position.
     /// </summary>
-    private (IMediaClock Clock, TimeSpan Position, bool HasOverride) ResolvePresentationClock()
+    private (IMediaClock Clock, TimeSpan Position, bool HasOverride, TimeSpan HudPosition) ResolvePresentationClock()
     {
         var externalClock = _presentationClockOverride;
         var presentationClock = externalClock ?? _clock;
@@ -487,6 +656,7 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
             throw new InvalidOperationException("Presentation clock is not available.");
 
         var clockPosition = presentationClock.Position;
+        var hudClockPosition = clockPosition;
         if (externalClock != null)
         {
             long rawTicks = clockPosition.Ticks;
@@ -498,10 +668,10 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
             long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
             long relTicks = rawTicks - originTicks;
             if (relTicks < 0) relTicks = 0;
-            clockPosition = TimeSpan.FromTicks(relTicks);
+            hudClockPosition = TimeSpan.FromTicks(relTicks);
         }
 
-        return (presentationClock, clockPosition, externalClock != null);
+        return (presentationClock, clockPosition, externalClock != null, hudClockPosition);
     }
 
     /// <summary>
@@ -613,8 +783,107 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
             // is re-drawn (the conditional re-arm in OnOpenGlRender's finally
             // would otherwise never fire without an upload).
             if (_isRunning)
-                RequestNextFrameRendering();
+                ScheduleNextFrameRendering(forceImmediate: true);
         }
+    }
+
+    private void ScheduleNextFrameRendering(bool forceImmediate = false)
+    {
+        if (!_isRunning || _disposed)
+            return;
+
+        if (forceImmediate || !LimitRenderToInputFps || !TryGetInputFrameIntervalTicks(out long intervalTicks))
+        {
+            Volatile.Write(ref _renderPacingIntervalTicks, 0);
+            Volatile.Write(ref _nextRenderRequestDueTicks, 0);
+            QueueRenderRequest(TimeSpan.Zero);
+            return;
+        }
+
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long previousInterval = Volatile.Read(ref _renderPacingIntervalTicks);
+        if (previousInterval != intervalTicks)
+        {
+            Volatile.Write(ref _renderPacingIntervalTicks, intervalTicks);
+            Volatile.Write(ref _nextRenderRequestDueTicks,
+                RenderCadenceHelper.InitialDue(now, intervalTicks, immediateFirstTick: false));
+        }
+
+        long due = Volatile.Read(ref _nextRenderRequestDueTicks);
+        if (due <= 0)
+            due = RenderCadenceHelper.InitialDue(now, intervalTicks, immediateFirstTick: false);
+        due = RenderCadenceHelper.NormalizeDue(
+            due, now, intervalTicks, RenderCadenceHelper.LateTickPolicy.WaitForNextBoundary);
+        TimeSpan delay = RenderCadenceHelper.ComputeDelay(now, due);
+
+        if (QueueRenderRequest(delay))
+            Volatile.Write(ref _nextRenderRequestDueTicks, due + intervalTicks);
+    }
+
+    private bool QueueRenderRequest(TimeSpan delay)
+    {
+        if (Interlocked.CompareExchange(ref _renderRequestScheduled, 1, 0) != 0)
+            return false;
+
+        if (delay <= TimeSpan.Zero)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                Interlocked.Exchange(ref _renderRequestScheduled, 0);
+                if (_isRunning && !_disposed)
+                    RequestNextFrameRendering();
+            }, DispatcherPriority.Render);
+            return true;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                long due = System.Diagnostics.Stopwatch.GetTimestamp() +
+                           (long)Math.Ceiling(delay.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+                while (true)
+                {
+                    long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                    long remaining = due - now;
+                    if (remaining <= 0)
+                        break;
+
+                    double remainingMs = remaining * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    if (remainingMs >= 2.0)
+                    {
+                        // Leave a small tail for sub-ms spin/yield correction so
+                        // timer quantization does not systematically run fast.
+                        double sleepMs = Math.Min(5.0, Math.Max(1.0, remainingMs - 1.0));
+                        await Task.Delay(TimeSpan.FromMilliseconds(sleepMs)).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        Thread.Yield();
+                    }
+                }
+            }
+            finally
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    Interlocked.Exchange(ref _renderRequestScheduled, 0);
+                    if (_isRunning && !_disposed)
+                        RequestNextFrameRendering();
+                }, DispatcherPriority.Render);
+            }
+        });
+
+        return true;
+    }
+
+    private bool TryGetInputFrameIntervalTicks(out long intervalTicks)
+    {
+        VideoFormat format;
+        lock (_stateLock)
+            format = _inputFormat;
+
+        return RenderCadenceHelper.TryGetFrameIntervalTicks(format.FrameRate, out intervalTicks);
     }
 
     private void UpdateRenderScalingFromUIThread()
@@ -726,5 +995,23 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
             _renderer.SetYuvHints(_yuvColorMatrix, _yuvLimitedRange);
         else
             _renderer.ResetYuvHintsToAuto();
+    }
+
+    private TimeSpan ComputeHudRelativeDrift(TimeSpan rawClockPosition, TimeSpan framePts)
+    {
+        long clockTicks = rawClockPosition.Ticks;
+        if (clockTicks < 0) clockTicks = 0;
+        long ptsTicks = framePts.Ticks;
+
+        if (Interlocked.CompareExchange(ref _hasHudDriftOrigin, 1, 0) == 0)
+        {
+            Volatile.Write(ref _hudDriftClockOriginTicks, clockTicks);
+            Volatile.Write(ref _hudDriftPtsOriginTicks, ptsTicks);
+            return TimeSpan.Zero;
+        }
+
+        long relClockTicks = clockTicks - Volatile.Read(ref _hudDriftClockOriginTicks);
+        long relPtsTicks = ptsTicks - Volatile.Read(ref _hudDriftPtsOriginTicks);
+        return TimeSpan.FromTicks(relClockTicks - relPtsTicks);
     }
 }

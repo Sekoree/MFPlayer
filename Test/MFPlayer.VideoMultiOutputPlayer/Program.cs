@@ -8,14 +8,12 @@
 
 using FFmpeg.AutoGen;
 using NDILib;
-using S.Media.FFmpeg;
-using S.Media.NDI;
 using S.Media.Core.Audio;
-using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
-using S.Media.Core.Routing;
 using S.Media.Core.Video;
+using S.Media.FFmpeg;
+using S.Media.NDI;
 using S.Media.SDL3;
 
 static NDIEndpointPreset ParseNDIPreset(string? text)
@@ -26,21 +24,6 @@ static NDIEndpointPreset ParseNDIPreset(string? text)
     if (s.Equals("lowlatency", StringComparison.OrdinalIgnoreCase) || s.Equals("low", StringComparison.OrdinalIgnoreCase) || s.Equals("l", StringComparison.OrdinalIgnoreCase))
         return NDIEndpointPreset.LowLatency;
     return NDIEndpointPreset.Balanced;
-}
-
-static ChannelRouteMap BuildAudioRouteMap(int srcChannels, int dstChannels)
-{
-    var b = new ChannelRouteMap.Builder();
-    if (srcChannels == 1 && dstChannels >= 2)
-    {
-        b.Route(0, 0).Route(0, 1);
-    }
-    else
-    {
-        int common = Math.Min(srcChannels, dstChannels);
-        for (int i = 0; i < common; i++) b.Route(i, i);
-    }
-    return b.Build();
 }
 
 Console.WriteLine("╔══════════════════════════════════════════╗");
@@ -110,12 +93,9 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    using var router = new AVRouter();
-    var videoEpId = router.RegisterEndpoint(videoOutput);
-    router.SetClock(videoOutput.Clock);
-
-    var videoInputId = router.RegisterVideoInput(videoChannel);
-    router.CreateRoute(videoInputId, videoEpId);
+    var playerBuilder = MediaPlayer.Create()
+        .WithVideoOutput(videoOutput)
+        .WithVideoInput(videoChannel);
 
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
@@ -155,12 +135,10 @@ using (decoder)
                 else
                 {
                     AudioFormat? ndiAudioFormat = null;
-                    ChannelRouteMap? routeMap = null;
                     if (audioChannel != null)
                     {
                         var srcAudio = audioChannel.SourceFormat;
                         ndiAudioFormat = new AudioFormat(48000, Math.Min(srcAudio.Channels, 2));
-                        routeMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
                     }
 
                     ndiSink = new NDIAVEndpoint(
@@ -172,15 +150,9 @@ using (decoder)
                         videoPoolCount: 0,
                         videoMaxPendingFrames: 0,
                         audioFramesPerBuffer: 1024);
-                    var ndiEpId = router.RegisterEndpoint(ndiSink);
-                    router.CreateRoute(videoInputId, ndiEpId);
-                    await ndiSink.StartAsync();
-
-                    if (audioChannel != null && routeMap != null)
-                    {
-                        var audioInputId = router.RegisterAudioInput(audioChannel);
-                        router.CreateRoute(audioInputId, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
-                    }
+                    playerBuilder.WithAVOutput(ndiSink);
+                    if (audioChannel != null)
+                        playerBuilder.WithAudioInput(audioChannel);
 
                     Console.WriteLine($"  NDI sink enabled: {senderName} ({preset})");
                     if (audioChannel != null)
@@ -189,6 +161,8 @@ using (decoder)
             }
         }
     }
+
+    using var player = playerBuilder.Build();
 
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -200,8 +174,7 @@ using (decoder)
     };
 
     decoder.Start();
-    await videoOutput.StartAsync();
-    await router.StartAsync();
+    await player.PlayAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Targets: SDL3 leader" + (ndiSink != null ? " + NDI sink" : string.Empty));
@@ -252,13 +225,7 @@ using (decoder)
     Console.Write("\nStopping... ");
     cts.Cancel();
     try { await statsTask; } catch (OperationCanceledException) { }
-    await videoOutput.StopAsync();
-
-    if (ndiSink != null)
-    {
-        await ndiSink.StopAsync();
-        ndiSink.Dispose();
-    }
+    await player.StopAsync();
 
     ndiSender?.Dispose();
     ndiRuntime?.Dispose();

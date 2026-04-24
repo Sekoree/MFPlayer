@@ -36,7 +36,6 @@ internal static unsafe partial class Native
 
     /// <summary>Returns a textual description of the current PortAudio build.</summary>
     /// <remarks>Deprecated as of PortAudio 19.5.0 — prefer <see cref="Pa_GetVersionInfo"/> and read <c>VersionText</c>.</remarks>
-    [Obsolete("Deprecated since PortAudio 19.5.0. Use Pa_GetVersionInfo().VersionText instead.")]
     public static string? Pa_GetVersionText()
     {
         if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_GetVersionText));
@@ -267,7 +266,6 @@ internal static unsafe partial class Native
     public static PaError Pa_GetSampleSize(PaSampleFormat format) => Pa_GetSampleSize_Import(format);
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_Sleep")] private static partial void Pa_Sleep_Import(nint msec);
-    [Obsolete("Use Thread.Sleep or Task.Delay instead. Pa_Sleep is a PortAudio-internal utility.")]
     [EditorBrowsable(EditorBrowsableState.Never)]
     public static void Pa_Sleep(nint msec) => Pa_Sleep_Import(msec);
 }

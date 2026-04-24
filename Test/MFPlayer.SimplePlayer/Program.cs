@@ -14,10 +14,7 @@
 using System.Diagnostics;
 using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
-using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Media.Endpoints;
-using S.Media.Core.Routing;
 using S.Media.FFmpeg;
 using S.Media.PortAudio;
 
@@ -74,219 +71,132 @@ if (!File.Exists(filePath))
     return;
 }
 
-// ── 5. Open decoder ───────────────────────────────────────────────────────────
+// ── 5. Build player pipeline ─────────────────────────────────────────────────
 
-Console.Write("\nOpening decoder… ");
-FFmpegDecoder decoder;
-try
+var hwFmt = new AudioFormat(
+    (int)device.DefaultSampleRate,
+    Math.Min(device.MaxOutputChannels, 2));
+
+Console.Write("Opening output device… ");
+// Request a short callback period and low device latency so volume / seek
+// changes reach the speakers within one or two callbacks. PortAudio treats
+// `suggestedLatency` as a hint — the host API may round up on PulseAudio etc.
+using var output = PortAudioEndpoint.Create(
+    device, hwFmt,
+    framesPerBuffer:  256,
+    suggestedLatency: 0.020);
+Console.WriteLine("OK");
+Console.WriteLine($"  Output:  {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
+
+using var player = MediaPlayer.Create()
+    .WithAudioOutput(output)
+    .WithDecoderOptions(new FFmpegDecoderOptions { EnableVideo = false })
+    .Build();
+
+// ── 6. Completion detection ──────────────────────────────────────────────────
+
+var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+player.PlaybackCompleted += (_, e) =>
 {
-    decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions { EnableVideo = false });
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"FAILED\n  {ex.Message}");
-    return;
-}
-
-if (decoder.AudioChannels.Count == 0)
-{
-    Console.WriteLine("No audio streams in file.");
-    decoder.Dispose();
-    return;
-}
-
-using (decoder)
-{
-    var audioChannel = decoder.AudioChannels[0];
-    var srcFmt       = audioChannel.SourceFormat;
-
-    // NegotiateFor encapsulates the "cap to stereo + build route map" dance
-    // (mono→stereo fan-out, multi-ch→stereo downmix, passthrough otherwise).
-    var (hwFmt, routeMap) = AudioFormat.NegotiateFor(audioChannel, device);
-
-    Console.WriteLine("OK");
-    Console.WriteLine($"  Source:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
-
-    // ── 6. Open output ───────────────────────────────────────────────────────
-    // PortAudioEndpoint.Create automatically falls back to the device's default
-    // sample rate if the requested rate isn't supported.  The AudioMixer
-    // resamples any source-rate ↔ output-rate mismatch transparently.
-
-    Console.Write("Opening output device… ");
-    PortAudioEndpoint output;
-    try
+    if (e.Reason == PlaybackCompletedReason.SourceEnded)
     {
-        output = PortAudioEndpoint.Create(device, hwFmt, framesPerBuffer: 0);
+        Console.WriteLine("\n[Playback completed]");
+        // Small drain grace so the tail of buffered audio reaches the hardware.
+        Task.Delay(300).ContinueWith(_ => cts.Cancel());
     }
-    catch (Exception ex)
+};
+
+// ── 7. Start playback ────────────────────────────────────────────────────────
+
+await player.OpenAndPlayAsync(filePath);
+
+Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
+Console.WriteLine("Controls: [Space]=pause/play  [Left/Right]=-+5s seek  [Up/Down]=-+0.05 vol  [Enter/Q/Esc]=stop\n");
+
+var seekState = new SeekUiState();
+var statsSw = Stopwatch.StartNew();
+
+// ── 8. Main control loop ─────────────────────────────────────────────────────
+
+while (!cts.IsCancellationRequested)
+{
+    while (Console.KeyAvailable)
     {
-        Console.WriteLine($"FAILED\n  {ex.Message}");
-        return;
-    }
-    using var _outputScope = output;
-    Console.WriteLine("OK");
-
-    Console.WriteLine($"  Output:  {output.HardwareFormat.SampleRate} Hz / {output.HardwareFormat.Channels} ch  →  {device.Name}");
-
-    // Set up routing via AVRouter
-    using var router = new AVRouter();
-    var epId = router.RegisterEndpoint(output);
-    router.SetClock(output.Clock);
-
-    var inputId = router.RegisterAudioInput(audioChannel);
-    router.CreateRoute(inputId, epId, new AudioRouteOptions { ChannelMap = routeMap });
-    router.SetInputVolume(inputId, 1.0f);
-
-    if (srcFmt.SampleRate != output.HardwareFormat.SampleRate)
-        Console.WriteLine($"  Resampling: {srcFmt.SampleRate} → {output.HardwareFormat.SampleRate} Hz (AudioMixer)");
-
-    // ── 7. Completion detection (source-ended + drain) ───────────────────────
-
-    var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-
-    var seekState = new SeekUiState();
-    int sourceEnded = 0;
-    long sourceEndedTicks = 0;
-    bool completionAnnounced = false;
-    const double DrainGraceSeconds = 0.30;
-
-    void MarkSourceEnded(string tag)
-    {
-        Volatile.Write(ref sourceEnded, 1);
-        Interlocked.Exchange(ref sourceEndedTicks, Stopwatch.GetTimestamp());
-        Console.WriteLine($"\n[{tag}: waiting for drain]");
-    }
-
-    decoder.EndOfMedia += (_, _) => MarkSourceEnded("demux EOF");
-    audioChannel.EndOfStream += (_, _) => MarkSourceEnded("decode EOF");
-
-    var sw = Stopwatch.StartNew();
-    audioChannel.BufferUnderrun += (_, _) =>
-    {
-        // Ignore underruns during the first 2 s (buffer warm-up).
-        if (sw.Elapsed.TotalSeconds <= 2) return;
-        if (cts.IsCancellationRequested) return;
-
-        // Seeking temporarily drains/flushes buffers; do not interpret that as EOF.
-        long ticksSinceSeek = Stopwatch.GetTimestamp() - Interlocked.Read(ref seekState.LastSeekTicks);
-        double secondsSinceSeek = ticksSinceSeek / (double)Stopwatch.Frequency;
-        if (secondsSinceSeek < 1.2) return;
-
-        // Underruns can happen before true EOF under decode pressure; do not auto-stop here.
-    };
-
-    // ── 8. Start playback ────────────────────────────────────────────────────
-
-    decoder.Start();
-    await output.StartAsync();
-    await router.StartAsync();
-    var clockBase = output.Clock.Position;
-
-    Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
-    Console.WriteLine("Controls: [Space]=pause/play  [Left/Right]=-+5s seek  [Up/Down]=-+0.05 vol  [Enter/Q/Esc]=stop\n");
-
-    bool paused = false;
-    float volume = 1.0f;
-    var statsSw = Stopwatch.StartNew();
-
-    // Main control loop: non-blocking key handling + periodic stats.
-    while (!cts.IsCancellationRequested)
-    {
-        while (Console.KeyAvailable)
+        var key = Console.ReadKey(intercept: true).Key;
+        switch (key)
         {
-            var key = Console.ReadKey(intercept: true).Key;
-            switch (key)
-            {
-                case ConsoleKey.Enter:
-                case ConsoleKey.Escape:
-                case ConsoleKey.Q:
-                    cts.Cancel();
-                    break;
-
-                case ConsoleKey.Spacebar:
-                    if (paused)
-                    {
-                        await output.StartAsync();
-                        paused = false;
-                        Console.WriteLine("[play]");
-                    }
-                    else
-                    {
-                        await output.StopAsync();
-                        paused = true;
-                        Console.WriteLine("[pause]");
-                    }
-                    break;
-
-                case ConsoleKey.LeftArrow:
-                {
-                    if (TrySeekBy(TimeSpan.FromSeconds(-5), audioChannel, decoder,
-                        ref seekState.SeekAnchor, ref seekState.LastSeekTicks, ref seekState.LastSeekCommandTicks, ref seekState.LastSeekTarget, out var target))
-                        Console.WriteLine($"[seek] {FormatTime(target)}");
-                    break;
-                }
-
-                case ConsoleKey.RightArrow:
-                {
-                    if (TrySeekBy(TimeSpan.FromSeconds(5), audioChannel, decoder,
-                        ref seekState.SeekAnchor, ref seekState.LastSeekTicks, ref seekState.LastSeekCommandTicks, ref seekState.LastSeekTarget, out var target))
-                        Console.WriteLine($"[seek] {FormatTime(target)}");
-                    break;
-                }
-
-                case ConsoleKey.UpArrow:
-                    volume = Math.Clamp(volume + 0.05f, 0.0f, 2.0f);
-                    router.SetInputVolume(inputId, volume);
-                    Console.WriteLine($"[volume] {volume:0.00}");
-                    break;
-
-                case ConsoleKey.DownArrow:
-                    volume = Math.Clamp(volume - 0.05f, 0.0f, 2.0f);
-                    router.SetInputVolume(inputId, volume);
-                    Console.WriteLine($"[volume] {volume:0.00}");
-                    break;
-            }
-        }
-
-        if (statsSw.ElapsedMilliseconds >= 25)
-        {
-            statsSw.Restart();
-            var clockPos = output.Clock.Position - clockBase;
-            if (clockPos < TimeSpan.Zero) clockPos = TimeSpan.Zero;
-            var chPos = audioChannel.Position;
-
-            Console.Write("\r" +
-                $"[stats] state={(paused ? "paused" : "playing"),7}  " +
-                $"clock={FormatTime(clockPos)}  src={FormatTime(chPos)}  " +
-                $"buffer={audioChannel.BufferAvailable,6}f  vol={audioChannel.Volume:0.00}");
-        }
-
-        if (!paused && Volatile.Read(ref sourceEnded) == 1 && audioChannel.BufferAvailable == 0)
-        {
-            long endedAt = Interlocked.Read(ref sourceEndedTicks);
-            double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
-            if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
-            {
-                if (!completionAnnounced)
-                {
-                    completionAnnounced = true;
-                    Console.WriteLine("\n[Playback drained]");
-                }
+            case ConsoleKey.Enter:
+            case ConsoleKey.Escape:
+            case ConsoleKey.Q:
                 cts.Cancel();
-            }
-        }
+                break;
 
-        try { await Task.Delay(20, cts.Token); }
-        catch (OperationCanceledException) { }
+            case ConsoleKey.Spacebar:
+                if (player.State == PlaybackState.Paused)
+                {
+                    await player.PlayAsync();
+                    Console.WriteLine("[play]");
+                }
+                else if (player.State == PlaybackState.Playing)
+                {
+                    await player.PauseAsync();
+                    Console.WriteLine("[pause]");
+                }
+                break;
+
+            case ConsoleKey.LeftArrow:
+            {
+                if (TrySeekBy(TimeSpan.FromSeconds(-5), player,
+                    ref seekState.SeekAnchor, ref seekState.LastSeekTicks,
+                    ref seekState.LastSeekCommandTicks, ref seekState.LastSeekTarget, out var target))
+                    Console.WriteLine($"[seek] {FormatTime(target)}");
+                break;
+            }
+
+            case ConsoleKey.RightArrow:
+            {
+                if (TrySeekBy(TimeSpan.FromSeconds(5), player,
+                    ref seekState.SeekAnchor, ref seekState.LastSeekTicks,
+                    ref seekState.LastSeekCommandTicks, ref seekState.LastSeekTarget, out var target))
+                    Console.WriteLine($"[seek] {FormatTime(target)}");
+                break;
+            }
+
+            case ConsoleKey.UpArrow:
+                player.Volume = Math.Clamp(player.Volume + 0.05f, 0.0f, 2.0f);
+                Console.WriteLine($"[volume] {player.Volume:0.00}");
+                break;
+
+            case ConsoleKey.DownArrow:
+                player.Volume = Math.Clamp(player.Volume - 0.05f, 0.0f, 2.0f);
+                Console.WriteLine($"[volume] {player.Volume:0.00}");
+                break;
+        }
     }
 
-    // ── 9. Stop ──────────────────────────────────────────────────────────────
+    if (statsSw.ElapsedMilliseconds >= 25)
+    {
+        statsSw.Restart();
+        var pos = player.Position;
+        var buf = player.AudioChannel?.BufferAvailable ?? 0;
 
-    Console.Write("\nStopping… ");
-    await output.StopAsync();
-    Console.WriteLine("Done.");
+        Console.Write("\r" +
+            $"[stats] state={player.State,7}  " +
+            $"pos={FormatTime(pos)}  " +
+            $"buffer={buf,6}f  vol={player.Volume:0.00}");
+    }
+
+    try { await Task.Delay(20, cts.Token); }
+    catch (OperationCanceledException) { }
 }
+
+// ── 9. Stop ──────────────────────────────────────────────────────────────────
+
+Console.Write("\nStopping… ");
+await player.StopAsync();
+Console.WriteLine("Done.");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -302,16 +212,6 @@ static int PickNumber(string label, int min, int max)
     }
 }
 
-// Builds a route map that handles mono->stereo fan-out and multi-channel->stereo clipping.
-// NOTE: kept as a small helper for any code path that still wants manual control;
-// everything in Main now uses AudioFormat.NegotiateFor which internally delegates to
-// ChannelRouteMap.AutoStereoDownmix.
-#pragma warning disable CS8321 // Local function is declared but never used
-static ChannelRouteMap BuildRouteMap(int srcChannels, int dstChannels) =>
-    ChannelRouteMap.AutoStereoDownmix(srcChannels, dstChannels);
-#pragma warning restore CS8321
-
-
 static string FormatTime(TimeSpan ts)
 {
     if (ts < TimeSpan.Zero) ts = TimeSpan.Zero;
@@ -320,8 +220,7 @@ static string FormatTime(TimeSpan ts)
 
 static bool TrySeekBy(
     TimeSpan delta,
-    IAudioChannel audioChannel,
-    FFmpegDecoder decoder,
+    MediaPlayer player,
     ref TimeSpan seekAnchor,
     ref long lastSeekTicks,
     ref long lastSeekCommandTicks,
@@ -330,23 +229,16 @@ static bool TrySeekBy(
 {
     long nowTicks = Stopwatch.GetTimestamp();
 
-    // During rapid key bursts, anchor on the most recently requested seek target
-    // so each step is deterministic and not based on lagging decode position.
     double sinceLastCommand = (nowTicks - lastSeekCommandTicks) / (double)Stopwatch.Frequency;
-    TimeSpan basePos = sinceLastCommand <= 0.075 ? seekAnchor : audioChannel.Position;
+    TimeSpan basePos = sinceLastCommand <= 0.075 ? seekAnchor : player.Position;
 
     target = basePos + delta;
     if (target < TimeSpan.Zero)
         target = TimeSpan.Zero;
 
-    // When already at start, repeated back-seeks are semantic no-ops.
-    // Still allow a real jump-to-zero from any non-zero base position.
     if (target == TimeSpan.Zero && lastSeekTarget == TimeSpan.Zero && basePos <= TimeSpan.FromMilliseconds(20))
         return false;
 
-    // Ignore repeated identical targets from key auto-repeat noise during
-    // rapid command bursts; allow same-target seeks again after playback advances.
-    // Guard the sentinel to avoid TimeSpan overflow on the first seek.
     if (lastSeekTarget != TimeSpan.MinValue && sinceLastCommand <= 0.075)
     {
         long deltaTicks = target.Ticks >= lastSeekTarget.Ticks
@@ -357,7 +249,7 @@ static bool TrySeekBy(
             return false;
     }
 
-    decoder.Seek(target);
+    player.Seek(target);
     seekAnchor = target;
     lastSeekTarget = target;
     lastSeekCommandTicks = nowTicks;
@@ -372,4 +264,3 @@ sealed class SeekUiState
     public long LastSeekCommandTicks;
     public TimeSpan LastSeekTarget = TimeSpan.MinValue;
 }
-

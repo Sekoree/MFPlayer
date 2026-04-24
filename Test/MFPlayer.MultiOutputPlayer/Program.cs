@@ -4,17 +4,13 @@
 //   2. Pick PRIMARY output device  (leader — drives the clock)
 //   3. Pick SECONDARY output device (fan-out sink — receives a copy of the mix)
 //   4. Enter an audio file path
-//   5. Play to both devices simultaneously via AVMixer routing
+//   5. Play to both devices simultaneously via MediaPlayer routing
 //      Press Enter or Ctrl+C to stop; auto-stops at EOF
 // ═══════════════════════════════════════════════════════════════════════════════
 
-using System.Diagnostics;
 using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
-using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
-using S.Media.Core.Media.Endpoints;
-using S.Media.Core.Routing;
 using S.Media.FFmpeg;
 using S.Media.PortAudio;
 
@@ -76,151 +72,62 @@ if (!File.Exists(filePath))
     return;
 }
 
-// ── 7. Open decoder ───────────────────────────────────────────────────────────
+// ── 7. Open outputs ──────────────────────────────────────────────────────────
 
-Console.Write("\nOpening decoder… ");
-FFmpegDecoder decoder;
+var hwFmt = new AudioFormat(
+    (int)primaryDevice.DefaultSampleRate,
+    Math.Min(primaryDevice.MaxOutputChannels, 2));
+
+Console.Write($"Opening primary device '{primaryDevice.Name}'… ");
+using var primaryOutput = PortAudioEndpoint.Create(primaryDevice, hwFmt, framesPerBuffer: 512);
+Console.WriteLine("OK");
+
+var negotiatedFmt = primaryOutput.HardwareFormat;
+
+Console.Write($"Opening secondary device '{secondaryDevice.Name}'… ");
+using var secondarySink = PortAudioEndpoint.Create(
+    secondaryDevice,
+    negotiatedFmt,
+    mode:            PortAudioDrivingMode.BlockingWrite,
+    framesPerBuffer: 512,
+    name:            $"Sink({secondaryDevice.Name})");
+Console.WriteLine("OK");
+
+// ── 8. Build player pipeline ─────────────────────────────────────────────────
+
+using var player = MediaPlayer.Create()
+    .WithAudioOutput(primaryOutput)
+    .WithAudioOutput(secondarySink)
+    .Build();
+
+// ── 9. Completion detection ──────────────────────────────────────────────────
+
+var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+// ── 10. Start playback ──────────────────────────────────────────────────────
+
+await player.OpenAndPlayAsync(filePath);
+
+Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
+Console.WriteLine($"  → {primaryDevice.Name}  (primary)");
+Console.WriteLine($"  → {secondaryDevice.Name}  (secondary)");
+Console.WriteLine("Press [Enter] or [Ctrl+C] to stop.\n");
+
+_ = Task.Run(() => { Console.ReadLine(); cts.Cancel(); });
+
 try
 {
-    decoder = FFmpegDecoder.Open(filePath);
+    var reason = await player.WaitForCompletionAsync(ct: cts.Token);
+    Console.WriteLine($"\n[Playback finished: {reason}]");
 }
-catch (Exception ex)
-{
-    Console.WriteLine($"FAILED\n  {ex.Message}");
-    return;
-}
+catch (OperationCanceledException) { }
 
-if (decoder.AudioChannels.Count == 0)
-{
-    Console.WriteLine("No audio streams in file.");
-    decoder.Dispose();
-    return;
-}
+// ── 11. Stop ─────────────────────────────────────────────────────────────────
 
-using (decoder)
-{
-    var audioChannel = decoder.AudioChannels[0];
-    var srcFmt       = audioChannel.SourceFormat;
-
-    // Cap to stereo; use file's native sample rate on both outputs.
-    var (hwFmt, routeMap) = AudioFormat.NegotiateFor(audioChannel, primaryDevice);
-    int outChannels       = hwFmt.Channels;
-
-    Console.WriteLine("OK");
-    Console.WriteLine($"  Source:   {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
-    Console.WriteLine($"  Output:   {hwFmt.SampleRate} Hz / {outChannels} ch");
-
-    // ── 8. Open primary output ───────────────────────────────────────────────
-
-    Console.Write($"Opening primary device '{primaryDevice.Name}'… ");
-    PortAudioEndpoint primaryOutput;
-    try
-    {
-        primaryOutput = PortAudioEndpoint.Create(primaryDevice, hwFmt, framesPerBuffer: 512);
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"FAILED\n  {ex.Message}");
-        return;
-    }
-    Console.WriteLine("OK");
-
-    using var router = new AVRouter();
-    var primaryEpId = router.RegisterEndpoint(primaryOutput);
-    router.SetClock(primaryOutput.Clock);
-
-    // ── 9. Open secondary sink ───────────────────────────────────────────────
-
-    // Use the actual negotiated format from the primary (in case sample rate changed).
-    var negotiatedFmt = primaryOutput.HardwareFormat;
-
-    Console.Write($"Opening secondary device '{secondaryDevice.Name}'… ");
-    PortAudioEndpoint secondarySink;
-    try
-    {
-        secondarySink = PortAudioEndpoint.Create(
-            secondaryDevice,
-            negotiatedFmt,
-            mode:            PortAudioDrivingMode.BlockingWrite,
-            framesPerBuffer: 512,
-            name:            $"Sink({secondaryDevice.Name})");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"FAILED\n  {ex.Message}");
-        return;
-    }
-    Console.WriteLine("OK");
-
-    var secondaryEpId = router.RegisterEndpoint(secondarySink);
-
-    // ── 10. Wire audio channel ───────────────────────────────────────────────
-
-    var inputId = router.RegisterAudioInput(audioChannel);
-    router.CreateRoute(inputId, primaryEpId, new AudioRouteOptions { ChannelMap = routeMap });
-    router.CreateRoute(inputId, secondaryEpId, new AudioRouteOptions { ChannelMap = routeMap });
-
-    // ── 11. Completion detection (source-ended + drain) ─────────────────────
-
-    var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-    int sourceEnded = 0;
-    long sourceEndedTicks = 0;
-    const double DrainGraceSeconds = 0.30;
-
-    void MarkSourceEnded(string tag)
-    {
-        Volatile.Write(ref sourceEnded, 1);
-        Interlocked.Exchange(ref sourceEndedTicks, Stopwatch.GetTimestamp());
-        Console.WriteLine($"\n[{tag}: waiting for drain]");
-    }
-
-    decoder.EndOfMedia += (_, _) => MarkSourceEnded("demux EOF");
-    audioChannel.EndOfStream += (_, _) => MarkSourceEnded("decode EOF");
-
-    var sw = Stopwatch.StartNew();
-    audioChannel.BufferUnderrun += (_, _) =>
-    {
-        if (sw.Elapsed.TotalSeconds <= 2 || cts.IsCancellationRequested)
-            return;
-
-        if (Volatile.Read(ref sourceEnded) == 1 && audioChannel.BufferAvailable == 0)
-        {
-            long endedAt = Interlocked.Read(ref sourceEndedTicks);
-            double sinceEnded = (Stopwatch.GetTimestamp() - endedAt) / (double)Stopwatch.Frequency;
-            if (endedAt != 0 && sinceEnded >= DrainGraceSeconds)
-            {
-                Console.WriteLine("\n[Playback drained]");
-                cts.Cancel();
-            }
-        }
-    };
-
-    // ── 12. Start playback ───────────────────────────────────────────────────
-
-    decoder.Start();
-    await secondarySink.StartAsync();
-    await primaryOutput.StartAsync();
-    await router.StartAsync();
-
-    Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
-    Console.WriteLine($"  → {primaryDevice.Name}  (primary)");
-    Console.WriteLine($"  → {secondaryDevice.Name}  (secondary)");
-    Console.WriteLine("Press [Enter] or [Ctrl+C] to stop.\n");
-
-    _ = Task.Run(() => { Console.ReadLine(); cts.Cancel(); });
-    try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); }
-    catch (OperationCanceledException) { }
-
-    // ── 13. Stop ─────────────────────────────────────────────────────────────
-
-    Console.Write("\nStopping… ");
-    await secondarySink.StopAsync();
-    await primaryOutput.StopAsync();
-    secondarySink.Dispose();
-    primaryOutput.Dispose();
-    Console.WriteLine("Done.");
-}
+Console.Write("\nStopping… ");
+await player.StopAsync();
+Console.WriteLine("Done.");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -244,5 +151,3 @@ static void PrintDeviceList(List<AudioDeviceInfo> devices, string apiName)
                           $"(ch: {devices[i].MaxOutputChannels},  " +
                           $"{devices[i].DefaultSampleRate:0} Hz)");
 }
-
-

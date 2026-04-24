@@ -88,17 +88,20 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     private readonly AVRouter _router;
     private readonly List<IMediaEndpoint> _endpoints = [];
     private readonly List<EndpointId> _endpointIds = [];
+    private readonly List<RouteId> _routeIds = [];
+    private readonly List<(Func<CancellationToken, Task> BeforePlay, Func<CancellationToken, Task>? BeforeClose)> _lifecycleHooks = [];
 
     private FFmpegDecoder? _decoder;
-    private float           _volume         = 1.0f;
-    private bool            _decoderStarted;
-    private bool            _disposed;
-    private PlaybackState   _state = PlaybackState.Idle;
+    private float _volume = 1.0f;
+    private bool _decoderStarted;
+    private bool _disposed;
+    private PlaybackState _state = PlaybackState.Idle;
 
-    // Track registered input/route ids for current session
     private InputId? _audioInputId;
     private InputId? _videoInputId;
-    private readonly List<RouteId> _routeIds = [];
+
+    private AvDriftCorrectionOptions? _driftCorrectionOptions;
+    private CancellationTokenSource? _driftCts;
 
     // ── Construction ──────────────────────────────────────────────────────────
 
@@ -125,21 +128,18 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     /// Starts a fluent <see cref="MediaPlayerBuilder"/> so endpoints, clock,
     /// decoder/router options and an error handler can be declared up-front,
     /// then the fully-wired <see cref="MediaPlayer"/> materialises on
-    /// <see cref="MediaPlayerBuilder.Build"/>. Closes review item §5.1.
+    /// <see cref="MediaPlayerBuilder.Build"/>.
     /// </summary>
     public static MediaPlayerBuilder Create() => new();
 
     /// <summary>
     /// Default <see cref="FFmpegDecoderOptions"/> applied when
     /// <see cref="OpenAsync(string, FFmpegDecoderOptions?, CancellationToken)"/>
-    /// is called with a <see langword="null"/> options argument. Set by
-    /// <see cref="MediaPlayerBuilder.WithDecoderOptions"/>; <see langword="null"/>
-    /// (default) falls back to <see cref="FFmpegDecoder"/>'s built-in defaults.
+    /// is called with a <see langword="null"/> options argument.
     /// </summary>
     internal FFmpegDecoderOptions? DefaultDecoderOptions { get; set; }
 
     // ── Events ────────────────────────────────────────────────────────────────
-
 
     /// <inheritdoc cref="PlaybackStateChangedEventArgs"/>
     /// <remarks>
@@ -171,7 +171,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     // ── Properties ───────────────────────────────────────────────────────────
 
     /// <summary>Whether the output is actively rendering.</summary>
-    public bool IsPlaying => _decoderStarted && !_disposed;
+    public bool IsPlaying => _state == PlaybackState.Playing && !_disposed;
 
     /// <summary>Current playback state.</summary>
     public PlaybackState State => _state;
@@ -221,8 +221,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     // ── Endpoint management ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Registers an audio endpoint. If the endpoint is <see cref="IClockCapableEndpoint"/>,
-    /// the router's clock is automatically overridden to use it.
+    /// Registers an audio endpoint.
     /// </summary>
     public void AddEndpoint(IAudioEndpoint endpoint)
     {
@@ -257,30 +256,21 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// Async counterpart to <see cref="AddEndpoint(IAudioEndpoint)"/> — closes review
-    /// item §4.4 / B19. Registers the endpoint with the router and, if the player
-    /// is already running, starts the endpoint cooperatively via
-    /// <see cref="IMediaEndpoint.StartAsync"/> instead of the legacy sync
-    /// <c>GetAwaiter().GetResult()</c> that could deadlock single-threaded sync
-    /// contexts.
+    /// Async counterpart to <see cref="AddEndpoint(IAudioEndpoint)"/>.
     /// </summary>
     public Task AddEndpointAsync(IAudioEndpoint endpoint, CancellationToken ct = default)
-        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint),
-            audio: true, video: false, ct);
+        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint), audio: true, video: false, ct);
 
     /// <inheritdoc cref="AddEndpointAsync(IAudioEndpoint, CancellationToken)"/>
     public Task AddEndpointAsync(IVideoEndpoint endpoint, CancellationToken ct = default)
-        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint),
-            audio: false, video: true, ct);
+        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint), audio: false, video: true, ct);
 
     /// <inheritdoc cref="AddEndpointAsync(IAudioEndpoint, CancellationToken)"/>
     public Task AddEndpointAsync(IAVEndpoint endpoint, CancellationToken ct = default)
-        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint),
-            audio: true, video: true, ct);
+        => RegisterEndpointAndMaybeStartAsync(endpoint, _router.RegisterEndpoint(endpoint), audio: true, video: true, ct);
 
     /// <summary>
-    /// Async counterpart to <see cref="RemoveEndpoint"/>. Stops the endpoint
-    /// cooperatively if the player is active, then unregisters it from the router.
+    /// Async counterpart to <see cref="RemoveEndpoint"/>.
     /// </summary>
     public async Task RemoveEndpointAsync(IMediaEndpoint endpoint, CancellationToken ct = default)
     {
@@ -296,13 +286,149 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         _endpointIds.RemoveAt(idx);
     }
 
+    // ── External input registration (§5.7) ───────────────────────────────────
+
+    /// <summary>
+    /// §5.7 — Registers a non-FFmpeg audio input and auto-routes it to every
+    /// already-registered audio-capable endpoint. Idempotent per session.
+    /// </summary>
+    internal InputId RegisterExternalAudioInput(IAudioChannel channel, AudioRouteOptions? routeOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (_audioInputId.HasValue)
+            return _audioInputId.Value;
+
+        var inputId = _router.RegisterAudioInput(channel);
+        _audioInputId = inputId;
+        _router.SetInputVolume(inputId, _volume);
+
+        for (int i = 0; i < _endpoints.Count; i++)
+        {
+            if (_endpoints[i] is IAudioEndpoint or IAVEndpoint)
+            {
+                _routeIds.Add(routeOptions is null
+                    ? _router.CreateRoute(inputId, _endpointIds[i])
+                    : _router.CreateRoute(inputId, _endpointIds[i], routeOptions));
+            }
+        }
+
+        return inputId;
+    }
+
+    /// <summary>
+    /// §5.7 — Registers a non-FFmpeg video input and auto-routes it to every
+    /// already-registered video-capable endpoint. Idempotent per session.
+    /// </summary>
+    internal InputId RegisterExternalVideoInput(IVideoChannel channel, VideoRouteOptions? routeOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (_videoInputId.HasValue)
+            return _videoInputId.Value;
+
+        var inputId = _router.RegisterVideoInput(channel);
+        _videoInputId = inputId;
+
+        for (int i = 0; i < _endpoints.Count; i++)
+        {
+            if (_endpoints[i] is IVideoEndpoint or IAVEndpoint)
+            {
+                _routeIds.Add(routeOptions is null
+                    ? _router.CreateRoute(inputId, _endpointIds[i])
+                    : _router.CreateRoute(inputId, _endpointIds[i], routeOptions));
+            }
+        }
+
+        return inputId;
+    }
+
+    // ── Lifecycle hooks (extension point) ────────────────────────────────────
+
+    internal void AddLifecycleHook(
+        Func<CancellationToken, Task> beforePlay,
+        Func<CancellationToken, Task>? beforeClose = null)
+    {
+        ArgumentNullException.ThrowIfNull(beforePlay);
+        _lifecycleHooks.Add((beforePlay, beforeClose));
+    }
+
+    // ── Drift correction (§5.9) ──────────────────────────────────────────────
+
+    internal void ConfigureDriftCorrection(AvDriftCorrectionOptions options)
+    {
+        _driftCorrectionOptions = options;
+    }
+
+    internal void StartDriftCorrectionLoop(AvDriftCorrectionOptions options)
+    {
+        if (_driftCts is not null)
+            return;
+        if (!_audioInputId.HasValue || !_videoInputId.HasValue)
+            return;
+
+        var audioId = _audioInputId.Value;
+        var videoId = _videoInputId.Value;
+        _driftCts = new CancellationTokenSource();
+        var ct = _driftCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            double currentOffsetMs = 0;
+
+            try { await Task.Delay(options.InitialDelay, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var drift = _router.GetAvDrift(audioId, videoId);
+                    double absDriftMs = Math.Abs(drift.TotalMilliseconds);
+
+                    if (absDriftMs < options.MinDriftMs)
+                    {
+                        // no-op
+                    }
+                    else if (absDriftMs < options.IgnoreOutlierDriftMs)
+                    {
+                        double requestedStepMs = -drift.TotalMilliseconds * options.CorrectionGain;
+                        double clampedStepMs = Math.Clamp(requestedStepMs, -options.MaxStepMs, options.MaxStepMs);
+                        double nextOffsetMs = Math.Clamp(currentOffsetMs + clampedStepMs, -options.MaxAbsOffsetMs, options.MaxAbsOffsetMs);
+                        currentOffsetMs = nextOffsetMs;
+                        // Keep the correction on video so audio hardware remains the primary cadence source.
+                        _router.SetInputTimeOffset(videoId, TimeSpan.FromMilliseconds(nextOffsetMs));
+                    }
+
+                    await Task.Delay(options.Interval, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    // Best effort: keep loop alive.
+                    try { await Task.Delay(options.Interval, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
+            }
+        }, ct);
+    }
+
+    private void StopDriftCorrectionLoop()
+    {
+        if (_driftCts is not { } cts) return;
+        _driftCts = null;
+        try { cts.Cancel(); } catch { }
+        cts.Dispose();
+    }
+
     // ── Open ──────────────────────────────────────────────────────────────────
 
     /// <summary>Opens the media file and prepares the pipeline.</summary>
     public async Task OpenAsync(
-        string                path,
+        string path,
         FFmpegDecoderOptions? options = null,
-        CancellationToken     ct     = default)
+        CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         SetState(PlaybackState.Opening);
@@ -322,10 +448,10 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>Opens the media from a stream and prepares the pipeline.</summary>
     public async Task OpenAsync(
-        Stream                stream,
-        FFmpegDecoderOptions? options   = null,
-        bool                  leaveOpen = false,
-        CancellationToken     ct        = default)
+        Stream stream,
+        FFmpegDecoderOptions? options = null,
+        bool leaveOpen = false,
+        CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         SetState(PlaybackState.Opening);
@@ -352,20 +478,28 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
         try
         {
-            if (_decoder == null)
-                throw new MediaException("No media is open. Call OpenAsync first.");
+            if (_lifecycleHooks.Count > 0)
+                await RunBeforePlayHooks(ct).ConfigureAwait(false);
 
-            if (!_decoderStarted)
+            if (_decoder == null && !_audioInputId.HasValue && !_videoInputId.HasValue)
+            {
+                throw new MediaException(
+                    "No media is open and no external inputs are registered. Call OpenAsync first or register inputs via the builder.");
+            }
+
+            if (_decoder != null && !_decoderStarted)
             {
                 _decoder.Start();
                 _decoderStarted = true;
             }
 
-            // Start all registered endpoints
             foreach (var ep in _endpoints)
                 await ep.StartAsync(ct).ConfigureAwait(false);
 
             await _router.StartAsync(ct).ConfigureAwait(false);
+
+            if (_driftCorrectionOptions is { } dco)
+                StartDriftCorrectionLoop(dco);
 
             SetState(PlaybackState.Playing);
         }
@@ -385,6 +519,8 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             await _router.StopAsync(ct).ConfigureAwait(false);
             foreach (var ep in _endpoints)
                 await ep.StopAsync(ct).ConfigureAwait(false);
+
+            StopDriftCorrectionLoop();
             SetState(PlaybackState.Paused);
         }
         catch (Exception ex)
@@ -418,9 +554,9 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>Opens and immediately starts playback.</summary>
     public async Task OpenAndPlayAsync(
-        string                path,
+        string path,
         FFmpegDecoderOptions? options = null,
-        CancellationToken     ct      = default)
+        CancellationToken ct = default)
     {
         await OpenAsync(path, options, ct).ConfigureAwait(false);
         await PlayAsync(ct).ConfigureAwait(false);
@@ -428,10 +564,10 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>Opens from stream and immediately starts playback.</summary>
     public async Task OpenAndPlayAsync(
-        Stream                stream,
-        FFmpegDecoderOptions? options   = null,
-        bool                  leaveOpen = false,
-        CancellationToken     ct        = default)
+        Stream stream,
+        FFmpegDecoderOptions? options = null,
+        bool leaveOpen = false,
+        CancellationToken ct = default)
     {
         await OpenAsync(stream, options, leaveOpen, ct).ConfigureAwait(false);
         await PlayAsync(ct).ConfigureAwait(false);
@@ -439,24 +575,11 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Awaits natural end-of-media (source EOF) or an unrecoverable playback
-    /// failure, whichever comes first. Returns the
-    /// <see cref="PlaybackCompletedReason"/> that ended the session.
-    ///
-    /// <para>
-    /// Intended to replace the hand-rolled <c>CancellationTokenSource</c> + EOF /
-    /// drain bookkeeping every test app currently reimplements. Honours
-    /// <paramref name="ct"/>; if cancellation fires before completion, the
-    /// player is left running (caller decides whether to <see cref="StopAsync"/>).
-    /// Closes review finding §4.3.
-    /// </para>
+    /// failure, whichever comes first.
     /// </summary>
-    /// <param name="drainGrace">
-    /// Extra wait after <see cref="PlaybackCompletedReason.SourceEnded"/> to let
-    /// the tail of already-buffered audio reach the hardware. Default 300 ms.
-    /// </param>
     public async Task<PlaybackCompletedReason> WaitForCompletionAsync(
-        TimeSpan          drainGrace = default,
-        CancellationToken ct         = default)
+        TimeSpan drainGrace = default,
+        CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (drainGrace == default) drainGrace = TimeSpan.FromMilliseconds(300);
@@ -465,10 +588,10 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         void OnCompleted(object? s, PlaybackCompletedEventArgs e) => tcs.TrySetResult(e.Reason);
-        void OnFailed(object? s, PlaybackFailedEventArgs e)       => tcs.TrySetException(e.Exception);
+        void OnFailed(object? s, PlaybackFailedEventArgs e) => tcs.TrySetException(e.Exception);
 
         PlaybackCompleted += OnCompleted;
-        PlaybackFailed    += OnFailed;
+        PlaybackFailed += OnFailed;
         try
         {
             using var reg = ct.Register(static state =>
@@ -476,8 +599,6 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
             var reason = await tcs.Task.ConfigureAwait(false);
 
-            // Apply drain grace only on natural EOF so the hardware can finish
-            // playing what's already been pushed through the router.
             if (reason == PlaybackCompletedReason.SourceEnded && drainGrace > TimeSpan.Zero)
             {
                 try { await Task.Delay(drainGrace, ct).ConfigureAwait(false); }
@@ -489,7 +610,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         finally
         {
             PlaybackCompleted -= OnCompleted;
-            PlaybackFailed    -= OnFailed;
+            PlaybackFailed -= OnFailed;
         }
     }
 
@@ -497,7 +618,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Synchronous disposal. Delegates to <see cref="DisposeAsync"/>; prefer the
-    /// async variant in async call-paths (closes review item §4.4, B19).
+    /// async variant in async call-paths.
     /// </summary>
     public void Dispose()
     {
@@ -506,24 +627,8 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// Cooperatively stops the router + every registered endpoint + the
-    /// decoder, then disposes the underlying <see cref="AVRouter"/>.
-    /// Implements review items §4.4 (B19) + §10.3 — the sequence is:
-    /// <list type="number">
-    ///   <item>Stop the router so no new push ticks fire at endpoints in
-    ///         teardown.</item>
-    ///   <item>Stop every registered endpoint <b>in parallel</b>
-    ///         (<see cref="Task.WhenAll(Task[])"/>) — endpoint
-    ///         <c>StopAsync</c>s are independent (they own their own
-    ///         render/capture threads) so serialising them would add
-    ///         0–N×(slowest stop) to tear-down for no gain.</item>
-    ///   <item>Stop the decoder so demux/decode threads join cooperatively.</item>
-    ///   <item>Release the session and dispose the router.</item>
-    /// </list>
-    /// Every step is best-effort: a faulty endpoint StopAsync cannot block
-    /// the subsequent steps from running. Endpoints are owned by the
-    /// caller (see <see cref="AddEndpoint(IAudioEndpoint)"/>) — we stop
-    /// them but do not dispose them.
+    /// Cooperatively stops the router + every registered endpoint + decoder, then
+    /// disposes the underlying <see cref="AVRouter"/>.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
@@ -532,11 +637,8 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
         if (IsActive)
         {
-            try { await _router.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
+            try { await _router.StopAsync().ConfigureAwait(false); } catch { }
 
-            // §10.3 — parallel endpoint stop. Each StopAsync gets its own
-            // try/catch wrapper task so one faulty endpoint cannot short-
-            // circuit the WhenAll; all results are discarded.
             if (_endpoints.Count > 0)
             {
                 var stops = new Task[_endpoints.Count];
@@ -545,17 +647,23 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
                     var ep = _endpoints[i];
                     stops[i] = Task.Run(async () =>
                     {
-                        try { await ep.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
+                        try { await ep.StopAsync().ConfigureAwait(false); } catch { }
                     });
                 }
-                try { await Task.WhenAll(stops).ConfigureAwait(false); }
-                catch { /* swallowed — per-endpoint try already caught */ }
+
+                try { await Task.WhenAll(stops).ConfigureAwait(false); } catch { }
             }
         }
 
         if (_decoder is { } dec)
         {
-            try { await dec.StopAsync().ConfigureAwait(false); } catch { /* best-effort */ }
+            try { await dec.StopAsync().ConfigureAwait(false); } catch { }
+        }
+
+        if (_lifecycleHooks.Count > 0)
+        {
+            try { await RunBeforeCloseHooks(CancellationToken.None).ConfigureAwait(false); }
+            catch { }
         }
 
         ReleaseSession();
@@ -567,9 +675,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Whether the player is currently running (endpoints/router have been
-    /// started and not yet stopped). Single source of truth derived from
-    /// <see cref="_state"/> — closes the §4.11 <c>_isRunning</c> duplication
-    /// noted in the review.
+    /// started and not yet stopped).
     /// </summary>
     private bool IsActive => _state is PlaybackState.Playing or PlaybackState.Paused;
 
@@ -599,11 +705,8 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         {
             var inputId = _router.RegisterAudioInput(audioCh);
             _audioInputId = inputId;
-            // §3.56 — publish volume via the router input (new world) rather than
-            // via the channel-level setter which is now [Obsolete].
             _router.SetInputVolume(inputId, _volume);
 
-            // Create routes to all audio-capable endpoints
             for (int i = 0; i < _endpoints.Count; i++)
             {
                 if (_endpoints[i] is IAudioEndpoint)
@@ -616,7 +719,6 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             var inputId = _router.RegisterVideoInput(videoCh);
             _videoInputId = inputId;
 
-            // Create routes to all video-capable endpoints
             for (int i = 0; i < _endpoints.Count; i++)
             {
                 if (_endpoints[i] is IVideoEndpoint)
@@ -625,16 +727,12 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         }
 
         decoder.EndOfMedia += OnEndOfMedia;
-        _decoder        = decoder;
+        _decoder = decoder;
         _decoderStarted = false;
     }
 
-    // Clock auto-registration is now handled by AVRouter.RegisterEndpoint
-    // when the endpoint implements IClockCapableEndpoint.
-
     private void AutoRouteToEndpoint(EndpointId epId, bool audio, bool video)
     {
-        // If there's already an open session, auto-route existing inputs
         if (audio && _audioInputId.HasValue)
             _routeIds.Add(_router.CreateRoute(_audioInputId.Value, epId));
         if (video && _videoInputId.HasValue)
@@ -643,23 +741,32 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     private async Task CloseAsync(CancellationToken ct, PlaybackCompletedReason? closeReason = null)
     {
-        bool hadSession = _decoder != null || _decoderStarted;
-        if (_decoderStarted)
+        bool hadSession = _decoder != null || _decoderStarted || _audioInputId.HasValue || _videoInputId.HasValue;
+
+        // Always run the cooperative stop pass. This remains idempotent when
+        // already stopped and avoids state-ordering gaps (e.g. Stopping/Opening
+        // set before CloseAsync) where endpoint stop calls were skipped.
         {
-            try { await _router.StopAsync(ct).ConfigureAwait(false); } catch { /* best-effort */ }
+            try { await _router.StopAsync(ct).ConfigureAwait(false); } catch { }
             foreach (var ep in _endpoints)
             {
-                try { await ep.StopAsync(ct).ConfigureAwait(false); } catch { /* best-effort */ }
+                try { await ep.StopAsync(ct).ConfigureAwait(false); } catch { }
             }
         }
+
+        if (_lifecycleHooks.Count > 0)
+            await RunBeforeCloseHooks(ct).ConfigureAwait(false);
+
         ReleaseSession();
+
         if (hadSession && closeReason.HasValue)
             PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(closeReason.Value));
     }
 
     private void ReleaseSession()
     {
-        // Remove routes and inputs from router
+        StopDriftCorrectionLoop();
+
         foreach (var routeId in _routeIds)
             _router.RemoveRoute(routeId);
         _routeIds.Clear();
@@ -669,6 +776,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             _router.UnregisterInput(_audioInputId.Value);
             _audioInputId = null;
         }
+
         if (_videoInputId.HasValue)
         {
             _router.UnregisterInput(_videoInputId.Value);
@@ -676,7 +784,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         }
 
         _decoder?.Dispose();
-        _decoder        = null;
+        _decoder = null;
         _decoderStarted = false;
     }
 
@@ -688,8 +796,42 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             return;
         }
 
+        // Don't raise SourceEnded the instant the demuxer hits EOF — the channel
+        // ring and the endpoint's device buffer still have audio queued. Poll
+        // the channel until it drains, then add a small device-side grace so
+        // the tail reaches the speakers before listeners treat playback as over.
+        _ = RaiseSourceEndedAfterDrainAsync();
+    }
+
+    private async Task RaiseSourceEndedAfterDrainAsync()
+    {
+        try
+        {
+            var ch = _decoder?.FirstAudioChannel;
+            if (ch is not null)
+            {
+                // Ring drain — bounded by the audio tail length, so no worst-case cap needed.
+                while (!_disposed && !IsStoppingOrStopped() && ch.BufferAvailable > 0)
+                    await Task.Delay(20).ConfigureAwait(false);
+                // Device buffer grace — covers PortAudio's host-API queue. 100 ms is
+                // comfortably above typical output latency for common host APIs.
+                if (!_disposed && !IsStoppingOrStopped())
+                    await Task.Delay(100).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // Fall through — CloseAsync already fired a PlaybackCompleted with a
+            // Stopped/Replaced reason, so we still shouldn't fire SourceEnded.
+        }
+
+        // Suppress SourceEnded if the user (or a replacing Open) beat us to it.
+        if (_disposed || IsStoppingOrStopped()) return;
         PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(PlaybackCompletedReason.SourceEnded));
     }
+
+    private bool IsStoppingOrStopped()
+        => _state is PlaybackState.Stopping or PlaybackState.Stopped or PlaybackState.Idle;
 
     private void SetState(PlaybackState next)
     {
@@ -699,5 +841,20 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
         _state = next;
         PlaybackStateChanged?.Invoke(this, new PlaybackStateChangedEventArgs(prev, next));
+    }
+
+    private async Task RunBeforePlayHooks(CancellationToken ct)
+    {
+        foreach (var (beforePlay, _) in _lifecycleHooks)
+            await beforePlay(ct).ConfigureAwait(false);
+    }
+
+    private async Task RunBeforeCloseHooks(CancellationToken ct)
+    {
+        foreach (var (_, beforeClose) in _lifecycleHooks)
+        {
+            if (beforeClose is null) continue;
+            await beforeClose(ct).ConfigureAwait(false);
+        }
     }
 }

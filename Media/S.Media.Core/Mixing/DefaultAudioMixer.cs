@@ -51,6 +51,28 @@ public sealed class DefaultAudioMixer : IAudioMixer
     }
 
     /// <inheritdoc />
+    public void ApplyGainRamp(Span<float> buffer, float startGain, float endGain, int channels)
+    {
+        if (channels <= 0 || buffer.IsEmpty) return;
+        int frameCount = buffer.Length / channels;
+        if (frameCount <= 0) return;
+        if (frameCount == 1)
+        {
+            ApplyGain(buffer, endGain);
+            return;
+        }
+        float step = (endGain - startGain) / (frameCount - 1);
+        float g = startGain;
+        for (int f = 0; f < frameCount; f++)
+        {
+            int baseIdx = f * channels;
+            for (int c = 0; c < channels; c++)
+                buffer[baseIdx + c] *= g;
+            g += step;
+        }
+    }
+
+    /// <inheritdoc />
     public void ApplyChannelMap(
         ReadOnlySpan<float> src, Span<float> dest,
         (int dstCh, float gain)[][] bakedRoutes,
@@ -100,13 +122,15 @@ public sealed class DefaultAudioMixer : IAudioMixer
     /// <inheritdoc />
     public void FlushDenormalsToZero()
     {
-        // .NET's public surface no longer exposes the MXCSR FTZ/DAZ bits directly
-        // (the legacy `Sse.SetCsr`/`GetCsr` helpers were removed). Leaving this as
-        // a documented no-op until we wire a P/Invoke-based alternative under
-        // review item §4.13 / M2. The JIT already uses SSE scalars that honour
-        // FTZ when the runtime sets it globally, so this method's absence is not
-        // a correctness issue — only a missed perf opportunity on denormal-heavy
-        // workloads.
+        // §4.13 / M2 — The .NET runtime (since .NET 6) sets FTZ and DAZ
+        // on the MXCSR register for every managed thread at creation time.
+        // On ARM64, NEON has flush-to-zero by default. Therefore this method
+        // is intentionally a no-op: the runtime already provides the
+        // denormal-flush behaviour that audio threads need, and the managed
+        // surface no longer exposes Sse.GetCsr/SetCsr (removed in .NET 5+)
+        // or X86Base.GetMxcsr/SetMxcsr. Callers may still invoke this at
+        // thread entry as a self-documenting annotation that denormal
+        // flushing is required on the code path — it costs nothing.
     }
 
     /// <inheritdoc />

@@ -23,7 +23,7 @@ namespace S.Media.NDI;
 /// if (profile.ResetClockOrigin)
 ///     videoEndpoint.ResetClockOrigin();
 ///
-/// router.BypassVideoPtsScheduling = profile.BypassVideoPtsScheduling;
+/// var routeOptions = new VideoRouteOptions { LiveMode = profile.BypassVideoPtsScheduling };
 ///
 /// await Task.WhenAll(
 ///     avSource.WaitForAudioBufferAsync(profile.AudioPreBufferChunks, ct),
@@ -67,9 +67,8 @@ public sealed record NDIPlaybackProfile
     /// </summary>
     /// <remarks>
     /// Pass this value as <c>VideoRouteOptions { LiveMode = profile.BypassVideoPtsScheduling }</c>
-    /// to <c>router.CreateRoute(videoInputId, videoEpId, options)</c>.
-    /// The legacy <c>IAVRouter.BypassVideoPtsScheduling</c> global flag is
-    /// <c>[Obsolete]</c> as of §6.1.
+    /// to <c>router.CreateRoute(videoInputId, videoEpId, options)</c>. The old
+    /// router-wide bypass flag was removed; per-route live mode is the canonical API.
     /// </remarks>
     public bool BypassVideoPtsScheduling { get; init; }
 
@@ -152,4 +151,3 @@ public sealed record NDIPlaybackProfile
         },
     };
 }
-

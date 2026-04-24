@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using NDILib;
@@ -42,6 +43,8 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
     private long _framesInRing;
 
     private bool _disposed;
+    // §3.48 / CH1 — single-reader reentrancy guard (Debug builds only).
+    private int _fillBufferActive;
     private VideoFormat _sourceFormat;
     private readonly Lock _formatLock = new();
     private readonly HashSet<NDIFourCCVideoType> _unsupportedFourCcLogged = [];
@@ -197,6 +200,9 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         {
             NDIVideoFrameV2 frame = default;
             bool haveFrame = false;
+            IDisposable? frameOwner = null;
+            bool frameFreedByOwner = false;
+            bool frameEnqueued = false;
             try
             {
                 lock (_frameSyncGate)
@@ -219,25 +225,36 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                     continue;
                 }
 
-                // §4.16 / N4 — mirror of the audio-side policy switch. Both
-                // + VideoPreferred always write; AudioPreferred skips here;
-                // FirstWriter uses the CAS on the clock.
-                switch (_clockPolicy)
+                if (!TryMapFourCc(frame.FourCC, out var pixFmt))
                 {
-                    case NDIClockPolicy.Both:
-                    case NDIClockPolicy.VideoPreferred:
-                        _clock.UpdateFromFrame(frame.Timestamp);
-                        break;
-                    case NDIClockPolicy.FirstWriter:
-                        _clock.TryUpdateFromFrame(frame.Timestamp, NDIClock.WriterClaimVideo);
-                        break;
-                    // AudioPreferred: skip.
+                    // §4.17 / N7 — log + event on first encounter of each
+                    // distinct FourCC.
+                    if (_unsupportedFourCcLogged.Add(frame.FourCC))
+                    {
+                        Log.LogWarning(
+                            "NDIVideoChannel unsupported FourCC={FourCC} ({FourCCInt}) x={Width} y={Height} stride={Stride}; frame dropped",
+                            frame.FourCC, (uint)frame.FourCC, frame.Xres, frame.Yres, frame.LineStrideInBytes);
+                        try { UnsupportedFourCc?.Invoke(this, new NDIUnsupportedFourCcEventArgs((uint)frame.FourCC, isAudio: false)); }
+                        catch (Exception ex) { Log.LogWarning(ex, "UnsupportedFourCc handler threw"); }
+                    }
+                    continue;
                 }
 
-                if (!TryCopyFrameToTightBuffer(frame, out var pixFmt, out var rented, out var totalBytes))
-                    continue;
+                ReadOnlyMemory<byte> payload;
+                if (TryWrapFrameZeroCopy(frame, pixFmt, out var nativeOwner, out var nativePayload))
+                {
+                    frameOwner = nativeOwner;
+                    frameFreedByOwner = true;
+                    payload = nativePayload;
+                }
+                else
+                {
+                    if (!CopyFrameToTightBuffer(frame, pixFmt, out var rented, out var totalBytes))
+                        continue;
 
-                var owner  = new NDIVideoFrameOwner(rented);
+                    frameOwner = new NDIVideoFrameOwner(rented, totalBytes);
+                    payload = rented.AsMemory(0, totalBytes);
+                }
 
                 // Use the NDI timestamp when available; fall back to a local monotonic
                 // clock when the source provides undefined timestamps (0, negative, or
@@ -277,13 +294,31 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 _lastPtsSeconds = tsSecs;
                 _lastPtsWasSynthetic = currentIsSynthetic;
                 _hasLastPts = true;
+                long ptsTicks = TimeSpan.FromSeconds(tsSecs).Ticks;
+
+                // §4.16 / N4 — publish clock updates from the *effective* video
+                // PTS (after monotonic/jump clamps and synthetic fallback), not
+                // the raw source timestamp. This keeps the shared NDIClock in
+                // the same domain as VideoFrame.Pts across sender discontinuities
+                // such as Test Pattern profile/FPS switches.
+                switch (_clockPolicy)
+                {
+                    case NDIClockPolicy.Both:
+                    case NDIClockPolicy.VideoPreferred:
+                        _clock.UpdateFromFrame(ptsTicks);
+                        break;
+                    case NDIClockPolicy.FirstWriter:
+                        _clock.TryUpdateFromFrame(ptsTicks, NDIClock.WriterClaimVideo);
+                        break;
+                    // AudioPreferred: skip.
+                }
 
                 var vf = new VideoFrame(
                     frame.Xres, frame.Yres,
                     pixFmt,
-                    rented.AsMemory(0, totalBytes),
-                    TimeSpan.FromSeconds(tsSecs),
-                    owner);
+                    payload,
+                    TimeSpan.FromTicks(ptsTicks),
+                    frameOwner);
 
                 // Update source format from the live stream dimensions / pixel format.
                 int fpsNum = frame.FrameRateN > 0 ? frame.FrameRateN : 30000;
@@ -310,6 +345,7 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 _suggestedRange  = (int)range;
 
                 EnqueueFrame(vf);
+                frameEnqueued = true;
 
                 // Throttle: sleep for roughly ¼ of a frame interval.
                 double fpsNow;
@@ -344,10 +380,17 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
             }
             finally
             {
-                // §3.44 / N6 — FreeVideo is unconditional when we successfully
-                // captured. Previously the `continue` branches leaked the NDI
-                // buffer if any exception landed between CaptureVideo and Free.
-                if (haveFrame && frame.PData != nint.Zero)
+                // Frame ownership only transfers to downstream consumers after
+                // EnqueueFrame succeeds. If this iteration bails out earlier, release
+                // the owner here (returns pooled copy buffers or frees retained NDI
+                // frame-sync buffers).
+                if (!frameEnqueued)
+                    frameOwner?.Dispose();
+
+                // §8.9 — when using the native zero-copy owner, FreeVideo moved to
+                // NDIVideoFrameOwner.Dispose so the NDI frame can outlive this loop
+                // iteration. The legacy copy path still frees here.
+                if (haveFrame && frame.PData != nint.Zero && !frameFreedByOwner)
                 {
                     try { lock (_frameSyncGate) _frameSync.FreeVideo(frame); }
                     catch (Exception ex) { Log.LogWarning(ex, "FreeVideo threw"); }
@@ -394,39 +437,98 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
         && a.PixelFormat == b.PixelFormat
         && Math.Abs(a.FrameRate - b.FrameRate) < 0.01;
 
-    private bool TryCopyFrameToTightBuffer(
+    /// <summary>
+    /// §8.9 — zero-copy fast path: retain the native NDI frame in
+    /// <see cref="NDIVideoFrameOwner"/> and expose its payload as
+    /// <see cref="ReadOnlyMemory{T}"/>. Falls back when layout is not tightly
+    /// packed or when YV12 U/V planes must be swapped to I420.
+    /// </summary>
+    private bool TryWrapFrameZeroCopy(
         in NDIVideoFrameV2 frame,
-        out PixelFormat pixelFormat,
-        out byte[] rented,
-        out int totalBytes)
+        PixelFormat pixelFormat,
+        out NDIVideoFrameOwner owner,
+        out ReadOnlyMemory<byte> payload)
     {
-        pixelFormat = default;
-        rented = Array.Empty<byte>();
-        totalBytes = 0;
+        owner = null!;
+        payload = default;
 
-        if (!TryMapFourCc(frame.FourCC, out pixelFormat))
+        int totalBytes;
+        switch (pixelFormat)
         {
-            // §4.17 / N7 — log + event on first encounter of each distinct
-            // FourCC. Per-FourCC dedup means a buggy sender streaming
-            // unsupported frames only fires one event + one log per kind.
-            if (_unsupportedFourCcLogged.Add(frame.FourCC))
+            case PixelFormat.Bgra32:
+            case PixelFormat.Rgba32:
             {
-                Log.LogWarning("NDIVideoChannel unsupported FourCC={FourCC} ({FourCCInt}) x={Width} y={Height} stride={Stride}; frame dropped",
-                    frame.FourCC, (uint)frame.FourCC, frame.Xres, frame.Yres, frame.LineStrideInBytes);
-                try { UnsupportedFourCc?.Invoke(this, new NDIUnsupportedFourCcEventArgs((uint)frame.FourCC, isAudio: false)); }
-                catch (Exception ex) { Log.LogWarning(ex, "UnsupportedFourCc handler threw"); }
+                int rowBytes = checked(frame.Xres * 4);
+                int stride = frame.LineStrideInBytes > 0 ? frame.LineStrideInBytes : rowBytes;
+                if (stride != rowBytes) return false;
+                totalBytes = checked(rowBytes * frame.Yres);
+                break;
             }
-            return false;
+            case PixelFormat.Uyvy422:
+            {
+                int rowBytes = checked(frame.Xres * 2);
+                int stride = frame.LineStrideInBytes > 0 ? frame.LineStrideInBytes : rowBytes;
+                if (stride != rowBytes) return false;
+                totalBytes = checked(rowBytes * frame.Yres);
+                break;
+            }
+            case PixelFormat.Nv12:
+            {
+                int w = frame.Xres;
+                int h = frame.Yres;
+                int yRowBytes = w;
+                int uvRowBytes = w;
+                int chromaRows = (h + 1) / 2;
+                int yStride = frame.LineStrideInBytes > 0 ? frame.LineStrideInBytes : yRowBytes;
+                if (yStride != yRowBytes) return false;
+                totalBytes = checked((yRowBytes * h) + (uvRowBytes * chromaRows));
+                break;
+            }
+            case PixelFormat.Yuv420p:
+            {
+                // YV12 is V+U planar order; our PixelFormat.Yuv420p contract is
+                // I420 (Y+U+V), so this case still requires a copy+swap.
+                if (frame.FourCC == NDIFourCCVideoType.Yv12) return false;
+
+                int w = frame.Xres;
+                int h = frame.Yres;
+                int yRowBytes = w;
+                int uvRowBytes = Math.Max(1, (w + 1) / 2);
+                int chromaRows = Math.Max(1, (h + 1) / 2);
+                int yStride = frame.LineStrideInBytes > 0 ? frame.LineStrideInBytes : yRowBytes;
+                int uvStride = Math.Max(uvRowBytes, yStride / 2);
+                if (yStride != yRowBytes || uvStride != uvRowBytes) return false;
+                totalBytes = checked((yRowBytes * h) + (uvRowBytes * chromaRows) + (uvRowBytes * chromaRows));
+                break;
+            }
+            default:
+                return false;
         }
 
-        return pixelFormat switch
+        owner = new NDIVideoFrameOwner(_frameSync, _frameSyncGate, frame, totalBytes);
+        payload = owner.Memory;
+        return true;
+    }
+
+    private static bool CopyFrameToTightBuffer(
+        in NDIVideoFrameV2 frame,
+        PixelFormat pixelFormat,
+        out byte[] rented,
+        out int totalBytes)
+        => pixelFormat switch
         {
             PixelFormat.Bgra32 or PixelFormat.Rgba32 => CopyPacked(frame, bytesPerPixel: 4, out rented, out totalBytes),
             PixelFormat.Uyvy422 => CopyPacked(frame, bytesPerPixel: 2, out rented, out totalBytes),
             PixelFormat.Nv12 => CopyNv12(frame, out rented, out totalBytes),
             PixelFormat.Yuv420p => CopyI420(frame, out rented, out totalBytes),
-            _ => false,
+            _ => FailCopy(out rented, out totalBytes),
         };
+
+    private static bool FailCopy(out byte[] rented, out int totalBytes)
+    {
+        rented = Array.Empty<byte>();
+        totalBytes = 0;
+        return false;
     }
 
     private static bool TryMapFourCc(NDIFourCCVideoType fourCc, out PixelFormat pixelFormat)
@@ -561,21 +663,31 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 
     public int FillBuffer(Span<VideoFrame> dest, int frameCount)
     {
-        int filled = 0;
-        for (int i = 0; i < frameCount; i++)
+        // §3.48 / CH1 — assert single-reader invariant in debug builds.
+        Debug.Assert(Interlocked.Exchange(ref _fillBufferActive, 1) == 0,
+            "NDIVideoChannel.FillBuffer called concurrently — the contract requires single-threaded pull.");
+        try
         {
-            if (!_ringReader.TryRead(out var vf)) break;
-            long after = Interlocked.Decrement(ref _framesInRing);
-            // §3.47e — invariant: _framesInRing must never go negative.
-            Debug.Assert(after >= 0, "NDIVideoChannel._framesInRing went negative on FillBuffer");
-            dest[i] = vf;
-            Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
-            Interlocked.Increment(ref _framesDequeued);
-            filled++;
+            int filled = 0;
+            for (int i = 0; i < frameCount; i++)
+            {
+                if (!_ringReader.TryRead(out var vf)) break;
+                long after = Interlocked.Decrement(ref _framesInRing);
+                // §3.47e — invariant: _framesInRing must never go negative.
+                Debug.Assert(after >= 0, "NDIVideoChannel._framesInRing went negative on FillBuffer");
+                dest[i] = vf;
+                Volatile.Write(ref _positionTicks, vf.Pts.Ticks);
+                Interlocked.Increment(ref _framesDequeued);
+                filled++;
+            }
+            if (filled == 0 && Interlocked.Read(ref _framesDequeued) > 0)
+                RaiseBufferUnderrun();
+            return filled;
         }
-        if (filled == 0 && Interlocked.Read(ref _framesDequeued) > 0)
-            RaiseBufferUnderrun();
-        return filled;
+        finally
+        {
+            Interlocked.Exchange(ref _fillBufferActive, 0);
+        }
     }
 
     private void RaiseBufferUnderrun()
@@ -725,18 +837,96 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
 }
 
 /// <summary>
-/// Wraps an <see cref="ArrayPool{T}"/> rental for a video frame byte buffer.
-/// Passed as <see cref="VideoFrame.MemoryOwner"/>; the consumer must call
-/// <see cref="Dispose"/> once the frame data is no longer needed.
+/// Frame payload owner used by <see cref="NDIVideoChannel"/>.
+/// <list type="bullet">
+/// <item>Copy path: owns an <see cref="ArrayPool{T}"/> byte[] rental.</item>
+/// <item>§8.9 zero-copy path: owns a retained <see cref="NDIVideoFrameV2"/> and
+/// frees it through <see cref="NDIFrameSync.FreeVideo"/> on dispose.</item>
+/// </list>
 /// </summary>
-internal sealed class NDIVideoFrameOwner(byte[] array) : IDisposable
+internal sealed class NDIVideoFrameOwner : MemoryManager<byte>
 {
-    private byte[]? _array = array;
+    private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIVideoFrameOwner));
 
-    public void Dispose()
+    private byte[]? _array;
+    private readonly NDIFrameSync? _frameSync;
+    private readonly Lock? _frameSyncGate;
+    private NDIVideoFrameV2 _nativeFrame;
+    private readonly int _length;
+    private int _disposed;
+
+    public NDIVideoFrameOwner(byte[] array, int length)
     {
+        _array = array;
+        _length = length;
+    }
+
+    public NDIVideoFrameOwner(NDIFrameSync frameSync, Lock frameSyncGate, in NDIVideoFrameV2 frame, int length)
+    {
+        _frameSync = frameSync;
+        _frameSyncGate = frameSyncGate;
+        _nativeFrame = frame;
+        _length = length;
+    }
+
+    public override unsafe Span<byte> GetSpan()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_array is not null)
+            return _array.AsSpan(0, _length);
+
+        return new Span<byte>((void*)_nativeFrame.PData, _length);
+    }
+
+    protected override bool TryGetArray(out ArraySegment<byte> segment)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_array is not null)
+        {
+            segment = new ArraySegment<byte>(_array, 0, _length);
+            return true;
+        }
+
+        segment = default;
+        return false;
+    }
+
+    public override unsafe MemoryHandle Pin(int elementIndex = 0)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if ((uint)elementIndex > (uint)_length)
+            throw new ArgumentOutOfRangeException(nameof(elementIndex));
+
+        if (_array is not null)
+        {
+            var handle = GCHandle.Alloc(_array, GCHandleType.Pinned);
+            void* ptr = (byte*)handle.AddrOfPinnedObject() + elementIndex;
+            return new MemoryHandle(ptr, handle, this);
+        }
+
+        return new MemoryHandle((byte*)_nativeFrame.PData + elementIndex, default, this);
+    }
+
+    public override void Unpin() { }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         var arr = Interlocked.Exchange(ref _array, null);
-        if (arr is not null) ArrayPool<byte>.Shared.Return(arr);
+        if (arr is not null)
+        {
+            ArrayPool<byte>.Shared.Return(arr);
+            return;
+        }
+
+        var frame = _nativeFrame;
+        _nativeFrame = default;
+        if (frame.PData != nint.Zero && _frameSync is not null)
+        {
+            try { lock (_frameSyncGate!) _frameSync.FreeVideo(frame); }
+            catch (Exception ex) { Log.LogWarning(ex, "FreeVideo threw in NDIVideoFrameOwner.Dispose"); }
+        }
     }
 }
-

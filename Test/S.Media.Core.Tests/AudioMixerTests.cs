@@ -73,6 +73,60 @@ public sealed class AudioMixerTests
         Assert.All(buf, v => Assert.Equal(0f, v));
     }
 
+    // ── ApplyGainRamp ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void ApplyGainRamp_EqualEndpoints_ActsAsApplyGain()
+    {
+        var buf = new float[8];
+        for (int i = 0; i < buf.Length; i++) buf[i] = 1.0f;
+        Mixer.ApplyGainRamp(buf, 0.5f, 0.5f, channels: 1);
+        Assert.All(buf, v => Assert.Equal(0.5f, v, 5));
+    }
+
+    [Fact]
+    public void ApplyGainRamp_Mono_LinearlyInterpolatesFrameByFrame()
+    {
+        // 5 frames, ramp from 0 to 1 linearly.
+        var buf = new float[] { 1, 1, 1, 1, 1 };
+        Mixer.ApplyGainRamp(buf, 0.0f, 1.0f, channels: 1);
+        // Expected: 0.0, 0.25, 0.5, 0.75, 1.0
+        Assert.Equal(0.00f, buf[0], 5);
+        Assert.Equal(0.25f, buf[1], 5);
+        Assert.Equal(0.50f, buf[2], 5);
+        Assert.Equal(0.75f, buf[3], 5);
+        Assert.Equal(1.00f, buf[4], 5);
+    }
+
+    [Fact]
+    public void ApplyGainRamp_Stereo_SharesGainPerFrame()
+    {
+        // 3 stereo frames = 6 samples; ramp 0.0 → 1.0
+        // Expected per-frame gain: 0.0, 0.5, 1.0 (applied to both L/R in that frame)
+        var buf = new float[] { 2, 4, 2, 4, 2, 4 };
+        Mixer.ApplyGainRamp(buf, 0.0f, 1.0f, channels: 2);
+        Assert.Equal(0.0f, buf[0], 5); Assert.Equal(0.0f, buf[1], 5);
+        Assert.Equal(1.0f, buf[2], 5); Assert.Equal(2.0f, buf[3], 5);
+        Assert.Equal(2.0f, buf[4], 5); Assert.Equal(4.0f, buf[5], 5);
+    }
+
+    [Fact]
+    public void ApplyGainRamp_SingleFrame_AppliesEndGain()
+    {
+        var buf = new float[] { 1, 1 };
+        Mixer.ApplyGainRamp(buf, 0.25f, 0.75f, channels: 2);
+        // With only one frame, the ramp degenerates to a flat apply of endGain.
+        Assert.All(buf, v => Assert.Equal(0.75f, v, 5));
+    }
+
+    [Fact]
+    public void ApplyGainRamp_EmptyBuffer_NoThrow()
+    {
+        var buf = Array.Empty<float>();
+        Mixer.ApplyGainRamp(buf, 0f, 1f, channels: 2);
+        // No exception = pass.
+    }
+
     // ── MeasurePeak ─────────────────────────────────────────────────────────
 
     [Fact]

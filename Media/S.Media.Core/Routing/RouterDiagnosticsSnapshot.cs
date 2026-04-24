@@ -4,7 +4,6 @@ namespace S.Media.Core.Routing;
 public sealed record RouterDiagnosticsSnapshot(
     bool IsRunning,
     TimeSpan ClockPosition,
-    bool BypassVideoPtsScheduling,
     IReadOnlyList<InputDiagnostics> Inputs,
     IReadOnlyList<EndpointDiagnostics> Endpoints,
     IReadOnlyList<RouteDiagnostics> Routes);
@@ -33,5 +32,15 @@ public sealed record RouteDiagnostics(
     float Gain,
     TimeSpan TimeOffset,
     bool HasResampler,
-    bool LiveMode = false);
+    bool LiveMode = false,
+    PtsDriftTrackerSnapshot? PushVideoDrift = null,
+    PtsDriftTrackerSnapshot? PullVideoDrift = null);
 
+/// <summary>
+/// Diagnostic snapshot of one <c>PtsDriftTracker</c> instance (push or pull path).
+/// </summary>
+public readonly record struct PtsDriftTrackerSnapshot(
+    bool HasOrigin,
+    TimeSpan PtsOrigin,
+    TimeSpan ClockOrigin,
+    TimeSpan OriginDrift);

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Avalonia.Controls;
+using Avalonia.Input;
 using FFmpeg.AutoGen;
 using S.Media.Avalonia;
 using S.Media.Core.Audio;
@@ -51,6 +52,7 @@ public sealed class MainWindow : Window
 
         Opened += OnOpened;
         Closed += OnClosed;
+        KeyDown += OnKeyDown;
     }
 
     private async void OnOpened(object? sender, EventArgs e)
@@ -65,6 +67,7 @@ public sealed class MainWindow : Window
             int videoBufferDepth = Math.Max(1, GetIntOptionValue(_args, "--video-buffer", 4));
             int catchupLagMs = Math.Max(1, GetIntOptionValue(_args, "--catchup-lag-ms", 45));
             int maxCatchupPulls = Math.Max(0, GetIntOptionValue(_args, "--max-catchup-pulls", 6));
+            bool limitRenderToInputFps = GetBoolOptionValue(_args, "--limit-render-fps", defaultValue: true);
 
             string? filePath = GetFilePathFromArgs(_args);
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
@@ -72,6 +75,7 @@ public sealed class MainWindow : Window
 
             _videoOutput.CatchupLagThreshold = TimeSpan.FromMilliseconds(catchupLagMs);
             _videoOutput.MaxCatchupPullsPerRender = maxCatchupPulls;
+            _videoOutput.LimitRenderToInputFps = limitRenderToInputFps;
 
             _decoder = FFmpegDecoder.Open(filePath, new FFmpegDecoderOptions
             {
@@ -80,7 +84,9 @@ public sealed class MainWindow : Window
                 DecoderThreadCount = decoderThreads, // 0 = FFmpeg auto threading.
                 VideoBufferDepth = videoBufferDepth,
                 PreferHardwareDecoding = !forceSoftwareDecode,
-                VideoTargetPixelFormat = PixelFormat.Rgba32
+                // Keep native decode format so the video endpoint can use its
+                // direct multi-format shader upload paths (NV12/I420/UYVY/...).
+                VideoTargetPixelFormat = null
             });
 
             var decDiag = _decoder.GetDiagnosticsSnapshot();
@@ -95,7 +101,8 @@ public sealed class MainWindow : Window
 
             Console.WriteLine(
                 $"[MFPlayer.AvaloniaVideoPlayer] hw={(forceSoftwareDecode ? "sw-forced" : "auto")} " +
-                $"threads={decoderThreads} videoBuffer={videoBufferDepth} catchupLagMs={catchupLagMs} maxCatchupPulls={maxCatchupPulls}");
+                $"threads={decoderThreads} videoBuffer={videoBufferDepth} catchupLagMs={catchupLagMs} " +
+                $"maxCatchupPulls={maxCatchupPulls} limitRenderFps={(limitRenderToInputFps ? "on" : "off")}");
             _ = hardwareDeviceType; // suppress unused-variable warning (--hw flag kept for backward compat but no longer used)
 
             if (_decoder.VideoChannels.Count == 0)
@@ -111,7 +118,7 @@ public sealed class MainWindow : Window
             var resolvedMatrix = YuvAutoPolicy.ResolveMatrix(hintedMatrix, srcFmt.Width, srcFmt.Height);
             Console.WriteLine(
                 $"[MFPlayer.AvaloniaVideoPlayer] yuvPolicy hint[{RangeLabel(hintedRange)}/{MatrixLabel(hintedMatrix)}] " +
-                $"resolved[{RangeLabel(resolvedRange)}/{MatrixLabel(resolvedMatrix)}] path=cpu-convert-to-rgba");
+                $"resolved[{RangeLabel(resolvedRange)}/{MatrixLabel(resolvedMatrix)}] path=native-passthrough");
 
             _videoOutput.Open(
                 title: "MFPlayer - Avalonia Video Player",
@@ -303,11 +310,35 @@ public sealed class MainWindow : Window
         return int.TryParse(valueText, out int parsed) ? parsed : defaultValue;
     }
 
+    private static bool GetBoolOptionValue(string[] args, string option, bool defaultValue)
+    {
+        var valueText = GetOptionValue(args, option);
+        if (string.IsNullOrWhiteSpace(valueText))
+            return defaultValue;
+
+        return valueText.Trim().ToLowerInvariant() switch
+        {
+            "1" or "true" or "on" or "yes" or "y" => true,
+            "0" or "false" or "off" or "no" or "n" => false,
+            _ => defaultValue,
+        };
+    }
+
     private static bool HasOption(string[] args, string option)
     {
         foreach (var arg in args)
             if (arg.Equals(option, StringComparison.OrdinalIgnoreCase))
                 return true;
         return false;
+    }
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.H)
+            return;
+
+        _videoOutput.ShowHud = !_videoOutput.ShowHud;
+        Console.WriteLine($"[MFPlayer.AvaloniaVideoPlayer] HUD {(_videoOutput.ShowHud ? "ON" : "OFF")}");
+        e.Handled = true;
     }
 }

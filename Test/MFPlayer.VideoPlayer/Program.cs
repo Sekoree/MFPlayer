@@ -244,8 +244,27 @@ using (decoder)
     using var videoOutput = new SDL3VideoEndpoint();
     YuvColorRange selectedRange;
     YuvColorMatrix selectedMatrix;
+    bool limitRenderToInputFps;
     try
     {
+        if (cli.LimitRenderToInputFps.HasValue)
+        {
+            limitRenderToInputFps = cli.LimitRenderToInputFps.Value;
+        }
+        else if (cli.NoPrompt)
+        {
+            // Prefer source-cadence rendering in unattended mode to reduce
+            // CPU/GPU use for low-FPS content.
+            limitRenderToInputFps = true;
+        }
+        else
+        {
+            Console.Write("Limit local render FPS to source FPS? [Y/n]: ");
+            string raw = (Console.ReadLine() ?? string.Empty).Trim();
+            limitRenderToInputFps = string.IsNullOrEmpty(raw) || ParseOnOff(raw);
+        }
+
+        videoOutput.LimitRenderToInputFps = limitRenderToInputFps;
         videoOutput.Open("MFPlayer — Video Player",
             initialWindow.Width,
             initialWindow.Height,
@@ -289,6 +308,7 @@ using (decoder)
 
         var resolvedRange = YuvAutoPolicy.ResolveRange(selectedRange);
         var resolvedMatrix = YuvAutoPolicy.ResolveMatrix(selectedMatrix, srcFmt.Width, srcFmt.Height);
+        Console.WriteLine($"  Local render FPS limit: {(limitRenderToInputFps ? "source FPS" : "display refresh")}");
         Console.WriteLine($"  YUV policy: req[{RangeLabel(selectedRange)}/{MatrixLabel(selectedMatrix)}] -> resolved[{RangeLabel(resolvedRange)}/{MatrixLabel(resolvedMatrix)}], hint[{RangeLabel(suggestedRange)}/{MatrixLabel(suggestedMatrix)}]");
     }
     catch (Exception ex)
@@ -298,29 +318,17 @@ using (decoder)
     }
     Console.WriteLine("OK");
 
-    // ── 4. Wire up ───────────────────────────────────────────────────────
+    // ── 4. Configure optional NDI sink ──────────────────────────────────
 
-    using var router = new AVRouter(new AVRouterOptions
-    {
-        // Tighter tick cadence → frames sit in the push subscription for less time
-        // before being flushed to the NDI sink.  Higher CPU at tighter values
-        // (the spin-wait tail in PushVideoThreadLoop).
-        InternalTickCadence = enableNdi ? RouterTickFor(ndiPreset) : TimeSpan.FromMilliseconds(10),
-    });
-    var videoEpId = router.RegisterEndpoint(videoOutput);
-    router.SetClock(videoOutput.Clock);
-
-    var videoInputId = router.RegisterVideoInput(videoChannel);
     var localVideoDelay = TimeSpan.FromMilliseconds(cli.LocalVideoDelayMs ?? 0);
-    router.CreateRoute(videoInputId, videoEpId, new VideoRouteOptions
-    {
-        TimeOffset = localVideoDelay,
-    });
+    var ndiDelay = TimeSpan.FromMilliseconds(cli.NdiDelayMs ?? 0);
 
-    // Optional: route the same active channel to an NDI A/V sink.
+    // Optional: mirror the same active channel(s) to an NDI A/V sink.
     NDIRuntime? ndiRuntime = null;
     NDISender? ndiSender = null;
     NDIAVEndpoint? ndiSink = null;
+    ChannelRouteMap? ndiAudioRouteMap = null;
+    IAudioChannel? ndiAudioChannel = null;
 
     if (enableNdi)
     {
@@ -383,13 +391,12 @@ using (decoder)
                 else
                 {
                     AudioFormat? ndiAudioFormat = null;
-                    ChannelRouteMap? routeMap = null;
                     if (decoder.AudioChannels.Count > 0)
                     {
-                        var sourceAudioChannel = decoder.AudioChannels[0];
-                        var srcAudio = sourceAudioChannel.SourceFormat;
+                        ndiAudioChannel = decoder.AudioChannels[0];
+                        var srcAudio = ndiAudioChannel.SourceFormat;
                         ndiAudioFormat = new AudioFormat(48000, Math.Min(srcAudio.Channels, 2));
-                        routeMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
+                        ndiAudioRouteMap = BuildAudioRouteMap(srcAudio.Channels, ndiAudioFormat.Value.Channels);
                     }
 
                     ndiSink = new NDIAVEndpoint(ndiSender, new NDIAVSinkOptions
@@ -411,34 +418,105 @@ using (decoder)
                         // timecodes (NDIAvTimingContext), not rate nudging.
                         EnableAudioDriftCorrection   = false,
                     });
-                    var ndiEpId = router.RegisterEndpoint(ndiSink);
-                    var ndiDelay = TimeSpan.FromMilliseconds(cli.NdiDelayMs ?? 0);
-                    router.CreateRoute(videoInputId, ndiEpId, new VideoRouteOptions
-                    {
-                        TimeOffset = ndiDelay,
-                    });
-                    await ndiSink.StartAsync();
-
-                    if (decoder.AudioChannels.Count > 0 && routeMap != null)
-                    {
-                        var sourceAudioChannel = decoder.AudioChannels[0];
-                        var audioInputId = router.RegisterAudioInput(sourceAudioChannel);
-                        router.CreateRoute(audioInputId, ndiEpId, new AudioRouteOptions
-                        {
-                            ChannelMap = routeMap,
-                            TimeOffset = ndiDelay,
-                        });
-                    }
-
                     Console.WriteLine($"  NDI sink enabled: {senderName} ({preset}, mode={(preferPerformanceOverQuality ? "perf" : "quality")})");
-                    if (ndiDelay != TimeSpan.Zero || localVideoDelay != TimeSpan.Zero)
-                        Console.WriteLine($"  Route delays: local-video={localVideoDelay.TotalMilliseconds:+0;-0;0} ms, ndi={ndiDelay.TotalMilliseconds:+0;-0;0} ms");
                     if (decoder.AudioChannels.Count > 0)
                         Console.WriteLine("  NDI audio enabled from source audio track.");
                 }
             }
         }
     }
+
+    // ── 4b. Build player graph (builder API) ───────────────────────────
+
+    var playerBuilder = MediaPlayer.Create()
+        .WithRouterOptions(new AVRouterOptions
+        {
+            // Tighter tick cadence → frames sit in the push subscription for less time
+            // before being flushed to the NDI sink. Higher CPU at tighter values.
+            InternalTickCadence = enableNdi ? RouterTickFor(ndiPreset) : TimeSpan.FromMilliseconds(10),
+        })
+        .WithVideoOutput(videoOutput)
+        .WithVideoInput(videoChannel)
+        .WithClock(videoOutput.Clock, ClockPriority.Hardware);
+
+    if (ndiSink != null)
+        playerBuilder.WithAVOutput(ndiSink);
+    if (ndiAudioChannel != null)
+        playerBuilder.WithAudioInput(ndiAudioChannel);
+
+    using var player = playerBuilder.Build();
+
+    // Rewire routes explicitly so per-endpoint delays remain configurable.
+    // The builder's default external-input auto-routes use default options.
+    var router = player.Router;
+    var graph = router.GetDiagnosticsSnapshot();
+    foreach (var route in graph.Routes)
+        router.RemoveRoute(route.Id);
+
+    static InputId RequireInputId(RouterDiagnosticsSnapshot diag, string kind)
+    {
+        for (int i = 0; i < diag.Inputs.Count; i++)
+        {
+            if (string.Equals(diag.Inputs[i].Kind, kind, StringComparison.Ordinal))
+                return diag.Inputs[i].Id;
+        }
+
+        throw new InvalidOperationException($"Expected an input of kind '{kind}' in the builder-wired graph.");
+    }
+
+    static EndpointId RequireEndpointId(RouterDiagnosticsSnapshot diag, string kind)
+    {
+        for (int i = 0; i < diag.Endpoints.Count; i++)
+        {
+            if (string.Equals(diag.Endpoints[i].Kind, kind, StringComparison.Ordinal))
+                return diag.Endpoints[i].Id;
+        }
+
+        throw new InvalidOperationException($"Expected an endpoint of kind '{kind}' in the builder-wired graph.");
+    }
+
+    static bool TryFindEndpointId(RouterDiagnosticsSnapshot diag, string kind, out EndpointId id)
+    {
+        for (int i = 0; i < diag.Endpoints.Count; i++)
+        {
+            if (string.Equals(diag.Endpoints[i].Kind, kind, StringComparison.Ordinal))
+            {
+                id = diag.Endpoints[i].Id;
+                return true;
+            }
+        }
+
+        id = default;
+        return false;
+    }
+
+    var videoInputId = RequireInputId(graph, "Video");
+    var localVideoEndpointId = RequireEndpointId(graph, "Video");
+    router.CreateRoute(videoInputId, localVideoEndpointId, new VideoRouteOptions
+    {
+        TimeOffset = localVideoDelay
+    });
+
+    if (ndiSink != null && TryFindEndpointId(graph, "AV", out var ndiEndpointId))
+    {
+        router.CreateRoute(videoInputId, ndiEndpointId, new VideoRouteOptions
+        {
+            TimeOffset = ndiDelay
+        });
+
+        if (ndiAudioChannel != null && ndiAudioRouteMap != null)
+        {
+            var audioInputId = RequireInputId(graph, "Audio");
+            router.CreateRoute(audioInputId, ndiEndpointId, new AudioRouteOptions
+            {
+                ChannelMap = ndiAudioRouteMap,
+                TimeOffset = ndiDelay
+            });
+        }
+    }
+
+    if (ndiDelay != TimeSpan.Zero || localVideoDelay != TimeSpan.Zero)
+        Console.WriteLine($"  Route delays: local-video={localVideoDelay.TotalMilliseconds:+0;-0;0} ms, ndi={ndiDelay.TotalMilliseconds:+0;-0;0} ms");
 
     // ── 5. Auto-stop on window close ─────────────────────────────────────
 
@@ -554,8 +632,7 @@ using (decoder)
             $"(audio.buf={audioCh.BufferAvailable} samples).");
     }
 
-    await videoOutput.StartAsync();
-    await router.StartAsync();
+    await player.PlayAsync();
 
     Console.WriteLine($"\nPlaying: {Path.GetFileName(filePath)}");
     Console.WriteLine("Close the window or press [Ctrl+C] to stop.");
@@ -749,12 +826,8 @@ using (decoder)
     Console.Write("\nStopping… ");
     cts.Cancel();
     try { await statsTask; } catch (OperationCanceledException) { }
-    await videoOutput.StopAsync();
-    if (ndiSink != null)
-    {
-        await ndiSink.StopAsync();
-        ndiSink.Dispose();
-    }
+    await player.StopAsync();
+    ndiSink?.Dispose();
     ndiSender?.Dispose();
     ndiRuntime?.Dispose();
     Console.WriteLine("Done.");
@@ -767,6 +840,7 @@ static void PrintUsage()
     Console.WriteLine("MFPlayer.VideoPlayer options:");
     Console.WriteLine("  --file <path>                Video file path (non-interactive)");
     Console.WriteLine("  --ndi <on|off>               Enable/disable NDI sink");
+    Console.WriteLine("  --limit-render-fps <on|off>  Limit local render FPS to source FPS");
     Console.WriteLine("  --ndi-preset <safe|balanced|lowlatency>");
     Console.WriteLine("  --ndi-name <name>            NDI sender/source name");
     Console.WriteLine("  --ndi-mode <quality|performance>");
@@ -807,6 +881,11 @@ static CliOptions ParseArgs(string[] args)
 
             case "--ndi":
                 if (i + 1 < args.Length) cli.EnableNdi = ParseOnOff(args[++i]);
+                i++;
+                break;
+
+            case "--limit-render-fps":
+                if (i + 1 < args.Length) cli.LimitRenderToInputFps = ParseOnOff(args[++i]);
                 i++;
                 break;
 
@@ -923,6 +1002,7 @@ sealed class CliOptions
     public NDIEndpointPreset? NdiPreset { get; set; }
     public string? NdiSenderName { get; set; }
     public bool? NdiPreferPerformance { get; set; }
+    public bool? LimitRenderToInputFps { get; set; }
     public YuvColorRange? YuvRange { get; set; }
     public YuvColorMatrix? YuvMatrix { get; set; }
     public double? NdiDelayMs { get; set; }

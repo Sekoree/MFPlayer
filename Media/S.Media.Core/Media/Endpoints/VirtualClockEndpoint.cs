@@ -48,7 +48,7 @@ public sealed class VirtualClockEndpoint : IAudioEndpoint, IClockCapableEndpoint
     // ── IAudioEndpoint ───────────────────────────────────────────────────
 
     /// <summary>Silently consumes audio. The clock advances via its own stopwatch.</summary>
-    public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format)
+    public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format, TimeSpan sourcePts)
     {
         // No-op — virtual endpoint discards audio.
     }
@@ -74,4 +74,3 @@ public sealed class VirtualClockEndpoint : IAudioEndpoint, IClockCapableEndpoint
         _clock.Dispose();
     }
 }
-

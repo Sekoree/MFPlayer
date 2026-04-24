@@ -41,6 +41,7 @@ public sealed class SDL3VideoCloneEndpoint : IVideoEndpoint, IFormatCapabilities
     private bool _closeRequested;
     private bool _disposed;
     private bool _running;
+    private SDL3ProcessEventPump.Subscription? _eventSubscription;
 
     // Identity of the last frame uploaded to the GPU — used to skip
     // glTexSubImage2D when the same frame is still the latest.
@@ -98,6 +99,8 @@ public sealed class SDL3VideoCloneEndpoint : IVideoEndpoint, IFormatCapabilities
         _renderer.SetVideoSize(Math.Max(1, _format.Width), Math.Max(1, _format.Height));
 
         SDL.GLMakeCurrent(_window, nint.Zero);
+
+        _eventSubscription = SDL3ProcessEventPump.RegisterWindow(_window);
     }
 
     public Task StartAsync(CancellationToken ct = default)
@@ -198,7 +201,8 @@ public sealed class SDL3VideoCloneEndpoint : IVideoEndpoint, IFormatCapabilities
         var token = _cts!.Token;
         while (!token.IsCancellationRequested && !_closeRequested)
         {
-            while (SDL.PollEvent(out var evt))
+            var eventSubscription = _eventSubscription;
+            while (eventSubscription is not null && eventSubscription.TryDequeue(out var evt))
             {
                 var eventType = (SDL.EventType)evt.Type;
                 if (eventType is SDL.EventType.Quit or SDL.EventType.WindowCloseRequested)
@@ -285,7 +289,9 @@ public sealed class SDL3VideoCloneEndpoint : IVideoEndpoint, IFormatCapabilities
         _renderThread = null;
         _renderer = null;
 
+        _eventSubscription?.Dispose();
+        _eventSubscription = null;
+
         SDL3VideoEndpoint.ReleaseSdlVideo();
     }
 }
-

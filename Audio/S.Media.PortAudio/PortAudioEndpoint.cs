@@ -100,7 +100,7 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
     public AudioFormat? NegotiatedFormat => _hardwareFormat;
 
     /// <inheritdoc/>
-    public abstract void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat);
+    public abstract void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat, TimeSpan sourcePts);
 
     // ── Factory ───────────────────────────────────────────────────────────
 
@@ -346,7 +346,7 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
         public AudioFormat EndpointFormat => _hardwareFormat;
         public int FramesPerBuffer        => _framesPerBuffer;
 
-        public override void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
+        public override void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat, TimeSpan sourcePts)
         {
             // Pull endpoints do not use push delivery.
         }
@@ -519,7 +519,7 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
                 userData:         nint.Zero);
         }
 
-        public override void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
+        public override void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat, TimeSpan sourcePts)
         {
             if (!_isRunning) return;
 
@@ -693,4 +693,3 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
         }
     }
 }
-

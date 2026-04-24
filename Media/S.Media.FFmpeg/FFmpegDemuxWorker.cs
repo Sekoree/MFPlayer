@@ -108,6 +108,12 @@ internal static class FFmpegDemuxWorker
     {
         try
         {
+            // §8.5 — fast path: bounded channels often have immediate space.
+            // Avoiding the async state machine in this case trims per-packet
+            // overhead on demux-heavy streams.
+            if (writer.TryWrite(packet))
+                return true;
+
             await writer.WriteAsync(packet, token).ConfigureAwait(false);
             return true;
         }

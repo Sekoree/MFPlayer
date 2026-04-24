@@ -43,13 +43,59 @@ public sealed class MediaPlayerBuilder
 
     private readonly List<PendingEndpoint>                        _endpoints = [];
     private readonly List<(IMediaClock Clock, ClockPriority Pri)> _clocks    = [];
+    private readonly List<(Func<MediaPlayer, CancellationToken, Task> BeforePlay, Func<MediaPlayer, CancellationToken, Task>? BeforeClose)> _lifecycleHooks = [];
     private          AVRouterOptions?                             _routerOptions;
     private          FFmpegDecoderOptions?                        _decoderOptions;
     private          Action<PlaybackFailedEventArgs>?             _onError;
     private          Action<PlaybackStateChangedEventArgs>?       _onStateChanged;
     private          Action<PlaybackCompletedEventArgs>?          _onCompleted;
 
+    // Capture external inputs for registration during Build().
+    private readonly record struct PendingInput(object Channel, bool IsAudio, AudioRouteOptions? AudioOptions, VideoRouteOptions? VideoOptions);
+
+    private readonly List<PendingInput> _inputs = [];
+
     internal MediaPlayerBuilder() { }
+
+    // ── Inputs ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// §5.7 — Registers an external audio input (e.g. an <c>NDIAudioChannel</c>)
+    /// that is not backed by an FFmpeg decoder. The input is registered with the
+    /// router during <see cref="Build"/> and automatically routed to all
+    /// audio-capable endpoints. Only one external audio input is supported via the
+    /// builder — for multi-input scenarios, use <see cref="MediaPlayer.Router"/>
+    /// directly.
+    /// </summary>
+    public MediaPlayerBuilder WithAudioInput(IAudioChannel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        _inputs.Add(new PendingInput(channel, IsAudio: true, AudioOptions: null, VideoOptions: null));
+        return this;
+    }
+
+    /// <summary>
+    /// §5.7 — Registers an external video input (e.g. an <c>NDIVideoChannel</c>)
+    /// that is not backed by an FFmpeg decoder. The input is registered with the
+    /// router during <see cref="Build"/> and automatically routed to all
+    /// video-capable endpoints. Only one external video input is supported via the
+    /// builder — for multi-input scenarios, use <see cref="MediaPlayer.Router"/>
+    /// directly.
+    /// </summary>
+    public MediaPlayerBuilder WithVideoInput(IVideoChannel channel)
+        => WithVideoInput(channel, routeOptions: null);
+
+    /// <summary>
+    /// §5.7 — Registers an external video input with explicit route options
+    /// (e.g. live-mode, overflow policy, subscription capacity) applied to the
+    /// auto-created routes.
+    /// </summary>
+    public MediaPlayerBuilder WithVideoInput(IVideoChannel channel, VideoRouteOptions? routeOptions)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        _inputs.Add(new PendingInput(channel, IsAudio: false, AudioOptions: null, VideoOptions: routeOptions));
+        return this;
+    }
 
     // ── Endpoints ─────────────────────────────────────────────────────────────
 
@@ -153,6 +199,34 @@ public sealed class MediaPlayerBuilder
         return this;
     }
 
+    /// <summary>
+    /// §5.9 — Enables a background loop that periodically measures A/V drift via
+    /// <see cref="IAVRouter.GetAvDrift"/> and nudges
+    /// <see cref="IAVRouter.SetInputTimeOffset"/> to keep audio and video in sync.
+    /// Only takes effect when both an audio and a video input are registered.
+    /// </summary>
+    public MediaPlayerBuilder WithAutoAvDriftCorrection(AvDriftCorrectionOptions? options = null)
+    {
+        _driftCorrectionOptions = options ?? new AvDriftCorrectionOptions();
+        return this;
+    }
+
+    private AvDriftCorrectionOptions? _driftCorrectionOptions;
+
+    /// <summary>
+    /// Internal extension point used by endpoint/input packages (e.g. NDI) to
+    /// orchestrate source-specific pre-play and pre-close work while keeping
+    /// the core builder free of concrete backend dependencies.
+    /// </summary>
+    internal MediaPlayerBuilder WithLifecycleHook(
+        Func<MediaPlayer, CancellationToken, Task> beforePlay,
+        Func<MediaPlayer, CancellationToken, Task>? beforeClose = null)
+    {
+        ArgumentNullException.ThrowIfNull(beforePlay);
+        _lifecycleHooks.Add((beforePlay, beforeClose));
+        return this;
+    }
+
     // ── Event wiring ──────────────────────────────────────────────────────────
 
     /// <summary>
@@ -225,6 +299,27 @@ public sealed class MediaPlayerBuilder
                             $"Endpoint type {pending.Endpoint.GetType().Name} is not supported by the builder.");
                 }
             }
+
+            // §5.7 — register external inputs after endpoints so routes can be
+            // auto-created to all already-registered endpoints.
+            foreach (var input in _inputs)
+            {
+                if (input.IsAudio)
+                    player.RegisterExternalAudioInput((IAudioChannel)input.Channel, input.AudioOptions);
+                else
+                    player.RegisterExternalVideoInput((IVideoChannel)input.Channel, input.VideoOptions);
+            }
+
+            // §5.9 — configured here, activated on PlayAsync when inputs are live.
+            if (_driftCorrectionOptions is { } dco)
+                player.ConfigureDriftCorrection(dco);
+
+            foreach (var (beforePlay, beforeClose) in _lifecycleHooks)
+            {
+                player.AddLifecycleHook(
+                    ct => beforePlay(player, ct),
+                    beforeClose is null ? null : ct => beforeClose(player, ct));
+            }
         }
         catch
         {
@@ -239,4 +334,3 @@ public sealed class MediaPlayerBuilder
         return player;
     }
 }
-

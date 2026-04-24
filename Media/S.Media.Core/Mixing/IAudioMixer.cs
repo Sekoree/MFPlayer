@@ -25,6 +25,15 @@ public interface IAudioMixer
     void ApplyGain(Span<float> buffer, float gain);
 
     /// <summary>
+    /// Linearly ramps gain from <paramref name="startGain"/> at frame 0 to
+    /// <paramref name="endGain"/> at frame <c>frameCount-1</c>, scaling interleaved
+    /// <paramref name="buffer"/> in place. <paramref name="channels"/> samples per frame share the
+    /// same gain so the ramp is frame-aligned. Used to avoid zipper noise when
+    /// per-input/per-route gain changes between RT callbacks.
+    /// </summary>
+    void ApplyGainRamp(Span<float> buffer, float startGain, float endGain, int channels);
+
+    /// <summary>
     /// Scatters interleaved source samples into interleaved destination samples using
     /// a pre-baked channel route table.
     /// </summary>

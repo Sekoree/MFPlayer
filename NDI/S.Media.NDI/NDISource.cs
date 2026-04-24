@@ -69,46 +69,10 @@ public sealed class NDISourceOptions
     /// <summary>
     /// §4.19 — reconnect policy. <see langword="null"/> (default) disables auto-reconnect.
     /// <c>new NDIReconnectPolicy()</c> enables it with the library defaults (2 s interval).
-    /// Prefer this over the legacy <see cref="AutoReconnect"/> / <see cref="ConnectionCheckIntervalMs"/>
-    /// pair — the record collapses the two-flag coordination into one value and will let
-    /// future knobs (max backoff, retry limit) land without another flag cluster.
     /// </summary>
     public NDIReconnectPolicy? ReconnectPolicy { get; init; }
 
-    /// <summary>
-    /// Legacy flag. When <see langword="true"/>, monitors the connection and automatically
-    /// reconnects if the NDI source goes offline. Default: <see langword="false"/>.
-    /// <para>
-    /// §4.19 — superseded by <see cref="ReconnectPolicy"/>; kept for source compatibility.
-    /// The effective policy is <see cref="ReconnectPolicy"/> when non-<see langword="null"/>,
-    /// otherwise derived from this flag + <see cref="ConnectionCheckIntervalMs"/>.
-    /// </para>
-    /// </summary>
-    [Obsolete("§4.19 — use ReconnectPolicy instead. Will remain for one release.", error: false)]
-    public bool AutoReconnect { get; init; } = false;
-
-    /// <summary>
-    /// Legacy knob. How often (in ms) to check the connection status when
-    /// <see cref="AutoReconnect"/> is enabled. Default: 2000.
-    /// <para>
-    /// §4.19 — superseded by <see cref="NDIReconnectPolicy.CheckIntervalMs"/>.
-    /// </para>
-    /// </summary>
-    [Obsolete("§4.19 — use ReconnectPolicy.CheckIntervalMs instead. Will remain for one release.", error: false)]
-    public int ConnectionCheckIntervalMs { get; init; } = 2000;
-
-    /// <summary>
-    /// §4.19 — resolved reconnect policy. Returns <see cref="ReconnectPolicy"/>
-    /// when set, else reconstructs one from the legacy flags, else <see langword="null"/>
-    /// meaning "do not reconnect". Internal — <see cref="NDISource"/> reads this
-    /// instead of the raw flags.
-    /// </summary>
-#pragma warning disable CS0618 // bridging legacy flags; [Obsolete] warns callers, not this internal resolver
-    internal NDIReconnectPolicy? ResolveReconnectPolicy()
-        => ReconnectPolicy ?? (AutoReconnect
-            ? new NDIReconnectPolicy(CheckIntervalMs: ConnectionCheckIntervalMs)
-            : null);
-#pragma warning restore CS0618
+    internal NDIReconnectPolicy? ResolveReconnectPolicy() => ReconnectPolicy;
 
     /// <summary>
     /// §4.17 / N11 — maximum forward-jump (ms) the NDI video capture loop
@@ -147,10 +111,9 @@ public sealed class NDISourceOptions
     /// from the given <paramref name="preset"/>. Output-side configuration is provided by
     /// <see cref="NDIPlaybackProfile.For"/>.
     /// <para>
-    /// The returned options have <see cref="AutoReconnect"/> = <see langword="true"/> and
-    /// <see cref="EnableVideo"/> = <see langword="true"/>. Override individual properties
-    /// with <c>with { … }</c> if needed (requires converting to a mutable copy or
-    /// constructing manually).
+    /// The returned options have reconnect enabled via <see cref="ReconnectPolicy"/>
+    /// and <see cref="EnableVideo"/> = <see langword="true"/>. Override individual
+    /// properties with <c>with { … }</c> if needed.
     /// </para>
     /// </summary>
     /// <param name="preset">Endpoint latency preset.</param>
@@ -170,13 +133,7 @@ public sealed class NDISourceOptions
             LowLatency            = profile.LowLatencyPolling,
             AudioFramesPerCapture = profile.AudioFramesPerCapture,
             EnableVideo           = true,
-            // §4.19 — enable reconnect via the new record. Parallel legacy
-            // AutoReconnect=true retained for source-compat so callers that
-            // read the presets' flags still see the expected value.
             ReconnectPolicy       = NDIReconnectPolicy.Default,
-#pragma warning disable CS0618
-            AutoReconnect         = true,
-#pragma warning restore CS0618
             FinderSettings        = new NDIFinderSettings { ShowLocalSources = true },
         };
     }
@@ -188,7 +145,7 @@ public sealed class NDISourceOptions
 /// <see cref="NDIVideoChannel"/>, and starts their capture threads.
 /// Analogous to <c>FFmpegDecoder</c> for the NDI pipeline.
 /// <para>
-/// Supports automatic reconnection (<see cref="NDISourceOptions.AutoReconnect"/>) and
+/// Supports automatic reconnection (<see cref="NDISourceOptions.ReconnectPolicy"/>) and
 /// name-based discovery (<see cref="OpenByNameAsync"/>).
 /// </para>
 /// </summary>
@@ -379,7 +336,7 @@ public sealed class NDISource : IDisposable
     /// NDI source names are typically <c>"HOSTNAME (SourceName)"</c>.
     /// </para>
     /// <para>
-    /// When <see cref="NDISourceOptions.AutoReconnect"/> is <see langword="true"/>, the
+    /// When <see cref="NDISourceOptions.ReconnectPolicy"/> is configured, the
     /// internal <see cref="NDIFinder"/> is kept alive so the source can be rediscovered
     /// if it goes offline and reappears (possibly at a different IP address).
     /// </para>
@@ -436,8 +393,7 @@ public sealed class NDISource : IDisposable
         }
         ndiSource._sourceNamePattern = sourceName;
 
-        // §4.19 — keep finder alive when reconnect is requested by either API:
-        // the new ReconnectPolicy record or the legacy AutoReconnect flag.
+        // §4.19 — keep finder alive when reconnect is requested.
         if (options.ResolveReconnectPolicy() is not null)
             ndiSource._finder = finder;
         else
@@ -450,7 +406,7 @@ public sealed class NDISource : IDisposable
 
     /// <summary>
     /// Starts capture threads for all channels and the clock.
-    /// If <see cref="NDISourceOptions.AutoReconnect"/> is enabled, also starts the
+    /// If <see cref="NDISourceOptions.ReconnectPolicy"/> is configured, also starts the
     /// connection watchdog thread.
     /// Call after adding channels to mixers/consumers.
     /// <para>
@@ -541,12 +497,6 @@ public sealed class NDISource : IDisposable
     }
 
     /// <summary>
-    /// Legacy alias for <see cref="StopClock"/>. Prefer <c>StopClock</c>.
-    /// </summary>
-    [Obsolete("Renamed to StopClock() in §3.45 — this method only stops the media clock, not capture. Use StopClock() or Dispose() explicitly.")]
-    public void Stop() => StopClock();
-
-    /// <summary>
     /// Waits until the underlying NDI audio ring reaches a minimum number of chunks.
     /// No-op when audio is unavailable.
     /// </summary>
@@ -633,8 +583,8 @@ public sealed class NDISource : IDisposable
             }
 
             // §3.47d / N15 — WaitOne returns `true` when the token fires; the
-            // next iteration would otherwise spend one extra
-            // ConnectionCheckIntervalMs hanging around. Exit immediately.
+            // next iteration would otherwise spend one extra poll interval
+            // hanging around. Exit immediately.
             if (token.WaitHandle.WaitOne(policy.EffectiveCheckIntervalMs))
                 break;
         }
@@ -847,4 +797,3 @@ public sealed class NDISource : IDisposable
         }
     }
 }
-

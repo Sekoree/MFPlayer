@@ -62,7 +62,7 @@ public sealed class EndpointClockPriorityTests
         public bool   IsRunning => false;
         public Task   StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task   StopAsync(CancellationToken ct = default)  => Task.CompletedTask;
-        public void   ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format) { }
+        public void   ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format, TimeSpan sourcePts) { }
         public IMediaClock Clock => _clock;
         // Uses the interface default (Hardware).
         public void Dispose() => _clock.Dispose();
@@ -75,10 +75,9 @@ public sealed class EndpointClockPriorityTests
         public bool   IsRunning => false;
         public Task   StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task   StopAsync(CancellationToken ct = default)  => Task.CompletedTask;
-        public void   ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format) { }
+        public void   ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format, TimeSpan sourcePts) { }
         public IMediaClock    Clock           => _clock;
         public ClockPriority  DefaultPriority => ClockPriority.External;
         public void Dispose() => _clock.Dispose();
     }
 }
-

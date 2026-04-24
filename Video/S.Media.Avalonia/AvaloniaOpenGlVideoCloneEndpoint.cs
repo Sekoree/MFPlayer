@@ -15,7 +15,6 @@ namespace S.Media.Avalonia;
 /// </summary>
 public sealed class AvaloniaOpenGlVideoCloneEndpoint : OpenGlControlBase, IVideoEndpoint, IFormatCapabilities<PixelFormat>
 {
-    private readonly BasicPixelFormatConverter _converter = new();
     private readonly VideoFrameSlot _latestFrame = new();
     private AvaloniaGlRenderer? _renderer;
     private bool _disposed;
@@ -23,8 +22,21 @@ public sealed class AvaloniaOpenGlVideoCloneEndpoint : OpenGlControlBase, IVideo
 
     public new string Name { get; }
     public bool IsRunning => _running;
-    public IReadOnlyList<PixelFormat> SupportedFormats { get; } = [PixelFormat.Rgba32, PixelFormat.Bgra32];
-    public PixelFormat? PreferredFormat => PixelFormat.Rgba32;
+    // §3.37 / A9 — clone sink now mirrors the parent endpoint's GPU upload
+    // formats directly; no CPU scalar converter path.
+    public IReadOnlyList<PixelFormat> SupportedFormats { get; } =
+    [
+        PixelFormat.Rgba32,
+        PixelFormat.Bgra32,
+        PixelFormat.Nv12,
+        PixelFormat.Yuv420p,
+        PixelFormat.Yuv422p10,
+        PixelFormat.Uyvy422,
+        PixelFormat.P010,
+        PixelFormat.Yuv444p,
+        PixelFormat.Gray8
+    ];
+    public PixelFormat? PreferredFormat => PixelFormat.Bgra32;
 
     internal AvaloniaOpenGlVideoCloneEndpoint(string? name = null)
     {
@@ -122,23 +134,7 @@ public sealed class AvaloniaOpenGlVideoCloneEndpoint : OpenGlControlBase, IVideo
         else
         {
             var vf = frame.Value;
-            if (vf.PixelFormat != PixelFormat.Rgba32)
-            {
-                var rgba = _converter.Convert(vf, PixelFormat.Rgba32);
-                try
-                {
-                    _renderer.UploadAndDraw(rgba, fb, viewportWidth, viewportHeight);
-                }
-                finally
-                {
-                    if (!ReferenceEquals(rgba.MemoryOwner, vf.MemoryOwner))
-                        rgba.MemoryOwner?.Dispose();
-                }
-            }
-            else
-            {
-                _renderer.UploadAndDraw(vf, fb, viewportWidth, viewportHeight);
-            }
+            _renderer.UploadAndDraw(vf, fb, viewportWidth, viewportHeight);
         }
 
         if (_running)
@@ -155,7 +151,6 @@ public sealed class AvaloniaOpenGlVideoCloneEndpoint : OpenGlControlBase, IVideo
 
         _renderer?.Dispose();
         _renderer = null;
-        _converter.Dispose();
     }
 
 }

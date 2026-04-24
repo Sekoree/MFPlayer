@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Threading.Channels;
@@ -26,6 +25,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
     private readonly int                          _threadCount;
     private readonly Func<int>                    _latestSeekEpochProvider;
     private readonly VideoFormat                  _nativeSourceFormat;
+    private readonly FixedVideoFramePool          _framePool;
 
     private AVCodecContext* _codecCtx;
     private SwsContext*     _sws;
@@ -153,6 +153,9 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         _threadCount        = threadCount;
         _bufferDepth        = Math.Max(1, bufferDepth);
         _latestSeekEpochProvider = latestSeekEpochProvider ?? (() => 0);
+        // §8.1 — per-channel bounded frame-buffer pool (fixed-size, LOH-aware).
+        // Keep enough buffers for active fan-out without unbounded retention.
+        _framePool = new FixedVideoFramePool(maxRetained: Math.Max(8, _bufferDepth * 2));
 
         var cp = stream->codecpar;
 
@@ -255,11 +258,11 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         double tbSeconds = _stream->time_base.num / (double)_stream->time_base.den;
         var pts = SafePts(frame->pts, tbSeconds);
 
-        // Rent a buffer from the pool. The VideoFrame carries an ArrayPoolOwner
-        // wrapped in a ref-counted buffer so multiple subscribers share a single
-        // rental; the rental returns to the pool when the last subscriber releases.
-        var rented = ArrayPool<byte>.Shared.Rent(_swsBufSize);
-        var owner  = new RefCountedVideoBuffer(new ArrayPoolOwner<byte>(rented));
+        // §8.1 — rent from the channel-local fixed-size pool. The frame carries
+        // a ref-counted owner so all subscribers share one buffer; it returns to
+        // this channel's pool when the last ref releases.
+        var rented = _framePool.Rent(_swsBufSize);
+        var owner  = new RefCountedVideoBuffer(new FixedVideoFrameOwner(_framePool, rented));
 
         _srcDataArr[0] = frame->data[0];
         _srcDataArr[1] = frame->data[1];
@@ -615,6 +618,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
             _defaultSub = null;
         }
         foreach (var s in subsSnap) s.Dispose();
+        _framePool.Dispose();
 
         if (_frame    != null) fixed (AVFrame**        pp = &_frame)    ffmpeg.av_frame_free(pp);
         if (_swFrame  != null) fixed (AVFrame**        pp = &_swFrame)  ffmpeg.av_frame_free(pp);
@@ -756,4 +760,3 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatr
         }, (this, handler));
     }
 }
-

@@ -126,7 +126,7 @@ public sealed class RouterBuilderTests
         public bool IsRunning => false;
         public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format) { }
+        public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat format, TimeSpan sourcePts) { }
         public void Dispose() { }
     }
 }

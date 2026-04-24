@@ -19,22 +19,7 @@ public interface IAudioChannel : IMediaChannel<float>
     AudioFormat SourceFormat { get; }
 
     /// <summary>Per-channel linear volume multiplier. Range: 0.0 – 1.0 (can exceed 1.0 for gain).</summary>
-    /// <remarks>
-    /// <b>§3.56 / §0.4.5 decision — Keep + legacy:</b> the setter is retained for
-    /// legacy direct-channel callers but is marked <c>[Obsolete]</c> as of the
-    /// 2026-04-23 fifth pass. Routed playback should use
-    /// <c>AVRouter.SetInputVolume(inputId, volume)</c>, which participates in
-    /// per-input peak metering and per-route gain automation (§7.3). The
-    /// in-tree <c>MediaPlayer</c> facade has already been migrated; future
-    /// major versions may remove the setter entirely, but the getter stays
-    /// non-obsolete because diagnostic / meter code legitimately reads it.
-    /// </remarks>
-    float Volume
-    {
-        get;
-        [Obsolete("Channel-level Volume is legacy — use AVRouter.SetInputVolume(inputId, volume) so per-input peak metering and per-route gain automation stay coherent. See Implementation-Checklist.md §3.56.")]
-        set;
-    }
+    float Volume { get; set; }
 
     /// <summary>
     /// Current playback position, derived from samples consumed by the RT pull
@@ -103,4 +88,3 @@ public interface IWritableAudioChannel : IAudioChannel
     /// </summary>
     bool TryWrite(ReadOnlySpan<float> frames);
 }
-

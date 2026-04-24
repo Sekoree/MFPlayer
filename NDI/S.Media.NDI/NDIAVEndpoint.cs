@@ -3,6 +3,8 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
 using NDILib;
@@ -25,21 +27,40 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
     private readonly struct PendingVideo
     {
-        public readonly byte[] Buffer;
+        public readonly ReadOnlyMemory<byte> Data;
+        public readonly byte[]? Buffer;
         public readonly int Width;
         public readonly int Height;
         public readonly long PtsTicks;
         public readonly PixelFormat PixelFormat;
         public readonly int Bytes;
+        public readonly VideoFrameHandle RetainedHandle;
+        public readonly bool HasRetainedHandle;
 
         public PendingVideo(byte[] buffer, int width, int height, long ptsTicks, PixelFormat pixelFormat, int bytes)
         {
+            Data = buffer.AsMemory(0, bytes);
             Buffer = buffer;
             Width = width;
             Height = height;
             PtsTicks = ptsTicks;
             PixelFormat = pixelFormat;
             Bytes = bytes;
+            RetainedHandle = default;
+            HasRetainedHandle = false;
+        }
+
+        public PendingVideo(VideoFrameHandle retainedHandle)
+        {
+            Data = retainedHandle.Data;
+            Buffer = null;
+            Width = retainedHandle.Width;
+            Height = retainedHandle.Height;
+            PtsTicks = retainedHandle.Pts.Ticks;
+            PixelFormat = retainedHandle.PixelFormat;
+            Bytes = retainedHandle.Data.Length;
+            RetainedHandle = retainedHandle;
+            HasRetainedHandle = true;
         }
     }
 
@@ -110,10 +131,12 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
     // These fields hold the one in-flight frame's resources.  They are only
     // touched by the video thread (plus Dispose after the thread has joined),
     // so no locking is required.
-    private GCHandle _pendingAsyncPin;
+    private MemoryHandle _pendingAsyncPin;
     private byte[]? _pendingAsyncPoolBuffer;     // pf.Buffer to return to _videoPool
     private byte[]? _pendingAsyncScratch;        // rented from ArrayPool<byte>.Shared
     private IDisposable? _pendingAsyncTempOwner; // VideoConverter.Convert result owner
+    private bool _pendingAsyncHasRetainedHandle;
+    private VideoFrameHandle _pendingAsyncRetainedHandle;
 
     // Audio path
     private readonly bool _hasAudio;
@@ -408,7 +431,11 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
         // buffers don't leak into the new timeline.  Pooled buffers are
         // returned to their pools so the upcoming session starts warm.
         _audioWork.Drain(pa => _audioPool.Enqueue(pa.Buffer));
-        _videoWork.Drain(pv => _videoPool.Enqueue(pv.Buffer));
+        _videoWork.Drain(pv =>
+        {
+            if (pv.Buffer != null) _videoPool.Enqueue(pv.Buffer);
+            if (pv.HasRetainedHandle) pv.RetainedHandle.Release();
+        });
 
         // Reset first-submit sentinels so the per-session stats reflect this
         // session's launch, not the previous one.
@@ -486,6 +513,47 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
             return;
         }
 
+        EnqueueCopiedVideoFrameReserved(frame, bytes);
+    }
+
+    /// <summary>
+    /// §8.2 — zero-copy fast path for ref-counted frames already in the sink's
+    /// target pixel format. We retain the incoming handle and enqueue it directly
+    /// so the async NDI send thread can pin and submit without an intermediate
+    /// copy into <see cref="_videoPool"/>.
+    /// </summary>
+    public void ReceiveFrame(in VideoFrameHandle handle)
+    {
+        if (!_hasVideo || Volatile.Read(ref _started) == 0)
+            return;
+
+        int bytes = handle.Data.Length;
+        if (bytes <= 0)
+        {
+            Interlocked.Increment(ref _videoCapacityMissDrops);
+            return;
+        }
+
+        // Atomic reserve-slot pattern so concurrent producers can't exceed the cap by N.
+        if (!_videoWork.TryReserveSlot(_videoMaxPendingFrames))
+        {
+            Interlocked.Increment(ref _videoQueueDrops);
+            return;
+        }
+
+        if (handle.IsRefCounted &&
+            handle.PixelFormat == _videoTargetFormat.PixelFormat)
+        {
+            var retained = handle.Retain();
+            _videoWork.EnqueueReserved(new PendingVideo(retained));
+            return;
+        }
+
+        EnqueueCopiedVideoFrameReserved(handle.Frame, bytes);
+    }
+
+    private void EnqueueCopiedVideoFrameReserved(in VideoFrame frame, int bytes)
+    {
         if (!_videoPool.TryDequeue(out var dst))
         {
             // Pool empty: grow lazily if we know the per-frame size.  The
@@ -518,16 +586,9 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
         _videoWork.EnqueueReserved(new PendingVideo(dst, frame.Width, frame.Height, frame.Pts.Ticks, frame.PixelFormat, bytes));
     }
 
-    public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat)
-        => ReceiveBufferCore(buffer, frameCount, sourceFormat, long.MinValue);
-
     /// <summary>
-    /// PTS-aware overload — carries the stream-time PTS of the first sample through to
-    /// the write loop so NDI timecodes for audio can share the video path's media-time
-    /// domain.  Without this, both streams fall back to <c>TimecodeSynthesize</c>
-    /// (wall-clock-at-submit), which bakes any decoder warm-up difference into a
-    /// permanent A/V offset — typically leaving video ahead of audio because the
-    /// video decoder produces frames sooner than the audio decoder.
+    /// Carries the stream-time PTS of the first sample through to the write loop so
+    /// NDI timecodes for audio can share the video path's media-time domain.
     /// </summary>
     public void ReceiveBuffer(ReadOnlySpan<float> buffer, int frameCount, AudioFormat sourceFormat, TimeSpan sourcePts)
         => ReceiveBufferCore(buffer, frameCount, sourceFormat,
@@ -750,8 +811,13 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
             ReleasePendingAsyncVideo();
         }
 
-        // Drain pending queues so pooled buffers are not leaked.
-        _videoWork.Drain(pv => _videoPool.Enqueue(pv.Buffer));
+        // Drain pending queues so pooled buffers are not leaked and retained
+        // zero-copy frame refs are released.
+        _videoWork.Drain(pv =>
+        {
+            if (pv.Buffer != null) _videoPool.Enqueue(pv.Buffer);
+            if (pv.HasRetainedHandle) pv.RetainedHandle.Release();
+        });
         _audioWork.Drain(pa => _audioPool.Enqueue(pa.Buffer));
 
         _videoWork.Dispose();
@@ -767,9 +833,15 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
     /// </summary>
     private void ReleasePendingAsyncVideo()
     {
-        if (_pendingAsyncPin.IsAllocated)
-            _pendingAsyncPin.Free();
+        _pendingAsyncPin.Dispose();
         _pendingAsyncPin = default;
+
+        if (_pendingAsyncHasRetainedHandle)
+        {
+            _pendingAsyncRetainedHandle.Release();
+            _pendingAsyncRetainedHandle = default;
+            _pendingAsyncHasRetainedHandle = false;
+        }
 
         var tempOwner = _pendingAsyncTempOwner; _pendingAsyncTempOwner = null;
         var scratch   = _pendingAsyncScratch;   _pendingAsyncScratch   = null;
@@ -857,29 +929,102 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
             ushort* pU = (ushort*)(pBuf + ySize);
             ushort* pV = (ushort*)(pBuf + ySize + uvSize);
 
-            // Process bottom-to-top because in-place output (2 bytes/px-pair) is smaller
-            // than source (4 bytes for 2×Y + U + V in 10-bit), avoiding overwrites.
+            // Process bottom-to-top so the in-place write never risks clobbering rows
+            // that are still waiting to be read.
             for (int row = height - 1; row >= 0; row--)
             {
-                int yRowOff  = row * width;         // in ushort units
-                int uvRowOff = row * (width >> 1);   // in ushort units
+                ushort* yRow = pY + (row * width);
+                ushort* uRow = pU + (row * (width >> 1));
+                ushort* vRow = pV + (row * (width >> 1));
                 byte* dstRow = pBuf + row * dstStride;
 
-                for (int x = width - 2; x >= 0; x -= 2)
-                {
-                    int uvIdx = uvRowOff + (x >> 1);
-                    byte* d = dstRow + x * 2;
-
-                    // Narrow 10-bit to 8-bit: (v + 2) >> 2
-                    d[0] = (byte)(((pU[uvIdx] & 0x03FF) + 2) >> 2);
-                    d[1] = (byte)(((pY[yRowOff + x] & 0x03FF) + 2) >> 2);
-                    d[2] = (byte)(((pV[uvIdx] & 0x03FF) + 2) >> 2);
-                    d[3] = (byte)(((pY[yRowOff + x + 1] & 0x03FF) + 2) >> 2);
-                }
+                // §8.3 / Tier 6 #30 — SIMD converter path (SSE2) with scalar fallback.
+                if (!TryConvertI210RowToUyvySse2(yRow, uRow, vRow, dstRow, width))
+                    ConvertI210RowToUyvyScalar(yRow, uRow, vRow, dstRow, width);
             }
         }
 
         return true;
+    }
+
+    private static unsafe bool TryConvertI210RowToUyvySse2(
+        ushort* yRow, ushort* uRow, ushort* vRow, byte* dstRow, int width)
+    {
+        if (!Sse2.IsSupported)
+            return false;
+
+        int pairCount = width >> 1;
+        if (pairCount < 8)
+            return false;
+
+        var mask = Vector128.Create((ushort)0x03FF);
+        var add2 = Vector128.Create((ushort)2);
+
+        byte* tmpY = stackalloc byte[16];
+        byte* tmpU = stackalloc byte[16];
+        byte* tmpV = stackalloc byte[16];
+
+        int pair = 0;
+        int vectorPairs = pairCount & ~7; // 8 chroma pairs per SSE2 block
+        for (; pair < vectorPairs; pair += 8)
+        {
+            var u = Narrow10To8(Sse2.LoadVector128(uRow + pair), mask, add2);
+            var v = Narrow10To8(Sse2.LoadVector128(vRow + pair), mask, add2);
+
+            int yIndex = pair << 1;
+            var yLo = Narrow10To8(Sse2.LoadVector128(yRow + yIndex), mask, add2);
+            var yHi = Narrow10To8(Sse2.LoadVector128(yRow + yIndex + 8), mask, add2);
+
+            Sse2.Store(tmpU, u);
+            Sse2.Store(tmpV, v);
+            Sse2.Store(tmpY, yLo);
+            Sse2.Store(tmpY + 8, yHi);
+
+            byte* d = dstRow + (pair << 2);
+            for (int i = 0; i < 8; i++)
+            {
+                int yOff = i << 1;
+                d[0] = tmpU[i];
+                d[1] = tmpY[yOff];
+                d[2] = tmpV[i];
+                d[3] = tmpY[yOff + 1];
+                d += 4;
+            }
+        }
+
+        for (; pair < pairCount; pair++)
+            ConvertI210PairToUyvyScalar(yRow, uRow, vRow, dstRow, pair);
+
+        return true;
+    }
+
+    private static Vector128<byte> Narrow10To8(Vector128<ushort> value, Vector128<ushort> mask, Vector128<ushort> add2)
+    {
+        var v = Sse2.And(value, mask);
+        v = Sse2.Add(v, add2);
+        v = Sse2.ShiftRightLogical(v, 2);
+        return Sse2.PackUnsignedSaturate(v.AsInt16(), Vector128<short>.Zero);
+    }
+
+    private static unsafe void ConvertI210RowToUyvyScalar(
+        ushort* yRow, ushort* uRow, ushort* vRow, byte* dstRow, int width)
+    {
+        int pairCount = width >> 1;
+        for (int pair = 0; pair < pairCount; pair++)
+            ConvertI210PairToUyvyScalar(yRow, uRow, vRow, dstRow, pair);
+    }
+
+    private static unsafe void ConvertI210PairToUyvyScalar(
+        ushort* yRow, ushort* uRow, ushort* vRow, byte* dstRow, int pair)
+    {
+        int yOff = pair << 1;
+        byte* d = dstRow + (pair << 2);
+
+        // Narrow 10-bit to 8-bit: (v + 2) >> 2
+        d[0] = (byte)(((uRow[pair] & 0x03FF) + 2) >> 2);
+        d[1] = (byte)(((yRow[yOff] & 0x03FF) + 2) >> 2);
+        d[2] = (byte)(((vRow[pair] & 0x03FF) + 2) >> 2);
+        d[3] = (byte)(((yRow[yOff + 1] & 0x03FF) + 2) >> 2);
     }
 
     private static bool TryConvertI210ToRgbaManaged(ReadOnlySpan<byte> src, Span<byte> dst, int width, int height, bool dstRgba)
@@ -1039,13 +1184,14 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                     {
                         if (pf.PixelFormat == _videoTargetFormat.PixelFormat)
                         {
-                            payload = pf.Buffer.AsMemory(0, pf.Bytes);
+                            payload = pf.Data;
                             sendFormat = pf.PixelFormat;
                             Interlocked.Increment(ref _videoPassthroughFrames);
                         }
                         else if (pf.PixelFormat == PixelFormat.Yuv422p10 && _videoTargetFormat.PixelFormat == PixelFormat.Uyvy422)
                         {
-                            if (!TryConvertI210ToUyvyInPlace(pf.Buffer, pf.Width, pf.Height, pf.Bytes, out int uyvyBytes))
+                            if (pf.Buffer is null ||
+                                !TryConvertI210ToUyvyInPlace(pf.Buffer, pf.Width, pf.Height, pf.Bytes, out int uyvyBytes))
                             {
                                 Interlocked.Increment(ref _videoConversionDrops);
                                 Interlocked.Increment(ref _videoFormatDrops);
@@ -1067,7 +1213,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                             if (EnsureFfmpegLoaded())
                             {
                                 converted = TryConvertI210ToRgbaFfmpeg(
-                                    pf.Buffer.AsSpan(0, pf.Bytes),
+                                    pf.Data.Span,
                                     scratchBuffer.AsSpan(0, rgbaBytes),
                                     pf.Width,
                                     pf.Height,
@@ -1079,7 +1225,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                             if (!converted)
                             {
                                 converted = TryConvertI210ToRgbaManaged(
-                                    pf.Buffer.AsSpan(0, pf.Bytes),
+                                    pf.Data.Span,
                                     scratchBuffer.AsSpan(0, rgbaBytes),
                                     pf.Width,
                                     pf.Height,
@@ -1103,7 +1249,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                                 pf.Width,
                                 pf.Height,
                                 pf.PixelFormat,
-                                pf.Buffer.AsMemory(0, pf.Bytes),
+                                pf.Data,
                                 TimeSpan.FromTicks(pf.PtsTicks));
 
                             var converted = _videoConverter.Convert(srcFrame, _videoTargetFormat.PixelFormat);
@@ -1113,18 +1259,18 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                             Interlocked.Increment(ref _videoConvertedFrames);
                         }
 
-                        if (!MemoryMarshal.TryGetArray(payload, out var seg) || seg.Array == null)
-                        {
-                            Interlocked.Increment(ref _videoFormatDrops);
-                            continue;
-                        }
-
-                        // Pin the payload array for the async send.  NDI's async API
+                        // Pin the payload for the async send. NDI's async API
                         // (send_video_async_v2) returns immediately but the SDK keeps
                         // a pointer to this buffer until the NEXT async send or a
                         // flush — so the pin must outlive this loop iteration.
-                        var sendHandle = GCHandle.Alloc(seg.Array, GCHandleType.Pinned);
-                        nint sendPtr = Marshal.UnsafeAddrOfPinnedArrayElement(seg.Array, seg.Offset);
+                        MemoryHandle sendHandle = payload.Pin();
+                        nint sendPtr = (nint)sendHandle.Pointer;
+                        if (sendPtr == nint.Zero)
+                        {
+                            sendHandle.Dispose();
+                            Interlocked.Increment(ref _videoFormatDrops);
+                            continue;
+                        }
 
                         // Stamp the NDI timecode with the frame's stream-time PTS (ticks,
                         // 100 ns units — matches NDI's UTC-since-epoch convention closely
@@ -1183,7 +1329,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                         catch
                         {
                             // Send failed before any SDK retention: free the pin now.
-                            sendHandle.Free();
+                            sendHandle.Dispose();
                             throw;
                         }
 
@@ -1197,6 +1343,8 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                         _pendingAsyncPoolBuffer = pf.Buffer;
                         _pendingAsyncScratch    = scratchBuffer;
                         _pendingAsyncTempOwner  = tempOwner;
+                        _pendingAsyncHasRetainedHandle = pf.HasRetainedHandle;
+                        _pendingAsyncRetainedHandle = pf.RetainedHandle;
                         handedOff = true;
 
                         // Diagnostics (post-submit: reflects the async-enqueue time,
@@ -1235,10 +1383,13 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                 }
                 finally
                 {
-                    // Same policy as the inner finally: only return pf.Buffer when
-                    // it hasn't been handed off to the async-retention slot.
+                    // Same policy as the inner finally: only release queue-owned
+                    // resources when they were not handed off to async retention.
                     if (!handedOff)
-                        _videoPool.Enqueue(pf.Buffer);
+                    {
+                        if (pf.Buffer != null) _videoPool.Enqueue(pf.Buffer);
+                        if (pf.HasRetainedHandle) pf.RetainedHandle.Release();
+                    }
                 }
             }
         }

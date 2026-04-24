@@ -40,6 +40,15 @@ public record AudioRouteOptions : IRouteOptions
     /// sample rates differ, the router auto-creates a <see cref="LinearResampler"/>.
     /// </summary>
     public IAudioResampler? Resampler { get; init; }
+
+    /// <summary>
+    /// §6.4 — When <see langword="true"/>, this route's input PTS is preferred for
+    /// the push-endpoint buffer's media timecode. Relevant only when multiple audio
+    /// inputs are mixed into a single push endpoint (e.g. NDI): the leader's PTS
+    /// governs the outgoing timecode even if another route fills data first.
+    /// Default: <see langword="false"/> (first-active-wins).
+    /// </summary>
+    public bool IsLeaderInput { get; init; }
 }
 
 /// <summary>

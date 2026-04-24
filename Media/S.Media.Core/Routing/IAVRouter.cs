@@ -151,14 +151,22 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     /// <summary>Master gain per endpoint, applied after accumulation. Default 1.0.</summary>
     void SetEndpointGain(EndpointId id, float gain);
 
-    // ── Video-specific ─────────────────────────────────────────────────
+    // ── Events ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Legacy router-wide PTS bypass. Prefer <see cref="VideoRouteOptions.LiveMode"/>
-    /// per route so a preview sink can be live while a recording sink is scheduled.
+    /// §6.5 — Raised on the push-tick thread when an audio route's input format
+    /// changes relative to the format that was active when the route was created.
+    /// Fires once per change; does not re-fire until the format changes again.
     /// </summary>
-    [Obsolete("Use VideoRouteOptions.LiveMode per-route instead. §6.1 / R23")]
-    bool BypassVideoPtsScheduling { get; set; }
+    event EventHandler<RouteFormatMismatchEventArgs>? RouteFormatMismatch;
+
+    /// <summary>
+    /// §10.4 — live diagnostics stream emitted on the router's push-audio thread
+    /// (at the effective audio cadence). Carries the same payload as
+    /// <see cref="GetDiagnosticsSnapshot"/> without requiring polling.
+    /// Handlers must be non-blocking.
+    /// </summary>
+    event Action<RouterDiagnosticsSnapshot>? AVRouterDiagnostics;
 
     // ── Diagnostics ────────────────────────────────────────────────────
 
@@ -180,4 +188,3 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     /// </summary>
     RouterDiagnosticsSnapshot GetDiagnosticsSnapshot();
 }
-

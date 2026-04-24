@@ -40,7 +40,7 @@ public sealed class MediaPlayerBuilderTests
             return Task.CompletedTask;
         }
 
-        public void ReceiveBuffer(ReadOnlySpan<float> interleaved, int frameCount, AudioFormat format) => RecvCount++;
+        public void ReceiveBuffer(ReadOnlySpan<float> interleaved, int frameCount, AudioFormat format, TimeSpan sourcePts) => RecvCount++;
 
         public void Dispose() => DisposeCount++;
     }
@@ -52,7 +52,7 @@ public sealed class MediaPlayerBuilderTests
 
         public Task StartAsync(CancellationToken ct = default) => throw new InvalidOperationException("Boom.");
         public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public void ReceiveBuffer(ReadOnlySpan<float> interleaved, int frameCount, AudioFormat format) { }
+        public void ReceiveBuffer(ReadOnlySpan<float> interleaved, int frameCount, AudioFormat format, TimeSpan sourcePts) { }
         public void Dispose() { }
     }
 
@@ -169,4 +169,3 @@ public sealed class MediaPlayerBuilderTests
         Assert.Equal(PlaybackState.Idle, player.State);
     }
 }
-

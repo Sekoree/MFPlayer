@@ -22,11 +22,11 @@ using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core;
 using S.Media.Core.Audio;
-using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Routing;
 using S.Media.Core.Video;
+using S.Media.FFmpeg;
 using S.Media.NDI;
 using S.Media.PortAudio;
 using S.Media.SDL3;
@@ -129,8 +129,16 @@ using (ndiRuntime)
 
     var preset  = PickNdiPreset();
     var profile = NDIPlaybackProfile.For(preset);
+    bool useNdiClock = PickYesNo("Use NDI source clock as master? (recommended — avoids domain mismatch)", defaultYes: true);
+    // Live monitoring behaves best when the video timeline is authoritative.
+    // Using VideoPreferred avoids accidental audio-first clock ownership and
+    // keeps NDIClock in the same domain as NDIVideoChannel frame PTS.
+    var clockPolicy = NDIClockPolicy.VideoPreferred;
+    bool livePreviewMode = PickYesNo("Enable live preview mode (bypass PTS scheduling for lowest latency)?", defaultYes: false);
     Console.WriteLine($"NDI profile: preset={preset}, audioCapture={profile.AudioFramesPerCapture}smp, " +
-                      $"liveMode={profile.BypassVideoPtsScheduling}, adaptiveVSync={profile.AdaptiveVSync}");
+                      $"liveMode={profile.BypassVideoPtsScheduling}, adaptiveVSync={profile.AdaptiveVSync}, " +
+                      $"masterClock={(useNdiClock ? "NDI" : "PortAudio")}, " +
+                      $"ndiClockPolicy={clockPolicy}, livePreview={livePreviewMode}");
 
     // ── 6. Open NDI source by name (async discovery + auto-reconnect) ────────
 
@@ -144,12 +152,14 @@ using (ndiRuntime)
     // Allow Ctrl+C to cancel discovery too.
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; discoveryCts.Cancel(); };
 
+    var sourceOptions = BuildSourceOptions(preset, outChannels, clockPolicy);
+
     NDIAVChannel avSource;
     try
     {
         avSource = await NDIAVChannel.OpenByNameAsync(
             sourceName,
-            NDISourceOptions.ForPreset(preset, channels: outChannels),
+            sourceOptions,
             discoveryCts.Token);
     }
     catch (OperationCanceledException)
@@ -167,6 +177,9 @@ using (ndiRuntime)
 
     using (avSource)
     {
+        var videoChannel = avSource.VideoChannel;
+        SDL3VideoEndpoint? videoOutput = null;
+
         // ── 7. Subscribe to state changes ────────────────────────────────────
 
         avSource.StateChanged += (_, e) =>
@@ -184,6 +197,11 @@ using (ndiRuntime)
             Console.WriteLine($"  [NDI] state {e.OldState} -> {e.NewState}  ({e.SourceName})");
             Console.ForegroundColor = prev;
         };
+        avSource.VideoFormatChanged += (_, e) =>
+        {
+            Console.WriteLine($"  [NDI] video format changed: {e.PreviousFormat} -> {e.NewFormat}");
+            videoOutput?.SetInputFormatHint(e.NewFormat);
+        };
 
         // ── 8. Wire up audio pipeline ────────────────────────────────────────
 
@@ -192,7 +210,6 @@ using (ndiRuntime)
         var srcFmt       = audioChannel.SourceFormat;
         int outCh        = Math.Min(srcFmt.Channels, outChannels);
         var hwFmt        = new AudioFormat(srcFmt.SampleRate, outCh);
-        var routeMap     = ChannelRouteMap.AutoStereoDownmix(srcFmt.Channels, outCh);
 
         Console.WriteLine($"  NDI audio:  {srcFmt.SampleRate} Hz / {srcFmt.Channels} ch");
 
@@ -218,9 +235,6 @@ using (ndiRuntime)
             Console.WriteLine($"  Resampling: {srcFmt.SampleRate} → {output.HardwareFormat.SampleRate} Hz (AudioMixer)");
 
         // ── 8b. Wire up video pipeline (if available) ─────────────────────────
-
-        var videoChannel = avSource.VideoChannel;
-        SDL3VideoEndpoint? videoOutput = null;
 
         if (videoChannel != null)
         {
@@ -264,7 +278,12 @@ using (ndiRuntime)
                     videoOutput.VsyncMode = VsyncMode.Adaptive;
 
                 videoOutput.Open($"NDI — {sourceName}", winW, winH, videoFormat);
-                videoOutput.OverridePresentationClock(output.Clock);
+                // Pick the presentation clock that shares a timestamp domain with the
+                // video frames. NDIClock is fed by NDI frame timestamps, so it matches
+                // VideoFrame.Pts exactly. PortAudioClock starts at 0 locally; if the
+                // NDI sender stamps frames with Unix-style timestamps the drift tracker
+                // would latch onto a multi-day offset and park on the first frame.
+                videoOutput.OverridePresentationClock(useNdiClock ? avSource.Clock : output.Clock);
 
                 if (profile.ResetClockOrigin)
                     videoOutput.ResetClockOrigin();
@@ -284,27 +303,56 @@ using (ndiRuntime)
             Console.WriteLine("  (No video channel — audio only)");
         }
 
-        // ── 8c. Create AV router ───────────────────────────────────────────────
+        // ── 8c. Build MediaPlayer graph (builder API) ──────────────────────────
 
-        using var router = new AVRouter();
-        var audioEpId = router.RegisterEndpoint(output);
-        router.SetClock(output.Clock);
+        var playerBuilder = MediaPlayer.Create()
+            .WithRouterOptions(new AVRouterOptions
+            {
+                // Faster re-lock after live-source timestamp discontinuities
+                // (pattern/profile/FPS switches) while staying in scheduled mode.
+                VideoPtsDiscontinuityResetThreshold = TimeSpan.FromMilliseconds(250)
+            })
+            .WithAudioOutput(output)
+            .WithAudioInput(audioChannel);
 
-        var audioInputId = router.RegisterAudioInput(audioChannel);
-        router.CreateRoute(audioInputId, audioEpId, new AudioRouteOptions { ChannelMap = routeMap });
+        // Drift correction manipulates route time offsets, which is useful for
+        // scheduled playback but intentionally bypassed in live-preview mode.
+        if (!livePreviewMode)
+        {
+            playerBuilder.WithAutoAvDriftCorrection(new AvDriftCorrectionOptions
+            {
+                InitialDelay = TimeSpan.FromSeconds(30),
+                Interval = TimeSpan.FromSeconds(30),
+                MinDriftMs = 20,
+                IgnoreOutlierDriftMs = 250,
+                CorrectionGain = 0.50,
+                MaxStepMs = 40,
+                MaxAbsOffsetMs = 250
+            });
+        }
 
-        InputId? videoInputId = null;
+        // Register the NDI source clock at External priority so it beats the
+        // PortAudio output's auto-registered Hardware clock. NDIClock.Position
+        // is stamped from incoming NDI frame timestamps — the same domain as
+        // VideoFrame.Pts, so the router's PTS↔clock drift tracker seeds
+        // correctly from the first frame instead of seeing a multi-day skew.
+        if (useNdiClock)
+            playerBuilder.WithClock(avSource.Clock, ClockPriority.External);
+
         if (videoOutput != null && videoChannel != null)
         {
-            var videoEpId = router.RegisterEndpoint(videoOutput);
-            videoInputId = router.RegisterVideoInput(videoChannel);
-            // §6.1 / R23: per-route LiveMode replaces the global BypassVideoPtsScheduling.
-            router.CreateRoute(videoInputId.Value, videoEpId,
-                new VideoRouteOptions { LiveMode = profile.BypassVideoPtsScheduling });
-
-            if (profile.BypassVideoPtsScheduling)
-                Console.WriteLine("  VideoMixer: LiveMode=ON (newest-frame, no PTS scheduling)");
+            var videoRouteOptions = new VideoRouteOptions
+            {
+                LiveMode = livePreviewMode || profile.BypassVideoPtsScheduling,
+                // Live NDI monitoring should prefer newest frames over queueing
+                // stale ones; this keeps pattern/scene switches responsive.
+                OverflowPolicy = VideoOverflowPolicy.DropOldest,
+                Capacity = Math.Max(2, profile.VideoPreBufferFrames + 1)
+            };
+            playerBuilder.WithVideoOutput(videoOutput).WithVideoInput(videoChannel, videoRouteOptions);
         }
+
+        using var player = playerBuilder.Build();
 
         // ── 9. Start ─────────────────────────────────────────────────────────
 
@@ -333,10 +381,7 @@ using (ndiRuntime)
             }
             catch (OperationCanceledException) { /* timed out — proceed */ }
 
-            await output.StartAsync();
-            if (videoOutput != null)
-                await videoOutput.StartAsync();
-            await router.StartAsync();
+            await player.PlayAsync();
         }
         catch (Exception ex)
         {
@@ -368,57 +413,6 @@ using (ndiRuntime)
             };
         }
 
-        // Auto-correct A/V drift every 30 s.
-        // Even after the pre-buffer alignment fix, tiny residual drift can accumulate from
-        // NDI timestamp jitter or hardware clock differences.  This loop measures drift and
-        // nudges the video channel's time offset by 50 % of the measured error — gentle
-        // enough to be invisible, converging to <5 ms within a few correction cycles.
-        //
-        // drift = audio.Position − video.Position
-        //   negative → video is ahead  → increase offset (hold video frames longer)
-        //   positive → audio is ahead  → decrease offset (release video frames sooner)
-        if (videoChannel != null && videoOutput != null && videoInputId.HasValue)
-        {
-            var vidInputId = videoInputId.Value;
-            _ = Task.Run(async () =>
-            {
-                const double MinDriftMs = 20;
-                const double IgnoreOutlierDriftMs = 250;
-                const double CorrectionGain = 0.50;
-                const double MaxStepMs = 40;
-                const double MaxAbsOffsetMs = 250;
-                double currentOffsetMs = 0;
-
-                // Skip the first interval to let both streams settle after startup.
-                try { await Task.Delay(30_000, cts.Token); } catch (OperationCanceledException) { return; }
-
-                while (!cts.IsCancellationRequested)
-                {
-                    if (avSource.TryGetAvDrift(out var drift))
-                    {
-                        double absDriftMs = Math.Abs(drift.TotalMilliseconds);
-                        if (absDriftMs >= IgnoreOutlierDriftMs)
-                        {
-                            avSource.ResetAvDriftBaseline();
-                        }
-                        else if (absDriftMs >= MinDriftMs)
-                        {
-                            double requestedStepMs = -drift.TotalMilliseconds * CorrectionGain;
-                            double clampedStepMs = Math.Clamp(requestedStepMs, -MaxStepMs, MaxStepMs);
-                            double nextOffsetMs = Math.Clamp(currentOffsetMs + clampedStepMs, -MaxAbsOffsetMs, MaxAbsOffsetMs);
-                            currentOffsetMs = nextOffsetMs;
-                            router.SetInputTimeOffset(vidInputId, TimeSpan.FromMilliseconds(nextOffsetMs));
-                            Console.WriteLine(
-                                $"  [AV-sync] drift={drift.TotalMilliseconds:+0.0;-0.0}ms " +
-                                $"→ step {clampedStepMs:+0.0;-0.0}ms (offset={nextOffsetMs:+0.0;-0.0}ms)");
-                        }
-                    }
-
-                    try { await Task.Delay(30_000, cts.Token); } catch (OperationCanceledException) { break; }
-                }
-            });
-        }
-
         // Print periodic status
         _ = Task.Run(async () =>
         {
@@ -436,7 +430,8 @@ using (ndiRuntime)
                 if (videoOutput != null)
                 {
                     var snap = videoOutput.GetDiagnosticsSnapshot();
-                    line += $"  presented={snap.PresentedFrames}  black={snap.BlackFrames}";
+                    line += $"  displayed={snap.PresentedFrames}  unique={snap.UniqueFrames}" +
+                            $"  dropped={snap.DroppedFrames}  reuse={snap.TextureReuseDraws}  black={snap.BlackFrames}";
                 }
                 Console.WriteLine(line);
             }
@@ -462,9 +457,7 @@ using (ndiRuntime)
         // ── 11. Stop ─────────────────────────────────────────────────────────
 
         Console.Write("\nStopping… ");
-        if (videoOutput != null)
-            await videoOutput.StopAsync();
-        await output.StopAsync();
+        await player.StopAsync();
         avSource.Stop();
         videoOutput?.Dispose();
         Console.WriteLine("Done.");
@@ -499,6 +492,17 @@ static int PickNumber(string label, int min, int max, int? defaultValue = null)
     }
 }
 
+static bool PickYesNo(string label, bool defaultYes)
+{
+    string hint = defaultYes ? "Y/n" : "y/N";
+    Console.Write($"{label} [{hint}]: ");
+    string raw = (Console.ReadLine() ?? string.Empty).Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(raw)) return defaultYes;
+    if (raw is "y" or "yes" or "true" or "1") return true;
+    if (raw is "n" or "no" or "false" or "0") return false;
+    return defaultYes;
+}
+
 static NDIEndpointPreset PickNdiPreset()
 {
     Console.Write("NDI receive preset [Safe/Balanced/LowLatency/UltraLow] (default Balanced): ");
@@ -514,4 +518,26 @@ static NDIEndpointPreset PickNdiPreset()
     return NDIEndpointPreset.Balanced;
 }
 
-
+static NDISourceOptions BuildSourceOptions(
+    NDIEndpointPreset preset,
+    int channels,
+    NDIClockPolicy clockPolicy)
+{
+    var presetOptions = NDISourceOptions.ForPreset(preset, channels: channels);
+    return new NDISourceOptions
+    {
+        SampleRate = presetOptions.SampleRate,
+        Channels = presetOptions.Channels,
+        QueueBufferDepth = presetOptions.QueueBufferDepth,
+        AudioBufferDepth = presetOptions.AudioBufferDepth,
+        VideoBufferDepth = presetOptions.VideoBufferDepth,
+        LowLatency = presetOptions.LowLatency,
+        AudioFramesPerCapture = presetOptions.AudioFramesPerCapture,
+        EnableVideo = presetOptions.EnableVideo,
+        ReceiverSettings = presetOptions.ReceiverSettings,
+        ReconnectPolicy = presetOptions.ReconnectPolicy,
+        MaxForwardPtsJumpMs = presetOptions.MaxForwardPtsJumpMs,
+        FinderSettings = presetOptions.FinderSettings,
+        ClockPolicy = clockPolicy,
+    };
+}

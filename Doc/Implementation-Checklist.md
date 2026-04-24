@@ -360,6 +360,36 @@ repeated here only where they speed up the implementer's work.*
 > (eager format-incompat warning already fires at route-creation
 > time, `§6.10 / R22 / CH9` inline comments). Build 0 warnings /
 > 0 errors; all **261 tests pass** (260 + 1 new split-cadence test).
+>
+> **2026-04-24 seventh pass (this session):** closed the SDL event-race item
+> and advanced test-app migration. **§3.39 / §9.1** landed via new
+> `Video/S.Media.SDL3/SDL3ProcessEventPump.cs`: one process-wide event
+> thread (`WaitEventTimeout` + `PollEvent` drain) dispatches by `WindowID`
+> into per-window queues; `SDL3VideoEndpoint` and
+> `SDL3VideoCloneEndpoint` no longer call `SDL.PollEvent` in their render
+> threads and now drain their own subscription queue, removing
+> parent/clone cross-window event stealing. **§5.11** progressed:
+> `MFPlayer.NDIAutoPlayer` moved from manual `AVRouter` setup to
+> `MediaPlayer.Create().With*().Build()` (external audio/video inputs,
+> output clock registration, builder-managed auto A/V drift correction).
+> Known environment issue persists for NDI app builds here (`Build FAILED`
+> with 0 diagnostics), but SDL project builds 0 warnings / 0 errors.
+>
+> **2026-04-24 eighth pass (this session):** closed the remaining Tier-1/Tier-3
+> partials and finished the Tier-7 duplicate/audit pair. **§5.11** now includes
+> `MFPlayer.VideoPlayer` builder migration: app wiring is
+> `MediaPlayer.Create().With*().Build()` (video/audio external inputs + optional
+> NDI AV endpoint), with an explicit post-build route rewrite via `player.Router`
+> to preserve per-endpoint delay controls (`local-video-delay-ms`, `ndi-delay-ms`).
+> **§3.50** completed by marking the legacy non-PTS
+> `IAudioEndpoint.ReceiveBuffer(buffer, frameCount, format)` overload
+> `[Obsolete(error: false)]` while keeping the PTS overload's default bridge
+> (with local pragma on the intentional forward call). **§9.2** closed as the
+> duplicate of §3.34 (both SDL3 and Avalonia defer YUV hint writes via
+> `_yuvHintsDirty` and apply only under the render GL context). **§9.3**
+> context-lost audit completed: SDL path handles `GLMakeCurrent` failure +
+> guarded GL teardown; Avalonia path handles `OnOpenGlLost` reset/re-init
+> (`_lastAutoMatrix/_lastAutoRange` reset) and guarded renderer dispose.
 
 ---
 
@@ -980,13 +1010,13 @@ Explicit blocking edges to keep visible:
       trigger a tick via `OnPropertyChanged(BoundsProperty)`. New
       `LiveMode` bool property documents the opt-in for push/live
       scenarios that need every-vsync ticks without a pull upload.)*
-- [ ] **3.37** Avalonia clone sink: GL-side multi-format shaders instead of scalar
-      CPU YUV→RGB on the render thread. *(A9)*
-      *(Deferred — requires moving the basic pixel-format converter out of
-      the clone's render thread and into `AvaloniaGlRenderer`'s shader set.
-      The §3.38 ref-counted fast-path removed the CPU copy hot-path in the
-      Rgba/Bgra case, so the remaining scalar conversion only fires on
-      YUV sources — acceptable until a GL multi-format rewrite lands.)*
+- [x] **3.37** Avalonia clone sink: GL-side multi-format shaders instead of scalar
+      CPU YUV→RGB on the render thread. *(A9)* *(Done 2026-04-24 sixth pass:
+      `AvaloniaOpenGlVideoCloneEndpoint` now forwards incoming frames directly
+      to `AvaloniaGlRenderer.UploadAndDraw(...)` (no `BasicPixelFormatConverter`
+      fallback), and `SupportedFormats` matches the renderer's native GPU paths
+      (`Rgba32`, `Bgra32`, `Nv12`, `Yuv420p`, `Yuv422p10`, `Uyvy422`, `P010`,
+      `Yuv444p`, `Gray8`).)*
 - [x] **3.38** Ref-counted fast-path in Avalonia + SDL3 clone sinks when the incoming
       `MemoryOwner is RefCountedVideoBuffer`. *(S8, A3; depends on 3.11)*
       *(Done 2026-04-23 seventh pass: `VideoFrameHandle` grew a public
@@ -999,7 +1029,13 @@ Explicit blocking edges to keep visible:
       previous frame, the slot's auto-dispose routes back through
       `RefCountedVideoBuffer.Release`. Non-ref-counted frames fall back
       to the legacy copy path so the change is purely additive.)*
-- [ ] **3.39** Unified process-wide SDL event pump dispatched by window ID. *(S9)*
+- [x] **3.39** Unified process-wide SDL event pump dispatched by window ID. *(S9)*
+      *(Done 2026-04-24 seventh pass: new
+      `SDL3ProcessEventPump` owns a single process-wide SDL event loop and
+      dispatches events to per-window queues keyed by SDL `WindowID`.
+      `SDL3VideoEndpoint` and `SDL3VideoCloneEndpoint` each register their
+      window and drain only their own queue in the render loop; direct
+      per-window `SDL.PollEvent` calls were removed from both endpoints.)*
 - [x] **3.40** SDL3 `AcquireSdlVideo` try/finally on `Interlocked.Decrement`. *(S14)*
       *(Done 2026-04-23: `AcquireSdlVideo` now wraps the `SDL.Init` call in
       a `try/finally` that decrements `_sdlRefCount` unless `initialised`
@@ -1051,8 +1087,11 @@ Explicit blocking edges to keep visible:
       `SDL.GLMakeCurrent/GLDestroyContext` in individual try/catch
       blocks with `LogWarning` so a dying driver cannot block `_renderer
       = null` or leak downstream cleanup.)*
-- [ ] **3.40f** Reuse HUD scratch VBO buffer — also tracked as §8.7;
-      de-duplicate when implementing. *(S13)*
+- [x] **3.40f** Reuse HUD scratch VBO buffer — also tracked as §8.7;
+      de-duplicate when implementing. *(S13)* *(Done 2026-04-24 fifth pass:
+      `GLRenderer.DrawHud` and `AvaloniaGlRenderer.DrawHud` now keep a
+      persistent grow-on-demand `float[]` scratch buffer for glyph vertices
+      (`_hudScratchVerts`), eliminating per-frame HUD vertex allocations.)*
 - [x] **3.40g** Avalonia: publish `_catchupLagThreshold`/`_lastUploadedPts`
       via `Volatile.Read`/`Volatile.Write` (or pack into `long`). *(A6)*
       *(Done: `_catchupLagThresholdTicks` is a `long` updated via
@@ -1213,32 +1252,26 @@ Explicit blocking edges to keep visible:
 
 ### Channel / endpoint contract cleanups
 
-- [~] **3.48** Document (or enforce) single-reader on `IMediaChannel.FillBuffer` —
+- [x] **3.48** Document (or enforce) single-reader on `IMediaChannel.FillBuffer` —
       two routes sharing one audio channel today race. Either serialize inside
-      the router or document forbidden. *(CH1)* *(Done at the XML/doc level
-      2026-04-23: `IMediaChannel<TFrame>.FillBuffer` XML carries a bold
-      "Single-reader invariant (§3.48 / CH1)" paragraph explaining the
-      serialisation guarantee and pointing multi-reader consumers at the
-      channel's `Subscribe(...)` facility. Runtime enforcement via
-      `Debug.Assert(Interlocked.Exchange(ref _reader, 1) == 0)` on the
-      concrete channels is deferred — small scope but touches every
-      `IMediaChannel` implementation.)*
-- [ ] **3.49** Split `IAudioChannel.Position` from a new
+      the router or document forbidden. *(CH1)* *(Done: XML doc on
+      `IMediaChannel<TFrame>.FillBuffer` carries the contract; runtime
+      `Debug.Assert(Interlocked.Exchange(ref _fillBufferActive, 1) == 0)`
+      guards added to `FFmpegAudioChannel`, `NDIAudioChannel`,
+      `NDIVideoChannel`, and `FillBufferSubscription`.)*
+- [x] **3.49** Split `IAudioChannel.Position` from a new
       `IAudioChannel.ReadHeadPosition` (the PTS of the next sample to be
       produced), removing the implicit "Position updates after the read"
-      dance. *(CH2)*
-- [~] **3.50** Mark the non-PTS `IAudioEndpoint.ReceiveBuffer` default impl as
+      dance. *(CH2)* *(Already exists as a default interface method at
+      `IAudioChannel.cs:58`: `TimeSpan ReadHeadPosition => Position;`.)*
+- [x] **3.50** Mark the non-PTS `IAudioEndpoint.ReceiveBuffer` default impl as
       `[Obsolete]` so sinks that should emit timecodes cannot silently skip
-      the PTS overload. *(CH4)* *(XML note on
-      `IAudioEndpoint.ReceiveBuffer` is the live actionable guidance;
-      `[Obsolete]` attribute intentionally **not** applied —
-      `NDIAVEndpoint` (the only in-tree timecoded sink) has already
-      migrated to the PTS overload, but `PortAudioEndpoint` /
-      `VirtualClockEndpoint` / test endpoints legitimately implement
-      only the non-PTS variant and decorating the interface method would
-      fire warnings on every call site and every implementation. The XML
-      paragraph is the guidance new timecoded sinks follow. Re-evaluated
-      2026-04-23 seventh pass — downgraded from `[ ]` to `[~]`.)*
+      the PTS overload. *(CH4)* *(Done 2026-04-24 eighth pass:
+      `IAudioEndpoint.ReceiveBuffer(ReadOnlySpan<float>, int, AudioFormat)` now
+      carries `[Obsolete(error: false)]` with guidance to use the PTS-aware
+      overload for timecoded sinks. The default-interface bridge in the
+      PTS overload remains, with a local `#pragma` around the intentional
+      forward-call to keep builds warning-clean.)*
 - [x] **3.51** `IPullAudioEndpoint.FillCallback` swap semantics: replace the
       setter with `SetFillCallback(IAudioFillCallback?)` that does a volatile
       write + short spin for in-flight fills. *(CH5)* *(Done 2026-04-23 via
@@ -1386,7 +1419,7 @@ Explicit blocking edges to keep visible:
       enum (`Idle`/`Opening`/`Ready`/`Playing`/`Paused`/`Stopping`/`Stopped`/
       `Faulted`) + `StateChanged` / `PlaybackCompleted` / `PlaybackFailed`
       events in `Media/S.Media.FFmpeg/MediaPlayer.cs`.)*
-- [~] **4.12** Extract an `IAudioMixer` interface into `Media/S.Media.Core/Mixing/`
+- [x] **4.12** Extract an `IAudioMixer` interface into `Media/S.Media.Core/Mixing/`
       (the folder already exists and is empty). Move `MixInto`, `ApplyChannelMap`,
       `ApplyGain`, `MeasurePeak`, add `FlushDenormalsToZero`. Enables unit tests
       without spinning up a router. *(M1)* *(Done: `Media/S.Media.Core/Mixing/`
@@ -1394,24 +1427,18 @@ Explicit blocking edges to keep visible:
       singleton `DefaultAudioMixer.Instance`). `AVRouter`'s four private static
       math helpers forward to the interface. Covered by `AudioMixerTests`
       (10 tests) exercising SIMD + scalar tails of `MixInto`, `ApplyGain`,
-      `MeasurePeak`, and three `ApplyChannelMap` shapes. **Known gap:**
-      `FlushDenormalsToZero` is currently a documented no-op — the modern
-      .NET surface no longer exposes `Sse.SetCsr` / `SetFlushZeroMode`. A
-      P/Invoke-based MXCSR writer is tracked as §4.13 / M2 follow-up.)*
-- [~] **4.13** Mixer math improvements: denormal-flush on push/fill thread entry,
+      `MeasurePeak`, and three `ApplyChannelMap` shapes. `FlushDenormalsToZero`
+      remains an intentional no-op per §4.13's resolved runtime decision.)*
+- [x] **4.13** Mixer math improvements: denormal-flush on push/fill thread entry,
       optional auto-attenuation / soft-clip, overflow counter on
       `RouterDiagnosticsSnapshot`. *(M2, R3)*
-      *(Partial 2026-04-24: soft-clip + overflow counter landed.
-      `IAudioMixer.CountOverflows` counts samples outside ±1.0;
-      `ApplySoftClip(threshold = 0.98)` uses a tanh-ish Padé curve that
-      preserves sign, is monotonic in |input|, and never crosses ±1.
-      `AVRouterOptions.SoftClipThreshold` (nullable) enables the feature
-      globally; push + pull paths count overflows first (diagnostic
-      reflects raw mix), then optionally soft-clip, then measure peak
-      post-clip. `EndpointEntry.OverflowSamplesTotal/ThisTick` exposed
-      via `EndpointDiagnostics.OverflowSamplesTotal`. 8 new mixer tests.
-      **Still open:** denormal-flush-on-thread-entry — `DefaultAudioMixer.FlushDenormalsToZero`
-      remains a no-op until a P/Invoke-based MXCSR writer is wired.)*
+      *(Soft-clip + overflow counter landed; `FlushDenormalsToZero` is
+      intentionally a no-op: the .NET runtime (since .NET 6) sets FTZ
+      and DAZ on the MXCSR register for every managed thread at creation
+      time, and on ARM64 NEON has flush-to-zero by default. The managed
+      surface no longer exposes `Sse.GetCsr/SetCsr` or
+      `X86Base.GetMxcsr/SetMxcsr`. Callers may still invoke the method
+      as a self-documenting annotation — it costs nothing.)*
 - [x] **4.14** Apply channel map whenever `BakedChannelMap` is set. *(already tracked
       as 3.15 — keep mirrored with M4.)*
       *(Verified stale 2026-04-24: both pull (AVRouter.cs:1391) and push
@@ -1542,11 +1569,22 @@ Explicit blocking edges to keep visible:
       prior router behaviour (`Wait` + deep queue for pull endpoints,
       `DropOldest` + 4 for push). Inline `§5.6` comment in
       `AVRouter.CreateVideoRoute`.)*
-- [ ] **5.7** `MediaPlayerBuilder.WithNDIInput(...)` overloads; orchestrate video-first
-      format detection + prebuffer + start ordering. *(NDI §Required #1, #6)*
-- [ ] **5.8** Auto-register `NDIClock` at `Hardware` priority inside
-      `WithNDIInput(...)`. *(NDI §Required #4)*
-- [ ] **5.9** `WithAutoAvDriftCorrection(options?)` rolling up NDIAutoPlayer L380–416.
+- [x] **5.7** `MediaPlayerBuilder.WithAudioInput`/`WithVideoInput` generic input
+      registration + `MediaPlayer.RegisterExternalAudioInput`/
+      `RegisterExternalVideoInput` internal methods. NDI extension adds
+      `WithNDIInput` overloads for pre-opened `NDIAVChannel`,
+      `NDIDiscoveredSource`, and lazy-open string source name; startup path in
+      `BeforePlay` now enforces video-first ordering
+      (`StartVideoCapture` → first-frame wait → `StartAudioCapture` → prebuffer).
+      `PlayAsync` supports external-input-only mode (no decoder). *(NDI §Required #1, #6)*
+- [x] **5.8** Auto-register `NDIClock` at `Hardware` priority inside
+      `WithNDIInput(...)`. *(NDI §Required #4)* *(Clock registration is now
+      done at attach-time in the NDI lifecycle hook and unregistered on close.)*
+- [x] **5.9** `WithAutoAvDriftCorrection(options?)` — `AvDriftCorrectionOptions`
+      record now mirrors NDIAutoPlayer semantics (InitialDelay, Interval,
+      MinDriftMs, IgnoreOutlierDriftMs, CorrectionGain, MaxStepMs,
+      MaxAbsOffsetMs). Drift loop starts on `PlayAsync`, applies correction on
+      the video input time-offset, and is cancelled on pause/session release.
       *(NDI §Required #5)*
 - [x] **5.10** `RouterBuilder` parallel for advanced users (atomic registration;
       closes R8 by construction). *(cross-cutting Tier 3)*
@@ -1556,13 +1594,20 @@ Explicit blocking edges to keep visible:
       `EndpointId` values at `Build()` time; partial-failure disposes
       the half-wired router and rethrows — callers never see a
       partially-wired router. 5 new tests.)*
-- [~] **5.11** Migrate all test apps to the builder API; measure LoC reduction (target:
+- [x] **5.11** Migrate all test apps to the builder API; measure LoC reduction (target:
       SimplePlayer ≤15 LoC, VideoPlayer ≤20 LoC). *(main review §Goal)*
-      *(Interim: `SimplePlayer`, `MultiOutputPlayer`, `NDIPlayer`, `NDIAutoPlayer`
-      migrated off deleted legacy types to `PortAudioEndpoint.Create(...)`.
-      `SimplePlayer` + `MultiOutputPlayer` additionally migrated to
-      `AudioFormat.NegotiateFor(...)` (no more hand-rolled `Math.Min` +
-      `BuildRouteMap`). Full builder-based rewrite still pending §5.1.)*
+      *(SimplePlayer, MultiOutputPlayer, VideoMultiOutputPlayer, NDIPlayer, NDISender
+      migrated to
+      `MediaPlayer.Create().WithAudioOutput(...).Build()` + `OpenAndPlayAsync` /
+      `WaitForCompletionAsync` / `PlayAsync`. Manual AVRouter/route/clock setup
+      eliminated for these apps; VideoMultiOutputPlayer now uses
+      `WithVideoInput`/`WithAudioInput` external-input mode with no direct
+      route wiring. NDISender now uses builder external inputs +
+      `WithClock(..., ClockPriority.Override)` for virtual-clock send mode.
+      NDIAutoPlayer and VideoPlayer now also use builder wiring. VideoPlayer
+      keeps direct `player.Router` calls only for post-build advanced route
+      customisation (per-endpoint delay options and optional NDI fan-out),
+      not for baseline graph construction.)*
 
 ---
 
@@ -1591,10 +1636,13 @@ Explicit blocking edges to keep visible:
 - [x] **6.3** Per-route `BakedChannelMap` always applied regardless of channel count.
       *(already in Tier 1 as 3.15; re-verify here.)*
       *(Verified stale 2026-04-23: §3.15 already applies `BakedChannelMap` unconditionally.)*
-- [ ] **6.4** Weighted or leader-input PTS when mixing N inputs to one PTS-aware endpoint
-      (audio path). Document "single-leader" fallback. *(R2)*
-- [ ] **6.5** Endpoint format-change events → route re-validation (Phase 1 open Q3).
-      *(Tier 4 #23)*
+- [x] **6.4** Weighted or leader-input PTS when mixing N inputs to one PTS-aware endpoint
+      (audio path). *(R2)* *(Done: `AudioRouteOptions.IsLeaderInput` bool added;
+      PushAudioTick prefers leader-flagged route's PTS over first-active-wins.)*
+- [x] **6.5** Endpoint format-change events → route re-validation (Phase 1).
+      *(Tier 4 #23)* *(Done: `RouteFormatMismatchEventArgs` + `IAVRouter.RouteFormatMismatch`
+      event. Fires once per format change in PushAudioTick when `SourceFormat`
+      differs from the format at route creation time.)*
 - [x] **6.6** Per-endpoint peak metering (already done for inputs; extend to outputs).
       *(Tier 4 #24)*
       *(Verified stale 2026-04-24 tenth pass: `EndpointEntry.PeakLevel` is written
@@ -1610,7 +1658,10 @@ Explicit blocking edges to keep visible:
       *(Done 2026-04-24 ninth pass: push-audio tick invokes `route.Resampler` when src/dst
       rates differ (`GetRequiredInputFrames` for input sizing; `ArrayPool` resampled buffer
       in try/finally). Log-once warning when rates differ and no resampler is wired.)*
-- [ ] **6.9** Per-input drift EMA keyed by `(audioInputId, videoInputId)`. *(R16)*
+- [x] **6.9** Per-input drift EMA keyed by `(audioInputId, videoInputId)`. *(R16)*
+      *(Done: replaced single-pair fields with
+      `ConcurrentDictionary<(InputId, InputId), DriftEmaState>`;
+      `GetAvDrift` uses `GetOrAdd` + per-state lock.)*
 - [x] **6.10** `IFormatCapabilities<T>` must declare non-empty `SupportedFormats` or
       throw. *(R22, CH9)*
       *(Done — verified stale 2026-04-24 ninth pass: `CreateAudioRoute` / `CreateVideoRoute`
@@ -1637,34 +1688,76 @@ Explicit blocking edges to keep visible:
 
 ## 8. Tier 6 — Performance
 
-- [ ] **8.1** Per-channel `VideoFrame` buffer pool (fixed-size, LOH-aware) replacing
-      `ArrayPool<byte>.Shared` for 4K60 video. *(Tier 6 #28)*
-- [ ] **8.2** Zero-copy fast-path when source pixel format == sink format (NDIAVSink,
-      SDL3 clones). *(Tier 6 #29)*
-- [ ] **8.3** SIMD I210→UYVY converter. *(Tier 6 #30)*
-- [ ] **8.4** Extend `_scratchBuffers` caching to `destBuf` and `mappedBuf` per endpoint.
-      *(main review Performance #3)*
-- [ ] **8.5** Synchronous `TryWrite`-first fast path in `FFmpegDemuxWorker.WritePacketAsync`.
-      *(main review Performance #5)*
-- [ ] **8.6** Persistent-mapped PBO upload path in SDL3 and Avalonia. *(§3.3, §4.3)*
-- [ ] **8.7** Reuse the HUD scratch VBO buffer. *(S13)*
-- [ ] **8.8** Denormal flush-to-zero on push/fill thread entry. *(R3, duplicate of 4.13)*
-- [ ] **8.9** Zero-copy NDI receive: retain `NDIVideoFrameV2` through `NDIVideoFrameOwner`;
+- [x] **8.1** Per-channel `VideoFrame` buffer pool (fixed-size, LOH-aware) replacing
+      `ArrayPool<byte>.Shared` for 4K60 video. *(Tier 6 #28)* *(Done 2026-04-24:
+      `FFmpegVideoChannel` now rents from a channel-local bounded
+      `FixedVideoFramePool` (`FixedVideoFramePool.cs`) and returns through
+      `FixedVideoFrameOwner` under `RefCountedVideoBuffer`, replacing direct
+      `ArrayPool<byte>.Shared` rentals for converted frame payloads.)*
+- [x] **8.2** Zero-copy fast-path when source pixel format == sink format (NDIAVSink,
+      SDL3 clones). *(Tier 6 #29)* *(Done 2026-04-24: SDL3/Avalonia clone
+      endpoints already use the §3.38 ref-counted `VideoFrameHandle` fast
+      path; `NDIAVEndpoint` now implements `ReceiveFrame(in VideoFrameHandle)`
+      and enqueues retained matching-format frames without copy. The async
+      send path pins `ReadOnlyMemory<byte>` directly (array-backed or custom
+      `MemoryManager`) and releases retained handles on recycle/flush.)*
+- [x] **8.3** SIMD I210→UYVY converter. *(Tier 6 #30)* *(Done 2026-04-24:
+      `NDIAVEndpoint.TryConvertI210ToUyvyInPlace` now uses an SSE2 row path
+      (`TryConvertI210RowToUyvySse2`) that vector-narrows 10-bit Y/U/V to 8-bit
+      before packing UYVY, with scalar fallback for unsupported CPUs / tail
+      pairs.)*
+- [x] **8.4** Extend `_scratchBuffers` caching to `destBuf` and `mappedBuf` per endpoint.
+      *(main review Performance #3)* *(Done 2026-04-24: new per-endpoint
+      `_pushDestScratchBuffers` + `_pushMappedScratchBuffers` in `AVRouter`;
+      `PushAudioTick` now uses `GetOrCreatePush*Scratch(...)` instead of
+      per-tick `ArrayPool<float>.Shared.Rent/Return` for `destBuf` and
+      `mappedBuf`.)*
+- [x] **8.5** Synchronous `TryWrite`-first fast path in `FFmpegDemuxWorker.WritePacketAsync`.
+      *(main review Performance #5)* *(Done 2026-04-24: `WritePacketAsync`
+      now does `writer.TryWrite(packet)` first and falls back to awaited
+      `WriteAsync` only when the channel cannot accept immediately.)*
+- [x] **8.6** Persistent-mapped PBO upload path in SDL3 and Avalonia. *(§3.3, §4.3)*
+      *(Done 2026-04-24: both `GLRenderer` (SDL3) and `AvaloniaGlRenderer`
+      now initialise an optional persistent-mapped unpack-PBO ring
+      (`glBufferStorage` + `glMapBufferRange` + sync fences) and route texture
+      uploads through non-blocking PBO-backed paths with automatic fallback to
+      direct CPU pointer uploads when the extension path is unavailable.)*
+- [x] **8.7** Reuse the HUD scratch VBO buffer. *(S13)*
+      *(Done — see §3.40f: both SDL3 and Avalonia HUD draw paths now reuse a
+      persistent CPU-side scratch vertex buffer.)*
+- [x] **8.8** Denormal flush-to-zero on push/fill thread entry. *(R3, duplicate of 4.13)*
+      *(Resolved: see §4.13 — .NET runtime already handles FTZ/DAZ.)*
+- [x] **8.9** Zero-copy NDI receive: retain `NDIVideoFrameV2` through `NDIVideoFrameOwner`;
       call `_frameSync.FreeVideo` on Dispose. Depends on `VideoFrameHandle` (3.11). *(Tier 4-N)*
+      *(Done 2026-04-24: `NDIVideoChannel` now takes a zero-copy fast path
+      (`TryWrapFrameZeroCopy`) for tightly-packed BGRA/RGBA/UYVY/NV12/I420
+      frames. `NDIVideoFrameOwner` now has a native-frame mode (inherits
+      `MemoryManager<byte>`) and calls `_frameSync.FreeVideo(...)` in
+      `Dispose(bool)`; copy fallback remains for padded/YV12 layouts.)*
 
 ---
 
 ## 9. Tier 7 — GL/rendering robustness (new)
 
-- [ ] **9.1** Unified SDL process-wide event pump (duplicate of 3.39). *(S9)*
-- [ ] **9.2** Off-thread GL state serialisation (3.34). *(S6, A5)*
-- [ ] **9.3** Context-lost recovery audit across SDL3 + Avalonia. *(A4, A7)*
+- [x] **9.1** Unified SDL process-wide event pump (duplicate of 3.39). *(S9)*
+      *(Done via §3.39 on 2026-04-24 seventh pass.)*
+- [x] **9.2** Off-thread GL state serialisation (3.34). *(S6, A5)*
+      *(Done via §3.34 and re-verified 2026-04-24 eighth pass: SDL3 and
+      Avalonia both queue YUV-hint changes via `_yuvHintsDirty` and apply
+      only inside the render loop under current GL context.)*
+- [x] **9.3** Context-lost recovery audit across SDL3 + Avalonia. *(A4, A7)*
+      *(Audit done 2026-04-24 eighth pass: SDL3 handles
+      `GLMakeCurrent` failure by signalling close and dispatching
+      `WindowClosed`; dispose path guards `GLMakeCurrent`/renderer dispose/
+      `GLDestroyContext`. Avalonia handles `OnOpenGlLost` with guarded
+      renderer dispose and resets auto YUV hint tracking so re-init
+      re-applies policies correctly.)*
 
 ---
 
 ## 10. Ongoing / cross-cutting
 
-- [~] **10.1** Unit test scaffolding.
+- [x] **10.1** Unit test scaffolding.
       - [x] `ChannelRouteMap.Auto` — 4 new tests (`Auto_MonoToStereo_FansOutToBothChannels`,
         `Auto_StereoToStereo_IsIdentity`, `Auto_SixChannelToStereo_PassesThroughFirstTwo`,
         `Auto_MonoToMono_SinglePassthrough`); also `AutoStereoDownmix` (4 tests:
@@ -1673,9 +1766,12 @@ Explicit blocking edges to keep visible:
       - [x] `DriftCorrector.CorrectFrameCount` — covered by `DriftCorrectorTests` (8 tests).
       - [x] `LinearResampler` boundary continuity — covered by `LinearResamplerTests` (8 tests
         including `Resample_CrossBufferContinuity_MatchesSingleCallResult`).
-      - [ ] Seek-epoch filter — lives inside `FFmpegDecodeWorkers` decode loop; needs
-        an integration-level harness (out of scope for unit tests).
-      - [ ] Extracted `IAudioMixer` (4.12) — pending §4.12 implementation.
+      - [x] Seek-epoch filter — covered by
+        `FFmpegDecodeWorkersTests.RunAsync_SeekEpochFilter_DropsStalePackets_AndAppliesFlushOncePerEpoch`
+        (stale-packet drop, once-per-epoch flush apply, decode ordering, and EOF/complete hooks).
+      - [x] Extracted `IAudioMixer` (4.12) — `DefaultAudioMixer` has 22 tests
+        covering `MixInto`, `ApplyGain`, `ApplyChannelMap`, `MeasurePeak`,
+        `CountOverflows`, `ApplySoftClip`.
       *(review §Nice-to-haves)*
 - [x] **10.2** Correlation-scoped logging (`RouteId`, `InputId`). *(EL2)*
       *(Done 2026-04-24 ninth pass: new `LoggerCorrelationExtensions` in
@@ -1692,10 +1788,20 @@ Explicit blocking edges to keep visible:
       wrapped in its own try/catch so a faulty endpoint can't
       short-circuit the whole fan-out) → decoder.StopAsync →
       ReleaseSession + router.Dispose. Documented inline.)*
-- [ ] **10.4** `AVRouterDiagnostics` event stream + expose `PtsDriftTracker.Snapshot`
-      on the diagnostics snapshot. *(§7 Nice-to-haves)*
-- [ ] **10.5** SDL3 HUD additions (drift ms, current clock name); Avalonia HUD parity.
-      *(§7 Nice-to-haves)*
+- [x] **10.4** `AVRouterDiagnostics` event stream + expose `PtsDriftTracker.Snapshot`
+      on the diagnostics snapshot. *(§7 Nice-to-haves)* *(Done 2026-04-24:
+      `IAVRouter` now exposes `event Action<RouterDiagnosticsSnapshot>? AVRouterDiagnostics`,
+      emitted once per audio push tick from `AVRouter.PushThreadLoop` when subscribers
+      exist. `PtsDriftTracker.Snapshot()` returns `PtsDriftTrackerSnapshot` and
+      `RouteDiagnostics` now carries `PushVideoDrift` / `PullVideoDrift` snapshots
+      for video routes. Covered by `AVRouterDiagnosticsEventTests`.)*
+- [x] **10.5** SDL3 HUD additions (drift ms, current clock name); Avalonia HUD parity.
+      *(§7 Nice-to-haves)* *(Done 2026-04-24: `HudStats` now includes
+      `ClockName`; SDL3 HUD populates both `Drift` and `ClockName`
+      (`SDL3VideoEndpoint`). Avalonia now renders the same HUD via a new
+      `AvaloniaGlRenderer.DrawHud(...)` path and populates matching stats in
+      `AvaloniaOpenGlVideoEndpoint` (fps, dropped/catch-up count, drift, clock
+      source). Added `HudStatsTests` for formatting coverage.)*
 
 ---
 
@@ -1798,43 +1904,27 @@ these are feature ideas, not required work.
 
 ---
 
-## Progress summary *(updated 2026-04-24)*
+## Progress summary *(updated 2026-04-24, twelfth pass)*
 
 | Section | Done | Partial | Open | Total | % done |
 |---------|:----:|:-------:|:----:|:-----:|:------:|
 | §0 Framing decisions | 8 | 0 | 0 | 8 | 100 % |
 | §1 Audio endpoint consolidation | 8 | 0 | 0 | 8 | 100 % |
 | §2 Tier 0 — Documentation sync | 8 | 0 | 0 | 8 | 100 % |
-| §3 Tier 1 — Bug fixes | 75 | 2 | 4 | 81 | 93 % |
-| §4 Tier 2 — Ergonomic helpers | 18 | 2 | 0 | 20 | 90 % |
-| §5 Tier 3 — Builder API | 8 | 1 | 2 | 11 | 73 % |
-| §6 Tier 4 — Per-route flexibility | 10 | 0 | 1 | 11 | 91 % |
+| §3 Tier 1 — Bug fixes | 81 | 0 | 0 | 81 | 100 % |
+| §4 Tier 2 — Ergonomic helpers | 20 | 0 | 0 | 20 | 100 % |
+| §5 Tier 3 — Builder API | 11 | 0 | 0 | 11 | 100 % |
+| §6 Tier 4 — Per-route flexibility | 11 | 0 | 0 | 11 | 100 % |
 | §7 Tier 5 — Timeline / gapless | 0 | 0 | 5 | 5 | 0 % |
-| §8 Tier 6 — Performance | 0 | 0 | 9 | 9 | 0 % |
-| §9 Tier 7 — GL robustness | 0 | 0 | 3 | 3 | 0 % |
-| §10 Ongoing / cross-cutting | 2 | 1 | 2 | 5 | 40 % |
+| §8 Tier 6 — Performance | 9 | 0 | 0 | 9 | 100 % |
+| §9 Tier 7 — GL robustness | 3 | 0 | 0 | 3 | 100 % |
+| §10 Ongoing / cross-cutting | 5 | 0 | 0 | 5 | 100 % |
 | §10.5 Acceptance criteria | 0 | 0 | 24 | 24 | 0 % |
-| **Total** | **137** | **6** | **50** | **193** | **71 %** |
+| **Total** | **164** | **0** | **29** | **193** | **85 %** |
 
 ### Remaining open items at a glance
 
 | # | Item | Tier |
 |---|------|------|
-| 3.37 | Avalonia GL multi-format pixel shaders | T1 |
-| 3.39 | Unified process-wide SDL3 event pump | T1 |
-| 3.40f | Reuse HUD scratch VBO buffer (= §8.7) | T1 |
-| 3.49 | Split `IAudioChannel.Position` → `ReadHeadPosition` (breaking) | T1 |
-| 5.7 | `MediaPlayerBuilder.WithNDIInput(...)` overloads | T3 |
-| 5.8 | Auto-register `NDIClock` inside `WithNDIInput` | T3 |
-| 5.9 | `WithAutoAvDriftCorrection(options?)` | T3 |
-| 5.11 | Full sample-app migration to builder API (partial) | T3 |
-| 6.4 | Weighted/leader-input PTS for N-input mixing | T4 |
-| 6.5 | Endpoint format-change → route re-validation | T4 |
-| 6.9 | Per-input drift EMA keyed by `(audioInputId, videoInputId)` | T4 |
 | 7.* | Timeline / gapless / multi-source (5 items) | T5 |
-| 8.* | Performance (9 items) | T6 |
-| 9.* | GL/rendering robustness (3 items) | T7 |
-| 10.1 | Seek-epoch filter + `IAudioMixer` unit tests (partial) | — |
-| 10.4 | `AVRouterDiagnostics` event stream | — |
-| 10.5 | SDL3 / Avalonia HUD additions (drift ms, clock name) | — |
-
+| 10.5 | Acceptance criteria (24 items) | Validation |

@@ -34,6 +34,13 @@ public sealed class AVRouter : IAVRouter
         public readonly IAudioChannel? AudioChannel;
         public readonly IVideoChannel? VideoChannel;
         public float Volume = 1.0f;
+        // Last gain actually applied to audio leaving this input. Written only
+        // on the RT/push thread that last consumed the input's channel; each
+        // callback ramps from this value toward <see cref="Volume"/> to avoid
+        // zipper noise when the user changes volume between callbacks. Races
+        // between multiple endpoints sharing one input are benign — each
+        // converges toward the same target.
+        public float AppliedVolume = 1.0f;
         // §3.18 / B13: long-backed for Interlocked atomicity; TimeOffset is a wrapper.
         public long TimeOffsetTicks;
         public TimeSpan TimeOffset => TimeSpan.FromTicks(Interlocked.Read(ref TimeOffsetTicks));
@@ -110,6 +117,9 @@ public sealed class AVRouter : IAVRouter
         public TimeSpan TimeOffset;
         public IAudioResampler? Resampler;
         public bool OwnsResampler; // if we auto-created the resampler
+        public bool IsLeaderInput; // §6.4 — prefer this route's PTS for push buffer timecode
+        public AudioFormat? OriginalAudioFormat; // §6.5 — format at route creation time
+        public AudioFormat? LastSeenAudioFormat; // §6.5 — last observed format (for change detection)
 
         // Video-specific: per-route subscription into the input channel's frame stream.
         // Each (input, endpoint) pair owns its own bounded queue — the decoder fans
@@ -192,6 +202,12 @@ public sealed class AVRouter : IAVRouter
     // the push-tick path still rents from the pool because it can overlap
     // multiple endpoints on one tick thread.
     private readonly ConcurrentDictionary<EndpointId, float[]> _outputScratchBuffers = new();
+    // §8.4 — push-audio destination/mapped scratch caches per endpoint.
+    // Replaces per-tick ArrayPool.Rent/Return for `destBuf` and `mappedBuf`.
+    // PushAudioTick is single-threaded, so one mutable buffer per endpoint is
+    // sufficient and safe.
+    private readonly ConcurrentDictionary<EndpointId, float[]> _pushDestScratchBuffers = new();
+    private readonly ConcurrentDictionary<EndpointId, float[]> _pushMappedScratchBuffers = new();
 
     // Per-endpoint fractional frame accumulator for time-aware push audio.
     // Prevents truncation drift when computing frame counts from elapsed seconds.
@@ -485,6 +501,8 @@ public sealed class AVRouter : IAVRouter
 
             _scratchBuffers.TryRemove(id, out _);
             _outputScratchBuffers.TryRemove(id, out _);
+            _pushDestScratchBuffers.TryRemove(id, out _);
+            _pushMappedScratchBuffers.TryRemove(id, out _);
             _pushAudioFrameAccumulators.TryRemove(id, out _);
 
             Log.LogDebug("Endpoint unregistered: {Id}", id);
@@ -618,6 +636,14 @@ public sealed class AVRouter : IAVRouter
         // scratch (both are frames×channels-bounded) so one constant covers both.
         if (audio is IPullAudioEndpoint)
             _outputScratchBuffers[id] = new float[minSize];
+        else
+        {
+            // §8.4 — push endpoints get dedicated destination + channel-map
+            // scratch upfront so PushAudioTick does not rent from ArrayPool on
+            // every tick.
+            _pushDestScratchBuffers[id] = new float[minSize];
+            _pushMappedScratchBuffers[id] = new float[minSize];
+        }
     }
 
     /// <summary>
@@ -720,6 +746,12 @@ public sealed class AVRouter : IAVRouter
     /// the lock is released before the invocation.
     /// </summary>
     public event Action<IMediaClock>? ActiveClockChanged;
+
+    /// <inheritdoc />
+    public event EventHandler<RouteFormatMismatchEventArgs>? RouteFormatMismatch;
+
+    /// <inheritdoc />
+    public event Action<RouterDiagnosticsSnapshot>? AVRouterDiagnostics;
 
     public void RegisterClock(IMediaClock clock, ClockPriority priority = ClockPriority.Hardware)
     {
@@ -850,15 +882,6 @@ public sealed class AVRouter : IAVRouter
         entry.Gain = gain;
     }
 
-    // ── IAVRouter: Video ────────────────────────────────────────────────
-
-    /// <summary>
-    /// Legacy router-wide PTS bypass. Prefer <see cref="VideoRouteOptions.LiveMode"/>
-    /// per-route so a preview sink can be live while a recording sink stays scheduled.
-    /// </summary>
-    [Obsolete("Use VideoRouteOptions.LiveMode per-route instead. §6.1 / R23")]
-    public bool BypassVideoPtsScheduling { get; set; }
-
     // ── IAVRouter: Diagnostics ──────────────────────────────────────────
 
     public TimeSpan GetAvDrift(InputId audioInput, InputId videoInput)
@@ -892,40 +915,30 @@ public sealed class AVRouter : IAVRouter
         // the displayed value tracks real drift closely (so tightening the
         // correction gains is visible to the user) while still swallowing
         // single-sample PTS-quantization noise.
+        // §6.9 — per-pair EMA so multiple A/V pairings can each track their
+        // own drift independently (promotes the single-pair fix from §3.54).
         const double alpha = 0.4;
-        lock (_driftEmaLock)
+        var state = _driftEmaStates.GetOrAdd((audioInput, videoInput), static _ => new DriftEmaState());
+        lock (state)
         {
-            // §3.54 / R16: single-pair EMA. When the caller polls a different
-            // (audioInput, videoInput) pair from the previous call, reset the
-            // filter so the new pair is not contaminated by the previous one's
-            // history. Full per-pair keying is tracked as §6.9; this is the
-            // minimum viable correctness fix.
-            if (!_driftEmaValid ||
-                _driftEmaAudioInput != audioInput ||
-                _driftEmaVideoInput != videoInput)
+            if (!state.Valid)
             {
-                _driftEmaTicks = raw;
-                _driftEmaValid = true;
-                _driftEmaAudioInput = audioInput;
-                _driftEmaVideoInput = videoInput;
+                state.EmaTicks = raw;
+                state.Valid = true;
             }
             else
             {
-                _driftEmaTicks = (long)(_driftEmaTicks * (1 - alpha) + raw * alpha);
+                state.EmaTicks = (long)(state.EmaTicks * (1 - alpha) + raw * alpha);
             }
-            return TimeSpan.FromTicks(_driftEmaTicks);
+            return TimeSpan.FromTicks(state.EmaTicks);
         }
     }
 
-    // EMA state for GetAvDrift — kept on the router because it's a smoothed diagnostic
-    // readout shared across all audio↔video pairings. Only one pair is tracked at a
-    // time (§3.54); the filter resets when the caller switches pairs. §6.9 will
-    // promote this to a per-pair dictionary for multi-pair scenarios.
-    private readonly Lock _driftEmaLock = new();
-    private long _driftEmaTicks;
-    private bool _driftEmaValid;
-    private InputId _driftEmaAudioInput;
-    private InputId _driftEmaVideoInput;
+    // §6.9 — per-pair EMA state for GetAvDrift. Each (audioInput, videoInput) pair
+    // gets its own filter so callers polling different pairings in the same graph
+    // (e.g. two NDI sources with independent A/V sync) don't contaminate each other.
+    private sealed class DriftEmaState { public long EmaTicks; public bool Valid; }
+    private readonly ConcurrentDictionary<(InputId Audio, InputId Video), DriftEmaState> _driftEmaStates = new();
 
     public float GetInputPeakLevel(InputId id)
     {
@@ -964,13 +977,13 @@ public sealed class AVRouter : IAVRouter
             r.Id, r.InputId, r.EndpointId, r.Kind.ToString(), r.Enabled, r.Gain,
             r.TimeOffset,
             r.Resampler is not null,
-            r.LiveMode)).ToArray();
+            r.LiveMode,
+            r.Kind == InputKind.Video ? r.PushDrift.Snapshot() : null,
+            r.Kind == InputKind.Video ? r.PullDrift.Snapshot() : null)).ToArray();
 
-#pragma warning disable CS0618 // reading own legacy property for diagnostics compatibility
         return new RouterDiagnosticsSnapshot(
-            IsRunning, Clock.Position, BypassVideoPtsScheduling,
+            IsRunning, Clock.Position,
             inputSnapshots, endpointSnapshots, routeSnapshots);
-#pragma warning restore CS0618
     }
 
     // ── IDisposable / IAsyncDisposable ──────────────────────────────────
@@ -1089,12 +1102,17 @@ public sealed class AVRouter : IAVRouter
         lock (_lock)
         {
             var routeId = RouteId.New();
+            // §6.5 — capture the source format at creation time for mismatch detection.
+            var originalFmt = inp.AudioChannel?.SourceFormat;
             var route = new RouteEntry(routeId, inp.Id, ep.Id, InputKind.Audio)
             {
                 Gain = options.Gain,
                 TimeOffset = options.TimeOffset,
                 ChannelMap = options.ChannelMap,
                 Resampler = options.Resampler,
+                IsLeaderInput = options.IsLeaderInput,
+                OriginalAudioFormat = originalFmt,
+                LastSeenAudioFormat = originalFmt,
             };
 
             // Auto-derive channel map if not provided
@@ -1352,6 +1370,7 @@ public sealed class AVRouter : IAVRouter
             try
             {
                 PushAudioTick(elapsedSeconds);
+                EmitDiagnosticsIfSubscribed();
             }
             catch (Exception ex)
             {
@@ -1434,6 +1453,32 @@ public sealed class AVRouter : IAVRouter
         }
     }
 
+    private void EmitDiagnosticsIfSubscribed()
+    {
+        var handler = AVRouterDiagnostics;
+        if (handler is null) return;
+
+        RouterDiagnosticsSnapshot snapshot;
+        try
+        {
+            snapshot = GetDiagnosticsSnapshot();
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Failed to build diagnostics snapshot for AVRouterDiagnostics.");
+            return;
+        }
+
+        try
+        {
+            handler(snapshot);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "AVRouterDiagnostics subscriber threw; continuing.");
+        }
+    }
+
     private void PushAudioTick(double elapsedSeconds)
     {
         var routesByEp = _audioRoutesByEndpoint;
@@ -1500,29 +1545,38 @@ public sealed class AVRouter : IAVRouter
             var format = outFormat.Value;
 
             int destSamples = framesPerBuffer * format.Channels;
-            var destBuf = ArrayPool<float>.Shared.Rent(destSamples);
-            try
+            var destBuf = GetOrCreatePushDestScratch(ep.Id, destSamples);
+            var dest = destBuf.AsSpan(0, destSamples);
+            dest.Clear();
+            int maxFilled = 0;
+
+            // Stream-time PTS of the first sample in the delivered buffer.  Seeded
+            // from the first active input's Position BEFORE its FillBuffer call,
+            // which is the read-head PTS that the upcoming samples will start at.
+            // Sinks that stamp media timecode (NDIAVEndpoint) use this directly; other
+            // sinks see it discarded by the default <see cref="IAudioEndpoint.ReceiveBuffer"/>
+            // overload.  TimeSpan.MinValue means "no PTS" (all inputs empty).
+            TimeSpan bufferPts = TimeSpan.MinValue;
+
+            // Second pass: pull from each route, apply map, mix into dest
+            foreach (var route in routes)
             {
-                var dest = destBuf.AsSpan(0, destSamples);
-                dest.Clear();
-                int maxFilled = 0;
+                if (!Volatile.Read(ref route.Enabled)) continue;
+                if (!_inputs.TryGetValue(route.InputId, out var inp) || !inp.Enabled) continue;
 
-                // Stream-time PTS of the first sample in the delivered buffer.  Seeded
-                // from the first active input's Position BEFORE its FillBuffer call,
-                // which is the read-head PTS that the upcoming samples will start at.
-                // Sinks that stamp media timecode (NDIAVEndpoint) use this directly; other
-                // sinks see it discarded by the default <see cref="IAudioEndpoint.ReceiveBuffer"/>
-                // overload.  TimeSpan.MinValue means "no PTS" (all inputs empty).
-                TimeSpan bufferPts = TimeSpan.MinValue;
+                var channel = inp.AudioChannel!;
+                var srcFormat = channel.SourceFormat;
 
-                // Second pass: pull from each route, apply map, mix into dest
-                foreach (var route in routes)
+                // §6.5 — detect format changes at runtime and fire once per change.
+                if (route.OriginalAudioFormat.HasValue &&
+                    route.LastSeenAudioFormat.HasValue &&
+                    srcFormat != route.LastSeenAudioFormat.Value)
                 {
-                    if (!Volatile.Read(ref route.Enabled)) continue;
-                    if (!_inputs.TryGetValue(route.InputId, out var inp) || !inp.Enabled) continue;
-
-                    var channel = inp.AudioChannel!;
-                    var srcFormat = channel.SourceFormat;
+                    route.LastSeenAudioFormat = srcFormat;
+                    RouteFormatMismatch?.Invoke(this, new RouteFormatMismatchEventArgs(
+                        route.Id, route.InputId, route.EndpointId,
+                        route.OriginalAudioFormat, srcFormat));
+                }
 
                     // §6.8 — per-route resampler on the push path. Rates that
                     // don't match the endpoint format are handled by the
@@ -1530,44 +1584,44 @@ public sealed class AVRouter : IAVRouter
                     // skipped with a log-once warning (preserves the prior
                     // "homogeneous format required" contract for routes the
                     // caller did not opt into resampling on).
-                    bool needsResample = srcFormat.SampleRate != format.SampleRate;
-                    if (needsResample && route.Resampler is null)
+                bool needsResample = srcFormat.SampleRate != format.SampleRate;
+                if (needsResample && route.Resampler is null)
+                {
+                    // Log-once per route via a HashSet we already track
+                    // for this exact purpose.
+                    if (_pushAudioFormatMismatchWarnings.TryAdd(route.Id, 0))
                     {
-                        // Log-once per route via a HashSet we already track
-                        // for this exact purpose.
-                        if (_pushAudioFormatMismatchWarnings.TryAdd(route.Id, 0))
-                        {
-                            // §10.2 / EL2 — correlation scope so filters on
-                            // RouteId = X surface this warning alongside the
-                            // route's creation / removal records.
-                            using var _corrScope = Log.BeginRouteScope(route.Id);
-                            Log.LogWarning(
-                                "Push audio route {Route} ({Input}->{Endpoint}) source rate " +
-                                "{SrcRate}Hz != endpoint rate {DstRate}Hz and no Resampler " +
-                                "is wired — frames dropped. Set AudioRouteOptions.Resampler " +
-                                "to enable push-path rate conversion (§6.8).",
-                                route.Id, route.InputId, route.EndpointId,
-                                srcFormat.SampleRate, format.SampleRate);
-                        }
-                        continue;
+                        // §10.2 / EL2 — correlation scope so filters on
+                        // RouteId = X surface this warning alongside the
+                        // route's creation / removal records.
+                        using var _corrScope = Log.BeginRouteScope(route.Id);
+                        Log.LogWarning(
+                            "Push audio route {Route} ({Input}->{Endpoint}) source rate " +
+                            "{SrcRate}Hz != endpoint rate {DstRate}Hz and no Resampler " +
+                            "is wired — frames dropped. Set AudioRouteOptions.Resampler " +
+                            "to enable push-path rate conversion (§6.8).",
+                            route.Id, route.InputId, route.EndpointId,
+                            srcFormat.SampleRate, format.SampleRate);
                     }
+                    continue;
+                }
 
                     // Channel-count conversion without a map also means we
                     // have no way to produce the right layout — skip.
-                    if (srcFormat.Channels != format.Channels && route.BakedChannelMap is null)
-                        continue;
+                if (srcFormat.Channels != format.Channels && route.BakedChannelMap is null)
+                    continue;
 
                     // Pull size: when resampling, ask the resampler how many
                     // input frames it needs to produce `framesPerBuffer`
                     // output frames (accounts for internally-buffered phase).
-                    int inputFrames = needsResample
-                        ? route.Resampler!.GetRequiredInputFrames(framesPerBuffer, srcFormat, format.SampleRate)
-                        : framesPerBuffer;
-                    int srcSamples = inputFrames * srcFormat.Channels;
+                int inputFrames = needsResample
+                    ? route.Resampler!.GetRequiredInputFrames(framesPerBuffer, srcFormat, format.SampleRate)
+                    : framesPerBuffer;
+                int srcSamples = inputFrames * srcFormat.Channels;
 
-                    var scratch = GetOrCreateScratch(ep.Id, srcSamples);
-                    var srcSpan = scratch.AsSpan(0, srcSamples);
-                    srcSpan.Clear();
+                var scratch = GetOrCreateScratch(ep.Id, srcSamples);
+                var srcSpan = scratch.AsSpan(0, srcSamples);
+                srcSpan.Clear();
 
                     // Snapshot Position BEFORE the read: that's the stream PTS of the
                     // first sample we're about to consume.  Use the first input that
@@ -1575,111 +1629,107 @@ public sealed class AVRouter : IAVRouter
                     // for the typical single-input-per-endpoint case; for N-input mixes
                     // the sinks that care about PTS (NDI) typically have one decoder
                     // channel per input anyway.
-                    var ptsBeforeFill = channel.Position;
+                var ptsBeforeFill = channel.Position;
 
-                    int filled = channel.FillBuffer(srcSpan, inputFrames);
-                    if (filled == 0) continue;
-                    if (bufferPts == TimeSpan.MinValue)
-                        bufferPts = ptsBeforeFill + inp.TimeOffset + route.TimeOffset;
+                int filled = channel.FillBuffer(srcSpan, inputFrames);
+                if (filled == 0) continue;
 
-                    var filledSpan = srcSpan[..(filled * srcFormat.Channels)];
+                    // §6.4 — leader-flagged route's PTS takes priority over first-active.
+                var routePts = ptsBeforeFill + inp.TimeOffset + route.TimeOffset;
+                if (route.IsLeaderInput || bufferPts == TimeSpan.MinValue)
+                    bufferPts = routePts;
 
-                    if (Math.Abs(inp.Volume - 1.0f) > 1e-6f)
-                        ApplyGain(filledSpan, inp.Volume);
-                    if (Math.Abs(route.Gain - 1.0f) > 1e-6f)
-                        ApplyGain(filledSpan, route.Gain);
+                var filledSpan = srcSpan[..(filled * srcFormat.Channels)];
+
+                ApplyInputVolumeRamped(filledSpan, inp, srcFormat.Channels);
+                if (Math.Abs(route.Gain - 1.0f) > 1e-6f)
+                    ApplyGain(filledSpan, route.Gain);
 
                     // Per-input peak metering (post-volume, pre-mix, pre-resample)
-                    inp.PeakLevel = MeasurePeak(filledSpan);
+                inp.PeakLevel = MeasurePeak(filledSpan);
 
                     // §6.8 — apply the resampler if wired. The output
                     // buffer is sized for `framesPerBuffer` frames at the
                     // source channel count; channel-map conversion runs on
                     // the resampled output. `srcFramesOut` tracks the frame
                     // count *after* resample for mix / maxFilled accounting.
-                    ReadOnlySpan<float> outSpan = filledSpan;
-                    int srcFramesOut = filled;
-                    float[]? resampledBuf = null;
-                    if (needsResample)
-                    {
-                        int rsSamples = framesPerBuffer * srcFormat.Channels;
-                        resampledBuf = ArrayPool<float>.Shared.Rent(rsSamples);
-                        var rsSpan = resampledBuf.AsSpan(0, rsSamples);
-                        rsSpan.Clear();
-                        int outFrames = route.Resampler!.Resample(filledSpan, rsSpan, srcFormat, format.SampleRate);
-                        outSpan = rsSpan[..(outFrames * srcFormat.Channels)];
-                        srcFramesOut = outFrames;
-                    }
-                    if (srcFramesOut > maxFilled) maxFilled = srcFramesOut;
+                ReadOnlySpan<float> outSpan = filledSpan;
+                int srcFramesOut = filled;
+                float[]? resampledBuf = null;
+                if (needsResample)
+                {
+                    int rsSamples = framesPerBuffer * srcFormat.Channels;
+                    resampledBuf = ArrayPool<float>.Shared.Rent(rsSamples);
+                    var rsSpan = resampledBuf.AsSpan(0, rsSamples);
+                    rsSpan.Clear();
+                    int outFrames = route.Resampler!.Resample(filledSpan, rsSpan, srcFormat, format.SampleRate);
+                    outSpan = rsSpan[..(outFrames * srcFormat.Channels)];
+                    srcFramesOut = outFrames;
+                }
+                if (srcFramesOut > maxFilled) maxFilled = srcFramesOut;
 
-                    try
+                try
+                {
+                    // §3.15 / R4: apply the baked channel map whenever one is
+                    // supplied, not only when channel counts differ — user-
+                    // defined maps can also reorder / attenuate equal-channel
+                    // streams (e.g. stereo L↔R swap, mid-side encode).
+                    if (route.BakedChannelMap is not null)
                     {
-                        // §3.15 / R4: apply the baked channel map whenever one is
-                        // supplied, not only when channel counts differ — user-
-                        // defined maps can also reorder / attenuate equal-channel
-                        // streams (e.g. stereo L↔R swap, mid-side encode).
-                        if (route.BakedChannelMap is not null)
-                        {
-                            int mappedSamples = srcFramesOut * format.Channels;
-                            var mappedBuf = ArrayPool<float>.Shared.Rent(mappedSamples);
-                            try
-                            {
-                                var mapped = mappedBuf.AsSpan(0, mappedSamples);
-                                mapped.Clear();
-                                ApplyChannelMap(outSpan, mapped, route.BakedChannelMap,
-                                    srcFormat.Channels, format.Channels, srcFramesOut);
-                                MixInto(dest, mapped);
-                            }
-                            finally { ArrayPool<float>.Shared.Return(mappedBuf); }
-                        }
-                        else
-                        {
-                            MixInto(dest, outSpan);
-                        }
+                        int mappedSamples = srcFramesOut * format.Channels;
+                        var mappedBuf = GetOrCreatePushMappedScratch(ep.Id, mappedSamples);
+                        var mapped = mappedBuf.AsSpan(0, mappedSamples);
+                        mapped.Clear();
+                        ApplyChannelMap(outSpan, mapped, route.BakedChannelMap,
+                            srcFormat.Channels, format.Channels, srcFramesOut);
+                        MixInto(dest, mapped);
                     }
-                    finally
+                    else
                     {
-                        if (resampledBuf is not null)
-                            ArrayPool<float>.Shared.Return(resampledBuf);
+                        MixInto(dest, outSpan);
                     }
                 }
-
-                // Only deliver when the decoder actually produced content.  Sending
-                // synthetic silence during startup underruns would label that silence
-                // with whatever PTS we chose — any choice creates a permanent A/V
-                // offset on sinks that align audio ↔ video by timecode (NDI etc.).
-                // Skipping the send leaves those sinks' timelines paused until real
-                // decoded audio arrives, at which point the buffer is labelled with
-                // its correct stream PTS.
-                if (maxFilled > 0)
+                finally
                 {
-                    var deliverSpan = dest[..(maxFilled * format.Channels)];
-                    if (Math.Abs(ep.Gain - 1.0f) > 1e-6f)
-                        ApplyGain(deliverSpan, ep.Gain);
-
-                    // §4.13 / M2 — overflow diagnostic: count samples whose
-                    // absolute value would clip on a conventional DAC, then
-                    // optionally round them off with the mixer's soft-clip
-                    // curve. Count is recorded pre-soft-clip so diagnostics
-                    // reflect what the raw mix tried to produce.
-                    int overflows = DefaultAudioMixer.Instance.CountOverflows(deliverSpan);
-                    if (overflows > 0)
-                    {
-                        Interlocked.Add(ref ep.OverflowSamplesTotal, overflows);
-                        Interlocked.Exchange(ref ep.OverflowSamplesThisTick, overflows);
-                    }
-                    if (_options.SoftClipThreshold is float t && overflows > 0)
-                        DefaultAudioMixer.Instance.ApplySoftClip(deliverSpan, t);
-
-                    // §4.15 / R24, M3 — per-endpoint peak meter sampled after
-                    // channel-map, endpoint-gain and (optional) soft-clip,
-                    // just before ReceiveBuffer.
-                    ep.PeakLevel = MeasurePeak(deliverSpan);
-
-                    ep.Audio.ReceiveBuffer(deliverSpan, maxFilled, format, bufferPts);
+                    if (resampledBuf is not null)
+                        ArrayPool<float>.Shared.Return(resampledBuf);
                 }
             }
-            finally { ArrayPool<float>.Shared.Return(destBuf); }
+
+            // Only deliver when the decoder actually produced content.  Sending
+            // synthetic silence during startup underruns would label that silence
+            // with whatever PTS we chose — any choice creates a permanent A/V
+            // offset on sinks that align audio ↔ video by timecode (NDI etc.).
+            // Skipping the send leaves those sinks' timelines paused until real
+            // decoded audio arrives, at which point the buffer is labelled with
+            // its correct stream PTS.
+            if (maxFilled > 0)
+            {
+                var deliverSpan = dest[..(maxFilled * format.Channels)];
+                if (Math.Abs(ep.Gain - 1.0f) > 1e-6f)
+                    ApplyGain(deliverSpan, ep.Gain);
+
+                // §4.13 / M2 — overflow diagnostic: count samples whose
+                // absolute value would clip on a conventional DAC, then
+                // optionally round them off with the mixer's soft-clip
+                // curve. Count is recorded pre-soft-clip so diagnostics
+                // reflect what the raw mix tried to produce.
+                int overflows = DefaultAudioMixer.Instance.CountOverflows(deliverSpan);
+                if (overflows > 0)
+                {
+                    Interlocked.Add(ref ep.OverflowSamplesTotal, overflows);
+                    Interlocked.Exchange(ref ep.OverflowSamplesThisTick, overflows);
+                }
+                if (_options.SoftClipThreshold is float t && overflows > 0)
+                    DefaultAudioMixer.Instance.ApplySoftClip(deliverSpan, t);
+
+                // §4.15 / R24, M3 — per-endpoint peak meter sampled after
+                // channel-map, endpoint-gain and (optional) soft-clip,
+                // just before ReceiveBuffer.
+                ep.PeakLevel = MeasurePeak(deliverSpan);
+
+                ep.Audio.ReceiveBuffer(deliverSpan, maxFilled, format, bufferPts);
+            }
         }
     }
 
@@ -1690,6 +1740,7 @@ public sealed class AVRouter : IAVRouter
 
         var clockPos = Clock.Position;
         long earlyToleranceTicks = _options.VideoPtsEarlyTolerance.Ticks;
+        long discontinuityResetTicks = _options.VideoPtsDiscontinuityResetThreshold.Ticks;
         int maxCatchUp = _options.VideoMaxCatchUpFramesPerTick;
 
         foreach (var route in routes)
@@ -1716,30 +1767,40 @@ public sealed class AVRouter : IAVRouter
             bool didCatchUp = false;
 
             // 3) PTS gate with smooth drift correction (unless live mode).
-            // §6.1 / R23: per-route LiveMode takes precedence; global BypassVideoPtsScheduling
-            // is a legacy fallback for callers that set the flag before per-route options existed.
-#pragma warning disable CS0618
-            if (!route.LiveMode && !BypassVideoPtsScheduling)
-#pragma warning restore CS0618
+            if (!route.LiveMode)
             {
                 // §6.2 / R14: use route.PushDrift (per-route on RouteEntry) instead of
                 // a ConcurrentDictionary lookup — O(1) field access, no GC pressure.
                 var drift = route.PushDrift;
 
-                // Same self-feedback seeding alignment as the pull-video path
-                // (see VideoPresentCallbackForEndpoint for the long-form note):
-                // if the master clock hasn't yet caught up to the first frame's
-                // PTS, the post-UpdateFromFrame jump would otherwise leave the
-                // drift tracker permanently biased.
+                // Seed each origin from its own domain. A previous revision clamped
+                // the clock origin up to the PTS value whenever clockPos < pts, which
+                // only worked for self-fed clocks that were about to jump (e.g. an
+                // NDIClock on the first frame). For wall-clock masters (PortAudio,
+                // StopwatchClock) that clamp produced a permanent huge negative skew
+                // and stuck the pipeline on the first frame.
                 bool pushFirstSeed = !drift.HasOrigin;
-                long pushSeedClockTicks = clockPos.Ticks < candidate.Pts.Ticks
-                    ? candidate.Pts.Ticks
-                    : clockPos.Ticks;
-                drift.SeedIfNeeded(candidate.Pts.Ticks, pushSeedClockTicks);
+                drift.SeedIfNeeded(candidate.Pts.Ticks, clockPos.Ticks);
 
                 long relativeClockTicks = drift.RelativeClock(clockPos.Ticks);
                 long routeOffsetTicks   = inp.TimeOffset.Ticks + route.TimeOffset.Ticks;
                 long relativePtsTicks   = drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
+
+                // Large timestamp discontinuity (live sender restart, profile/FPS
+                // switch, source seek): re-seed the drift origin so scheduled mode
+                // does not stall for the full jump duration.
+                if (!pushFirstSeed && discontinuityResetTicks > 0)
+                {
+                    long errorTicks = relativePtsTicks - relativeClockTicks;
+                    if (Math.Abs(errorTicks) > discontinuityResetTicks)
+                    {
+                        drift.Reset();
+                        drift.SeedIfNeeded(candidate.Pts.Ticks, clockPos.Ticks);
+                        relativeClockTicks = drift.RelativeClock(clockPos.Ticks);
+                        relativePtsTicks = drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
+                        pushFirstSeed = true;
+                    }
+                }
 
                 // Too early — cache for next tick.
                 if (relativePtsTicks > relativeClockTicks + earlyToleranceTicks)
@@ -1852,9 +1913,9 @@ public sealed class AVRouter : IAVRouter
 
                 var filledSpan = srcSpan[..(filled * srcFormat.Channels)];
 
-                // Apply input volume
-                if (Math.Abs(inp.Volume - 1.0f) > 1e-6f)
-                    ApplyGain(filledSpan, inp.Volume);
+                // Apply input volume with a one-callback ramp so user volume
+                // changes arrive without zipper noise.
+                ApplyInputVolumeRamped(filledSpan, inp, srcFormat.Channels);
 
                 // Apply route gain
                 if (Math.Abs(route.Gain - 1.0f) > 1e-6f)
@@ -1980,26 +2041,40 @@ public sealed class AVRouter : IAVRouter
                     }
                 }
 
-                // §6.1 / R23: PTS check — skip when this route is in live mode or
-                // the legacy global bypass is on.
-#pragma warning disable CS0618
-                if (!route.LiveMode && !_router.BypassVideoPtsScheduling)
-#pragma warning restore CS0618
+                // §6.1 / R23: PTS check — skip when this route is in live mode.
+                if (!route.LiveMode)
                 {
                     // §6.2 / R14: use route.PullDrift — independent from the push
                     // tracker (route.PushDrift) since the two paths run on different
                     // threads with different tick cadences.
                     var drift = route.PullDrift;
                     bool firstSeed = !drift.HasOrigin;
-                    long seedClockTicks = clockPosition.Ticks < candidate.Pts.Ticks
-                        ? candidate.Pts.Ticks
-                        : clockPosition.Ticks;
-                    drift.SeedIfNeeded(candidate.Pts.Ticks, seedClockTicks);
+                    // Seed each origin from its own domain — see the matching note
+                    // on PushVideoTick. Clamping clock up to the PTS value produced
+                    // a permanent skew under wall-clock masters.
+                    drift.SeedIfNeeded(candidate.Pts.Ticks, clockPosition.Ticks);
 
                     long routeOffsetTicks   = inp.TimeOffset.Ticks + route.TimeOffset.Ticks;
                     long relativePtsTicks   = drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
                     long relativeClockTicks = drift.RelativeClock(clockPosition.Ticks);
                     long toleranceTicks     = _router._options.VideoPtsEarlyTolerance.Ticks;
+                    long discontinuityResetTicks = _router._options.VideoPtsDiscontinuityResetThreshold.Ticks;
+
+                    // Large timestamp discontinuity (live sender restart, profile/FPS
+                    // switch, source seek): re-seed the pull-path drift origin so the
+                    // early-frame gate doesn't park on stale timeline offsets.
+                    if (!firstSeed && discontinuityResetTicks > 0)
+                    {
+                        long errorTicks = relativePtsTicks - relativeClockTicks;
+                        if (Math.Abs(errorTicks) > discontinuityResetTicks)
+                        {
+                            drift.Reset();
+                            drift.SeedIfNeeded(candidate.Pts.Ticks, clockPosition.Ticks);
+                            relativePtsTicks = drift.RelativePts(candidate.Pts.Ticks, routeOffsetTicks);
+                            relativeClockTicks = drift.RelativeClock(clockPosition.Ticks);
+                            firstSeed = true;
+                        }
+                    }
 
                     // First-ever frame: skip the gate so the presentation pipeline
                     // (and therefore Clock.Position) gets initialized.
@@ -2093,6 +2168,38 @@ public sealed class AVRouter : IAVRouter
     }
 
     /// <summary>
+    /// §8.4 — push-audio destination scratch (`destBuf` in PushAudioTick).
+    /// Keeps a growable per-endpoint buffer to avoid ArrayPool rent/return
+    /// on every tick.
+    /// </summary>
+    private float[] GetOrCreatePushDestScratch(EndpointId id, int minSize)
+    {
+        if (_pushDestScratchBuffers.TryGetValue(id, out var buf) && buf.Length >= minSize)
+            return buf;
+
+        return _pushDestScratchBuffers.AddOrUpdate(
+            id,
+            _ => new float[minSize],
+            (_, existing) => existing.Length >= minSize ? existing : new float[minSize]);
+    }
+
+    /// <summary>
+    /// §8.4 — push-audio mapped scratch (`mappedBuf` in PushAudioTick).
+    /// Separate from destination scratch because channel-map conversion reads
+    /// from source while mixing into destination.
+    /// </summary>
+    private float[] GetOrCreatePushMappedScratch(EndpointId id, int minSize)
+    {
+        if (_pushMappedScratchBuffers.TryGetValue(id, out var buf) && buf.Length >= minSize)
+            return buf;
+
+        return _pushMappedScratchBuffers.AddOrUpdate(
+            id,
+            _ => new float[minSize],
+            (_, existing) => existing.Length >= minSize ? existing : new float[minSize]);
+    }
+
+    /// <summary>
     /// Scatters interleaved source samples into interleaved destination samples
     /// using a pre-baked channel route table.
     /// </summary>
@@ -2107,10 +2214,33 @@ public sealed class AVRouter : IAVRouter
     private static void ApplyGain(Span<float> buffer, float gain)
         => Mixer.ApplyGain(buffer, gain);
 
+    /// <summary>
+    /// Applies per-input volume with a one-callback linear ramp between the
+    /// previously-applied value (<see cref="InputEntry.AppliedVolume"/>) and
+    /// the target (<see cref="InputEntry.Volume"/>). Skips the ramp when
+    /// already at target and target==1.0 to keep the unity-gain fast path
+    /// allocation- and work-free.
+    /// </summary>
+    private static void ApplyInputVolumeRamped(Span<float> buffer, InputEntry inp, int channels)
+    {
+        float target   = Volatile.Read(ref inp.Volume);
+        float applied  = inp.AppliedVolume;
+        bool  atTarget = Math.Abs(applied - target) <= 1e-6f;
+
+        if (atTarget)
+        {
+            if (Math.Abs(target - 1.0f) > 1e-6f)
+                Mixer.ApplyGain(buffer, target);
+            return;
+        }
+
+        Mixer.ApplyGainRamp(buffer, applied, target, channels);
+        inp.AppliedVolume = target;
+    }
+
     private static void MixInto(Span<float> dest, ReadOnlySpan<float> src)
         => Mixer.MixInto(dest, src);
 
     private static float MeasurePeak(ReadOnlySpan<float> buffer)
         => Mixer.MeasurePeak(buffer);
 }
-

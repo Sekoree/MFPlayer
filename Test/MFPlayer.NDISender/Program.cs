@@ -6,16 +6,14 @@
 //   4. Press Enter or Ctrl+C to stop; auto-stops at end of file
 //
 // Pipeline
-//   FFmpegDecoder ──► FFmpegAudioChannel ──► AVRouter ──► NDIAVEndpoint(audio) ──► NDISender
-//                 └─► FFmpegVideoChannel ──► AVRouter ──► NDIAVEndpoint(video) ──╯
-//   VirtualClockEndpoint drives the master clock (Stopwatch-based, no hardware device needed)
+//   FFmpegDecoder channels ──► MediaPlayer builder (external-input mode) ──► NDIAVEndpoint ──► NDISender
+//   VirtualClockEndpoint.Clock is registered as override clock (no hardware output device required)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using System.Diagnostics;
 using FFmpeg.AutoGen;
 using NDILib;
 using S.Media.Core.Audio;
-using S.Media.Core.Audio.Routing;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Routing;
@@ -108,12 +106,10 @@ using (ndiRuntime)
 
         // ── Determine NDI audio format ──
         AudioFormat? ndiAudioFormat = null;
-        ChannelRouteMap? routeMap = null;
         if (audioChannel != null)
         {
             var srcFmt = audioChannel.SourceFormat;
             ndiAudioFormat = new AudioFormat(48000, Math.Min(srcFmt.Channels, 2));
-            routeMap = ChannelRouteMap.AutoStereoDownmix(srcFmt.Channels, ndiAudioFormat.Value.Channels);
         }
 
         // ── Determine NDI video format ──
@@ -165,21 +161,13 @@ using (ndiRuntime)
 
             // ── 6. Wire the pipeline ─────────────────────────────────────────
             //
-            //   VirtualClockEndpoint (clock master, no hardware device)
-            //       └─► AVRouter
-            //               ├─► NDIAVEndpoint (audio: interleaved→planar, SendAudio)
-            //               └─► NDIAVEndpoint (video: pixel copy, SendVideo)
-            //                       └─► NDISender ──► network
+            //   FFmpegDecoder channels (external inputs) ─► MediaPlayer builder
+            //       ├─► NDIAVEndpoint (audio/video sink)
+            //       └─► VirtualClockEndpoint.Clock registered as Override
 
             const int framesPerBuffer = 1024; // ~21 ms @ 48 kHz
 
             using var virtualClock = new VirtualClockEndpoint();
-            using var router = new AVRouter(new AVRouterOptions()
-            {
-                //VideoPtsEarlyTolerance = TimeSpan.FromMilliseconds(1),
-                //VideoMaxCatchUpFramesPerTick = 1,
-                //VideoPullDriftCorrectionGain = 0.002, 
-            });
 
             var ndiSink = new NDIAVEndpoint(
                 sender,
@@ -190,26 +178,14 @@ using (ndiRuntime)
 
             using (ndiSink)
             {
-                var clockEpId = router.RegisterEndpoint(virtualClock);
-                router.SetClock(virtualClock.Clock);
-
-                var ndiEpId = router.RegisterEndpoint(ndiSink);
-
-                // Route audio (if present)
-                InputId? audioInputId = null;
+                var builder = MediaPlayer.Create()
+                    .WithAVOutput(ndiSink)
+                    .WithClock(virtualClock.Clock, ClockPriority.Override);
                 if (audioChannel != null)
-                {
-                    audioInputId = router.RegisterAudioInput(audioChannel);
-                    router.CreateRoute(audioInputId.Value, ndiEpId, new AudioRouteOptions { ChannelMap = routeMap });
-                }
-
-                // Route video (if present)
-                InputId? videoInputId = null;
+                    builder.WithAudioInput(audioChannel);
                 if (videoChannel != null)
-                {
-                    videoInputId = router.RegisterVideoInput(videoChannel);
-                    router.CreateRoute(videoInputId.Value, ndiEpId);
-                }
+                    builder.WithVideoInput(videoChannel);
+                using var player = builder.Build();
 
             // ── 7. Completion detection (source-ended + drain) ───────────────
 
@@ -281,9 +257,8 @@ using (ndiRuntime)
 
                 Console.Write("Starting… ");
                 decoder.Start();
-                await ndiSink.StartAsync();
                 await virtualClock.StartAsync();
-                await router.StartAsync();
+                await player.PlayAsync();
                 Console.WriteLine("OK\n");
 
             string modeLabel = (hasAudio, hasVideo) switch
@@ -304,7 +279,7 @@ using (ndiRuntime)
                     while (!cts.IsCancellationRequested)
                     {
                         int receivers = sender.GetConnectionCount();
-                        TimeSpan clockPos = router.Clock.Position;
+                        TimeSpan clockPos = player.Router.Clock.Position;
                         string clockStr = clockPos.ToString(@"mm\:ss\.ff");
 
                         var parts = new List<string> { $"Clock: {clockStr}" };
@@ -315,14 +290,10 @@ using (ndiRuntime)
                         if (videoChannel != null)
                             parts.Add($"V: {videoChannel.Position:mm\\:ss\\.ff}");
 
-                        if (hasAudio && hasVideo && audioInputId.HasValue && videoInputId.HasValue)
+                        if (audioChannel != null && videoChannel != null)
                         {
-                            try
-                            {
-                                var drift = router.GetAvDrift(audioInputId.Value, videoInputId.Value);
-                                parts.Add($"A-V: {drift.TotalMilliseconds:+0;-0}ms");
-                            }
-                            catch { /* inputs may not exist yet */ }
+                            var drift = audioChannel.Position - videoChannel.Position;
+                            parts.Add($"A-V: {drift.TotalMilliseconds:+0;-0}ms");
                         }
 
                         if (hasVideo)
@@ -356,13 +327,10 @@ using (ndiRuntime)
             // ── 10. Stop ──────────────────────────────────────────────────────
 
                 Console.WriteLine("\n\nStopping… ");
-                await router.StopAsync();
+                await player.StopAsync();
                 await virtualClock.StopAsync();
-                await ndiSink.StopAsync();
                 Console.WriteLine("Done.");
             }
         } // sender disposed
     } // decoder disposed
 } // ndiRuntime disposed
-
-

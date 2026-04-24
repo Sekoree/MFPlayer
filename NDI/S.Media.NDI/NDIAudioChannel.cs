@@ -75,6 +75,8 @@ internal sealed class NDIAudioChannel : IAudioChannel
     private long     _framesConsumed;
     private long     _framesProduced;             // monotonic: total frames ever enqueued
     private bool     _disposed;
+    // §3.48 / CH1 — single-reader reentrancy guard (Debug builds only).
+    private int      _fillBufferActive;
 
     public Guid        Id           { get; } = Guid.NewGuid();
     public AudioFormat SourceFormat { get; }
@@ -414,55 +416,65 @@ internal sealed class NDIAudioChannel : IAudioChannel
 
     public int FillBuffer(Span<float> dest, int frameCount)
     {
-        int channels     = SourceFormat.Channels;
-        int totalSamples = frameCount * channels;
-        int filled       = 0;
-
-        while (filled < totalSamples)
+        // §3.48 / CH1 — assert single-reader invariant in debug builds.
+        Debug.Assert(Interlocked.Exchange(ref _fillBufferActive, 1) == 0,
+            "NDIAudioChannel.FillBuffer called concurrently — the contract requires single-threaded pull.");
+        try
         {
-            if (_currentChunk == null || _currentOffset >= _currentChunk.Length)
-            {
-                // Return fully consumed chunk to pool before fetching next.
-                if (_currentChunk != null)
-                {
-                    _pool.Enqueue(_currentChunk);
-                    _currentChunk = null;
-                }
-                if (!_ringReader.TryRead(out _currentChunk))
-                {
-                    dest[filled..].Clear();
-                    int consumed = filled / channels;
-                    int dropped  = (totalSamples - filled) / channels;
-                    // Update tracking for frames that were consumed before the underrun.
-                    if (consumed > 0)
-                        Interlocked.Add(ref _framesConsumed, consumed);
-                    if (dropped > 0)
-                    {
-                        // Static delegate + value-tuple state avoids allocating a closure on the RT thread.
-                        var state = (Self: this, Pos: Position, Dropped: dropped);
-                        ThreadPool.QueueUserWorkItem(static s =>
-                        {
-                            var (self, pos, d) = ((NDIAudioChannel, TimeSpan, int))s!;
-                            self.BufferUnderrun?.Invoke(self, new BufferUnderrunEventArgs(pos, d));
-                        }, state);
-                    }
-                    return consumed;
-                }
-                // §3.47b — pair every TryRead with a matching _framesInRing decrement.
-                long afterRead = Interlocked.Decrement(ref _framesInRing);
-                Debug.Assert(afterRead >= 0,
-                    "NDIAudioChannel._framesInRing went negative on FillBuffer");
-                _currentOffset = 0;
-            }
-            int available = _currentChunk.Length - _currentOffset;
-            int toCopy    = Math.Min(available, totalSamples - filled);
-            _currentChunk.AsSpan(_currentOffset, toCopy).CopyTo(dest[filled..]);
-            filled         += toCopy;
-            _currentOffset += toCopy;
-        }
+            int channels     = SourceFormat.Channels;
+            int totalSamples = frameCount * channels;
+            int filled       = 0;
 
-        Interlocked.Add(ref _framesConsumed, frameCount);
-        return frameCount;
+            while (filled < totalSamples)
+            {
+                if (_currentChunk == null || _currentOffset >= _currentChunk.Length)
+                {
+                    // Return fully consumed chunk to pool before fetching next.
+                    if (_currentChunk != null)
+                    {
+                        _pool.Enqueue(_currentChunk);
+                        _currentChunk = null;
+                    }
+                    if (!_ringReader.TryRead(out _currentChunk))
+                    {
+                        dest[filled..].Clear();
+                        int consumed = filled / channels;
+                        int dropped  = (totalSamples - filled) / channels;
+                        // Update tracking for frames that were consumed before the underrun.
+                        if (consumed > 0)
+                            Interlocked.Add(ref _framesConsumed, consumed);
+                        if (dropped > 0)
+                        {
+                            // Static delegate + value-tuple state avoids allocating a closure on the RT thread.
+                            var state = (Self: this, Pos: Position, Dropped: dropped);
+                            ThreadPool.QueueUserWorkItem(static s =>
+                            {
+                                var (self, pos, d) = ((NDIAudioChannel, TimeSpan, int))s!;
+                                self.BufferUnderrun?.Invoke(self, new BufferUnderrunEventArgs(pos, d));
+                            }, state);
+                        }
+                        return consumed;
+                    }
+                    // §3.47b — pair every TryRead with a matching _framesInRing decrement.
+                    long afterRead = Interlocked.Decrement(ref _framesInRing);
+                    Debug.Assert(afterRead >= 0,
+                        "NDIAudioChannel._framesInRing went negative on FillBuffer");
+                    _currentOffset = 0;
+                }
+                int available = _currentChunk.Length - _currentOffset;
+                int toCopy    = Math.Min(available, totalSamples - filled);
+                _currentChunk.AsSpan(_currentOffset, toCopy).CopyTo(dest[filled..]);
+                filled         += toCopy;
+                _currentOffset += toCopy;
+            }
+
+            Interlocked.Add(ref _framesConsumed, frameCount);
+            return frameCount;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _fillBufferActive, 0);
+        }
     }
 
     // ── Push (not supported — NDI receive is pull-only) ───────────────────────

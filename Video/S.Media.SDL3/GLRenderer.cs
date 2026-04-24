@@ -57,6 +57,18 @@ internal sealed unsafe class GLRenderer : IDisposable
     private const uint GL_SRC_ALPHA           = 0x0302;
     private const uint GL_ONE_MINUS_SRC_ALPHA = 0x0303;
     private const uint GL_DYNAMIC_DRAW        = 0x88E8;
+    private const uint GL_PIXEL_UNPACK_BUFFER = 0x88EC;
+    private const uint GL_MAP_WRITE_BIT       = 0x0002;
+    private const uint GL_MAP_PERSISTENT_BIT  = 0x0040;
+    private const uint GL_MAP_COHERENT_BIT    = 0x0080;
+    private const uint GL_SYNC_GPU_COMMANDS_COMPLETE = 0x9117;
+    private const uint GL_ALREADY_SIGNALED    = 0x911A;
+    private const uint GL_TIMEOUT_EXPIRED     = 0x911B;
+    private const uint GL_CONDITION_SATISFIED = 0x911C;
+    private const uint GL_WAIT_FAILED         = 0x911D;
+
+    private const int PersistentPboSlotCount = 6;
+    private const int PersistentPboSlotSizeBytes = 32 * 1024 * 1024;
 
     // ── GL function pointers ──────────────────────────────────────────────
 
@@ -107,6 +119,12 @@ internal sealed unsafe class GLRenderer : IDisposable
     private delegate void   GlBlendFunc(uint sfactor, uint dfactor);
     private delegate void   GlUniform2f(int location, float v0, float v1);
     private delegate void   GlUniform4f(int location, float v0, float v1, float v2, float v3);
+    private delegate void   GlBufferStorage(uint target, nint size, void* data, uint flags);
+    private delegate void*  GlMapBufferRange(uint target, nint offset, nint length, uint access);
+    private delegate byte   GlUnmapBuffer(uint target);
+    private delegate nint   GlFenceSync(uint condition, uint flags);
+    private delegate uint   GlClientWaitSync(nint sync, uint flags, ulong timeout);
+    private delegate void   GlDeleteSync(nint sync);
 
     // Instances
     private GlViewport                _glViewport = null!;
@@ -156,6 +174,12 @@ internal sealed unsafe class GLRenderer : IDisposable
     private GlBlendFunc               _glBlendFunc = null!;
     private GlUniform2f               _glUniform2f = null!;
     private GlUniform4f               _glUniform4f = null!;
+    private GlBufferStorage?          _glBufferStorage;
+    private GlMapBufferRange?         _glMapBufferRange;
+    private GlUnmapBuffer?            _glUnmapBuffer;
+    private GlFenceSync?              _glFenceSync;
+    private GlClientWaitSync?         _glClientWaitSync;
+    private GlDeleteSync?             _glDeleteSync;
 
     // ── GL state ──────────────────────────────────────────────────────────
 
@@ -242,6 +266,12 @@ internal sealed unsafe class GLRenderer : IDisposable
     // Scaling filter — bicubic by default for broadcast-quality monitoring.
     // Set via ScalingFilter property (render thread reads, any thread writes).
     private volatile int _scalingFilter = (int)ScalingFilter.Bicubic;
+    // §8.6 — persistent mapped PBO ring for non-blocking texture uploads.
+    private bool _persistentPboEnabled;
+    private uint[]? _persistentPboIds;
+    private nint[]? _persistentPboMappings;
+    private nint[]? _persistentPboFences;
+    private int _persistentPboNextSlot;
 
     // ── Last-drawn frame tracking (for DrawLastFrame / texture reuse) ─────
     // Set at the tail of each UploadAndDrawXxx. Used by DrawLastFrame() to
@@ -261,6 +291,9 @@ internal sealed unsafe class GLRenderer : IDisposable
     private int  _hudUColor = -1;
     private int  _hudUBgColor = -1;
     private bool _hudInitialised;
+    // §3.40f / §8.7 — persistent CPU-side scratch for HUD glyph vertices.
+    // Avoids a per-frame `new float[]` allocation in DrawHud.
+    private float[] _hudScratchVerts = Array.Empty<float>();
 
     public ScalingFilter ScalingFilter
     {
@@ -607,6 +640,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         // Byte-aligned unpacking — required for R8/RG8 texture planes where the row
         // byte count may not be a multiple of 4 (the GL default alignment).
         _glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        InitialisePersistentPboUpload();
 
         // Textures — initialised via helper to eliminate repetition (§6.3).
         InitTexture(ref _texture,        GL_LINEAR);
@@ -701,7 +735,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (w == _texWidth && h == _texHeight)
         {
             // Same resolution → fast sub-image update (no GPU realloc).
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, uploadFormat, GL_UNSIGNED_BYTE, pin.Pointer);
+            UploadSubImage2D(w, h, uploadFormat, GL_UNSIGNED_BYTE, pin.Pointer, w * h * 4);
         }
         else
         {
@@ -755,14 +789,14 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureY);
         if (w == _texWidthNv12 && h == _texHeightNv12)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+            UploadSubImage2D(w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr, ySize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
 
         _glActiveTexture(GL_TEXTURE1);
         _glBindTexture(GL_TEXTURE_2D, _textureUv);
         if (w == _texWidthNv12 && h == _texHeightNv12)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Math.Max(1, w / 2), Math.Max(1, h / 2), GL_RG, GL_UNSIGNED_BYTE, (void*)uvPtr);
+            UploadSubImage2D(Math.Max(1, w / 2), Math.Max(1, h / 2), GL_RG, GL_UNSIGNED_BYTE, (void*)uvPtr, uvSize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, Math.Max(1, w / 2), Math.Max(1, h / 2), 0, GL_RG, GL_UNSIGNED_BYTE, (void*)uvPtr);
 
@@ -822,21 +856,21 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureY);
         if (w == _texWidthI420 && h == _texHeightI420)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+            UploadSubImage2D(w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr, ySize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
 
         _glActiveTexture(GL_TEXTURE1);
         _glBindTexture(GL_TEXTURE_2D, _textureU);
         if (w == _texWidthI420 && h == _texHeightI420)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
+            UploadSubImage2D(cw, ch, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr, uSize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, cw, ch, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
 
         _glActiveTexture(GL_TEXTURE2);
         _glBindTexture(GL_TEXTURE_2D, _textureV);
         if (w == _texWidthI420 && h == _texHeightI420)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
+            UploadSubImage2D(cw, ch, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr, uSize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, cw, ch, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
 
@@ -897,21 +931,21 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureY422P10);
         if (w == _texWidthI422P10 && h == _texHeightI422P10)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
+            UploadSubImage2D(w, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr, ySamples * sizeof(ushort));
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, w, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
 
         _glActiveTexture(GL_TEXTURE1);
         _glBindTexture(GL_TEXTURE_2D, _textureU422P10);
         if (w == _texWidthI422P10 && h == _texHeightI422P10)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)uPtr);
+            UploadSubImage2D(cw, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)uPtr, uvSamples * sizeof(ushort));
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, cw, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)uPtr);
 
         _glActiveTexture(GL_TEXTURE2);
         _glBindTexture(GL_TEXTURE_2D, _textureV422P10);
         if (w == _texWidthI422P10 && h == _texHeightI422P10)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)vPtr);
+            UploadSubImage2D(cw, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)vPtr, uvSamples * sizeof(ushort));
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, cw, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)vPtr);
 
@@ -970,7 +1004,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureUyvy);
         if (w == _texWidthUyvy && h == _texHeightUyvy)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, halfW, h, GL_RGBA, GL_UNSIGNED_BYTE, pin.Pointer);
+            UploadSubImage2D(halfW, h, GL_RGBA, GL_UNSIGNED_BYTE, pin.Pointer, required);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, halfW, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pin.Pointer);
 
@@ -1173,14 +1207,14 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureP010Y);
         if (w == _texWidthP010 && h == _texHeightP010)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
+            UploadSubImage2D(w, h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr, yBytes);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, w, h, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, (void*)yPtr);
 
         _glActiveTexture(GL_TEXTURE1);
         _glBindTexture(GL_TEXTURE_2D, _textureP010UV);
         if (w == _texWidthP010 && h == _texHeightP010)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, uvW, uvH, GL_RG_INTEGER, GL_UNSIGNED_SHORT, (void*)uvPtr);
+            UploadSubImage2D(uvW, uvH, GL_RG_INTEGER, GL_UNSIGNED_SHORT, (void*)uvPtr, uvW * uvH * 4);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16UI, uvW, uvH, 0, GL_RG_INTEGER, GL_UNSIGNED_SHORT, (void*)uvPtr);
 
@@ -1231,21 +1265,21 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureY444p);
         if (w == _texWidthYuv444p && h == _texHeightYuv444p)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
+            UploadSubImage2D(w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr, planeSize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)yPtr);
 
         _glActiveTexture(GL_TEXTURE1);
         _glBindTexture(GL_TEXTURE_2D, _textureU444p);
         if (w == _texWidthYuv444p && h == _texHeightYuv444p)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
+            UploadSubImage2D(w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr, planeSize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)uPtr);
 
         _glActiveTexture(GL_TEXTURE2);
         _glBindTexture(GL_TEXTURE_2D, _textureV444p);
         if (w == _texWidthYuv444p && h == _texHeightYuv444p)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
+            UploadSubImage2D(w, h, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr, planeSize);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, (void*)vPtr);
 
@@ -1294,7 +1328,7 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glActiveTexture(GL_TEXTURE0);
         _glBindTexture(GL_TEXTURE_2D, _textureGray8);
         if (w == _texWidthGray8 && h == _texHeightGray8)
-            _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, pin.Pointer);
+            UploadSubImage2D(w, h, GL_RED, GL_UNSIGNED_BYTE, pin.Pointer, required);
         else
             _glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, pin.Pointer);
 
@@ -1320,6 +1354,166 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glDrawArrays(GL_TRIANGLES, 0, 6);
         _glBindVertexArray(0);
         if (useFbo) BlitFboToScreen();
+    }
+
+    private void UploadSubImage2D(int width, int height, uint format, uint type, void* source, int sourceBytes)
+    {
+        if (TryUploadSubImageWithPersistentPbo(width, height, format, type, source, sourceBytes))
+            return;
+        _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, format, type, source);
+    }
+
+    private void InitialisePersistentPboUpload()
+    {
+        _persistentPboEnabled = false;
+        var glBufferStorage = _glBufferStorage;
+        var glMapBufferRange = _glMapBufferRange;
+        if (glBufferStorage is null || glMapBufferRange is null || _glFenceSync is null ||
+            _glClientWaitSync is null || _glDeleteSync is null)
+            return;
+
+        var pboIds      = new uint[PersistentPboSlotCount];
+        var pboMappings = new nint[PersistentPboSlotCount];
+        var pboFences   = new nint[PersistentPboSlotCount];
+        uint storageFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        bool ok = false;
+
+        try
+        {
+            for (int i = 0; i < pboIds.Length; i++)
+            {
+                fixed (uint* p = &pboIds[i]) _glGenBuffers(1, p);
+                if (pboIds[i] == 0)
+                    return;
+
+                _glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pboIds[i]);
+                glBufferStorage(GL_PIXEL_UNPACK_BUFFER, PersistentPboSlotSizeBytes, null, storageFlags);
+                void* mapped = glMapBufferRange(
+                    GL_PIXEL_UNPACK_BUFFER, 0, PersistentPboSlotSizeBytes, storageFlags);
+                if (mapped is null)
+                    return;
+                pboMappings[i] = (nint)mapped;
+            }
+
+            ok = true;
+        }
+        finally
+        {
+            _glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+            if (!ok)
+            {
+                for (int i = 0; i < pboIds.Length; i++)
+                {
+                    if (pboIds[i] == 0) continue;
+                    fixed (uint* p = &pboIds[i]) _glDeleteBuffers(1, p);
+                }
+            }
+        }
+
+        _persistentPboIds = pboIds;
+        _persistentPboMappings = pboMappings;
+        _persistentPboFences = pboFences;
+        _persistentPboNextSlot = 0;
+        _persistentPboEnabled = true;
+    }
+
+    private bool TryUploadSubImageWithPersistentPbo(
+        int width, int height, uint format, uint type, void* source, int sourceBytes)
+    {
+        if (!_persistentPboEnabled || sourceBytes <= 0 || sourceBytes > PersistentPboSlotSizeBytes)
+            return false;
+        var glFenceSync = _glFenceSync;
+        if (_persistentPboIds is null || _persistentPboMappings is null || _persistentPboFences is null ||
+            glFenceSync is null || _glClientWaitSync is null || _glDeleteSync is null)
+            return false;
+
+        if (!TryAcquirePersistentPboSlot(out int slot))
+            return false;
+
+        Buffer.MemoryCopy(source, (void*)_persistentPboMappings[slot], PersistentPboSlotSizeBytes, sourceBytes);
+
+        _glBindBuffer(GL_PIXEL_UNPACK_BUFFER, _persistentPboIds[slot]);
+        _glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, format, type, null);
+        _glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        _persistentPboFences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        return true;
+    }
+
+    private bool TryAcquirePersistentPboSlot(out int slot)
+    {
+        slot = -1;
+        var glClientWaitSync = _glClientWaitSync;
+        var glDeleteSync = _glDeleteSync;
+        if (_persistentPboIds is null || _persistentPboFences is null ||
+            glClientWaitSync is null || glDeleteSync is null)
+            return false;
+
+        int count = _persistentPboIds.Length;
+        int start = _persistentPboNextSlot;
+        for (int i = 0; i < count; i++)
+        {
+            int idx = (start + i) % count;
+            nint fence = _persistentPboFences[idx];
+            if (fence == nint.Zero)
+            {
+                slot = idx;
+                _persistentPboNextSlot = (idx + 1) % count;
+                return true;
+            }
+
+            uint wait = glClientWaitSync(fence, 0, 0);
+            if (wait == GL_ALREADY_SIGNALED || wait == GL_CONDITION_SATISFIED || wait == GL_WAIT_FAILED)
+            {
+                glDeleteSync(fence);
+                _persistentPboFences[idx] = nint.Zero;
+                slot = idx;
+                _persistentPboNextSlot = (idx + 1) % count;
+                return true;
+            }
+            if (wait == GL_TIMEOUT_EXPIRED)
+                continue;
+        }
+
+        return false;
+    }
+
+    private void DisposePersistentPboUpload()
+    {
+        _persistentPboEnabled = false;
+        if (_persistentPboIds is null)
+            return;
+
+        var glDeleteSync = _glDeleteSync;
+        if (_persistentPboFences is not null && glDeleteSync is not null)
+        {
+            for (int i = 0; i < _persistentPboFences.Length; i++)
+            {
+                if (_persistentPboFences[i] == nint.Zero)
+                    continue;
+                glDeleteSync(_persistentPboFences[i]);
+                _persistentPboFences[i] = nint.Zero;
+            }
+        }
+
+        for (int i = 0; i < _persistentPboIds.Length; i++)
+        {
+            if (_persistentPboIds[i] == 0)
+                continue;
+            if (_glUnmapBuffer is not null && _persistentPboMappings is not null &&
+                _persistentPboMappings[i] != nint.Zero)
+            {
+                _glBindBuffer(GL_PIXEL_UNPACK_BUFFER, _persistentPboIds[i]);
+                _glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+                _persistentPboMappings[i] = nint.Zero;
+            }
+            fixed (uint* p = &_persistentPboIds[i]) _glDeleteBuffers(1, p);
+        }
+
+        _glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        _persistentPboIds = null;
+        _persistentPboMappings = null;
+        _persistentPboFences = null;
+        _persistentPboNextSlot = 0;
     }
 
     /// <summary>
@@ -1477,6 +1671,14 @@ internal sealed unsafe class GLRenderer : IDisposable
         return Marshal.GetDelegateForFunctionPointer<T>(ptr);
     }
 
+    private T? TryLoadGL<T>(string name) where T : Delegate
+    {
+        var ptr = (nint)global::SDL3.SDL.GLGetProcAddress(name);
+        if (ptr == nint.Zero)
+            return null;
+        return Marshal.GetDelegateForFunctionPointer<T>(ptr);
+    }
+
     private void LoadGLFunctions()
     {
         _glViewport                = LoadGL<GlViewport>("glViewport");
@@ -1526,6 +1728,14 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glBlendFunc               = LoadGL<GlBlendFunc>("glBlendFunc");
         _glUniform2f               = LoadGL<GlUniform2f>("glUniform2f");
         _glUniform4f               = LoadGL<GlUniform4f>("glUniform4f");
+
+        // §8.6 optional upload path for drivers exposing ARB_buffer_storage / GL 4.4+.
+        _glBufferStorage = TryLoadGL<GlBufferStorage>("glBufferStorage");
+        _glMapBufferRange = TryLoadGL<GlMapBufferRange>("glMapBufferRange");
+        _glUnmapBuffer = TryLoadGL<GlUnmapBuffer>("glUnmapBuffer");
+        _glFenceSync = TryLoadGL<GlFenceSync>("glFenceSync");
+        _glClientWaitSync = TryLoadGL<GlClientWaitSync>("glClientWaitSync");
+        _glDeleteSync = TryLoadGL<GlDeleteSync>("glDeleteSync");
     }
 
     /// <summary>
@@ -1608,7 +1818,9 @@ internal sealed unsafe class GLRenderer : IDisposable
         int totalGlyphs = 0;
         foreach (var line in lines) totalGlyphs += line.Length;
 
-        var verts = new float[totalGlyphs * 6 * 4];
+        int requiredFloats = totalGlyphs * 6 * 4;
+        EnsureHudScratchCapacity(requiredFloats);
+        var verts = _hudScratchVerts;
         int vi = 0;
         int cursorY = padding;
 
@@ -1679,6 +1891,17 @@ internal sealed unsafe class GLRenderer : IDisposable
         _glViewport(_vpX, _vpY, _vpW, _vpH);
     }
 
+    private void EnsureHudScratchCapacity(int requiredFloats)
+    {
+        if (_hudScratchVerts.Length >= requiredFloats)
+            return;
+
+        int newSize = _hudScratchVerts.Length == 0 ? 1024 : _hudScratchVerts.Length;
+        while (newSize < requiredFloats)
+            newSize <<= 1;
+        _hudScratchVerts = new float[newSize];
+    }
+
     private void EnsureHudInitialised()
     {
         if (_hudInitialised) return;
@@ -1735,6 +1958,7 @@ internal sealed unsafe class GLRenderer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        DisposePersistentPboUpload();
 
         fixed (uint* p = &_texture)        _glDeleteTextures(1, p);
         fixed (uint* p = &_textureY)       _glDeleteTextures(1, p);
@@ -1777,4 +2001,3 @@ internal sealed unsafe class GLRenderer : IDisposable
         if (_hudVao != 0) { fixed (uint* p = &_hudVao) _glDeleteVertexArrays(1, p); }
     }
 }
-

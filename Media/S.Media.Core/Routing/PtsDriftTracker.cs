@@ -78,5 +78,15 @@ internal sealed class PtsDriftTracker
         PtsOriginTicks   = 0;
         ClockOriginTicks = 0;
     }
-}
 
+    public PtsDriftTrackerSnapshot Snapshot()
+    {
+        var pts = PtsOriginTicks;
+        var clk = ClockOriginTicks;
+        return new PtsDriftTrackerSnapshot(
+            HasOrigin,
+            TimeSpan.FromTicks(pts),
+            TimeSpan.FromTicks(clk),
+            TimeSpan.FromTicks(pts - clk));
+    }
+}

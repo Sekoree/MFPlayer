@@ -65,8 +65,15 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
     private volatile IMediaClock? _presentationClockOverride;
     private long _presentationClockOriginTicks;
     private int _hasPresentationClockOrigin;
+    // HUD-only drift baseline for cross-domain clock/PTS pairs (e.g. PortAudio
+    // clock vs absolute NDI PTS). Render-loop reads/writes; reset from public
+    // API paths uses Interlocked/Volatile for safe publication.
+    private long _hudDriftClockOriginTicks;
+    private long _hudDriftPtsOriginTicks;
+    private int _hasHudDriftOrigin;
     private VideoFormat  _outputFormat;
     private VideoFormat  _inputFormat;
+    private readonly Lock _inputFormatLock = new();
 
     // ── Render thread ─────────────────────────────────────────────────────
 
@@ -101,6 +108,8 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
     private long                     _resizeEvents;
     private long                     _renderExceptions;
     private long                     _glMakeCurrentFailures;
+    private long                     _renderPacingIntervalTicks;
+    private long                     _nextRenderDueTicks;
     private volatile int             _yuvColorRange = (int)YuvColorRange.Auto;
     private volatile int             _yuvColorMatrix = (int)YuvColorMatrix.Auto;
 
@@ -160,6 +169,7 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
 
     private readonly Lock _cloneLock = new();
     private SDL3VideoCloneEndpoint[] _clones = [];
+    private SDL3ProcessEventPump.Subscription? _eventSubscription;
 
     // ── YUV shader config ─────────────────────────────────────────────────
 
@@ -257,6 +267,24 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
     }
 
     /// <summary>
+    /// When <see langword="true"/>, the render loop is additionally paced to the
+    /// current input FPS hint instead of redrawing every display refresh tick.
+    /// This reduces CPU/GPU work for low-FPS sources (for example 24/25/30 FPS
+    /// video on a 60 Hz monitor). Default is <see langword="false"/>.
+    /// </summary>
+    public bool LimitRenderToInputFps { get; set; }
+
+    /// <summary>
+    /// Updates the source-format hint used by HUD diagnostics.
+    /// Useful for live sources whose format/FPS can change at runtime.
+    /// </summary>
+    public void SetInputFormatHint(VideoFormat format)
+    {
+        lock (_inputFormatLock)
+            _inputFormat = format;
+    }
+
+    /// <summary>
     /// When the presentation clock is more than this threshold ahead of the
     /// pulled frame's PTS, the render loop drains additional stale frames
     /// from the ring (up to <see cref="MaxCatchupPullsPerRender"/>) to catch
@@ -307,7 +335,8 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
 
     /// <summary>
     /// When <see langword="true"/>, a diagnostic HUD overlay is rendered on top of the video
-    /// showing resolution, pixel format, FPS, presented/black frame counts, and clock position.
+    /// showing resolution, pixel format, FPS, presented/black frame counts, and
+    /// clock diagnostics (position, source, and frame drift).
     /// Thread-safe: can be toggled from any thread at any time.
     /// </summary>
     public bool ShowHud { get; set; }
@@ -347,6 +376,9 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
         // `hasOrigin==0 && ticks==<stale>` on a weakly-ordered CPU.
         Interlocked.Exchange(ref _presentationClockOriginTicks, 0);
         Interlocked.Exchange(ref _hasPresentationClockOrigin, 0);
+        Interlocked.Exchange(ref _hudDriftClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hudDriftPtsOriginTicks, 0);
+        Interlocked.Exchange(ref _hasHudDriftOrigin, 0);
     }
 
     /// <summary>
@@ -369,6 +401,9 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
         // observe `hasOrigin==1 && ticks==<stale>`).
         Interlocked.Exchange(ref _presentationClockOriginTicks, ticks);
         Interlocked.Exchange(ref _hasPresentationClockOrigin, 1);
+        Interlocked.Exchange(ref _hudDriftClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hudDriftPtsOriginTicks, 0);
+        Interlocked.Exchange(ref _hasHudDriftOrigin, 0);
         Log.LogInformation("Presentation clock origin set deterministically: {OriginMs:F2} ms",
             TimeSpan.FromTicks(ticks).TotalMilliseconds);
     }
@@ -465,6 +500,8 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
         // can claim it via GLMakeCurrent.
         SDL.GLMakeCurrent(_window, nint.Zero);
 
+        _eventSubscription = SDL3ProcessEventPump.RegisterWindow(_window);
+
         // ── Pipeline objects ──────────────────────────────────────────────
         var leaderPixelFormat = LocalVideoOutputRoutingPolicy.SelectLeaderPixelFormat(
             format,
@@ -474,7 +511,8 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
             supportsUyvy422: true,
             fallback: PixelFormat.Bgra32);
         _outputFormat = format with { PixelFormat = leaderPixelFormat };
-        _inputFormat = format;
+        lock (_inputFormatLock)
+            _inputFormat = format;
 
 
         _clock = new VideoPtsClock(
@@ -503,12 +541,17 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
         // §3.40b — ticks first then flag; see OverridePresentationClock.
         Interlocked.Exchange(ref _presentationClockOriginTicks, 0);
         Interlocked.Exchange(ref _hasPresentationClockOrigin, 0);
+        Interlocked.Exchange(ref _hudDriftClockOriginTicks, 0);
+        Interlocked.Exchange(ref _hudDriftPtsOriginTicks, 0);
+        Interlocked.Exchange(ref _hasHudDriftOrigin, 0);
 
         _renderThread = new Thread(RenderLoop)
         {
             Name         = "SDL3VideoEndpoint.Render",
             IsBackground = true
         };
+        Volatile.Write(ref _renderPacingIntervalTicks, 0);
+        Volatile.Write(ref _nextRenderDueTicks, 0);
         _renderThread.Start();
 
         _clock!.Start();
@@ -567,8 +610,9 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
                     ApplyResolvedYuvHints(w, h);
                 }
 
-                // ── Event pump ────────────────────────────────────────────
-                while (SDL.PollEvent(out var evt))
+                // ── Process-wide SDL event dispatch (per-window queue) ───
+                var eventSubscription = _eventSubscription;
+                while (eventSubscription is not null && eventSubscription.TryDequeue(out var evt))
                 {
                     var eventType = (SDL.EventType)evt.Type;
 
@@ -597,9 +641,15 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
 
                 if (_closeRequested) break;
 
+                if (!WaitForRenderCadence(token))
+                    continue;
+
                 // ── Present frame ─────────────────────────────────────────
                 VideoFrame? frame = null;
                 TimeSpan clockPosition = TimeSpan.Zero;
+                TimeSpan hudClockPosition = TimeSpan.Zero;
+                TimeSpan hudDrift = TimeSpan.Zero;
+                string hudClockName = ((_presentationClockOverride ?? _clock)?.GetType().Name) ?? "n/a";
 
                 var presentCb = PresentCallback;
                 if (presentCb is not null)
@@ -609,20 +659,35 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
                     if (presentationClock == null)
                         throw new InvalidOperationException("Presentation clock is not available.");
 
+                    hudClockName = externalClock is null
+                        ? presentationClock.GetType().Name
+                        : $"{presentationClock.GetType().Name} (override)";
+
                     clockPosition = presentationClock.Position;
+                    hudClockPosition = clockPosition;
+
+                    // HUD clock display: for override clocks we show a relative timeline
+                    // from first observation so absolute wall-clock style domains do not
+                    // produce unreadable values.
                     if (externalClock != null)
                     {
                         long rawTicks = clockPosition.Ticks;
                         if (rawTicks < 0) rawTicks = 0;
-
                         if (Interlocked.CompareExchange(ref _hasPresentationClockOrigin, 1, 0) == 0)
                             Volatile.Write(ref _presentationClockOriginTicks, rawTicks);
-
                         long originTicks = Volatile.Read(ref _presentationClockOriginTicks);
                         long relTicks = rawTicks - originTicks;
                         if (relTicks < 0) relTicks = 0;
-                        clockPosition = TimeSpan.FromTicks(relTicks);
+                        hudClockPosition = TimeSpan.FromTicks(relTicks);
                     }
+                    // No local origin subtraction. The router's per-route drift tracker
+                    // (PtsDriftTracker) seeds its own origin from the first observed
+                    // (pts, clock) pair, so clock and frame PTS can live in any matched
+                    // or mismatched domain and the tracker reduces both to relative
+                    // deltas internally. A previous revision here subtracted an
+                    // "SDL3 presentation origin" from the clock only, which left
+                    // clock-delta comparing against absolute PTS and stuck the gate on
+                    // NDI timestamps.
 
                     if (presentCb.TryPresentNext(clockPosition, out VideoFrame cbFrame))
                         frame = cbFrame;
@@ -630,7 +695,7 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
                     // ── Catch-up: if this frame is already stale, drop it and
                     // pull newer ones from the ring until we're back in sync
                     // (or run out of budget / newer frames). This mirrors the
-                    // AvaloniaOpenGlVideoOutput catch-up loop and is what makes
+                    // AvaloniaOpenGlVideoEndpoint catch-up loop and is what makes
                     // the router push-path (NDI) look smooth; without it the
                     // SDL3 pull-path drains at exactly one frame per vsync and
                     // can never recover from a stall.
@@ -659,9 +724,30 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
                     }
                 }
 
+                // HUD drift reads against the clock's raw position — same domain
+                // as VideoFrame.Pts when the clock is correctly paired (NDIClock
+                // vs NDI timestamps, VideoPtsClock vs FFmpeg PTS). When the user
+                // deliberately picks a mismatched clock the number stays large,
+                // which is the honest answer.
+                if (!frame.HasValue && _hasUploadedFrame)
+                {
+                    hudDrift = _presentationClockOverride != null
+                        ? ComputeHudRelativeDrift(clockPosition, _lastUploadedPts)
+                        : clockPosition - _lastUploadedPts;
+                }
+
                 if (frame.HasValue)
                 {
                     var vf = frame.Value;
+                    lock (_inputFormatLock)
+                    {
+                        int inputFpsNum = _inputFormat.FrameRateNumerator > 0 ? _inputFormat.FrameRateNumerator : 30000;
+                        int inputFpsDen = _inputFormat.FrameRateDenominator > 0 ? _inputFormat.FrameRateDenominator : 1001;
+                        _inputFormat = new VideoFormat(vf.Width, vf.Height, vf.PixelFormat, inputFpsNum, inputFpsDen);
+                    }
+                    hudDrift = _presentationClockOverride != null
+                        ? ComputeHudRelativeDrift(clockPosition, vf.Pts)
+                        : clockPosition - vf.Pts;
                     ApplyResolvedYuvHints(vf.Width, vf.Height);
                     _renderer!.SetVideoSize(vf.Width, vf.Height);
 
@@ -755,21 +841,44 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
                         _hudLastUniqueTimestamp = now;
                     }
 
+                    double displayFps = _hudFps;
+                    if (displayFps < 0 || double.IsNaN(displayFps) || double.IsInfinity(displayFps))
+                        displayFps = 0;
+
+                    double contentFps = _hudUniqueFps;
+                    if (contentFps < 0 || double.IsNaN(contentFps) || double.IsInfinity(contentFps))
+                        contentFps = 0;
+                    VideoFormat inputFormatSnapshot;
+                    lock (_inputFormatLock)
+                        inputFormatSnapshot = _inputFormat;
+                    double inputFps = inputFormatSnapshot.FrameRate;
+                    int inputWidth = _hasUploadedFrame ? _lastUploadedWidth : inputFormatSnapshot.Width;
+                    int inputHeight = _hasUploadedFrame ? _lastUploadedHeight : inputFormatSnapshot.Height;
+                    PixelFormat inputPixelFormat = _hasUploadedFrame ? inputFormatSnapshot.PixelFormat : _outputFormat.PixelFormat;
+
                     var stats = new HudStats
                     {
                         Width = _outputFormat.Width,
                         Height = _outputFormat.Height,
                         PixelFormat = _outputFormat.PixelFormat,
-                        Fps = _hudUniqueFps > 0 ? _hudUniqueFps : _hudFps,
-                        InputWidth = _inputFormat.Width,
-                        InputHeight = _inputFormat.Height,
-                        InputFps = _inputFormat.FrameRate,
-                        InputPixelFormat = _inputFormat.PixelFormat,
-                        PresentedFrames = Interlocked.Read(ref _uniqueFrames),
+                        // Keep the main FPS line as display refresh cadence.
+                        // Content/unique FPS is shown separately to avoid a
+                        // perceived "60 -> 30 drop" when source cadence differs.
+                        Fps = displayFps,
+                        InputWidth = inputWidth,
+                        InputHeight = inputHeight,
+                        InputFps = inputFps,
+                        InputPixelFormat = inputPixelFormat,
+                        PresentedFrames = Interlocked.Read(ref _presentedFrames),
                         BlackFrames = Interlocked.Read(ref _blackFrames),
                         DroppedFrames = Interlocked.Read(ref _droppedFrames),
-                        ClockPosition = ((_presentationClockOverride ?? _clock)?.Position ?? TimeSpan.Zero),
-                        ExtraLine1 = $"reuse: {Interlocked.Read(ref _textureReuseDraws)}  uploads: {Interlocked.Read(ref _textureUploads)}",
+                        ClockPosition = hudClockPosition,
+                        ClockName = hudClockName,
+                        Drift = hudDrift,
+                        ExtraLine1 = contentFps > 0
+                            ? $"fps content: {contentFps:F1}  display: {displayFps:F1}"
+                            : $"fps content: n/a  display: {displayFps:F1}",
+                        ExtraLine2 = $"reuse: {Interlocked.Read(ref _textureReuseDraws)}  uploads: {Interlocked.Read(ref _textureUploads)}",
                     };
                     _renderer!.DrawHud(stats.ToLines());
                 }
@@ -873,6 +982,9 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
             _clones = [];
         }
 
+        _eventSubscription?.Dispose();
+        _eventSubscription = null;
+
         _clock?.Dispose();
         _cts?.Dispose();
 
@@ -893,6 +1005,97 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
         return value is YuvColorMatrix.Auto or YuvColorMatrix.Bt601 or YuvColorMatrix.Bt709
             ? value
             : YuvColorMatrix.Auto;
+    }
+
+    private bool WaitForRenderCadence(CancellationToken token)
+    {
+        if (!LimitRenderToInputFps || !TryGetInputFrameIntervalTicks(out long intervalTicks))
+        {
+            Volatile.Write(ref _renderPacingIntervalTicks, 0);
+            Volatile.Write(ref _nextRenderDueTicks, 0);
+            return true;
+        }
+
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long previousInterval = Volatile.Read(ref _renderPacingIntervalTicks);
+        if (previousInterval != intervalTicks)
+        {
+            Volatile.Write(ref _renderPacingIntervalTicks, intervalTicks);
+            // Keep startup responsive (first draw can be immediate), but when
+            // switching intervals mid-stream anchor from "now".
+            Volatile.Write(ref _nextRenderDueTicks,
+                RenderCadenceHelper.InitialDue(now, intervalTicks, immediateFirstTick: !_hasUploadedFrame));
+        }
+
+        long due;
+        while (true)
+        {
+            due = Volatile.Read(ref _nextRenderDueTicks);
+            if (due <= 0)
+            {
+                now = System.Diagnostics.Stopwatch.GetTimestamp();
+                due = RenderCadenceHelper.InitialDue(now, intervalTicks, immediateFirstTick: !_hasUploadedFrame);
+                Volatile.Write(ref _nextRenderDueTicks, due);
+            }
+
+            now = System.Diagnostics.Stopwatch.GetTimestamp();
+            // SDL swaps may already block on VSync; when we're late, present
+            // immediately instead of waiting another full cadence interval.
+            due = RenderCadenceHelper.NormalizeDue(
+                due, now, intervalTicks, RenderCadenceHelper.LateTickPolicy.PresentImmediately);
+            Volatile.Write(ref _nextRenderDueTicks, due);
+
+            now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (now >= due)
+                break;
+
+            double remainingMs = RenderCadenceHelper.ComputeRemainingMilliseconds(now, due);
+            if (remainingMs >= 2.0)
+            {
+                // Leave a short tail for sub-ms correction so scheduler
+                // quantization doesn't systematically run fast.
+                int sleepMs = (int)Math.Min(5.0, Math.Max(1.0, remainingMs - 1.0));
+                Thread.Sleep(sleepMs);
+            }
+            else
+            {
+                Thread.Yield();
+            }
+
+            if (token.IsCancellationRequested || _closeRequested)
+                return false;
+        }
+
+        long nowAfterPacing = System.Diagnostics.Stopwatch.GetTimestamp();
+        Volatile.Write(ref _nextRenderDueTicks, RenderCadenceHelper.ComputeNextDue(due, nowAfterPacing, intervalTicks));
+        return true;
+    }
+
+    private bool TryGetInputFrameIntervalTicks(out long intervalTicks)
+    {
+        VideoFormat format;
+        lock (_inputFormatLock)
+            format = _inputFormat;
+
+        return RenderCadenceHelper.TryGetFrameIntervalTicks(format.FrameRate, out intervalTicks);
+    }
+
+    private TimeSpan ComputeHudRelativeDrift(TimeSpan rawClockPosition, TimeSpan framePts)
+    {
+        long clockTicks = rawClockPosition.Ticks;
+        if (clockTicks < 0) clockTicks = 0;
+        long ptsTicks = framePts.Ticks;
+
+        if (Interlocked.CompareExchange(ref _hasHudDriftOrigin, 1, 0) == 0)
+        {
+            Volatile.Write(ref _hudDriftClockOriginTicks, clockTicks);
+            Volatile.Write(ref _hudDriftPtsOriginTicks, ptsTicks);
+            return TimeSpan.Zero;
+        }
+
+        long relClockTicks = clockTicks - Volatile.Read(ref _hudDriftClockOriginTicks);
+        long relPtsTicks = ptsTicks - Volatile.Read(ref _hudDriftPtsOriginTicks);
+        return TimeSpan.FromTicks(relClockTicks - relPtsTicks);
     }
 
     private void ApplyResolvedYuvHints(int width, int height)
@@ -1026,4 +1229,3 @@ public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVid
         return ep;
     }
 }
-

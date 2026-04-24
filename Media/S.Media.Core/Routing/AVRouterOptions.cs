@@ -75,6 +75,19 @@ public record AVRouterOptions
     public int VideoMaxCatchUpFramesPerTick { get; init; } = 4;
 
     /// <summary>
+    /// When the absolute PTS↔clock error exceeds this threshold, the per-route
+    /// drift tracker is re-seeded from the current (pts, clock) pair before the
+    /// early-frame gate runs. This allows scheduled (non-live) playback to
+    /// recover immediately from source discontinuities (e.g. live sender profile
+    /// or FPS switches) instead of stalling for the full timestamp jump.
+    /// <para>
+    /// Set to <see cref="TimeSpan.Zero"/> or a negative value to disable auto
+    /// re-seeding. Default: 750 ms.
+    /// </para>
+    /// </summary>
+    public TimeSpan VideoPtsDiscontinuityResetThreshold { get; init; } = TimeSpan.FromMilliseconds(750);
+
+    /// <summary>
     /// Drift correction gain for the pull video endpoint's PTS origin
     /// adjustment, applied outside a dead-band equal to
     /// <see cref="VideoPtsEarlyTolerance"/> / 2 and suppressed on frames where the
@@ -147,4 +160,3 @@ public record AVRouterOptions
     /// </summary>
     public float? SoftClipThreshold { get; init; }
 }
-
