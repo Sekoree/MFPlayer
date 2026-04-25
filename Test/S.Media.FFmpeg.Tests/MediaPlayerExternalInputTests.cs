@@ -2,6 +2,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Video;
+using S.Media.Playback;
 using Xunit;
 
 namespace S.Media.FFmpeg.Tests;

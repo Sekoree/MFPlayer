@@ -10,6 +10,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
         <ProjectReference Include="..\..\Audio\S.Media.PortAudio\S.Media.PortAudio.csproj" />
         <ProjectReference Include="..\..\NDI\NDILib\NDILib.csproj" />
         <ProjectReference Include="..\..\NDI\S.Media.NDI\S.Media.NDI.csproj" />

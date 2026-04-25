@@ -37,12 +37,6 @@ public interface IMediaChannel<TFrame> : IDisposable
     /// </summary>
     int FillBuffer(Span<TFrame> dest, int frameCount);
 
-    /// <summary>Whether seeking is supported by this channel's source.</summary>
-    bool CanSeek { get; }
-
-    /// <summary>Seek to the given position. Flushes internal buffers.</summary>
-    void Seek(TimeSpan position);
-
     /// <summary>
     /// Raised when the channel's backing source signals that no more frames will be produced.
     /// For file-backed channels this fires once after the last frame has been pushed into the buffer.

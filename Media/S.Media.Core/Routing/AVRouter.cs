@@ -731,6 +731,13 @@ public sealed class AVRouter : IAVRouter
         Volatile.Write(ref route.Enabled, enabled);
     }
 
+    public void SetRouteGain(RouteId id, float gain)
+    {
+        if (!_routes.TryGetValue(id, out var route))
+            throw new MediaRoutingException($"Route {id} is not registered.");
+        route.Gain = gain;
+    }
+
     // ── IAVRouter: Clock ────────────────────────────────────────────────
 
     public IMediaClock InternalClock => _internalClock;
@@ -872,6 +879,27 @@ public sealed class AVRouter : IAVRouter
             throw new MediaRoutingException($"Input {id} is not registered.");
         Volatile.Write(ref entry.Enabled, enabled);
     }
+
+    public bool TrySeekInput(InputId id, TimeSpan position)
+    {
+        if (!_inputs.TryGetValue(id, out var entry))
+            throw new MediaRoutingException($"Input {id} is not registered.");
+
+        ISeekableInput? seekable = entry.Kind switch
+        {
+            InputKind.Audio => entry.AudioChannel as ISeekableInput,
+            InputKind.Video => entry.VideoChannel as ISeekableInput,
+            _ => null
+        };
+
+        if (seekable is null || !seekable.CanSeek)
+            return false;
+
+        seekable.Seek(position);
+        return true;
+    }
+
+    public bool TryRewindInput(InputId id) => TrySeekInput(id, TimeSpan.Zero);
 
     // ── IAVRouter: Per-endpoint control ─────────────────────────────────
 

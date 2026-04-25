@@ -5,6 +5,7 @@
 - Use `MediaPlayer` for fast open/play/pause/stop workflows and optional fan-out.
 - Use `AVRouter` when you need full explicit input/endpoint routing control.
 - See `MediaPlayer-Guide.md` for complete `MediaPlayer` examples and events.
+- See `Playback-And-Soundboard-Patterns.md` for overlapping clip and soundboard-style patterns.
 
 ## Core Model (AVRouter)
 

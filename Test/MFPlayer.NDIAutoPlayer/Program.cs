@@ -26,7 +26,7 @@ using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.Core.Routing;
 using S.Media.Core.Video;
-using S.Media.FFmpeg;
+using S.Media.Playback;
 using S.Media.NDI;
 using S.Media.PortAudio;
 using S.Media.SDL3;

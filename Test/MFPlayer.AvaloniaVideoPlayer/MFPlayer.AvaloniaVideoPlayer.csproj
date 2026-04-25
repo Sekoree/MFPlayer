@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
+    <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
     <ProjectReference Include="..\..\Video\S.Media.Avalonia\S.Media.Avalonia.csproj" />
   </ItemGroup>
 

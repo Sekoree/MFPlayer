@@ -7,8 +7,10 @@ This folder contains current documentation for both `MediaPlayer` and `AVRouter`
 1. `Quick-Start.md` - fast setup path for audio, video, and fan-out.
 2. `MediaPlayer-Guide.md` - high-level playback API, events, and fan-out examples (including NDI).
 3. `Usage-Guide.md` - day-to-day API usage patterns.
-4. `Clone-Sinks.md` - parent-owned clone endpoint usage for Avalonia and SDL3.
-5. `AVMixer-Refactor-Plan.md` - historical refactor plan that led to today's `AVRouter` endpoint-based routing model.
+4. `Playback-And-Soundboard-Patterns.md` - quick playback + soundboard-style app-layer patterns.
+5. `Playback-Soundboard-Enablement-Plan.md` - concrete roadmap for easier advanced playback/soundboard workflows.
+6. `Clone-Sinks.md` - parent-owned clone endpoint usage for Avalonia and SDL3.
+7. `Archive/Planning/README.md` - archived planning docs and active-plan pointer.
 
 ## Current Architecture (Short)
 
@@ -35,8 +37,8 @@ MFPlayer exposes two tiers of public surface:
    `MediaPlayer` when you want "play one file, then exit"; reach for
    `AVRouter` when you need anything more.
 
-See `API-Implementation-Review.md` §"Layering" for the rationale and
-`Implementation-Checklist.md` §0.1 for the audit trail.
+See `Archive/Planning/API-Implementation-Review.md` §"Layering" for the rationale and
+`Archive/Planning/Implementation-Checklist.md` §0.1 for the audit trail.
 
 ## Obsoletion Policy (§0.4.3 framing decision)
 

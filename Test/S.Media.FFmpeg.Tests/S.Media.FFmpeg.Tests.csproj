@@ -17,6 +17,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
     </ItemGroup>
 
 </Project>

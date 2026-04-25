@@ -11,6 +11,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
         <ProjectReference Include="..\..\NDI\NDILib\NDILib.csproj" />
         <ProjectReference Include="..\..\NDI\S.Media.NDI\S.Media.NDI.csproj" />
         <ProjectReference Include="..\..\Video\S.Media.SDL3\S.Media.SDL3.csproj" />

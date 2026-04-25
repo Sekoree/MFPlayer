@@ -8,6 +8,7 @@
 using FFmpeg.AutoGen;
 using NDILib;
 using S.Media.FFmpeg;
+using S.Media.Playback;
 using S.Media.NDI;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;

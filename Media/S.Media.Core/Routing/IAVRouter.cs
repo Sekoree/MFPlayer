@@ -91,6 +91,9 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     /// <summary>Enables or disables a route without removing it.</summary>
     void SetRouteEnabled(RouteId id, bool enabled);
 
+    /// <summary>Sets the gain multiplier for a route at runtime. Default 1.0.</summary>
+    void SetRouteGain(RouteId id, float gain);
+
     // ── Clock ──────────────────────────────────────────────────────────
 
     /// <summary>The router's own built-in software clock. Always available as ultimate fallback.</summary>
@@ -145,6 +148,18 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
 
     /// <summary>Enables or disables an input without unregistering it.</summary>
     void SetInputEnabled(InputId id, bool enabled);
+
+    /// <summary>
+    /// Attempts to seek a registered input to <paramref name="position"/>.
+    /// Returns <see langword="false"/> when the input exists but does not support seeking.
+    /// </summary>
+    bool TrySeekInput(InputId id, TimeSpan position);
+
+    /// <summary>
+    /// Attempts to rewind a registered input to zero.
+    /// Returns <see langword="false"/> when the input exists but does not support seeking.
+    /// </summary>
+    bool TryRewindInput(InputId id);
 
     // ── Per-endpoint control ───────────────────────────────────────────
 

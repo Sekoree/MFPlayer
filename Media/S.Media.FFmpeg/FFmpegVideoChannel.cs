@@ -15,7 +15,7 @@ namespace S.Media.FFmpeg;
 /// thread. Each frame is pixel-format-converted to <see cref="Core.Media.PixelFormat.Bgra32"/>
 /// by default. Frames are exposed through the <see cref="IMediaChannel{VideoFrame}"/> pull interface.
 /// </summary>
-internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, IVideoColorMatrixHint, IDecodableChannel
+internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput, IVideoColorMatrixHint, IDecodableChannel
 {
     private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegVideoChannel));
     private readonly AVStream*                    _stream;

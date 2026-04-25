@@ -1,4 +1,5 @@
 using S.Media.FFmpeg.Tests.Helpers;
+using S.Media.Playback;
 using Xunit;
 
 namespace S.Media.FFmpeg.Tests;

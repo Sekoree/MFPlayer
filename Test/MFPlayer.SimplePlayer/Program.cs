@@ -16,6 +16,7 @@ using FFmpeg.AutoGen;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.FFmpeg;
+using S.Media.Playback;
 using S.Media.PortAudio;
 
 Console.WriteLine("╔═══════════════════════════════╗");

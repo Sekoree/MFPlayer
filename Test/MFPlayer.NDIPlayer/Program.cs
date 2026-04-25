@@ -10,7 +10,7 @@
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
-using S.Media.FFmpeg;
+using S.Media.Playback;
 using S.Media.NDI;
 using S.Media.PortAudio;
 

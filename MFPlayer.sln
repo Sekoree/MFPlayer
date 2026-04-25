@@ -21,9 +21,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB
 		Doc\Usage-Guide.md = Doc\Usage-Guide.md
 		Doc\Clone-Sinks.md = Doc\Clone-Sinks.md
 		Doc\MediaPlayer-Guide.md = Doc\MediaPlayer-Guide.md
-		Doc\API-Implementation-Review.md = Doc\API-Implementation-Review.md
-		Doc\Implementation-Checklist.md = Doc\Implementation-Checklist.md
-		Doc\Tier5-Application-Evaluation.md = Doc\Tier5-Application-Evaluation.md
+		Doc\Playback-And-Soundboard-Patterns.md = Doc\Playback-And-Soundboard-Patterns.md
+		Doc\Playback-Soundboard-Enablement-Plan.md = Doc\Playback-Soundboard-Enablement-Plan.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "NDI", "NDI", "{A60A708F-FB76-474D-BC78-75770742423D}"
@@ -50,7 +49,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.PortAudio", "Audio\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.NDI", "NDI\S.Media.NDI\S.Media.NDI.csproj", "{14C618F6-70A2-4962-920C-29BA0F5B8A1B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.NDI.Playback", "NDI\S.Media.NDI.Playback\S.Media.NDI.Playback.csproj", "{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.FFmpeg", "Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj", "{B7BDD4B6-5475-4746-8229-90BC0DCE9E90}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.Playback", "Media\S.Media.Playback\S.Media.Playback.csproj", "{6200D10D-C996-4B83-855D-CD6605FA278C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.Core.Tests", "Test\S.Media.Core.Tests\S.Media.Core.Tests.csproj", "{F4655ED1-1810-4F50-8317-CD46D41871DC}"
 EndProject
@@ -79,6 +82,15 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.Core.Benchmarks", "Test\S.Media.Core.Benchmarks\S.Media.Core.Benchmarks.csproj", "{9D2D04FC-B0AA-4727-882E-262DF4E568FA}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MFPlayer.NDIAutoPlayer", "Test\MFPlayer.NDIAutoPlayer\MFPlayer.NDIAutoPlayer.csproj", "{18A698CD-DFD8-45BD-9B2C-4C0C4547BB11}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Archive", "Archive", "{A5140ABE-1AF0-4103-AAD7-B1BEA8FDC762}"
+	ProjectSection(SolutionItems) = preProject
+		Doc\Archive\Planning\README.md = Doc\Archive\Planning\README.md
+		Doc\Archive\Planning\API-Implementation-Review.md = Doc\Archive\Planning\API-Implementation-Review.md
+		Doc\Archive\Planning\Implementation-Checklist.md = Doc\Archive\Planning\Implementation-Checklist.md
+		Doc\Archive\Planning\Tier5-Application-Evaluation.md = Doc\Archive\Planning\Tier5-Application-Evaluation.md
+		Doc\Archive\Planning\Project-Modularization-Plan.md = Doc\Archive\Planning\Project-Modularization-Plan.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -186,6 +198,18 @@ Global
 		{14C618F6-70A2-4962-920C-29BA0F5B8A1B}.Release|x64.Build.0 = Release|Any CPU
 		{14C618F6-70A2-4962-920C-29BA0F5B8A1B}.Release|x86.ActiveCfg = Release|Any CPU
 		{14C618F6-70A2-4962-920C-29BA0F5B8A1B}.Release|x86.Build.0 = Release|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Debug|x64.Build.0 = Debug|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Debug|x86.Build.0 = Debug|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Release|x64.ActiveCfg = Release|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Release|x64.Build.0 = Release|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Release|x86.ActiveCfg = Release|Any CPU
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53}.Release|x86.Build.0 = Release|Any CPU
 		{B7BDD4B6-5475-4746-8229-90BC0DCE9E90}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{B7BDD4B6-5475-4746-8229-90BC0DCE9E90}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B7BDD4B6-5475-4746-8229-90BC0DCE9E90}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -198,6 +222,18 @@ Global
 		{B7BDD4B6-5475-4746-8229-90BC0DCE9E90}.Release|x64.Build.0 = Release|Any CPU
 		{B7BDD4B6-5475-4746-8229-90BC0DCE9E90}.Release|x86.ActiveCfg = Release|Any CPU
 		{B7BDD4B6-5475-4746-8229-90BC0DCE9E90}.Release|x86.Build.0 = Release|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Debug|x64.Build.0 = Debug|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Debug|x86.Build.0 = Debug|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Release|x64.ActiveCfg = Release|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Release|x64.Build.0 = Release|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Release|x86.ActiveCfg = Release|Any CPU
+		{6200D10D-C996-4B83-855D-CD6605FA278C}.Release|x86.Build.0 = Release|Any CPU
 		{F4655ED1-1810-4F50-8317-CD46D41871DC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F4655ED1-1810-4F50-8317-CD46D41871DC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F4655ED1-1810-4F50-8317-CD46D41871DC}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -367,7 +403,9 @@ Global
 		{0048AB41-5654-47F0-ABD5-1646F7D7706D} = {776AE86F-6A81-4B69-A48A-88A9293EB425}
 		{B4223D77-9668-414F-9611-18851DEDD898} = {486A1187-8515-43B7-8075-1DFC7B95B987}
 		{14C618F6-70A2-4962-920C-29BA0F5B8A1B} = {A60A708F-FB76-474D-BC78-75770742423D}
+		{AAE15C9D-D0A5-49AA-8A33-BBED07934B53} = {A60A708F-FB76-474D-BC78-75770742423D}
 		{B7BDD4B6-5475-4746-8229-90BC0DCE9E90} = {776AE86F-6A81-4B69-A48A-88A9293EB425}
+		{6200D10D-C996-4B83-855D-CD6605FA278C} = {776AE86F-6A81-4B69-A48A-88A9293EB425}
 		{F4655ED1-1810-4F50-8317-CD46D41871DC} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{568568A0-6D66-45B0-B315-B84CDCCC56CA} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{B9BD3EB8-674B-4D10-B06B-CDDE72F0E6B7} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
@@ -381,6 +419,7 @@ Global
 		{99860D42-4A59-4BB1-BDEF-5F4842345076} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{9D2D04FC-B0AA-4727-882E-262DF4E568FA} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
 		{18A698CD-DFD8-45BD-9B2C-4C0C4547BB11} = {4FC3071A-F3AC-4D1F-8C73-FBD40A73FECE}
+		{A5140ABE-1AF0-4103-AAD7-B1BEA8FDC762} = {C5A09A9C-9EB0-47AE-A212-5084CFA63CEC}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {83CB65B8-011F-4ED7-BCD3-A6CFA935EF7E}
