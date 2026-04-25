@@ -96,7 +96,7 @@ await router.DisposeAsync();
 
 ```bash
 dotnet build /home/seko/RiderProjects/MFPlayer/MFPlayer.sln -v minimal
-dotnet run --project /home/seko/RiderProjects/MFPlayer/Test/MFPlayer.SimplePlayer/MFPlayer.SimplePlayer.csproj
-dotnet run --project /home/seko/RiderProjects/MFPlayer/Test/MFPlayer.VideoPlayer/MFPlayer.VideoPlayer.csproj
+dotnet run --project /home/seko/RiderProjects/MFPlayer/MediaFramework/Test/MFPlayer.SimplePlayer/MFPlayer.SimplePlayer.csproj
+dotnet run --project /home/seko/RiderProjects/MFPlayer/MediaFramework/Test/MFPlayer.VideoPlayer/MFPlayer.VideoPlayer.csproj
 ```
 

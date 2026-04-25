@@ -11,6 +11,7 @@ This folder contains current documentation for both `MediaPlayer` and `AVRouter`
 5. `Playback-Soundboard-Enablement-Plan.md` - concrete roadmap for easier advanced playback/soundboard workflows.
 6. `Clone-Sinks.md` - parent-owned clone endpoint usage for Avalonia and SDL3.
 7. `Archive/Planning/README.md` - archived planning docs and active-plan pointer.
+8. **`Libraries/README.md`** - index of **per-library** reference docs (`S.Media.Core`, FFmpeg, NDI, OSC, MIDI, etc.) and how to consume **`MediaFramework/FrameworkBuilds`**.
 
 ## Current Architecture (Short)
 
