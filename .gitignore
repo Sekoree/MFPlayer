@@ -455,4 +455,5 @@ $RECYCLE.BIN/
 
 # Published framework binaries (MediaFramework/Scripts/build-framework.sh); README stays tracked
 /MediaFramework/FrameworkBuilds/*
+/MediaFramework/Reference/*
 !/MediaFramework/FrameworkBuilds/README.md
