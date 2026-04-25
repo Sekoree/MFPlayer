@@ -305,19 +305,27 @@ using (ndiRuntime)
 
         // ── 8c. Build MediaPlayer graph (builder API) ──────────────────────────
 
+        var routerOptions = new AVRouterOptions
+        {
+            // Faster re-lock after live-source timestamp discontinuities
+            // (pattern/profile/FPS switches) while staying in scheduled mode.
+            VideoPtsDiscontinuityResetThreshold = TimeSpan.FromMilliseconds(250),
+            // NDI clock + NDI video PTS already share a source domain. Disabling
+            // integrator-based drift correction in this mode prevents slow
+            // origin-walk that can accumulate pending/reuse over time.
+            VideoPullDriftCorrectionGain = useNdiClock ? 0.0 : 0.05,
+            VideoPushDriftCorrectionGain = useNdiClock ? 0.0 : 0.08,
+        };
+
         var playerBuilder = MediaPlayer.Create()
-            .WithRouterOptions(new AVRouterOptions
-            {
-                // Faster re-lock after live-source timestamp discontinuities
-                // (pattern/profile/FPS switches) while staying in scheduled mode.
-                VideoPtsDiscontinuityResetThreshold = TimeSpan.FromMilliseconds(250)
-            })
+            .WithRouterOptions(routerOptions)
             .WithAudioOutput(output)
             .WithAudioInput(audioChannel);
 
-        // Drift correction manipulates route time offsets, which is useful for
-        // scheduled playback but intentionally bypassed in live-preview mode.
-        if (!livePreviewMode)
+        // Drift correction manipulates route time offsets. Keep it for cross-domain
+        // masters (e.g. PortAudio), but skip it when NDI clock is master because
+        // video PTS and clock already share the same source domain.
+        if (!livePreviewMode && !useNdiClock)
         {
             playerBuilder.WithAutoAvDriftCorrection(new AvDriftCorrectionOptions
             {

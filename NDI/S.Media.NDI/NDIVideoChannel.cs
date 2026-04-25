@@ -296,6 +296,7 @@ internal sealed class NDIVideoChannel : IVideoChannel, IVideoColorMatrixHint
                 _hasLastPts = true;
                 long ptsTicks = TimeSpan.FromSeconds(tsSecs).Ticks;
 
+
                 // §4.16 / N4 — publish clock updates from the *effective* video
                 // PTS (after monotonic/jump clamps and synthetic fallback), not
                 // the raw source timestamp. This keeps the shared NDIClock in

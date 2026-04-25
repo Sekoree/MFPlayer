@@ -18,6 +18,11 @@ public sealed class NDIClock : MediaClockBase
     // see a consistent snapshot of (lastFramePosition, swAtLastFrame).
     private long       _lastFramePositionTicks;
     private long       _swAtLastFrameTicks;
+    // Monotonic floor for Position reads across update races/jitter.
+    private long _monotonicFloorTicks;
+    // Seqlock-style version for atomic (position, stopwatch-origin) snapshots.
+    // Even = stable, odd = writer in progress.
+    private int _snapshotVersion;
     private volatile bool _running;
     private readonly double _sampleRate;
 
@@ -27,9 +32,29 @@ public sealed class NDIClock : MediaClockBase
         {
             if (!_running)
                 return TimeSpan.FromTicks(Interlocked.Read(ref _lastFramePositionTicks));
-            long lastFrame = Interlocked.Read(ref _lastFramePositionTicks);
-            long swAtLast  = Interlocked.Read(ref _swAtLastFrameTicks);
-            return TimeSpan.FromTicks(lastFrame + (_sw.Elapsed.Ticks - swAtLast));
+
+            while (true)
+            {
+                int v1 = Volatile.Read(ref _snapshotVersion);
+                if ((v1 & 1) != 0)
+                    continue; // writer is updating; retry
+
+                long lastFrame = Interlocked.Read(ref _lastFramePositionTicks);
+                long swAtLast  = Interlocked.Read(ref _swAtLastFrameTicks);
+                long swNow     = _sw.Elapsed.Ticks;
+
+                int v2 = Volatile.Read(ref _snapshotVersion);
+                if (v1 != v2 || (v2 & 1) != 0)
+                    continue; // observed torn snapshot; retry
+
+                long elapsed = swNow - swAtLast;
+                if (elapsed < 0) elapsed = 0;
+                long candidate = lastFrame + elapsed;
+                long floor = Interlocked.Read(ref _monotonicFloorTicks);
+                if (candidate < floor) candidate = floor;
+                PublishMonotonicFloor(candidate);
+                return TimeSpan.FromTicks(candidate);
+            }
         }
     }
 
@@ -72,6 +97,7 @@ public sealed class NDIClock : MediaClockBase
         Log.LogDebug("NDIClock reset");
         Interlocked.Exchange(ref _lastFramePositionTicks, 0);
         Interlocked.Exchange(ref _swAtLastFrameTicks, 0);
+        Interlocked.Exchange(ref _monotonicFloorTicks, 0);
         ResetWriterClaim();
         _sw.Reset();
     }
@@ -85,11 +111,31 @@ public sealed class NDIClock : MediaClockBase
     {
         // Guard: skip zero/negative and NDIlib_recv_timestamp_undefined (INT64_MAX = long.MaxValue).
         if (ndiTimestamp <= 0 || ndiTimestamp == long.MaxValue) return;
-        // Sample the stopwatch BEFORE publishing the new frame position so a concurrent
-        // reader never sees (newPos, oldSwAtLast) — which would produce a time jump.
+
+        // Publish a consistent (framePts, swAtLastFrame) pair.
+        // NOTE: we intentionally do NOT clamp ndiTimestamp to the monotonic floor here.
+        // The Position getter has its own floor to prevent backward reads, but clamping
+        // the incoming frame timestamp would inflate _lastFramePositionTicks by the
+        // receiver-vs-sender clock rate difference each frame, causing accumulating
+        // drift (~2 ms/s) that eventually triggers the SDL3 catch-up drop path.
         long swNow = _sw.Elapsed.Ticks;
-        Interlocked.Exchange(ref _swAtLastFrameTicks, swNow);
+        Interlocked.Increment(ref _snapshotVersion); // odd: writer active
         Interlocked.Exchange(ref _lastFramePositionTicks, ndiTimestamp);
+        Interlocked.Exchange(ref _swAtLastFrameTicks, swNow);
+        Interlocked.Increment(ref _snapshotVersion); // even: stable
+        PublishMonotonicFloor(ndiTimestamp);
+    }
+
+    private void PublishMonotonicFloor(long candidate)
+    {
+        while (true)
+        {
+            long current = Interlocked.Read(ref _monotonicFloorTicks);
+            if (candidate <= current)
+                return;
+            if (Interlocked.CompareExchange(ref _monotonicFloorTicks, candidate, current) == current)
+                return;
+        }
     }
 
     // §4.16 / N4 — atomic "first writer wins" claim. 0 = unclaimed, 1 = audio,

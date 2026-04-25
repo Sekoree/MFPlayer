@@ -18,6 +18,15 @@ public class HardwareClock : MediaClockBase
     private TimeSpan           _lastValidPosition;
     private bool               _usingFallback;
 
+    // Interpolation between hardware updates. Some audio backends (ALSA, JACK)
+    // return the same Pa_GetStreamTime value between audio callbacks, making the
+    // clock appear "frozen" for an entire buffer period. The PTS gate then sees
+    // frames advancing past the frozen clock and holds them back, cutting content
+    // FPS in half. A local stopwatch bridges the gap, re-syncing whenever the
+    // hardware time actually changes.
+    private readonly Stopwatch _interpSw = new();
+    private TimeSpan           _lastHwPosition;
+
     // §3.31 / C5: debounce exit from fallback — require N consecutive valid hw
     // reads before trusting the hardware timer again. A single flaky valid read
     // during a driver stall would otherwise reset the fallback stopwatch,
@@ -68,10 +77,6 @@ public class HardwareClock : MediaClockBase
                 _fallbackLock.Enter(ref taken);
                 if (hw > 0.0)
                 {
-                    // Require N consecutive valid reads before trusting the hw
-                    // timer again (§3.31 / C5). While still debouncing, keep
-                    // returning the fallback-interpolated position so a single
-                    // flaky valid read cannot snap Position backwards.
                     if (_usingFallback)
                     {
                         _consecutiveValidReads++;
@@ -82,11 +87,24 @@ public class HardwareClock : MediaClockBase
                         _consecutiveValidReads = 0;
                         _fallbackSw.Reset();
                     }
-                    _lastValidPosition = TimeSpan.FromSeconds(hw);
-                    return _lastValidPosition;
+
+                    var hwPos = TimeSpan.FromSeconds(hw);
+                    if (hwPos != _lastHwPosition)
+                    {
+                        _lastHwPosition = hwPos;
+                        _lastValidPosition = hwPos;
+                        _interpSw.Restart();
+                        return hwPos;
+                    }
+
+                    // Hardware time unchanged since last read (common on backends
+                    // that update Pa_GetStreamTime only on audio callbacks).
+                    // Interpolate forward from the last known position using a
+                    // local stopwatch so the clock advances continuously and the
+                    // PTS gate doesn't freeze-lock to half rate.
+                    return _lastHwPosition + _interpSw.Elapsed;
                 }
 
-                // Hardware unavailable — continue from last known position via stopwatch
                 _consecutiveValidReads = 0;
                 if (!_usingFallback)
                 {
@@ -112,15 +130,18 @@ public class HardwareClock : MediaClockBase
     {
         _running = false;
         _fallbackSw.Stop();
+        _interpSw.Stop();
         base.Stop();
     }
 
     public override void Reset()
     {
         _lastValidPosition = TimeSpan.Zero;
+        _lastHwPosition    = TimeSpan.Zero;
         _usingFallback     = false;
         _consecutiveValidReads = 0;
         _fallbackSw.Reset();
+        _interpSw.Reset();
     }
 
     /// <summary>
