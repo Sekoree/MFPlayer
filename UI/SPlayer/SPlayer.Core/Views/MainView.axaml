@@ -13,10 +13,18 @@
         <vm:MainViewModel />
     </Design.DataContext>
     
-    <views:OutputView>
-        <views:OutputView.DataContext>
-            <vm:OutputViewModel/>
-        </views:OutputView.DataContext>
-    </views:OutputView>
+    <TabControl TabStripPlacement="Left">
+        <TabItem Header="Outputs">
+            <views:OutputView>
+                <views:OutputView.DataContext>
+                    <vm:OutputViewModel/>
+                </views:OutputView.DataContext>
+            </views:OutputView>
+        </TabItem>
+        
+        <TabItem Header="Player">
+            
+        </TabItem>
+    </TabControl>
     
 </UserControl>

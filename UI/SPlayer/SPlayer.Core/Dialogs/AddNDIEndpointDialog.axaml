@@ -1,0 +1,95 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:dialogModels="clr-namespace:SPlayer.Core.Dialogs.DialogModels"
+        mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="400"
+        x:Class="SPlayer.Core.Dialogs.AddNDIEndpointDialog"
+        x:DataType="dialogModels:AddNDIEndpointViewModel"
+        Title="Add NDI Output"
+        Width="450" SizeToContent="Height"
+        CanResize="False">
+
+    <Design.DataContext>
+        <dialogModels:AddNDIEndpointViewModel/>
+    </Design.DataContext>
+
+    <StackPanel Margin="20,16" Spacing="10">
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Sender Name" FontSize="12"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            <TextBox Text="{Binding SenderName}"/>
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Preset" FontSize="12"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            <ComboBox ItemsSource="{Binding Presets}"
+                      SelectedItem="{Binding SelectedPreset}"
+                      HorizontalAlignment="Stretch"/>
+        </StackPanel>
+
+        <!-- Audio section -->
+        <CheckBox Content="Audio Output" IsChecked="{Binding HasAudio}" Margin="0,4,0,0"/>
+        <Border IsVisible="{Binding HasAudio}"
+                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                CornerRadius="4" Padding="12,10">
+            <Grid ColumnDefinitions="*, 12, *">
+                <StackPanel Grid.Column="0" Spacing="4">
+                    <TextBlock Text="Sample Rate" FontSize="12"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <TextBox Text="{Binding AudioSampleRate}" InnerRightContent="Hz"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="4">
+                    <TextBlock Text="Channels" FontSize="12"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <TextBox Text="{Binding AudioChannels}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Video section -->
+        <CheckBox Content="Video Output" IsChecked="{Binding HasVideo}"/>
+        <Border IsVisible="{Binding HasVideo}"
+                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                CornerRadius="4" Padding="12,10">
+            <Grid ColumnDefinitions="*, 12, *, 12, *">
+                <StackPanel Grid.Column="0" Spacing="4">
+                    <TextBlock Text="Width" FontSize="12"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <TextBox Text="{Binding VideoWidth}" InnerRightContent="px"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="4">
+                    <TextBlock Text="Height" FontSize="12"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <TextBox Text="{Binding VideoHeight}" InnerRightContent="px"/>
+                </StackPanel>
+                <StackPanel Grid.Column="4" Spacing="4">
+                    <TextBlock Text="Frame Rate" FontSize="12"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <TextBox Text="{Binding VideoFrameRate}" InnerRightContent="fps"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid ColumnDefinitions="*, 8, *" Margin="0,6,0,0">
+            <Button Grid.Column="0"
+                    Content="Add Output"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    IsDefault="True"
+                    Command="{Binding AddCommand}"
+                    CommandParameter="{Binding $parent[Window]}"/>
+            <Button Grid.Column="2"
+                    Content="Cancel"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    IsCancel="True"
+                    Command="{Binding CancelCommand}"
+                    CommandParameter="{Binding $parent[Window]}"/>
+        </Grid>
+
+    </StackPanel>
+
+</Window>

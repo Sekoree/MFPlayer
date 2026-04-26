@@ -24,5 +24,7 @@
     <ItemGroup>
       <ProjectReference Include="..\..\..\MediaFramework\Audio\S.Media.PortAudio\S.Media.PortAudio.csproj" />
       <ProjectReference Include="..\..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
+      <ProjectReference Include="..\..\..\MediaFramework\Video\S.Media.Avalonia\S.Media.Avalonia.csproj" />
+      <ProjectReference Include="..\..\..\MediaFramework\NDI\S.Media.NDI\S.Media.NDI.csproj" />
     </ItemGroup>
 </Project>
