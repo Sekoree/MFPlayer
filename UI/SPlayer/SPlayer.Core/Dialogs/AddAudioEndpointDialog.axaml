@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:dialogModels="clr-namespace:SPlayer.Core.Dialogs.DialogModels"
+        xmlns:audio="clr-namespace:S.Media.Core.Audio;assembly=S.Media.Core"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        x:Class="SPlayer.Core.Dialogs.AddAudioEndpointDialog"
+        Title="AddAudioEndpointDialog"
+        x:DataType="dialogModels:AddAudioEndpointViewModel">
+    
+    <Design.DataContext>
+        <dialogModels:AddAudioEndpointViewModel/>
+    </Design.DataContext>
+
+    <StackPanel Margin="5"
+                Orientation="Vertical"
+                Spacing="5">
+
+        <TextBlock Text="Host API:" />
+        <ComboBox ItemsSource="{Binding HostApis}"
+                  SelectedItem="{Binding SelectedHostApi}">
+            <ComboBox.ItemTemplate>
+                <DataTemplate DataType="audio:AudioHostApiInfo">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="5">
+                        <TextBlock Text="{Binding Name}" />
+                        <TextBlock Text=" (" />
+                        <TextBlock Text="{Binding Type}" />
+                        <TextBlock Text=") (" />
+                        <TextBlock Text="{Binding DeviceCount}" />
+                        <TextBlock Text=" devices)" />
+                    </StackPanel>
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="Device:" />
+        <ComboBox ItemsSource="{Binding Devices}"
+                  SelectedItem="{Binding SelectedDevice}">
+            <ComboBox.ItemTemplate>
+                <DataTemplate DataType="audio:AudioDeviceInfo">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="5">
+                        <TextBlock Text="{Binding Name}" />
+                    </StackPanel>
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+        
+        <TextBlock Text="Preferred Samplerate:"/>
+        <TextBox Text="{Binding PreferredSampleRate}"
+                 InnerRightContent="Hz"/>
+        
+        <Button Content="Add Device"
+                Command="{Binding AddDeviceCommand}"
+                CommandParameter="{Binding $parent[Window]}"/>
+        <Button Content="Cancel"
+                Command="{Binding CancelCommand}"
+                CommandParameter="{Binding $parent[Window]}"/>
+
+    </StackPanel>
+
+</Window>

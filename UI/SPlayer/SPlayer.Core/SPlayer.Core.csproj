@@ -20,4 +20,9 @@
         </PackageReference>
         <PackageReference Include="CommunityToolkit.Mvvm"/>
     </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\..\..\MediaFramework\Audio\S.Media.PortAudio\S.Media.PortAudio.csproj" />
+      <ProjectReference Include="..\..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
+    </ItemGroup>
 </Project>

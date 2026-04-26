@@ -613,8 +613,7 @@ public sealed class AVRouter : IAVRouter
     /// time using the endpoint's preferred frame count and channel count, so the
     /// first push/fill tick never hits <see cref="ConcurrentDictionary{TKey,TValue}.AddOrUpdate(TKey, Func{TKey, TValue}, Func{TKey, TValue, TValue})"/>
     /// on an RT thread. If the endpoint exposes no hint, fall back to a
-    /// conservative 2048-float buffer (≈ 512 frames × 4 channels) which is
-    /// big enough that the common case never reallocates.
+    /// 1024-float buffer.
     /// </summary>
     private void PreallocateScratch(EndpointId id, IAudioEndpoint audio)
     {
@@ -635,7 +634,7 @@ public sealed class AVRouter : IAVRouter
         }
 
         int minSize = framesPerBuffer * channels;
-        if (minSize < 2048) minSize = 2048;
+        if (minSize < 1024) minSize = 1024;
         _scratchBuffers[id] = new float[minSize];
 
         // §3.26 / P3 — pre-rent the output-format scratch for pull endpoints so

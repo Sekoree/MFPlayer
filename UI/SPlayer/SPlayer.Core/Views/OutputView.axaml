@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:viewModels="clr-namespace:SPlayer.Core.ViewModels"
+             xmlns:endpoints="clr-namespace:S.Media.Core.Media.Endpoints;assembly=S.Media.Core"
+             xmlns:models="clr-namespace:SPlayer.Core.Models"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="SPlayer.Core.Views.OutputView"
+             x:DataType="viewModels:OutputViewModel">
+
+    <Design.DataContext>
+        <viewModels:OutputViewModel />
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto, *"
+          ShowGridLines="True">
+
+        <Button Grid.Row="0"
+                Content="Add Audio Endpoint"
+                Command="{Binding AddAudioEndpointCommand}"
+                CommandParameter="{Binding $parent[Window]}" />
+
+        <ListBox Grid.Row="1"
+                 ItemsSource="{Binding AudioEndpointModels}">
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="models:AudioEndpointModel">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="5">
+                        <TextBlock Text="{Binding Name}" />
+                        <TextBlock Text=" - " />
+                        <TextBlock Text="{Binding SampleRate}" />
+                        <TextBlock Text=" - Open: " />
+                        <TextBlock Text="{Binding Open}" />
+                        
+                        <StackPanel.ContextFlyout>
+                            <MenuFlyout>
+                                <MenuItem Header="Start"
+                                          Command="{Binding StartCommand}"/>
+                                <MenuItem Header="Stop"
+                                          Command="{Binding StopCommand}"/>
+                            </MenuFlyout>
+                        </StackPanel.ContextFlyout>
+                    </StackPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+    </Grid>
+
+</UserControl>
