@@ -12,6 +12,7 @@ using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
+using S.Media.Core.Clock;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 
@@ -21,7 +22,7 @@ namespace S.Media.NDI;
 /// Consolidated NDI sink that can accept both audio and video and send them through one sender
 /// with a shared A/V timing context.
 /// </summary>
-public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVideoFpsReceiver
+public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISupportsDynamicMetadata
 {
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAVEndpoint));
 
@@ -95,6 +96,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
 
     private readonly NDISender _sender;
     private readonly NDIAvTimingContext _timing = new();
+    private readonly NDIClock _clock;
     // Per NDI SDK §13 ("NDI-Send"): audio, video and metadata frames may be submitted
     // to a sender "at any time, off any thread, and in any order".  The video send is
     // protected because Dispose may flush concurrently with the video thread; audio is
@@ -180,6 +182,8 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
     private long _firstAudioSubmitMs = -1;
     private long _lastVideoSubmitMs;
     private long _lastAudioSubmitMs;
+    private long _audioContentFloorTicks = long.MinValue;
+    private volatile int _sourceGeneration;
     private long _videoFramesSubmitted;
     private long _audioBuffersSubmitted;
     private long _audioSamplesSubmitted;
@@ -194,6 +198,12 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
     // readout, not for correctness decisions.
     private long _atLastVideoAudioMs;
     private long _atLastAudioVideoMs;
+    private const int StartupAudioLeadHoldMs = 220;
+    // When the first dequeued video frame is already far from stream start
+    // (DropOldest overflow during decoder warm-up), the audio path may need
+    // longer than the base startup hold to reach the same content PTS.
+    // Cap the adaptive hold so video-only routes cannot stall indefinitely.
+    private const int StartupAudioLeadMaxHoldMs = 1500;
 
     private Thread? _videoThread;
     private Thread? _audioThread;
@@ -205,6 +215,11 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
     public bool IsRunning => Volatile.Read(ref _started) == 1;
     public bool HasAudio => _hasAudio;
     public bool HasVideo => _hasVideo;
+    /// <summary>
+    /// Sender-side media clock driven by submitted A/V timecodes.
+    /// Exposed for host applications that want to explicitly select this clock.
+    /// </summary>
+    public IMediaClock Clock => _clock;
 
     /// <summary>
     /// The audio drift corrector instance, or <see langword="null"/> if drift correction is disabled.
@@ -242,6 +257,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
     {
         _sender = sender;
         Name = name ?? "NDIAVEndpoint";
+        _clock = new NDIClock(sampleRate: audioTargetFormat?.SampleRate ?? 48_000);
 
         // Apply the underrun-recovery threshold to the shared timing context up front so
         // the very first audio buffer sees the right policy.  Values <= 0 revert to the
@@ -432,6 +448,8 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
         // stale audio cursor from the previous session (which would resume
         // audio timecodes from an arbitrary past point).
         _timing.Reset();
+        _clock.Reset();
+        _clock.Start();
 
         // Drain any pending work left over from a prior session so stale PTS
         // buffers don't leak into the new timeline.  Pooled buffers are
@@ -447,6 +465,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
         // session's launch, not the previous one.
         Interlocked.Exchange(ref _firstVideoSubmitMs, -1);
         Interlocked.Exchange(ref _firstAudioSubmitMs, -1);
+        Interlocked.Exchange(ref _audioContentFloorTicks, long.MinValue);
         Interlocked.Exchange(ref _loggedVideoSynthesizeFallback, 0);
         Interlocked.Exchange(ref _loggedChannelRemix, 0);
 
@@ -498,6 +517,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
             catch (Exception ex) { Log.LogDebug(ex, "NDI flush-async on stop failed: {Message}", ex.Message); }
             ReleasePendingAsyncVideo();
         }
+        _clock.Stop();
     }
 
     /// <summary>
@@ -808,6 +828,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
         _audioWork.Dispose();
         _videoConverter.Dispose();
         if (_ownsAudioResampler) _audioResampler?.Dispose();
+        _clock.Dispose();
     }
 
     /// <summary>
@@ -1132,26 +1153,63 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
         }
     }
 
-    void IVideoFpsReceiver.ApplyFpsHint(int numerator, int denominator)
+    void ISupportsDynamicMetadata.AnnounceUpcomingVideoFormat(VideoFormat format)
     {
-        if (numerator > 0 && denominator > 0)
+        if (format.FrameRateNumerator > 0 && format.FrameRateDenominator > 0)
+            ApplyVideoFpsHintCore(format.FrameRateNumerator, format.FrameRateDenominator);
+
+        // A new source is about to produce frames. Reset the shared A/V
+        // timing context so audio timecodes reseed from the new video PTS
+        // instead of inheriting the cursor from the previous source (which
+        // would place audio in a different time domain and bake a permanent
+        // A/V offset at the receiver). Also reset first-submit sentinels so
+        // the startup A/V gate fires for this source.
+        _sourceGeneration++;
+        _timing.Reset();
+        Interlocked.Exchange(ref _firstVideoSubmitMs, -1);
+        Interlocked.Exchange(ref _firstAudioSubmitMs, -1);
+        Interlocked.Exchange(ref _audioContentFloorTicks, long.MinValue);
+
+        // Reset the NDIClock's monotonic floor so the new source's PTS values
+        // (starting near 0) can advance the clock.  Without this, the floor
+        // from the previous file's last PTS blocks all clock advances, which
+        // stalls any non-LiveMode route (e.g. local video) gated on this clock.
+        _clock.ResetForNewSource();
+
+        // Drain leftover video/audio frames from the previous source so they
+        // don't corrupt the timing state for the new source.
+        while (_videoWork.TryDequeue(out var stale))
         {
-            _videoFpsHintNum = numerator;
-            _videoFpsHintDen = denominator;
+            if (stale.Buffer != null) _videoPool.Enqueue(stale.Buffer);
+            if (stale.HasRetainedHandle) stale.RetainedHandle.Release();
         }
+        while (_audioWork.TryDequeue(out var staleAudio))
+            _audioPool.Enqueue(staleAudio.Buffer);
+    }
+
+    void ISupportsDynamicMetadata.ApplyVideoFpsHint(int numerator, int denominator)
+        => ApplyVideoFpsHintCore(numerator, denominator);
+
+    private void ApplyVideoFpsHintCore(int numerator, int denominator)
+    {
+        if (numerator <= 0 || denominator <= 0) return;
+        _videoFpsHintNum = numerator;
+        _videoFpsHintDen = denominator;
     }
 
     private unsafe void VideoWriteLoop()
     {
         var token = _cts!.Token;
-        // Prefer fps from source stream metadata (propagated via IVideoFpsReceiver before
-        // playback starts), then fall back to the configured target format, then to 30000/1001.
+        // Prefer fps from source stream metadata (propagated via ISupportsDynamicMetadata
+        // at route creation), then fall back to the configured target format, then to 30000/1001.
         int hintNum = _videoFpsHintNum;
         int hintDen = _videoFpsHintDen;
         int fpsNum = hintNum > 0 ? hintNum
             : _videoTargetFormat.FrameRateNumerator > 0 ? _videoTargetFormat.FrameRateNumerator : 30000;
         int fpsDen = hintNum > 0 ? hintDen
             : _videoTargetFormat.FrameRateDenominator > 0 ? _videoTargetFormat.FrameRateDenominator : 1001;
+        int lastKnownHintNum = hintNum;
+        int lastKnownHintDen = hintDen;
         SwsContext* ffmpegSws = null;
 
         // PTS-delta tracking for fps auto-adaptation.
@@ -1170,8 +1228,12 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
         {
             if (!_videoWork.WaitForItem(token)) break;
 
+            bool drainedStartupBurst = false;
+
             while (_videoWork.TryDequeue(out var pf))
             {
+                int frameGen = _sourceGeneration;
+
                 // True once this frame's pool buffer + conversion scratch are
                 // handed off to _pendingAsync* for retention past SendVideoAsync.
                 // If the send never issues (conversion error, format mismatch,
@@ -1180,6 +1242,79 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
 
                 try
                 {
+                    // Startup A/V gate: on the very first video send, hold until audio has
+                    // warmed up (or the timeout expires), then drain any frames that queued
+                    // in _videoWork during the hold.  Falls through to send pf normally so
+                    // video PTS and audio cursor stay anchored to the same media-time origin.
+                    if (_hasAudio && Interlocked.Read(ref _firstVideoSubmitMs) < 0)
+                    {
+                        if (pf.PtsTicks >= 0)
+                        {
+                            _timing.ObserveVideoPts(pf.PtsTicks);
+                            Interlocked.Exchange(ref _audioContentFloorTicks, pf.PtsTicks);
+                        }
+
+                        long holdMs = StartupAudioLeadHoldMs;
+                        if (pf.PtsTicks > 0)
+                        {
+                            // Keep first-video release aligned with the content floor that
+                            // AudioWriteLoop enforces on startup.  Without this, a large
+                            // first video PTS (e.g. ~1 s after DropOldest warm-up churn)
+                            // lets video start after 220 ms while audio is still waiting
+                            // to reach that floor, yielding visible "video ahead of audio".
+                            long ptsMs = (long)TimeSpan.FromTicks(pf.PtsTicks).TotalMilliseconds;
+                            holdMs = Math.Clamp(ptsMs + 120, StartupAudioLeadHoldMs, StartupAudioLeadMaxHoldMs);
+                        }
+
+                        long holdDeadlineMs = _sinkClock.ElapsedMilliseconds + holdMs;
+                        long waitStartedMs = _sinkClock.ElapsedMilliseconds;
+                        while (!token.IsCancellationRequested &&
+                               Interlocked.Read(ref _firstAudioSubmitMs) < 0 &&
+                               _sinkClock.ElapsedMilliseconds < holdDeadlineMs)
+                        {
+                            Thread.Sleep(2);
+                        }
+
+                        int drainedCount = 0;
+                        while (_videoWork.TryDequeue(out var stale))
+                        {
+                            drainedCount++;
+                            if (stale.Buffer != null) _videoPool.Enqueue(stale.Buffer);
+                            if (stale.HasRetainedHandle) stale.RetainedHandle.Release();
+                        }
+
+                        long waitedMs = _sinkClock.ElapsedMilliseconds - waitStartedMs;
+                        bool audioReady = Interlocked.Read(ref _firstAudioSubmitMs) >= 0;
+                        long floorPtsMs = pf.PtsTicks > 0 ? (long)TimeSpan.FromTicks(pf.PtsTicks).TotalMilliseconds : -1;
+                        Log.LogInformation(
+                            "NDIAVEndpoint '{Name}' startup gate: sourceGen={SourceGen}, firstVideoPtsMs={FirstVideoPtsMs}, " +
+                            "holdMs={HoldMs}, waitedMs={WaitedMs}, audioReady={AudioReady}, drainedVideoFrames={Drained}",
+                            Name, frameGen, floorPtsMs, holdMs, waitedMs, audioReady, drainedCount);
+
+                        drainedStartupBurst = true;
+                        // Fall through: pf is sent normally; the pacing loop below
+                        // will hold it until the audio cursor is within threshold.
+                    }
+
+                    // Detect source changes via the fps-hint volatile fields
+                    // (set by AnnounceUpcomingVideoFormat on new route creation)
+                    // and re-seed the fps + delta ring so a prior file's stale
+                    // PTS deltas can't pollute the new content's fps declaration.
+                    {
+                        int curHintNum = _videoFpsHintNum;
+                        int curHintDen = _videoFpsHintDen;
+                        if (curHintNum > 0 && curHintDen > 0 &&
+                            (curHintNum != lastKnownHintNum || curHintDen != lastKnownHintDen))
+                        {
+                            fpsNum = curHintNum;
+                            fpsDen = curHintDen;
+                            lastKnownHintNum = curHintNum;
+                            lastKnownHintDen = curHintDen;
+                            lastPtsTicks = long.MinValue;
+                            deltaFilled = 0;
+                        }
+                    }
+
                     ReadOnlyMemory<byte> payload;
                     PixelFormat sendFormat;
                     IDisposable? tempOwner = null;
@@ -1289,11 +1424,22 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
                         // PTS as the timecode puts both streams in the same media-time
                         // domain regardless of submit order.  Timestamp is still filled
                         // in by the SDK (§21.1).
+                        // If the source changed since we dequeued this frame
+                        // (AnnounceUpcomingVideoFormat fired on another thread),
+                        // this frame is from the old source. Sending it would
+                        // poison the freshly-reset timing/clock state with stale
+                        // PTS values.
+                        if (frameGen != _sourceGeneration)
+                        {
+                            continue;
+                        }
+
                         long videoPts = pf.PtsTicks;
                         long videoTimecode = videoPts >= 0 ? videoPts : NDIConstants.TimecodeSynthesize;
                         if (videoPts >= 0)
                         {
                             _timing.ObserveVideoPts(videoPts);
+                            _clock.UpdateFromFrame(videoPts);
                         }
                         else if (Interlocked.CompareExchange(ref _loggedVideoSynthesizeFallback, 1, 0) == 0)
                         {
@@ -1316,7 +1462,25 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
                         if (videoPts > 0 && lastPtsTicks > 0)
                         {
                             long delta = videoPts - lastPtsTicks;
-                            if (delta > 83_333 && delta < 10_000_000) // 1–120 fps bounds
+                            if (delta < -TimeSpan.TicksPerSecond)
+                            {
+                                // PTS jumped backward by > 1 s — new source or
+                                // backward seek. Flush the delta ring and re-read
+                                // the fps hint so the NDI frame-rate declaration
+                                // reflects the new content immediately.
+                                deltaFilled = 0;
+                                lastPtsTicks = long.MinValue;
+                                int freshNum = _videoFpsHintNum;
+                                int freshDen = _videoFpsHintDen;
+                                if (freshNum > 0 && freshDen > 0)
+                                {
+                                    fpsNum = freshNum;
+                                    fpsDen = freshDen;
+                                    lastKnownHintNum = freshNum;
+                                    lastKnownHintDen = freshDen;
+                                }
+                            }
+                            else if (delta > 83_333 && delta < 10_000_000) // 1–120 fps bounds
                             {
                                 ptsDeltaRing[deltaFilled % DeltaWindowSize] = delta;
                                 deltaFilled++;
@@ -1334,7 +1498,23 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
                                 }
                             }
                         }
-                        if (videoPts > 0) lastPtsTicks = videoPts;
+                        if (videoPts > 0)
+                        {
+                            if (drainedStartupBurst)
+                            {
+                                // The gap between this frame and the next spans the
+                                // drained range and would produce an outlier delta
+                                // that averages to ~15 fps in the ring.  Skip seeding
+                                // lastPtsTicks so the next frame also starts with
+                                // lastPtsTicks == MinValue → its delta is skipped too,
+                                // and normal tracking resumes on the frame after.
+                                drainedStartupBurst = false;
+                            }
+                            else
+                            {
+                                lastPtsTicks = videoPts;
+                            }
+                        }
 
                         var vf = new NDIVideoFrameV2
                         {
@@ -1477,6 +1657,23 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
 
                 while (_audioWork.TryDequeue(out var pending))
                 {
+                    // Skip audio buffers whose content predates the first video
+                    // frame.  With NDI-only output the video subscription uses
+                    // DropOldest and may overflow during decoder warmup, so the
+                    // first available video PTS is often > 0 while audio starts
+                    // from PTS 0.  Sending that early audio with a timecode
+                    // seeded from the video PTS creates a permanent content-level
+                    // A/V offset (audio data from position 0 plays alongside
+                    // video data from position 83 ms, for example).
+                    if (Interlocked.Read(ref _firstAudioSubmitMs) < 0)
+                    {
+                        long floor = Interlocked.Read(ref _audioContentFloorTicks);
+                        if (floor > 0 && pending.PtsTicks >= 0 && pending.PtsTicks < floor)
+                        {
+                            _audioPool.Enqueue(pending.Buffer);
+                            continue;
+                        }
+                    }
 
                     var interleaved = pending.Buffer;
                     int sampleValues = pending.Samples;
@@ -1553,7 +1750,6 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVid
                             Timecode = audioTimecode,
                             Timestamp = NDIConstants.TimestampUndefined
                         };
-
                         // SendAudio (NDIlib_send_send_audio_v3) is synchronous and copies the
                         // payload before returning — no cross-thread contention on the planar
                         // buffer, and no async-retention to manage.  The per-sink audio thread

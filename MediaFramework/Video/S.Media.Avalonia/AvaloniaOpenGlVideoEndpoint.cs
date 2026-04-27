@@ -562,6 +562,15 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
                     // at clock/source = 0 forever).
                     QueueRenderRequest(TimeSpan.FromMilliseconds(5));
                 }
+                else
+                {
+                    // Safety net: a render tick produced no upload even though
+                    // frames have been uploaded before. This can happen after a
+                    // clock switch (drift re-seed), a transient render exception,
+                    // or a subscription race. Poll at a low cadence so the loop
+                    // recovers instead of permanently stalling.
+                    QueueRenderRequest(TimeSpan.FromMilliseconds(100));
+                }
             }
         }
     }

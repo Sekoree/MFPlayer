@@ -103,6 +103,24 @@ public sealed class NDIClock : MediaClockBase
     }
 
     /// <summary>
+    /// Clears the position and monotonic floor without stopping the internal
+    /// stopwatch, so the clock can be re-seeded from a new source's first
+    /// frame.  Use this on file/source switches where the NDI endpoint stays
+    /// alive across sources — without this the monotonic floor from the
+    /// previous file's last PTS blocks all advances for the new file.
+    /// </summary>
+    public void ResetForNewSource()
+    {
+        long swNow = _sw.Elapsed.Ticks;
+        Interlocked.Increment(ref _snapshotVersion);
+        Interlocked.Exchange(ref _lastFramePositionTicks, 0);
+        Interlocked.Exchange(ref _swAtLastFrameTicks, swNow);
+        Interlocked.Increment(ref _snapshotVersion);
+        Interlocked.Exchange(ref _monotonicFloorTicks, 0);
+        ResetWriterClaim();
+    }
+
+    /// <summary>
     /// Called by NDI channel implementations each time a frame arrives.
     /// <paramref name="ndiTimestamp"/> is in 100 ns units (NDI SDK convention).
     /// Pass 0 / negative to skip the update.

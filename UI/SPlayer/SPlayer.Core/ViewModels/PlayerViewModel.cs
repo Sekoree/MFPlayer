@@ -17,12 +17,26 @@ using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.FFmpeg;
 using S.Media.Playback;
+using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
+using S.Media.NDI;
 using SPlayer.Core.Models;
 using SPlayer.Core.Services;
 
 namespace SPlayer.Core.ViewModels;
+
+public sealed class ClockChoiceItem
+{
+    public string Key { get; }
+    public string Label { get; }
+
+    public ClockChoiceItem(string key, string label)
+    {
+        Key = key;
+        Label = label;
+    }
+}
 
 public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 {
@@ -46,11 +60,14 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _positionTimer;
     private readonly Dictionary<string, bool> _selectionMemory = new();
     private readonly Dictionary<string, AveStreamSelection> _aveToPlayerMemory = new();
+    private readonly Dictionary<string, IMediaClock> _clockChoiceByKey = new(StringComparer.Ordinal);
+    private bool _suppressClockChoiceChanged;
 
     private bool _isScrubbing;
     private bool _eventsHooked;
     public ObservableCollection<PlayerOutputRowViewModel> OutputRows { get; } = new();
     public ObservableCollection<PlaylistDocumentViewModel> Playlists { get; } = new();
+    public ObservableCollection<ClockChoiceItem> ClockChoices { get; } = new();
 
     [ObservableProperty]
     private PlaylistDocumentViewModel? _selectedPlaylist;
@@ -91,6 +108,15 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _outputRoutingLocked;
 
+    [ObservableProperty]
+    private ClockChoiceItem? _selectedClockChoice;
+
+    partial void OnSelectedClockChoiceChanged(ClockChoiceItem? value)
+    {
+        if (_suppressClockChoiceChanged) return;
+        ApplyClockSelectionToRouter();
+    }
+
     public bool IsScrubbing
     {
         get => _isScrubbing;
@@ -130,11 +156,17 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
     private void OnOutputRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(PlayerOutputRowViewModel.AveToPlayer)) return;
         if (sender is not PlayerOutputRowViewModel row) return;
-        if (row is not { Kind: PlayerOutputKind.Ndi }) return;
-        _aveToPlayerMemory[row.RowKey] = row.AveToPlayer;
-        TryApplyAveStreamSelection(row);
+        if (e.PropertyName == nameof(PlayerOutputRowViewModel.AveToPlayer) &&
+            row is { Kind: PlayerOutputKind.Ndi })
+        {
+            _aveToPlayerMemory[row.RowKey] = row.AveToPlayer;
+            TryApplyAveStreamSelection(row);
+            return;
+        }
+        if (e.PropertyName is nameof(PlayerOutputRowViewModel.IsSelected)
+            or nameof(PlayerOutputRowViewModel.IsRowAvailable))
+            RefreshClockChoices();
     }
 
     private void OnOutputPoolChanged(object? s, NotifyCollectionChangedEventArgs e) => RebuildOutputRows();
@@ -189,6 +221,7 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         foreach (var n in _outputs.NdiEndpointModels) AddNdi(n);
 
         UpdateRoutingLockUi();
+        RefreshClockChoices();
     }
 
     private static string RowKey(PlayerOutputKind kind, string name) => $"{kind}:{name}";
@@ -422,7 +455,8 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         {
             StatusMessage = Path.GetFileName(path);
             await _player.OpenAsync(path, GetDecoderOptions());
-            ApplyDisplayClockToRouter();
+            RefreshClockChoices();
+            ApplyClockSelectionToRouter();
             ApplyAveToAllNdiRows();
             if (_player.VideoChannel is null && WantsVideoRouting())
                 StatusMessage = $"{Path.GetFileName(path)} — no video track decoded (try another file, or check decoder logs).";
@@ -470,10 +504,14 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
             if (_attachedEndpoints.Any(a => ReferenceEquals(a, ep))) continue;
             row.TryAddToPlayer(_player, _attachedEndpoints);
         }
+        RefreshClockChoices();
     }
 
     private FFmpegDecoderOptions GetDecoderOptions()
     {
+        bool wantsAudio = WantsAudioDecoding();
+        bool forceRgba = false;
+
         // When NDI video output is active, force a CPU-accessible pixel format.
         // Hardware decoding with VideoTargetPixelFormat=null produces GPU-resident frames
         // (Data.Length == 0 on CPU) that NDIAVEndpoint's capacity check silently drops.
@@ -484,20 +522,34 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
                 row.NdiIncludesVideo &&
                 row.AveToPlayer != AveStreamSelection.AudioOnly)
             {
-                // Rgba32 matches the NDI target format → passthrough in VideoWriteLoop,
-                // no per-frame pixel conversion. Avalonia GL also handles Rgba32 natively.
-                return new FFmpegDecoderOptions
-                {
-                    EnableAudio = DecoderOptionsForUiPlayback.EnableAudio,
-                    EnableVideo = DecoderOptionsForUiPlayback.EnableVideo,
-                    VideoTargetPixelFormat = PixelFormat.Rgba32,
-                    VideoBufferDepth = DecoderOptionsForUiPlayback.VideoBufferDepth,
-                    PreferHardwareDecoding = DecoderOptionsForUiPlayback.PreferHardwareDecoding,
-                    DecoderThreadCount = DecoderOptionsForUiPlayback.DecoderThreadCount
-                };
+                forceRgba = true;
+                break;
             }
         }
-        return DecoderOptionsForUiPlayback;
+
+        return new FFmpegDecoderOptions
+        {
+            EnableAudio = wantsAudio,
+            EnableVideo = DecoderOptionsForUiPlayback.EnableVideo,
+            VideoTargetPixelFormat = forceRgba ? PixelFormat.Rgba32 : DecoderOptionsForUiPlayback.VideoTargetPixelFormat,
+            VideoBufferDepth = DecoderOptionsForUiPlayback.VideoBufferDepth,
+            PreferHardwareDecoding = DecoderOptionsForUiPlayback.PreferHardwareDecoding,
+            DecoderThreadCount = DecoderOptionsForUiPlayback.DecoderThreadCount
+        };
+    }
+
+    private bool WantsAudioDecoding()
+    {
+        foreach (var row in OutputRows)
+        {
+            if (!row.IsSelected || !row.IsRowAvailable) continue;
+            if (row.Kind == PlayerOutputKind.Audio)
+                return true;
+            if (row.Kind == PlayerOutputKind.Ndi &&
+                row.AveToPlayer != AveStreamSelection.VideoOnly)
+                return true;
+        }
+        return false;
     }
 
     private bool WantsVideoRouting()
@@ -538,33 +590,125 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>
-    /// Same idea as <c>AVRouter.SetClock(_videoOutput.Clock)</c> in MFPlayer.AvaloniaVideoPlayer: use the
-    /// display endpoint clock when video is being decoded. Clears a prior override when the file has no video.
-    /// </summary>
-    private void ApplyDisplayClockToRouter()
+    private void ApplyClockSelectionToRouter()
     {
-        if (_player.VideoChannel is null)
+        try
         {
-            SLog.LogDebug("ApplyDisplayClock: no decoded video — SetClock(null).");
-            _player.Router.SetClock(null);
-            return;
-        }
-        foreach (var ep in _attachedEndpoints)
-        {
-            if (ep is IClockCapableEndpoint clocked and IVideoEndpoint)
+            var key = SelectedClockChoice?.Key ?? "auto";
+            if (key == "auto")
             {
-                SLog.LogInformation(
-                    "ApplyDisplayClock: using {Type} '{Name}' clock (VideoPts) for pull + push gating",
-                    ep.GetType().Name, ep.Name);
-                _player.Router.SetClock(clocked.Clock);
+                TryResolveAutoClock(out var autoClock);
+                _player.Router.SetClock(autoClock);
                 return;
             }
+            if (key == "internal")
+            {
+                _player.Router.SetClock(_player.Router.InternalClock);
+                return;
+            }
+
+            if (_clockChoiceByKey.TryGetValue(key, out var chosenClock))
+            {
+                // VideoPts-based clocks should only be forced when video is actually present.
+                if (chosenClock is VideoPtsClock && _player.VideoChannel is null)
+                {
+                    _player.Router.SetClock(null);
+                    SelectedClockChoice = ClockChoices.FirstOrDefault(c => c.Key == "auto");
+                    return;
+                }
+
+                _player.Router.SetClock(chosenClock);
+                return;
+            }
+
+            _player.Router.SetClock(null);
+            SelectedClockChoice = ClockChoices.FirstOrDefault(c => c.Key == "auto");
         }
-        SLog.LogWarning(
-            "ApplyDisplayClock: no IClockCapable+IVideo in {Count} attached endpoint(s) — override not set; push video may use wrong timebase. Endpoints: {List}",
-            _attachedEndpoints.Count,
-            string.Join(" | ", _attachedEndpoints.Select(e => $"{e.GetType().Name}:'{e.Name}'")));
+        catch (Exception ex)
+        {
+            SLog.LogWarning(ex, "Failed to apply selected clock '{ClockKey}'; keeping current router clock.", SelectedClockChoice?.Key);
+        }
+    }
+
+    private void RefreshClockChoices()
+    {
+        string previousKey = SelectedClockChoice?.Key ?? "auto";
+        ClockChoices.Clear();
+        _clockChoiceByKey.Clear();
+
+        ClockChoices.Add(new ClockChoiceItem("auto", "Auto (prefer audio hardware)"));
+        ClockChoices.Add(new ClockChoiceItem("internal", "Internal stopwatch"));
+
+        foreach (var row in OutputRows)
+        {
+            if (!row.TryGetSelectedEndpoint(out var ep)) continue;
+
+            if (ep is IClockCapableEndpoint clocked)
+            {
+                try
+                {
+                    string key = $"endpoint:{row.RowKey}";
+                    string label = $"{row.Name} ({clocked.Clock.GetType().Name})";
+                    ClockChoices.Add(new ClockChoiceItem(key, label));
+                    _clockChoiceByKey[key] = clocked.Clock;
+                }
+                catch (Exception ex)
+                {
+                    SLog.LogDebug(ex, "RefreshClockChoices: endpoint clock unavailable for '{Name}'.", row.Name);
+                }
+            }
+
+            // NDI sender endpoints are not auto-registered as clock-capable, but they do
+            // expose a sender-side NDIClock that can be selected explicitly.
+            if (ep is NDIAVEndpoint ndi)
+            {
+                string key = $"ndi:{row.RowKey}";
+                string label = $"{row.Name} (NDIClock)";
+                ClockChoices.Add(new ClockChoiceItem(key, label));
+                _clockChoiceByKey[key] = ndi.Clock;
+            }
+        }
+
+        var selected = ClockChoices.FirstOrDefault(c => c.Key == previousKey)
+            ?? ClockChoices.FirstOrDefault(c => c.Key == "auto");
+
+        string newKey = selected?.Key ?? "auto";
+        _suppressClockChoiceChanged = true;
+        try
+        {
+            SelectedClockChoice = selected;
+        }
+        finally
+        {
+            _suppressClockChoiceChanged = false;
+        }
+
+        if (!string.Equals(previousKey, newKey, StringComparison.Ordinal))
+            ApplyClockSelectionToRouter();
+    }
+
+    private bool TryResolveAutoClock(out IMediaClock clock)
+    {
+        // For local playback, audio-device clock should normally lead to avoid
+        // "audio behind video" drift from a video-clock master.
+        foreach (var row in OutputRows)
+        {
+            if (row.Kind != PlayerOutputKind.Audio) continue;
+            if (!row.TryGetSelectedEndpoint(out var ep)) continue;
+            if (ep is not IClockCapableEndpoint clocked) continue;
+            try
+            {
+                clock = clocked.Clock;
+                return true;
+            }
+            catch
+            {
+                // Ignore unavailable endpoint clock and keep searching.
+            }
+        }
+
+        clock = _player.Router.InternalClock;
+        return true;
     }
 
     [RelayCommand]

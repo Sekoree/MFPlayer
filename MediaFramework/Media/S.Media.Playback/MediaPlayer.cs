@@ -569,6 +569,9 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             {
                 _decoder.Start();
                 _decoderStarted = true;
+                // Give decoders a brief head start so push A/V sinks (notably NDI-only)
+                // don't emit video significantly ahead of the first audio buffer.
+                await WarmupDecodedBuffersAsync(ct).ConfigureAwait(false);
             }
 
             // When endpoints are shared with an external output pool, they can already be
@@ -926,7 +929,22 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     /// </summary>
     private static RouteId CreateVideoRouteToEndpoint(
         IAVRouter router, InputId inputId, EndpointId epId, IVideoEndpoint v) =>
-        v is not IPullVideoEndpoint
+        v is IAVEndpoint
+            // Keep A/V sinks on scheduled mode so decoded-file bursts cannot run video
+            // content far ahead of audio content. NDI endpoints still stamp/send using
+            // their own timing, but router-side PTS gating prevents startup/steady-state
+            // "video content lead" that manifests as audio-late at receivers.
+            //
+            // Also force Wait overflow for AV sinks: DropOldest skips older video frames
+            // under transient pressure, which advances video content PTS relative to the
+            // audio path and recreates the "video slightly ahead" symptom.
+            ? router.CreateRoute(inputId, epId, new VideoRouteOptions
+            {
+                LiveMode = false,
+                OverflowPolicy = VideoOverflowPolicy.Wait,
+                Capacity = 12
+            })
+            : v is not IPullVideoEndpoint
             ? router.CreateRoute(inputId, epId, new VideoRouteOptions { LiveMode = true })
             : router.CreateRoute(inputId, epId);
 
@@ -1105,6 +1123,27 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         {
             if (beforeClose is null) continue;
             await beforeClose(this, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task WarmupDecodedBuffersAsync(CancellationToken ct)
+    {
+        var audio = AudioChannel;
+        var video = VideoChannel;
+        if (audio is null || video is null)
+            return;
+
+        // Keep warmup short and bounded: we only need enough decoded lead so the
+        // first router ticks can feed both streams immediately.
+        const int minAudioFrames = 480; // ~10 ms @ 48 kHz
+        const int minVideoFrames = 1;
+        var timeoutAt = DateTime.UtcNow + TimeSpan.FromMilliseconds(250);
+
+        while (DateTime.UtcNow < timeoutAt && !ct.IsCancellationRequested)
+        {
+            if (audio.BufferAvailable >= minAudioFrames && video.BufferAvailable >= minVideoFrames)
+                return;
+            await Task.Delay(5, ct).ConfigureAwait(false);
         }
     }
 }

@@ -55,7 +55,7 @@ public partial class NDIEndpointModel : ObservableObject
         // Clean up any prior partial state before creating a new sender.
         await CleanupAsync();
 
-        var result = NDISender.Create(out _sender, _config.SenderName);
+        var result = NDISender.Create(out _sender, _config.SenderName, clockVideo: false, clockAudio: false);
         if (result != 0 || _sender is null)
         {
             OnPropertyChanged(nameof(Open));

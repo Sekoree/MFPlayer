@@ -857,12 +857,43 @@ public sealed class AVRouter : IAVRouter
         // change and must fire; transitioning from internal to internal is not.
         var previousActive = previous ?? _internalClock;
         if (ReferenceEquals(previousActive, current)) return;
+
+        // The PTS drift trackers were seeded against the previous clock's
+        // position domain.  With a new clock the origin offsets are stale
+        // and would cause the PTS gate to cache (or burst-deliver) frames
+        // until the discontinuity detector fires.  Resetting eagerly gives
+        // the gate a clean seed on the very next frame.
+        ResetAllDriftTrackers();
+
         var handler = ActiveClockChanged;
         if (handler is null) return;
         try { handler(current); }
         catch (Exception ex)
         {
             Log.LogWarning(ex, "ActiveClockChanged subscriber threw; continuing.");
+        }
+    }
+
+    private void ResetAllDriftTrackers()
+    {
+        foreach (var route in _routes.Values)
+        {
+            // Only reset push-side drift. Pull-side drift (PullDrift) is driven
+            // by the endpoint's own clock (e.g. VideoPtsClock), which does NOT
+            // change when the router clock changes. Resetting PullDrift here
+            // would race the render thread (PtsDriftTracker has no internal
+            // synchronization) and is unnecessary because the pull clock domain
+            // is unaffected by the router clock switch.
+            route.PushDrift.Reset();
+        }
+
+        // Flush push-pending frames that were cached against the old clock's
+        // timing — they would be evaluated against the new clock's position on
+        // the next tick and likely mis-timed.
+        foreach (var kv in _pushVideoPending)
+        {
+            if (_pushVideoPending.TryRemove(kv.Key, out var frame))
+                frame.MemoryOwner?.Dispose();
         }
     }
 
@@ -1350,19 +1381,23 @@ public sealed class AVRouter : IAVRouter
             }
 
             if (inp.VideoChannel is not null &&
-                inp.VideoChannel.SourceFormat.FrameRateNumerator > 0 &&
-                ep.Video is IVideoFpsReceiver fpsSink)
+                ep.Video is ISupportsDynamicMetadata dynamicMeta)
             {
                 try
                 {
-                    fpsSink.ApplyFpsHint(
-                        inp.VideoChannel.SourceFormat.FrameRateNumerator,
-                        inp.VideoChannel.SourceFormat.FrameRateDenominator);
+                    var sourceFormat = inp.VideoChannel.SourceFormat;
+                    dynamicMeta.AnnounceUpcomingVideoFormat(sourceFormat);
+                    if (sourceFormat.FrameRateNumerator > 0)
+                    {
+                        dynamicMeta.ApplyVideoFpsHint(
+                            sourceFormat.FrameRateNumerator,
+                            sourceFormat.FrameRateDenominator);
+                    }
                 }
                 catch (Exception ex)
                 {
                     Log.LogWarning(ex,
-                        "ApplyFpsHint threw on endpoint {Endpoint}; continuing with configured fps.",
+                        "Dynamic metadata hinting threw on endpoint {Endpoint}; continuing with configured defaults.",
                         ep.Id);
                 }
             }

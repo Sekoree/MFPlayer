@@ -80,6 +80,21 @@
                            TextWrapping="Wrap"
                            FontSize="11"
                            Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Clock source:"
+                               FontSize="11"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                               VerticalAlignment="Center"/>
+                    <ComboBox MinWidth="280"
+                              ItemsSource="{Binding ClockChoices}"
+                              SelectedItem="{Binding SelectedClockChoice, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate DataType="vm:ClockChoiceItem">
+                                <TextBlock Text="{Binding Label}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
                 <ScrollViewer MaxHeight="180">
                     <ItemsControl ItemsSource="{Binding OutputRows}">
                         <ItemsControl.ItemTemplate>
