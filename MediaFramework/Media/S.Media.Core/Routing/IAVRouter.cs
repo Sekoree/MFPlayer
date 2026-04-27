@@ -192,6 +192,21 @@ public interface IAVRouter : IAsyncDisposable, IDisposable
     TimeSpan GetAvDrift(InputId audioInput, InputId videoInput);
 
     /// <summary>
+    /// Smoothed <em>change</em> in decoder read-head A/V offset: the first sample
+    /// records a baseline of (audio <see cref="IAudioChannel.Position"/> minus
+    /// video time between <see cref="IVideoChannel.Position"/> and
+    /// <see cref="IVideoChannel.NextExpectedPts"/>), then the returned value is an EMA
+    /// of the delta from that baseline. This isolates true drift from a large static
+    /// gap between interpolated audio and frame-based video PTS. No comparison to
+    /// <see cref="Clock"/>. Use for auto A/V nudge on the video input when
+    /// <see cref="GetAvDrift"/> is not in a comparable time domain
+    /// (e.g. a self-fed NDI/sender output clock as the router master for push
+    /// sinks). Sign matches <see cref="GetAvDrift"/>: positive → audio is ahead
+    /// in media time relative to video.
+    /// </summary>
+    TimeSpan GetAvStreamHeadDrift(InputId audioInput, InputId videoInput);
+
+    /// <summary>
     /// Returns the most recent peak sample level (absolute, 0.0–1.0+) for an audio input,
     /// measured post-volume/pre-mix. Returns 0 for video inputs.
     /// </summary>

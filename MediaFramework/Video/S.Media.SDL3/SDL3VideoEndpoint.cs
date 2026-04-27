@@ -32,7 +32,8 @@ public enum VsyncMode
 /// vsync-driven render loop on a dedicated thread.
 /// Analogous to <c>PortAudioOutput</c> for audio.
 /// </summary>
-public class SDL3VideoEndpoint : IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver
+public class SDL3VideoEndpoint
+    : IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver, IVideoPresentationClockOverridable
 {
     private static readonly ILogger Log = SDL3VideoLogging.GetLogger(nameof(SDL3VideoEndpoint));
 

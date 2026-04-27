@@ -6,6 +6,25 @@ namespace S.Media.Core.Clock;
 /// Video clock driven by presented frame PTS values.
 /// Uses <see cref="Stopwatch"/> interpolation between frames
 /// (same pattern as <c>NDIClock.UpdateFromFrame</c>).
+/// <para>
+/// <b>Drift handling.</b> Two operating modes:
+/// </para>
+/// <list type="bullet">
+///   <item><description>
+///     <i>Default (router-corrected)</i> — small forward/backward drift below
+///     <see cref="SeekThreshold"/> is ignored; only large jumps are treated as
+///     seeks. Use this when the AVRouter applies its own cross-origin
+///     correction (<c>PtsDriftTracker</c>); chasing raw PTS here would form a
+///     positive feedback loop with that corrector.
+///   </description></item>
+///   <item><description>
+///     <i><see cref="ApplySelfSlew"/> = true</i> — opt-in slew toward the
+///     incoming PTS at <see cref="SelfSlewMaxMsPerSec"/> (default 0.5 ms/s) so
+///     the clock cannot diverge unbounded when used as the router master with
+///     no upstream corrector. See
+///     <c>Doc/Clock-And-AV-Drift-Analysis.md</c> §5.1 / item L.
+///   </description></item>
+/// </list>
 /// </summary>
 public sealed class VideoPtsClock : MediaClockBase
 {
@@ -20,6 +39,30 @@ public sealed class VideoPtsClock : MediaClockBase
     private volatile bool _running;
     private bool          _initialised;
 
+    /// <summary>
+    /// Forward/backward delta beyond which an <see cref="UpdateFromFrame"/>
+    /// call is treated as a seek (re-anchor the clock immediately).
+    /// </summary>
+    public static TimeSpan SeekThreshold { get; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// When <see langword="true"/>, sub-<see cref="SeekThreshold"/> drift is
+    /// gradually corrected at <see cref="SelfSlewMaxMsPerSec"/>. Default
+    /// <see langword="false"/> — leave off when an upstream
+    /// <c>PtsDriftTracker</c> already corrects this clock's PTS-vs-router gap.
+    /// Toggle on when this clock is the *router master* with no other
+    /// corrector in the loop.
+    /// </summary>
+    public bool ApplySelfSlew { get; init; }
+
+    /// <summary>
+    /// Maximum slew rate in milliseconds-of-PTS-correction per real second when
+    /// <see cref="ApplySelfSlew"/> is true. 0.5 ms/s is well below the
+    /// audibility threshold for video playback rate variations and clears the
+    /// largest plausible accumulated drift (~250 ms) in ~8 minutes of playback.
+    /// </summary>
+    public double SelfSlewMaxMsPerSec { get; init; } = 0.5;
+
     /// <inheritdoc/>
     public override TimeSpan Position
     {
@@ -28,9 +71,16 @@ public sealed class VideoPtsClock : MediaClockBase
             lock (_stateLock)
             {
                 if (!_running) return _lastPts;
-                return _initialised
-                    ? _lastPts + (_sw.Elapsed - _swAtLastPts)
-                    : TimeSpan.Zero;
+                if (!_initialised)
+                {
+                    // Monotonic stand-in until the first presented frame calls
+                    // <see cref="UpdateFromFrame"/>. Returning zero made this clock
+                    // unusable as a router master for push (NDI) before the first pull
+                    // present, because all subsequent frames looked "too early" vs
+                    // a stuck clock at 0.
+                    return _sw.Elapsed;
+                }
+                return _lastPts + (_sw.Elapsed - _swAtLastPts);
             }
         }
     }
@@ -106,23 +156,45 @@ public sealed class VideoPtsClock : MediaClockBase
 
             var predicted = _lastPts + (swNow - _swAtLastPts);
             var delta = pts - predicted;
+            var absDelta = delta < TimeSpan.Zero ? -delta : delta;
 
-            // Re-anchor only on a LARGE jump (seek / stream discontinuity); see the
-            // long-form note below for why small forward drift MUST be ignored here.
-            //
-            // Short version: the AVRouter already runs its own cross-origin drift
-            // correction (PtsDriftTracker) on the presentation path, and chasing
-            // raw PTS forward here would form a positive feedback loop with that
-            // correction. A backward jump of any size is a seek; a forward jump
-            // larger than SeekThreshold is also a seek. Everything else is drift —
-            // ignore.
-            var seekThreshold = TimeSpan.FromMilliseconds(500);
-            if (delta >= TimeSpan.Zero && delta < seekThreshold)
+            // Re-anchor immediately on a LARGE jump (seek / stream discontinuity).
+            // For sub-threshold drift the behaviour depends on ApplySelfSlew:
+            //   - false (default): ignore — the AVRouter's PtsDriftTracker corrects
+            //     this clock's PTS-vs-router gap upstream, and chasing raw PTS here
+            //     would form a positive feedback loop.
+            //   - true: apply a bounded slew toward `pts` so the clock cannot
+            //     diverge unbounded when used as the router master with no other
+            //     corrector (Doc/Clock-And-AV-Drift-Analysis.md §5.1 / item L).
+            if (absDelta >= SeekThreshold)
+            {
+                _lastPts = pts;
+                _swAtLastPts = swNow;
                 return;
-            if (delta < TimeSpan.Zero && -delta < seekThreshold)
+            }
+
+            if (!ApplySelfSlew)
                 return;
 
-            _lastPts = pts;
+            // Slew: cap |adjustment| ≤ SelfSlewMaxMsPerSec × secondsSinceLastUpdate.
+            // wallDelta is the wall-time elapsed since the previous successful
+            // anchor (NOT since the previous UpdateFromFrame call). Using the
+            // anchor's wall snapshot keeps the slew rate deterministic across
+            // dropped/duplicate frame submissions.
+            double wallSecs = (swNow - _swAtLastPts).TotalSeconds;
+            if (wallSecs <= 0)
+                return;
+
+            double maxAdjustMs = SelfSlewMaxMsPerSec * wallSecs;
+            double deltaMs = delta.TotalMilliseconds;
+            double clampedAdjustMs = deltaMs > 0
+                ? Math.Min(deltaMs,  maxAdjustMs)
+                : Math.Max(deltaMs, -maxAdjustMs);
+
+            // Re-anchor to predicted + clampedAdjust. Equivalent to advancing the
+            // anchor pair by (predicted + clampedAdjust, swNow), which preserves
+            // monotonic wall-time interpolation.
+            _lastPts = predicted + TimeSpan.FromMilliseconds(clampedAdjustMs);
             _swAtLastPts = swNow;
         }
     }

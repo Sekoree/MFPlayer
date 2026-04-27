@@ -26,13 +26,31 @@ namespace S.Media.Core.Routing;
 /// </list>
 ///
 /// <para>
-/// The struct is intentionally mutable; callers either hold it as a field
-/// (pull callback — single thread) or store a reference in a per-input
-/// dictionary (push tick — single push thread). No internal synchronization.
+/// The class is intentionally mutable; callers either hold it as a field
+/// (pull callback — single thread) or as a per-route field on
+/// <c>RouteEntry</c> (push tick — single push thread).  Reads/writes from
+/// the owning thread need no locking.
+/// </para>
+/// <para>
+/// <b>Cross-thread <see cref="Reset"/></b> — <see cref="AVRouter.SetClock"/> /
+/// <see cref="AVRouter.RegisterClock"/> /
+/// <see cref="AVRouter.UnregisterClock"/> reset every push tracker from the
+/// caller thread while the push thread is reading the same fields.
+/// <see cref="Reset"/> writes the three fields under <see cref="_resetLock"/>
+/// and the read-side accessors take the same lock around their multi-field
+/// reads, so the push thread can never observe a torn snapshot
+/// (<c>HasOrigin == true</c> with a half-cleared origin pair, or vice versa).
+/// Hold time is sub-microsecond and the lock is uncontended in steady state.
 /// </para>
 /// </summary>
 internal sealed class PtsDriftTracker
 {
+    // §reset-race fix: paired with reads in SeedIfNeeded / RelativePts /
+    // RelativeClock / IntegrateError / Snapshot so a concurrent Reset cannot
+    // tear the (HasOrigin, Pts, Clock) triple. Field is a `Lock` (System.Threading)
+    // for sub-microsecond uncontended fast paths on .NET 9+.
+    private readonly Lock _resetLock = new();
+
     public bool HasOrigin;
     public long PtsOriginTicks;
     public long ClockOriginTicks;
@@ -43,19 +61,28 @@ internal sealed class PtsDriftTracker
     /// </summary>
     public void SeedIfNeeded(long ptsTicks, long clockTicks)
     {
-        if (HasOrigin) return;
-        PtsOriginTicks   = ptsTicks;
-        ClockOriginTicks = clockTicks;
-        HasOrigin        = true;
+        lock (_resetLock)
+        {
+            if (HasOrigin) return;
+            PtsOriginTicks   = ptsTicks;
+            ClockOriginTicks = clockTicks;
+            HasOrigin        = true;
+        }
     }
 
     /// <summary>PTS of <paramref name="ptsTicks"/> expressed relative to the seeded origin, plus a per-input time offset.</summary>
-    public long RelativePts(long ptsTicks, long timeOffsetTicks) =>
-        ptsTicks - PtsOriginTicks + timeOffsetTicks;
+    public long RelativePts(long ptsTicks, long timeOffsetTicks)
+    {
+        lock (_resetLock)
+            return ptsTicks - PtsOriginTicks + timeOffsetTicks;
+    }
 
     /// <summary>Master-clock position expressed relative to the seeded origin.</summary>
-    public long RelativeClock(long clockTicks) =>
-        clockTicks - ClockOriginTicks;
+    public long RelativeClock(long clockTicks)
+    {
+        lock (_resetLock)
+            return clockTicks - ClockOriginTicks;
+    }
 
     /// <summary>
     /// Integrates the PTS↔clock error into <see cref="PtsOriginTicks"/> with a
@@ -67,24 +94,37 @@ internal sealed class PtsDriftTracker
         if (gain <= 0) return;
         long errorTicks    = relativePtsTicks - relativeClockTicks;
         long deadBandTicks = Math.Max(1, toleranceTicks / 2);
-        if      (errorTicks >  deadBandTicks) PtsOriginTicks += (long)((errorTicks - deadBandTicks) * gain);
-        else if (errorTicks < -deadBandTicks) PtsOriginTicks += (long)((errorTicks + deadBandTicks) * gain);
-        // else: within dead-band, do nothing.
+        long delta = 0;
+        if      (errorTicks >  deadBandTicks) delta = (long)((errorTicks - deadBandTicks) * gain);
+        else if (errorTicks < -deadBandTicks) delta = (long)((errorTicks + deadBandTicks) * gain);
+        if (delta == 0) return;
+        lock (_resetLock)
+            PtsOriginTicks += delta;
     }
 
     public void Reset()
     {
-        HasOrigin        = false;
-        PtsOriginTicks   = 0;
-        ClockOriginTicks = 0;
+        lock (_resetLock)
+        {
+            HasOrigin        = false;
+            PtsOriginTicks   = 0;
+            ClockOriginTicks = 0;
+        }
     }
 
     public PtsDriftTrackerSnapshot Snapshot()
     {
-        var pts = PtsOriginTicks;
-        var clk = ClockOriginTicks;
+        bool hasOrigin;
+        long pts;
+        long clk;
+        lock (_resetLock)
+        {
+            hasOrigin = HasOrigin;
+            pts       = PtsOriginTicks;
+            clk       = ClockOriginTicks;
+        }
         return new PtsDriftTrackerSnapshot(
-            HasOrigin,
+            hasOrigin,
             TimeSpan.FromTicks(pts),
             TimeSpan.FromTicks(clk),
             TimeSpan.FromTicks(pts - clk));

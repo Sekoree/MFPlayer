@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using S.Media.Core;
+using S.Media.Core.Clock;
 
 namespace S.Media.NDI;
 
@@ -7,7 +8,7 @@ namespace S.Media.NDI;
 /// <see cref="MediaClockBase"/> backed by NDI frame timestamps (100 ns ticks).
 /// Falls back gracefully to elapsed time between frames for the sub-tick position.
 /// </summary>
-public sealed class NDIClock : MediaClockBase
+public sealed class NDIClock : MediaClockBase, ISuppressesAutoAvDriftCorrection
 {
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIClock));
 

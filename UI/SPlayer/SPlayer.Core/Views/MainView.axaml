@@ -14,12 +14,16 @@
     </Design.DataContext>
     
     <TabControl TabStripPlacement="Left">
+        <TabItem Header="Player">
+            <views:PlayerView DataContext="{Binding Player}" />
+        </TabItem>
+
         <TabItem Header="Outputs">
             <views:OutputView DataContext="{Binding Outputs}" />
         </TabItem>
-        
-        <TabItem Header="Player">
-            <views:PlayerView DataContext="{Binding Player}" />
+
+        <TabItem Header="Settings">
+            <views:SettingsView DataContext="{Binding Settings}" />
         </TabItem>
     </TabControl>
     

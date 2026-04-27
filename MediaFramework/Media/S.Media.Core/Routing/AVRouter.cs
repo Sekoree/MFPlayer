@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
@@ -19,6 +21,8 @@ namespace S.Media.Core.Routing;
 public sealed class AVRouter : IAVRouter
 {
     private static readonly ILogger Log = MediaCoreLogging.GetLogger(nameof(AVRouter));
+    /// <summary>QPC ticks per millisecond; <see cref="Stopwatch.GetTimestamp()"/> is high-resolution (unlike <see cref="Environment.TickCount64"/> on many Linux setups).</summary>
+    private static readonly double QpcPerMillisecond = Stopwatch.Frequency / 1000.0;
 
     private readonly AVRouterOptions _options;
     private readonly Lock _lock = new();
@@ -146,6 +150,18 @@ public sealed class AVRouter : IAVRouter
         // Written only from the render thread — no synchronisation needed.
         public VideoFrame? PullPendingFrame;
         public VideoFrame? PullLastPresentedFrame;
+
+        // When the router clock is the same as ISenderMediaClockProvider.SenderMediaClock
+        // (e.g. NDIClock), PushVideoTick bypasses the PTS gate — the push thread must still
+        // not outrun real time vs stream PTS, or 30 fps is delivered in wall steps of 10 ms.
+        public long LastBypassPushedStreamPtsTicks = long.MinValue;
+        /// <summary>0 = no previous push. Monotonic <see cref="Stopwatch.GetTimestamp()"/> of last deliver — used to pace NDI/sender-clock bypass without 10–16ms tick quantization.</summary>
+        public long LastBypassPushTimestamp;
+        // Sender-clock bypass skips PushDrift "too early" gating, so a video input
+        // TimeOffset nudge (auto A/V drift) had no effect on wall-time video delivery
+        // while audio still used pts+offset.  A separate tracker with the same
+        // RelativePts/RelativeClock shape as the scheduled gate, but wall-time clock.
+        public readonly PtsDriftTracker BypassNudgeDrift = new();
 
         public RouteEntry(RouteId id, InputId inputId, EndpointId endpointId, InputKind kind)
         {
@@ -430,6 +446,12 @@ public sealed class AVRouter : IAVRouter
 
 
             Log.LogDebug("Input unregistered: {Id}", id);
+
+            foreach (var key in _streamHeadDriftStates.Keys.ToArray())
+            {
+                if (key.Audio == id || key.Video == id)
+                    _streamHeadDriftStates.TryRemove(key, out _);
+            }
         }
     }
 
@@ -753,6 +775,18 @@ public sealed class AVRouter : IAVRouter
         if (!_routes.TryGetValue(id, out var route))
             throw new MediaRoutingException($"Route {id} is not registered.");
         Volatile.Write(ref route.Enabled, enabled);
+
+        // Mirror the flag onto the fanout subscriber so the fan-out writer
+        // skips routes that are currently disabled instead of stalling on
+        // their bounded ring (the audio fanout `await Task.WhenAll(...)`
+        // path would otherwise wait on a subscriber nobody is draining,
+        // freezing every other audio route through the same input).
+        if (route.Kind == InputKind.Audio &&
+            _audioFanouts.TryGetValue(route.InputId, out var fanout))
+        {
+            fanout.SetSubscriberEnabled(id, enabled);
+        }
+
         if (Log.IsEnabled(LogLevel.Debug))
         {
             Log.LogDebug("SetRouteEnabled: route={Route} enabled={Enabled} kind={Kind} in→{Input} out→{Endpoint}",
@@ -878,13 +912,21 @@ public sealed class AVRouter : IAVRouter
     {
         foreach (var route in _routes.Values)
         {
-            // Only reset push-side drift. Pull-side drift (PullDrift) is driven
-            // by the endpoint's own clock (e.g. VideoPtsClock), which does NOT
-            // change when the router clock changes. Resetting PullDrift here
-            // would race the render thread (PtsDriftTracker has no internal
-            // synchronization) and is unnecessary because the pull clock domain
-            // is unaffected by the router clock switch.
+            // Push-side drift was seeded against the previous clock's domain.
+            // §reset-race fix: PtsDriftTracker.Reset is now thread-safe vs
+            // concurrent push-thread reads (its accessors take the same lock).
+            // Pull-side drift (PullDrift) is driven by the endpoint's own clock
+            // (e.g. VideoPtsClock), which does NOT change when the router clock
+            // changes, so we leave it alone.
             route.PushDrift.Reset();
+            // Issue #6 fix: BypassNudgeDrift was also seeded against the previous
+            // clock domain (its "clock" is wall-time, but its origin pair was
+            // captured during the prior session). Reset alongside PushDrift so
+            // the next frame re-seeds cleanly instead of caching/stalling
+            // until the discontinuity-reset path catches up.
+            route.BypassNudgeDrift.Reset();
+            route.LastBypassPushedStreamPtsTicks = long.MinValue;
+            route.LastBypassPushTimestamp = 0;
         }
 
         // Flush push-pending frames that were cached against the old clock's
@@ -1022,11 +1064,105 @@ public sealed class AVRouter : IAVRouter
         }
     }
 
+    /// <summary>
+    /// Settling threshold for <see cref="GetAvStreamHeadDrift"/> baselining: the
+    /// pipeline is considered "settled" once two consecutive samples agree on
+    /// <c>(aTicks − vTicks)</c> within ±50 ms. Until that point the baseline is
+    /// kept tentative and re-anchored to the latest sample so a 10–60 s startup
+    /// transient (audio output buffer pre-fill on PortAudio/CoreAudio is the
+    /// usual culprit) doesn't poison the long-running drift measurement.
+    /// </summary>
+    private static readonly long StreamHeadSettlingToleranceTicks = TimeSpan.FromMilliseconds(50).Ticks;
+
+    public TimeSpan GetAvStreamHeadDrift(InputId audioInput, InputId videoInput)
+    {
+        if (!_inputs.TryGetValue(audioInput, out var aEntry) || aEntry.Kind != InputKind.Audio)
+            throw new MediaRoutingException("Audio input not found.");
+        if (!_inputs.TryGetValue(videoInput, out var vEntry) || vEntry.Kind != InputKind.Video)
+            throw new MediaRoutingException("Video input not found.");
+
+        var vCh     = vEntry.VideoChannel!;
+        long aTicks = aEntry.AudioChannel!.Position.Ticks;
+        // Mid between last-frame PTS and next expected (see GetAvDrift) — matches
+        // audio's sample-interpolated Position better than raw last-frame PTS alone,
+        // which can sit hundreds of ms "behind" audio in absolute ticks even when
+        // both advance at 1:1 in media time.
+        long vLast  = vCh.Position.Ticks;
+        long vNext  = vCh.NextExpectedPts.Ticks;
+        long vTicks = (vLast + vNext) / 2;
+        long current = aTicks - vTicks;
+
+        var state = _streamHeadDriftStates.GetOrAdd((audioInput, videoInput), _ => new StreamHeadDriftState());
+        const double alpha = 0.4;
+        lock (state)
+        {
+            if (!state.BaselineValid)
+            {
+                // Defer locking in the baseline until two consecutive samples
+                // show that the audio↔video pipeline depth has stopped moving.
+                // Until then, every call returns 0 and we just track the latest
+                // sample — so the auto drift loop sees "no drift yet" while the
+                // pipeline is still settling, instead of treating the settling
+                // ramp as real drift.
+                if (!state.HasPriorSample)
+                {
+                    state.LastAudioMinusVideoTicks = current;
+                    state.HasPriorSample           = true;
+                    return TimeSpan.Zero;
+                }
+
+                long delta = Math.Abs(current - state.LastAudioMinusVideoTicks);
+                state.LastAudioMinusVideoTicks = current;
+                if (delta > StreamHeadSettlingToleranceTicks)
+                {
+                    // Still moving — postpone baseline.
+                    return TimeSpan.Zero;
+                }
+
+                // Two consecutive samples within tolerance — pipeline is settled.
+                state.BaselineAudioMinusVideoTicks = current;
+                state.BaselineValid                = true;
+                return TimeSpan.Zero;
+            }
+
+            long raw = current - state.BaselineAudioMinusVideoTicks;
+
+            if (!state.EmaValid)
+            {
+                state.EmaTicks  = raw;
+                state.EmaValid  = true;
+            }
+            else
+                state.EmaTicks = (long)(state.EmaTicks * (1 - alpha) + raw * alpha);
+
+            return TimeSpan.FromTicks(state.EmaTicks);
+        }
+    }
+
     // §6.9 — per-pair EMA state for GetAvDrift. Each (audioInput, videoInput) pair
     // gets its own filter so callers polling different pairings in the same graph
     // (e.g. two NDI sources with independent A/V sync) don't contaminate each other.
     private sealed class DriftEmaState { public long EmaTicks; public bool Valid; }
     private readonly ConcurrentDictionary<(InputId Audio, InputId Video), DriftEmaState> _driftEmaStates = new();
+
+    /// <summary>
+    /// Two consecutive samples within <see cref="StreamHeadSettlingToleranceTicks"/>
+    /// seed the baseline; thereafter we EMA Δ(a−v) from that baseline. The
+    /// settling window protects against startup pipeline transients (audio
+    /// output buffer pre-fill, decoder warm-up) that would otherwise be locked
+    /// into the baseline as a false zero point.
+    /// </summary>
+    private sealed class StreamHeadDriftState
+    {
+        public long LastAudioMinusVideoTicks;
+        public bool HasPriorSample;
+        public long BaselineAudioMinusVideoTicks;
+        public bool BaselineValid;
+        public long EmaTicks;
+        public bool EmaValid;
+    }
+
+    private readonly ConcurrentDictionary<(InputId Audio, InputId Video), StreamHeadDriftState> _streamHeadDriftStates = new();
 
     public float GetInputPeakLevel(InputId id)
     {
@@ -1254,7 +1390,7 @@ public sealed class AVRouter : IAVRouter
                     {
                         if (r.Kind != InputKind.Audio || r.InputId != inp.Id) continue;
                         if (r.FanoutChannel is null)
-                            r.FanoutChannel = fanout.AddSubscriber(r.Id);
+                            r.FanoutChannel = fanout.AddSubscriber(r.Id, Volatile.Read(ref r.Enabled));
                     }
                 }
             }
@@ -1895,10 +2031,19 @@ public sealed class AVRouter : IAVRouter
         var routes = _videoRouteSnapshot;
         if (routes.Length == 0) return;
 
-        var clockPos = Clock.Position;
         long earlyToleranceTicks = _options.VideoPtsEarlyTolerance.Ticks;
         long discontinuityResetTicks = _options.VideoPtsDiscontinuityResetThreshold.Ticks;
         int maxCatchUp = _options.VideoMaxCatchUpFramesPerTick;
+
+        // Issue #I + #K fix: hoist Clock.Position and EffectiveVideoTickCadence
+        // to once-per-tick instead of once-per-route. Multiple routes against the
+        // same master clock no longer pay N×lock acquisitions per tick, and the
+        // sender-clock bypass branch reads a stable pushMs that cannot vary
+        // mid-tick. Per-route timing accuracy difference inside a single tick
+        // is well below the dead-band tolerance.
+        var clockPos = Clock.Position;
+        double pushMs = EffectiveVideoTickCadence.TotalMilliseconds;
+        double pushHalfMs = pushMs * 0.5;
 
         foreach (var route in routes)
         {
@@ -1924,7 +2069,25 @@ public sealed class AVRouter : IAVRouter
             bool didCatchUp = false;
 
             // 3) PTS gate with smooth drift correction (unless live mode).
-            if (!route.LiveMode)
+            // If the router master is the same object as the sink's sender clock
+            // (e.g. NDIClock on NDIAVEndpoint), scheduled gating fights the clock:
+            // NDIClock is advanced in ReceiveFrame after the gate runs, and
+            // PtsDriftTracker.IntegrateError then walks the origin each tick — the
+            // route may have been created before the user selected that clock
+            // (Open → then SetClock), so route.LiveMode alone is not enough.
+            bool bypassScheduledGate = route.LiveMode
+                || (ep.Video is ISenderMediaClockProvider sc
+                    && ReferenceEquals(Clock, sc.SenderMediaClock));
+
+            // NDIClock=Router: bypass skips the normal PTS gate; pace by wall time vs
+            // stream PTS step so 24/30 fps is not shoved in ~10 ms steps (~3×+ too fast).
+            // LiveMode bypass is left unthrottled (low-latency / camera-style paths).
+            bool senderClockBypassPace = bypassScheduledGate
+                && !route.LiveMode
+                && ep.Video is ISenderMediaClockProvider sPace2
+                && ReferenceEquals(Clock, sPace2.SenderMediaClock);
+
+            if (!bypassScheduledGate)
             {
                 // §6.2 / R14: use route.PushDrift (per-route on RouteEntry) instead of
                 // a ConcurrentDictionary lookup — O(1) field access, no GC pressure.
@@ -2004,6 +2167,100 @@ public sealed class AVRouter : IAVRouter
                         earlyToleranceTicks,
                         _options.VideoPushDriftCorrectionGain);
             }
+            else if (senderClockBypassPace
+                     && route.LastBypassPushedStreamPtsTicks != long.MinValue
+                     && route.LastBypassPushTimestamp != 0
+                     && route.Kind == InputKind.Video)
+            {
+                long dPtsTicks = candidate.Pts.Ticks - route.LastBypassPushedStreamPtsTicks;
+                // Forward-discontinuity re-anchor: a stream PTS jump beyond the
+                // discontinuity threshold (seek / live restart / large edit) used to
+                // make the pace test wait wall(dPtsTicks) seconds before delivering.
+                // Treat it like the existing backward-jump path: drop the wall
+                // anchor so the next tick re-seeds and ships the new frame
+                // immediately.
+                bool forwardDiscontinuity =
+                    discontinuityResetTicks > 0 && dPtsTicks > discontinuityResetTicks;
+                if (dPtsTicks < 0 || forwardDiscontinuity)
+                {
+                    route.LastBypassPushedStreamPtsTicks = long.MinValue;
+                    route.LastBypassPushTimestamp = 0;
+                }
+                else
+                {
+                    // §3.A/B fix: long-term ideal-wall reference. LastBypassPushTimestamp
+                    // now stores the IDEAL wall-time of the previous deliver (advanced
+                    // by exactly dPts every frame in the post-deliver block below),
+                    // not the actual deliver wall-time. That means "elapsed since last
+                    // ideal" stays a pure measure of how far past the previous ideal
+                    // deadline we are — any "deliver up to half a tick early" slack on
+                    // the previous frame does not shift the next deadline forward, so
+                    // pace errors cannot compound across frames.
+                    long nowQpc = Stopwatch.GetTimestamp();
+                    double elapsedMs = (nowQpc - route.LastBypassPushTimestamp) / QpcPerMillisecond;
+                    if (dPtsTicks == 0)
+                    {
+                        // Repeat-PTS throttle: keep duplicates one push-tick apart so a
+                        // burst of same-timestamp frames does not swamp the sink.  The
+                        // gap is measured against the ideal-wall reference, so it can
+                        // be slightly tighter than a strict wall-time gap by `pushHalfMs`.
+                        if (elapsedMs < pushMs)
+                        {
+                            if (_pushVideoPending.TryRemove(route.Id, out var st))
+                                st.MemoryOwner?.Dispose();
+                            _pushVideoPending[route.Id] = candidate;
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        // Symmetric pace gate (issue #1 fix A): wait until the
+                        // wall-time elapsed since the previous *ideal* deadline reaches
+                        // `dMedia − pushMs/2`, so the per-frame error is bounded
+                        // symmetrically in [−pushHalfMs, +tickJitter] with zero mean.
+                        // Combined with the post-deliver "advance by dPts" update
+                        // (issue #1 fix B, below) this prevents the systematic
+                        // forward bias that produced ~1 s of "video ahead" over
+                        // 90 s with the previous next-tick-overshoots branch.
+                        double dMediaMs = dPtsTicks / 10_000.0; // 100ns → ms
+                        if (elapsedMs < dMediaMs - pushHalfMs)
+                        {
+                            if (_pushVideoPending.TryRemove(route.Id, out var st))
+                                st.MemoryOwner?.Dispose();
+                            _pushVideoPending[route.Id] = candidate;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Input TimeOffset (e.g. auto A/V drift nudge) is in routeOffset in the
+            // scheduled branch above, which delays video vs clock.  Sender-clock
+            // bypass does not use routeOffset in its PTS gate, so a non-zero nudge
+            // had no effect on *when* frames reach a push sink: video was delivered
+            // at stream dMedia pace in wall time while audio followed pts+offset — the
+            // same A/V error the nudge is meant to fix.  Replicate the "too early"
+            // test with a monotonic wall tick clock (100 ns); Router.Clock is the
+            // NDI self-fed clock, so it cannot serve this check without fighting
+            // ReceiveFrame (see sender-clock bypass note above).
+            if (senderClockBypassPace
+                && route.Kind == InputKind.Video
+                && (inp.TimeOffset.Ticks + route.TimeOffset.Ticks) != 0)
+            {
+                long routeNudgeTicks = inp.TimeOffset.Ticks + route.TimeOffset.Ticks;
+                long wallTicks = (long)(Stopwatch.GetTimestamp() * (10_000_000.0 / Stopwatch.Frequency));
+                var bnd = route.BypassNudgeDrift;
+                bnd.SeedIfNeeded(candidate.Pts.Ticks, wallTicks);
+                long relP = bnd.RelativePts(candidate.Pts.Ticks, routeNudgeTicks);
+                long relC = bnd.RelativeClock(wallTicks);
+                if (relP > relC + earlyToleranceTicks)
+                {
+                    if (_pushVideoPending.TryRemove(route.Id, out var stale2))
+                        stale2.MemoryOwner?.Dispose();
+                    _pushVideoPending[route.Id] = candidate;
+                    continue;
+                }
+            }
 
             // §3.11 / B15+B16+R18+CH7 — forward through the ref-counted handle
             // overload. Endpoints that need the data past the call call
@@ -2013,6 +2270,36 @@ public sealed class AVRouter : IAVRouter
             var handle = new VideoFrameHandle(in candidate);
             ep.Video.ReceiveFrame(in handle);
             handle.Release();
+
+            if (senderClockBypassPace && route.Kind == InputKind.Video)
+            {
+                long deliveredPts = candidate.Pts.Ticks;
+                long prevPts = route.LastBypassPushedStreamPtsTicks;
+                if (prevPts == long.MinValue
+                    || route.LastBypassPushTimestamp == 0
+                    || deliveredPts < prevPts)
+                {
+                    // First push of this session, post-reset, or backward seek:
+                    // anchor the ideal-wall reference to the actual current wall.
+                    route.LastBypassPushTimestamp = Stopwatch.GetTimestamp();
+                }
+                else
+                {
+                    // Issue #1 fix B: advance the ideal-wall reference by exactly
+                    // the stream delta in QPC ticks rather than slamming it to the
+                    // actual current wall.  Decoupling the next deadline from the
+                    // jitter of THIS delivery is what stops the systematic
+                    // "deliver slightly early" bias from compounding across frames
+                    // (Doc/Clock-And-AV-Drift-Analysis.md §3 / §8 #B).  The result
+                    // is that |actualDeliver − idealDeliver| stays bounded at
+                    // ±pushMs/2 forever, instead of growing linearly with N.
+                    long dPtsTicksDelivered = deliveredPts - prevPts;
+                    long dMediaQpc = (long)(dPtsTicksDelivered
+                        * (Stopwatch.Frequency / (double)TimeSpan.TicksPerSecond));
+                    route.LastBypassPushTimestamp += dMediaQpc;
+                }
+                route.LastBypassPushedStreamPtsTicks = deliveredPts;
+            }
         }
     }
 
@@ -2051,14 +2338,30 @@ public sealed class AVRouter : IAVRouter
                 IAudioChannel channel = route.FanoutChannel ?? inp.AudioChannel!;
                 var srcFormat = channel.SourceFormat;
 
-                // Need scratch for per-channel pull
-                int srcSamples = frameCount * srcFormat.Channels;
+                // Pull size: when resampling, ask the resampler how many input
+                // frames it needs to produce `frameCount` output frames (which
+                // accounts for any internally-buffered fractional phase). This
+                // mirrors the push-tick path above and is critical: passing
+                // `frameCount` directly when srcRate ≠ dstRate would over-pull
+                // input every callback (e.g. 1024 source frames @ 44.1 kHz when
+                // only ~941 are needed to make 1024 frames @ 48 kHz), causing
+                //   1. the resampler's pending buffer to grow unboundedly →
+                //      RT-thread allocations + audible crackling/stutter, and
+                //   2. `aChannel.Position` to advance at srcRate/dstRate × wall
+                //      time → false A/V drift readings even with everything
+                //      else perfectly synced.
+                int inputFrames = route.Resampler is not null
+                    ? route.Resampler.GetRequiredInputFrames(frameCount, srcFormat, endpointFormat.SampleRate)
+                    : frameCount;
+
+                // Need scratch for per-channel pull (sized to actual input frames).
+                int srcSamples = inputFrames * srcFormat.Channels;
                 var scratch = GetOrGrowScratch(_router._scratchBuffers,
                     _endpoint.Id, srcSamples);
                 var srcSpan = scratch.AsSpan(0, srcSamples);
                 srcSpan.Clear();
 
-                int filled = channel.FillBuffer(srcSpan, frameCount);
+                int filled = channel.FillBuffer(srcSpan, inputFrames);
                 if (filled == 0) continue;
 
                 var filledSpan = srcSpan[..(filled * srcFormat.Channels)];
@@ -2141,10 +2444,33 @@ public sealed class AVRouter : IAVRouter
     /// </summary>
     private sealed class AudioFanout : IDisposable
     {
+        /// <summary>
+        /// Per-route subscriber slot.  <see cref="Enabled"/> mirrors
+        /// <see cref="RouteEntry.Enabled"/> so the fanout writer can skip
+        /// subscribers whose route is currently disabled. Without this, the
+        /// fanout's <c>WhenAll</c>-style write would back-pressure on a
+        /// disabled route's bounded ring (nobody is draining it), stalling
+        /// the source pull and freezing playback. Symptom this guards
+        /// against: adding a video-only NDI sink (or otherwise disabling an
+        /// audio route via <see cref="SetAveStreamSelection"/>) hangs every
+        /// other audio route through the same input.
+        /// </summary>
+        private sealed class Subscriber
+        {
+            public readonly AudioChannel Channel;
+            public          bool         Enabled;
+            public Subscriber(AudioChannel channel, bool enabled)
+            {
+                Channel = channel;
+                Enabled = enabled;
+            }
+        }
+
         private readonly IAudioChannel _source;
-        // One AudioChannel per route that shares this input; written by the background
-        // task, read by the route's RT callback or push tick (each has its own subscriber).
-        private readonly ConcurrentDictionary<RouteId, AudioChannel> _subscribers = new();
+        // One subscriber slot per route that shares this input.  The slot's
+        // AudioChannel is written by the background task and read by the
+        // route's RT callback or push tick (each has its own subscriber).
+        private readonly ConcurrentDictionary<RouteId, Subscriber> _subscribers = new();
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _task;
 
@@ -2154,12 +2480,13 @@ public sealed class AVRouter : IAVRouter
             _task = Task.Run(RunAsync, _cts.Token);
         }
 
-        internal AudioChannel AddSubscriber(RouteId routeId)
+        internal AudioChannel AddSubscriber(RouteId routeId, bool enabled)
         {
             // bufferDepth 4 ≈ 43 ms at 48 kHz / 512 frames — enough headroom for an RT
             // callback period while keeping post-seek stale-data lag short.
-            var ch = new AudioChannel(_source.SourceFormat, bufferDepth: 4);
-            _subscribers[routeId] = ch;
+            var ch  = new AudioChannel(_source.SourceFormat, bufferDepth: 4);
+            var sub = new Subscriber(ch, enabled);
+            _subscribers[routeId] = sub;
             return ch;
         }
 
@@ -2171,6 +2498,17 @@ public sealed class AVRouter : IAVRouter
             _subscribers.TryRemove(routeId, out _);
         }
 
+        /// <summary>
+        /// Mirrors a route's <c>Enabled</c> flag onto its fanout subscriber
+        /// so the fanout writer skips disabled routes instead of waiting on
+        /// their (un-drained) bounded ring.
+        /// </summary>
+        internal void SetSubscriberEnabled(RouteId routeId, bool enabled)
+        {
+            if (_subscribers.TryGetValue(routeId, out var sub))
+                Volatile.Write(ref sub.Enabled, enabled);
+        }
+
         internal bool IsEmpty => _subscribers.IsEmpty;
 
         private async Task RunAsync()
@@ -2178,6 +2516,13 @@ public sealed class AVRouter : IAVRouter
             int channels = _source.SourceFormat.Channels;
             const int FramesPerRead = 512;
             var buf = new float[FramesPerRead * channels];
+
+            // Pre-allocated working lists; pulled from the concurrent dict each
+            // tick to avoid per-iteration allocations on the hot path.  A
+            // disabled subscriber gets a non-blocking TryWrite so a re-enable
+            // mid-stream doesn't observe a many-second backlog of stale data.
+            var enabledSubs  = new List<AudioChannel>(4);
+            var disabledSubs = new List<AudioChannel>(4);
             try
             {
                 while (!_cts.IsCancellationRequested)
@@ -2186,22 +2531,49 @@ public sealed class AVRouter : IAVRouter
                     if (filled > 0)
                     {
                         var data = buf.AsMemory(0, filled * channels);
-                        var subs = new List<AudioChannel>(_subscribers.Values);
-                        if (subs.Count == 1)
+
+                        enabledSubs.Clear();
+                        disabledSubs.Clear();
+                        foreach (var kv in _subscribers)
                         {
-                            await subs[0].WriteAsync(data, _cts.Token).ConfigureAwait(false);
+                            var s = kv.Value;
+                            if (Volatile.Read(ref s.Enabled)) enabledSubs.Add(s.Channel);
+                            else                              disabledSubs.Add(s.Channel);
                         }
-                        else if (subs.Count > 1)
+
+                        if (enabledSubs.Count == 1)
+                        {
+                            await enabledSubs[0].WriteAsync(data, _cts.Token).ConfigureAwait(false);
+                        }
+                        else if (enabledSubs.Count > 1)
                         {
                             // Write concurrently so a slow subscriber (e.g. NDI audio drain
                             // at push-tick cadence) does not head-of-line block faster ones
                             // (e.g. PortAudio RT callback). Backpressure still applies: we
-                            // wait for ALL writes before reading the next chunk.
-                            var tasks = new Task[subs.Count];
-                            for (int i = 0; i < subs.Count; i++)
-                                tasks[i] = subs[i].WriteAsync(data, _cts.Token).AsTask();
+                            // wait for ALL enabled writes before reading the next chunk.
+                            var tasks = new Task[enabledSubs.Count];
+                            for (int i = 0; i < enabledSubs.Count; i++)
+                                tasks[i] = enabledSubs[i].WriteAsync(data, _cts.Token).AsTask();
                             await Task.WhenAll(tasks).ConfigureAwait(false);
                         }
+                        else
+                        {
+                            // No enabled subscribers — pace ourselves so we
+                            // don't drain the source faster than wall time.
+                            // The source ring will fill up and FillBuffer
+                            // will return 0 once it's empty, but that's a
+                            // momentary state; sleeping a tick avoids
+                            // burning a CPU core when an entire input has
+                            // been temporarily muted.
+                            await Task.Delay(1, _cts.Token).ConfigureAwait(false);
+                        }
+
+                        // Disabled subscribers get a non-blocking write that
+                        // drops on full. They aren't being drained, so a
+                        // blocking write would stall the whole fanout (and
+                        // therefore every other route through this input).
+                        for (int i = 0; i < disabledSubs.Count; i++)
+                            disabledSubs[i].TryWrite(data.Span);
                     }
                     else
                     {

@@ -55,6 +55,8 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     };
 
     private readonly OutputViewModel _outputs;
+    private readonly SettingsViewModel? _settings;
+    private readonly Services.AppSettingsService? _settingsStore;
     private readonly MediaPlayer _player = new();
     private readonly List<IMediaEndpoint> _attachedEndpoints = new();
     private readonly DispatcherTimer _positionTimer;
@@ -62,6 +64,8 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string, AveStreamSelection> _aveToPlayerMemory = new();
     private readonly Dictionary<string, IMediaClock> _clockChoiceByKey = new(StringComparer.Ordinal);
     private bool _suppressClockChoiceChanged;
+    private bool _suppressSelectionPersistence;
+    private bool _hasAppliedDefaultsThisLaunch;
 
     private bool _isScrubbing;
     private bool _eventsHooked;
@@ -71,6 +75,18 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private PlaylistDocumentViewModel? _selectedPlaylist;
+
+    partial void OnSelectedPlaylistChanged(PlaylistDocumentViewModel? oldValue, PlaylistDocumentViewModel? newValue)
+    {
+        // Routing is locked while a session is active; avoid flipping selections
+        // mid-track. The next stop/play will pick up the new playlist's overrides.
+        if (_player.State is PlaybackState.Playing or PlaybackState.Paused or PlaybackState.Opening)
+            return;
+        ApplyOutputSelectionForCurrentPlaylist(forceFromDefaults: false);
+        // Drop the bypass-clock state if the previous playlist forced a specific
+        // clock — RefreshClockChoices reconciles after the new selection is applied.
+        RefreshClockChoices();
+    }
 
     [ObservableProperty]
     private string _statusMessage = "";
@@ -130,9 +146,36 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
     public string StateLabel => _player.State.ToString();
 
-    public PlayerViewModel(OutputViewModel outputs)
+    /// <summary>Convenience constructor for design-time / unit-test scenarios with no settings store.</summary>
+    public PlayerViewModel(OutputViewModel outputs) : this(outputs, settings: null, settingsStore: null) { }
+
+    public PlayerViewModel(OutputViewModel outputs, SettingsViewModel? settings, Services.AppSettingsService? settingsStore)
     {
         _outputs = outputs;
+        _settings = settings;
+        _settingsStore = settingsStore;
+
+        var driftOptions = settings is not null
+            ? settings.ToAppSettings().AvDrift.ToOptions()
+            : new AvDriftCorrectionOptions
+            {
+                InitialDelay = TimeSpan.FromSeconds(10),
+                Interval = TimeSpan.FromSeconds(5),
+                MinDriftMs = 8,
+                IgnoreOutlierDriftMs = 250,
+                OutlierConsecutiveSamples = 3,
+                CorrectionGain = 0.15,
+                MaxStepMs = 5,
+                MaxAbsOffsetMs = 250
+            };
+        // Gentle automatic A/V trim on long-form playback; MediaPlayer re-reads on next PlayAsync.
+        // Doc/Clock-And-AV-Drift-Analysis.md §8 #D: smaller, more frequent steps so a
+        // single nudge stays well under one push-tick of audio (≤ 8 ms) and the loop
+        // can chase the systemic forward bias without producing audible jumps.
+        _player.ConfigureAutoAvDriftCorrection(driftOptions);
+        SLog.LogDebug("PlayerViewModel: ConfigureAutoAvDriftCorrection enabled (initial={Init}s, interval={Int}s, maxStep={Max}ms).",
+            driftOptions.InitialDelay.TotalSeconds, driftOptions.Interval.TotalSeconds, driftOptions.MaxStepMs);
+
         _outputs.AudioEndpointModels.CollectionChanged += OnOutputPoolChanged;
         _outputs.VideoEndpointModels.CollectionChanged += OnOutputPoolChanged;
         _outputs.NdiEndpointModels.CollectionChanged += OnOutputPoolChanged;
@@ -140,12 +183,37 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         _positionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _positionTimer.Tick += OnPositionTick;
 
+        if (settings is not null)
+        {
+            // Hydrate transport-side defaults from settings.
+            _autoAdvance = settings.AutoAdvance;
+            _loop = settings.Loop;
+            _volumePercent = settings.VolumePercent;
+            _player.IsLooping = _loop;
+            _player.Volume = (float)Math.Clamp(_volumePercent / 100.0, 0, 2);
+
+            // React to settings changes after the user adjusts them.
+            settings.SettingsApplied += OnSettingsApplied;
+        }
+
         RebuildOutputRows();
         AddEmptyPlaylistTab("Playlist 1");
         SelectedPlaylist = Playlists[0];
 
         HookPlayerEvents();
         SyncTransportFlags();
+    }
+
+    private void OnSettingsApplied(object? sender, EventArgs e)
+    {
+        if (_settings is null) return;
+        // Refresh drift options live so the next corrector cycle picks them up.
+        _player.ConfigureAutoAvDriftCorrection(_settings.ToAppSettings().AvDrift.ToOptions());
+        // Re-evaluate which outputs should be ticked given the (possibly changed)
+        // default-output set. Only do this when no playback session is active so
+        // routes do not flap mid-track.
+        if (_player.State is PlaybackState.Idle or PlaybackState.Stopped)
+            ApplyOutputSelectionForCurrentPlaylist(forceFromDefaults: false);
     }
 
     private void EnsureFfmpeg()
@@ -166,7 +234,13 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         }
         if (e.PropertyName is nameof(PlayerOutputRowViewModel.IsSelected)
             or nameof(PlayerOutputRowViewModel.IsRowAvailable))
+        {
+            // Persist the user's selection back to the active playlist's overrides
+            // (when playlist overrides are in use) so reopening the app or switching
+            // tabs reproduces the routing they just set up.
+            PersistSelectionToActivePlaylistIfOverriding();
             RefreshClockChoices();
+        }
     }
 
     private void OnOutputPoolChanged(object? s, NotifyCollectionChangedEventArgs e) => RebuildOutputRows();
@@ -220,8 +294,103 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         foreach (var v in _outputs.VideoEndpointModels) AddVideo(v);
         foreach (var n in _outputs.NdiEndpointModels) AddNdi(n);
 
+        // Apply the active playlist's override set (or fall back to defaults from
+        // SettingsViewModel) to the freshly built row list. This is the entry-point
+        // for "auto-tick the outputs the user told us they care about" — both at
+        // first launch and after the user adds another endpoint on the Outputs tab.
+        ApplyOutputSelectionForCurrentPlaylist(forceFromDefaults: !_hasAppliedDefaultsThisLaunch);
+        _hasAppliedDefaultsThisLaunch = true;
+
         UpdateRoutingLockUi();
         RefreshClockChoices();
+    }
+
+    /// <summary>
+    /// Sets <c>IsSelected</c> on each output row to match either:
+    /// <list type="bullet">
+    ///   <item><description>the active playlist's <c>OutputOverrideKeys</c> when non-empty;</description></item>
+    ///   <item><description>otherwise the global default-output set from settings;</description></item>
+    ///   <item><description>otherwise the row's prior in-memory selection (no change).</description></item>
+    /// </list>
+    /// Suppresses persistence callbacks while toggling.
+    /// </summary>
+    private void ApplyOutputSelectionForCurrentPlaylist(bool forceFromDefaults)
+    {
+        if (OutputRows.Count == 0) return;
+
+        HashSet<string>? selectionKeys = null;
+        Dictionary<string, int>? ndiAveByKey = null;
+        bool fromOverrides = false;
+
+        var playlist = SelectedPlaylist;
+        if (playlist?.OutputOverrideKeys is { Count: > 0 } overrides)
+        {
+            selectionKeys = new HashSet<string>(overrides, StringComparer.Ordinal);
+            fromOverrides = true;
+        }
+        else if (forceFromDefaults && _settings is not null)
+        {
+            var s = _settings.ToAppSettings();
+            if (s.DefaultOutputs.Count > 0)
+            {
+                selectionKeys = new HashSet<string>(s.DefaultOutputs, StringComparer.Ordinal);
+                ndiAveByKey = s.NdiAveDefaults;
+            }
+        }
+
+        if (selectionKeys is null) return; // honour existing in-memory selection.
+
+        _suppressSelectionPersistence = true;
+        try
+        {
+            foreach (var row in OutputRows)
+            {
+                bool wantSelected = selectionKeys.Contains(SettingsRowKey(row));
+                if (row.IsSelected != wantSelected)
+                    row.IsSelected = wantSelected;
+                if (row.Kind == PlayerOutputKind.Ndi
+                    && ndiAveByKey is not null
+                    && ndiAveByKey.TryGetValue(SettingsRowKey(row), out var aveIdx)
+                    && row.NdiAveToPlayerIndex != aveIdx)
+                {
+                    row.NdiAveToPlayerIndex = aveIdx;
+                }
+            }
+        }
+        finally
+        {
+            _suppressSelectionPersistence = false;
+        }
+
+        SLog.LogDebug("Applied output selection: source={Source}, count={Count}.",
+            fromOverrides ? "playlist-override" : "default", selectionKeys.Count);
+    }
+
+    /// <summary>
+    /// Maps a <see cref="PlayerOutputRowViewModel"/> to the canonical settings
+    /// row key (<c>{Kind}:{Name}</c>). The row's own <c>RowKey</c> happens to use
+    /// the same shape (<see cref="RowKey"/>), so this is straight pass-through —
+    /// kept as a helper so the contract is explicit.
+    /// </summary>
+    private static string SettingsRowKey(PlayerOutputRowViewModel row) => row.RowKey;
+
+    /// <summary>
+    /// Saves the current row selection to the active playlist's override set
+    /// (only when overrides are already enabled for that playlist, or when
+    /// <see cref="SettingsViewModel.RememberPlaylistOverrides"/> says so).
+    /// </summary>
+    private void PersistSelectionToActivePlaylistIfOverriding()
+    {
+        if (_suppressSelectionPersistence) return;
+        var playlist = SelectedPlaylist;
+        if (playlist is null) return;
+        // Only update an OVERRIDE that already exists; don't promote a default
+        // selection to a per-playlist override unless the user explicitly enabled
+        // overrides for this playlist via UseOutputOverridesCommand.
+        if (!playlist.HasOutputOverrides) return;
+
+        var keys = OutputRows.Where(r => r.IsSelected).Select(r => r.RowKey).ToList();
+        playlist.SetOutputOverrides(keys);
     }
 
     private static string RowKey(PlayerOutputKind kind, string name) => $"{kind}:{name}";
@@ -454,7 +623,14 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         try
         {
             StatusMessage = Path.GetFileName(path);
+            // Apply the selected router clock *before* OpenAsync so the transport never
+            // briefly switches to auto/stopwatch (ResetAllDriftTrackers + push flush) when
+            // RefreshClockChoices reconciles a new media session. That intermediate master
+            // is visible in logs and can leave NDI video queued then burst to catch up.
+            RefreshClockChoices();
+            ApplyClockSelectionToRouter();
             await _player.OpenAsync(path, GetDecoderOptions());
+            // Re-evaluate with decoder metadata (e.g. VideoPts clock) after the file is open.
             RefreshClockChoices();
             ApplyClockSelectionToRouter();
             ApplyAveToAllNdiRows();
@@ -599,11 +775,15 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
             {
                 TryResolveAutoClock(out var autoClock);
                 _player.Router.SetClock(autoClock);
+                SLog.LogInformation(
+                    "A/V: router clock = Auto → {Type} (MediaPlayer will sync pull video to Router.Clock).",
+                    autoClock.GetType().Name);
                 return;
             }
             if (key == "internal")
             {
                 _player.Router.SetClock(_player.Router.InternalClock);
+                SLog.LogInformation("A/V: router clock = Internal stopwatch (pull video will follow same).");
                 return;
             }
 
@@ -613,20 +793,45 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
                 if (chosenClock is VideoPtsClock && _player.VideoChannel is null)
                 {
                     _player.Router.SetClock(null);
+                    SLog.LogInformation("A/V: VideoPts clock cleared — no video track; reverting to Auto clock choice.");
                     SelectedClockChoice = ClockChoices.FirstOrDefault(c => c.Key == "auto");
                     return;
                 }
 
                 _player.Router.SetClock(chosenClock);
+                SLog.LogInformation(
+                    "A/V: router clock = manual {Type} (pull video presentation should match; check 'A/V:' logs).",
+                    chosenClock.GetType().Name);
                 return;
             }
 
             _player.Router.SetClock(null);
+            SLog.LogInformation("A/V: router clock override cleared; registry/defaults apply.");
             SelectedClockChoice = ClockChoices.FirstOrDefault(c => c.Key == "auto");
         }
         catch (Exception ex)
         {
             SLog.LogWarning(ex, "Failed to apply selected clock '{ClockKey}'; keeping current router clock.", SelectedClockChoice?.Key);
+        }
+    }
+
+    private void TryRecoverMissingManualClockChoice(string previousKey)
+    {
+        if (ClockChoices.Any(c => c.Key == previousKey)) return;
+        if (string.IsNullOrEmpty(previousKey) || previousKey is "auto" or "internal") return;
+
+        if (!previousKey.StartsWith("ndi:", StringComparison.Ordinal)) return;
+
+        string rowKey = previousKey["ndi:".Length..];
+        foreach (var row in OutputRows)
+        {
+            if (row.RowKey != rowKey || row.Kind != PlayerOutputKind.Ndi) continue;
+            if (!row.TryGetNdiAveEndpointUnconditionally(out var ndiAv) || ndiAv is null) continue;
+
+            ClockChoices.Add(new ClockChoiceItem(previousKey, $"{row.Name} (NDIClock)"));
+            _clockChoiceByKey[previousKey] = ndiAv.Clock;
+            SLog.LogDebug("RefreshClockChoices: restored missing clock choice {Key} (NDI row briefly unavailable for dropdown).", previousKey);
+            return;
         }
     }
 
@@ -641,36 +846,62 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
         foreach (var row in OutputRows)
         {
-            if (!row.TryGetSelectedEndpoint(out var ep)) continue;
+            if (!row.IsSelected) continue;
 
-            if (ep is IClockCapableEndpoint clocked)
+            if (row.TryGetSelectedEndpoint(out var ep))
             {
-                try
+                if (ep is IClockCapableEndpoint clocked)
                 {
-                    string key = $"endpoint:{row.RowKey}";
-                    string label = $"{row.Name} ({clocked.Clock.GetType().Name})";
-                    ClockChoices.Add(new ClockChoiceItem(key, label));
-                    _clockChoiceByKey[key] = clocked.Clock;
-                }
-                catch (Exception ex)
-                {
-                    SLog.LogDebug(ex, "RefreshClockChoices: endpoint clock unavailable for '{Name}'.", row.Name);
+                    try
+                    {
+                        string key = $"endpoint:{row.RowKey}";
+                        string label = $"{row.Name} ({clocked.Clock.GetType().Name})";
+                        ClockChoices.Add(new ClockChoiceItem(key, label));
+                        _clockChoiceByKey[key] = clocked.Clock;
+                    }
+                    catch (Exception ex)
+                    {
+                        SLog.LogDebug(ex, "RefreshClockChoices: endpoint clock unavailable for '{Name}'.", row.Name);
+                    }
                 }
             }
 
-            // NDI sender endpoints are not auto-registered as clock-capable, but they do
-            // expose a sender-side NDIClock that can be selected explicitly.
-            if (ep is NDIAVEndpoint ndi)
+            // NDI: register the sender NDIClock whenever an AveEndpoint exists, even
+            // if IsRowAvailable is false (e.g. model Open flips). Gating the ndi:* entry
+            // on TryGetSelectedEndpoint only caused the dropdown to lose ndi: during
+            // Reconcile/Refresh, fall back to Auto, and SetClock(Stopwatch) — gating
+            // video to wall time while the wire still uses stream PTS.
+            if (row is { Kind: PlayerOutputKind.Ndi }
+                && row.TryGetNdiAveEndpointUnconditionally(out var ndiAve) && ndiAve is not null)
             {
                 string key = $"ndi:{row.RowKey}";
-                string label = $"{row.Name} (NDIClock)";
-                ClockChoices.Add(new ClockChoiceItem(key, label));
-                _clockChoiceByKey[key] = ndi.Clock;
+                if (!_clockChoiceByKey.ContainsKey(key))
+                {
+                    string label = $"{row.Name} (NDIClock)";
+                    ClockChoices.Add(new ClockChoiceItem(key, label));
+                    _clockChoiceByKey[key] = ndiAve.Clock;
+                }
             }
         }
 
+        // If the NDI row was momentarily !IsRowAvailable, the ndi:* entry is missing above
+        // and we would fall back to "auto" → SetClock(Stopwatch), which gates video against
+        // wall time while NDIClock still advances from stream PTS — ~1s burst/hang on NDI out.
+        TryRecoverMissingManualClockChoice(previousKey);
+
         var selected = ClockChoices.FirstOrDefault(c => c.Key == previousKey)
             ?? ClockChoices.FirstOrDefault(c => c.Key == "auto");
+        if (selected?.Key == "auto"
+            && !string.IsNullOrEmpty(previousKey)
+            && !string.Equals(previousKey, "auto", StringComparison.Ordinal)
+            && !string.Equals(previousKey, "internal", StringComparison.Ordinal))
+        {
+            SLog.LogWarning(
+                "RefreshClockChoices: could not re-resolve clock key '{PreviousKey}'; list has ndi/endpoint = [{Keys}]. " +
+                "Falling back to Auto — A/V and NDI may desync until you reselect the clock.",
+                previousKey,
+                string.Join(", ", ClockChoices.Select(c => c.Key)));
+        }
 
         string newKey = selected?.Key ?? "auto";
         _suppressClockChoiceChanged = true;
@@ -958,9 +1189,91 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         SelectedPlaylist = Playlists[Math.Max(0, ix - 1)];
     }
 
+    // ── Playlist entry management (Doc/Clock-And-AV-Drift-Analysis.md UI refactor) ──
+
+    [RelayCommand]
+    private void RemovePlaylistEntry(PlaylistEntry? entry)
+    {
+        var pl = SelectedPlaylist;
+        if (pl is null || entry is null) return;
+        pl.RemoveEntry(entry);
+    }
+
+    [RelayCommand]
+    private void RemoveSelectedPlaylistEntry()
+    {
+        var pl = SelectedPlaylist;
+        pl?.RemoveSelected();
+    }
+
+    [RelayCommand]
+    private void MovePlaylistEntryUp(PlaylistEntry? entry)
+    {
+        SelectedPlaylist?.MoveEntryUp(entry);
+    }
+
+    [RelayCommand]
+    private void MovePlaylistEntryDown(PlaylistEntry? entry)
+    {
+        SelectedPlaylist?.MoveEntryDown(entry);
+    }
+
+    [RelayCommand]
+    private void ClearCurrentPlaylist()
+    {
+        SelectedPlaylist?.ClearEntries();
+    }
+
+    [RelayCommand]
+    private void RenameCurrentPlaylist(string? newTitle)
+    {
+        if (SelectedPlaylist is null) return;
+        if (string.IsNullOrWhiteSpace(newTitle)) return;
+        SelectedPlaylist.Title = newTitle.Trim();
+    }
+
+    // ── Per-playlist output overrides ────────────────────────────────────
+
+    /// <summary>
+    /// Snapshots the currently checked rows into the active playlist's override
+    /// set, so that whenever this playlist is reselected the same routing is
+    /// reapplied (instead of the global default-outputs set).
+    /// </summary>
+    [RelayCommand]
+    private void UseOutputOverridesForPlaylist()
+    {
+        var pl = SelectedPlaylist;
+        if (pl is null) return;
+        var keys = OutputRows.Where(r => r.IsSelected).Select(r => r.RowKey).ToList();
+        if (keys.Count == 0)
+        {
+            StatusMessage = "Select at least one output before saving as a playlist override.";
+            return;
+        }
+        pl.SetOutputOverrides(keys);
+        StatusMessage = $"Saved {keys.Count} output override(s) for '{pl.Title}'.";
+    }
+
+    /// <summary>
+    /// Clears the active playlist's override set. Subsequent rebuilds fall back
+    /// to the global default-outputs set from settings.
+    /// </summary>
+    [RelayCommand]
+    private void ClearOutputOverridesForPlaylist()
+    {
+        var pl = SelectedPlaylist;
+        if (pl is null) return;
+        pl.SetOutputOverrides(null);
+        ApplyOutputSelectionForCurrentPlaylist(forceFromDefaults: true);
+        RefreshClockChoices();
+        StatusMessage = $"Cleared output override for '{pl.Title}'.";
+    }
+
     public void Dispose()
     {
         _positionTimer.Stop();
+        if (_settings is not null)
+            _settings.SettingsApplied -= OnSettingsApplied;
         _outputs.AudioEndpointModels.CollectionChanged -= OnOutputPoolChanged;
         _outputs.VideoEndpointModels.CollectionChanged -= OnOutputPoolChanged;
         _outputs.NdiEndpointModels.CollectionChanged -= OnOutputPoolChanged;

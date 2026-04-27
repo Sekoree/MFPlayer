@@ -17,7 +17,8 @@ namespace S.Media.Avalonia;
 /// Avalonia embedded video output based on OpenGlControlBase.
 /// Host apps place this control in their visual tree and wire channels via Mixer.
 /// </summary>
-public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver
+public class AvaloniaOpenGlVideoEndpoint
+    : OpenGlControlBase, IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver, IVideoPresentationClockOverridable
 {
     private static readonly ILogger Log = AvaloniaVideoLogging.GetLogger(nameof(AvaloniaOpenGlVideoEndpoint));
 

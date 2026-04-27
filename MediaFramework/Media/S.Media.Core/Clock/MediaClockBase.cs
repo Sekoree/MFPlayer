@@ -17,11 +17,18 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     private readonly Timer   _tickTimer;
     private TimeSpan         _tickInterval;
     private bool             _disposed;
+    // Doc/Clock-And-AV-Drift-Analysis.md §6.7 / item O — lazy timer activation.
+    // The timer only runs when the clock has been Start()'d AND there is at least
+    // one Tick subscriber. This avoids pinning a thread-pool thread every
+    // _tickInterval just to invoke a no-op handler chain. Tracked separately from
+    // _tickInterval so SetTickInterval can rearm without re-checking subscribers.
+    private bool _timerArmed;
+    private bool _started;
 
     protected MediaClockBase(TimeSpan tickInterval)
     {
         _tickInterval = tickInterval;
-        // Infinite dueTime = timer starts stopped; Change() activates it.
+        // Infinite dueTime = timer starts stopped; ArmTimer/DisarmTimer toggles it.
         _tickTimer = new Timer(OnTimerTick, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
@@ -39,19 +46,41 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     /// </summary>
     public event Action<TimeSpan>? Tick
     {
-        add    { lock (_tickLock) _tick += value; }
-        remove { lock (_tickLock) _tick -= value; }
+        add
+        {
+            lock (_tickLock)
+            {
+                _tick += value;
+                ReconcileTimerLocked();
+            }
+        }
+        remove
+        {
+            lock (_tickLock)
+            {
+                _tick -= value;
+                ReconcileTimerLocked();
+            }
+        }
     }
 
     public virtual void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _tickTimer.Change(_tickInterval, _tickInterval);
+        lock (_tickLock)
+        {
+            _started = true;
+            ReconcileTimerLocked();
+        }
     }
 
     public virtual void Stop()
     {
-        _tickTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        lock (_tickLock)
+        {
+            _started = false;
+            ReconcileTimerLocked();
+        }
     }
 
     public abstract void Reset();
@@ -72,14 +101,33 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     }
 
     /// <summary>
+    /// Activates / deactivates the underlying <see cref="Timer"/> based on whether
+    /// <see cref="Start"/> has been called and at least one <see cref="Tick"/>
+    /// subscriber is registered. Callers MUST hold <see cref="_tickLock"/>.
+    /// </summary>
+    private void ReconcileTimerLocked()
+    {
+        bool wantArmed = _started && _tick is not null && !_disposed;
+        if (wantArmed == _timerArmed) return;
+        if (wantArmed)
+            _tickTimer.Change(_tickInterval, _tickInterval);
+        else
+            _tickTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _timerArmed = wantArmed;
+    }
+
+    /// <summary>
     /// Allows subclasses to adjust the tick interval at runtime
     /// (e.g. after the hardware buffer size is known).
     /// </summary>
     protected void SetTickInterval(TimeSpan interval)
     {
-        _tickInterval = interval;
-        if (IsRunning)
-            _tickTimer.Change(interval, interval);
+        lock (_tickLock)
+        {
+            _tickInterval = interval;
+            if (_timerArmed)
+                _tickTimer.Change(interval, interval);
+        }
     }
 
     public void Dispose()
@@ -91,8 +139,16 @@ public abstract class MediaClockBase : IMediaClock, IDisposable
     protected virtual void Dispose(bool disposing)
     {
         if (_disposed) return;
-        if (disposing) _tickTimer.Dispose();
         _disposed = true;
+        if (disposing)
+        {
+            lock (_tickLock)
+            {
+                _timerArmed = false;
+                _started = false;
+            }
+            _tickTimer.Dispose();
+        }
     }
 }
 

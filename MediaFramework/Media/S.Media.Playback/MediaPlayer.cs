@@ -1,3 +1,4 @@
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.Core.Audio;
@@ -118,6 +119,12 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     private volatile bool _disposed;
     private volatile PlaybackState _state = PlaybackState.Idle;
     private int _completionRaised;
+    // Monotonic session counter — bumped in <see cref="ReleaseSession"/> so that
+    // background tasks (e.g. <see cref="RaiseSourceEndedAfterDrainAsync"/>) that
+    // were spawned for a previous session can detect they are stale and bail out
+    // without clobbering the new session's state.  Without this, a slow EOF drain
+    // from track N could call SetState(Stopped) on track N+1 mid-playback.
+    private int _playSessionId;
 
     private InputId? _audioInputId;
     private InputId? _videoInputId;
@@ -149,17 +156,98 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     private void OnActiveClockChanged(IMediaClock c)
     {
+        string clockType;
         try
         {
-            var pos = c.Position;
-            var running = c.IsRunning;
-            Log.LogDebug("ActiveClockChanged → {Type} (running={Run}, pos≈{PosMs:F1}ms)", c.GetType().Name, running, pos.TotalMilliseconds);
+            clockType = c.GetType().Name;
+        }
+        catch
+        {
+            clockType = "?";
+        }
+
+        // Same reference the router will use for this session’s resolved master.
+        var master = _router.Clock;
+        if (!ReferenceEquals(c, master))
+        {
+            Log.LogDebug(
+                "ActiveClockChanged: event clock {EvtType} vs Router.Clock {MasterType} (using Router.Clock for pull overrides).",
+                clockType, master.GetType().Name);
+        }
+
+        try
+        {
+            var pos = master.Position;
+            var running = master.IsRunning;
+            Log.LogInformation(
+                "A/V: ActiveClockChanged — router master is {Type} (running={Run}, pos≈{PosMs:F1}ms). Syncing pull video presentation to this clock.",
+                master.GetType().Name, running, pos.TotalMilliseconds);
         }
         catch (Exception ex)
         {
-            Log.LogWarning(ex, "Active clock handler: failed to read clock for logging.");
+            Log.LogWarning(ex, "Active clock: failed to read master clock for logging; still syncing pull endpoints.");
+        }
+
+        TrySyncPullVideoPresentationClocks("ActiveClockChanged");
+    }
+
+    /// <summary>
+    /// Binds every registered pull-video endpoint that supports
+    /// <see cref="IVideoPresentationClockOverridable"/> to the current
+    /// <see cref="IAVRouter.Clock"/> so the same master drives push scheduling and
+    /// pull PTS gating. Idempotent: safe to call on every play and clock change.
+    /// </summary>
+    public void SyncPullVideoPresentationClocks() => TrySyncPullVideoPresentationClocks("SyncPullVideoPresentationClocks()");
+
+    private void TrySyncPullVideoPresentationClocks(string reason)
+    {
+        var master = _router.Clock;
+        int n = 0;
+        for (int i = 0; i < _endpoints.Count; i++)
+        {
+            if (_endpoints[i] is not IPullVideoEndpoint) continue;
+            if (_endpoints[i] is not IVideoPresentationClockOverridable ovr) continue;
+            ovr.OverridePresentationClock(master);
+            n++;
+            string epName;
+            try { epName = _endpoints[i].Name; }
+            catch { epName = "?"; }
+            try
+            {
+                Log.LogDebug(
+                    "A/V: pull presentation — endpoint[{Index}] {EpType} '{Name}' now follows {MasterType} (reason={Reason}, master pos≈{PosMs:F1}ms)",
+                    i, _endpoints[i].GetType().Name, epName, master.GetType().Name, reason, master.Position.TotalMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                Log.LogDebug(ex, "A/V: pull presentation — endpoint[{Index}] (reason={Reason})", i, reason);
+            }
+        }
+
+        if (n > 0)
+        {
+            Log.LogInformation("A/V: bound {Count} pull video endpoint(s) to router master {MasterType} (reason={Reason}).",
+                n, master.GetType().Name, reason);
+        }
+        else
+        {
+            Log.LogDebug("A/V: no IVideoPresentationClockOverridable+IPullVideoEndpoint in session (reason={Reason}).", reason);
         }
     }
+
+    private static void ClearPullPresentationClockIfAny(IMediaEndpoint endpoint)
+    {
+        if (endpoint is IVideoPresentationClockOverridable ovr and IPullVideoEndpoint)
+            ovr.OverridePresentationClock(null);
+    }
+
+    /// <summary>
+    /// §5.9 — enable or disable automatic A/V drift correction (nudges the video
+    /// input <see cref="IAVRouter.SetInputTimeOffset"/> on a background timer).
+    /// Takes effect the next time playback <see cref="PlayAsync"/> starts the loop;
+    /// pass <see langword="null"/> to disable.
+    /// </summary>
+    public void ConfigureAutoAvDriftCorrection(AvDriftCorrectionOptions? options) => ConfigureDriftCorrection(options);
 
     /// <summary>
     /// Starts a fluent <see cref="MediaPlayerBuilder"/> so endpoints, clock,
@@ -288,6 +376,16 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         if (IsActive)
             endpoint.StopAsync().GetAwaiter().GetResult();
 
+        try
+        {
+            ClearPullPresentationClockIfAny(endpoint);
+            Log.LogDebug("A/V: removed pull presentation override for {Type} '{Name}'.", endpoint.GetType().Name, endpoint.Name);
+        }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "A/V: could not clear presentation override on remove.");
+        }
+
         _router.UnregisterEndpoint(epId);
         _endpoints.RemoveAt(idx);
         _endpointIds.RemoveAt(idx);
@@ -319,6 +417,16 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
         if (IsActive)
             await endpoint.StopAsync(ct).ConfigureAwait(false);
+
+        try
+        {
+            ClearPullPresentationClockIfAny(endpoint);
+            Log.LogDebug("A/V: removed pull presentation override for {Type} '{Name}' (async).", endpoint.GetType().Name, endpoint.Name);
+        }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "A/V: could not clear presentation override on remove (async).");
+        }
 
         _router.UnregisterEndpoint(epId);
         _endpoints.RemoveAt(idx);
@@ -420,7 +528,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
     // ── Drift correction (§5.9) ──────────────────────────────────────────────
 
-    internal void ConfigureDriftCorrection(AvDriftCorrectionOptions options)
+    internal void ConfigureDriftCorrection(AvDriftCorrectionOptions? options)
     {
         _driftCorrectionOptions = options;
     }
@@ -435,58 +543,170 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         var audioId = _audioInputId.Value;
         var videoId = _videoInputId.Value;
         _driftCts = new CancellationTokenSource();
-        var ct = _driftCts.Token;
+
+        if (_router.Clock is ISuppressesAutoAvDriftCorrection)
+        {
+            Log.LogInformation(
+                "A/V drift: background loop scheduled (stream-head mode — {Type} suppresses GetAvDrift) — " +
+                "initial delay {Id}s, interval {Int}s, min drift {Min}ms, outlier >{Ign}ms, gain {Gain}, max step {Step}ms, max |offset| {MaxOff}ms. " +
+                "Nudges the video input; the sender-clock bypass in the router also honors that nudge in wall time.",
+                _router.Clock.GetType().Name, options.InitialDelay.TotalSeconds, options.Interval.TotalSeconds, options.MinDriftMs, options.IgnoreOutlierDriftMs,
+                options.CorrectionGain, options.MaxStepMs, options.MaxAbsOffsetMs);
+        }
+        else
+        {
+            Log.LogInformation(
+                "A/V drift: background loop scheduled — initial delay {Id}s, interval {Int}s, min drift {Min}ms, outlier >{Ign}ms, gain {Gain}, max step {Step}ms, max |offset| {MaxOff}ms.",
+                options.InitialDelay.TotalSeconds, options.Interval.TotalSeconds, options.MinDriftMs, options.IgnoreOutlierDriftMs,
+                options.CorrectionGain, options.MaxStepMs, options.MaxAbsOffsetMs);
+        }
 
         _ = Task.Run(async () =>
         {
+            var ownedCts = _driftCts;
+            if (ownedCts is null) return;
             double currentOffsetMs = 0;
-
-            try { await Task.Delay(options.InitialDelay, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return; }
-
-            while (!ct.IsCancellationRequested)
+            // Issue #C fix: persistence-based outlier filter. The previous
+            // hard-cap behaviour silently ignored every measurement above
+            // IgnoreOutlierDriftMs, which meant a real ~1 s drift (NDI clock
+            // case) was never corrected. Now we count consecutive over-cap
+            // samples; once `OutlierConsecutiveSamples` in a row agree, the
+            // drift is treated as real and a clamped step is applied.
+            int consecutiveOutliers = 0;
+            int outlierThreshold = Math.Max(1, options.OutlierConsecutiveSamples);
+            var loopCt = ownedCts.Token;
+            try
             {
-                try
-                {
-                    var drift = _router.GetAvDrift(audioId, videoId);
-                    double absDriftMs = Math.Abs(drift.TotalMilliseconds);
+                try { await Task.Delay(options.InitialDelay, loopCt).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+                Log.LogDebug("A/V drift: initial delay elapsed; first measurement pass.");
 
-                    if (absDriftMs < options.MinDriftMs)
+                while (!loopCt.IsCancellationRequested)
+                {
+                    try
                     {
-                        // no-op
-                    }
-                    else if (absDriftMs < options.IgnoreOutlierDriftMs)
-                    {
-                        double requestedStepMs = -drift.TotalMilliseconds * options.CorrectionGain;
-                        double clampedStepMs = Math.Clamp(requestedStepMs, -options.MaxStepMs, options.MaxStepMs);
-                        double nextOffsetMs = Math.Clamp(currentOffsetMs + clampedStepMs, -options.MaxAbsOffsetMs, options.MaxAbsOffsetMs);
-                        currentOffsetMs = nextOffsetMs;
-                        // Keep the correction on video so audio hardware remains the primary cadence source.
-                        _router.SetInputTimeOffset(videoId, TimeSpan.FromMilliseconds(nextOffsetMs));
-                    }
+                        var drift = _router.Clock is ISuppressesAutoAvDriftCorrection
+                            ? _router.GetAvStreamHeadDrift(audioId, videoId)
+                            : _router.GetAvDrift(audioId, videoId);
+                        double absDriftMs = Math.Abs(drift.TotalMilliseconds);
+                        // Positive drift → audio ahead of video; correction nudges video input time offset.
+                        Log.LogDebug(
+                            "A/V drift: raw={DriftMs:F2}ms abs={AbsMs:F2}ms videoOffset={OffMs:F2}ms (minAct={Min} outlier>{Ign} need×{N})",
+                            drift.TotalMilliseconds, absDriftMs, currentOffsetMs,
+                            options.MinDriftMs, options.IgnoreOutlierDriftMs, outlierThreshold);
 
-                    await Task.Delay(options.Interval, ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch
-                {
-                    // Best effort: keep loop alive.
-                    try { await Task.Delay(options.Interval, ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
+                        bool applyStep;
+                        double driftToApplyMs;
+                        if (absDriftMs < options.MinDriftMs)
+                        {
+                            consecutiveOutliers = 0;
+                            applyStep = false;
+                            driftToApplyMs = 0;
+                        }
+                        else if (absDriftMs < options.IgnoreOutlierDriftMs)
+                        {
+                            consecutiveOutliers = 0;
+                            applyStep = true;
+                            driftToApplyMs = drift.TotalMilliseconds;
+                        }
+                        else
+                        {
+                            consecutiveOutliers++;
+                            if (consecutiveOutliers < outlierThreshold)
+                            {
+                                // Issue #H: log at Information once we've ignored
+                                // multiple outliers in a row so the silent-failure
+                                // mode is observable in default logging configs.
+                                if (consecutiveOutliers > 1)
+                                {
+                                    Log.LogInformation(
+                                        "A/V drift: outlier sample #{N} |drift|={AbsMs:F1}ms (cap {Ign}ms); will correct after {Need} consecutive.",
+                                        consecutiveOutliers, absDriftMs, options.IgnoreOutlierDriftMs, outlierThreshold);
+                                }
+                                else
+                                {
+                                    Log.LogDebug(
+                                        "A/V drift: ignored single outlier |drift|={AbsMs:F1}ms (cap {Ign}ms).",
+                                        absDriftMs, options.IgnoreOutlierDriftMs);
+                                }
+                                applyStep = false;
+                                driftToApplyMs = 0;
+                            }
+                            else
+                            {
+                                Log.LogInformation(
+                                    "A/V drift: persistent over-cap drift confirmed after {N} samples |drift|={AbsMs:F1}ms — applying clamped step.",
+                                    consecutiveOutliers, absDriftMs);
+                                applyStep = true;
+                                driftToApplyMs = drift.TotalMilliseconds;
+                                consecutiveOutliers = 0;
+                            }
+                        }
+
+                        if (applyStep)
+                        {
+                            double requestedStepMs = -driftToApplyMs * options.CorrectionGain;
+                            double clampedStepMs = Math.Clamp(requestedStepMs, -options.MaxStepMs, options.MaxStepMs);
+                            double nextOffsetMs = Math.Clamp(currentOffsetMs + clampedStepMs, -options.MaxAbsOffsetMs, options.MaxAbsOffsetMs);
+                            if (Math.Abs(nextOffsetMs - currentOffsetMs) > 0.01)
+                            {
+                                Log.LogInformation(
+                                    "A/V drift: applying video input time offset {NextMs:F2}ms (step {StepMs:F2}ms, was {PrevMs:F2}ms).",
+                                    nextOffsetMs, nextOffsetMs - currentOffsetMs, currentOffsetMs);
+                            }
+                            currentOffsetMs = nextOffsetMs;
+                            // Keep the correction on video so audio hardware remains the primary cadence source.
+                            _router.SetInputTimeOffset(videoId, TimeSpan.FromMilliseconds(nextOffsetMs));
+                        }
+
+                        await Task.Delay(options.Interval, loopCt).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                    catch
+                    {
+                        // Best effort: keep loop alive.
+                        try { await Task.Delay(options.Interval, loopCt).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { break; }
+                    }
                 }
             }
-        }, ct);
+            finally
+            {
+                if (Interlocked.CompareExchange(ref _driftCts, null, ownedCts) == ownedCts)
+                {
+                    try { ownedCts.Dispose(); } catch { }
+                }
+            }
+        });
     }
 
-    private void StopDriftCorrectionLoop()
+    private void StopDriftCorrectionLoop(bool resetVideoTimeOffsetNudge = false, string? reason = null)
     {
-        if (_driftCts is not { } cts) return;
-        _driftCts = null;
-        try { cts.Cancel(); } catch { }
-        cts.Dispose();
+        if (Interlocked.Exchange(ref _driftCts, null) is { } cts)
+        {
+            try { cts.Cancel(); } catch { }
+            try { cts.Dispose(); } catch { }
+        }
+
+        if (resetVideoTimeOffsetNudge)
+            TryResetDriftNudgedVideoTimeOffset(reason ?? "drift loop stopped");
+    }
+
+    private void TryResetDriftNudgedVideoTimeOffset(string reason)
+    {
+        if (!_videoInputId.HasValue) return;
+        try
+        {
+            _router.SetInputTimeOffset(_videoInputId.Value, TimeSpan.Zero);
+            Log.LogInformation("A/V drift: cleared video input time offset (nudge) — {Reason}.", reason);
+        }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "A/V drift: could not clear video time offset.");
+        }
     }
 
     // ── Open ──────────────────────────────────────────────────────────────────
@@ -584,6 +804,9 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             }
 
             await _router.StartAsync(ct).ConfigureAwait(false);
+            // Router + endpoint clocks are fully registered; re-bind pull paths even if
+            // no new ActiveClockChanged fired this session.
+            TrySyncPullVideoPresentationClocks("PlayAsync (after router StartAsync)");
 
             if (_driftCorrectionOptions is { } dco)
                 StartDriftCorrectionLoop(dco);
@@ -838,6 +1061,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         Log.LogDebug("AddEndpoint: {Type} '{Name}' wantAudio={A} wantVideo={V} (session has audioIn={HasA} videoIn={HasV})",
             endpoint.GetType().Name, endpoint.Name, audio, video, _audioInputId, _videoInputId);
         AutoRouteToEndpoint(id, audio, video);
+        TrySyncPullVideoPresentationClocks("AddEndpoint");
 
         if (IsActive)
             endpoint.StartAsync().GetAwaiter().GetResult();
@@ -850,6 +1074,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         _perEndpointRoutes.Add((null, null));
         Log.LogDebug("AddEndpointAsync: {Type} '{Name}' wantAudio={A} wantVideo={V}", endpoint.GetType().Name, endpoint.Name, audio, video);
         AutoRouteToEndpoint(id, audio, video);
+        TrySyncPullVideoPresentationClocks("AddEndpointAsync");
 
         if (IsActive)
             await endpoint.StartAsync(ct).ConfigureAwait(false);
@@ -930,14 +1155,14 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     private static RouteId CreateVideoRouteToEndpoint(
         IAVRouter router, InputId inputId, EndpointId epId, IVideoEndpoint v) =>
         v is IAVEndpoint
-            // Keep A/V sinks on scheduled mode so decoded-file bursts cannot run video
-            // content far ahead of audio content. NDI endpoints still stamp/send using
-            // their own timing, but router-side PTS gating prevents startup/steady-state
-            // "video content lead" that manifests as audio-late at receivers.
+            // When the router's resolved master is the *same* instance as the sink's
+            // <see cref="ISenderMediaClockProvider.SenderMediaClock"/>, <see cref="AVRouter"/>
+            // treats the route as live at push time (see PushVideoTick) even if the user
+            // changed the clock after Open. Otherwise keep A/V sinks on scheduled mode
+            // so decoded-file bursts cannot run video far ahead of audio.
             //
-            // Also force Wait overflow for AV sinks: DropOldest skips older video frames
-            // under transient pressure, which advances video content PTS relative to the
-            // audio path and recreates the "video slightly ahead" symptom.
+            // Also force Wait overflow: DropOldest under pressure advances video content
+            // PTS relative to audio and recreates the "video slightly ahead" symptom.
             ? router.CreateRoute(inputId, epId, new VideoRouteOptions
             {
                 LiveMode = false,
@@ -984,7 +1209,11 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     private void ReleaseSession()
     {
         Interlocked.Exchange(ref _completionRaised, 0);
-        StopDriftCorrectionLoop();
+        // Invalidate any in-flight EOF-drain task spawned for the previous session
+        // (see RaiseSourceEndedAfterDrainAsync). Bumped BEFORE the rest of the tear-
+        // down so a drain task that wakes during this method observes the change.
+        Interlocked.Increment(ref _playSessionId);
+        StopDriftCorrectionLoop(resetVideoTimeOffsetNudge: true, reason: "session released");
 
         Log.LogDebug("ReleaseSession: tearing down {N} per-endpoint route sets", _perEndpointRoutes.Count);
         for (int i = 0; i < _perEndpointRoutes.Count; i++)
@@ -1026,48 +1255,82 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         // ring and the endpoint's device buffer still have audio queued. Poll
         // the channel until it drains, then add a small device-side grace so
         // the tail reaches the speakers before listeners treat playback as over.
-        _ = RaiseSourceEndedAfterDrainAsync();
+        // Capture the current session id so the drain task can detect that the
+        // session was replaced before it had a chance to publish its result.
+        int session = Volatile.Read(ref _playSessionId);
+        _ = RaiseSourceEndedAfterDrainAsync(session);
     }
 
-    private async Task RaiseSourceEndedAfterDrainAsync()
+    private async Task RaiseSourceEndedAfterDrainAsync(int sessionId)
     {
+        // Helper: returns true while we still own the session AND it is in a
+        // "still rendering" state. Paused is allowed — the audio device keeps
+        // consuming the queued tail even when the source decoder is paused, and
+        // a user pause taken right at EOF must not strand the player.
+        bool StillRunning() =>
+            !_disposed
+            && Volatile.Read(ref _playSessionId) == sessionId
+            && _state is PlaybackState.Playing or PlaybackState.Paused;
+
         try
         {
             var ch = _decoder?.FirstAudioChannel;
             if (ch is not null)
             {
-                // Only drain while we are still in the same "playing" session. When the user
-                // opens another file, OpenAsync sets Opening before CloseAsync/ReleaseSession —
-                // isStopping would NOT include Opening and this loop would spin until the
-                // (often disposed) channel drained or worse.
-                while (_disposed is false
-                       && _state == PlaybackState.Playing
-                       && ch.BufferAvailable > 0)
+                while (StillRunning())
+                {
+                    int avail;
+                    try { avail = ch.BufferAvailable; }
+                    catch { break; } // channel torn down mid-read.
+                    if (avail <= 0) break;
                     await Task.Delay(20).ConfigureAwait(false);
+                }
 
-                if (_disposed is false
-                    && _state == PlaybackState.Playing
-                    && ch is not null)
+                if (StillRunning())
                 {
                     // Device buffer grace — PortAudio's host-API queue.
-                    await Task.Delay(100).ConfigureAwait(false);
+                    try { await Task.Delay(100).ConfigureAwait(false); }
+                    catch { /* fall through to finalize */ }
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Decoder disposed or channel torn down mid-drain, or a new file opened.
+            // We must NOT swallow silently here: the previous version returned without
+            // ever reaching SetState(Stopped), leaving the player stuck in Playing if
+            // the channel raised a transient exception during drain. Log and fall through
+            // so finalization can still publish the terminal state for this session.
+            Log.LogDebug(ex, "SourceEnded drain interrupted; finalizing state anyway.");
+        }
+
+        if (_disposed) return;
+
+        // Bail out cleanly if a different session has taken over. This is the fix for
+        // the "track N+1 stops shortly after starting" race where a slow drain from
+        // track N would otherwise stomp on track N+1.
+        if (Volatile.Read(ref _playSessionId) != sessionId)
+        {
+            Log.LogDebug("SourceEnded drain skipped: session changed (was {OldSession}, now {NewSession}).",
+                sessionId, _playSessionId);
             return;
         }
 
-        // ReplacedByOpen: state is no longer Playing (e.g. Opening, Ready) — do not treat as SourceEnded.
-        if (_disposed || _state != PlaybackState.Playing)
+        // Skip if some other path (StopAsync, OpenAsync replace, fatal error) already
+        // moved us out of a "still rendering" state. Stopping/Stopped/Idle/Faulted/
+        // Opening/Ready are all "session is moving on" cases that handle their own
+        // terminal transitions.
+        var stateNow = _state;
+        if (stateNow is not (PlaybackState.Playing or PlaybackState.Paused))
         {
-            if (!_disposed)
-                Log.LogDebug("SourceEnded drain skipped: state={State} (new open replaced session).", _state);
+            Log.LogDebug("SourceEnded drain skipped: state={State} (session moved on).", stateNow);
             return;
         }
+
         if (Interlocked.Exchange(ref _completionRaised, 1) != 0) return;
+        // EOF: stop drift correction and clear nudged offset — the loop can otherwise keep
+        // running and calling GetAvDrift / SetInputTimeOffset long after the user perceives
+        // playback as finished.
+        StopDriftCorrectionLoop(resetVideoTimeOffsetNudge: true, reason: "source ended (EOF, post-drain)");
         SetState(PlaybackState.Stopped);
         PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(PlaybackCompletedReason.SourceEnded));
     }

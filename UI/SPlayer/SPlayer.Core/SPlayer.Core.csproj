@@ -4,6 +4,10 @@
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
         <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+        <!-- Surface trim/AOT warnings from this assembly's own code (not its
+             dependencies) so we catch reflection-based serialization regressions
+             early. The Desktop project still controls actual PublishAot. -->
+        <IsAotCompatible>true</IsAotCompatible>
     </PropertyGroup>
 
     <ItemGroup>

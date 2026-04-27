@@ -77,11 +77,11 @@ public sealed record NDIAVSinkOptions
     /// video PTS, preventing a transient stall from turning into a permanent A/V offset
     /// at the receiver.  The missed audio window becomes a short silence.
     /// <para/>
-    /// Default is 80 ms.  Lower this to keep A/V tighter (more frequent mini-dropouts
-    /// on stalls).  Higher values tolerate more stall before correcting but risk
-    /// permanent residual lag if the stall settles just below the threshold.
-    /// Set to 0 to disable underrun recovery entirely.
+    /// Default is 120 ms.  SPlayer uses the shortcut constructor, which also defaults
+    /// to 120 (must match) so a steady ~80ms false gap does not force NDIClock snaps
+    /// every few seconds.  Set lower for tighter recovery (at the cost of limit cycles
+    /// on some decoders) or 0 to disable.
     /// </summary>
-    public int AudioUnderrunRecoveryThresholdMs { get; init; } = 80;
+    public int AudioUnderrunRecoveryThresholdMs { get; init; } = 120;
 }
 

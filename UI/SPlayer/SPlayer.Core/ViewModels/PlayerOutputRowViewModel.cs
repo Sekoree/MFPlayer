@@ -3,6 +3,7 @@ using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using S.Media.Core.Media;
 using S.Media.Playback;
+using S.Media.NDI;
 using SPlayer.Core.Models;
 
 namespace SPlayer.Core.ViewModels;
@@ -134,6 +135,23 @@ public sealed partial class PlayerOutputRowViewModel : ObservableObject, IDispos
         if (_audio is not null) { endpoint = _audio.Endpoint; return true; }
         if (_video is not null) { endpoint = _video.Endpoint; return true; }
         if (_ndi?.AveEndpoint is { } av) { endpoint = av; return true; }
+        return false;
+    }
+
+    /// <summary>
+    /// NDI: returns the A/V sender when it exists, without requiring <see cref="IsRowAvailable"/>
+    /// (NDI can be Open=false briefly while the clock dropdown is rebuilt). Used to restore
+    /// <c>ndi:*</c> clock choices so we do not fall back to Auto/Stopwatch and desync the router.
+    /// </summary>
+    public bool TryGetNdiAveEndpointUnconditionally(out NDIAVEndpoint? ndiAve)
+    {
+        ndiAve = null;
+        if (Kind != PlayerOutputKind.Ndi) return false;
+        if (_ndi?.AveEndpoint is NDIAVEndpoint n)
+        {
+            ndiAve = n;
+            return true;
+        }
         return false;
     }
 

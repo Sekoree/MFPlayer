@@ -46,4 +46,54 @@ public partial class PlayerView : UserControl
         if (vm.PlayCommand.CanExecute(null))
             vm.PlayCommand.Execute(null);
     }
+
+    /// <summary>
+    /// Keyboard shortcuts on the playlist list:
+    ///   Delete     → remove the selected entry
+    ///   Enter      → play the selected entry
+    ///   Alt+Up     → move selected up
+    ///   Alt+Down   → move selected down
+    /// </summary>
+    private void PlaylistList_OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not ListBox list) return;
+        if (list.DataContext is not PlaylistDocumentViewModel doc) return;
+
+        var alt = (e.KeyModifiers & KeyModifiers.Alt) == KeyModifiers.Alt;
+
+        switch (e.Key)
+        {
+            case Key.Delete:
+                if (doc.RemoveSelectedCommand.CanExecute(null))
+                {
+                    doc.RemoveSelectedCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+
+            case Key.Enter:
+                if (DataContext is PlayerViewModel vm && vm.PlayCommand.CanExecute(null))
+                {
+                    vm.PlayCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+
+            case Key.Up when alt:
+                if (doc.SelectedEntry is { } upE && doc.MoveEntryUpCommand.CanExecute(upE))
+                {
+                    doc.MoveEntryUpCommand.Execute(upE);
+                    e.Handled = true;
+                }
+                break;
+
+            case Key.Down when alt:
+                if (doc.SelectedEntry is { } dnE && doc.MoveEntryDownCommand.CanExecute(dnE))
+                {
+                    doc.MoveEntryDownCommand.Execute(dnE);
+                    e.Handled = true;
+                }
+                break;
+        }
+    }
 }

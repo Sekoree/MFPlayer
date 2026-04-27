@@ -6,8 +6,19 @@ namespace S.Media.Core.Clock;
 /// Clock backed by an external hardware time source (e.g. <c>Pa_GetStreamTime</c>).
 /// Falls back to a <see cref="Stopwatch"/> seamlessly whenever the provider returns
 /// a non-positive value, and re-syncs as soon as valid hardware time resumes.
+///
+/// <para>
+/// Implements <see cref="ISuppressesAutoAvDriftCorrection"/>: hardware time sources
+/// represent the <em>output / DAC side</em> of the audio pipeline, offset from decoder
+/// PTS by the full audio output buffer / resampler / sink latency. Comparing the audio
+/// decode head against this clock (as <see cref="S.Media.Core.Routing.IAVRouter.GetAvDrift"/>
+/// does) therefore mixes pipeline depth into the drift signal and produces large
+/// "phantom drift" during startup settling. The playback layer routes around this by
+/// using <see cref="S.Media.Core.Routing.IAVRouter.GetAvStreamHeadDrift"/> instead,
+/// which baselines the first measurement and only tracks subsequent change.
+/// </para>
 /// </summary>
-public class HardwareClock : MediaClockBase
+public class HardwareClock : MediaClockBase, ISuppressesAutoAvDriftCorrection
 {
     private readonly Func<double> _secondsProvider;
     private readonly double       _sampleRate;

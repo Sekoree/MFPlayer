@@ -22,7 +22,8 @@ namespace S.Media.NDI;
 /// Consolidated NDI sink that can accept both audio and video and send them through one sender
 /// with a shared A/V timing context.
 /// </summary>
-public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISupportsDynamicMetadata
+public class NDIAVEndpoint
+    : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISupportsDynamicMetadata, ISenderMediaClockProvider
 {
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAVEndpoint));
 
@@ -172,6 +173,8 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
 
     // Log-once guard for the channel remix path (source channels ≠ target channels).
     private int _loggedChannelRemix;
+    /// <summary>Wall ms of last Information-level underrun-recovery log (rate-limit identical lines).</summary>
+    private long _lastUnderrunRecoveryInfoLogMs = -1;
 
     // A/V sync tracing — opt-in counters updated on the send paths so consumers
     // (debug UIs, test apps) can derive the actual wall-clock submit cadence and
@@ -189,6 +192,13 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
     private long _audioSamplesSubmitted;
     private long _lastVideoTimecodeTicks = long.MinValue;
     private long _lastAudioTimecodeTicks = long.MinValue;
+    // Per-source first stream PTS: NDI timecodes are (pts - first) so (Pv'−Pa') tracks (Pv−Pa)
+    // in the file.  Raw container PTS with different per-track start times (e.g. video
+    // +1s vs audio 0) otherwise looks like ~1s video lead at the receiver.  Compare
+    // FFmpegVideoChannel/FFmpegAudioChannel Position (same 100ns tick domain as frames).
+    private long _ndiFirstVideoPts = long.MinValue;
+    private long _ndiFirstAudioPts = long.MinValue;
+    private int _loggedNdiPerTrackRebase;
     private long _lastVideoPtsTicks = long.MinValue;
     private long _lastAudioPtsTicks = long.MinValue;
     // Sequential timestamping of a matched A/V pair so a reader can compute
@@ -220,6 +230,9 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
     /// Exposed for host applications that want to explicitly select this clock.
     /// </summary>
     public IMediaClock Clock => _clock;
+
+    /// <inheritdoc />
+    public IMediaClock SenderMediaClock => _clock;
 
     /// <summary>
     /// The audio drift corrector instance, or <see langword="null"/> if drift correction is disabled.
@@ -253,7 +266,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
         IAudioResampler? audioResampler = null,
         bool enableAudioDriftCorrection = false,
         int audioPtsDiscontinuityThresholdMs = 500,
-        int audioUnderrunRecoveryThresholdMs = 80)
+        int audioUnderrunRecoveryThresholdMs = 120)
     {
         _sender = sender;
         Name = name ?? "NDIAVEndpoint";
@@ -404,7 +417,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
         options?.AudioResampler,
         options?.EnableAudioDriftCorrection ?? false,
         options?.AudioPtsDiscontinuityThresholdMs ?? 500,
-        options?.AudioUnderrunRecoveryThresholdMs ?? 80)
+        options?.AudioUnderrunRecoveryThresholdMs ?? 120)
     { }
 
     // ── Factories (§1.4) ──────────────────────────────────────────────────
@@ -448,6 +461,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
         // stale audio cursor from the previous session (which would resume
         // audio timecodes from an arbitrary past point).
         _timing.Reset();
+        _lastUnderrunRecoveryInfoLogMs = -1;
         _clock.Reset();
         _clock.Start();
 
@@ -521,6 +535,74 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
     }
 
     /// <summary>
+    /// Tighter than the default 10 ms router cadence: sender-clock NDI video pacing
+    /// (bypass path) re-evaluates on each push tick; 10 ms quantises 24–30 fps to one
+    /// extra tick of latency per frame. The router takes the minimum across endpoints.
+    /// </summary>
+    public TimeSpan? NominalTickCadence => TimeSpan.FromMilliseconds(4);
+
+    private void TrySetNdiFirstVideoPts(long raw)
+    {
+        if (raw < 0) return;
+        // Doc/Clock-And-AV-Drift-Analysis.md §6.5 / item N — fast-path past the CAS once
+        // the field has been seeded.  Read first; only attempt the CompareExchange when
+        // the slot is still sentinel.  Saves an interlocked op on every video frame for
+        // the lifetime of the source (typical: 30–60 fps × duration).
+        if (Interlocked.Read(ref _ndiFirstVideoPts) != long.MinValue) return;
+        if (Interlocked.CompareExchange(ref _ndiFirstVideoPts, raw, long.MinValue) == long.MinValue)
+            TryLogNdiPerTrackRebase();
+    }
+
+    private void TrySetNdiFirstAudioPts(long raw)
+    {
+        if (raw < 0) return;
+        // Same fast-path as TrySetNdiFirstVideoPts — see comment there.
+        if (Interlocked.Read(ref _ndiFirstAudioPts) != long.MinValue) return;
+        if (Interlocked.CompareExchange(ref _ndiFirstAudioPts, raw, long.MinValue) == long.MinValue)
+            TryLogNdiPerTrackRebase();
+    }
+
+    private void TryLogNdiPerTrackRebase()
+    {
+        long a = Interlocked.Read(ref _ndiFirstAudioPts);
+        long v = Interlocked.Read(ref _ndiFirstVideoPts);
+        if (a == long.MinValue || v == long.MinValue) return;
+        if (Interlocked.Exchange(ref _loggedNdiPerTrackRebase, 1) != 0) return;
+        double deltaMs = (v - a) / 10_000.0;
+        Log.LogDebug(
+            "NDIAVEndpoint '{Name}': NDI timecode rebase — first stream PTS audio={AudioMs:F1}ms video={VideoMs:F1}ms Δ(v−a)={DeltaMs:F1}ms (per-track t=0; encoded lip-sync preserved).",
+            Name, a / 10_000.0, v / 10_000.0, deltaMs);
+    }
+
+    private long NdiRebaseToFirstVideo(long rawPts) =>
+        Interlocked.Read(ref _ndiFirstVideoPts) is long f && f != long.MinValue ? rawPts - f : rawPts;
+
+    private long NdiRebaseToFirstAudio(long timecode) =>
+        Interlocked.Read(ref _ndiFirstAudioPts) is long f && f != long.MinValue ? timecode - f : timecode;
+
+    /// <summary>
+    /// Feeds the shared <see cref="NDIClock"/> as soon as a frame is accepted from
+    /// the <see cref="AVRouter"/>, so the router's push-side PTS gate sees the same
+    /// media time the frame carries — not a value only updated on the async send thread
+    /// (which made NDIClock lag decoder PTS and appear "stuck", pacing video very slowly).
+    /// Uses the same per-track rebase as NDI video timecodes.
+    /// </summary>
+    private void NotifyNdiClockOfRouterVideoPts(long ptsTicks)
+    {
+        if (ptsTicks == long.MaxValue) return;
+        if (ptsTicks < 0) return;
+        TrySetNdiFirstVideoPts(ptsTicks);
+        if (ptsTicks == 0)
+        {
+            // NDIClock.UpdateFromFrame ignores non-positive timestamps; still rebase for timecode path.
+            return;
+        }
+        long t = NdiRebaseToFirstVideo(ptsTicks);
+        if (t < 0) t = 0;
+        _clock.UpdateFromFrame(t);
+    }
+
+    /// <summary>
     /// §8.2 — zero-copy fast path for ref-counted frames already in the sink's
     /// target pixel format. We retain the incoming handle and enqueue it directly
     /// so the async NDI send thread can pin and submit without an intermediate
@@ -549,7 +631,9 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
             handle.PixelFormat == _videoTargetFormat.PixelFormat)
         {
             var retained = handle.Retain();
-            _videoWork.EnqueueReserved(new PendingVideo(retained));
+            var pending = new PendingVideo(retained);
+            _videoWork.EnqueueReserved(pending);
+            NotifyNdiClockOfRouterVideoPts(pending.PtsTicks);
             return;
         }
 
@@ -587,7 +671,9 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
         }
 
         frame.Data.Span[..bytes].CopyTo(dst.AsSpan(0, bytes));
-        _videoWork.EnqueueReserved(new PendingVideo(dst, frame.Width, frame.Height, frame.Pts.Ticks, frame.PixelFormat, bytes));
+        var pending = new PendingVideo(dst, frame.Width, frame.Height, frame.Pts.Ticks, frame.PixelFormat, bytes);
+        _videoWork.EnqueueReserved(pending);
+        NotifyNdiClockOfRouterVideoPts(pending.PtsTicks);
     }
 
     /// <summary>
@@ -682,6 +768,9 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
             Interlocked.Increment(ref _audioQueueDrops);
             return;
         }
+
+        if (sourcePtsTicks >= 0)
+            TrySetNdiFirstAudioPts(sourcePtsTicks);
 
         // No explicit timecode is stamped here: the AudioWriteLoop derives a
         // media-time timecode through NDIAvTimingContext so audio & video share one
@@ -1176,6 +1265,10 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
         // stalls any non-LiveMode route (e.g. local video) gated on this clock.
         _clock.ResetForNewSource();
 
+        Interlocked.Exchange(ref _ndiFirstVideoPts, long.MinValue);
+        Interlocked.Exchange(ref _ndiFirstAudioPts, long.MinValue);
+        Interlocked.Exchange(ref _loggedNdiPerTrackRebase, 0);
+
         // Drain leftover video/audio frames from the previous source so they
         // don't corrupt the timing state for the new source.
         while (_videoWork.TryDequeue(out var stale))
@@ -1285,7 +1378,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
 
                         long waitedMs = _sinkClock.ElapsedMilliseconds - waitStartedMs;
                         bool audioReady = Interlocked.Read(ref _firstAudioSubmitMs) >= 0;
-                        long floorPtsMs = pf.PtsTicks > 0 ? (long)TimeSpan.FromTicks(pf.PtsTicks).TotalMilliseconds : -1;
+                        long floorPtsMs = pf.PtsTicks >= 0 ? (long)TimeSpan.FromTicks(pf.PtsTicks).TotalMilliseconds : -1;
                         Log.LogInformation(
                             "NDIAVEndpoint '{Name}' startup gate: sourceGen={SourceGen}, firstVideoPtsMs={FirstVideoPtsMs}, " +
                             "holdMs={HoldMs}, waitedMs={WaitedMs}, audioReady={AudioReady}, drainedVideoFrames={Drained}",
@@ -1435,11 +1528,16 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
                         }
 
                         long videoPts = pf.PtsTicks;
-                        long videoTimecode = videoPts >= 0 ? videoPts : NDIConstants.TimecodeSynthesize;
+                        if (videoPts >= 0)
+                            TrySetNdiFirstVideoPts(videoPts);
+                        // Per-track rebase so receivers do not see a constant container start offset
+                        // (e.g. video track +1 s vs audio 0) as "video ahead by 1 s".
+                        long videoTimecode = videoPts >= 0 ? NdiRebaseToFirstVideo(videoPts) : NDIConstants.TimecodeSynthesize;
+                        if (videoPts >= 0 && videoTimecode < 0) videoTimecode = 0;
                         if (videoPts >= 0)
                         {
                             _timing.ObserveVideoPts(videoPts);
-                            _clock.UpdateFromFrame(videoPts);
+                            // NDIClock is already advanced in ReceiveFrame (router thread) for this PTS.
                         }
                         else if (Interlocked.CompareExchange(ref _loggedVideoSynthesizeFallback, 1, 0) == 0)
                         {
@@ -1614,6 +1712,90 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
     }
 
     /// <summary>
+    /// Doc/Clock-And-AV-Drift-Analysis.md §6.3 / item M — fast deinterleave.
+    /// Splits a packed float buffer (sample-major, channel-minor) into NDI's
+    /// planar layout (one contiguous block per channel). Uses the most efficient
+    /// algorithm available for the channel count.
+    /// </summary>
+    private static unsafe void DeinterleaveAudio(
+        float[] interleaved, float[] planar, int channels, int samplesPerChannel)
+    {
+        if (samplesPerChannel <= 0 || channels <= 0)
+            return;
+
+        if (channels == 1)
+        {
+            // Mono → planar is identical to interleaved layout.
+            Buffer.BlockCopy(interleaved, 0, planar, 0, samplesPerChannel * sizeof(float));
+            return;
+        }
+
+        if (channels == 2)
+        {
+            DeinterleaveStereo(interleaved, planar, samplesPerChannel);
+            return;
+        }
+
+        // ≥3 channels: cache-blocked scalar transpose.  Process B contiguous
+        // sample-pairs at a time so the per-channel planar destinations and
+        // the interleaved source stay warm in L1 between inner-loop passes.
+        // 256 samples × 4 B × max-N-ch is well below typical L1 (32 KB).
+        const int BlockSize = 256;
+        for (int sBase = 0; sBase < samplesPerChannel; sBase += BlockSize)
+        {
+            int sEnd = sBase + BlockSize;
+            if (sEnd > samplesPerChannel) sEnd = samplesPerChannel;
+            for (int s = sBase; s < sEnd; s++)
+            {
+                int srcBase = s * channels;
+                for (int c = 0; c < channels; c++)
+                    planar[c * samplesPerChannel + s] = interleaved[srcBase + c];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stereo (2-channel) deinterleave with SSE2 acceleration.  Handles 4 stereo
+    /// pairs (8 floats) per iteration via shuffle; the scalar tail handles up to
+    /// 3 leftover pairs.  Falls back to scalar when SSE is not supported.
+    /// </summary>
+    private static unsafe void DeinterleaveStereo(
+        float[] interleaved, float[] planar, int samplesPerChannel)
+    {
+        int leftBase = 0;
+        int rightBase = samplesPerChannel;
+        int s = 0;
+
+        if (Sse.IsSupported && samplesPerChannel >= 4)
+        {
+            fixed (float* pSrc = interleaved)
+            fixed (float* pDst = planar)
+            {
+                int simdSamples = samplesPerChannel & ~3;  // round down to multiple of 4
+                for (; s < simdSamples; s += 4)
+                {
+                    // Load: a = [L0 R0 L1 R1], b = [L2 R2 L3 R3]
+                    var a = Sse.LoadVector128(pSrc + s * 2);
+                    var b = Sse.LoadVector128(pSrc + s * 2 + 4);
+                    // Shuffle imm 0b10_00_10_00 picks (a[0], a[2], b[0], b[2]) = [L0 L1 L2 L3]
+                    // Shuffle imm 0b11_01_11_01 picks (a[1], a[3], b[1], b[3]) = [R0 R1 R2 R3]
+                    var lo = Sse.Shuffle(a, b, 0b10_00_10_00);
+                    var hi = Sse.Shuffle(a, b, 0b11_01_11_01);
+                    Sse.Store(pDst + leftBase + s, lo);
+                    Sse.Store(pDst + rightBase + s, hi);
+                }
+            }
+        }
+
+        // Scalar tail (also full path when SSE is not available).
+        for (; s < samplesPerChannel; s++)
+        {
+            planar[leftBase + s]  = interleaved[s * 2];
+            planar[rightBase + s] = interleaved[s * 2 + 1];
+        }
+    }
+
+    /// <summary>
     /// Maps an average PTS delta (in 100 ns ticks) to the nearest standard NDI
     /// frame-rate fraction.  Returns (0, 0) if no standard rate is within 2 %.
     /// </summary>
@@ -1685,14 +1867,13 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
                         planar = ArrayPool<float>.Shared.Rent(planarNeed);
                     }
 
-                    // Deinterleave: s-outer/c-inner gives sequential reads on the
-                    // interleaved source buffer (better cache locality than c-outer/s-inner).
-                    for (int s = 0; s < samplesPerChannel; s++)
-                    {
-                        int srcBase = s * channels;
-                        for (int c = 0; c < channels; c++)
-                            planar[c * samplesPerChannel + s] = interleaved[srcBase + c];
-                    }
+                    // Doc/Clock-And-AV-Drift-Analysis.md §6.3 / item M — fast deinterleave.
+                    // Dispatches to the most efficient path for the channel count:
+                    //   * 1 ch  → buffer copy (planar == interleaved layout).
+                    //   * 2 ch  → SSE2 8-floats-at-a-time shuffle (most common case).
+                    //   * ≥3 ch → cache-blocked scalar transpose so the per-channel
+                    //             planar destinations stay warm in L1.
+                    DeinterleaveAudio(interleaved, planar, channels, samplesPerChannel);
 
                     _audioPool.Enqueue(interleaved);
 
@@ -1709,7 +1890,7 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
                         // briefly pushes fewer/no buffers, so the cursor would naturally
                         // lag.  The timing context snaps the cursor forward to the latest
                         // video PTS whenever the lag exceeds the underrun-recovery
-                        // threshold (default 80 ms), so a transient decoder glitch can't
+                        // threshold (see NDIAVSinkOptions; default 120 ms), so a transient decoder glitch can't
                         // turn into a permanent A/V offset at the receiver.
                         //
                         // Discontinuity path: if the producer stream-PTS jumps forward
@@ -1719,13 +1900,17 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
                         // reflects the new media position.  Forward-only; backward jumps
                         // keep the cursor stationary so wire tc stays monotonic.
                         //
-                        // NB: we intentionally do NOT stamp from `pending.PtsTicks`
-                        // (producer stream PTS) on every buffer.  A previous revision did,
-                        // but that caused audio timecodes to permanently lag video after
-                        // any decoder underrun — the receiver then saw a persistent skew
-                        // that looked like "video sped up and never corrected".
+                        // When the AVRouter provides the decoder read-head (bufferPts), stamp
+                        // NDI timecodes from that stream-PTS. That matches the video path’s
+                        // frame PTS and avoids a ~AlignUntilBelowMs floor from
+                        // sample+LatestVideoOnly creep, which is especially visible when
+                        // ISuppressesAutoAvDriftCorrection (NDIClock) is active — the
+                        // Stopwatch+auto-drift path had been masking small mux A/V offset.
+                        // The pure-sample path remains for "no stream PTS" / legacy edge cases;
+                        // large forward jumps still re-anchor (seek / discontinuous timeline).
                         long audioTimecode;
                         long cursorNow = _timing.NextAudioTimecodeTicks;
+                        long underrunBefore = _timing.UnderrunRecoveries;
                         if (pending.PtsTicks >= 0 &&
                             cursorNow != long.MinValue &&
                             pending.PtsTicks - cursorNow > _audioPtsDiscontinuityThresholdTicks)
@@ -1733,10 +1918,42 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, ISup
                             audioTimecode = _timing.AdvanceAudioCursorTo(
                                 pending.PtsTicks, samplesPerChannel, _audioTargetFormat.SampleRate);
                         }
+                        else if (pending.PtsTicks >= 0)
+                        {
+                            audioTimecode = _timing.StampFromDecoderStreamHead(
+                                pending.PtsTicks, samplesPerChannel, _audioTargetFormat.SampleRate);
+                        }
                         else
                         {
                             audioTimecode = _timing.ReserveAudioTimecode(
                                 samplesPerChannel, _audioTargetFormat.SampleRate);
+                        }
+
+                        audioTimecode = NdiRebaseToFirstAudio(audioTimecode);
+                        if (audioTimecode < 0) audioTimecode = 0;
+
+                        if (_timing.UnderrunRecoveries > underrunBefore)
+                        {
+                            double aheadMs = _timing.LastUnderrunVideoAheadTicks / 10_000.0;
+                            long nowLogMs = _sinkClock.ElapsedMilliseconds;
+                            bool logInfo = _lastUnderrunRecoveryInfoLogMs < 0
+                                || nowLogMs - _lastUnderrunRecoveryInfoLogMs >= 15000;
+                            if (logInfo)
+                            {
+                                _lastUnderrunRecoveryInfoLogMs = nowLogMs;
+                                Log.LogInformation(
+                                    "NDIAVEndpoint '{Name}': A/V underrun recovery — audio timecode jumped to align with video " +
+                                    "(video was ~{AheadMs:F1} ms ahead of the sample cursor; recoveries={Total}, threshold_ms={Threshold}). " +
+                                    "Receiver may hear a short gap; often caused by router clock desync or slow video delivery vs real-time audio.",
+                                    Name, aheadMs, _timing.UnderrunRecoveries,
+                                    _timing.EffectiveUnderrunRecoveryThresholdTicks / 10_000.0);
+                            }
+                            else if (Log.IsEnabled(LogLevel.Debug))
+                            {
+                                Log.LogDebug(
+                                    "NDIAVEndpoint '{Name}': A/V underrun recovery (same as above; recoveries={Total}, ~{AheadMs:F1} ms ahead).",
+                                    Name, _timing.UnderrunRecoveries, aheadMs);
+                            }
                         }
 
                         var frame = new NDIAudioFrameV3
