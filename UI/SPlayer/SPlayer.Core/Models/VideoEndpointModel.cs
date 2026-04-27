@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using S.Media.Core.Media.Endpoints;
 using SPlayer.Core.Views;
 
 namespace SPlayer.Core.Models;
@@ -15,6 +16,9 @@ public partial class VideoEndpointModel : ObservableObject
     public bool Open => _window.VideoEndpoint.IsRunning;
 
     public Action? RemoveRequestedAction { get; set; }
+
+    /// <summary>Used by the player view to route decoded video to this output.</summary>
+    public IVideoEndpoint Endpoint => _window.VideoEndpoint;
 
     public VideoEndpointModel(string name, string info, VideoOutputWindow window)
     {

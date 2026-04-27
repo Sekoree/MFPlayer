@@ -20,6 +20,9 @@ public partial class AudioEndpointModel : ObservableObject
 
     public Action? RemoveRequestedAction { get; set; }
 
+    /// <summary>Used by the player view to route decoded media to this output.</summary>
+    public IAudioEndpoint Endpoint => _audioEndpoint;
+
     public AudioEndpointModel(IAudioEndpoint audioEndpoint)
     {
         _audioEndpoint = audioEndpoint;

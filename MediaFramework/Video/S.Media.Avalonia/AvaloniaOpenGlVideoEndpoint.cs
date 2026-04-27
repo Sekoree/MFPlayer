@@ -378,6 +378,8 @@ public class AvaloniaOpenGlVideoEndpoint : OpenGlControlBase, IPullVideoEndpoint
     public Task StartAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_isRunning)
+            return Task.CompletedTask;
         if (!_isOpen)
             throw new InvalidOperationException("Call Open() before Start.");
 

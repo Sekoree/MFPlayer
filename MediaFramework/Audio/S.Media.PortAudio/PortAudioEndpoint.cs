@@ -248,6 +248,8 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
     public virtual Task StartAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_isRunning)
+            return Task.CompletedTask;
         if (_stream == nint.Zero)
             throw new InvalidOperationException("PortAudioEndpoint stream is not open.");
 
@@ -570,6 +572,9 @@ public abstract class PortAudioEndpoint : IAudioEndpoint, IClockCapableEndpoint,
 
         public override Task StartAsync(CancellationToken ct = default)
         {
+            if (_isRunning)
+                return Task.CompletedTask;
+
             var t = base.StartAsync(ct);
 
             _cts = new CancellationTokenSource();

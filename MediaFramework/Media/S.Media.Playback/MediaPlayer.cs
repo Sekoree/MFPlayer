@@ -1,5 +1,8 @@
+using Microsoft.Extensions.Logging;
+using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Audio.Routing;
+using S.Media.Core.Clock;
 using S.Media.Core.Errors;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
@@ -67,6 +70,17 @@ public sealed record PlaybackCompletedEventArgs(PlaybackCompletedReason Reason);
 /// <summary>Carries the stage and exception when a transport operation fails.</summary>
 public sealed record PlaybackFailedEventArgs(PlaybackFailureStage Stage, Exception Exception);
 
+/// <summary>Which streams to send to a combined audio+video sink (for example, an NDI AV sender) for the current file.</summary>
+public enum AveStreamSelection
+{
+    /// <summary>Send both decoded audio and video when the source and routes exist.</summary>
+    Both = 0,
+    /// <summary>Send only audio; the video route to this output is disabled.</summary>
+    AudioOnly = 1,
+    /// <summary>Send only video; the audio route to this output is disabled.</summary>
+    VideoOnly = 2,
+}
+
 /// <summary>
 /// High-level one-source one-output playback facade built on
 /// <see cref="FFmpegDecoder"/> and <see cref="AVRouter"/>.
@@ -86,6 +100,7 @@ public sealed record PlaybackFailedEventArgs(PlaybackFailureStage Stage, Excepti
 /// </remarks>
 public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 {
+    private static readonly ILogger Log = MediaCoreLogging.GetLogger("S.Media.Playback.MediaPlayer");
     private static readonly TimeSpan SeekPresentPollInterval = TimeSpan.FromMilliseconds(10);
     private static readonly TimeSpan SeekPositionTolerance = TimeSpan.FromMilliseconds(1);
     private static readonly TimeSpan DefaultSeekPresentTimeout = TimeSpan.FromSeconds(2);
@@ -93,7 +108,8 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     private readonly AVRouter _router;
     private readonly List<IMediaEndpoint> _endpoints = [];
     private readonly List<EndpointId> _endpointIds = [];
-    private readonly List<RouteId> _routeIds = [];
+    /// <summary>Parallel to <see cref="_endpoints"/>: per-endpoint A/V <see cref="RouteId"/>s (null = no such route in this session).</summary>
+    private readonly List<(RouteId? Audio, RouteId? Video)> _perEndpointRoutes = [];
     private readonly List<(Func<MediaPlayer, CancellationToken, Task> BeforePlay, Func<MediaPlayer, CancellationToken, Task>? BeforeClose)> _lifecycleHooks = [];
 
     private FFmpegDecoder? _decoder;
@@ -128,6 +144,21 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     internal MediaPlayer(AVRouterOptions? routerOptions)
     {
         _router = new AVRouter(routerOptions);
+        _router.ActiveClockChanged += OnActiveClockChanged;
+    }
+
+    private void OnActiveClockChanged(IMediaClock c)
+    {
+        try
+        {
+            var pos = c.Position;
+            var running = c.IsRunning;
+            Log.LogDebug("ActiveClockChanged → {Type} (running={Run}, pos≈{PosMs:F1}ms)", c.GetType().Name, running, pos.TotalMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Active clock handler: failed to read clock for logging.");
+        }
     }
 
     /// <summary>
@@ -260,6 +291,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         _router.UnregisterEndpoint(epId);
         _endpoints.RemoveAt(idx);
         _endpointIds.RemoveAt(idx);
+        _perEndpointRoutes.RemoveAt(idx);
     }
 
     /// <summary>
@@ -291,6 +323,30 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         _router.UnregisterEndpoint(epId);
         _endpoints.RemoveAt(idx);
         _endpointIds.RemoveAt(idx);
+        _perEndpointRoutes.RemoveAt(idx);
+    }
+
+    /// <summary>
+    /// Disables the audio and/or video routes to a registered <see cref="IAVEndpoint"/>
+    /// so, for example, you can send only audio to NDI while still routing the full
+    /// program to a local display.
+    /// </summary>
+    public void SetAveStreamSelection(IAVEndpoint endpoint, AveStreamSelection selection)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        int idx = _endpoints.IndexOf(endpoint);
+        if (idx < 0)
+            throw new ArgumentException("Endpoint is not registered with this player.", nameof(endpoint));
+
+        bool wantAudio = selection is AveStreamSelection.Both or AveStreamSelection.AudioOnly;
+        bool wantVideo = selection is AveStreamSelection.Both or AveStreamSelection.VideoOnly;
+        var (a, v) = _perEndpointRoutes[idx];
+        if (a is { } ar) _router.SetRouteEnabled(ar, wantAudio);
+        if (v is { } vr) _router.SetRouteEnabled(vr, wantVideo);
+        Log.LogInformation(
+            "SetAveStreamSelection: endpoint='{Name}' ({Type}) mode={Mode} wantAudio={WA} wantVideo={WV} routeAudio={HasA} routeVideo={HasV}",
+            endpoint.Name, endpoint.GetType().Name, selection, wantAudio, wantVideo, a, v);
     }
 
     // ── External input registration (§5.7) ───────────────────────────────────
@@ -313,9 +369,11 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         {
             if (_endpoints[i] is IAudioEndpoint or IAVEndpoint)
             {
-                _routeIds.Add(routeOptions is null
+                var r = routeOptions is null
                     ? _router.CreateRoute(inputId, _endpointIds[i])
-                    : _router.CreateRoute(inputId, _endpointIds[i], routeOptions));
+                    : _router.CreateRoute(inputId, _endpointIds[i], routeOptions);
+                var t = _perEndpointRoutes[i];
+                _perEndpointRoutes[i] = (r, t.Video);
             }
         }
 
@@ -337,11 +395,13 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
         for (int i = 0; i < _endpoints.Count; i++)
         {
-            if (_endpoints[i] is IVideoEndpoint or IAVEndpoint)
+            if (_endpoints[i] is IVideoEndpoint v)
             {
-                _routeIds.Add(routeOptions is null
-                    ? _router.CreateRoute(inputId, _endpointIds[i])
-                    : _router.CreateRoute(inputId, _endpointIds[i], routeOptions));
+                var r = routeOptions is null
+                    ? CreateVideoRouteToEndpoint(_router, inputId, _endpointIds[i], v)
+                    : _router.CreateRoute(inputId, _endpointIds[i], routeOptions);
+                var t = _perEndpointRoutes[i];
+                _perEndpointRoutes[i] = (t.Audio, r);
             }
         }
 
@@ -441,13 +501,19 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         SetState(PlaybackState.Opening);
         try
         {
-            await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen).ConfigureAwait(false);
+            // Keep hardware endpoints running when the media file is replaced (shared output pool).
+            await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen, stopRegisteredEndpoints: false)
+                .ConfigureAwait(false);
             AttachDecoder(FFmpegDecoder.Open(path, options ?? DefaultDecoderOptions));
             SetState(PlaybackState.Ready);
+            Log.LogInformation(
+                "OpenAsync(file) ready: {Path} audioInput={A} videoInput={V} endpointCount={E}",
+                path, _audioInputId, _videoInputId, _endpoints.Count);
         }
         catch (Exception ex)
         {
             SetState(PlaybackState.Faulted);
+            Log.LogError(ex, "OpenAsync(file) failed: {Path}", path);
             PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Open, ex));
             throw;
         }
@@ -464,13 +530,18 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         SetState(PlaybackState.Opening);
         try
         {
-            await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen).ConfigureAwait(false);
+            await CloseAsync(ct, PlaybackCompletedReason.ReplacedByOpen, stopRegisteredEndpoints: false)
+                .ConfigureAwait(false);
             AttachDecoder(FFmpegDecoder.Open(stream, options ?? DefaultDecoderOptions, leaveOpen));
             SetState(PlaybackState.Ready);
+            Log.LogInformation(
+                "OpenAsync(stream) ready: audioInput={A} videoInput={V} endpointCount={E}",
+                _audioInputId, _videoInputId, _endpoints.Count);
         }
         catch (Exception ex)
         {
             SetState(PlaybackState.Faulted);
+            Log.LogError(ex, "OpenAsync(stream) failed");
             PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Open, ex));
             throw;
         }
@@ -500,8 +571,14 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
                 _decoderStarted = true;
             }
 
+            // When endpoints are shared with an external output pool, they can already be
+            // running; IMediaEndpoint.StartAsync must not be called again (e.g. PortAudio
+            // Pa_StartStream on an active stream will fail with paStreamIsNotStopped).
             foreach (var ep in _endpoints)
-                await ep.StartAsync(ct).ConfigureAwait(false);
+            {
+                if (!ep.IsRunning)
+                    await ep.StartAsync(ct).ConfigureAwait(false);
+            }
 
             await _router.StartAsync(ct).ConfigureAwait(false);
 
@@ -509,10 +586,14 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
                 StartDriftCorrectionLoop(dco);
 
             SetState(PlaybackState.Playing);
+            Log.LogInformation(
+                "PlayAsync: playing; endpoints={N} router clock={ClockType}",
+                _endpoints.Count, _router.Clock.GetType().Name);
         }
         catch (Exception ex)
         {
             SetState(PlaybackState.Faulted);
+            Log.LogError(ex, "PlayAsync failed");
             PlaybackFailed?.Invoke(this, new PlaybackFailedEventArgs(PlaybackFailureStage.Play, ex));
             throw;
         }
@@ -540,13 +621,21 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     }
 
     /// <summary>Stops playback and releases the current media.</summary>
-    public async Task StopAsync(CancellationToken ct = default)
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="stopRegisteredEndpoints">
+    /// When <see langword="true"/> (default), each <see cref="IMediaEndpoint"/> added via
+    /// <c>AddEndpoint</c> is stopped like today. Set to <see langword="false"/> when those endpoints
+    /// are owned/managed elsewhere (e.g. a global output pool) and only the transport graph should
+    /// be torn down.
+    /// </param>
+    public async Task StopAsync(CancellationToken ct = default, bool stopRegisteredEndpoints = true)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         SetState(PlaybackState.Stopping);
         try
         {
-            await CloseAsync(ct, PlaybackCompletedReason.StoppedByUser).ConfigureAwait(false);
+            await CloseAsync(ct, PlaybackCompletedReason.StoppedByUser, stopRegisteredEndpoints)
+                .ConfigureAwait(false);
             SetState(PlaybackState.Stopped);
         }
         catch (Exception ex)
@@ -725,6 +814,7 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         }
 
         ReleaseSession();
+        _router.ActiveClockChanged -= OnActiveClockChanged;
         _router.Dispose();
         SetState(PlaybackState.Stopped);
     }
@@ -741,6 +831,9 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     {
         _endpoints.Add(endpoint);
         _endpointIds.Add(id);
+        _perEndpointRoutes.Add((null, null));
+        Log.LogDebug("AddEndpoint: {Type} '{Name}' wantAudio={A} wantVideo={V} (session has audioIn={HasA} videoIn={HasV})",
+            endpoint.GetType().Name, endpoint.Name, audio, video, _audioInputId, _videoInputId);
         AutoRouteToEndpoint(id, audio, video);
 
         if (IsActive)
@@ -751,6 +844,8 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     {
         _endpoints.Add(endpoint);
         _endpointIds.Add(id);
+        _perEndpointRoutes.Add((null, null));
+        Log.LogDebug("AddEndpointAsync: {Type} '{Name}' wantAudio={A} wantVideo={V}", endpoint.GetType().Name, endpoint.Name, audio, video);
         AutoRouteToEndpoint(id, audio, video);
 
         if (IsActive)
@@ -768,7 +863,11 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             for (int i = 0; i < _endpoints.Count; i++)
             {
                 if (_endpoints[i] is IAudioEndpoint)
-                    _routeIds.Add(_router.CreateRoute(inputId, _endpointIds[i]));
+                {
+                    var r = _router.CreateRoute(inputId, _endpointIds[i]);
+                    var t = _perEndpointRoutes[i];
+                    _perEndpointRoutes[i] = (r, t.Video);
+                }
             }
         }
 
@@ -779,25 +878,62 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
 
             for (int i = 0; i < _endpoints.Count; i++)
             {
-                if (_endpoints[i] is IVideoEndpoint)
-                    _routeIds.Add(_router.CreateRoute(inputId, _endpointIds[i]));
+                if (_endpoints[i] is IVideoEndpoint v)
+                {
+                    var r = CreateVideoRouteToEndpoint(_router, inputId, _endpointIds[i], v);
+                    var t = _perEndpointRoutes[i];
+                    _perEndpointRoutes[i] = (t.Audio, r);
+                }
             }
         }
 
         decoder.EndOfMedia += OnEndOfMedia;
         _decoder = decoder;
         _decoderStarted = false;
+        for (int i = 0; i < _endpoints.Count; i++)
+        {
+            var (ar, vr) = _perEndpointRoutes[i];
+            Log.LogDebug(
+                "AttachDecoder: ep[{I}] {Type} '{Name}' routeA={A} routeV={V}",
+                i, _endpoints[i].GetType().Name, _endpoints[i].Name, ar, vr);
+        }
     }
 
     private void AutoRouteToEndpoint(EndpointId epId, bool audio, bool video)
     {
+        int idx = _endpointIds.IndexOf(epId);
+        if (idx < 0) return;
+
         if (audio && _audioInputId.HasValue)
-            _routeIds.Add(_router.CreateRoute(_audioInputId.Value, epId));
-        if (video && _videoInputId.HasValue)
-            _routeIds.Add(_router.CreateRoute(_videoInputId.Value, epId));
+        {
+            var r = _router.CreateRoute(_audioInputId.Value, epId);
+            var t = _perEndpointRoutes[idx];
+            _perEndpointRoutes[idx] = (r, t.Video);
+        }
+        if (video && _videoInputId.HasValue && _endpoints[idx] is IVideoEndpoint v)
+        {
+            var r = CreateVideoRouteToEndpoint(_router, _videoInputId.Value, epId, v);
+            var t = _perEndpointRoutes[idx];
+            _perEndpointRoutes[idx] = (t.Audio, r);
+        }
     }
 
-    private async Task CloseAsync(CancellationToken ct, PlaybackCompletedReason? closeReason = null)
+    /// <summary>
+    /// Push sinks (e.g. NDI) do not have a <see cref="IClockCapableEndpoint"/>+pull clock that
+    /// tracks decoded PTS. Without <see cref="VideoRouteOptions.LiveMode"/>, the push thread
+    /// keeps frames pending against PortAudio or the internal stopwatch and video never
+    /// reaches the sink. Pull renderers (Avalonia, SDL3) use the default scheduled mode.
+    /// </summary>
+    private static RouteId CreateVideoRouteToEndpoint(
+        IAVRouter router, InputId inputId, EndpointId epId, IVideoEndpoint v) =>
+        v is not IPullVideoEndpoint
+            ? router.CreateRoute(inputId, epId, new VideoRouteOptions { LiveMode = true })
+            : router.CreateRoute(inputId, epId);
+
+    private async Task CloseAsync(
+        CancellationToken ct,
+        PlaybackCompletedReason? closeReason = null,
+        bool stopRegisteredEndpoints = true)
     {
         bool hadSession = _decoder != null || _decoderStarted || _audioInputId.HasValue || _videoInputId.HasValue;
 
@@ -806,9 +942,12 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         // set before CloseAsync) where endpoint stop calls were skipped.
         {
             try { await _router.StopAsync(ct).ConfigureAwait(false); } catch { }
-            foreach (var ep in _endpoints)
+            if (stopRegisteredEndpoints)
             {
-                try { await ep.StopAsync(ct).ConfigureAwait(false); } catch { }
+                foreach (var ep in _endpoints)
+                {
+                    try { await ep.StopAsync(ct).ConfigureAwait(false); } catch { }
+                }
             }
         }
 
@@ -829,9 +968,16 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         Interlocked.Exchange(ref _completionRaised, 0);
         StopDriftCorrectionLoop();
 
-        foreach (var routeId in _routeIds)
-            _router.RemoveRoute(routeId);
-        _routeIds.Clear();
+        Log.LogDebug("ReleaseSession: tearing down {N} per-endpoint route sets", _perEndpointRoutes.Count);
+        for (int i = 0; i < _perEndpointRoutes.Count; i++)
+        {
+            var (a, v) = _perEndpointRoutes[i];
+            if (a is { } ar) _router.RemoveRoute(ar);
+            if (v is { } vr) _router.RemoveRoute(vr);
+        }
+        _perEndpointRoutes.Clear();
+        for (int n = 0; n < _endpoints.Count; n++)
+            _perEndpointRoutes.Add((null, null));
 
         if (_audioInputId.HasValue)
         {
@@ -872,22 +1018,37 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             var ch = _decoder?.FirstAudioChannel;
             if (ch is not null)
             {
-                // Ring drain — bounded by the audio tail length, so no worst-case cap needed.
-                while (!_disposed && !IsStoppingOrStopped() && ch.BufferAvailable > 0)
+                // Only drain while we are still in the same "playing" session. When the user
+                // opens another file, OpenAsync sets Opening before CloseAsync/ReleaseSession —
+                // isStopping would NOT include Opening and this loop would spin until the
+                // (often disposed) channel drained or worse.
+                while (_disposed is false
+                       && _state == PlaybackState.Playing
+                       && ch.BufferAvailable > 0)
                     await Task.Delay(20).ConfigureAwait(false);
-                // Device buffer grace — covers PortAudio's host-API queue. 100 ms is
-                // comfortably above typical output latency for common host APIs.
-                if (!_disposed && !IsStoppingOrStopped())
+
+                if (_disposed is false
+                    && _state == PlaybackState.Playing
+                    && ch is not null)
+                {
+                    // Device buffer grace — PortAudio's host-API queue.
                     await Task.Delay(100).ConfigureAwait(false);
+                }
             }
         }
         catch
         {
-            // Fall through — CloseAsync already fired a PlaybackCompleted with a
-            // Stopped/Replaced reason, so we still shouldn't fire SourceEnded.
+            // Decoder disposed or channel torn down mid-drain, or a new file opened.
+            return;
         }
 
-        if (_disposed || IsStoppingOrStopped()) return;
+        // ReplacedByOpen: state is no longer Playing (e.g. Opening, Ready) — do not treat as SourceEnded.
+        if (_disposed || _state != PlaybackState.Playing)
+        {
+            if (!_disposed)
+                Log.LogDebug("SourceEnded drain skipped: state={State} (new open replaced session).", _state);
+            return;
+        }
         if (Interlocked.Exchange(ref _completionRaised, 1) != 0) return;
         SetState(PlaybackState.Stopped);
         PlaybackCompleted?.Invoke(this, new PlaybackCompletedEventArgs(PlaybackCompletedReason.SourceEnded));

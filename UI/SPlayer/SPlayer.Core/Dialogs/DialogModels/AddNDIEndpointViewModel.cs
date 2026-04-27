@@ -11,31 +11,12 @@ namespace SPlayer.Core.Dialogs.DialogModels;
 
 public partial class AddNDIEndpointViewModel : ViewModelBase
 {
+    /// <summary>0 = audio+video, 1 = audio only, 2 = video only.</summary>
+    [ObservableProperty]
+    private int _streamModeIndex;
+
     [ObservableProperty]
     private string _senderName = "MFPlayer Output";
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AddCommand))]
-    private bool _hasAudio = true;
-
-    [ObservableProperty]
-    private int _audioSampleRate = 48_000;
-
-    [ObservableProperty]
-    private int _audioChannels = 2;
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AddCommand))]
-    private bool _hasVideo = false;
-
-    [ObservableProperty]
-    private int _videoWidth = 1920;
-
-    [ObservableProperty]
-    private int _videoHeight = 1080;
-
-    [ObservableProperty]
-    private double _videoFrameRate = 60.0;
 
     [ObservableProperty]
     private NDIEndpointPreset _selectedPreset = NDIEndpointPreset.Balanced;
@@ -49,17 +30,26 @@ public partial class AddNDIEndpointViewModel : ViewModelBase
 
     public NdiOutputConfig? CreatedConfig { get; private set; }
 
-    private bool CanAdd() => HasAudio || HasVideo;
-
-    [RelayCommand(CanExecute = nameof(CanAdd))]
+    [RelayCommand]
     private void Add(Window dialog)
     {
-        VideoFormat? videoFormat = HasVideo
-            ? VideoFormat.Create(VideoWidth, VideoHeight, PixelFormat.Uyvy422, VideoFrameRate)
+        var (includeAudio, includeVideo) = StreamModeIndex switch
+        {
+            1 => (true, false),  // audio only
+            2 => (false, true),  // video only
+            _ => (true, true)    // 0: audio + video
+        };
+
+        // Use a placeholder video format — actual frame dimensions and fps adapt
+        // per-frame from incoming content (VideoWriteLoop PTS-delta tracking).
+        VideoFormat? videoFormat = includeVideo
+            ? VideoFormat.Create(1920, 1080, PixelFormat.Rgba32, 30.0)
             : null;
 
-        AudioFormat? audioFormat = HasAudio
-            ? new AudioFormat(AudioSampleRate, AudioChannels)
+        // 48 kHz stereo covers the vast majority of content; NDI audio format
+        // is declared once at start and the router resamples if needed.
+        AudioFormat? audioFormat = includeAudio
+            ? new AudioFormat(48_000, 2)
             : null;
 
         CreatedConfig = new NdiOutputConfig(SenderName, audioFormat, videoFormat, SelectedPreset);

@@ -21,7 +21,7 @@ namespace S.Media.NDI;
 /// Consolidated NDI sink that can accept both audio and video and send them through one sender
 /// with a shared A/V timing context.
 /// </summary>
-public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
+public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>, IVideoFpsReceiver
 {
     private static readonly ILogger Log = NDIMediaLogging.GetLogger(nameof(NDIAVEndpoint));
 
@@ -104,6 +104,12 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
     // Video path
     private readonly bool _hasVideo;
     private readonly VideoFormat _videoTargetFormat;
+    // Fps hint supplied by AVRouter at route-creation time from the source
+    // stream's container frame-rate (r_frame_rate). Used by VideoWriteLoop so
+    // the correct fps is declared from the first sent frame, letting NDI
+    // receivers see the real content fps without waiting for PTS deltas.
+    private volatile int _videoFpsHintNum;
+    private volatile int _videoFpsHintDen;
     private readonly ConcurrentQueue<byte[]> _videoPool = new();
     private readonly PooledWorkQueue<PendingVideo> _videoWork = new();
     private readonly int _videoMaxPendingFrames;
@@ -1126,12 +1132,33 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
         }
     }
 
+    void IVideoFpsReceiver.ApplyFpsHint(int numerator, int denominator)
+    {
+        if (numerator > 0 && denominator > 0)
+        {
+            _videoFpsHintNum = numerator;
+            _videoFpsHintDen = denominator;
+        }
+    }
+
     private unsafe void VideoWriteLoop()
     {
         var token = _cts!.Token;
-        int fpsNum = _videoTargetFormat.FrameRateNumerator > 0 ? _videoTargetFormat.FrameRateNumerator : 30000;
-        int fpsDen = _videoTargetFormat.FrameRateDenominator > 0 ? _videoTargetFormat.FrameRateDenominator : 1001;
+        // Prefer fps from source stream metadata (propagated via IVideoFpsReceiver before
+        // playback starts), then fall back to the configured target format, then to 30000/1001.
+        int hintNum = _videoFpsHintNum;
+        int hintDen = _videoFpsHintDen;
+        int fpsNum = hintNum > 0 ? hintNum
+            : _videoTargetFormat.FrameRateNumerator > 0 ? _videoTargetFormat.FrameRateNumerator : 30000;
+        int fpsDen = hintNum > 0 ? hintDen
+            : _videoTargetFormat.FrameRateDenominator > 0 ? _videoTargetFormat.FrameRateDenominator : 1001;
         SwsContext* ffmpegSws = null;
+
+        // PTS-delta tracking for fps auto-adaptation.
+        long lastPtsTicks = long.MinValue;
+        const int DeltaWindowSize = 8;
+        var ptsDeltaRing = new long[DeltaWindowSize];
+        int deltaFilled = 0;
 
         // Pre-allocate scratch arrays for sws_scale to avoid 4 heap allocations per frame.
         var swsSrcData   = new byte*[4];
@@ -1279,6 +1306,36 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
                                 "A/V offset at the receiver.  Upstream should supply valid video PTS.", Name);
                         }
 
+                        // Adapt NDI frame-rate declaration to actual content fps.
+                        // The configured rate (e.g. 60fps) is wrong for 24fps content;
+                        // receivers use FrameRateN/D for buffer management, so a mismatch
+                        // causes burst delivery every few seconds.
+                        // Skip PTS=0: SafePts maps AV_NOPTS_VALUE to TimeSpan.Zero, so
+                        // zero is ambiguous. Using > 0 avoids a false cluster of zero deltas
+                        // that would produce a huge bogus first-delta and pollute the ring.
+                        if (videoPts > 0 && lastPtsTicks > 0)
+                        {
+                            long delta = videoPts - lastPtsTicks;
+                            if (delta > 83_333 && delta < 10_000_000) // 1–120 fps bounds
+                            {
+                                ptsDeltaRing[deltaFilled % DeltaWindowSize] = delta;
+                                deltaFilled++;
+                                // Snap on the very first valid delta so frame 2 (the second
+                                // non-zero-PTS frame) already declares the correct fps.
+                                int windowCount = Math.Min(deltaFilled, DeltaWindowSize);
+                                long avgDelta = 0;
+                                for (int i = 0; i < windowCount; i++) avgDelta += ptsDeltaRing[i];
+                                avgDelta /= windowCount;
+                                var (sn, sd) = SnapFps(avgDelta);
+                                if (sn > 0 && (sn != fpsNum || sd != fpsDen))
+                                {
+                                    fpsNum = sn;
+                                    fpsDen = sd;
+                                }
+                            }
+                        }
+                        if (videoPts > 0) lastPtsTicks = videoPts;
+
                         var vf = new NDIVideoFrameV2
                         {
                             Xres = pf.Width,
@@ -1374,6 +1431,30 @@ public class NDIAVEndpoint : IAVEndpoint, IFormatCapabilities<PixelFormat>
 
         if (ffmpegSws != null)
             ffmpeg.sws_freeContext(ffmpegSws);
+    }
+
+    /// <summary>
+    /// Maps an average PTS delta (in 100 ns ticks) to the nearest standard NDI
+    /// frame-rate fraction.  Returns (0, 0) if no standard rate is within 2 %.
+    /// </summary>
+    private static (int n, int d) SnapFps(long avgDeltaTicks)
+    {
+        if (avgDeltaTicks <= 0) return (0, 0);
+        double fps = 10_000_000.0 / avgDeltaTicks;
+        ReadOnlySpan<(int n, int d)> standards =
+        [
+            (120, 1), (60000, 1001), (60, 1), (50, 1), (48, 1),
+            (30000, 1001), (30, 1), (25, 1), (24000, 1001), (24, 1), (15, 1)
+        ];
+        double bestDiff = double.MaxValue;
+        (int n, int d) best = (0, 0);
+        foreach (var (n, d) in standards)
+        {
+            double diff = Math.Abs(fps - (double)n / d);
+            if (diff < bestDiff) { bestDiff = diff; best = (n, d); }
+        }
+        double bestFps = (double)best.n / best.d;
+        return bestDiff / bestFps < 0.02 ? best : (0, 0);
     }
 
     /// <summary>

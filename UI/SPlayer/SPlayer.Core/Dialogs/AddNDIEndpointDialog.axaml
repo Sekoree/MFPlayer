@@ -30,48 +30,17 @@
                       HorizontalAlignment="Stretch"/>
         </StackPanel>
 
-        <!-- Audio section -->
-        <CheckBox Content="Audio Output" IsChecked="{Binding HasAudio}" Margin="0,4,0,0"/>
-        <Border IsVisible="{Binding HasAudio}"
-                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                CornerRadius="4" Padding="12,10">
-            <Grid ColumnDefinitions="*, 12, *">
-                <StackPanel Grid.Column="0" Spacing="4">
-                    <TextBlock Text="Sample Rate" FontSize="12"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <TextBox Text="{Binding AudioSampleRate}" InnerRightContent="Hz"/>
-                </StackPanel>
-                <StackPanel Grid.Column="2" Spacing="4">
-                    <TextBlock Text="Channels" FontSize="12"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <TextBox Text="{Binding AudioChannels}"/>
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <!-- Video section -->
-        <CheckBox Content="Video Output" IsChecked="{Binding HasVideo}"/>
-        <Border IsVisible="{Binding HasVideo}"
-                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                CornerRadius="4" Padding="12,10">
-            <Grid ColumnDefinitions="*, 12, *, 12, *">
-                <StackPanel Grid.Column="0" Spacing="4">
-                    <TextBlock Text="Width" FontSize="12"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <TextBox Text="{Binding VideoWidth}" InnerRightContent="px"/>
-                </StackPanel>
-                <StackPanel Grid.Column="2" Spacing="4">
-                    <TextBlock Text="Height" FontSize="12"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <TextBox Text="{Binding VideoHeight}" InnerRightContent="px"/>
-                </StackPanel>
-                <StackPanel Grid.Column="4" Spacing="4">
-                    <TextBlock Text="Frame Rate" FontSize="12"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <TextBox Text="{Binding VideoFrameRate}" InnerRightContent="fps"/>
-                </StackPanel>
-            </Grid>
-        </Border>
+        <StackPanel Spacing="4" Margin="0,4,0,0">
+            <TextBlock Text="This sender carries" FontSize="12"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            <TextBlock Text="You can use audio only, video only, or both on one NDI name."
+                       FontSize="11" Opacity="0.85" TextWrapping="Wrap" MaxWidth="400"/>
+            <ComboBox SelectedIndex="{Binding StreamModeIndex, Mode=TwoWay}" HorizontalAlignment="Stretch">
+                <ComboBoxItem>Audio and video</ComboBoxItem>
+                <ComboBoxItem>Audio only</ComboBoxItem>
+                <ComboBoxItem>Video only</ComboBoxItem>
+            </ComboBox>
+        </StackPanel>
 
         <Grid ColumnDefinitions="*, 8, *" Margin="0,6,0,0">
             <Button Grid.Column="0"

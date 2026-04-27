@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using NDILib;
 using S.Media.Core.Media;
+using S.Media.Core.Media.Endpoints;
 using S.Media.NDI;
 
 namespace SPlayer.Core.Models;
@@ -22,7 +23,17 @@ public partial class NDIEndpointModel : ObservableObject
 
     public string Name => _config.SenderName;
     public string Info { get; }
+
+    /// <summary>Whether this sender was created to carry audio (affects player warnings / routing intent).</summary>
+    public bool ConfigIncludesAudio => _config.AudioFormat.HasValue;
+
+    /// <summary>Whether this sender was created to carry video.</summary>
+    public bool ConfigIncludesVideo => _config.VideoFormat.HasValue;
+
     public bool Open => _endpoint?.IsRunning ?? false;
+
+    /// <summary>Valid when the NDI output has been started; used by the player for routing.</summary>
+    public IAVEndpoint? AveEndpoint => _endpoint;
 
     public Action? RemoveRequestedAction { get; set; }
 

@@ -15,15 +15,11 @@
     
     <TabControl TabStripPlacement="Left">
         <TabItem Header="Outputs">
-            <views:OutputView>
-                <views:OutputView.DataContext>
-                    <vm:OutputViewModel/>
-                </views:OutputView.DataContext>
-            </views:OutputView>
+            <views:OutputView DataContext="{Binding Outputs}" />
         </TabItem>
         
         <TabItem Header="Player">
-            
+            <views:PlayerView DataContext="{Binding Player}" />
         </TabItem>
     </TabControl>
     

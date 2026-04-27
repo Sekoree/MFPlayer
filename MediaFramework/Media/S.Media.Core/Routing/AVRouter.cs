@@ -122,6 +122,11 @@ public sealed class AVRouter : IAVRouter
         public AudioFormat? OriginalAudioFormat; // §6.5 — format at route creation time
         public AudioFormat? LastSeenAudioFormat; // §6.5 — last observed format (for change detection)
 
+        // Fan-out: non-null when the same audio input is shared by multiple routes.
+        // The route reads from this private AudioChannel (fed by AudioFanout) instead of
+        // calling FillBuffer directly on the shared source, preventing concurrent access.
+        public AudioChannel? FanoutChannel;
+
         // Video-specific: per-route subscription into the input channel's frame stream.
         // Each (input, endpoint) pair owns its own bounded queue — the decoder fans
         // each frame out to every subscription, so pull (SDL3/Avalonia) and push
@@ -227,6 +232,9 @@ public sealed class AVRouter : IAVRouter
     // so each route has independent PTS-origin state regardless of how many routes share
     // the same endpoint. _pushVideoDrift ConcurrentDictionary removed.
     private readonly ConcurrentDictionary<RouteId, byte> _pushAudioFormatMismatchWarnings = new();
+    // One AudioFanout per audio InputId that has 2+ routes; keeps all subscribers supplied
+    // from a single reader task so independent RT callbacks never race on FillBuffer.
+    private readonly ConcurrentDictionary<InputId, AudioFanout> _audioFanouts = new();
 
     // §3.20 / EL3: rate-limit repeated push-tick exceptions. Log the first three,
     // then every 100th, so a persistent fault doesn't flood the log while still
@@ -745,6 +753,11 @@ public sealed class AVRouter : IAVRouter
         if (!_routes.TryGetValue(id, out var route))
             throw new MediaRoutingException($"Route {id} is not registered.");
         Volatile.Write(ref route.Enabled, enabled);
+        if (Log.IsEnabled(LogLevel.Debug))
+        {
+            Log.LogDebug("SetRouteEnabled: route={Route} enabled={Enabled} kind={Kind} in→{Input} out→{Endpoint}",
+                id, enabled, route.Kind, route.InputId, route.EndpointId);
+        }
     }
 
     public void SetRouteGain(RouteId id, float gain)
@@ -1186,6 +1199,35 @@ public sealed class AVRouter : IAVRouter
                 route.BakedChannelMap = route.ChannelMap.BakeRoutes(inp.AudioChannel.SourceFormat.Channels);
 
             _routes[routeId] = route;
+
+            // Fan-out guard: if any other audio route already references the same input channel,
+            // multiple independent RT callbacks would call FillBuffer concurrently — a
+            // single-reader contract violation (see §3.48 / CH1 debug assertion).
+            // Create one AudioFanout per input to serialise all reads on a background task
+            // and broadcast decoded chunks to per-route subscriber AudioChannels.
+            if (inp.AudioChannel is not null)
+            {
+                bool hasOtherAudioRoutes = false;
+                foreach (var r in _routes.Values)
+                {
+                    if (r.Kind == InputKind.Audio && r.InputId == inp.Id && r.Id != routeId)
+                    {
+                        hasOtherAudioRoutes = true;
+                        break;
+                    }
+                }
+                if (hasOtherAudioRoutes)
+                {
+                    var fanout = _audioFanouts.GetOrAdd(inp.Id, _ => new AudioFanout(inp.AudioChannel));
+                    foreach (var r in _routes.Values)
+                    {
+                        if (r.Kind != InputKind.Audio || r.InputId != inp.Id) continue;
+                        if (r.FanoutChannel is null)
+                            r.FanoutChannel = fanout.AddSubscriber(r.Id);
+                    }
+                }
+            }
+
             RebuildAudioRouteSnapshot();
 
             // §10.2 / EL2 — correlation scope: the creation log record
@@ -1307,6 +1349,24 @@ public sealed class AVRouter : IAVRouter
                 }
             }
 
+            if (inp.VideoChannel is not null &&
+                inp.VideoChannel.SourceFormat.FrameRateNumerator > 0 &&
+                ep.Video is IVideoFpsReceiver fpsSink)
+            {
+                try
+                {
+                    fpsSink.ApplyFpsHint(
+                        inp.VideoChannel.SourceFormat.FrameRateNumerator,
+                        inp.VideoChannel.SourceFormat.FrameRateDenominator);
+                }
+                catch (Exception ex)
+                {
+                    Log.LogWarning(ex,
+                        "ApplyFpsHint threw on endpoint {Endpoint}; continuing with configured fps.",
+                        ep.Id);
+                }
+            }
+
             // §10.2 / EL2 — correlation scope (video sibling).
             if (Log.IsEnabled(LogLevel.Debug))
             {
@@ -1326,6 +1386,23 @@ public sealed class AVRouter : IAVRouter
     {
         // Caller must hold _lock
         _routes.TryRemove(route.Id, out _);
+
+        // Fan-out cleanup: stop delivering to this route's subscriber channel.
+        // We null FanoutChannel first so any in-flight RT callback that completes
+        // after the snapshot rebuild falls back gracefully to inp.AudioChannel.
+        if (route.Kind == InputKind.Audio && route.FanoutChannel is not null)
+        {
+            route.FanoutChannel = null;
+            if (_audioFanouts.TryGetValue(route.InputId, out var fanout))
+            {
+                fanout.RemoveSubscriber(route.Id);
+                if (fanout.IsEmpty)
+                {
+                    _audioFanouts.TryRemove(route.InputId, out _);
+                    fanout.Dispose();
+                }
+            }
+        }
 
         if (route.OwnsResampler)
             route.Resampler?.Dispose();
@@ -1617,7 +1694,7 @@ public sealed class AVRouter : IAVRouter
                 if (!Volatile.Read(ref route.Enabled)) continue;
                 if (!_inputs.TryGetValue(route.InputId, out var inp) || !inp.Enabled) continue;
 
-                var channel = inp.AudioChannel!;
+                IAudioChannel channel = route.FanoutChannel ?? inp.AudioChannel!;
                 var srcFormat = channel.SourceFormat;
 
                 // §6.5 — detect format changes at runtime and fire once per change.
@@ -1936,7 +2013,7 @@ public sealed class AVRouter : IAVRouter
                 if (!_router._inputs.TryGetValue(route.InputId, out var inp) || !inp.Enabled)
                     continue;
 
-                var channel = inp.AudioChannel!;
+                IAudioChannel channel = route.FanoutChannel ?? inp.AudioChannel!;
                 var srcFormat = channel.SourceFormat;
 
                 // Need scratch for per-channel pull
@@ -2018,6 +2095,95 @@ public sealed class AVRouter : IAVRouter
             // VU meters read the same signal the endpoint consumes
             // regardless of driving mode (RT callback vs router push).
             _endpoint.PeakLevel = MeasurePeak(dest);
+        }
+    }
+
+    /// <summary>
+    /// Reads audio from a shared <see cref="IAudioChannel"/> on a dedicated background task
+    /// and distributes chunks to per-route <see cref="AudioChannel"/> subscriber buffers.
+    /// Prevents the concurrent-FillBuffer assertion that fires when two independent PortAudio
+    /// RT callbacks both read from the same <see cref="IAudioChannel"/> (§3.48 / CH1).
+    /// </summary>
+    private sealed class AudioFanout : IDisposable
+    {
+        private readonly IAudioChannel _source;
+        // One AudioChannel per route that shares this input; written by the background
+        // task, read by the route's RT callback or push tick (each has its own subscriber).
+        private readonly ConcurrentDictionary<RouteId, AudioChannel> _subscribers = new();
+        private readonly CancellationTokenSource _cts = new();
+        private readonly Task _task;
+
+        internal AudioFanout(IAudioChannel source)
+        {
+            _source = source;
+            _task = Task.Run(RunAsync, _cts.Token);
+        }
+
+        internal AudioChannel AddSubscriber(RouteId routeId)
+        {
+            // bufferDepth 4 ≈ 43 ms at 48 kHz / 512 frames — enough headroom for an RT
+            // callback period while keeping post-seek stale-data lag short.
+            var ch = new AudioChannel(_source.SourceFormat, bufferDepth: 4);
+            _subscribers[routeId] = ch;
+            return ch;
+        }
+
+        internal void RemoveSubscriber(RouteId routeId)
+        {
+            // Only stop writing to the subscriber; do NOT dispose the AudioChannel here.
+            // An in-flight RT callback may still hold a reference and read from it safely
+            // (underrun on a managed AudioChannel returns silence, never crashes).
+            _subscribers.TryRemove(routeId, out _);
+        }
+
+        internal bool IsEmpty => _subscribers.IsEmpty;
+
+        private async Task RunAsync()
+        {
+            int channels = _source.SourceFormat.Channels;
+            const int FramesPerRead = 512;
+            var buf = new float[FramesPerRead * channels];
+            try
+            {
+                while (!_cts.IsCancellationRequested)
+                {
+                    int filled = _source.FillBuffer(buf.AsSpan(0, buf.Length), FramesPerRead);
+                    if (filled > 0)
+                    {
+                        var data = buf.AsMemory(0, filled * channels);
+                        var subs = new List<AudioChannel>(_subscribers.Values);
+                        if (subs.Count == 1)
+                        {
+                            await subs[0].WriteAsync(data, _cts.Token).ConfigureAwait(false);
+                        }
+                        else if (subs.Count > 1)
+                        {
+                            // Write concurrently so a slow subscriber (e.g. NDI audio drain
+                            // at push-tick cadence) does not head-of-line block faster ones
+                            // (e.g. PortAudio RT callback). Backpressure still applies: we
+                            // wait for ALL writes before reading the next chunk.
+                            var tasks = new Task[subs.Count];
+                            for (int i = 0; i < subs.Count; i++)
+                                tasks[i] = subs[i].WriteAsync(data, _cts.Token).AsTask();
+                            await Task.WhenAll(tasks).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        // Underrun — source ring is momentarily empty (seek drain or
+                        // decoder stall). Sleep briefly so we don't busy-spin.
+                        await Task.Delay(1, _cts.Token).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            try { _task.Wait(TimeSpan.FromSeconds(2)); } catch { }
+            _cts.Dispose();
         }
     }
 

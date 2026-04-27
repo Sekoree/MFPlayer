@@ -48,6 +48,8 @@ public sealed class AvaloniaOpenGlVideoCloneEndpoint : OpenGlControlBase, IVideo
 
     public Task StartAsync(CancellationToken ct = default)
     {
+        if (_running)
+            return Task.CompletedTask;
         _running = true;
         RequestNextFrameRendering();
         return Task.CompletedTask;

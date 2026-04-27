@@ -23,7 +23,9 @@ public static class MediaCoreLogging
             _factory = loggerFactory ?? NullLoggerFactory.Instance;
     }
 
-    internal static ILogger GetLogger(string category) => _factory.CreateLogger(category);
+    /// <summary>Resolves a category named logger; uses the factory from <see cref="Configure"/>.</summary>
+    public static ILogger GetLogger(string category) => _factory.CreateLogger(category);
+
     internal static ILogger<T> GetLogger<T>() => _factory.CreateLogger<T>();
 }
 
