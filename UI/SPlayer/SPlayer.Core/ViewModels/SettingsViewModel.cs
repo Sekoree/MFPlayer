@@ -60,6 +60,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _rememberPlaylistOverrides = true;
 
+    /// <summary>
+    /// §heavy-media-fixes phase 2 — when enabled, every Avalonia render path
+    /// requested via the player paces its tick to the source frame interval
+    /// instead of vsync.
+    /// </summary>
+    [ObservableProperty]
+    private bool _limitRenderFpsToSource;
+
     // ── A/V drift correction ────────────────────────────────────────────────
 
     [ObservableProperty] private double _avInitialDelaySec = 10;
@@ -68,8 +76,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private double _avIgnoreOutlierDriftMs = 250;
     [ObservableProperty] private int _avOutlierConsecutiveSamples = 3;
     [ObservableProperty] private double _avCorrectionGain = 0.15;
-    [ObservableProperty] private double _avMaxStepMs = 5;
-    [ObservableProperty] private double _avMaxAbsOffsetMs = 250;
+    [ObservableProperty] private double _avMaxStepMs = 20;
+    [ObservableProperty] private double _avMaxAbsOffsetMs = 2000;
 
     [ObservableProperty]
     private string _statusMessage = "";
@@ -102,6 +110,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             Loop = s.Loop;
             VolumePercent = s.VolumePercent;
             RememberPlaylistOverrides = s.RememberPlaylistOverrides;
+            LimitRenderFpsToSource = s.LimitRenderFpsToSource;
 
             AvInitialDelaySec = s.AvDrift.InitialDelaySec;
             AvIntervalSec = s.AvDrift.IntervalSec;
@@ -182,6 +191,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnLoopChanged(bool value) => ApplyAndSaveIfReady();
     partial void OnVolumePercentChanged(double value) => ApplyAndSaveIfReady();
     partial void OnRememberPlaylistOverridesChanged(bool value) => ApplyAndSaveIfReady();
+    partial void OnLimitRenderFpsToSourceChanged(bool value) => ApplyAndSaveIfReady();
 
     partial void OnAvInitialDelaySecChanged(double value) => ApplyAndSaveIfReady();
     partial void OnAvIntervalSecChanged(double value) => ApplyAndSaveIfReady();
@@ -221,6 +231,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             Loop = Loop,
             VolumePercent = VolumePercent,
             RememberPlaylistOverrides = RememberPlaylistOverrides,
+            LimitRenderFpsToSource = LimitRenderFpsToSource,
             AvDrift = new AvDriftSettings
             {
                 InitialDelaySec = AvInitialDelaySec,

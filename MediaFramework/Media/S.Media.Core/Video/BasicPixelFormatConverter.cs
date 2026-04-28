@@ -8,16 +8,37 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Pure-managed scalar pixel converter — the reference implementation that
-/// never depends on any native library.  Used as the final fallback path by
+/// never depends on any native library. Used as the final fallback path by
 /// <c>FFmpegPixelFormatConverter</c> for format pairs libswscale doesn't
 /// support, and as the standalone choice for callers that want a guaranteed-
 /// portable converter (e.g. test harnesses).
 /// <para>
-/// Supports BGRA↔RGBA byte-swap, several common YUV → RGB / BGR conversions
-/// (NV12, I420, UYVY, I210, I010, P010, Yuv444p) and packed 24-bit + Gray8
-/// expansion to RGBA / BGRA.  All paths are scalar and intentionally simple;
-/// production callers should prefer the FFmpeg-backed converter for
-/// throughput-sensitive workloads.
+/// <b>Format coverage today.</b> Real scalar implementations exist for:
+/// </para>
+/// <list type="bullet">
+/// <item><description>BGRA32 ↔ RGBA32 byte-swap.</description></item>
+/// <item><description>RGB24 / BGR24 → RGBA32 / BGRA32 (packed-24 expansion).</description></item>
+/// <item><description>Gray8 → RGBA32 / BGRA32.</description></item>
+/// <item><description>Yuv444p → RGBA32 / BGRA32.</description></item>
+/// <item><description>Yuv422p10 (I210) → RGBA32 / BGRA32.</description></item>
+/// <item><description>Yuv420p10 (I010) → RGBA32 / BGRA32.</description></item>
+/// <item><description>P010 → RGBA32 / BGRA32.</description></item>
+/// </list>
+/// <para>
+/// <b>§heavy-media-fixes phase 7 — explicit placeholder behaviour.</b>
+/// NV12 / Yuv420p / Uyvy422 → RGBA32 / BGRA32 are <i>intentionally</i>
+/// stubbed: they return an opaque-black frame of the correct size and the
+/// existing <c>VideoPts</c>, so timing / pacing stays deterministic when
+/// libswscale is unavailable. Production callers should always go through
+/// <see cref="S.Media.FFmpeg.FFmpegPixelFormatConverter"/>, which covers
+/// these formats via libswscale's SIMD path; this class only handles them
+/// silently because tests pin the contract and because keeping the channel
+/// flowing is preferable to throwing on a code path that genuinely shouldn't
+/// be hit on a healthy install. Vectorising the scalar paths
+/// (<see cref="System.Runtime.Intrinsics"/>) was considered and deferred:
+/// libswscale already delivers what we need, and the maintenance cost of a
+/// second, hand-vectorised path isn't justified by the (rare-fallback)
+/// callers.
 /// </para>
 /// </summary>
 public sealed class BasicPixelFormatConverter : IPixelFormatConverter
@@ -69,11 +90,14 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
             var owner = new ArrayPoolOwner<byte>(rented);
 
             bool dstRgba = dstFormat == PixelFormat.Rgba32;
-            // Managed scalar fallback — the FFmpeg-backed converter is the
-            // throughput path; this class is only used directly as a portable
-            // reference / final-fallback.  I210 has the only fully-correct
-            // implementation here today; the others currently ship a black
-            // frame to preserve downstream timing without regressing colour.
+            // §heavy-media-fixes phase 7 — only Yuv422p10 has a real scalar
+            // implementation here. Nv12 / Yuv420p / Uyvy422 fall through to
+            // the opaque-black placeholder below by design (see the class
+            // docstring); the FFmpeg-backed converter handles them via
+            // libswscale's SIMD path and is the production route. Keeping
+            // the channel flowing with a same-shape buffer means downstream
+            // pacing isn't disturbed if a non-fatal misconfiguration ever
+            // routes a frame here without FFmpeg available.
             bool managedConverted = source.PixelFormat == PixelFormat.Yuv422p10
                 && TryConvertI210Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba,
                     colorRange, colorMatrix);

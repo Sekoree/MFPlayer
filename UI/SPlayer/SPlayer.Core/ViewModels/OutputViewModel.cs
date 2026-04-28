@@ -47,10 +47,29 @@ public partial class OutputViewModel : ObservableObject
         await model.StartCommand.ExecuteAsync(null);
     }
 
+    /// <summary>
+    /// §sdl3-output — defaults to the Avalonia backend so existing keyboard /
+    /// scripting flows that bind to <c>AddVideoEndpointCommand</c> keep
+    /// working unchanged. The Outputs view's split-button drop-down also
+    /// invokes <see cref="AddAvaloniaVideoEndpointCommand"/> /
+    /// <see cref="AddSdl3VideoEndpointCommand"/> directly so the user can
+    /// pick the backend up front.
+    /// </summary>
     [RelayCommand]
-    private async Task AddVideoEndpoint(Window parent)
+    private Task AddVideoEndpoint(Window parent) =>
+        AddVideoEndpointInternal(parent, VideoOutputBackend.Avalonia);
+
+    [RelayCommand]
+    private Task AddAvaloniaVideoEndpoint(Window parent) =>
+        AddVideoEndpointInternal(parent, VideoOutputBackend.Avalonia);
+
+    [RelayCommand]
+    private Task AddSdl3VideoEndpoint(Window parent) =>
+        AddVideoEndpointInternal(parent, VideoOutputBackend.Sdl3);
+
+    private async Task AddVideoEndpointInternal(Window parent, VideoOutputBackend backend)
     {
-        var vm = new AddVideoEndpointViewModel(parent.Screens.All);
+        var vm = new AddVideoEndpointViewModel(parent.Screens.All, backend);
         var dialog = new AddVideoEndpointDialog
         {
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -61,13 +80,24 @@ public partial class OutputViewModel : ObservableObject
 
         var screen = vm.SelectedScreen?.Screen;
         var info = screen != null
-            ? $"{screen.Bounds.Width} × {screen.Bounds.Height}"
-            : "Fullscreen";
+            ? $"{vm.Backend} · {screen.Bounds.Width} × {screen.Bounds.Height}"
+            : $"{vm.Backend} · Fullscreen";
 
-        var outputWindow = new VideoOutputWindow(vm.Title, screen);
-        outputWindow.Show();
+        IVideoOutputHost host;
+        switch (vm.Backend)
+        {
+            case VideoOutputBackend.Sdl3:
+                host = new Sdl3VideoOutputHost(vm.Title, screen);
+                break;
+            case VideoOutputBackend.Avalonia:
+            default:
+                var window = new VideoOutputWindow(vm.Title, screen);
+                window.Show();
+                host = new AvaloniaVideoOutputHost(window);
+                break;
+        }
 
-        var model = new VideoEndpointModel(vm.Title, info, outputWindow);
+        var model = new VideoEndpointModel(vm.Title, info, host);
         model.RemoveRequestedAction = () => VideoEndpointModels.Remove(model);
         VideoEndpointModels.Add(model);
         await model.StartCommand.ExecuteAsync(null);

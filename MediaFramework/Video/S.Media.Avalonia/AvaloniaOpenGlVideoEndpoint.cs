@@ -18,7 +18,7 @@ namespace S.Media.Avalonia;
 /// Host apps place this control in their visual tree and wire channels via Mixer.
 /// </summary>
 public class AvaloniaOpenGlVideoEndpoint
-    : OpenGlControlBase, IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver, IVideoPresentationClockOverridable
+    : OpenGlControlBase, IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver, IVideoPresentationClockOverridable, IVideoEndpointDiagnosticsSink, IVideoEndpointInputFormatHint
 {
     private static readonly ILogger Log = AvaloniaVideoLogging.GetLogger(nameof(AvaloniaOpenGlVideoEndpoint));
 
@@ -70,6 +70,11 @@ public class AvaloniaOpenGlVideoEndpoint
     private long _textureUploads;
     private long _textureReuseDraws;
     private long _catchupSkips;
+    // §heavy-media-fixes phase 1 — counters surfaced into HudStats. Mirrored
+    // from upstream (router subscription / decoder) via UpdateDropCounters so
+    // the user can see at a glance which stage is the bottleneck.
+    private long _subscriptionDroppedFrames;
+    private long _decoderDroppedFrames;
 
     // HUD FPS measurement (render thread only).
     private long _hudLastTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -138,6 +143,22 @@ public class AvaloniaOpenGlVideoEndpoint
         TextureReuseDraws: Interlocked.Read(ref _textureReuseDraws),
         CatchupSkips: Interlocked.Read(ref _catchupSkips));
 
+    /// <summary>
+    /// §heavy-media-fixes phase 1 — pushes upstream drop counters (router
+    /// subscription overflow + decoder late-frame skip) into the HUD's view of
+    /// the world. Called by <c>MediaPlayer</c> on each diagnostics tick. Idempotent
+    /// and lock-free.
+    /// </summary>
+    /// <param name="subscriptionDropped">Frames dropped by the router video subscription queue.</param>
+    /// <param name="decoderDropped">Frames the decoder skipped before <c>sws_scale</c>.</param>
+    public void UpdateDropCounters(long subscriptionDropped, long decoderDropped)
+    {
+        if (subscriptionDropped >= 0)
+            Interlocked.Exchange(ref _subscriptionDroppedFrames, subscriptionDropped);
+        if (decoderDropped >= 0)
+            Interlocked.Exchange(ref _decoderDroppedFrames, decoderDropped);
+    }
+
     public VideoFormat OutputFormat => _outputFormat;
 
     /// <summary>
@@ -153,7 +174,31 @@ public class AvaloniaOpenGlVideoEndpoint
     /// This reduces CPU/GPU work for low-FPS sources. Default is
     /// <see langword="false"/>.
     /// </summary>
-    public bool LimitRenderToInputFps { get; set; }
+    private bool _limitRenderToInputFps;
+
+    /// <summary>
+    /// When true, the render-request loop fires at the source frame-rate
+    /// cadence instead of vsync. Useful for reducing CPU/GPU load when the
+    /// source fps is much lower than the display rate (e.g. 24p film on a
+    /// 144 Hz monitor). Toggling at runtime is supported and triggers a
+    /// reschedule so the new cadence (or the immediate vsync path) takes
+    /// effect within one frame.
+    /// </summary>
+    public bool LimitRenderToInputFps
+    {
+        get => _limitRenderToInputFps;
+        set
+        {
+            if (_limitRenderToInputFps == value) return;
+            _limitRenderToInputFps = value;
+            // §heavy-media-fixes phase 2 — wake the loop so the next tick
+            // picks up the new cadence (or drops the cadence and goes back to
+            // vsync). Without this, an OFF→ON flip mid-play would still fire
+            // at the old vsync cadence until the next layout change.
+            if (_isRunning)
+                ScheduleNextFrameRendering(forceImmediate: true);
+        }
+    }
 
     public IMediaClock Clock => _clock ?? throw new InvalidOperationException("Call Open() first.");
 
@@ -290,6 +335,15 @@ public class AvaloniaOpenGlVideoEndpoint
     /// </summary>
     public void OverridePresentationClock(IMediaClock? clock)
     {
+        // §heavy-media-fixes phase 1 — same-instance no-op. MediaPlayer's
+        // TrySyncPullVideoPresentationClocks fires on every endpoint
+        // registration / endpoint change / play; if the master clock didn't
+        // actually change we must not reset the HUD drift origin (it would
+        // park the displayed drift at zero for the first sample and produce a
+        // visible glitch on every endpoint mutation).
+        if (ReferenceEquals(_presentationClockOverride, clock))
+            return;
+
         _presentationClockOverride = clock;
         // Clear ticks first then flag so observers can never see a stale origin.
         Interlocked.Exchange(ref _presentationClockOriginTicks, 0);
@@ -489,6 +543,11 @@ public class AvaloniaOpenGlVideoEndpoint
         TimeSpan clockPosition = TimeSpan.Zero;
         TimeSpan hudClockPosition = TimeSpan.Zero;
         TimeSpan hudDrift = TimeSpan.Zero;
+        // §heavy-media-fixes phase 1 — raw lag, never EMA-smoothed; the user-
+        // facing HUD now reports both numbers so a slow decoder shows the real
+        // gap on `frame age` while `drift` keeps the smoothed value upstream
+        // analytics already rely on.
+        TimeSpan hudFrameAge = TimeSpan.Zero;
         string hudClockName = ((_presentationClockOverride ?? _clock)?.GetType().Name) ?? "n/a";
         VideoFrame hudFrame = default;
         bool hasHudFrame = false;
@@ -516,6 +575,7 @@ public class AvaloniaOpenGlVideoEndpoint
                 hudDrift = hasOverride
                     ? ComputeHudRelativeDrift(clockPosition, vf.Pts)
                     : clockPosition - vf.Pts;
+                hudFrameAge = clockPosition - vf.Pts;
                 hudFrame = vf;
                 hasHudFrame = true;
             }
@@ -528,11 +588,12 @@ public class AvaloniaOpenGlVideoEndpoint
                     hudDrift = hasOverride
                         ? ComputeHudRelativeDrift(clockPosition, _lastUploadedPts)
                         : clockPosition - _lastUploadedPts;
+                    hudFrameAge = clockPosition - _lastUploadedPts;
                 }
             }
 
             if (ShowHud)
-                DrawHudOverlay(fb, viewportWidth, viewportHeight, hudClockPosition, hudClockName, hasHudFrame, in hudFrame, hudDrift);
+                DrawHudOverlay(fb, viewportWidth, viewportHeight, hudClockPosition, hudClockName, hasHudFrame, in hudFrame, hudDrift, hudFrameAge);
         }
         catch (Exception ex)
         {
@@ -584,7 +645,8 @@ public class AvaloniaOpenGlVideoEndpoint
         string clockName,
         bool hasFrame,
         in VideoFrame frame,
-        TimeSpan drift)
+        TimeSpan drift,
+        TimeSpan frameAge)
     {
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
         double elapsed = (double)(now - _hudLastTimestamp) / System.Diagnostics.Stopwatch.Frequency;
@@ -642,9 +704,12 @@ public class AvaloniaOpenGlVideoEndpoint
             PresentedFrames = Interlocked.Read(ref _presentedFrames),
             BlackFrames = Interlocked.Read(ref _blackFrames),
             DroppedFrames = Interlocked.Read(ref _catchupSkips),
+            SubscriptionDroppedFrames = Interlocked.Read(ref _subscriptionDroppedFrames),
+            DecoderDroppedFrames = Interlocked.Read(ref _decoderDroppedFrames),
             ClockPosition = hudClockPosition,
             ClockName = clockName,
             Drift = drift,
+            FrameAge = frameAge,
             ExtraLine1 = contentFps > 0
                 ? $"fps content: {contentFps:F1}  display: {displayFps:F1}"
                 : $"fps content: n/a  display: {displayFps:F1}",

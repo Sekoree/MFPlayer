@@ -9,8 +9,10 @@ namespace S.Media.FFmpeg.Tests;
 public sealed class FFmpegDecoderOptionsTests
 {
     [Fact]
-    public void Defaults_PacketQueueDepth_Is64()
-        => Assert.Equal(64, new FFmpegDecoderOptions().PacketQueueDepth);
+    public void Defaults_PacketQueueDepth_Is32()
+        // §heavy-media-fixes phase 4 — default lowered from 64 to 32 so EOF
+        // detection surfaces faster under sustained decode backpressure.
+        => Assert.Equal(32, new FFmpegDecoderOptions().PacketQueueDepth);
 
     [Fact]
     public void Defaults_AudioBufferDepth_Is16()
@@ -38,14 +40,19 @@ public sealed class FFmpegDecoderOptionsTests
     }
 
     [Fact]
-    public void Defaults_VideoTargetPixelFormat_IsBgra32()
-        => Assert.Equal((PixelFormat?)PixelFormat.Bgra32, new FFmpegDecoderOptions().VideoTargetPixelFormat);
+    public void Defaults_VideoTargetPixelFormat_IsNullForPassthrough()
+        // §heavy-media-fixes phase 3 — the default is now "no software
+        // conversion": the decoder hands the renderer the source-native
+        // pixel format and lets the renderer (or the router) decide whether
+        // a CPU step is required. Callers that need a fixed BGRA/RGBA target
+        // must set the property explicitly.
+        => Assert.Null(new FFmpegDecoderOptions().VideoTargetPixelFormat);
 
     [Fact]
-    public void VideoTargetPixelFormat_NullMeansNativeAutoDetect()
+    public void VideoTargetPixelFormat_ExplicitBgra32_IsHonoured()
     {
-        var opts = new FFmpegDecoderOptions { VideoTargetPixelFormat = null };
-        Assert.Null(opts.VideoTargetPixelFormat);
+        var opts = new FFmpegDecoderOptions { VideoTargetPixelFormat = PixelFormat.Bgra32 };
+        Assert.Equal((PixelFormat?)PixelFormat.Bgra32, opts.VideoTargetPixelFormat);
     }
 
     [Fact]

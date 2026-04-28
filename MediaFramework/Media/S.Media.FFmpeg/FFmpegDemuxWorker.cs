@@ -39,7 +39,7 @@ internal static class FFmpegDemuxWorker
                                     Log.LogTrace("Demux packet #{Count}: pts={Pts} size={Size} epoch={Epoch}",
                                         packetCount, packet.Pts, packet.ActualLength, packet.SeekEpoch);
 
-                                if (!await WritePacketAsync(writer, packet, packetPool, token).ConfigureAwait(false))
+                                if (!await WritePacketAsync(owner, writer, packet, packetPool, token).ConfigureAwait(false))
                                 {
                                     Log.LogDebug("Demux worker stopping: write channel closed");
                                     return;
@@ -117,7 +117,25 @@ internal static class FFmpegDemuxWorker
         }
     }
 
+    /// <summary>
+    /// §heavy-media-fixes phase 4 — soft watchdog timeout. If the per-stream
+    /// packet queue stays full for longer than this, <see cref="WritePacketAsync"/>
+    /// drops the packet and continues so the demux loop never sits forever
+    /// (which used to mask <c>AVERROR_EOF</c> behind a stuck consumer).
+    /// 2 s is far longer than any sane decode hiccup and shorter than any
+    /// "did the file end?" user expectation.
+    /// </summary>
+    private static readonly TimeSpan WriteStallBudget = TimeSpan.FromSeconds(2);
+    private static long s_demuxBackpressureDrops;
+
+    /// <summary>
+    /// Total packets dropped by the demux watchdog across all running
+    /// instances. Surfaces backpressure pathologies in tests / diagnostics.
+    /// </summary>
+    public static long DemuxBackpressureDrops => Interlocked.Read(ref s_demuxBackpressureDrops);
+
     private static async ValueTask<bool> WritePacketAsync(
+        FFmpegDecoder owner,
         ChannelWriter<EncodedPacket> writer,
         EncodedPacket packet,
         ConcurrentQueue<EncodedPacket> packetPool,
@@ -131,8 +149,38 @@ internal static class FFmpegDemuxWorker
             if (writer.TryWrite(packet))
                 return true;
 
-            await writer.WriteAsync(packet, token).ConfigureAwait(false);
-            return true;
+            // §heavy-media-fixes phase 4 — bound the wait. A linked CTS lets
+            // us tell apart "user cancellation" (return false to stop the
+            // loop) from "decoder stall" (drop the packet and keep going so
+            // EOF can still surface).
+            using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            stallCts.CancelAfter(WriteStallBudget);
+            try
+            {
+                await writer.WriteAsync(packet, stallCts.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                // Stall budget exhausted — log once per N drops and discard
+                // the packet. The decoder will resync on the next keyframe.
+                long drops = Interlocked.Increment(ref s_demuxBackpressureDrops);
+                if (drops <= 3 || drops % 100 == 0)
+                {
+                    Log.LogWarning(
+                        "Demux watchdog: dropped packet pts={Pts} after {BudgetMs}ms write stall (total={Total})",
+                        packet.Pts, (long)WriteStallBudget.TotalMilliseconds, drops);
+                }
+                if (packet.IsPooled)
+                    ArrayPool<byte>.Shared.Return(packet.Data);
+                packetPool.Enqueue(packet);
+                // §heavy-media-fixes phase 7 — surface the stall to MediaPlayer
+                // / SPlayer so the UI can flash a "buffering" badge. The
+                // event itself is queued onto the thread pool by the
+                // decoder so we don't slow the demux loop.
+                owner.RaiseBufferStalled(drops);
+                return true;
+            }
         }
         catch (OperationCanceledException)
         {

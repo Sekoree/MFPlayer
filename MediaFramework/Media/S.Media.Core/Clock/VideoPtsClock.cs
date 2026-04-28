@@ -63,6 +63,33 @@ public sealed class VideoPtsClock : MediaClockBase
     /// </summary>
     public double SelfSlewMaxMsPerSec { get; init; } = 0.5;
 
+    private long _maxInterpolationLeadTicks;
+
+    /// <summary>
+    /// §heavy-media-fixes phase 5 — when greater than zero, <see cref="Position"/>
+    /// is capped at <c>_lastPts + MaxInterpolationLead</c>. This prevents the
+    /// clock from running away from the most recent presented frame when the
+    /// renderer is being re-fed at sub-realtime cadence (e.g. heavy 4K60
+    /// decode that produces a frame every 25 ms instead of every 16 ms). The
+    /// HUD-visible drift then stays bounded to roughly one frame interval
+    /// instead of growing unbounded.
+    /// <para>
+    /// Set this to ~1.5× the frame interval when this clock is the router
+    /// master and there is no upstream corrector (i.e. video-only playback);
+    /// leave at <see cref="TimeSpan.Zero"/> (the default) when an audio
+    /// master or a downstream <c>PtsDriftTracker</c> already governs pacing.
+    /// </para>
+    /// </summary>
+    public TimeSpan MaxInterpolationLead
+    {
+        get => TimeSpan.FromTicks(Volatile.Read(ref _maxInterpolationLeadTicks));
+        set
+        {
+            long ticks = value <= TimeSpan.Zero ? 0 : value.Ticks;
+            Volatile.Write(ref _maxInterpolationLeadTicks, ticks);
+        }
+    }
+
     /// <inheritdoc/>
     public override TimeSpan Position
     {
@@ -80,7 +107,18 @@ public sealed class VideoPtsClock : MediaClockBase
                     // a stuck clock at 0.
                     return _sw.Elapsed;
                 }
-                return _lastPts + (_sw.Elapsed - _swAtLastPts);
+                var elapsedSinceAnchor = _sw.Elapsed - _swAtLastPts;
+                long leadCapTicks = Volatile.Read(ref _maxInterpolationLeadTicks);
+                if (leadCapTicks > 0 && elapsedSinceAnchor.Ticks > leadCapTicks)
+                {
+                    // §heavy-media-fixes phase 5 — bound the lead. Without
+                    // this, a starved render loop lets `_sw.Elapsed` outrun
+                    // the next anchor for as long as the decoder is below
+                    // realtime, which is what produced the unbounded drift
+                    // readouts in the heavy-media reproduction.
+                    elapsedSinceAnchor = TimeSpan.FromTicks(leadCapTicks);
+                }
+                return _lastPts + elapsedSinceAnchor;
             }
         }
     }

@@ -35,6 +35,7 @@
       <ProjectReference Include="..\..\..\MediaFramework\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
       <ProjectReference Include="..\..\..\MediaFramework\Media\S.Media.Playback\S.Media.Playback.csproj" />
       <ProjectReference Include="..\..\..\MediaFramework\Video\S.Media.Avalonia\S.Media.Avalonia.csproj" />
+      <ProjectReference Include="..\..\..\MediaFramework\Video\S.Media.SDL3\S.Media.SDL3.csproj" />
       <ProjectReference Include="..\..\..\MediaFramework\NDI\S.Media.NDI\S.Media.NDI.csproj" />
       <ProjectReference Include="..\..\..\MediaFramework\NDI\S.Media.NDI.Playback\S.Media.NDI.Playback.csproj" />
     </ItemGroup>

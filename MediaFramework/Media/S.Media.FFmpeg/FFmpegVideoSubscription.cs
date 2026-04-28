@@ -19,7 +19,14 @@ internal sealed class FFmpegVideoSubscription : IVideoSubscription
     private readonly ChannelWriter<VideoFrame> _writer;
     private long _queued;
     private long _dequeued;
+    private long _droppedOldest;
     private volatile bool _disposed;
+
+    /// <summary>
+    /// §heavy-media-fixes phase 4 — frames evicted by overflow handling.
+    /// Surfaced through <see cref="IVideoSubscription.DroppedFrames"/>.
+    /// </summary>
+    public long DroppedFrames => Interlocked.Read(ref _droppedOldest);
 
     public FFmpegVideoSubscription(FFmpegVideoChannel parent, VideoSubscriptionOptions options)
     {
@@ -77,6 +84,70 @@ internal sealed class FFmpegVideoSubscription : IVideoSubscription
                 return false;
             }
 
+            case VideoOverflowPolicy.DropOldestUnderStall:
+            {
+                // §heavy-media-fixes phase 4 — wait briefly for the consumer
+                // to drain (handles per-vsync jitter without dropping) then
+                // fall back to plain DropOldest semantics if the queue stays
+                // full for too long. The bounded wait is what unblocks demux
+                // / decode / EOF detection on heavy media without losing the
+                // "lossless under normal conditions" guarantee that the Wait
+                // policy provided.
+                if (_writer.TryWrite(frame))
+                {
+                    Interlocked.Increment(ref _queued);
+                    return true;
+                }
+
+                int stallMs = Math.Max(0, _options.StallTimeoutMs);
+                if (stallMs > 0)
+                {
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    linked.CancelAfter(stallMs);
+                    try
+                    {
+                        var write = _writer.WriteAsync(frame, linked.Token);
+                        if (!write.IsCompletedSuccessfully)
+                            write.AsTask().GetAwaiter().GetResult();
+                        Interlocked.Increment(ref _queued);
+                        return true;
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
+                    {
+                        return false;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Stall timer fired — fall through to eviction.
+                    }
+                    catch (ChannelClosedException)
+                    {
+                        return false;
+                    }
+                }
+
+                // Sustained backpressure: evict and retry exactly like
+                // DropOldest. Same ref-count invariants (§3.10).
+                for (int attempt = 0; attempt < 4; attempt++)
+                {
+                    if (_writer.TryWrite(frame))
+                    {
+                        Interlocked.Increment(ref _queued);
+                        return true;
+                    }
+                    if (_reader.TryRead(out var evicted))
+                    {
+                        long after = Interlocked.Decrement(ref _queued);
+                        System.Diagnostics.Debug.Assert(after >= 0,
+                            "DropOldestUnderStall evicted a frame while _queued was already 0 — ref-count torn.");
+                        evicted.MemoryOwner?.Dispose();
+                        Interlocked.Increment(ref _droppedOldest);
+                    }
+                    if (_disposed) return false;
+                }
+                return false;
+            }
+
             case VideoOverflowPolicy.DropOldest:
             default:
             {
@@ -101,6 +172,7 @@ internal sealed class FFmpegVideoSubscription : IVideoSubscription
                         System.Diagnostics.Debug.Assert(after >= 0,
                             "DropOldest evicted a frame while _queued was already 0 — ref-count torn.");
                         evicted.MemoryOwner?.Dispose();
+                        Interlocked.Increment(ref _droppedOldest);
                     }
                     if (_disposed) return false;
                 }

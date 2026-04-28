@@ -37,9 +37,25 @@
                 <Button Content="+ Audio"
                         Command="{Binding AddAudioEndpointCommand}"
                         CommandParameter="{Binding $parent[Window]}"/>
-                <Button Content="+ Video"
-                        Command="{Binding AddVideoEndpointCommand}"
-                        CommandParameter="{Binding $parent[Window]}"/>
+                <!-- §sdl3-output — split-button: clicking the main face uses the
+                     default Avalonia backend; the chevron opens a flyout that
+                     also offers SDL3 (its own native window + dedicated render
+                     thread, recommended for heavy 4K content where the
+                     Avalonia dispatcher can stall). -->
+                <SplitButton Content="+ Video"
+                             Command="{Binding AddAvaloniaVideoEndpointCommand}"
+                             CommandParameter="{Binding $parent[Window]}">
+                    <SplitButton.Flyout>
+                        <MenuFlyout Placement="Bottom">
+                            <MenuItem Header="Avalonia (default)"
+                                      Command="{Binding AddAvaloniaVideoEndpointCommand}"
+                                      CommandParameter="{Binding $parent[Window]}"/>
+                            <MenuItem Header="SDL3 (dedicated window + render thread)"
+                                      Command="{Binding AddSdl3VideoEndpointCommand}"
+                                      CommandParameter="{Binding $parent[Window]}"/>
+                        </MenuFlyout>
+                    </SplitButton.Flyout>
+                </SplitButton>
                 <Button Content="+ NDI"
                         Command="{Binding AddNdiEndpointCommand}"
                         CommandParameter="{Binding $parent[Window]}"/>
@@ -146,9 +162,25 @@
                                             <TextBlock Text="{Binding Name}"
                                                        FontSize="13"
                                                        FontWeight="Medium"/>
-                                            <TextBlock Text="{Binding Info}"
-                                                       FontSize="11"
-                                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <TextBlock Text="{Binding Info}"
+                                                           FontSize="11"
+                                                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                                                <!-- §sdl3-output — visible badge when the per-row
+                                                     "Lock to source FPS" override is active so the
+                                                     user doesn't have to right-click to find out
+                                                     which outputs are paced to source. -->
+                                                <Border Background="{DynamicResource SystemAccentColorDark1}"
+                                                        CornerRadius="2"
+                                                        Padding="4,0"
+                                                        VerticalAlignment="Center"
+                                                        IsVisible="{Binding LimitRenderToInputFps}">
+                                                    <TextBlock Text="FPS LOCK"
+                                                               FontSize="9"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="White"/>
+                                                </Border>
+                                            </StackPanel>
                                         </StackPanel>
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
                                             <Button Content="Start" Padding="10,3" FontSize="12"
@@ -166,6 +198,16 @@
                                             <MenuItem Header="Remove" Command="{Binding RemoveCommand}"/>
                                             <Separator/>
                                             <CheckBox Content="Debug HUD" IsChecked="{Binding DebugHUDEnabled}"/>
+                                            <!-- §sdl3-output — per-row override of the global
+                                                 LimitRenderFpsToSource setting. Convenient when you
+                                                 want only the SDL3 output paced to source FPS while
+                                                 the Avalonia output keeps free-running, or vice
+                                                 versa. The global setting in the Settings tab still
+                                                 seeds newly-added rows; toggling this is just a
+                                                 live override. -->
+                                            <CheckBox Content="Lock to source FPS"
+                                                      IsChecked="{Binding LimitRenderToInputFps}"
+                                                      ToolTip.Tip="Pace the renderer to the source video's frame rate instead of the display vsync. Recommended for heavy 4K/HDR sources where the GPU can't sustain a full vsync rate."/>
                                         </MenuFlyout>
                                     </Border.ContextFlyout>
                                 </Border>

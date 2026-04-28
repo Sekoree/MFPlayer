@@ -28,32 +28,43 @@ namespace S.Media.Core.Routing;
 /// <para>
 /// The class is intentionally mutable; callers either hold it as a field
 /// (pull callback — single thread) or as a per-route field on
-/// <c>RouteEntry</c> (push tick — single push thread).  Reads/writes from
-/// the owning thread need no locking.
+/// <c>RouteEntry</c> (push tick — single push thread). The hot-path
+/// accessors (<see cref="RelativePts"/>, <see cref="RelativeClock"/>,
+/// <see cref="IntegrateError"/>) are lock-free; the only seed/reset path
+/// that needs the (HasOrigin, Pts, Clock) triple to update atomically uses
+/// a <see cref="Lock"/>, which is uncontended in steady state.
 /// </para>
 /// <para>
-/// <b>Cross-thread <see cref="Reset"/></b> — <see cref="AVRouter.SetClock"/> /
-/// <see cref="AVRouter.RegisterClock"/> /
-/// <see cref="AVRouter.UnregisterClock"/> reset every push tracker from the
-/// caller thread while the push thread is reading the same fields.
-/// <see cref="Reset"/> writes the three fields under <see cref="_resetLock"/>
-/// and the read-side accessors take the same lock around their multi-field
-/// reads, so the push thread can never observe a torn snapshot
-/// (<c>HasOrigin == true</c> with a half-cleared origin pair, or vice versa).
-/// Hold time is sub-microsecond and the lock is uncontended in steady state.
+/// §heavy-media-fixes phase 7 — the previous design held <see cref="_seedResetLock"/>
+/// on every read/write, including the per-frame <see cref="IntegrateError"/>
+/// and <see cref="RelativePts"/> calls on the push tick. Those reads now
+/// use <see cref="Volatile.Read{T}(ref T)"/> on the long fields and an
+/// <see cref="Interlocked.Add(ref long, long)"/> for the integrator's
+/// read-modify-write, so the realtime path no longer enters the lock.
 /// </para>
 /// </summary>
 internal sealed class PtsDriftTracker
 {
-    // §reset-race fix: paired with reads in SeedIfNeeded / RelativePts /
-    // RelativeClock / IntegrateError / Snapshot so a concurrent Reset cannot
-    // tear the (HasOrigin, Pts, Clock) triple. Field is a `Lock` (System.Threading)
-    // for sub-microsecond uncontended fast paths on .NET 9+.
-    private readonly Lock _resetLock = new();
+    // Used only for the SeedIfNeeded / Reset triple update — the rare paths
+    // that need (HasOrigin, Pts, Clock) to flip atomically. Hot-path readers
+    // never take the lock.
+    private readonly Lock _seedResetLock = new();
 
-    public bool HasOrigin;
-    public long PtsOriginTicks;
-    public long ClockOriginTicks;
+    private volatile bool _hasOrigin;
+    private long _ptsOriginTicks;
+    private long _clockOriginTicks;
+
+    /// <summary>
+    /// True once <see cref="SeedIfNeeded"/> has captured the first frame's
+    /// PTS / master-clock pair. Reads are lock-free.
+    /// </summary>
+    public bool HasOrigin => _hasOrigin;
+
+    /// <summary>Stream-time PTS of the seed frame.</summary>
+    public long PtsOriginTicks => Volatile.Read(ref _ptsOriginTicks);
+
+    /// <summary>Master-clock position at the seed frame.</summary>
+    public long ClockOriginTicks => Volatile.Read(ref _clockOriginTicks);
 
     /// <summary>
     /// Seeds <see cref="PtsOriginTicks"/> / <see cref="ClockOriginTicks"/> from the first
@@ -61,28 +72,29 @@ internal sealed class PtsDriftTracker
     /// </summary>
     public void SeedIfNeeded(long ptsTicks, long clockTicks)
     {
-        lock (_resetLock)
+        // Optimistic fast-path: most calls hit this once HasOrigin is set.
+        if (_hasOrigin) return;
+        lock (_seedResetLock)
         {
-            if (HasOrigin) return;
-            PtsOriginTicks   = ptsTicks;
-            ClockOriginTicks = clockTicks;
-            HasOrigin        = true;
+            if (_hasOrigin) return;
+            // Order matters: write ptsOriginTicks / clockOriginTicks BEFORE
+            // _hasOrigin so a concurrent reader that observes _hasOrigin=true
+            // will already see the corresponding origin values. The
+            // `volatile bool` provides the release barrier for the long
+            // writes that precede it on the same thread.
+            Volatile.Write(ref _ptsOriginTicks, ptsTicks);
+            Volatile.Write(ref _clockOriginTicks, clockTicks);
+            _hasOrigin = true;
         }
     }
 
     /// <summary>PTS of <paramref name="ptsTicks"/> expressed relative to the seeded origin, plus a per-input time offset.</summary>
     public long RelativePts(long ptsTicks, long timeOffsetTicks)
-    {
-        lock (_resetLock)
-            return ptsTicks - PtsOriginTicks + timeOffsetTicks;
-    }
+        => ptsTicks - Volatile.Read(ref _ptsOriginTicks) + timeOffsetTicks;
 
     /// <summary>Master-clock position expressed relative to the seeded origin.</summary>
     public long RelativeClock(long clockTicks)
-    {
-        lock (_resetLock)
-            return clockTicks - ClockOriginTicks;
-    }
+        => clockTicks - Volatile.Read(ref _clockOriginTicks);
 
     /// <summary>
     /// Integrates the PTS↔clock error into <see cref="PtsOriginTicks"/> with a
@@ -98,35 +110,40 @@ internal sealed class PtsDriftTracker
         if      (errorTicks >  deadBandTicks) delta = (long)((errorTicks - deadBandTicks) * gain);
         else if (errorTicks < -deadBandTicks) delta = (long)((errorTicks + deadBandTicks) * gain);
         if (delta == 0) return;
-        lock (_resetLock)
-            PtsOriginTicks += delta;
+        // Atomic read-modify-write so a concurrent Reset can't race the
+        // integrator into writing a non-zero delta over a freshly cleared
+        // origin.
+        Interlocked.Add(ref _ptsOriginTicks, delta);
     }
 
     public void Reset()
     {
-        lock (_resetLock)
+        lock (_seedResetLock)
         {
-            HasOrigin        = false;
-            PtsOriginTicks   = 0;
-            ClockOriginTicks = 0;
+            // Clear _hasOrigin first so any reader that races the reset will
+            // either see the old (consistent) state or the cleared state, but
+            // never a mid-update (HasOrigin=true, Pts=0) snapshot.
+            _hasOrigin = false;
+            Volatile.Write(ref _ptsOriginTicks, 0);
+            Volatile.Write(ref _clockOriginTicks, 0);
         }
     }
 
     public PtsDriftTrackerSnapshot Snapshot()
     {
-        bool hasOrigin;
-        long pts;
-        long clk;
-        lock (_resetLock)
+        // Snapshot is only used for diagnostics / events; cost of the lock
+        // is fine here and gives us the same triple-atomicity that the old
+        // implementation provided.
+        lock (_seedResetLock)
         {
-            hasOrigin = HasOrigin;
-            pts       = PtsOriginTicks;
-            clk       = ClockOriginTicks;
+            bool hasOrigin = _hasOrigin;
+            long pts = _ptsOriginTicks;
+            long clk = _clockOriginTicks;
+            return new PtsDriftTrackerSnapshot(
+                hasOrigin,
+                TimeSpan.FromTicks(pts),
+                TimeSpan.FromTicks(clk),
+                TimeSpan.FromTicks(pts - clk));
         }
-        return new PtsDriftTrackerSnapshot(
-            hasOrigin,
-            TimeSpan.FromTicks(pts),
-            TimeSpan.FromTicks(clk),
-            TimeSpan.FromTicks(pts - clk));
     }
 }

@@ -96,7 +96,7 @@
                         <Border Grid.Column="1" Height="1" VerticalAlignment="Center"
                                 Background="{DynamicResource SystemControlForegroundBaseLowBrush}"/>
                     </Grid>
-                    <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, Auto, Auto, Auto" RowSpacing="6" ColumnSpacing="12">
+                    <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, Auto, Auto, Auto, Auto" RowSpacing="6" ColumnSpacing="12">
                         <CheckBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                                   IsChecked="{Binding AutoAdvance, Mode=TwoWay}"
                                   Content="Auto-advance to next track on end"/>
@@ -106,9 +106,13 @@
                         <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
                                   IsChecked="{Binding RememberPlaylistOverrides, Mode=TwoWay}"
                                   Content="Save per-playlist output overrides to settings"/>
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Default volume"
+                        <CheckBox Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                  IsChecked="{Binding LimitRenderFpsToSource, Mode=TwoWay}"
+                                  Content="Lock video render rate to source FPS (saves CPU/GPU on low-fps content)"
+                                  ToolTip.Tip="Each Avalonia video output paces its render-request loop to the source's nominal frame rate instead of the display vsync. Reduces redundant work; may add a sub-frame of latency."/>
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Default volume"
                                    VerticalAlignment="Center" FontSize="12"/>
-                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Spacing="8">
                             <Slider Width="240" Minimum="0" Maximum="200"
                                     Value="{Binding VolumePercent, Mode=TwoWay}"
                                     VerticalAlignment="Center"/>
@@ -163,7 +167,7 @@
                         <TextBlock Grid.Row="6" Grid.Column="2" Text="{Binding AvMaxStepMs, StringFormat='{}{0:F1}'}" VerticalAlignment="Center"/>
 
                         <TextBlock Grid.Row="7" Grid.Column="0" Text="Max abs offset (ms)" VerticalAlignment="Center" FontSize="12"/>
-                        <Slider Grid.Row="7" Grid.Column="1" Minimum="50" Maximum="2000" Value="{Binding AvMaxAbsOffsetMs, Mode=TwoWay}"/>
+                        <Slider Grid.Row="7" Grid.Column="1" Minimum="50" Maximum="5000" Value="{Binding AvMaxAbsOffsetMs, Mode=TwoWay}"/>
                         <TextBlock Grid.Row="7" Grid.Column="2" Text="{Binding AvMaxAbsOffsetMs, StringFormat='{}{0:F0}'}" VerticalAlignment="Center"/>
 
                     </Grid>

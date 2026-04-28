@@ -32,6 +32,14 @@ public interface IVideoChannel : IMediaChannel<VideoFrame>
     int BufferAvailable { get; }
 
     /// <summary>
+    /// §heavy-media-fixes phase 4 — running count of frames dropped by all
+    /// active subscriptions on this channel (their overflow policy
+    /// triggered an eviction). Default returns 0 for implementations that
+    /// don't track this.
+    /// </summary>
+    long SubscriptionDroppedFrames => 0;
+
+    /// <summary>
     /// Raised (on a background thread) when the pull path finds the ring buffer empty
     /// after at least one frame has been seen, indicating a genuine decoder underrun.
     /// </summary>

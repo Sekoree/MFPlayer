@@ -6,8 +6,8 @@
         mc:Ignorable="d" d:DesignWidth="420" d:DesignHeight="200"
         x:Class="SPlayer.Core.Dialogs.AddVideoEndpointDialog"
         x:DataType="dialogModels:AddVideoEndpointViewModel"
-        Title="Add Video Output"
-        Width="420" SizeToContent="Height"
+        Title="{Binding DialogHeader}"
+        Width="460" SizeToContent="Height"
         CanResize="False">
 
     <Design.DataContext>
@@ -15,6 +15,18 @@
     </Design.DataContext>
 
     <StackPanel Margin="20,16" Spacing="10">
+
+        <!-- §sdl3-output — backend description blurb, mirrors the "+ Video" split-button choice. -->
+        <Border Background="{DynamicResource SystemControlBackgroundAltMediumLowBrush}"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10,8">
+            <TextBlock Text="{Binding BackendDescription}"
+                       TextWrapping="Wrap"
+                       FontSize="11"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+        </Border>
 
         <StackPanel Spacing="4">
             <TextBlock Text="Name" FontSize="12"

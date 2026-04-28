@@ -52,14 +52,28 @@ public sealed record AvDriftCorrectionOptions
     public double CorrectionGain { get; init; } = 0.20;
 
     /// <summary>
-    /// Maximum magnitude of one correction step (ms). Default 8 ms — slightly
-    /// under the audio frame size at 48 kHz/240-sample windows so a single
-    /// step never exceeds one buffer of audio.
+    /// Maximum magnitude of one correction step (ms). Default 25 ms.
+    /// <para>
+    /// §heavy-media-fixes phase 6 — was 8 ms, raised to 25 ms so a real
+    /// multi-hundred-millisecond drift (e.g. heavy 4K60 below realtime
+    /// playback that has accumulated lag) can actually converge in a
+    /// reasonable number of loop iterations. 25 ms is still well under
+    /// any audio frame size large enough to be perceptible as a glitch —
+    /// the previous 8 ms default was under one 48 kHz audio buffer but
+    /// effectively meant the corrector could not catch a 250 ms drift in
+    /// less than ten loop intervals.
+    /// </para>
     /// </summary>
-    public double MaxStepMs { get; init; } = 8;
+    public double MaxStepMs { get; init; } = 25;
 
     /// <summary>
-    /// Absolute cap on accumulated offset (ms). Default 250 ms.
+    /// Absolute cap on accumulated offset (ms). Default 2000 ms.
+    /// <para>
+    /// §heavy-media-fixes phase 6 — was 250 ms, raised to 2000 ms so the
+    /// loop can absorb the larger drifts that surface on heavy media when
+    /// the decoder spends extended periods below realtime. Independent of
+    /// step-size: this is the running total clamp, not the per-step clamp.
+    /// </para>
     /// </summary>
-    public double MaxAbsOffsetMs { get; init; } = 250;
+    public double MaxAbsOffsetMs { get; init; } = 2000;
 }

@@ -33,7 +33,7 @@ public enum VsyncMode
 /// Analogous to <c>PortAudioOutput</c> for audio.
 /// </summary>
 public class SDL3VideoEndpoint
-    : IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver, IVideoPresentationClockOverridable
+    : IPullVideoEndpoint, IClockCapableEndpoint, IVideoColorMatrixReceiver, IVideoPresentationClockOverridable, IVideoEndpointInputFormatHint
 {
     private static readonly ILogger Log = SDL3VideoLogging.GetLogger(nameof(SDL3VideoEndpoint));
 

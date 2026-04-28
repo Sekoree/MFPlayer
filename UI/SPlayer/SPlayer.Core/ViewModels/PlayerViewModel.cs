@@ -194,6 +194,9 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
             _autoAdvance = settings.AutoAdvance;
             _loop = settings.Loop;
             _volumePercent = settings.VolumePercent;
+            // §heavy-media-fixes phase 2 — propagate fps-lock to any video
+            // endpoint that already exists at construction time.
+            ApplyLimitRenderFpsToVideoEndpoints(settings.LimitRenderFpsToSource);
             // React to settings changes after the user adjusts them.
             settings.SettingsApplied += OnSettingsApplied;
         }
@@ -226,8 +229,8 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
                 IgnoreOutlierDriftMs = 250,
                 OutlierConsecutiveSamples = 3,
                 CorrectionGain = 0.15,
-                MaxStepMs = 5,
-                MaxAbsOffsetMs = 250
+                MaxStepMs = 20,
+                MaxAbsOffsetMs = 2000
             };
 
     /// <summary>
@@ -303,13 +306,27 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     private void OnSettingsApplied(object? sender, EventArgs e)
     {
         if (_settings is null) return;
+        var snapshot = _settings.ToAppSettings();
         // Refresh drift options live so the next corrector cycle picks them up.
-        _player.ConfigureAutoAvDriftCorrection(_settings.ToAppSettings().AvDrift.ToOptions());
+        _player.ConfigureAutoAvDriftCorrection(snapshot.AvDrift.ToOptions());
+        // §heavy-media-fixes phase 2 — fan out the render-fps lock to every
+        // currently registered video endpoint, including ones that were added
+        // before the user flipped the setting.
+        ApplyLimitRenderFpsToVideoEndpoints(snapshot.LimitRenderFpsToSource);
         // Re-evaluate which outputs should be ticked given the (possibly changed)
         // default-output set. Only do this when no playback session is active so
         // routes do not flap mid-track.
         if (_player.State is PlaybackState.Idle or PlaybackState.Stopped)
             ApplyOutputSelectionForCurrentPlaylist(forceFromDefaults: false);
+    }
+
+    private void ApplyLimitRenderFpsToVideoEndpoints(bool limit)
+    {
+        foreach (var v in _outputs.VideoEndpointModels)
+        {
+            try { v.LimitRenderToInputFps = limit; }
+            catch (Exception ex) { SLog.LogDebug(ex, "Failed to apply LimitRenderToInputFps to {Name}", v.Name); }
+        }
     }
 
     private void EnsureFfmpeg()
@@ -339,7 +356,25 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void OnOutputPoolChanged(object? s, NotifyCollectionChangedEventArgs e) => RebuildOutputRows();
+    private void OnOutputPoolChanged(object? s, NotifyCollectionChangedEventArgs e)
+    {
+        // §heavy-media-fixes phase 2 — newly-added video endpoints inherit the
+        // current LimitRenderFpsToSource setting so the user's choice does not
+        // silently revert when they spawn a fresh output window mid-session.
+        if (_settings is not null && e.NewItems is not null)
+        {
+            bool limit = _settings.LimitRenderFpsToSource;
+            foreach (var item in e.NewItems)
+            {
+                if (item is VideoEndpointModel v)
+                {
+                    try { v.LimitRenderToInputFps = limit; }
+                    catch (Exception ex) { SLog.LogDebug(ex, "Failed to seed LimitRenderToInputFps on new endpoint {Name}", v.Name); }
+                }
+            }
+        }
+        RebuildOutputRows();
+    }
 
     private void RebuildOutputRows()
     {
@@ -500,6 +535,7 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         _player.PlaybackStateChanged += OnPlaybackStateChanged;
         _player.PlaybackCompleted += OnPlaybackCompleted;
         _player.PlaybackFailed += OnPlaybackFailed;
+        _player.BufferStalled += OnBufferStalled;
     }
 
     private void UnhookPlayerEvents()
@@ -509,6 +545,26 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         try { _player.PlaybackStateChanged -= OnPlaybackStateChanged; } catch { }
         try { _player.PlaybackCompleted -= OnPlaybackCompleted; } catch { }
         try { _player.PlaybackFailed -= OnPlaybackFailed; } catch { }
+        try { _player.BufferStalled -= OnBufferStalled; } catch { }
+    }
+
+    private long _lastBufferStallNotice;
+
+    private void OnBufferStalled(object? sender, long totalDrops)
+    {
+        // §heavy-media-fixes phase 7 — surface a transient status badge.
+        // Keep wording short so it fits the existing transport status row.
+        // The decoder fires this every time a packet times out, but a
+        // genuine pathology produces dozens per second; rate-limit the UI
+        // updates so we don't churn observable property notifications.
+        long lastTicks = Interlocked.Read(ref _lastBufferStallNotice);
+        long nowTicks = Environment.TickCount64;
+        if (nowTicks - lastTicks < 500) return;
+        Interlocked.Exchange(ref _lastBufferStallNotice, nowTicks);
+        Dispatcher.UIThread.Post(() =>
+        {
+            StatusMessage = $"Output stalled — decoder dropping packets (total {totalDrops}).";
+        });
     }
 
     private void OnPlaybackFailed(object? sender, PlaybackFailedEventArgs e)

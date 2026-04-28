@@ -124,22 +124,18 @@ public sealed unsafe class FFmpegPixelFormatConverter : IPixelFormatConverter
         fixed (byte* pSrc = src)
         fixed (byte* pDst = dst)
         {
+            // §heavy-media-fixes phase 7 — `FillPlanes` already zeroes the
+            // byte*[] / int[] state at entry, so we don't need to clear
+            // again after `sws_scale`. The previous post-scale clear was
+            // pure defense-in-depth (the `byte*` becomes stale once the
+            // fixed scope exits), but no caller ever reads these private
+            // fields outside this method, so the writes are dead.
             FillPlanes(srcPf, pSrc, width, height, _srcDataPtrs, _srcStrides);
             FillPlanes(dstPf, pDst, width, height, _dstDataPtrs, _dstStrides);
 
             int converted = ffmpeg.sws_scale(_sws,
                 _srcDataPtrs, _srcStrides, 0, height,
                 _dstDataPtrs, _dstStrides);
-
-            // Clear the cached pointers so the byte*[] arrays don't keep raw
-            // (now-stale) addresses alive between calls.
-            for (int i = 0; i < 4; i++)
-            {
-                _srcDataPtrs[i] = null;
-                _dstDataPtrs[i] = null;
-                _srcStrides[i] = 0;
-                _dstStrides[i] = 0;
-            }
 
             return converted == height;
         }

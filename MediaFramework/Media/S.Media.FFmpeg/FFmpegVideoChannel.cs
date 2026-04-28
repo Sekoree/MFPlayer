@@ -15,7 +15,7 @@ namespace S.Media.FFmpeg;
 /// thread. Each frame is pixel-format-converted to <see cref="Core.Media.PixelFormat.Bgra32"/>
 /// by default. Frames are exposed through the <see cref="IMediaChannel{VideoFrame}"/> pull interface.
 /// </summary>
-internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput, IVideoColorMatrixHint, IDecodableChannel
+internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput, IVideoColorMatrixHint, IDecodableChannel, ISupportsLateFrameDrop
 {
     private static readonly ILogger Log = FFmpegLogging.GetLogger(nameof(FFmpegVideoChannel));
     private readonly AVStream*                    _stream;
@@ -90,6 +90,21 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
         }
     }
 
+    /// <inheritdoc/>
+    public long SubscriptionDroppedFrames
+    {
+        get
+        {
+            // Sum drops across active subscriptions. Tear-free immutable
+            // snapshot read of `_subs`.
+            var subs = _subs;
+            long total = 0;
+            foreach (var s in subs)
+                total += s.DroppedFrames;
+            return total;
+        }
+    }
+
     /// <summary>
     /// §2.8 — raised on the demux worker thread once the last decoded frame has
     /// been published to subscribers. Handlers must not block; chain via
@@ -126,6 +141,56 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
     /// <inheritdoc/>
     public TimeSpan Position => TimeSpan.FromTicks(Volatile.Read(ref _positionTicks));
     private long _positionTicks;
+
+    /// <summary>
+    /// §heavy-media-fixes phase 6 — when greater than zero, non-reference
+    /// frames whose PTS is more than this far behind the consumer-side
+    /// reference (max of this channel's <see cref="Position"/> and any
+    /// external clock hint set via <see cref="SetExternalClockHint"/>)
+    /// are skipped at decode time (no <c>sws_scale</c>, no publish). The
+    /// next I-frame still goes through so the picture recovers cleanly.
+    /// </summary>
+    private long _lateFrameDropDeadlineTicks;
+    private long _externalClockHintTicks;
+    private long _decoderDroppedFrames;
+
+    /// <summary>
+    /// Configures the late-frame drop deadline. Call with
+    /// <see cref="TimeSpan.Zero"/> (the default) to disable. Safe from
+    /// any thread.
+    /// </summary>
+    public TimeSpan LateFrameDropDeadline
+    {
+        get => TimeSpan.FromTicks(Volatile.Read(ref _lateFrameDropDeadlineTicks));
+        set
+        {
+            long ticks = value <= TimeSpan.Zero ? 0 : value.Ticks;
+            Volatile.Write(ref _lateFrameDropDeadlineTicks, ticks);
+        }
+    }
+
+    /// <summary>
+    /// Pushes a "where the master clock thinks we should be" hint into the
+    /// channel so the late-drop logic can recognise sustained sub-realtime
+    /// decode even when this channel's own <see cref="Position"/> is still
+    /// behind (which is the common case under pull-mode backpressure —
+    /// frames evicted by the subscription queue never reach the consumer
+    /// so <see cref="NotifyFrameDelivered"/> never fires for them, and
+    /// <see cref="Position"/> stays pinned at whatever the renderer last
+    /// actually drew). Pass <see cref="TimeSpan.Zero"/> to clear the hint.
+    /// </summary>
+    public void SetExternalClockHint(TimeSpan masterPosition)
+    {
+        long ticks = masterPosition <= TimeSpan.Zero ? 0 : masterPosition.Ticks;
+        Volatile.Write(ref _externalClockHintTicks, ticks);
+    }
+
+    /// <summary>
+    /// Number of frames the decoder skipped before <c>sws_scale</c> /
+    /// publish because they were past their deadline. Surfaced into the
+    /// HUD via <c>AvaloniaOpenGlVideoEndpoint.UpdateDropCounters</c>.
+    /// </summary>
+    public long DecoderDroppedFrames => Interlocked.Read(ref _decoderDroppedFrames);
 
     /// <inheritdoc/>
     /// <remarks>
@@ -174,13 +239,29 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
         // This is used by SourceFormat (routing decisions) and is independent of TargetPixelFormat.
         var nativeAvFmt     = (AVPixelFormat)cp->format;
         var nativePixelFmt  = MapNativePixelFormat(nativeAvFmt);
+
+        // §heavy-media-fixes phase 7 — prefer `avg_frame_rate` over
+        // `r_frame_rate`. The latter is the largest-common-denominator
+        // frame rate (e.g. 60 for a 24p source whose VFR table includes
+        // 60/1 entries) and gives the wrong cadence to
+        // `LimitRenderToInputFps`. `avg_frame_rate` is the actual mean fps
+        // the muxer recorded; we fall back to `r_frame_rate` when it is
+        // unset (some container formats leave it at 0/0).
+        int fpsNum = stream->avg_frame_rate.num;
+        int fpsDen = stream->avg_frame_rate.den;
+        if (fpsNum <= 0 || fpsDen <= 0)
+        {
+            fpsNum = stream->r_frame_rate.num;
+            fpsDen = stream->r_frame_rate.den;
+        }
+
         _nativeSourceFormat = new VideoFormat(cp->width, cp->height, nativePixelFmt,
-            stream->r_frame_rate.num, stream->r_frame_rate.den);
+            fpsNum, fpsDen);
 
         // Resolved target: null means "use native format" (no software conversion).
         TargetPixelFormat = targetPixelFormat ?? nativePixelFmt;
         Format = new VideoFormat(cp->width, cp->height, TargetPixelFormat,
-            stream->r_frame_rate.num, stream->r_frame_rate.den);
+            fpsNum, fpsDen);
 
         SuggestedYuvColorMatrix = MapSuggestedYuvColorMatrix((AVColorSpace)cp->color_space);
         SuggestedYuvColorRange = MapSuggestedYuvColorRange((AVColorRange)cp->color_range);
@@ -296,8 +377,26 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
         return AVPixelFormat.AV_PIX_FMT_NONE;
     }
 
+    // §heavy-media-fixes phase 7 — `sws_getCachedContext` and
+    // `av_image_get_buffer_size` are both relatively cheap on a hit but
+    // measurable on the per-frame hot path (4K60 = 60 calls/s/each).
+    // Cache the inputs that determine the result so we only re-enter the
+    // FFmpeg helpers when they actually changed. `TargetPixelFormat` is
+    // immutable per channel so it intentionally is not part of the key.
+    private int _swsCacheW;
+    private int _swsCacheH;
+    private AVPixelFormat _swsCacheSrcFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+
     private SwsContext* GetSws(int w, int h, AVPixelFormat srcFmt)
     {
+        if (_sws != null
+            && _swsCacheW == w
+            && _swsCacheH == h
+            && _swsCacheSrcFmt == srcFmt)
+        {
+            return _sws;
+        }
+
         var dstFmt = MapPixelFormat(TargetPixelFormat);
         // swsBilinear = 2 (SWS_BILINEAR in libswscale/swscale.h). Used only for pixel-format
         // conversion (not a resize), so the interpolation quality has no visual effect here.
@@ -307,6 +406,9 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
         if (_sws == null) throw new MediaDecodeException("sws_getCachedContext failed.");
 
         _swsBufSize = ffmpeg.av_image_get_buffer_size(dstFmt, w, h, 1);
+        _swsCacheW = w;
+        _swsCacheH = h;
+        _swsCacheSrcFmt = srcFmt;
         return _sws;
     }
 
@@ -341,7 +443,11 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
         // a ref-counted owner so all subscribers share one buffer; it returns to
         // this channel's pool when the last ref releases.
         var rented = _framePool.Rent(_swsBufSize);
-        var owner  = new RefCountedVideoBuffer(new FixedVideoFrameOwner(_framePool, rented));
+        // §heavy-media-fixes phase 7 — pool the wrapper too. The decoder
+        // hot path used to allocate one of these per frame; on the typical
+        // pull + clone fan-out the working set fits inside the bounded
+        // pool and `Rent` becomes a `TryDequeue`.
+        var owner  = RefCountedVideoBuffer.Rent(new FixedVideoFrameOwner(_framePool, rented));
 
         _srcDataArr[0] = frame->data[0];
         _srcDataArr[1] = frame->data[1];
@@ -759,6 +865,31 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
                             "Subsequent transfer failures on this channel will not be logged.",
                             _streamIndex, transferRet);
                     ffmpeg.av_frame_unref(_frame);
+                    continue;
+                }
+            }
+
+            // §heavy-media-fixes phase 6 — late-frame drop. The reference
+            // point is max(consumer-Position, externalClockHint) so we drop
+            // both "renderer already passed this PTS" and "master clock is
+            // way past this PTS" cases. Only non-key frames are dropped;
+            // the next I-frame is always decoded so video recovers.
+            long dropDeadlineTicks = Volatile.Read(ref _lateFrameDropDeadlineTicks);
+            if (dropDeadlineTicks > 0 && decodedFrame->pts != ffmpeg.AV_NOPTS_VALUE)
+            {
+                double tb = _stream->time_base.num / (double)_stream->time_base.den;
+                long framePtsTicks = (long)(decodedFrame->pts * tb * TimeSpan.TicksPerSecond);
+                long consumerPtsTicks = Volatile.Read(ref _positionTicks);
+                long hintPtsTicks = Volatile.Read(ref _externalClockHintTicks);
+                long referencePtsTicks = Math.Max(consumerPtsTicks, hintPtsTicks);
+                bool isKey = decodedFrame->pict_type == AVPictureType.AV_PICTURE_TYPE_I;
+                if (referencePtsTicks > 0
+                    && referencePtsTicks - framePtsTicks > dropDeadlineTicks
+                    && !isKey)
+                {
+                    Interlocked.Increment(ref _decoderDroppedFrames);
+                    ffmpeg.av_frame_unref(_frame);
+                    if (transferred) ffmpeg.av_frame_unref(_swFrame);
                     continue;
                 }
             }

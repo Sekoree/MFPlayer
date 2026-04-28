@@ -1500,8 +1500,17 @@ public sealed class AVRouter : IAVRouter
                     ? Math.Max(_options.DefaultFramesPerBuffer, inp.VideoChannel.BufferDepth)
                     : 4;
                 int capacity = options.Capacity is int c ? Math.Max(1, c) : defaultCapacity;
+                // §heavy-media-fixes phase 4 — pull-endpoint default switched
+                // from `Wait` to `DropOldestUnderStall`. The old default could
+                // back-pressure the entire decode/demux chain whenever the
+                // renderer fell behind (e.g. 4K60 yuv422p10 below realtime),
+                // which then masked end-of-source detection and let the
+                // master clock interpolate unbounded drift. The new default
+                // still waits briefly for jitter (preserving "no drops under
+                // normal load") but unconditionally evicts under sustained
+                // pressure so the upstream stays live.
                 VideoOverflowPolicy overflow = options.OverflowPolicy
-                    ?? (isPull ? VideoOverflowPolicy.Wait : VideoOverflowPolicy.DropOldest);
+                    ?? (isPull ? VideoOverflowPolicy.DropOldestUnderStall : VideoOverflowPolicy.DropOldest);
 
                 route.VideoSub = inp.VideoChannel.Subscribe(new VideoSubscriptionOptions(
                     Capacity: capacity,

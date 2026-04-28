@@ -130,7 +130,7 @@ public sealed class MediaPlayerLifecycleTests
         {
             using var dec = FFmpegDecoder.Open(path);
             dec.Start();
-            // Let the queue fill past typical PacketQueueDepth (64).
+            // Let the queue fill past typical PacketQueueDepth (32 by default).
             await Task.Delay(50);
 
             // Perform a burst of seeks; each must complete without throwing

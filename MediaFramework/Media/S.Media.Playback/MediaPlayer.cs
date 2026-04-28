@@ -195,7 +195,105 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             Log.LogWarning(ex, "Active clock: failed to read master clock for logging; still syncing pull endpoints.");
         }
 
+        // §heavy-media-fixes phase 5 — when a VideoPtsClock is the router
+        // master (i.e. video-only session, no audio anchor), cap how far it
+        // can interpolate ahead of the last presented PTS. This bounds the
+        // HUD-visible drift to roughly one frame interval when decode is
+        // below realtime, instead of letting it grow unbounded with wall
+        // time. When audio later joins and the master flips to a hardware
+        // / stopwatch clock, the cap is cleared so the video clock returns
+        // to its original "interpolate freely" behaviour.
+        ApplyVideoMasterTrackingCap(master);
+
         TrySyncPullVideoPresentationClocks("ActiveClockChanged");
+    }
+
+    /// <summary>
+    /// §heavy-media-fixes phase 5 — last <see cref="VideoPtsClock"/> we
+    /// applied a tracking cap to. Tracked here so a later master change
+    /// (e.g. audio joins the session) can revert the cap to zero.
+    /// </summary>
+    private VideoPtsClock? _videoMasterTrackingCapApplied;
+
+    private void TryFanOutDropCountersToVideoEndpoints()
+    {
+        var dec = _decoder;
+        if (dec is null) return;
+        var ch = dec.VideoChannels.Count > 0 ? dec.VideoChannels[0] : null;
+        if (ch is null) return;
+
+        long subDropped = ch.SubscriptionDroppedFrames;
+        long decDropped = ch is ISupportsLateFrameDrop ld ? ld.DecoderDroppedFrames : 0;
+
+        // Walk MediaPlayer's own registered endpoint list — the same list
+        // PlayAsync / StopAsync drive — instead of poking router internals.
+        foreach (var ep in _endpoints)
+        {
+            if (ep is IVideoEndpointDiagnosticsSink sink)
+            {
+                try { sink.UpdateDropCounters(subDropped, decDropped); }
+                catch { /* HUD updates are best-effort */ }
+            }
+        }
+    }
+
+    private void TryUpdateVideoLateDropFromDrift(TimeSpan drift)
+    {
+        var dec = _decoder;
+        if (dec is null) return;
+        // Find the active video channel (we only auto-tune the first one;
+        // multi-stream sources are rare in this code base).
+        var ch = dec.VideoChannels.Count > 0 ? dec.VideoChannels[0] : null;
+        if (ch is not ISupportsLateFrameDrop vc) return;
+
+        // Positive drift = audio ahead of video. Treat the audio anchor as
+        // "where video should be" and tell the channel about it.
+        try
+        {
+            var clockPos = _router.Clock.Position;
+            vc.SetExternalClockHint(clockPos);
+        }
+        catch { /* best-effort — clock may have been replaced mid-loop */ }
+
+        double absMs = Math.Abs(drift.TotalMilliseconds);
+        // Only enable late-drop when drift is well past one frame interval.
+        // 100 ms is a conservative threshold: below it the existing
+        // TimeOffset corrector is already converging and adding decoder-
+        // side drops would just produce visible judder for no real benefit.
+        if (absMs >= 100)
+        {
+            // Deadline = half the observed lag, floored at 50 ms. This
+            // keeps the drop "scoped" to the frames most pessimistically
+            // late while never dropping for sub-frame jitter.
+            double deadlineMs = Math.Max(50, absMs * 0.5);
+            vc.LateFrameDropDeadline = TimeSpan.FromMilliseconds(deadlineMs);
+        }
+        else
+        {
+            vc.LateFrameDropDeadline = TimeSpan.Zero;
+        }
+    }
+
+    private void ApplyVideoMasterTrackingCap(IMediaClock master)
+    {
+        // Clear any previous cap so the old master returns to its default
+        // (uncapped) interpolation behaviour when a new master is selected.
+        var previous = _videoMasterTrackingCapApplied;
+        if (previous is not null && !ReferenceEquals(previous, master))
+        {
+            previous.MaxInterpolationLead = TimeSpan.Zero;
+            _videoMasterTrackingCapApplied = null;
+        }
+
+        if (master is not VideoPtsClock vpc) return;
+
+        double fps = vpc.FrameRate > 0 ? vpc.FrameRate : 30.0;
+        // Cap at ~1.5 frame intervals, with a 25 ms / 250 ms floor and
+        // ceiling so 0 fps and pathologically low fps inputs get something
+        // sane.
+        double leadMs = Math.Clamp(1500.0 / fps, 25.0, 250.0);
+        vpc.MaxInterpolationLead = TimeSpan.FromMilliseconds(leadMs);
+        _videoMasterTrackingCapApplied = vpc;
     }
 
     /// <summary>
@@ -299,6 +397,17 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     /// fires.
     /// </remarks>
     public event EventHandler<PlaybackFailedEventArgs>? PlaybackFailed;
+
+    /// <summary>
+    /// §heavy-media-fixes phase 7 — raised when the demux watchdog drops a
+    /// packet because consumers fell behind for longer than its stall
+    /// budget (currently 2 s). UIs can use this to flash a buffering /
+    /// "output stalled" indicator. Argument is the cumulative process-wide
+    /// drop count for diagnostics; the event itself fires on a thread-pool
+    /// thread so handlers must not assume any particular synchronization
+    /// context. Handlers must not block.
+    /// </summary>
+    public event EventHandler<long>? BufferStalled;
 
     // ── Properties ───────────────────────────────────────────────────────────
 
@@ -635,6 +744,20 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
                             "A/V drift: raw={DriftMs:F2}ms abs={AbsMs:F2}ms videoOffset={OffMs:F2}ms (minAct={Min} outlier>{Ign} need×{N})",
                             drift.TotalMilliseconds, absDriftMs, currentOffsetMs,
                             options.MinDriftMs, options.IgnoreOutlierDriftMs, outlierThreshold);
+
+                        // §heavy-media-fixes phase 6 — feed the live A/V drift
+                        // and master-clock position into the video channel so it
+                        // can drop non-reference frames whose PTS is hopelessly
+                        // behind the audio anchor. The deadline grows with the
+                        // observed lag so we don't start dropping until decode
+                        // is genuinely below realtime; the hint lets the channel
+                        // recognise late frames that were never delivered to the
+                        // consumer (and so wouldn't otherwise update Position).
+                        TryUpdateVideoLateDropFromDrift(drift);
+                        // §heavy-media-fixes phase 4 / 6 — fan out the latest
+                        // upstream drop counters to any video endpoints that
+                        // expose a diagnostics sink (HUD overlay).
+                        TryFanOutDropCountersToVideoEndpoints();
 
                         bool applyStep;
                         double driftToApplyMs;
@@ -1145,6 +1268,15 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             var inputId = _router.RegisterVideoInput(videoCh);
             _videoInputId = inputId;
 
+            // §heavy-media-fixes phase 7 — push the source format hint into
+            // every endpoint that supports it before the first frame is
+            // produced. Without this the HUD's `src:` line stays blank
+            // until the first decoded frame is presented (a few hundred ms
+            // on heavy 4K60 sources, longer when the decoder is warming
+            // up). It also lets endpoints prepare resources sized to the
+            // expected frame layout if they want to.
+            var srcFormat = videoCh.SourceFormat;
+
             for (int i = 0; i < _endpoints.Count; i++)
             {
                 if (_endpoints[i] is IVideoEndpoint v)
@@ -1153,10 +1285,21 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
                     var t = _perEndpointRoutes[i];
                     _perEndpointRoutes[i] = (t.Audio, r);
                 }
+
+                if (_endpoints[i] is IVideoEndpointInputFormatHint hint)
+                {
+                    try { hint.SetInputFormatHint(srcFormat); }
+                    catch (Exception ex)
+                    {
+                        Log.LogDebug(ex, "AttachDecoder: SetInputFormatHint failed on ep[{I}] {Type}",
+                            i, _endpoints[i].GetType().Name);
+                    }
+                }
             }
         }
 
         decoder.EndOfMedia += OnEndOfMedia;
+        decoder.BufferStalled += OnBufferStalled;
         _decoder = decoder;
         _decoderStarted = false;
         for (int i = 0; i < _endpoints.Count; i++)
@@ -1184,6 +1327,21 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             var r = CreateVideoRouteToEndpoint(_router, _videoInputId.Value, epId, v);
             var t = _perEndpointRoutes[idx];
             _perEndpointRoutes[idx] = (t.Audio, r);
+        }
+
+        // §heavy-media-fixes phase 7 — endpoint added after AttachDecoder
+        // gets the same SourceFormat hint that AttachDecoder pushed to
+        // earlier endpoints, so the HUD `src:` line is correct from the
+        // moment the endpoint becomes visible.
+        if (video && _decoder?.FirstVideoChannel is { } vchHint
+            && _endpoints[idx] is IVideoEndpointInputFormatHint hint)
+        {
+            try { hint.SetInputFormatHint(vchHint.SourceFormat); }
+            catch (Exception ex)
+            {
+                Log.LogDebug(ex, "AutoRouteToEndpoint: SetInputFormatHint failed on ep[{I}] {Type}",
+                    idx, _endpoints[idx].GetType().Name);
+            }
         }
     }
 
@@ -1284,6 +1442,20 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         _decoderStarted = false;
     }
 
+    private void OnBufferStalled(object? sender, long totalDrops)
+    {
+        // §heavy-media-fixes phase 7 — re-raise on this MediaPlayer instance.
+        // Decoder lifetime is owned by us; even after it's torn down the
+        // event won't fire again because the demuxer's stopped.
+        if (_disposed) return;
+        var handler = BufferStalled;
+        if (handler == null) return;
+        // Already on the thread pool when the decoder's own RaiseBufferStalled
+        // queued us, so we can call handlers inline without re-queueing.
+        try { handler(this, totalDrops); }
+        catch (Exception ex) { Log.LogDebug(ex, "BufferStalled handler threw"); }
+    }
+
     private void OnEndOfMedia(object? sender, EventArgs e)
     {
         if (IsLooping && _decoder != null && !_disposed)
@@ -1316,7 +1488,53 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         try
         {
             var ch = _decoder?.FirstAudioChannel;
-            if (ch is not null)
+            if (ch is null)
+            {
+                // §heavy-media-fixes phase 4 — video-only sessions must
+                // also drain (the renderer's subscription queue can hold
+                // several frames at EOF) before the player tells the UI
+                // we're done. Mirrors the audio drain budget but observes
+                // the video channel's BufferAvailable instead.
+                var vch = _decoder?.FirstVideoChannel;
+                if (vch is not null)
+                {
+                    var vDrainStarted = DateTimeOffset.UtcNow;
+                    var vLastProgressAt = vDrainStarted;
+                    int vLastAvail = int.MaxValue;
+                    while (StillRunning())
+                    {
+                        int vAvail;
+                        try { vAvail = vch.BufferAvailable; }
+                        catch { break; }
+                        if (vAvail <= 0) break;
+
+                        var now = DateTimeOffset.UtcNow;
+                        if (vAvail < vLastAvail)
+                        {
+                            vLastAvail = vAvail;
+                            vLastProgressAt = now;
+                        }
+                        else if (now - vLastProgressAt >= TimeSpan.FromSeconds(1))
+                        {
+                            Log.LogWarning(
+                                "SourceEnded (video) drain stalled: BufferAvailable={Avail} frozen for ≥1 s; finalizing state anyway.",
+                                vAvail);
+                            break;
+                        }
+
+                        if (now - vDrainStarted >= MaxSourceEndedDrainTimeout)
+                        {
+                            Log.LogWarning(
+                                "SourceEnded (video) drain timed out after {ElapsedMs:F0}ms with BufferAvailable={Avail}; finalizing state anyway.",
+                                (now - vDrainStarted).TotalMilliseconds, vAvail);
+                            break;
+                        }
+
+                        await Task.Delay(20).ConfigureAwait(false);
+                    }
+                }
+            }
+            else
             {
                 // §EOF-reliability — TODO #1: bound the drain wait. If the audio
                 // endpoint stops consuming (rare teardown race) the previous

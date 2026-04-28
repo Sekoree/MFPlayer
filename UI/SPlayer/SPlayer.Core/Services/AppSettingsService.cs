@@ -53,6 +53,14 @@ public sealed record AppSettings
     /// <summary>Whether the player tab should remember per-playlist output overrides on save.</summary>
     public bool RememberPlaylistOverrides { get; init; } = true;
 
+    /// <summary>
+    /// When true, every <c>AvaloniaOpenGlVideoEndpoint</c> attached to the
+    /// player paces its render-request loop to the source's frame rate
+    /// instead of vsync. Reduces CPU/GPU load for low-fps content; may
+    /// introduce a small per-tick latency for refresh-rate-bound use cases.
+    /// </summary>
+    public bool LimitRenderFpsToSource { get; init; }
+
     [JsonIgnore]
     public static string DefaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -68,8 +76,11 @@ public sealed record AvDriftSettings
     public double IgnoreOutlierDriftMs { get; init; } = 250;
     public int OutlierConsecutiveSamples { get; init; } = 3;
     public double CorrectionGain { get; init; } = 0.15;
-    public double MaxStepMs { get; init; } = 5;
-    public double MaxAbsOffsetMs { get; init; } = 250;
+    // §heavy-media-fixes phase 6 — was 5/250, raised so SPlayer can converge
+    // multi-hundred-ms drifts on heavy media. Settings UI lets the user tune
+    // back down for sinks that prefer gentler corrections.
+    public double MaxStepMs { get; init; } = 20;
+    public double MaxAbsOffsetMs { get; init; } = 2000;
 
     public AvDriftCorrectionOptions ToOptions() => new()
     {

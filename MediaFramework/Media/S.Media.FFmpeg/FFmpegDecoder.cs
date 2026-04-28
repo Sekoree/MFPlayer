@@ -16,8 +16,19 @@ namespace S.Media.FFmpeg;
 /// </summary>
 public sealed class FFmpegDecoderOptions
 {
-    /// <summary>Packet queue capacity per stream. Default 64.</summary>
-    public int PacketQueueDepth { get; init; } = 64;
+    /// <summary>
+    /// Packet queue capacity per stream. Default 32.
+    /// <para>
+    /// §heavy-media-fixes phase 4 — was 64, lowered to 32 so end-of-source
+    /// surfaces in roughly half the wall-clock time when a downstream
+    /// consumer is below realtime. The decoder still has plenty of headroom
+    /// for normal-rate playback (a 64-packet queue at 60 fps was 1+ s of
+    /// look-ahead, which is way past what any realistic decode-side jitter
+    /// burns through). Bump it back up explicitly if you have an unusually
+    /// bursty source.
+    /// </para>
+    /// </summary>
+    public int PacketQueueDepth { get; init; } = 32;
 
     /// <summary>Audio channel ring buffer depth in chunks. Default 16.</summary>
     public int AudioBufferDepth { get; init; } = 16;
@@ -53,12 +64,20 @@ public sealed class FFmpegDecoderOptions
     public bool EnableVideo { get; init; } = true;
 
     /// <summary>
-    /// Output pixel format produced by video channels. Default is Bgra32.
-    /// Set to <see langword="null"/> to use the source's native pixel format automatically
-    /// (no software conversion in the decoder — the pipeline operates in the source format).
-    /// Set to <see cref="PixelFormat.Rgba32"/> for renderers that use RGBA uploads.
+    /// Output pixel format produced by video channels. <see langword="null"/>
+    /// (the default) means "use the source's native pixel format" — no
+    /// software conversion runs in the decoder and the pipeline operates in
+    /// the source format. Set to <see cref="PixelFormat.Bgra32"/> /
+    /// <see cref="PixelFormat.Rgba32"/> when the consumer cannot accept YUV.
+    /// <para>
+    /// Historic note: prior to the heavy-media-fixes pass this defaulted to
+    /// <see cref="PixelFormat.Bgra32"/>, which forced a per-frame
+    /// <c>sws_scale</c> step even for renderers (Avalonia GL, NDI receivers)
+    /// that would otherwise sample YUV directly on the GPU. Callers that
+    /// rely on the old behaviour should set this explicitly.
+    /// </para>
     /// </summary>
-    public PixelFormat? VideoTargetPixelFormat { get; init; } = PixelFormat.Bgra32;
+    public PixelFormat? VideoTargetPixelFormat { get; init; }
 
     /// <summary>
     /// §4.7 — when set, <see cref="FFmpegAudioChannel"/> configures its
@@ -269,6 +288,28 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     /// is the underlying IO exception (if any). Handlers must not block.
     /// </summary>
     public event EventHandler<MediaDecodeException>? OnError;
+
+    /// <summary>
+    /// §heavy-media-fixes phase 7 — raised on a <see cref="ThreadPool"/> thread
+    /// when the demux watchdog (<c>FFmpegDemuxWorker.WriteStallBudget</c>)
+    /// drops a packet because a per-stream queue stayed full longer than the
+    /// stall budget. UIs can use this to flash a "buffering / output
+    /// stalled" indicator. The argument carries the cumulative drop count
+    /// (process-wide) for diagnostics; handlers must not block.
+    /// </summary>
+    public event EventHandler<long>? BufferStalled;
+
+    internal void RaiseBufferStalled(long totalDrops)
+    {
+        var handler = BufferStalled;
+        if (handler == null) return;
+        ThreadPool.QueueUserWorkItem(static s =>
+        {
+            var (self, h, n) = ((FFmpegDecoder, EventHandler<long>, long))s!;
+            try { h(self, n); }
+            catch { /* handlers must not throw, but we don't want to crash the worker either */ }
+        }, (this, handler, totalDrops));
+    }
 
     private FFmpegDecoder()
     {

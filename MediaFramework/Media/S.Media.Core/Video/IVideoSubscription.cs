@@ -37,6 +37,15 @@ public interface IVideoSubscription : IDisposable
     /// <summary><see langword="true"/> when the publisher has stopped and the queue has drained.</summary>
     bool IsCompleted { get; }
 
+    /// <summary>
+    /// §heavy-media-fixes phase 4 — running count of frames dropped by this
+    /// subscription's overflow policy (zero for <see cref="VideoOverflowPolicy.Wait"/>).
+    /// Surfaced into the HUD so consumers can see the transport-side losses.
+    /// Default implementation returns 0 for backwards compatibility with
+    /// custom subscription implementations.
+    /// </summary>
+    long DroppedFrames => 0;
+
     /// <summary>Raised on the publisher's thread when the queue is empty after at least one frame has been seen.</summary>
     event EventHandler<BufferUnderrunEventArgs>? BufferUnderrun;
 }
