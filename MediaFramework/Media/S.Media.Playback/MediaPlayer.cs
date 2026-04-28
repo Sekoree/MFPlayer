@@ -105,6 +105,13 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
     private static readonly TimeSpan SeekPresentPollInterval = TimeSpan.FromMilliseconds(10);
     private static readonly TimeSpan SeekPositionTolerance = TimeSpan.FromMilliseconds(1);
     private static readonly TimeSpan DefaultSeekPresentTimeout = TimeSpan.FromSeconds(2);
+    // §EOF-reliability — TODO #1: hard upper bound on the post-EOF audio drain
+    // wait. The previous unbounded loop polled BufferAvailable until 0; if the
+    // audio endpoint stopped consuming for any reason (rare underrun/teardown
+    // race) the player was stranded in Playing. Five seconds is generous for a
+    // typical PortAudio + ring buffer (~1–2 s worst-case) yet bounded so the
+    // UI cannot get permanently stuck.
+    private static readonly TimeSpan MaxSourceEndedDrainTimeout = TimeSpan.FromSeconds(5);
 
     private readonly AVRouter _router;
     private readonly List<IMediaEndpoint> _endpoints = [];
@@ -514,6 +521,40 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
         }
 
         return inputId;
+    }
+
+    /// <summary>
+    /// §Dynamic-source-format / TODO #NDI-jump — re-broadcasts a video input's
+    /// current source format to every <see cref="ISupportsDynamicMetadata"/>
+    /// endpoint. Used by external inputs whose <c>SourceFormat</c> only
+    /// becomes valid after the first frame arrives (NDI's typical
+    /// "format-on-first-frame" pattern). Without this, the route's initial
+    /// <c>AnnounceUpcomingVideoFormat</c> ran with default(VideoFormat) and
+    /// the endpoint never received a real fps hint, falling back to its
+    /// internal PTS-delta auto-snap which oscillates against jittery NDI
+    /// timestamps and causes receivers to re-detect format/fps.
+    /// </summary>
+    internal void AnnounceVideoSourceFormat(VideoFormat format)
+    {
+        for (int i = 0; i < _endpoints.Count; i++)
+        {
+            if (_endpoints[i] is IVideoEndpoint { } v
+                && v is ISupportsDynamicMetadata dm)
+            {
+                try
+                {
+                    dm.AnnounceUpcomingVideoFormat(format);
+                    if (format.FrameRateNumerator > 0 && format.FrameRateDenominator > 0)
+                        dm.ApplyVideoFpsHint(format.FrameRateNumerator, format.FrameRateDenominator);
+                }
+                catch (Exception ex)
+                {
+                    Log.LogWarning(ex,
+                        "AnnounceVideoSourceFormat: dynamic-metadata hint threw on endpoint {Endpoint}; ignoring.",
+                        v.Name);
+                }
+            }
+        }
     }
 
     // ── Lifecycle hooks (extension point) ────────────────────────────────────
@@ -1277,16 +1318,57 @@ public sealed class MediaPlayer : IAsyncDisposable, IDisposable
             var ch = _decoder?.FirstAudioChannel;
             if (ch is not null)
             {
+                // §EOF-reliability — TODO #1: bound the drain wait. If the audio
+                // endpoint stops consuming (rare teardown race) the previous
+                // unbounded loop never exited and the player was stranded in
+                // Playing. Track wall time + last-observed `BufferAvailable`;
+                // exit on drain, on stall (no progress for 1 s), or on overall
+                // timeout. The watchdog only kicks in when the buffer truly
+                // never empties — successful drains exit at `avail <= 0` as
+                // before with no behavioural change.
+                var drainStarted = DateTimeOffset.UtcNow;
+                var lastProgressAt = drainStarted;
+                int lastAvail = int.MaxValue;
+                bool drainTimedOut = false;
+                bool drainStalled = false;
                 while (StillRunning())
                 {
                     int avail;
                     try { avail = ch.BufferAvailable; }
                     catch { break; } // channel torn down mid-read.
                     if (avail <= 0) break;
+
+                    var now = DateTimeOffset.UtcNow;
+                    if (avail < lastAvail)
+                    {
+                        lastAvail = avail;
+                        lastProgressAt = now;
+                    }
+                    else if (now - lastProgressAt >= TimeSpan.FromSeconds(1))
+                    {
+                        // Audio path has frozen at `avail` frames for 1 s — the
+                        // endpoint isn't pulling anymore (or did so very slowly).
+                        // Treat as drained so the UI can advance.
+                        drainStalled = true;
+                        Log.LogWarning(
+                            "SourceEnded drain stalled: BufferAvailable={Avail} frozen for ≥1 s; finalizing state anyway.",
+                            avail);
+                        break;
+                    }
+
+                    if (now - drainStarted >= MaxSourceEndedDrainTimeout)
+                    {
+                        drainTimedOut = true;
+                        Log.LogWarning(
+                            "SourceEnded drain timed out after {ElapsedMs:F0}ms with BufferAvailable={Avail}; finalizing state anyway.",
+                            (now - drainStarted).TotalMilliseconds, avail);
+                        break;
+                    }
+
                     await Task.Delay(20).ConfigureAwait(false);
                 }
 
-                if (StillRunning())
+                if (StillRunning() && !drainTimedOut && !drainStalled)
                 {
                     // Device buffer grace — PortAudio's host-API queue.
                     try { await Task.Delay(100).ConfigureAwait(false); }

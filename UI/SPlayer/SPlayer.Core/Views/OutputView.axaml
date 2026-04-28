@@ -164,6 +164,8 @@
                                             <MenuItem Header="Restart" Command="{Binding RestartCommand}"/>
                                             <Separator/>
                                             <MenuItem Header="Remove" Command="{Binding RemoveCommand}"/>
+                                            <Separator/>
+                                            <CheckBox Content="Debug HUD" IsChecked="{Binding DebugHUDEnabled}"/>
                                         </MenuFlyout>
                                     </Border.ContextFlyout>
                                 </Border>

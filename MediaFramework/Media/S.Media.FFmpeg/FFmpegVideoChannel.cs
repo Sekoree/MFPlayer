@@ -22,10 +22,19 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
     private readonly int                          _streamIndex;
     private readonly ChannelReader<EncodedPacket> _packetReader;
     private readonly AVBufferRef*                 _hwDeviceCtx;   // null = sw only
+    private readonly AVHWDeviceType               _hwDeviceType;  // matches _hwDeviceCtx; AV_HWDEVICE_TYPE_NONE when sw-only
     private readonly int                          _threadCount;
     private readonly Func<int>                    _latestSeekEpochProvider;
     private readonly VideoFormat                  _nativeSourceFormat;
     private readonly FixedVideoFramePool          _framePool;
+
+    // Captured AVPixelFormat the codec advertises for HW decode through get_format.
+    // Set by OpenCodec() when avcodec_get_hw_config returns a matching config.
+    private AVPixelFormat _hwPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+    // Strong reference to the get_format callback delegate. FFmpeg.AutoGen marshals the
+    // delegate to a function pointer, but the GC will collect the delegate unless we
+    // hold it in a managed field — leading to a hard crash on the first frame.
+    private AVCodecContext_get_format? _getFormatDelegate;
 
     private AVCodecContext* _codecCtx;
     private SwsContext*     _sws;
@@ -141,6 +150,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
     internal FFmpegVideoChannel(int streamIndex, AVStream* stream,
                                  ChannelReader<EncodedPacket> packetReader,
                                  AVBufferRef*   hwDeviceCtx       = null,
+                                 AVHWDeviceType hwDeviceType      = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE,
                                  PixelFormat?   targetPixelFormat = PixelFormat.Bgra32,
                                  int            threadCount       = 0,
                                  int            bufferDepth       = 8,
@@ -150,6 +160,7 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
         _stream             = stream;
         _packetReader       = packetReader;
         _hwDeviceCtx        = hwDeviceCtx;
+        _hwDeviceType       = hwDeviceType;
         _threadCount        = threadCount;
         _bufferDepth        = Math.Max(1, bufferDepth);
         _latestSeekEpochProvider = latestSeekEpochProvider ?? (() => 0);
@@ -202,20 +213,87 @@ internal sealed unsafe class FFmpegVideoChannel : IVideoChannel, ISeekableInput,
         if (_hwDeviceCtx == null && _threadCount != 1)
             _codecCtx->thread_type = ffmpeg.FF_THREAD_FRAME | ffmpeg.FF_THREAD_SLICE;
 
-        // Attach hardware device context if provided.
+        // Attach hardware device context if provided, and wire up get_format so the
+        // codec actually negotiates the HW pixel format. Without this callback the
+        // codec falls back to software decode for any modern codec (HEVC 10-bit,
+        // AV1, modern H.264 profiles) — even though hw_device_ctx is set, the
+        // default get_format chooses the SW format from the offered list.
         if (_hwDeviceCtx != null)
-            _codecCtx->hw_device_ctx = ffmpeg.av_buffer_ref(_hwDeviceCtx);
+        {
+            _hwPixelFormat = FindHwPixelFormat(codec, _hwDeviceType);
+            if (_hwPixelFormat != AVPixelFormat.AV_PIX_FMT_NONE)
+            {
+                _codecCtx->hw_device_ctx = ffmpeg.av_buffer_ref(_hwDeviceCtx);
+
+                // Capture into a local for the closure so the delegate has stable storage.
+                var hwFmt = _hwPixelFormat;
+                int streamIdx = _streamIndex;
+                AVCodecContext_get_format del = (AVCodecContext* _, AVPixelFormat* fmts) =>
+                {
+                    for (var p = fmts; *p != AVPixelFormat.AV_PIX_FMT_NONE; p++)
+                    {
+                        if (*p == hwFmt) return *p;
+                    }
+                    Log.LogWarning(
+                        "Video stream={StreamIndex}: HW format {HwFmt} not offered by codec; falling back to {SwFmt}",
+                        streamIdx, hwFmt, *fmts);
+                    return *fmts;
+                };
+                // Root the delegate in a managed field so the GC does not collect it
+                // while FFmpeg holds the marshalled function pointer.
+                _getFormatDelegate = del;
+                _codecCtx->get_format = del;
+
+                Log.LogInformation(
+                    "Video stream={StreamIndex}: HW decode wired (device={HwDeviceType}, hw_pix_fmt={HwFmt})",
+                    _streamIndex, _hwDeviceType, _hwPixelFormat);
+            }
+            else
+            {
+                Log.LogInformation(
+                    "Video stream={StreamIndex}: codec {CodecName} has no HW config matching device {HwDeviceType}; using software decode",
+                    _streamIndex, ffmpeg.avcodec_get_name(codec->id), _hwDeviceType);
+            }
+        }
 
         int ret = ffmpeg.avcodec_open2(_codecCtx, codec, null);
         if (ret < 0) throw new MediaOpenException($"avcodec_open2 failed: {ret}");
 
         string codecName = ffmpeg.avcodec_get_name(_codecCtx->codec_id);
-        Log.LogInformation("Video stream={StreamIndex} codec={CodecName} threads(req={ReqThreads}, eff={EffThreads}) type(req={ReqType}, active={ActiveType})",
-            _streamIndex, codecName, _threadCount, _codecCtx->thread_count, _codecCtx->thread_type, _codecCtx->active_thread_type);
+        Log.LogInformation("Video stream={StreamIndex} codec={CodecName} threads(req={ReqThreads}, eff={EffThreads}) type(req={ReqType}, active={ActiveType}) hw={HwAccel}",
+            _streamIndex, codecName, _threadCount, _codecCtx->thread_count, _codecCtx->thread_type, _codecCtx->active_thread_type,
+            _codecCtx->hw_device_ctx != null);
 
         _frame    = ffmpeg.av_frame_alloc();
         _swFrame  = ffmpeg.av_frame_alloc();
         _pkt      = ffmpeg.av_packet_alloc();
+    }
+
+    /// <summary>
+    /// Walks the codec's HW config table and returns the AVPixelFormat for the first
+    /// config that supports HW_DEVICE_CTX-style negotiation against the requested device
+    /// type. Returns AV_PIX_FMT_NONE when no suitable config is found, signalling that
+    /// the channel must fall back to software decode.
+    /// </summary>
+    private static AVPixelFormat FindHwPixelFormat(AVCodec* codec, AVHWDeviceType deviceType)
+    {
+        if (deviceType == AVHWDeviceType.AV_HWDEVICE_TYPE_NONE) return AVPixelFormat.AV_PIX_FMT_NONE;
+
+        // From libavcodec/codec.h: AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX = 0x01.
+        // FFmpeg.AutoGen does not expose this constant, so use the literal.
+        const int AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX = 0x01;
+
+        for (int i = 0; ; i++)
+        {
+            var cfg = ffmpeg.avcodec_get_hw_config(codec, i);
+            if (cfg == null) break;
+            if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0
+                && cfg->device_type == deviceType)
+            {
+                return cfg->pix_fmt;
+            }
+        }
+        return AVPixelFormat.AV_PIX_FMT_NONE;
     }
 
     private SwsContext* GetSws(int w, int h, AVPixelFormat srcFmt)

@@ -188,6 +188,12 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private long                     _seekControlDropLogCount;
 
     private int                      _started;
+    // One-shot guard: ensures EndOfMedia fires at most once per session even when
+    // multiple termination paths (clean EOF + demux finally fallback for Retry-
+    // exhaustion / Fatal exits) try to publish it. Reset by Reopen/Seek-restart
+    // is unnecessary because each FFmpegDecoder instance covers a single media
+    // session (a new MediaPlayer.OpenAsync constructs a new decoder).
+    private int                      _endOfMediaRaised;
 
     // Guards concurrent av_read_frame (demux thread) vs. av_seek_frame (user thread).
     // Read lock = demux reading packets; Write lock = seek repositioning the format context.
@@ -196,6 +202,10 @@ public sealed unsafe class FFmpegDecoder : IDisposable
     private readonly ReaderWriterLockSlim  _formatIoGate = new(LockRecursionPolicy.NoRecursion);
 
     private string?                  _activeHwDeviceType;
+    // The AVHWDeviceType associated with the active HW device, needed by FFmpegVideoChannel
+    // to look up the correct HW pixel format via avcodec_get_hw_config and wire up the
+    // get_format callback. Without this the codec context falls back to SW silently.
+    private AVHWDeviceType           _activeHwDeviceTypeEnum = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE;
 
     // Review §3.7 / §Consistency: shared static logger instead of per-instance
     // (decoder instances are short-lived; the per-instance field was gratuitous).
@@ -435,6 +445,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
                 video.Add(new FFmpegVideoChannel(i, stream, q.Reader,
                     hwDeviceCtx: _hwDeviceCtx,
+                    hwDeviceType: _activeHwDeviceTypeEnum,
                     targetPixelFormat: _options.VideoTargetPixelFormat,
                     threadCount: _options.DecoderThreadCount,
                     bufferDepth: _options.VideoBufferDepth,
@@ -474,6 +485,7 @@ public sealed unsafe class FFmpegDecoder : IDisposable
         }
         _hwDeviceCtx = ctx;
         _activeHwDeviceType = deviceType;
+        _activeHwDeviceTypeEnum = type;
     }
 
     private void TryCreateDefaultHwDevice()
@@ -778,6 +790,13 @@ public sealed unsafe class FFmpegDecoder : IDisposable
 
     internal void RaiseEndOfMedia()
     {
+        // Idempotent: clean-EOF demux exit and the demux finally-block fallback
+        // (Retry-exhaustion / Fatal) can both reach this. We must not publish
+        // EndOfMedia twice, otherwise MediaPlayer's drain task would race itself
+        // and the playback-completion observer would fire a phantom completion.
+        if (Interlocked.Exchange(ref _endOfMediaRaised, 1) != 0)
+            return;
+
         var handler = EndOfMedia;
         if (handler == null) return;
         ThreadPool.QueueUserWorkItem(static s =>

@@ -1,6 +1,5 @@
-1. EOF sometimes doesnt fire so the player still things its playing while playback actually stopped for some reason.
-2. Check if NDI in the Player is limited to just RGBA formats or if it can handle all NDI supports.
-3. See if volume change still takes time to apply.
-4. Redesign player UI so there is a bigger focus on the playlist, transport controls on the left + playlist management ones there too. Save/load etc. probably best in a menu bar.
-   Position progress bar can probably stay at the bottom, perhaps with all userful time infos (Current Position, Total Duration and Remaining Time)
-   Also a way to seek to a specific timestamp.
+1. YUV422p10 seems to get converted to BGRA32 on local video (should normally just passthrough) (tested with heavy 4k60 yuv422p10 prores file)
+2. Maybe option to lock video output fps to source video fps on Avalonia unless that stalls the entire app
+3. (local video only) Drift in the HUD value seems very broken, while playback looks fine (when not running slow), it seems to be at a random very high value (currently in my testing hovering around 9000ms and increasing more and more).
+4. (local video only) Playback doesnt seem to detect the end of the video and now the drift in the HUD just runs higher and higher.
+5. (local video + audio) When running slow audio and video seem to get out of sync

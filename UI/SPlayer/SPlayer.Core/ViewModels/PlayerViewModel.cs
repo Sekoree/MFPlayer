@@ -21,6 +21,8 @@ using S.Media.Core.Clock;
 using S.Media.Core.Media;
 using S.Media.Core.Media.Endpoints;
 using S.Media.NDI;
+using SPlayer.Core.Dialogs;
+using SPlayer.Core.Dialogs.DialogModels;
 using SPlayer.Core.Models;
 using SPlayer.Core.Services;
 
@@ -54,10 +56,21 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         DecoderThreadCount = 0
     };
 
+    /// <summary>
+    /// Tracks which kind of source the live <see cref="MediaPlayer"/> instance
+    /// was constructed for. The instance is rebuilt when the user crosses
+    /// between modes — file→NDI or NDI→file — because the NDI lifecycle hook
+    /// added at builder time cannot be removed afterwards (and we don't want
+    /// it firing for file playback).
+    /// </summary>
+    private enum SourceMode { File, Ndi }
+
     private readonly OutputViewModel _outputs;
     private readonly SettingsViewModel? _settings;
     private readonly Services.AppSettingsService? _settingsStore;
-    private readonly MediaPlayer _player = new();
+    private MediaPlayer _player = null!; // initialised in ctor via BuildFilePlayer
+    private SourceMode _sourceMode = SourceMode.File;
+    private string? _activeNdiSourceLabel;
     private readonly List<IMediaEndpoint> _attachedEndpoints = new();
     private readonly DispatcherTimer _positionTimer;
     private readonly Dictionary<string, bool> _selectionMemory = new();
@@ -96,6 +109,19 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _durationText = "0:00";
+
+    /// <summary>Remaining time, formatted with a leading "−" so the bottom
+    /// transport bar can show <c>0:42 / 3:15 (−2:33)</c> at a glance.</summary>
+    [ObservableProperty]
+    private string _remainingText = "−0:00";
+
+    /// <summary>
+    /// Free-form timestamp the user can type into the seek-to input. Accepts
+    /// <c>HH:MM:SS</c>, <c>MM:SS</c>, plain seconds, or a value with a single
+    /// decimal point. Parsed by <see cref="SeekToTimestampCommand"/>.
+    /// </summary>
+    [ObservableProperty]
+    private string _seekToTimestampInput = "";
 
     [ObservableProperty]
     private double _seekNormalized;
@@ -155,27 +181,6 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         _settings = settings;
         _settingsStore = settingsStore;
 
-        var driftOptions = settings is not null
-            ? settings.ToAppSettings().AvDrift.ToOptions()
-            : new AvDriftCorrectionOptions
-            {
-                InitialDelay = TimeSpan.FromSeconds(10),
-                Interval = TimeSpan.FromSeconds(5),
-                MinDriftMs = 8,
-                IgnoreOutlierDriftMs = 250,
-                OutlierConsecutiveSamples = 3,
-                CorrectionGain = 0.15,
-                MaxStepMs = 5,
-                MaxAbsOffsetMs = 250
-            };
-        // Gentle automatic A/V trim on long-form playback; MediaPlayer re-reads on next PlayAsync.
-        // Doc/Clock-And-AV-Drift-Analysis.md §8 #D: smaller, more frequent steps so a
-        // single nudge stays well under one push-tick of audio (≤ 8 ms) and the loop
-        // can chase the systemic forward bias without producing audible jumps.
-        _player.ConfigureAutoAvDriftCorrection(driftOptions);
-        SLog.LogDebug("PlayerViewModel: ConfigureAutoAvDriftCorrection enabled (initial={Init}s, interval={Int}s, maxStep={Max}ms).",
-            driftOptions.InitialDelay.TotalSeconds, driftOptions.Interval.TotalSeconds, driftOptions.MaxStepMs);
-
         _outputs.AudioEndpointModels.CollectionChanged += OnOutputPoolChanged;
         _outputs.VideoEndpointModels.CollectionChanged += OnOutputPoolChanged;
         _outputs.NdiEndpointModels.CollectionChanged += OnOutputPoolChanged;
@@ -189,19 +194,110 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
             _autoAdvance = settings.AutoAdvance;
             _loop = settings.Loop;
             _volumePercent = settings.VolumePercent;
-            _player.IsLooping = _loop;
-            _player.Volume = (float)Math.Clamp(_volumePercent / 100.0, 0, 2);
-
             // React to settings changes after the user adjusts them.
             settings.SettingsApplied += OnSettingsApplied;
         }
+
+        // Build the initial file-mode player. Rebuilding for NDI happens lazily
+        // in PlayNdiSourceAsync and is mirrored by a rebuild back to file mode
+        // when the user starts a file again.
+        BuildFilePlayer();
 
         RebuildOutputRows();
         AddEmptyPlaylistTab("Playlist 1");
         SelectedPlaylist = Playlists[0];
 
-        HookPlayerEvents();
         SyncTransportFlags();
+    }
+
+    /// <summary>
+    /// Returns the drift-correction options selected by settings (or a sensible
+    /// default if no settings store is wired). Pulled out so the file-mode
+    /// player and NDI-mode player builders share one source of truth.
+    /// </summary>
+    private AvDriftCorrectionOptions GetDriftOptions() =>
+        _settings is not null
+            ? _settings.ToAppSettings().AvDrift.ToOptions()
+            : new AvDriftCorrectionOptions
+            {
+                InitialDelay = TimeSpan.FromSeconds(10),
+                Interval = TimeSpan.FromSeconds(5),
+                MinDriftMs = 8,
+                IgnoreOutlierDriftMs = 250,
+                OutlierConsecutiveSamples = 3,
+                CorrectionGain = 0.15,
+                MaxStepMs = 5,
+                MaxAbsOffsetMs = 250
+            };
+
+    /// <summary>
+    /// Constructs a <see cref="MediaPlayer"/> ready for FFmpeg-decoded file
+    /// playback. The instance is owned by <see cref="_player"/> until the next
+    /// rebuild. Endpoints are NOT re-attached here — that happens in
+    /// <see cref="ReconcileEndpointsAsync"/> on the next play.
+    /// </summary>
+    private void BuildFilePlayer()
+    {
+        UnhookPlayerEvents();
+        _attachedEndpoints.Clear();
+
+        _player = new MediaPlayer();
+        _player.ConfigureAutoAvDriftCorrection(GetDriftOptions());
+        _player.IsLooping = Loop;
+        _player.Volume = (float)Math.Clamp(VolumePercent / 100.0, 0, 2);
+        _sourceMode = SourceMode.File;
+        _activeNdiSourceLabel = null;
+        HookPlayerEvents();
+        OnPropertyChanged(nameof(StateLabel));
+    }
+
+    /// <summary>
+    /// Builds an NDI-mode <see cref="MediaPlayer"/> via
+    /// <see cref="MediaPlayer.Create"/> + <c>WithNDIInput(name, preset)</c>.
+    /// The lifecycle hook installed by the extension owns the source's open /
+    /// start / stop calls; this VM only needs to hand it a name.
+    /// </summary>
+    private void BuildNdiPlayer(string sourceName, NDIEndpointPreset preset)
+    {
+        UnhookPlayerEvents();
+        _attachedEndpoints.Clear();
+
+        _player = MediaPlayer.Create()
+            .WithNDIInput(sourceName, preset)
+            .Build();
+        _player.ConfigureAutoAvDriftCorrection(GetDriftOptions());
+        _player.IsLooping = Loop;
+        _player.Volume = (float)Math.Clamp(VolumePercent / 100.0, 0, 2);
+        _sourceMode = SourceMode.Ndi;
+        _activeNdiSourceLabel = sourceName;
+        HookPlayerEvents();
+        OnPropertyChanged(nameof(StateLabel));
+    }
+
+    /// <summary>
+    /// Stops the current player (if running), unhooks events, disposes it,
+    /// and runs <paramref name="build"/> to construct the replacement. The
+    /// caller is responsible for any post-build endpoint re-registration —
+    /// usually delegated to <see cref="ReconcileEndpointsAsync"/>.
+    /// </summary>
+    private async Task SwitchPlayerAsync(Action build)
+    {
+        try
+        {
+            if (_player.State is PlaybackState.Playing or PlaybackState.Paused or PlaybackState.Ready)
+            {
+                await _player.StopAsync(stopRegisteredEndpoints: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            SLog.LogDebug(ex, "SwitchPlayer: stop on previous player failed (continuing).");
+        }
+
+        try { await _player.DisposeAsync(); }
+        catch (Exception ex) { SLog.LogDebug(ex, "SwitchPlayer: dispose on previous player failed (continuing)."); }
+
+        build();
     }
 
     private void OnSettingsApplied(object? sender, EventArgs e)
@@ -397,11 +493,22 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
     private void HookPlayerEvents()
     {
+        // Track per-player so a rebuild leaves no dangling subscription on the
+        // disposed instance (would NRE / leak on next state change before GC).
         if (_eventsHooked) return;
         _eventsHooked = true;
         _player.PlaybackStateChanged += OnPlaybackStateChanged;
         _player.PlaybackCompleted += OnPlaybackCompleted;
         _player.PlaybackFailed += OnPlaybackFailed;
+    }
+
+    private void UnhookPlayerEvents()
+    {
+        if (!_eventsHooked) return;
+        _eventsHooked = false;
+        try { _player.PlaybackStateChanged -= OnPlaybackStateChanged; } catch { }
+        try { _player.PlaybackCompleted -= OnPlaybackCompleted; } catch { }
+        try { _player.PlaybackFailed -= OnPlaybackFailed; } catch { }
     }
 
     private void OnPlaybackFailed(object? sender, PlaybackFailedEventArgs e)
@@ -450,7 +557,16 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         PositionText = FormatTime(p);
         DurationText = d.HasValue ? FormatTime(d.Value) : "—";
         if (d is { TotalSeconds: > 0 } dur)
+        {
             SeekNormalized = Math.Clamp(p.TotalSeconds / dur.TotalSeconds, 0, 1);
+            var remaining = dur - p;
+            if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
+            RemainingText = "−" + FormatTime(remaining);
+        }
+        else
+        {
+            RemainingText = "−0:00";
+        }
     }
 
     private static string FormatTime(TimeSpan t)
@@ -459,6 +575,85 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         if (t.TotalHours >= 1)
             return $"{(int)t.Days * 24 + t.Hours}:{t.Minutes:00}:{t.Seconds:00}";
         return $"{(int)t.TotalMinutes}:{t.Seconds:00}";
+    }
+
+    /// <summary>
+    /// Tries to parse <paramref name="text"/> into a positional <see cref="TimeSpan"/>.
+    /// Accepts <c>HH:MM:SS</c>, <c>MM:SS</c>, <c>SS</c>, fractional seconds
+    /// (<c>1:23.5</c>), and bare numbers. Returns <see langword="false"/> on
+    /// any malformed input — callers surface a status message instead of
+    /// throwing into the UI thread.
+    /// </summary>
+    internal static bool TryParseTimestamp(string? text, out TimeSpan position)
+    {
+        position = TimeSpan.Zero;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var s = text.Trim();
+
+        // Bare seconds (with optional fractional part).
+        if (!s.Contains(':'))
+        {
+            if (double.TryParse(s, System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var secs)
+                && secs >= 0)
+            {
+                position = TimeSpan.FromSeconds(secs);
+                return true;
+            }
+            return false;
+        }
+
+        // hh:mm:ss[.fff] or mm:ss[.fff]
+        var parts = s.Split(':');
+        if (parts.Length is < 2 or > 3) return false;
+
+        int hours = 0, minutes;
+        double seconds;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (parts.Length == 3)
+        {
+            if (!int.TryParse(parts[0], System.Globalization.NumberStyles.Integer, inv, out hours)) return false;
+            if (!int.TryParse(parts[1], System.Globalization.NumberStyles.Integer, inv, out minutes)) return false;
+            if (!double.TryParse(parts[2], System.Globalization.NumberStyles.Float, inv, out seconds)) return false;
+        }
+        else
+        {
+            if (!int.TryParse(parts[0], System.Globalization.NumberStyles.Integer, inv, out minutes)) return false;
+            if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float, inv, out seconds)) return false;
+        }
+
+        if (hours < 0 || minutes < 0 || seconds < 0) return false;
+        if (minutes >= 60 || seconds >= 60) return false;
+        position = TimeSpan.FromHours(hours) + TimeSpan.FromMinutes(minutes) + TimeSpan.FromSeconds(seconds);
+        return true;
+    }
+
+    /// <summary>
+    /// Command bound to the bottom-bar "Go" button next to the Seek-to input.
+    /// Parses <see cref="SeekToTimestampInput"/> via <see cref="TryParseTimestamp"/>
+    /// and asks the player to seek; clamps to <c>[0, Duration]</c>.
+    /// </summary>
+    [RelayCommand]
+    private async Task SeekToTimestampAsync()
+    {
+        if (!TryParseTimestamp(SeekToTimestampInput, out var pos))
+        {
+            StatusMessage = "Invalid time format. Use HH:MM:SS, MM:SS, or seconds.";
+            return;
+        }
+
+        var dur = _player.Duration;
+        if (dur is { } d && pos > d) pos = d;
+
+        try
+        {
+            await _player.SeekAsync(pos);
+            StatusMessage = $"Seeked to {FormatTime(pos)}.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Seek failed: {ex.Message}";
+        }
     }
 
     partial void OnVolumePercentChanged(double value)
@@ -507,6 +702,7 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
             _positionTimer.Stop();
             PositionText = "0:00";
             DurationText = "0:00";
+            RemainingText = "−0:00";
             SeekNormalized = 0;
         }
         else
@@ -605,9 +801,65 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         await OpenAndPlayPathAsync(entry.FilePath);
     }
 
+    /// <summary>
+    /// Switches the player into NDI-source mode and starts the named source.
+    /// Builds a fresh <see cref="MediaPlayer"/> via the
+    /// <c>WithNDIInput(sourceName, preset)</c> lifecycle hook every time —
+    /// the hook owns the source's open / start / stop. Subsequent calls keep
+    /// rebuilding so a different source name is honoured. Switching back to a
+    /// file is automatic on the next <see cref="OpenAndPlayPathAsync"/>.
+    /// </summary>
+    public async Task PlayNdiSourceAsync(string sourceName, NDIEndpointPreset preset)
+    {
+        if (string.IsNullOrWhiteSpace(sourceName))
+        {
+            StatusMessage = "Enter a non-empty NDI source name.";
+            return;
+        }
+
+        try
+        {
+            StatusMessage = $"NDI: connecting to '{sourceName}' ({preset})…";
+            await SwitchPlayerAsync(() => BuildNdiPlayer(sourceName, preset));
+            await ReconcileEndpointsAsync();
+
+            if (_attachedEndpoints.Count == 0)
+            {
+                StatusMessage = "Select at least one started output (Audio / Video / NDI) in the list above.";
+                return;
+            }
+
+            // Apply the selected router clock so the NDI clock can be picked up
+            // when it's registered by the lifecycle hook on PlayAsync.
+            RefreshClockChoices();
+            ApplyClockSelectionToRouter();
+            await _player.PlayAsync();
+            // After the lifecycle hook has run, the NDI clock is in the registry —
+            // re-evaluate so the dropdown lists it (sticks the user's choice).
+            RefreshClockChoices();
+            ApplyClockSelectionToRouter();
+            ApplyAveToAllNdiRows();
+            StatusMessage = $"NDI: playing '{sourceName}'.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"NDI: {ex.Message}";
+            SLog.LogWarning(ex, "PlayNdiSourceAsync failed for '{Source}'", sourceName);
+        }
+    }
+
     private async Task OpenAndPlayPathAsync(string path)
     {
         EnsureFfmpeg();
+
+        // If the previous session was an NDI source, the player instance still
+        // carries the NDI lifecycle hook which would re-attach NDI inputs on
+        // the next PlayAsync. Rebuild a clean file-mode player before opening.
+        if (_sourceMode != SourceMode.File)
+        {
+            await SwitchPlayerAsync(BuildFilePlayer);
+        }
+
         await ReconcileEndpointsAsync();
 
         if (_attachedEndpoints.Count == 0)
@@ -940,6 +1192,25 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
         clock = _player.Router.InternalClock;
         return true;
+    }
+
+    /// <summary>
+    /// Opens the "Play NDI source" dialog, then if the user confirms switches
+    /// the player into NDI mode and starts the chosen source. Hooked from the
+    /// Player view's NDI menu / button.
+    /// </summary>
+    [RelayCommand]
+    private async Task OpenNdiSourceDialogAsync(Window window)
+    {
+        var vm = new PlayNDISourceViewModel();
+        var dialog = new PlayNDISourceDialog
+        {
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            DataContext = vm
+        };
+        var ok = await dialog.ShowDialog<bool>(window);
+        if (!ok || vm.Result is null) return;
+        await PlayNdiSourceAsync(vm.Result.SourceName, vm.Result.Preset);
     }
 
     [RelayCommand]
@@ -1285,9 +1556,7 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         }
         OutputRows.Clear();
 
-        _player.PlaybackStateChanged -= OnPlaybackStateChanged;
-        _player.PlaybackCompleted -= OnPlaybackCompleted;
-        _player.PlaybackFailed -= OnPlaybackFailed;
+        UnhookPlayerEvents();
         _player.Dispose();
     }
 }

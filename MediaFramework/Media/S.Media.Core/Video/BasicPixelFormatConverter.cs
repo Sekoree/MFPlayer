@@ -7,36 +7,28 @@ using S.Media.Core.Media;
 namespace S.Media.Core.Video;
 
 /// <summary>
-/// Minimal pixel converter for early pipeline bring-up.
-/// Supports Bgra32 to/from Rgba32 byte-swap and falls back to black RGBA output
-/// for unsupported source formats to keep playback timing stable.
+/// Pure-managed scalar pixel converter — the reference implementation that
+/// never depends on any native library.  Used as the final fallback path by
+/// <c>FFmpegPixelFormatConverter</c> for format pairs libswscale doesn't
+/// support, and as the standalone choice for callers that want a guaranteed-
+/// portable converter (e.g. test harnesses).
+/// <para>
+/// Supports BGRA↔RGBA byte-swap, several common YUV → RGB / BGR conversions
+/// (NV12, I420, UYVY, I210, I010, P010, Yuv444p) and packed 24-bit + Gray8
+/// expansion to RGBA / BGRA.  All paths are scalar and intentionally simple;
+/// production callers should prefer the FFmpeg-backed converter for
+/// throughput-sensitive workloads.
+/// </para>
 /// </summary>
 public sealed class BasicPixelFormatConverter : IPixelFormatConverter
 {
-    public readonly record struct DiagnosticsSnapshot(
-        bool LibYuvAvailable,
-        long LibYuvAttempts,
-        long LibYuvSuccesses,
-        long ManagedFallbacks);
-
+    public readonly record struct DiagnosticsSnapshot(long ManagedConversions);
 
     private bool _disposed;
-    // Instance counters — each converter tracks its own conversions independently.
-    private long _libYuvAttempts;
-    private long _libYuvSuccesses;
-    private long _managedFallbacks;
+    private long _managedConversions;
 
-    public static bool LibYuvEnabled
-    {
-        get => LibYuvRuntime.Enabled;
-        set => LibYuvRuntime.Enabled = value;
-    }
-
-    public DiagnosticsSnapshot GetDiagnosticsSnapshot() => new(
-        LibYuvAvailable: LibYuvRuntime.IsAvailable,
-        LibYuvAttempts: Interlocked.Read(ref _libYuvAttempts),
-        LibYuvSuccesses: Interlocked.Read(ref _libYuvSuccesses),
-        ManagedFallbacks: Interlocked.Read(ref _managedFallbacks));
+    public DiagnosticsSnapshot GetDiagnosticsSnapshot() =>
+        new(ManagedConversions: Interlocked.Read(ref _managedConversions));
 
     public VideoFrame Convert(VideoFrame source, PixelFormat dstFormat)
     {
@@ -62,17 +54,8 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
             var rented = ArrayPool<byte>.Shared.Rent(bytes);
             var owner = new ArrayPoolOwner<byte>(rented);
 
-            bool usedLibYuv = LibYuvRuntime.TrySwapBgraRgba(source.Data, rented, source.Width, source.Height);
-            Interlocked.Increment(ref _libYuvAttempts);
-            if (!usedLibYuv)
-            {
-                Interlocked.Increment(ref _managedFallbacks);
-                SwapRedBlueChannels(source.Data.Span, rented.AsSpan(0, bytes));
-            }
-            else
-            {
-                Interlocked.Increment(ref _libYuvSuccesses);
-            }
+            Interlocked.Increment(ref _managedConversions);
+            SwapRedBlueChannels(source.Data.Span, rented.AsSpan(0, bytes));
 
             return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
         }
@@ -86,34 +69,20 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
             var owner = new ArrayPoolOwner<byte>(rented);
 
             bool dstRgba = dstFormat == PixelFormat.Rgba32;
-            bool converted = source.PixelFormat switch
-            {
-                PixelFormat.Nv12      => LibYuvRuntime.TryConvertNv12(source.Data, rented, source.Width, source.Height, dstRgba),
-                PixelFormat.Yuv420p   => LibYuvRuntime.TryConvertI420(source.Data, rented, source.Width, source.Height, dstRgba),
-                PixelFormat.Uyvy422   => LibYuvRuntime.TryConvertUyvy(source.Data, rented, source.Width, source.Height, dstRgba),
-                PixelFormat.Yuv422p10 => LibYuvRuntime.TryConvertI210(source.Data, rented, source.Width, source.Height, dstRgba),
-                _ => false
-            };
-
-            Interlocked.Increment(ref _libYuvAttempts);
-
-            if (converted)
-            {
-                Interlocked.Increment(ref _libYuvSuccesses);
-                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
-            }
-
+            // Managed scalar fallback — the FFmpeg-backed converter is the
+            // throughput path; this class is only used directly as a portable
+            // reference / final-fallback.  I210 has the only fully-correct
+            // implementation here today; the others currently ship a black
+            // frame to preserve downstream timing without regressing colour.
             bool managedConverted = source.PixelFormat == PixelFormat.Yuv422p10
                 && TryConvertI210Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba,
                     colorRange, colorMatrix);
 
-            if (managedConverted)
-            {
-                Interlocked.Increment(ref _managedFallbacks);
-                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
-            }
+            Interlocked.Increment(ref _managedConversions);
 
-            Interlocked.Increment(ref _managedFallbacks);
+            if (managedConverted)
+                return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
+
             rented.AsSpan(0, bytes).Clear();
             return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
         }
@@ -130,7 +99,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
                 int bytes = source.Width * source.Height * 4;
                 var rented = ArrayPool<byte>.Shared.Rent(bytes);
                 var owner = new ArrayPoolOwner<byte>(rented);
-                Interlocked.Increment(ref _managedFallbacks);
+                Interlocked.Increment(ref _managedConversions);
                 bool srcRgb = source.PixelFormat == PixelFormat.Rgb24;
                 ExpandPacked24To32(source.Data.Span, rented.AsSpan(0, bytes), source.Width * source.Height, srcRgb, dstRgba);
                 return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
@@ -142,7 +111,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
                 int bytes = source.Width * source.Height * 4;
                 var rented = ArrayPool<byte>.Shared.Rent(bytes);
                 var owner = new ArrayPoolOwner<byte>(rented);
-                Interlocked.Increment(ref _managedFallbacks);
+                Interlocked.Increment(ref _managedConversions);
                 ExpandGray8ToRgba(source.Data.Span, rented.AsSpan(0, bytes), source.Width * source.Height);
                 return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
             }
@@ -153,7 +122,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
                 int bytes = source.Width * source.Height * 4;
                 var rented = ArrayPool<byte>.Shared.Rent(bytes);
                 var owner = new ArrayPoolOwner<byte>(rented);
-                Interlocked.Increment(ref _managedFallbacks);
+                Interlocked.Increment(ref _managedConversions);
                 ConvertYuv444pManaged(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
                 return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
             }
@@ -164,7 +133,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
                 int bytes = source.Width * source.Height * 4;
                 var rented = ArrayPool<byte>.Shared.Rent(bytes);
                 var owner = new ArrayPoolOwner<byte>(rented);
-                Interlocked.Increment(ref _managedFallbacks);
+                Interlocked.Increment(ref _managedConversions);
                 ConvertYuv420p10Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
                 return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
             }
@@ -175,7 +144,7 @@ public sealed class BasicPixelFormatConverter : IPixelFormatConverter
                 int bytes = source.Width * source.Height * 4;
                 var rented = ArrayPool<byte>.Shared.Rent(bytes);
                 var owner = new ArrayPoolOwner<byte>(rented);
-                Interlocked.Increment(ref _managedFallbacks);
+                Interlocked.Increment(ref _managedConversions);
                 ConvertP010Managed(source.Data.Span, rented.AsSpan(0, bytes), source.Width, source.Height, dstRgba);
                 return new VideoFrame(source.Width, source.Height, dstFormat, rented.AsMemory(0, bytes), source.Pts, owner);
             }

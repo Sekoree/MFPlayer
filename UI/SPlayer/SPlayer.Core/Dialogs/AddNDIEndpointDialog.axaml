@@ -42,6 +42,26 @@
             </ComboBox>
         </StackPanel>
 
+        <StackPanel Spacing="4" Margin="0,4,0,0"
+                    IsEnabled="{Binding IsVideoEnabled}">
+            <TextBlock Text="Video pixel format" FontSize="12"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            <ComboBox ItemsSource="{Binding PixelFormats}"
+                      SelectedItem="{Binding SelectedPixelFormat}"
+                      HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate DataType="dialogModels:NdiPixelFormatChoice">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding Label}" FontWeight="Medium"/>
+                            <TextBlock Text="{Binding Hint}" FontSize="11" Opacity="0.75"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Text="Auto (recommended) sends whatever the source produces — no conversion, no color-space mis-tagging. Pick a fixed format only if you need a specific wire format. UHD sources (&gt;1920×1080) automatically fall back to RGBA inside the endpoint."
+                       FontSize="11" Opacity="0.75" TextWrapping="Wrap" MaxWidth="400"/>
+        </StackPanel>
+
         <Grid ColumnDefinitions="*, 8, *" Margin="0,6,0,0">
             <Button Grid.Column="0"
                     Content="Add Output"

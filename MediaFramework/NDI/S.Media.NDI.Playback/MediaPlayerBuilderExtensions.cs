@@ -104,6 +104,8 @@ public static class MediaPlayerBuilderExtensions
         private readonly NDIPlaybackProfile _profile = profile;
 
         private NDIAVChannel? _source;
+        private MediaPlayer? _player;
+        private EventHandler<NDIVideoFormatChangedEventArgs>? _formatChangedHandler;
         private bool _attached;
         private bool _clockRegistered;
 
@@ -116,6 +118,7 @@ public static class MediaPlayerBuilderExtensions
             try
             {
                 _source ??= await _openAsync(ct).ConfigureAwait(false);
+                _player = player;
 
                 if (!_attached)
                 {
@@ -156,11 +159,46 @@ public static class MediaPlayerBuilderExtensions
 
                 if (waits.Count > 0)
                     await WaitBestEffortAsync(Task.WhenAll(waits), PrebufferTimeout, ct).ConfigureAwait(false);
+
+                // §Dynamic-source-format / TODO #NDI-jump — at this point the
+                // NDI capture loop has produced ≥ 1 frame so VideoChannel.SourceFormat
+                // carries real Width / Height / fps from the source's reported
+                // FrameRateN/D. Re-broadcast it to all dynamic-metadata video
+                // endpoints so they stamp the correct fps from the very first
+                // outgoing frame (the route's initial AnnounceUpcomingVideoFormat
+                // ran with default(VideoFormat) — see MediaPlayer.AnnounceVideoSourceFormat
+                // for the rationale).
+                if (_source.VideoChannel is { } vch)
+                {
+                    var fmt = vch.SourceFormat;
+                    if (fmt.Width > 0 && fmt.Height > 0)
+                        player.AnnounceVideoSourceFormat(fmt);
+
+                    // Also follow live format changes (sender re-init, profile
+                    // switch, resolution change). NDIAVChannel forwards the
+                    // underlying NDIVideoChannel.FormatChanged.
+                    if (_formatChangedHandler is null)
+                    {
+                        _formatChangedHandler = OnVideoFormatChanged;
+                        _source.VideoFormatChanged += _formatChangedHandler;
+                    }
+                }
             }
             finally
             {
                 _gate.Release();
             }
+        }
+
+        private void OnVideoFormatChanged(object? sender, NDIVideoFormatChangedEventArgs e)
+        {
+            // Capture-thread context: keep this fast. Just forward to the
+            // player; AnnounceVideoSourceFormat itself only iterates endpoints
+            // and posts hints (no I/O, no waits).
+            var player = _player;
+            if (player is null) return;
+            try { player.AnnounceVideoSourceFormat(e.NewFormat); }
+            catch { /* swallow — capture thread must not throw */ }
         }
 
         public async Task BeforeCloseAsync(MediaPlayer player, CancellationToken ct)
@@ -171,6 +209,12 @@ public static class MediaPlayerBuilderExtensions
                 if (_source is null)
                     return;
 
+                if (_formatChangedHandler is not null)
+                {
+                    try { _source.VideoFormatChanged -= _formatChangedHandler; } catch { }
+                    _formatChangedHandler = null;
+                }
+
                 try { _source.Stop(); } catch { }
 
                 if (_clockRegistered)
@@ -180,6 +224,7 @@ public static class MediaPlayerBuilderExtensions
                 }
 
                 _attached = false;
+                _player = null;
 
                 if (_ownsSource)
                 {

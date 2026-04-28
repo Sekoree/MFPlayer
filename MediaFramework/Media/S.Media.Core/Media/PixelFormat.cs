@@ -22,5 +22,14 @@ public enum PixelFormat
     Bgr24,
     /// <summary>Single-channel 8-bit luma (greyscale). Used by monochrome cameras, IR sensors, and mask/keying sources.</summary>
     Gray8,
+    /// <summary>
+    /// Sentinel meaning "format unknown / follow source". Endpoints that
+    /// support a passthrough mode (e.g. <c>NDIAVEndpoint</c> in Auto mode)
+    /// recognise this value as a request to send each frame in whatever
+    /// pixel format it arrives — no conversion, no FourCC override. Other
+    /// endpoints should reject it (or treat it as a configuration error).
+    /// Added at the end of the enum so existing positional values are unchanged.
+    /// </summary>
+    Unknown,
 }
 

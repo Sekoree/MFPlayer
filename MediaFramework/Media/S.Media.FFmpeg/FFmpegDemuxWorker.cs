@@ -96,6 +96,23 @@ internal static class FFmpegDemuxWorker
         {
             owner.FreeDemuxPacket(pktHandle);
             owner.CompletePacketQueues();
+            // §EOF-reliability — TODO #1: Retry-exhaustion (256 consecutive
+            // retries) and Fatal-IO exits previously left the worker silent,
+            // so MediaPlayer never observed the terminal event and the UI was
+            // stuck in `Playing`. Always raise EndOfMedia once on any non-
+            // cancellation exit; the call itself is idempotent so the clean
+            // EOF path's explicit RaiseEndOfMedia above is unaffected.
+            if (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    owner.RaiseEndOfMedia();
+                }
+                catch (Exception ex)
+                {
+                    Log.LogDebug(ex, "Demux worker: RaiseEndOfMedia (finally fallback) threw");
+                }
+            }
             Log.LogDebug("Demux worker finished, total packets demuxed: {PacketCount}", packetCount);
         }
     }

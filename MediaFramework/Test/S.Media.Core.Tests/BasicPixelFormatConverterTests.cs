@@ -4,22 +4,14 @@ using Xunit;
 
 namespace S.Media.Core.Tests;
 
+/// <summary>
+/// Covers the pure-managed scalar paths in <see cref="BasicPixelFormatConverter"/>.
+/// The libyuv-backed shims that used to gate these paths have been removed —
+/// throughput-sensitive callers now go through <c>FFmpegPixelFormatConverter</c>
+/// in <c>S.Media.FFmpeg</c>, while this class stays the portable reference.
+/// </summary>
 public sealed class BasicPixelFormatConverterTests
 {
-    private static void WithLibYuvDisabled(Action action)
-    {
-        bool old = BasicPixelFormatConverter.LibYuvEnabled;
-        BasicPixelFormatConverter.LibYuvEnabled = false;
-        try
-        {
-            action();
-        }
-        finally
-        {
-            BasicPixelFormatConverter.LibYuvEnabled = old;
-        }
-    }
-
     [Fact]
     public void Convert_BgraToRgba_SwapsChannels()
     {
@@ -63,151 +55,116 @@ public sealed class BasicPixelFormatConverterTests
     }
 
     [Fact]
-    public void Convert_BgraToRgba_WorksWithLibYuvDisabled()
+    public void Convert_Nv12ToRgba_ManagedFallback_ReturnsBlackFrame()
     {
-        WithLibYuvDisabled(() =>
-        {
-            using var converter = new BasicPixelFormatConverter();
-            var source = new VideoFrame(
-                1,
-                1,
-                PixelFormat.Bgra32,
-                new byte[] { 10, 20, 30, 255 },
-                TimeSpan.Zero);
+        // NV12 → RGBA isn't implemented in the managed scalar path; the
+        // converter must still hand back a properly-sized RGBA buffer (zeroed)
+        // so downstream timing stays stable.
+        using var converter = new BasicPixelFormatConverter();
+        var source = new VideoFrame(
+            2,
+            2,
+            PixelFormat.Nv12,
+            new byte[] { 10, 20, 30, 40, 128, 64 },
+            TimeSpan.FromMilliseconds(33));
 
-            var converted = converter.Convert(source, PixelFormat.Rgba32);
-            var s = converted.Data.Span;
+        var converted = converter.Convert(source, PixelFormat.Rgba32);
+        var s = converted.Data.Span;
 
-            Assert.Equal(30, s[0]);
-            Assert.Equal(20, s[1]);
-            Assert.Equal(10, s[2]);
-            Assert.Equal(255, s[3]);
-        });
+        Assert.Equal(PixelFormat.Rgba32, converted.PixelFormat);
+        Assert.Equal(source.Width, converted.Width);
+        Assert.Equal(source.Height, converted.Height);
+        Assert.Equal(source.Pts, converted.Pts);
+        Assert.All(s.ToArray(), b => Assert.Equal(0, b));
     }
 
     [Fact]
-    public void Convert_Nv12ToRgba_WithLibYuvDisabled_ReturnsBlackFrame()
+    public void Convert_Yuv420pToBgra_ManagedFallback_ReturnsBlackFrame()
     {
-        WithLibYuvDisabled(() =>
-        {
-            using var converter = new BasicPixelFormatConverter();
-            var source = new VideoFrame(
-                2,
-                2,
-                PixelFormat.Nv12,
-                new byte[] { 10, 20, 30, 40, 128, 64 },
-                TimeSpan.FromMilliseconds(33));
+        using var converter = new BasicPixelFormatConverter();
+        var source = new VideoFrame(
+            2,
+            2,
+            PixelFormat.Yuv420p,
+            new byte[] { 10, 20, 30, 40, 128, 64 },
+            TimeSpan.FromMilliseconds(50));
 
-            var converted = converter.Convert(source, PixelFormat.Rgba32);
-            var s = converted.Data.Span;
+        var converted = converter.Convert(source, PixelFormat.Bgra32);
+        var s = converted.Data.Span;
 
-            Assert.Equal(PixelFormat.Rgba32, converted.PixelFormat);
-            Assert.Equal(source.Width, converted.Width);
-            Assert.Equal(source.Height, converted.Height);
-            Assert.Equal(source.Pts, converted.Pts);
-            Assert.All(s.ToArray(), b => Assert.Equal(0, b));
-        });
+        Assert.Equal(PixelFormat.Bgra32, converted.PixelFormat);
+        Assert.Equal(source.Width, converted.Width);
+        Assert.Equal(source.Height, converted.Height);
+        Assert.Equal(source.Pts, converted.Pts);
+        Assert.All(s.ToArray(), b => Assert.Equal(0, b));
     }
 
     [Fact]
-    public void Convert_Yuv420pToBgra_WithLibYuvDisabled_ReturnsBlackFrame()
+    public void Convert_UyvyToRgba_ManagedFallback_ReturnsBlackFrame()
     {
-        WithLibYuvDisabled(() =>
-        {
-            using var converter = new BasicPixelFormatConverter();
-            var source = new VideoFrame(
-                2,
-                2,
-                PixelFormat.Yuv420p,
-                new byte[] { 10, 20, 30, 40, 128, 64 },
-                TimeSpan.FromMilliseconds(50));
+        using var converter = new BasicPixelFormatConverter();
+        var source = new VideoFrame(
+            2,
+            2,
+            PixelFormat.Uyvy422,
+            new byte[] { 128, 16, 128, 235, 128, 16, 128, 235 },
+            TimeSpan.FromMilliseconds(75));
 
-            var converted = converter.Convert(source, PixelFormat.Bgra32);
-            var s = converted.Data.Span;
+        var converted = converter.Convert(source, PixelFormat.Rgba32);
+        var s = converted.Data.Span;
 
-            Assert.Equal(PixelFormat.Bgra32, converted.PixelFormat);
-            Assert.Equal(source.Width, converted.Width);
-            Assert.Equal(source.Height, converted.Height);
-            Assert.Equal(source.Pts, converted.Pts);
-            Assert.All(s.ToArray(), b => Assert.Equal(0, b));
-        });
+        Assert.Equal(PixelFormat.Rgba32, converted.PixelFormat);
+        Assert.Equal(source.Width, converted.Width);
+        Assert.Equal(source.Height, converted.Height);
+        Assert.Equal(source.Pts, converted.Pts);
+        Assert.All(s.ToArray(), b => Assert.Equal(0, b));
     }
 
     [Fact]
-    public void Convert_UyvyToRgba_WithLibYuvDisabled_ReturnsBlackFrame()
+    public void Convert_Yuv422p10ToRgba_UsesManagedConversion()
     {
-        WithLibYuvDisabled(() =>
-        {
-            using var converter = new BasicPixelFormatConverter();
-            var source = new VideoFrame(
-                2,
-                2,
-                PixelFormat.Uyvy422,
-                new byte[] { 128, 16, 128, 235, 128, 16, 128, 235 },
-                TimeSpan.FromMilliseconds(75));
+        using var converter = new BasicPixelFormatConverter();
+        var source = new VideoFrame(
+            2,
+            2,
+            PixelFormat.Yuv422p10,
+            new byte[16],
+            TimeSpan.FromMilliseconds(100));
 
-            var converted = converter.Convert(source, PixelFormat.Rgba32);
-            var s = converted.Data.Span;
+        var converted = converter.Convert(source, PixelFormat.Rgba32);
+        var s = converted.Data.Span;
 
-            Assert.Equal(PixelFormat.Rgba32, converted.PixelFormat);
-            Assert.Equal(source.Width, converted.Width);
-            Assert.Equal(source.Height, converted.Height);
-            Assert.Equal(source.Pts, converted.Pts);
-            Assert.All(s.ToArray(), b => Assert.Equal(0, b));
-        });
+        Assert.Equal(PixelFormat.Rgba32, converted.PixelFormat);
+        Assert.Equal(2, converted.Width);
+        Assert.Equal(2, converted.Height);
+        Assert.Equal(source.Pts, converted.Pts);
+        Assert.Equal(2 * 2 * 4, converted.Data.Length);
+        Assert.Equal(255, s[3]);
+        Assert.Equal(255, s[7]);
+        Assert.Equal(255, s[11]);
+        Assert.Equal(255, s[15]);
     }
 
     [Fact]
-    public void Convert_Yuv422p10ToRgba_WithLibYuvDisabled_UsesManagedConversion()
+    public void Convert_Yuv422p10ToBgra_UsesManagedConversion()
     {
-        WithLibYuvDisabled(() =>
-        {
-            using var converter = new BasicPixelFormatConverter();
-            var source = new VideoFrame(
-                2,
-                2,
-                PixelFormat.Yuv422p10,
-                new byte[16],
-                TimeSpan.FromMilliseconds(100));
+        using var converter = new BasicPixelFormatConverter();
+        var source = new VideoFrame(
+            2,
+            2,
+            PixelFormat.Yuv422p10,
+            new byte[16],
+            TimeSpan.FromMilliseconds(200));
 
-            var converted = converter.Convert(source, PixelFormat.Rgba32);
-            var s = converted.Data.Span;
+        var converted = converter.Convert(source, PixelFormat.Bgra32);
+        var s = converted.Data.Span;
 
-            Assert.Equal(PixelFormat.Rgba32, converted.PixelFormat);
-            Assert.Equal(2, converted.Width);
-            Assert.Equal(2, converted.Height);
-            Assert.Equal(source.Pts, converted.Pts);
-            Assert.Equal(2 * 2 * 4, converted.Data.Length);
-            Assert.Equal(255, s[3]);
-            Assert.Equal(255, s[7]);
-            Assert.Equal(255, s[11]);
-            Assert.Equal(255, s[15]);
-        });
-    }
-
-    [Fact]
-    public void Convert_Yuv422p10ToBgra_WithLibYuvDisabled_UsesManagedConversion()
-    {
-        WithLibYuvDisabled(() =>
-        {
-            using var converter = new BasicPixelFormatConverter();
-            var source = new VideoFrame(
-                2,
-                2,
-                PixelFormat.Yuv422p10,
-                new byte[16],
-                TimeSpan.FromMilliseconds(200));
-
-            var converted = converter.Convert(source, PixelFormat.Bgra32);
-            var s = converted.Data.Span;
-
-            Assert.Equal(PixelFormat.Bgra32, converted.PixelFormat);
-            Assert.Equal(2 * 2 * 4, converted.Data.Length);
-            Assert.Equal(255, s[3]);
-            Assert.Equal(255, s[7]);
-            Assert.Equal(255, s[11]);
-            Assert.Equal(255, s[15]);
-        });
+        Assert.Equal(PixelFormat.Bgra32, converted.PixelFormat);
+        Assert.Equal(2 * 2 * 4, converted.Data.Length);
+        Assert.Equal(255, s[3]);
+        Assert.Equal(255, s[7]);
+        Assert.Equal(255, s[11]);
+        Assert.Equal(255, s[15]);
     }
 
     [Fact]
@@ -260,4 +217,3 @@ public sealed class BasicPixelFormatConverterTests
         Assert.Throws<ObjectDisposedException>(() => converter.Convert(source, PixelFormat.Rgba32));
     }
 }
-

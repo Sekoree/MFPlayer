@@ -19,9 +19,13 @@ Options:
 
 The output prints total time, FPS-equivalent throughput, and approximate GiB/s.
 
-The harness runs two passes:
-- `mode=managed` (forces managed fallback paths)
-- `mode=libyuv` (only when libyuv is available at runtime)
+The harness runs:
+- `mode=managed` (the pure-managed scalar paths in `BasicPixelFormatConverter`)
+
+Note: the libyuv-backed fast paths have been removed. Throughput-sensitive
+callers now use `FFmpegPixelFormatConverter` (in `S.Media.FFmpeg`), which
+wraps libswscale; benchmark that converter directly for production-relevant
+numbers.
 
 Then it runs an audio mixer suite:
 - `mode=audio-mixer` (reports microseconds per callback across channel/sink fanout sizes)

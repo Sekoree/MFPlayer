@@ -15,6 +15,12 @@ public partial class VideoEndpointModel : ObservableObject
     public string Info { get; }
     public bool Open => _window.VideoEndpoint.IsRunning;
 
+    public bool DebugHUDEnabled
+    {
+        get => _window.VideoEndpoint.ShowHud;
+        set => _window.VideoEndpoint.ShowHud = value;
+    }
+
     public Action? RemoveRequestedAction { get; set; }
 
     /// <summary>Used by the player view to route decoded video to this output.</summary>

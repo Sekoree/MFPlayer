@@ -961,7 +961,23 @@ public sealed class AVRouter : IAVRouter
         // §3.18 / B13+R15: publish with Volatile.Write so the push/fill threads observe
         // the new value on the next iteration even on weakly ordered architectures
         // (ARM64). The float itself is 4 bytes and aligned, so the store is atomic.
+        float previous = Volatile.Read(ref entry.Volume);
         Volatile.Write(ref entry.Volume, volume);
+        // §Volume-latency / TODO #3 — perceived "volume change is slow" almost
+        // always traces to one of two unavoidable buffers:
+        //   (a) the endpoint's host audio buffer (PortAudio framesPerBuffer +
+        //       device buffer), at most one Fill callback wide, and
+        //   (b) for NDI sinks, the network + receiver-side play-out queue.
+        // The router itself applies the new gain on the very next callback via
+        // ApplyInputVolumeRamped, so we log only when the value actually
+        // changes — this lets us correlate the log timestamp with audio
+        // arrival to quantify (a)/(b) without spamming every drag-tick.
+        if (Log.IsEnabled(LogLevel.Debug) && Math.Abs(previous - volume) > 1e-4f)
+        {
+            Log.LogDebug(
+                "SetInputVolume input={Input} {Prev:F3} → {Next:F3}; will land on next FillBuffer (≈one PA period at the routed sink).",
+                id, previous, volume);
+        }
     }
 
     public void SetInputTimeOffset(InputId id, TimeSpan offset)

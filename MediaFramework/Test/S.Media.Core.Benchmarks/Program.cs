@@ -28,23 +28,13 @@ internal static class Program
 
         Console.WriteLine($"[bench] size={width}x{height} iterations={iterations}");
 
-        bool libYuvAvailable = converter.GetDiagnosticsSnapshot().LibYuvAvailable;
-
-        // Managed-only pass provides deterministic baseline.
-        BasicPixelFormatConverter.LibYuvEnabled = false;
+        // §perf-ffmpeg-converter — libyuv was removed in favour of FFmpeg's
+        // libswscale (the throughput path lives in S.Media.FFmpeg's
+        // FFmpegPixelFormatConverter).  This bench only exercises the pure-
+        // managed scalar reference paths in BasicPixelFormatConverter; for
+        // FFmpeg-vs-managed comparisons run the same suite with that converter.
         Console.WriteLine("[bench] mode=managed");
         RunSuite(converter, width, height, iterations);
-
-        if (libYuvAvailable)
-        {
-            BasicPixelFormatConverter.LibYuvEnabled = true;
-            Console.WriteLine("[bench] mode=libyuv");
-            RunSuite(converter, width, height, iterations);
-        }
-        else
-        {
-            Console.WriteLine("[bench] mode=libyuv unavailable (skipped)");
-        }
 
         // TODO: Audio router benchmarks (AVRouter-based) - pending new API stabilization
 

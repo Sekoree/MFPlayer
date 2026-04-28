@@ -47,6 +47,19 @@ public partial class PlayerView : UserControl
             vm.PlayCommand.Execute(null);
     }
 
+    /// <summary>Pressing Enter inside the bottom-bar Seek-to TextBox triggers
+    /// the SeekToTimestamp command so the user doesn't have to click "Go".</summary>
+    private void SeekToInput_OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        if (DataContext is not PlayerViewModel vm) return;
+        if (vm.SeekToTimestampCommand.CanExecute(null))
+        {
+            vm.SeekToTimestampCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
     /// <summary>
     /// Keyboard shortcuts on the playlist list:
     ///   Delete     → remove the selected entry
