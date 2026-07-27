@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Android.Content;
 using Android.Media;
 using HaViz.Core;
@@ -8,9 +9,11 @@ namespace HaViz.Android.Services;
 
 /// <summary>
 /// Mini player on the platform decoders: MediaExtractor + MediaCodec decode one track on a
-/// dedicated thread, output is converted to float32 and written to an AudioTrack, and the SAME
-/// floats go to the <see cref="IPcmSink"/> so the visualizer/NDI audio is exactly what is
-/// audible. Interface calls come from the UI thread; events fire on the decode thread.
+/// dedicated thread, output is converted to float32 and delivered to the <see cref="IPcmSink"/>
+/// (the show-critical NDI/visualizer feed) on a wall-clock schedule. An AudioTrack exists only
+/// while local monitoring is on and is written non-blocking - it is never the loop's clock, so a
+/// device with no usable audio output still decodes on schedule and feeds NDI. Interface calls
+/// come from the UI thread; events fire on the decode thread.
 /// </summary>
 public sealed class MediaCodecMiniPlayer : IMiniPlayer
 {
@@ -175,6 +178,13 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
     {
         private const long DequeueTimeoutUs = 10_000;
 
+        // Pacing: chunks are delivered against absolute deadlines (start + scheduledFrames/rate),
+        // so per-wait oversleep (Android timers are coarse) never accumulates into drift. When the
+        // loop falls behind by more than this (pause/resume, codec stall, format change), the
+        // anchor shifts forward instead of burst-decoding to catch up - the sink wants real-time
+        // cadence, not a backlog dump.
+        private const long PaceReanchorThresholdMs = 250;
+
         private readonly MediaCodecMiniPlayer _owner;
         private readonly TrackInfo _track;
         private readonly Thread _thread;
@@ -191,6 +201,11 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
         private byte[] _byteScratch = [];
         private float[] _floatScratch = [];
         private long _framesWritten;
+        // Decode-thread only: wall-clock delivery schedule (0 ticks = not yet anchored).
+        private long _paceStartTicks;
+        private long _scheduledFrames;
+        // Monitoring is best-effort: after a failed AudioTrack create, don't retry every chunk.
+        private bool _audioTrackFailed;
 
         public volatile bool IsPaused;
         public volatile bool HasEnded;
@@ -220,9 +235,20 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
 
         public void ApplyPreferredDevice() => _audioTrack?.SetPreferredDevice(_owner.ResolvePreferredDevice());
 
-        /// <summary>Local monitoring is a volume gate, not a write gate: the blocking AudioTrack
-        /// write stays as the loop's clock and the tap keeps feeding NDI/visualizer regardless.</summary>
-        public void ApplyLocalOutputVolume() => _audioTrack?.SetVolume(_owner._localOutputEnabled ? 1f : 0f);
+        /// <summary>Immediate mute/unmute of a live track; the decode thread converges the track's
+        /// EXISTENCE with the toggle on its next chunk (create when enabled, release when not) -
+        /// the volume gate here just makes the toggle feel instant and click-free meanwhile.</summary>
+        public void ApplyLocalOutputVolume()
+        {
+            try
+            {
+                _audioTrack?.SetVolume(_owner._localOutputEnabled ? 1f : 0f);
+            }
+            catch (Exception)
+            {
+                // Track released concurrently by the decode thread - it will converge anyway.
+            }
+        }
 
         /// <summary>Cancels and joins the decode thread. Called at most once, from the owner's
         /// transition chain (the owner lock already dropped the reference before queueing), so no
@@ -376,6 +402,10 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
 
             _sampleRate = sampleRate;
             _channels = channels;
+            // The delivery schedule is in frames-at-rate; a rate change invalidates it, so the
+            // next chunk re-anchors instead of computing deadlines against the old rate.
+            _paceStartTicks = 0;
+            _scheduledFrames = 0;
             if (_audioTrack is { } old)
             {
                 old.Pause();
@@ -387,9 +417,36 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
             // The replacement is created lazily by the next DeliverPcm with the new parameters.
         }
 
+        /// <summary>Decode-thread reconcile of the monitor AudioTrack's existence with the toggle:
+        /// create when monitoring turned on, release when it turned off. Runs before each chunk so
+        /// the toggle works mid-track without the UI thread ever owning the track.</summary>
+        private void ConvergeAudioTrack()
+        {
+            if (_owner._localOutputEnabled)
+            {
+                if (_audioTrack is null && !_audioTrackFailed)
+                    EnsureAudioTrack();
+            }
+            else if (_audioTrack is { } track)
+            {
+                try
+                {
+                    track.Pause();
+                    track.Flush();
+                    track.Release();
+                }
+                catch (Exception)
+                {
+                    // A dying track must not fail the (device-independent) playback loop.
+                }
+                _audioTrack = null;
+                _framesWritten = 0;
+            }
+        }
+
         private void DeliverPcm(Java.Nio.ByteBuffer buffer, int offset, int size)
         {
-            EnsureAudioTrack();
+            ConvergeAudioTrack();
 
             if (_byteScratch.Length < size)
                 _byteScratch = new byte[Math.Max(size, _byteScratch.Length * 2)];
@@ -451,11 +508,51 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
             }
 #pragma warning restore CA1416
 
-            // Same samples to the tap and the speaker; the blocking write paces the whole loop.
+            // The wall clock paces the loop: wait for this chunk's absolute deadline, then hand the
+            // same samples to the tap and (when monitoring) the speaker. The non-blocking write can
+            // never stall the schedule; the monitor's buffer keeps up because delivery IS real-time.
+            var frames = samples / _channels;
+            WaitForPaceDeadline();
             _owner._sink.SubmitPcm(new ReadOnlySpan<float>(_floatScratch, 0, samples), _sampleRate, _channels);
-            var written = _audioTrack!.Write(_floatScratch, 0, samples, WriteMode.Blocking);
-            if (written > 0)
-                _framesWritten += written / _channels;
+            _scheduledFrames += frames;
+            if (_audioTrack is { } track)
+            {
+                var written = track.Write(_floatScratch, 0, samples, WriteMode.NonBlocking);
+                if (written > 0)
+                    _framesWritten += written / _channels;
+            }
+        }
+
+        /// <summary>Sleeps until the current chunk's deadline (anchor + scheduled/rate). Cancellable;
+        /// re-anchors instead of bursting when the loop resumes far behind (pause, codec stall).</summary>
+        private void WaitForPaceDeadline()
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (_paceStartTicks == 0)
+            {
+                _paceStartTicks = now;
+                return;
+            }
+
+            var freq = Stopwatch.Frequency;
+            var due = _paceStartTicks + _scheduledFrames * freq / _sampleRate;
+            var behindMs = (now - due) * 1000 / freq;
+            if (behindMs > PaceReanchorThresholdMs)
+            {
+                _paceStartTicks += (now - due);
+                return;
+            }
+
+            while (true)
+            {
+                now = Stopwatch.GetTimestamp();
+                var waitMs = (due - now) * 1000 / freq;
+                if (waitMs <= 0)
+                    return;
+                // Slices keep Stop() responsive; absolute deadlines make per-wait oversleep harmless.
+                if (_cts.Token.WaitHandle.WaitOne((int)Math.Min(waitMs, 50)))
+                    throw new OperationCanceledException(_cts.Token);
+            }
         }
 
         private void EnsureFloatScratch(int samples)
@@ -464,11 +561,26 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
                 _floatScratch = new float[Math.Max(samples, _floatScratch.Length * 2)];
         }
 
+        /// <summary>Best-effort monitor-track create: a device without a usable output HAL logs
+        /// once and keeps playing device-free (the sink feed does not depend on it).</summary>
         private void EnsureAudioTrack()
         {
             if (_audioTrack is not null)
                 return;
+            try
+            {
+                CreateAudioTrack();
+            }
+            catch (Exception ex)
+            {
+                _audioTrackFailed = true;
+                global::Android.Util.Log.Warn("HaViz",
+                    $"local monitor AudioTrack unavailable ({ex.Message}) - continuing NDI/viz-only");
+            }
+        }
 
+        private void CreateAudioTrack()
+        {
             var formatBuilder = new AudioFormat.Builder()
                 .SetEncoding(Encoding.PcmFloat)!
                 .SetSampleRate(_sampleRate)!;
@@ -510,18 +622,34 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
             _audioTrack = track;
         }
 
-        /// <summary>Lets the buffered tail play out before PlaybackEnded so the playlist advance
-        /// (which releases this AudioTrack) does not clip the end of the song.</summary>
+        /// <summary>Waits on the wall-clock schedule until the last chunk has elapsed (the sink
+        /// received the whole track in real time), then - only when a monitor track exists - lets
+        /// its buffered tail play out so the playlist advance does not clip the audible end. The
+        /// advance no longer depends on any hardware playback head.</summary>
         private void DrainToEnd()
         {
+            if (_paceStartTicks != 0 && _scheduledFrames > 0 && _sampleRate > 0)
+            {
+                var due = _paceStartTicks + _scheduledFrames * Stopwatch.Frequency / _sampleRate;
+                while (!_cts.IsCancellationRequested && Stopwatch.GetTimestamp() < due)
+                    Thread.Sleep(10);
+            }
+
             if (_audioTrack is not { } track || _framesWritten == 0)
                 return;
-            track.Stop(); // stream mode: keeps playing until everything written has been played
-            var deadline = Environment.TickCount64 + 3_000;
-            while (!_cts.IsCancellationRequested
-                   && Environment.TickCount64 < deadline
-                   && track.PlaybackHeadPosition < _framesWritten)
-                Thread.Sleep(20);
+            try
+            {
+                track.Stop(); // stream mode: keeps playing until everything written has been played
+                var deadline = Environment.TickCount64 + 3_000;
+                while (!_cts.IsCancellationRequested
+                       && Environment.TickCount64 < deadline
+                       && track.PlaybackHeadPosition < _framesWritten)
+                    Thread.Sleep(20);
+            }
+            catch (Exception)
+            {
+                // A dying monitor track must not block the playlist advance.
+            }
         }
 
         private void ReleaseAll()

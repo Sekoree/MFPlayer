@@ -167,4 +167,13 @@ click-free fade + deferred detach in `Poll`). `MainViewModel` builds the player 
 backend (PortAudio failure no longer sinks the registry), the dead MiniAudio project
 reference is gone, `StartGraceMs` is gone (no hardware warm-up to wait for), and
 `MediaPlayer.OpenAudio` fails fast with a clear message on an empty device list.
-**Still open: P2 (Android), P3 (single video pacer), input-device persistence.**
+**P2 (Android) and P3 (video pacer) implemented and device-verified 2026-07-27** on the
+NW-A300: `MediaCodecMiniPlayer` now paces PCM delivery on absolute wall-clock deadlines
+(re-anchoring instead of burst catch-up after pause/stall/format change); the `AudioTrack`
+exists only while "Play on this device" is on (non-blocking writes, creation failure is
+non-fatal — a HAL-less device keeps feeding NDI), and `DrainToEnd`/playlist advance run on
+the wall-clock schedule, with the hardware-head wait only for an attached monitor's audible
+tail. `VizNdiEngine` now creates its sender with `clockVideo: false` (the pump's Stopwatch
+loop is the single video pacer; audio keeps the SDK throttle). On-device: playback with no
+AudioTrack at all, live monitor attach/detach mid-track, and track skip all verified with a
+clean error log. **Still open: input-device persistence (desktop, minor).**

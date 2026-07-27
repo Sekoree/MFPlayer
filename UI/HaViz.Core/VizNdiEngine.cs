@@ -112,7 +112,11 @@ public sealed class VizNdiEngine : IDisposable
         if (_pumpThread is not null)
             throw new InvalidOperationException("engine already started");
 
-        _ndi = new NDIOutput(_settings.NdiName);
+        // The pump's own Stopwatch deadline loop is the single video pacer; the SDK clock would
+        // double-pace it and hide a slow send as "catch-up" in the pump instead of surfacing as
+        // latency. Audio keeps the SDK clock: PCM arrives from the decoder's wall-clock schedule
+        // and the SDK throttle absorbs its chunk jitter against the negotiated sample rate.
+        _ndi = new NDIOutput(_settings.NdiName, clockVideo: false);
 
         // The factory hands each renderer its own context on the renderer's thread (the
         // IOffscreenGlContext contract); the static is process-wide by framework design.
