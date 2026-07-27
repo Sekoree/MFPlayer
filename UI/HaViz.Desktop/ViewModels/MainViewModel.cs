@@ -38,7 +38,7 @@ public sealed partial class ChannelChoice(int index) : ObservableObject
 
 /// <summary>
 /// Desktop head: the "GUI NDIVisualizer" - engine lifecycle plus the two PCM feeds, the mini
-/// player (framework MediaPlayer: FFmpeg decode -> audible output + viz tap) and line-in capture
+/// player (framework MediaPlayer: FFmpeg decode -> viz tap + optional local monitor) and line-in capture
 /// (PortAudio input with per-channel selection). The two feeds are mutually exclusive: both drive
 /// the same engine, and two unrelated PCM streams garble the visuals and the NDI audio clock.
 /// All engine/player/capture control runs on the UI thread; PCM lands on decoder/capture threads.
@@ -71,29 +71,37 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            _registry = MediaRegistry.Build(b => b
-                .Use(new FFmpegModule())
-                .Use(new PortAudioModule()));
-            var backend = _registry.AudioBackends.FirstOrDefault();
-            if (backend is not null)
+            _registry = MediaRegistry.Build(b =>
             {
-                _player = new DesktopMiniPlayer(_registry, backend, SubmitPcm);
-                _player.TrackStarted += track =>
+                b.Use(new FFmpegModule());
+                // PortAudio only powers the optional local-monitor output and the device lists;
+                // the player itself is wall-clock paced and device-free. A box without
+                // libportaudio (or any audio stack) must still decode -> viz/NDI, so a failed
+                // module registration cannot be allowed to sink the whole registry.
+                try
                 {
-                    // The file opened and the stream started - the error streak is over.
-                    _consecutivePlaybackErrors = 0;
-                    CurrentTrackName = track.DisplayName;
-                    IsPlaying = true;
-                };
-                _player.PlaybackEnded += OnTrackEnded;
-                _player.PlaybackError += OnPlaybackError;
-                // The property default (off) never fires the changed hook - sync it explicitly.
-                _player.SetLocalOutputEnabled(PlayOnDevice);
-            }
-            else
+                    b.Use(new PortAudioModule());
+                }
+                catch (Exception)
+                {
+                    // Reported below via the missing backend.
+                }
+            });
+            var backend = _registry.AudioBackends.FirstOrDefault();
+            _player = new DesktopMiniPlayer(_registry, backend, SubmitPcm);
+            _player.TrackStarted += track =>
             {
-                PlayerStatus = "player unavailable: no audio backend (PortAudio missing?)";
-            }
+                // The file opened and the stream started - the error streak is over.
+                _consecutivePlaybackErrors = 0;
+                CurrentTrackName = track.DisplayName;
+                IsPlaying = true;
+            };
+            _player.PlaybackEnded += OnTrackEnded;
+            _player.PlaybackError += OnPlaybackError;
+            // The property default (off) never fires the changed hook - sync it explicitly.
+            _player.SetLocalOutputEnabled(PlayOnDevice);
+            if (backend is null)
+                PlayerStatus = "no audio backend (PortAudio missing?) - playback works, local monitoring is unavailable";
         }
         catch (Exception ex)
         {

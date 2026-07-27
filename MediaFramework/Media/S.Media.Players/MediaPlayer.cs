@@ -593,6 +593,13 @@ public sealed class MediaPlayer : IDisposable
         try
         {
             var devices = audioBackend.EnumerateOutputDevices();
+            // Fail fast on a headless box: with an empty list, deviceId null would silently pass a
+            // null id down and surface much later as an obscure backend throw when the "_master"
+            // stream opens. OpenAudio's contract IS "wire a clocked device output" - callers that
+            // can run device-free should open via Open()/OpenFile() and skip the master output.
+            if (devices.Count == 0)
+                throw new InvalidOperationException(
+                    $"OpenAudio: audio backend '{audioBackend.Name}' reports no output devices - cannot create the '_master' device output.");
             var device = deviceId is null
                 ? devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault()
                 : devices.FirstOrDefault(d => d.Id == deviceId)

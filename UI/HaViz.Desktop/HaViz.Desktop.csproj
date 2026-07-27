@@ -67,7 +67,6 @@
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Routing/S.Media.Routing.csproj" />
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Players/S.Media.Players.csproj" />
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
-        <ProjectReference Include="../../MediaFramework/Media/S.Media.Audio.MiniAudio/S.Media.Audio.MiniAudio.csproj" />
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Present.SDL3.Compositor/S.Media.Present.SDL3.Compositor.csproj" />
     </ItemGroup>

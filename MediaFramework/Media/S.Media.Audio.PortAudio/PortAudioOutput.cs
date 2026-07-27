@@ -97,10 +97,26 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// </summary>
     public Exception? CallbackFaultException => Volatile.Read(ref _callbackFaultException);
     /// <summary>1 = PA reports stream active, 0 = inactive, negative = error/closed.</summary>
-    public int StreamActive => _stream != nint.Zero ? (int)Native.Pa_IsStreamActive(_stream) : -1;
+    public int StreamActive
+    {
+        get
+        {
+            // Native calls must not race Stop()'s Pa_CloseStream (use-after-free); the gate is
+            // reentrant and only contended during rare lifecycle transitions.
+            lock (_streamLifecycleGate)
+                return _stream != nint.Zero ? (int)Native.Pa_IsStreamActive(_stream) : -1;
+        }
+    }
 
     /// <summary>PortAudio's stream clock - wall-clock seconds since the stream started.</summary>
-    public double StreamTime => _stream != nint.Zero ? Native.Pa_GetStreamTime(_stream) : 0.0;
+    public double StreamTime
+    {
+        get
+        {
+            lock (_streamLifecycleGate)
+                return _stream != nint.Zero ? Native.Pa_GetStreamTime(_stream) : 0.0;
+        }
+    }
 
     // The negotiated output (DAC) latency in ticks, captured at Start; the master clock subtracts it so it
     // reports the audible position rather than the consumed one (see ElapsedSinceStart).
@@ -125,23 +141,29 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             var sampleElapsedSec = playedNow / (double)_format.SampleRate;
             var elapsedSec = sampleElapsedSec;
 
-            if (_stream != nint.Zero
-                && (int)Native.Pa_IsStreamActive(_stream) == 1
-                && Volatile.Read(ref _streamSmoothCalibrated) != 0)
+            // This getter is polled from MediaClock's driver thread; the native reads must not
+            // race Stop()'s Pa_CloseStream. The gate is only held long here while a lifecycle
+            // transition is mid-flight, in which case blocking briefly is the correct outcome.
+            lock (_streamLifecycleGate)
             {
-                Thread.MemoryBarrier();
-                var st = Native.Pa_GetStreamTime(_stream);
-                if (double.IsFinite(st))
+                if (_stream != nint.Zero
+                    && (int)Native.Pa_IsStreamActive(_stream) == 1
+                    && Volatile.Read(ref _streamSmoothCalibrated) != 0)
                 {
-                    // _segmentPlayed0Samples is already segment-local (played - epoch at calibration).
-                    var segmentPlayed0 = Volatile.Read(ref _segmentPlayed0Samples);
-                    if (segmentPlayed0 < 0) segmentPlayed0 = 0;
-                    var streamElapsedSec = segmentPlayed0 / (double)_format.SampleRate + (st - _segmentStreamT0);
-                    if (streamElapsedSec < 0)
-                        streamElapsedSec = 0;
-                    // After Pa_AbortStream + Pa_StartStream, Pa_GetStreamTime can stall while callbacks
-                    // still drain the ring - never let the master clock lag behind sample progress.
-                    elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
+                    Thread.MemoryBarrier();
+                    var st = Native.Pa_GetStreamTime(_stream);
+                    if (double.IsFinite(st))
+                    {
+                        // _segmentPlayed0Samples is already segment-local (played - epoch at calibration).
+                        var segmentPlayed0 = Volatile.Read(ref _segmentPlayed0Samples);
+                        if (segmentPlayed0 < 0) segmentPlayed0 = 0;
+                        var streamElapsedSec = segmentPlayed0 / (double)_format.SampleRate + (st - _segmentStreamT0);
+                        if (streamElapsedSec < 0)
+                            streamElapsedSec = 0;
+                        // After Pa_AbortStream + Pa_StartStream, Pa_GetStreamTime can stall while callbacks
+                        // still drain the ring - never let the master clock lag behind sample progress.
+                        elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
+                    }
                 }
             }
 
@@ -153,7 +175,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     }
 
     /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: true when the PA stream is open and reporting active.</summary>
-    public bool IsAdvancing => _stream != nint.Zero && (int)Native.Pa_IsStreamActive(_stream) == 1;
+    public bool IsAdvancing => StreamActive == 1;
 
     /// <summary>
     /// <see cref="IFlushableOutput.Flush"/>: aborts the PortAudio stream
@@ -216,7 +238,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         PortAudioRuntime.Acquire();
         try
         {
-            _deviceIndex = deviceIndex ?? Native.Pa_GetDefaultOutputDevice();
+            // The catalog's resolution honors MFP_PORTAUDIO_HOST_API; calling Pa_GetDefaultOutputDevice
+            // directly here would bypass the operator's host-API override on default-device opens.
+            _deviceIndex = deviceIndex ?? PortAudioDeviceCatalog.ResolveDefaultOutputDevice();
             if (_deviceIndex < 0)
                 throw new InvalidOperationException("no default PortAudio output device available");
 
@@ -353,6 +377,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     public void Submit(ReadOnlySpan<float> packedSamples)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        ThrowIfCallbackFaulted();
         EnsureStreamRunningAfterFlush();
         if (packedSamples.Length % _format.Channels != 0)
             throw new ArgumentException(
@@ -441,9 +466,31 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// total at or below <see cref="TargetQueueSamples"/>; otherwise sleeps
     /// for as long as the device needs to consume the excess.
     /// </summary>
+    /// <summary>
+    /// A faulted stream callback returned <c>paAbort</c>, so PortAudio has killed the stream and the
+    /// ring will never drain again. Surfacing it as a Submit exception routes the failure into the
+    /// router's <c>OutputErrored</c> path instead of leaving silence with a frozen clock.
+    /// </summary>
+    private void ThrowIfCallbackFaulted()
+    {
+        if (Volatile.Read(ref _callbackFaulted) == 0)
+            return;
+        throw new InvalidOperationException(
+            $"PortAudio stream callback faulted on device {_deviceIndex}; the stream was aborted",
+            Volatile.Read(ref _callbackFaultException));
+    }
+
     public bool WaitForCapacity(int chunkSamples, CancellationToken token)
     {
         if (chunkSamples <= 0) return !token.IsCancellationRequested;
+
+        // A faulted callback means the ring can never drain - fail pacing immediately instead of
+        // burning the full 5s timeout below on every chunk.
+        if (Volatile.Read(ref _callbackFaulted) != 0)
+        {
+            Trace.LogWarning("WaitForCapacity: stream callback faulted (device={Device}) - reporting no capacity", _deviceIndex);
+            return false;
+        }
 
         // Before the stream is started PA isn't draining yet - pretend ready,
         // so prebuffering can fill the ring up to the target before Start().

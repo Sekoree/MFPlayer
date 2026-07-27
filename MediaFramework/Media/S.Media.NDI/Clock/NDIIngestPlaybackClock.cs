@@ -41,6 +41,11 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     private bool _paused;
     private bool _captureStopped;
     private TimeSpan _frozenElapsed;
+    // High-water mark enforcing IPlaybackClock's monotonic contract: _lastStreamEndTicks already
+    // includes the full duration of the last frame, so a frame arriving LATER than its duration
+    // would otherwise step the computed elapsed backwards (pre-arrival = prevEnd + wall, post =
+    // prevEnd + duration). Reset only by Seek (a deliberate reposition) and AttachReceiver.
+    private TimeSpan _maxReportedElapsed;
 
     public NDIIngestPlaybackClock()
         : this(Stopwatch.GetTimestamp)
@@ -91,6 +96,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
             _sessionStarted = false;
             _sessionOriginTicks = 0;
             _lastStreamEndTicks = 0;
+            _maxReportedElapsed = TimeSpan.Zero;
             _advancing = false;
         }
     }
@@ -258,6 +264,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
 
             var shiftTicks = mediaPosition.Ticks - current.Ticks;
             _sessionOriginTicks -= shiftTicks;
+            _maxReportedElapsed = mediaPosition; // deliberate reposition may go backwards
             if (!_advancing)
                 _frozenElapsed = mediaPosition;
         }
@@ -269,7 +276,12 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
         var media = TimeSpan.FromTicks(_lastStreamEndTicks - _sessionOriginTicks);
         var wallExtras = Stopwatch.GetElapsedTime(_lastWallTicks, wallNow);
         var total = media + wallExtras;
-        return total < TimeSpan.Zero ? TimeSpan.Zero : total;
+        if (total < TimeSpan.Zero)
+            total = TimeSpan.Zero;
+        if (total < _maxReportedElapsed)
+            return _maxReportedElapsed;
+        _maxReportedElapsed = total;
+        return total;
     }
 
     private static long FrameDurationTicks(int sampleRate, int samples) =>

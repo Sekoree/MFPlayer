@@ -63,6 +63,9 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
     private Thread? _driverThread;
     private CancellationTokenSource? _driverCts;
+    // See WithDriverTransition for the roles of these two.
+    private readonly Lock _driverTransitionGate = new();
+    private Thread? _activeDriverThread;
 
     private static readonly ILogger TraceLog = MediaDiagnostics.CreateLogger("S.Media.Core.Clock.MediaClock");
 
@@ -105,7 +108,28 @@ public sealed class MediaClock : IMediaClock, IDisposable
     /// <inheritdoc cref="IPlayhead.PlaybackRate"/>
     public double PlaybackRate => 1.0;
 
-    public void Start()
+    /// <summary>
+    /// Serializes driver start against a Pause/Dispose that has already detached the old driver
+    /// under <c>_gate</c> but is still joining it outside <c>_gate</c> - without it a racing Start
+    /// sees <c>_driverThread == null</c> and spins up a second driver while the first still ticks.
+    /// Lock order: transition gate -> <c>_gate</c> (DriverLoop only ever takes <c>_gate</c>).
+    /// Calls arriving ON the driver thread (a tick subscriber) bypass the gate: their join is a
+    /// self-join no-op anyway, and blocking there would deadlock against an in-flight joiner.
+    /// </summary>
+    private void WithDriverTransition(Action body)
+    {
+        if (ReferenceEquals(Thread.CurrentThread, Volatile.Read(ref _activeDriverThread)))
+        {
+            body();
+            return;
+        }
+        lock (_driverTransitionGate)
+            body();
+    }
+
+    public void Start() => WithDriverTransition(StartCore);
+
+    private void StartCore()
     {
         lock (_gate)
         {
@@ -151,7 +175,10 @@ public sealed class MediaClock : IMediaClock, IDisposable
         }
     }
 
-    public void Pause(CancellationToken cancellationToken = default)
+    public void Pause(CancellationToken cancellationToken = default) =>
+        WithDriverTransition(() => PauseCore(cancellationToken));
+
+    private void PauseCore(CancellationToken cancellationToken)
     {
         Thread? toJoin;
         CancellationTokenSource? toDispose;
@@ -169,6 +196,8 @@ public sealed class MediaClock : IMediaClock, IDisposable
             _isRunning = false;
             (toJoin, toDispose) = DetachDriver();
         }
+        // Join under the transition gate (but off _gate, which the driver's ticks need to exit)
+        // so a concurrent Start cannot spawn a second driver while the old one is still winding down.
         JoinDriver(toJoin, toDispose, cancellationToken);
     }
 
@@ -229,7 +258,9 @@ public sealed class MediaClock : IMediaClock, IDisposable
         }
     }
 
-    public void Dispose()
+    public void Dispose() => WithDriverTransition(DisposeCore);
+
+    private void DisposeCore()
     {
         Thread? toJoin;
         CancellationTokenSource? toDispose;
@@ -283,6 +314,19 @@ public sealed class MediaClock : IMediaClock, IDisposable
     }
 
     private void DriverLoop(CancellationToken token)
+    {
+        Volatile.Write(ref _activeDriverThread, Thread.CurrentThread);
+        try
+        {
+            DriverLoopCore(token);
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _activeDriverThread, null, Thread.CurrentThread);
+        }
+    }
+
+    private void DriverLoopCore(CancellationToken token)
     {
         var sessionStart  = Stopwatch.GetTimestamp();
         var nextAudio     = _audioTickInterval;

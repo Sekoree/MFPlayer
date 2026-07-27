@@ -13,29 +13,41 @@ namespace S.Media.Time;
 /// never floats to an unrelated source. Switching the reference is explicit (<see cref="SetReference"/>)
 /// and continuity-preserving: <see cref="Now"/> does not jump across the swap.
 /// </summary>
-/// <remarks>Not thread-safe for reference swaps; read <see cref="Now"/> from the group's driver thread.</remarks>
+/// <remarks>Swaps (<see cref="SetReference"/>/<see cref="RebaseReference"/>) must come from one
+/// writer (the group's dispatcher); reads are tear-free from any thread - the reference and its
+/// shift live in one immutable anchor swapped atomically, so a reader can never combine a new
+/// reference with a stale shift (which read as a time jump).</remarks>
 public sealed class SessionClock
 {
-    private IPlaybackClock _reference;
-    private TimeSpan _shift;   // Now = reference.ElapsedSinceStart + _shift (rebaselined on reference swap)
+    // Now = Reference.ElapsedSinceStart + Shift (rebaselined on reference swap)
+    private sealed record Anchor(IPlaybackClock Reference, TimeSpan Shift);
+
+    private Anchor _anchor;
 
     public SessionClock(IPlaybackClock reference)
     {
         ArgumentNullException.ThrowIfNull(reference);
-        _reference = reference;
+        _anchor = new Anchor(reference, TimeSpan.Zero);
     }
 
     /// <summary>Creates a live-led clock backed by a free-running <see cref="MonotonicWallClock"/>.</summary>
     public static SessionClock LiveWallClock() => new(new MonotonicWallClock());
 
     /// <summary>The current master time for this transport group.</summary>
-    public TimeSpan Now => _reference.ElapsedSinceStart + _shift;
+    public TimeSpan Now
+    {
+        get
+        {
+            var anchor = Volatile.Read(ref _anchor);
+            return anchor.Reference.ElapsedSinceStart + anchor.Shift;
+        }
+    }
 
     /// <summary>True while the reference is advancing; false ⇒ the group is idle (paused/stopped).</summary>
-    public bool IsAdvancing => _reference.IsAdvancing;
+    public bool IsAdvancing => Volatile.Read(ref _anchor).Reference.IsAdvancing;
 
     /// <summary>The current reference clock.</summary>
-    public IPlaybackClock Reference => _reference;
+    public IPlaybackClock Reference => Volatile.Read(ref _anchor).Reference;
 
     /// <summary>
     /// Swap the reference (e.g. promote a new master output) without a time jump: the new reference's
@@ -45,8 +57,7 @@ public sealed class SessionClock
     {
         ArgumentNullException.ThrowIfNull(reference);
         var now = Now;
-        _reference = reference;
-        _shift = now - reference.ElapsedSinceStart;
+        Volatile.Write(ref _anchor, new Anchor(reference, now - reference.ElapsedSinceStart));
     }
 
     /// <summary>
@@ -54,6 +65,9 @@ public sealed class SessionClock
     /// loop wrap), preserving the supplied monotonic group time. The source coordinate may jump; the master
     /// coordinate must not. The owning <see cref="TransportTimeline"/> records the matching generation/anchor.
     /// </summary>
-    public void RebaseReference(TimeSpan preservedNow) =>
-        _shift = preservedNow - _reference.ElapsedSinceStart;
+    public void RebaseReference(TimeSpan preservedNow)
+    {
+        var anchor = Volatile.Read(ref _anchor);
+        Volatile.Write(ref _anchor, anchor with { Shift = preservedNow - anchor.Reference.ElapsedSinceStart });
+    }
 }

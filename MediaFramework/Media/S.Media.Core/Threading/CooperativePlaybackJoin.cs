@@ -9,7 +9,7 @@ public static class CooperativePlaybackJoin
     /// <summary>Join until <paramref name="thread"/> exits or <paramref name="timeout"/> elapses.</summary>
     public static void JoinThread(Thread? thread, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
-        if (thread is null) return;
+        if (thread is null || ReferenceEquals(thread, Thread.CurrentThread)) return;
 
         var deadlineMs = Environment.TickCount64 + (long)Math.Ceiling(timeout.TotalMilliseconds);
         while (thread.IsAlive)
@@ -23,9 +23,11 @@ public static class CooperativePlaybackJoin
         }
     }
 
-    /// <summary>Join until <paramref name="thread"/> exits or <paramref name="cancellationToken"/> is canceled.</summary>
+    /// <summary>Join until <paramref name="thread"/> exits or <paramref name="cancellationToken"/> is canceled.
+    /// Joining the current thread is a no-op (a self-join can never complete).</summary>
     public static void JoinThreadWhileCancelable(Thread? thread, CancellationToken cancellationToken)
     {
+        if (ReferenceEquals(thread, Thread.CurrentThread)) return;
         while (thread is { IsAlive: true })
         {
             cancellationToken.ThrowIfCancellationRequested();

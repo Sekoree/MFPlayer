@@ -61,7 +61,16 @@ public sealed unsafe class MiniAudioOutput :
 
     public bool IsRunning => Volatile.Read(ref _isRunning);
 
-    public int DeviceState => _device != nint.Zero ? MiniAudioNative.DeviceGetState(_device) : 0;
+    public int DeviceState
+    {
+        get
+        {
+            // Native calls must not race Stop()'s DeviceDestroy + FreeHGlobal (use-after-free);
+            // the gate is reentrant and only contended during rare lifecycle transitions.
+            lock (_deviceLifecycleGate)
+                return _device != nint.Zero ? MiniAudioNative.DeviceGetState(_device) : 0;
+        }
+    }
 
     public long PlayedSamples => Volatile.Read(ref _playedSamples);
 
@@ -91,11 +100,16 @@ public sealed unsafe class MiniAudioOutput :
         }
     }
 
-    public bool IsAdvancing =>
-        Volatile.Read(ref _isRunning)
-        && Volatile.Read(ref _deviceStoppedAfterFlush) == 0
-        && _device != nint.Zero
-        && MiniAudioNative.DeviceIsStarted(_device) != 0;
+    public bool IsAdvancing
+    {
+        get
+        {
+            if (!Volatile.Read(ref _isRunning) || Volatile.Read(ref _deviceStoppedAfterFlush) != 0)
+                return false;
+            lock (_deviceLifecycleGate)
+                return _device != nint.Zero && MiniAudioNative.DeviceIsStarted(_device) != 0;
+        }
+    }
 
     public void Start()
     {
@@ -195,6 +209,7 @@ public sealed unsafe class MiniAudioOutput :
     public void Submit(ReadOnlySpan<float> packedSamples)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        ThrowIfCallbackFaulted();
         EnsureDeviceRunningAfterFlush();
         if (packedSamples.Length % _format.Channels != 0)
             throw new ArgumentException(
@@ -224,11 +239,33 @@ public sealed unsafe class MiniAudioOutput :
         }
     }
 
+    /// <summary>
+    /// A faulted device callback fills silence and the ring will never drain reliably again.
+    /// Surfacing it as a Submit exception routes the failure into the router's
+    /// <c>OutputErrored</c> path instead of leaving silence with a frozen clock.
+    /// </summary>
+    private void ThrowIfCallbackFaulted()
+    {
+        if (Volatile.Read(ref _callbackFaulted) == 0)
+            return;
+        throw new InvalidOperationException(
+            "miniaudio playback callback faulted; the device is no longer draining",
+            Volatile.Read(ref _callbackFaultException));
+    }
+
     public bool WaitForCapacity(int chunkSamples, CancellationToken token)
     {
         if (chunkSamples <= 0) return !token.IsCancellationRequested;
         if (!Volatile.Read(ref _isRunning))
             return !token.IsCancellationRequested;
+
+        // A faulted callback means the ring can never drain - fail pacing immediately instead of
+        // burning the full 5s timeout below on every chunk.
+        if (Volatile.Read(ref _callbackFaulted) != 0)
+        {
+            Trace.LogWarning("WaitForCapacity: device callback faulted - reporting no capacity");
+            return false;
+        }
 
         EnsureDeviceRunningAfterFlush();
 
@@ -258,7 +295,12 @@ public sealed unsafe class MiniAudioOutput :
         lock (_deviceLifecycleGate)
         {
             if (_disposed || !Volatile.Read(ref _isRunning) || _device == nint.Zero) return;
-            MiniAudioException.ThrowIfError(MiniAudioNative.DeviceStop(_device), "ma_device_stop(playback flush)");
+            // A failing stop must not abort the flush half-way (ring/epoch/flag inconsistent) -
+            // finish the bookkeeping regardless and only log, matching PortAudioOutput.Flush's
+            // treatment of a failed Pa_AbortStream.
+            var stopResult = MiniAudioNative.DeviceStop(_device);
+            if (stopResult != MiniAudioNative.Success)
+                Trace.LogWarning("Flush: ma_device_stop failed with {Result}; continuing flush bookkeeping", stopResult);
             _ring.Clear();
             Interlocked.Exchange(ref _underrunSamples, 0);
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));

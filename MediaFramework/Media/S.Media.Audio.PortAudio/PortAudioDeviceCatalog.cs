@@ -64,7 +64,7 @@ public static class PortAudioDeviceCatalog
     /// PortAudio's global default. Lets a deployment - or a test run - route through JACK/PipeWire instead of
     /// the box's ALSA default, whose virtual-PCM config is noisy and can be flaky under test. Unset / no match
     /// ⇒ PortAudio's global default. Call only while the runtime is acquired (it enumerates host APIs).</summary>
-    private static int ResolveDefaultOutputDevice()
+    internal static int ResolveDefaultOutputDevice()
     {
         if (Environment.GetEnvironmentVariable("MFP_PORTAUDIO_HOST_API") is { Length: > 0 } preferred)
             foreach (var api in EnumerateHostApis())
