@@ -168,7 +168,7 @@
     <!-- Transport. GO is the show's primary action - keep it visually dominant; the tooltips double
          as the keyboard-shortcut reference for the code-behind transport bindings. Panic is the
          panic-path exit and wears Danger red, same as the media deck's Stop. -->
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
       <Button Grid.Column="0" Content="{x:Static res:Strings.StandbySelectedButton}"
               Command="{Binding StandbySelectedCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportStandbyTooltip}" />
@@ -195,9 +195,9 @@
       <StackPanel Grid.Column="6" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
                   ToolTip.Tip="{x:Static res:Strings.CueMasterTrimTooltip}">
         <TextBlock Text="{x:Static res:Strings.CueMasterTrimLabel}" VerticalAlignment="Center" />
-        <Slider x:Name="MasterTrimSlider" Width="120" Minimum="0" Maximum="1"
+        <Slider x:Name="MasterTrimSlider" Width="120" Minimum="-60" Maximum="0"
                 VerticalAlignment="Center" Padding="0" Margin="0"
-                Value="{Binding MasterTrim, Mode=TwoWay}"
+                Value="{Binding MasterTrimDb, Mode=TwoWay}"
                 AutomationProperties.Name="{x:Static res:Strings.CueMasterTrimLabel}" />
         <TextBlock MinWidth="52" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
                    Text="{Binding MasterTrimDisplay}" />
@@ -213,9 +213,21 @@
           <TextBlock Text="{x:Static res:Strings.SchedulesArmedToggleLabel}" VerticalAlignment="Center" />
         </StackPanel>
       </ToggleButton>
+      <!-- MIDI/OSC/hotkey trigger master gate (§6). A SEPARATE arm from Schedules (arming one
+           surface must never silently open the other), same semantics: session-scoped, starts
+           OFF, fires only while armed AND edit mode is off. -->
+      <ToggleButton Grid.Column="8" Classes="schedarm"
+                    IsChecked="{Binding TriggersArmed, Mode=TwoWay}"
+                    ToolTip.Tip="{x:Static res:Strings.TriggersArmedToggleTooltip}"
+                    AutomationProperties.Name="{x:Static res:Strings.TriggersArmedToggleLabel}">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="&#x26A1;" FontSize="12" VerticalAlignment="Center" />
+          <TextBlock Text="{x:Static res:Strings.TriggersArmedToggleLabel}" VerticalAlignment="Center" />
+        </StackPanel>
+      </ToggleButton>
       <!-- State chip, same palette as the deck's state pill: green running, amber paused or
            standby-armed, gray idle - readable across a booth without parsing the text. -->
-      <Border Grid.Column="8" Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
+      <Border Grid.Column="9" Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
               Background="{Binding TransportStateColor}">
         <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TransportState}"
                    TextTrimming="CharacterEllipsis" />
@@ -251,7 +263,7 @@
                      between rows. A row collapses to zero height when its cue-kind hides all
                      its children. -->
                 <Grid ColumnDefinitions="Auto,170,Auto,170"
-                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                       ColumnSpacing="8" RowSpacing="8">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.CueTreeNumberColumnHeader}" VerticalAlignment="Center" />
                   <TextBox Grid.Row="0" Grid.Column="1"
@@ -374,19 +386,32 @@
                                  ToolTip.Tip="{x:Static res:Strings.CueLevelDbTooltip}"
                                  Value="{Binding SelectedMediaCue.LevelDb, Mode=TwoWay}" />
 
-                  <!-- Authored lane start for cues in a Timeline group - the numeric twin of the
+                  <!-- Authored lane start for cues in a Timeline group - the time-code twin of the
                        timeline canvas's block drag (blocks render at start + pre-wait). -->
                   <TextBlock Grid.Row="7" Grid.Column="2" Text="{x:Static res:Strings.TimelineStartMsLabel}"
                              VerticalAlignment="Center"
                              IsVisible="{Binding IsSelectedCueInTimelineGroup}"
                              ToolTip.Tip="{x:Static res:Strings.TimelineStartMsTooltip}" />
-                  <NumericUpDown FormatString="0" Grid.Row="7" Grid.Column="3"
+                  <TextBox Grid.Row="7" Grid.Column="3"
+                           Text="{Binding SelectedCueNode.TimelineStartTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="00:00:00.000"
+                           TextAlignment="Right"
+                           IsVisible="{Binding IsSelectedCueInTimelineGroup}"
+                           ToolTip.Tip="{x:Static res:Strings.TimelineStartMsTooltip}" />
+
+                  <!-- Loop-with-crossfade window (dual-voice): only meaningful while Loop is on -
+                       0 keeps the seamless-seek butt-splice loop. -->
+                  <TextBlock Grid.Row="8" Grid.Column="0" Text="{x:Static res:Strings.LoopCrossfadeMsLabel}"
+                             VerticalAlignment="Center"
+                             IsVisible="{Binding SelectedMediaCue.Loop, FallbackValue=False}"
+                             ToolTip.Tip="{x:Static res:Strings.LoopCrossfadeMsTooltip}" />
+                  <NumericUpDown FormatString="0" Grid.Row="8" Grid.Column="1"
                                  Minimum="0"
-                                 Maximum="86400000"
+                                 Maximum="120000"
                                  Increment="100"
-                                 IsVisible="{Binding IsSelectedCueInTimelineGroup}"
-                                 ToolTip.Tip="{x:Static res:Strings.TimelineStartMsTooltip}"
-                                 Value="{Binding SelectedCueNode.TimelineStartMs, Mode=TwoWay}" />
+                                 IsVisible="{Binding SelectedMediaCue.Loop, FallbackValue=False}"
+                                 ToolTip.Tip="{x:Static res:Strings.LoopCrossfadeMsTooltip}"
+                                 Value="{Binding SelectedMediaCue.LoopCrossfadeMs, Mode=TwoWay}" />
                 </Grid>
 
                 <!-- Custom natural-end trigger. The target can itself be a random Jump cue, keeping
@@ -515,12 +540,13 @@
                   </StackPanel>
                 </Expander>
 
-                <!-- Per-cue triggers beyond GO (§6): today a keyboard hotkey - dispatched by the same
-                     transport-key layer as GO/Stop, gated on cue edit mode being OFF (the schedule
-                     gate's reasoning). Hotkey text parses on LostFocus like the schedule fields. -->
+                <!-- Per-cue triggers beyond GO (§6): the quick keyboard hotkey (dispatched by the
+                     transport-key layer, edit-mode gated) plus MIDI/OSC/hotkey trigger BINDINGS,
+                     matched by CueTriggerService while the transport row's Triggers toggle is
+                     armed. Text fields parse on LostFocus like the schedule fields. -->
                 <Expander Classes="dense" Margin="0,4,0,0"
                           Header="{x:Static res:Strings.CueTriggersSectionHeader}"
-                          IsExpanded="{Binding SelectedCueNode.HasHotkey, Mode=OneWay}">
+                          IsExpanded="{Binding SelectedCueNode.HasAnyExternalTrigger, Mode=OneWay}">
                   <StackPanel Spacing="6" Margin="6,4,6,4">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                       <TextBlock Text="{x:Static res:Strings.CueHotkeyLabel}" VerticalAlignment="Center" />
@@ -529,6 +555,85 @@
                                PlaceholderText="F5" />
                     </StackPanel>
                     <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueHotkeyHint}" />
+                    <Separator Margin="0,2" />
+                    <ItemsControl ItemsSource="{Binding SelectedCueNode.Triggers}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:CueTriggerBindingViewModel">
+                          <Border BorderThickness="1" CornerRadius="4" Margin="0,0,0,4" Padding="6"
+                                  BorderBrush="{DynamicResource ThemeBorderLowBrush}">
+                            <StackPanel Spacing="6">
+                              <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ComboBox Width="110"
+                                          ItemsSource="{x:Static vm:CueTriggerBindingViewModel.Kinds}"
+                                          SelectedItem="{Binding Kind, Mode=TwoWay}">
+                                  <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                                    </DataTemplate>
+                                  </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <CheckBox Content="{x:Static res:Strings.CueTriggerEnabledLabel}"
+                                          IsChecked="{Binding Enabled, Mode=TwoWay}" />
+                                <Button Content="{x:Static res:Strings.CueTriggerRemoveButton}"
+                                        Command="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).RemoveSelectedCueTriggerCommand}"
+                                        CommandParameter="{Binding}" />
+                              </StackPanel>
+                              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsMidi}">
+                                <TextBox Width="150"
+                                         Text="{Binding MidiDeviceName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                         PlaceholderText="{x:Static res:Strings.CueTriggerMidiDeviceWatermark}"
+                                         ToolTip.Tip="{x:Static res:Strings.CueTriggerMidiDeviceTooltip}" />
+                                <ComboBox Width="150"
+                                          ItemsSource="{x:Static vm:CueTriggerBindingViewModel.MidiMessageTypes}"
+                                          SelectedItem="{Binding MidiMessageType, Mode=TwoWay}">
+                                  <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                                    </DataTemplate>
+                                  </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <TextBlock Text="{x:Static res:Strings.CueTriggerMidiChannelLabel}" VerticalAlignment="Center" />
+                                <NumericUpDown FormatString="0" Width="90" Minimum="0" Maximum="16"
+                                               ToolTip.Tip="{x:Static res:Strings.CueTriggerMidiChannelTooltip}"
+                                               Value="{Binding MidiChannel, Mode=TwoWay}" />
+                                <TextBlock Text="{x:Static res:Strings.CueTriggerMidiNumberLabel}" VerticalAlignment="Center" />
+                                <NumericUpDown FormatString="0" Width="90" Minimum="0" Maximum="127"
+                                               Value="{Binding MidiNumber, Mode=TwoWay}" />
+                                <TextBlock Text="{x:Static res:Strings.CueTriggerMidiValueMinLabel}" VerticalAlignment="Center" />
+                                <NumericUpDown FormatString="0" Width="90" Minimum="0" Maximum="127"
+                                               ToolTip.Tip="{x:Static res:Strings.CueTriggerMidiValueMinTooltip}"
+                                               Value="{Binding MidiValueMin, Mode=TwoWay}" />
+                                <ToggleButton Content="{x:Static res:Strings.CueTriggerLearnButton}"
+                                              IsChecked="{Binding IsMidiLearning, Mode=OneWay}"
+                                              ToolTip.Tip="{x:Static res:Strings.CueTriggerLearnTooltip}"
+                                              Command="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).ToggleMidiLearnTriggerCommand}"
+                                              CommandParameter="{Binding}" />
+                              </StackPanel>
+                              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsOsc}">
+                                <TextBlock Text="{x:Static res:Strings.CueTriggerOscAddressLabel}" VerticalAlignment="Center" />
+                                <TextBox Width="220"
+                                         Text="{Binding OscAddress, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                         PlaceholderText="/haplay/cue/5" />
+                                <TextBlock Text="{x:Static res:Strings.CueTriggerOscArgumentLabel}" VerticalAlignment="Center" />
+                                <TextBox Width="120"
+                                         Text="{Binding OscArgument, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                         ToolTip.Tip="{x:Static res:Strings.CueTriggerOscArgumentTooltip}"
+                                         PlaceholderText="{x:Static res:Strings.CueTriggerOscArgumentWatermark}" />
+                              </StackPanel>
+                              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsHotkey}">
+                                <TextBlock Text="{x:Static res:Strings.CueHotkeyLabel}" VerticalAlignment="Center" />
+                                <TextBox Width="170"
+                                         Text="{Binding HotkeyGestureText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                         PlaceholderText="F5" />
+                              </StackPanel>
+                            </StackPanel>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="{x:Static res:Strings.CueTriggerAddButton}"
+                            Command="{Binding AddSelectedCueTriggerCommand}" />
+                    <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueTriggerHint}" />
                   </StackPanel>
                 </Expander>
 

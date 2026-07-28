@@ -304,6 +304,61 @@ public partial class CuePlayerViewModel
 
     private bool CanSetSelectedCueColorTag() => SelectedCueNode is not null;
 
+    // ----- MIDI/OSC/hotkey trigger bindings (drawer Triggers section, §6) --------------------------
+
+    /// <summary>Adds a fresh (MIDI NoteOn) binding row to the selected cue.</summary>
+    [RelayCommand(CanExecute = nameof(CanAddSelectedCueTrigger))]
+    private void AddSelectedCueTrigger()
+    {
+        if (SelectedCueNode is not { } cue)
+            return;
+        var row = new CueTriggerBindingViewModel { HotkeyConflictProbe = ProbeTriggerHotkeyConflict };
+        cue.Triggers.Add(row);
+    }
+
+    private bool CanAddSelectedCueTrigger() => SelectedCueNode is not null;
+
+    [RelayCommand]
+    private void RemoveSelectedCueTrigger(CueTriggerBindingViewModel row)
+    {
+        if (ReferenceEquals(MidiLearnTarget, row))
+            MidiLearnTarget = null;
+        SelectedCueNode?.Triggers.Remove(row);
+    }
+
+    /// <summary>Toggles MIDI learn on a binding row: while lit, the next incoming MIDI message
+    /// (via the armed control workspace's device I/O) fills the row's device/type/channel/number
+    /// fields. Clicking again - or selecting another cue - cancels.</summary>
+    [RelayCommand]
+    private void ToggleMidiLearnTrigger(CueTriggerBindingViewModel row) =>
+        MidiLearnTarget = ReferenceEquals(MidiLearnTarget, row) ? null : row;
+
+    /// <summary>Edit-time veto for trigger hotkeys that clash with the configurable transport keys
+    /// (GO/Stop/Panic/…): the assignment is rejected and the clash surfaced on the status strip.
+    /// At dispatch time the transport keys would win anyway (the view checks them first); vetoing
+    /// here keeps the operator from authoring a binding that can never fire.</summary>
+    internal bool ProbeTriggerHotkeyConflict(string gesture)
+    {
+        if (!CueHotkeyGesture.TryParse(gesture, out var key, out var modifiers))
+            return false;
+        foreach (var transport in new[]
+                 {
+                     Hotkeys.Go, Hotkeys.StopThenPanic, Hotkeys.PanicNow, Hotkeys.StandbySelected,
+                     Hotkeys.Back, Hotkeys.Pause, Hotkeys.NextVisualizerPreset,
+                 })
+        {
+            if (CueHotkeyGesture.TryParse(transport, out var tKey, out var tModifiers)
+                && tKey == key && tModifiers == modifiers)
+            {
+                StatusMessage = Strings.Format(
+                    nameof(Strings.CueTriggerHotkeyConflictWarningFormat), transport);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Swatch row bound by the drawer's General tab. Index 0 is "no tag" (transparent
     /// fill, slightly thicker border so it's clickable). Indexes 1..7 match
     /// <see cref="CueColorTagPalette"/>.</summary>

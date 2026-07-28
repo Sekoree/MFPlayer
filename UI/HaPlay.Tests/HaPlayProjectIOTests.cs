@@ -870,6 +870,49 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public async Task CueListIO_SaveLoad_RoundTripsLoopCrossfade()
+    {
+        // Loop-with-crossfade: the per-cue window persists at both levels (cue-list file + project),
+        // and an absent field loads as 0 (butt splice) - the CLR default, so init is source-gen-safe.
+        var cueList = new CueList
+        {
+            Name = "Beds",
+            Nodes =
+            {
+                new MediaCueNode
+                {
+                    Number = "1",
+                    Label = "Bed",
+                    Source = new FilePlaylistItem("/show/bed.wav"),
+                    Loop = true,
+                    LoopCrossfadeMs = 1200,
+                },
+            },
+        };
+
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        try
+        {
+            await CueListIO.SaveAsync(cueList, tmp);
+            var loaded = await CueListIO.LoadAsync(tmp);
+            var media = Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes));
+            Assert.True(media.Loop);
+            Assert.Equal(1200, media.LoopCrossfadeMs);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
+        }
+
+        var project = new HaPlayProject { CueLists = { cueList } };
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+        var projectMedia = Assert.IsType<MediaCueNode>(
+            Assert.Single(Assert.Single(roundTripped.CueLists).Nodes));
+        Assert.Equal(1200, projectMedia.LoopCrossfadeMs);
+    }
+
+    [Fact]
     public async Task LoadAsync_FutureSchemaVersion_ThrowsUnsupportedSchemaVersion()
     {
         // Hand-crafted JSON simulating a project written by a future build.

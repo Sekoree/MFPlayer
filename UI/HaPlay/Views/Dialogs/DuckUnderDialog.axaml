@@ -1,0 +1,59 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.DuckUnderDialog"
+        x:DataType="vm:DuckUnderDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="460" Height="360"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        SizeToContent="Height"
+        MinWidth="400">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.ApplyButton}" Click="ApplyClick" IsDefault="True"
+              IsEnabled="{Binding CanApply}" />
+    </StackPanel>
+
+    <StackPanel Spacing="10">
+      <TextBlock Text="{x:Static res:Strings.DuckDialogLanesLabel}" FontWeight="SemiBold" />
+      <TextBlock Text="{x:Static res:Strings.DuckDialogNoOverlapHint}" Opacity="0.7" TextWrapping="Wrap"
+                 IsVisible="{Binding !HasOverlappingLanes}" />
+      <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto"
+                    IsVisible="{Binding HasOverlappingLanes}">
+        <ItemsControl ItemsSource="{Binding Lanes}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:DuckLaneChoiceViewModel">
+              <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Content="{Binding Display}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+
+      <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="8">
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.DuckDialogDepthLabel}"
+                   ToolTip.Tip="{x:Static res:Strings.DuckDialogDepthTooltip}" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Row="0" Grid.Column="1" FormatString="0.0" Minimum="-60" Maximum="0" Increment="1"
+                       ToolTip.Tip="{x:Static res:Strings.DuckDialogDepthTooltip}"
+                       Value="{Binding DepthDb, Mode=TwoWay}" />
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.DuckDialogRampLabel}"
+                   ToolTip.Tip="{x:Static res:Strings.DuckDialogRampTooltip}" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Row="1" Grid.Column="1" FormatString="0" Minimum="0" Maximum="10000" Increment="50"
+                       ToolTip.Tip="{x:Static res:Strings.DuckDialogRampTooltip}"
+                       Value="{Binding RampMs, Mode=TwoWay}" />
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="{x:Static res:Strings.DuckDialogLeadLabel}"
+                   ToolTip.Tip="{x:Static res:Strings.DuckDialogLeadTooltip}" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Row="2" Grid.Column="1" FormatString="0" Minimum="0" Maximum="10000" Increment="50"
+                       ToolTip.Tip="{x:Static res:Strings.DuckDialogLeadTooltip}"
+                       Value="{Binding LeadMs, Mode=TwoWay}" />
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static res:Strings.DuckDialogCurveLabel}"
+                   VerticalAlignment="Center" />
+        <ComboBox Grid.Row="3" Grid.Column="1" MinWidth="140"
+                  ItemsSource="{Binding CurveChoices}"
+                  SelectedItem="{Binding Curve, Mode=TwoWay}" />
+      </Grid>
+    </StackPanel>
+  </DockPanel>
+</Window>

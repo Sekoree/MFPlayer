@@ -155,6 +155,14 @@ public sealed record ShowClipBinding(
     /// <summary>Loop the trimmed clip (GUI <c>MediaCueNode.Loop</c>, also implied by <see cref="ClipEndBehavior.Loop"/>).</summary>
     public bool Loop { get; init; }
 
+    /// <summary>Loop-with-crossfade window (GUI <c>MediaCueNode.LoopCrossfadeMs</c>; dual-voice design doc §3):
+    /// when positive on a looping clip, each loop wrap is a dual-voice crossfade instead of the seek-back butt
+    /// splice - within this window of the (trimmed) end the session re-fires the SAME binding as a fresh incoming
+    /// voice through the crossfade replacement path, so the tail of one pass overlaps the head of the next
+    /// (ambient beds). Must be shorter than the trimmed pass length; zero (the default) keeps the seamless-seek
+    /// loop unchanged. Ignored for non-looping clips.</summary>
+    public TimeSpan LoopCrossfade { get; init; }
+
     /// <summary>What happens when the clip reaches its (trimmed) end (GUI <c>MediaCueNode.EndBehavior</c>).</summary>
     public ClipEndBehavior EndBehavior { get; init; } = ClipEndBehavior.Stop;
 

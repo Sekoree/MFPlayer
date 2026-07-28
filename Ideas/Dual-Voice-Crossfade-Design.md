@@ -1,14 +1,21 @@
 # Dual-voice transport groups (true crossfade)
 
-Status: IMPLEMENTED, 2026-07-28 (order steps 1–2 fully; step 3's GO-early takeover too - only
-loop-with-crossfade remains open, since it needs a per-binding crossfade field neither this doc's
-model nor the cue UI defines yet). `TransportGroup.Outgoing` + `ReplaceAsync(crossfade:)` +
-`FireCueAsync(cueId, crossfade, curve)`; the pre-end fire rides `ShowClipBinding.PreEndNotify` →
-`ShowSession.ClipApproachingEnd` (the end monitor's one-shot pre-end offset, no second timer);
-HaPlay maps `CuePlaylistOptions.CrossfadeMs` (now persisted AND implemented, group-tab field) onto
-it and advances early through `CuePlayerViewModel.MediaCueCrossfadeExecutor` (EqualPower). Tests:
-`S.Media.Session.Tests/CrossfadeTests.cs`, `HaPlay.Tests/PlaylistGroupTests.cs` (crossfade
-section). Original design below.
+Status: IMPLEMENTED, 2026-07-28 (order steps 1–3 fully, loop-with-crossfade included).
+`TransportGroup.Outgoing` + `ReplaceAsync(crossfade:)` + `FireCueAsync(cueId, crossfade, curve)`;
+the pre-end fire rides `ShowClipBinding.PreEndNotify` → `ShowSession.ClipApproachingEnd` (the end
+monitor's one-shot pre-end offset, no second timer); HaPlay maps `CuePlaylistOptions.CrossfadeMs`
+(now persisted AND implemented, group-tab field) onto it and advances early through
+`CuePlayerViewModel.MediaCueCrossfadeExecutor` (EqualPower). The cross is audio AND video: the
+incoming voice's layers attach black and `StartFadeIn` ramps them 0→authored (a plain per-cue
+FadeIn on a placed clip gets the same audio+video ramp - the earlier audio-only fade-in was an
+omission, not a choice; only the fade CUE keeps an explicit video opt-out), and the outgoing
+tail's opacities ramp down with its audio. Loop-with-crossfade landed as
+`ShowClipBinding.LoopCrossfade` / `MediaCueNode.LoopCrossfadeMs` (General-tab field next to
+Loop): inside the window the end monitor re-fires the SAME binding as a fresh incoming voice via
+`PlayClipAsync(crossfade:)` (bypassing the cue graph, so a wrap never re-triggers auto-follow;
+EqualPower; a failed re-open falls back to the butt-splice seek wrap). Tests:
+`S.Media.Session.Tests/CrossfadeTests.cs` (incl. opacity + loop-overlap sections),
+`HaPlay.Tests/PlaylistGroupTests.cs` (crossfade section). Original design below.
 
 The framework feature the enhancement round repeatedly deferred:
 `CuePlaylistOptions.CrossfadeMs` (persisted, unimplemented), group-boundary crossfade for

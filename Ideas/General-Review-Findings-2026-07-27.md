@@ -182,7 +182,27 @@ eases in quadratically over the first `2×latency` window, C¹-continuous into `
 path; backend is now `IDisposable`. Truth-table/state-machine tests in
 `S.Media.Audio.Backends.Tests` (41 tests, hardware-dependent cases device-gated).
 
-**Still open:** 14 (seek/flush epoch generations — in progress 2026-07-28).
+**Round 3 (2026-07-28, later still):** **14 fixed** — the "one deliberate epoch mechanism" landed
+in `MediaClock`: a per-epoch master-elapsed high-water detects a master regression (an output
+`Flush` rewinding the device segment clock, or a composite handing off downward) and FOLDS the old
+epoch's accrued time into the base position (advancing master) or HOLDS the last in-epoch position
+(idle master), replacing the old clamp-negative-delta patch that froze the playhead. That closes
+leg 1: a `Flush` landing between `AvPlaybackCoordinator.Seek`'s source-seek and clock-seek now
+leaves the anchor stale for at most one position read (documented at the `Seek` overload). Leg 2:
+`MediaPlayer.Position`'s natural-EOF Duration clamp is KEPT deliberately — it reports exact
+`Duration` where the folded clock can sit at `Duration − ε`, and covers hosts polling sparser than
+the 30 Hz driver — but is now generation-scoped via `MediaClock.TimebaseGeneration` (bumped only by
+explicit re-anchors: Seek/Reset/SetMaster, never by internal epoch folds), so a seek after EOF
+reads the seek target instead of stale-clamping until the next Play. Tests:
+`MediaClockMasterEpochTests` (flush-after-clock-seek, EOF hold, dip-and-return, pause-across-reset,
+generation semantics), `MediaPlayerTests` (clamp truth table + seek-after-EOF integration).
+Post-implementation review of commit `fac305c4` (the dual-voice/trim round) found and fixed one
+defect: the crossfade handoff froze the outgoing tail's level as `EffectiveAudioLevel` (which
+already contains the master trim) while the outgoing ramp multiplied the live trim again — trim
+applied twice to the tail whenever the master fader sat below unity
+(`MasterTrimTests.MasterTrim_AppliesExactlyOnce_ToTheOutgoingCrossfadeTail`).
+
+**Still open:** nothing from §2.
 
 ## 6. Wire-or-prune decision (§1 table) — 2026-07-28
 

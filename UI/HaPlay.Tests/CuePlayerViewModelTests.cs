@@ -2021,13 +2021,20 @@ public sealed class CuePlayerViewModelTests
         media.StartOffsetMs = 1500;
         media.EndOffsetMs = 2500;
         media.Loop = true;
+        media.LoopCrossfadeMs = 750;
         media.EndBehavior = CueEndBehavior.FreezeLastFrame;
 
         var node = Assert.IsType<MediaCueNode>(Assert.Single(vm.BuildCueListsSnapshot()[0].Nodes));
         Assert.Equal(1500, node.StartOffsetMs);
         Assert.Equal(2500, node.EndOffsetMs);
         Assert.True(node.Loop);
+        Assert.Equal(750, node.LoopCrossfadeMs);
         Assert.Equal(CueEndBehavior.FreezeLastFrame, node.EndBehavior);
+
+        // And back: the restored editor VM carries the loop-crossfade window.
+        var restored = CueNodeViewModel.FromModel(node);
+        Assert.True(restored.Loop);
+        Assert.Equal(750, restored.LoopCrossfadeMs);
     }
 
     [Fact]
@@ -2078,6 +2085,82 @@ public sealed class CuePlayerViewModelTests
 
         cue.DurationTimeText = "not a time";
         Assert.Equal(5_000, cue.DurationMs);
+    }
+
+    [Fact]
+    public void TimelineStartTimeText_ParsesTimeCodes_AndRejectsBadInput()
+    {
+        var cue = new CueNodeViewModel(CueNodeKind.Media);
+
+        cue.TimelineStartTimeText = "01:02.500";
+        Assert.Equal(62_500, cue.TimelineStartMs);
+
+        cue.TimelineStartTimeText = "00:01:02.500";
+        Assert.Equal(62_500, cue.TimelineStartMs);
+        Assert.Equal("00:01:02.500", cue.TimelineStartTimeText);
+
+        cue.TimelineStartTimeText = "1500";
+        Assert.Equal(1_500, cue.TimelineStartMs);
+
+        cue.TimelineStartTimeText = "not a time";
+        Assert.Equal(1_500, cue.TimelineStartMs);
+        Assert.Equal("00:00:01.500", cue.TimelineStartTimeText);
+
+        // The timeline canvas drags the ms value; the drawer's text field follows live.
+        var raised = new List<string?>();
+        cue.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        cue.TimelineStartMs = 5_000;
+        Assert.Contains(nameof(CueNodeViewModel.TimelineStartTimeText), raised);
+        Assert.Equal("00:00:05.000", cue.TimelineStartTimeText);
+    }
+
+    [Fact]
+    public void IsSelectedCueInTimelineGroup_TracksParentGroupFireMode()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddGroupCommand.Execute(null);
+        var group = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddEmptyMediaCue();
+        var child = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        // Group defaults to a non-Timeline fire mode: the drawer field stays hidden.
+        Assert.False(vm.IsSelectedCueInTimelineGroup);
+
+        group.Extra = CueGroupFireMode.Timeline.ToString();
+        vm.SelectedCueNode = group;
+        Assert.False(vm.IsSelectedCueInTimelineGroup); // the group itself has no lane start
+
+        vm.SelectedCueNode = child; // the flag recomputes on selection
+        Assert.True(vm.IsSelectedCueInTimelineGroup);
+    }
+
+    [Fact]
+    public void MasterTrimDb_InvokesSessionTrimCallbackWithLinearScale()
+    {
+        var vm = new CuePlayerViewModel();
+        var pushed = new List<float>();
+        vm.SetMasterTrimCallback = level =>
+        {
+            pushed.Add(level);
+            return Task.CompletedTask;
+        };
+
+        vm.MasterTrimDb = -6.0;
+        Assert.Equal((float)Math.Pow(10, -6.0 / 20.0), Assert.Single(pushed));
+        Assert.Equal("-6.0 dB", vm.MasterTrimDisplay);
+
+        vm.MasterTrimDb = CuePlayerViewModel.MasterTrimFloorDb;
+        Assert.Equal(0f, pushed[^1]); // the floor is a hard mute, not 10^(-60/20)
+        Assert.Equal("-inf dB", vm.MasterTrimDisplay);
+
+        vm.MasterTrimDb = -120.0; // out-of-range input clamps to the floor
+        Assert.Equal(CuePlayerViewModel.MasterTrimFloorDb, vm.MasterTrimDb);
+        Assert.Equal(0f, pushed[^1]);
+
+        vm.ResetMasterTrimCommand.Execute(null);
+        Assert.Equal(0.0, vm.MasterTrimDb);
+        Assert.Equal(1f, pushed[^1]);
+        Assert.Equal("0.0 dB", vm.MasterTrimDisplay);
     }
 
     [Fact]

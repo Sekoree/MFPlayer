@@ -265,6 +265,78 @@ public abstract record CueNode
     /// hotkey - the CLR default, so <c>init</c> is safe under the source-generated serializer, and
     /// the context's WhenWritingNull policy keeps legacy cue JSON byte-identical.</summary>
     public string? HotkeyGesture { get; init; }
+
+    /// <summary>Optional MIDI/OSC/hotkey trigger bindings (Ideas/CuePlayer-Enhancements.md §6) -
+    /// each one fires this cue through the operator-selected GO path while the transport row's
+    /// "Triggers" toggle is armed and cue edit mode is off (<c>CueTriggerService</c>). Additional
+    /// triggers like <see cref="Schedule"/>, never a replacement for <see cref="TriggerMode"/>.
+    /// Null = none - the CLR default, so <c>init</c> is safe under the source-generated serializer,
+    /// and the WhenWritingNull policy keeps legacy cue JSON byte-identical.</summary>
+    public List<CueTriggerBinding>? Triggers { get; init; }
+}
+
+/// <summary>Trigger source of a <see cref="CueTriggerBinding"/>. GUI mirror of the framework's
+/// <c>S.Media.Session.TriggerSourceKind</c> (models stay framework-type-free, the
+/// <see cref="CueFadeCurve"/> precedent).</summary>
+public enum CueTriggerKind
+{
+    Midi,
+    Osc,
+    Hotkey,
+}
+
+/// <summary>MIDI message a <see cref="CueTriggerKind.Midi"/> binding listens for.</summary>
+public enum CueTriggerMidiMessageType
+{
+    NoteOn,
+    ControlChange,
+    ProgramChange,
+}
+
+/// <summary>One external trigger on a cue (Ideas/CuePlayer-Enhancements.md §6): an incoming MIDI
+/// message, an incoming OSC message, or a keyboard hotkey fires the cue through the same
+/// operator-selected GO path the wall-clock scheduler uses. Only the fields of the active
+/// <see cref="Kind"/> are meaningful; the others are retained (the VideoFx retained-while-disabled
+/// pattern) so switching kinds never loses the operator's spec.
+/// <para>GOTCHA: properties use <c>set</c>, not <c>init</c>, deliberately. The source-generated
+/// serializer assigns EVERY init property through one object initializer, so fields absent from
+/// the JSON would load as CLR defaults (Enabled false) instead of these property initializers - a
+/// minimal <c>{}</c> binding must keep Enabled true. See the <see cref="FadeCueNode"/> doc
+/// note.</para></summary>
+public sealed record CueTriggerBinding
+{
+    public CueTriggerKind Kind { get; set; }
+
+    /// <summary>Per-binding enable. Settings are retained while disabled (the VideoFx pattern).</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>MIDI input device name to match (the OS port name); null/empty = any device.</summary>
+    public string? MidiDeviceName { get; set; }
+
+    public CueTriggerMidiMessageType MidiMessageType { get; set; }
+
+    /// <summary>MIDI channel 1..16 to match; null = any channel.</summary>
+    public int? MidiChannel { get; set; }
+
+    /// <summary>Note number (NoteOn), controller number (ControlChange) or program number
+    /// (ProgramChange), 0..127.</summary>
+    public int MidiNumber { get; set; }
+
+    /// <summary>Minimum data value (NoteOn velocity / CC value) for the binding to fire; null =
+    /// any. A velocity-0 NoteOn is always ignored (it is the wire encoding of NoteOff).
+    /// ProgramChange carries no value and ignores this.</summary>
+    public int? MidiValueMin { get; set; }
+
+    /// <summary>OSC address to match, exact (case-sensitive, the OSC spec) - e.g. "/haplay/q5".</summary>
+    public string? OscAddress { get; set; }
+
+    /// <summary>Optional first-argument match: fires only when the incoming message's first
+    /// argument formats to this invariant text (e.g. "1" - the common touch-panel button-down
+    /// payload). Null/empty = any arguments.</summary>
+    public string? OscArgument { get; set; }
+
+    /// <summary>Hotkey gesture (<see cref="CueHotkeyGesture"/> text such as "F5" or "Ctrl+K").</summary>
+    public string? HotkeyGesture { get; set; }
 }
 
 /// <summary>Wall-clock schedule on a cue (Ideas/CuePlayer-Enhancements.md §4). Times are LOCAL
@@ -493,6 +565,12 @@ public sealed record MediaCueNode : CueNode
     public int SourceVideoHeight { get; init; }
 
     public bool Loop { get; init; }
+
+    /// <summary>Loop-with-crossfade window (ms): each loop wrap of a looping cue crossfades the tail of
+    /// one pass into the head of the next (ambient beds) instead of the seamless-seek butt splice.
+    /// 0 = butt splice (older files load unchanged). <c>init</c> is safe: 0 is the CLR default, so the
+    /// source-generated serializer's absent-field behavior matches (see the <see cref="FadeCueNode"/> doc note).</summary>
+    public int LoopCrossfadeMs { get; init; }
 
     public int StartOffsetMs { get; init; }
 
@@ -866,6 +944,7 @@ public enum CueActionKind
 [JsonSerializable(typeof(CueChromaKey))]
 [JsonSerializable(typeof(CueColorAdjust))]
 [JsonSerializable(typeof(CueSchedule))]
+[JsonSerializable(typeof(CueTriggerBinding))]
 [JsonSerializable(typeof(CueAutomationPoint))]
 [JsonSerializable(typeof(PlaylistItem))]
 [JsonSerializable(typeof(FilePlaylistItem))]

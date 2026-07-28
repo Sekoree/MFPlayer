@@ -255,6 +255,23 @@ public class ShowDocumentMapperTests
         var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }).Clips);
         Assert.True(clip.Loop);
         Assert.Equal(ClipEndBehavior.Loop, clip.EndBehavior);
+        Assert.Equal(TimeSpan.Zero, clip.LoopCrossfade); // 0 ms (the default) = the butt-splice loop
+    }
+
+    [Fact]
+    public void LoopCrossfadeMs_MapsToTheBindingWindow()
+    {
+        var cue = new MediaCueNode
+        {
+            Label = "Bed",
+            Source = new FilePlaylistItem("/m/bed.flac"),
+            Loop = true,
+            LoopCrossfadeMs = 1500,
+        };
+
+        var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }).Clips);
+        Assert.True(clip.Loop);
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), clip.LoopCrossfade);
     }
 
     [Fact]

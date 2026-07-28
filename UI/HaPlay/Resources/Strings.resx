@@ -409,6 +409,12 @@
   <data name="LoopLabel" xml:space="preserve">
     <value>Loop</value>
   </data>
+  <data name="LoopCrossfadeMsLabel" xml:space="preserve">
+    <value>Loop crossfade (ms)</value>
+  </data>
+  <data name="LoopCrossfadeMsTooltip" xml:space="preserve">
+    <value>Crossfade each loop wrap: within this window of the end, the next pass fades in over the tail of the current one (both audio and video). 0 = seamless butt-splice loop.</value>
+  </data>
   <data name="EndLabel" xml:space="preserve">
     <value>End</value>
   </data>
@@ -1553,10 +1559,10 @@
     <value>Master level for this cue: multiplies every audio route (−60 = silent, 0 = unity, up to +12). Applies live while the cue is playing.</value>
   </data>
   <data name="TimelineStartMsLabel" xml:space="preserve">
-    <value>Lane start (ms)</value>
+    <value>Timeline start</value>
   </data>
   <data name="TimelineStartMsTooltip" xml:space="preserve">
-    <value>Authored start on the Timeline group's clock. The cue becomes audible at this start plus its pre-wait; the timeline editor drags the same value.</value>
+    <value>Authored start on the Timeline group's clock (hh:mm:ss.fff, mm:ss.fff or plain milliseconds). The cue becomes audible at this start plus its pre-wait; the timeline editor drags the same value.</value>
   </data>
   <data name="FilesMenuLabel" xml:space="preserve">
     <value>Files…</value>
@@ -4056,5 +4062,110 @@
   </data>
   <data name="CueMasterTrimTooltip" xml:space="preserve">
     <value>Live show-level trim over everything playing (cues fired while reduced inherit it). Multiplies fades, envelopes and cue levels - a manual fader, not a stop. Double-click resets to full. Session-only, never saved.</value>
+  </data>
+  <data name="TriggersArmedToggleLabel" xml:space="preserve">
+    <value>Triggers</value>
+  </data>
+  <data name="TriggersArmedToggleTooltip" xml:space="preserve">
+    <value>Arm per-cue MIDI/OSC/hotkey triggers for this session. Trigger bindings fire only while this is ON and cue edit mode is OFF, and only from the SELECTED cue list. MIDI/OSC input rides the Control workspace's devices and listeners - configure and arm them there. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
+  </data>
+  <data name="TriggersArmedOtherListsWarningFormat" xml:space="preserve">
+    <value>Triggers armed for the selected list only - {0} cue(s) with enabled triggers in other lists will NOT fire.</value>
+  </data>
+  <data name="CueTriggerAddButton" xml:space="preserve">
+    <value>Add trigger</value>
+  </data>
+  <data name="CueTriggerRemoveButton" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="CueTriggerEnabledLabel" xml:space="preserve">
+    <value>Enabled</value>
+  </data>
+  <data name="CueTriggerMidiDeviceWatermark" xml:space="preserve">
+    <value>any device</value>
+  </data>
+  <data name="CueTriggerMidiDeviceTooltip" xml:space="preserve">
+    <value>MIDI input port to match (substring, case-insensitive). Empty = any device.</value>
+  </data>
+  <data name="CueTriggerMidiChannelLabel" xml:space="preserve">
+    <value>Ch</value>
+  </data>
+  <data name="CueTriggerMidiChannelTooltip" xml:space="preserve">
+    <value>MIDI channel 1-16; 0 = any channel.</value>
+  </data>
+  <data name="CueTriggerMidiNumberLabel" xml:space="preserve">
+    <value>No.</value>
+  </data>
+  <data name="CueTriggerMidiValueMinLabel" xml:space="preserve">
+    <value>Min</value>
+  </data>
+  <data name="CueTriggerMidiValueMinTooltip" xml:space="preserve">
+    <value>Minimum velocity / CC value to fire; 0 = any. Repeats within 250 ms are ignored either way, so a pot sweep fires once. Program changes ignore this.</value>
+  </data>
+  <data name="CueTriggerLearnButton" xml:space="preserve">
+    <value>Learn</value>
+  </data>
+  <data name="CueTriggerLearnTooltip" xml:space="preserve">
+    <value>Capture the next incoming MIDI message (note / CC / program change) into this binding. Needs the Control workspace armed with the device configured; works regardless of the Triggers arm.</value>
+  </data>
+  <data name="CueTriggerLearnCapturedStatusFormat" xml:space="preserve">
+    <value>MIDI learn captured: {0}</value>
+  </data>
+  <data name="CueTriggerOscAddressLabel" xml:space="preserve">
+    <value>Address</value>
+  </data>
+  <data name="CueTriggerOscArgumentLabel" xml:space="preserve">
+    <value>Arg</value>
+  </data>
+  <data name="CueTriggerOscArgumentWatermark" xml:space="preserve">
+    <value>any</value>
+  </data>
+  <data name="CueTriggerOscArgumentTooltip" xml:space="preserve">
+    <value>Optional first-argument match (e.g. 1 for a touch panel's button-down). Empty = fire on any arguments.</value>
+  </data>
+  <data name="CueTriggerHint" xml:space="preserve">
+    <value>Each binding fires this cue exactly like a GO on it, but only while the transport row's Triggers toggle is armed AND cue edit mode is OFF, and only from the selected list. MIDI/OSC input arrives via the Control workspace's armed devices/listeners. Repeats of one binding within 250 ms are ignored (controller chatter).</value>
+  </data>
+  <data name="CueMidiTriggerFiredStatusFormat" xml:space="preserve">
+    <value>MIDI trigger fire: {0}</value>
+  </data>
+  <data name="CueOscTriggerFiredStatusFormat" xml:space="preserve">
+    <value>OSC trigger fire: {0}</value>
+  </data>
+  <data name="CueTriggerHotkeyConflictWarningFormat" xml:space="preserve">
+    <value>That hotkey is already a transport key ({0}) - pick another gesture.</value>
+  </data>
+  <data name="TimelineDuckMenuItem" xml:space="preserve">
+    <value>Duck under…</value>
+  </data>
+  <data name="DuckDialogTitleFormat" xml:space="preserve">
+    <value>Duck '{0}' under overlapping lanes</value>
+  </data>
+  <data name="DuckDialogLanesLabel" xml:space="preserve">
+    <value>Duck under these lanes</value>
+  </data>
+  <data name="DuckDialogNoOverlapHint" xml:space="preserve">
+    <value>No other media lanes overlap this block on the timeline.</value>
+  </data>
+  <data name="DuckDialogDepthLabel" xml:space="preserve">
+    <value>Duck depth (dB)</value>
+  </data>
+  <data name="DuckDialogDepthTooltip" xml:space="preserve">
+    <value>How far the bed dips below its own envelope level while the selected lanes play. The bed's surrounding level is kept outside the dip.</value>
+  </data>
+  <data name="DuckDialogRampLabel" xml:space="preserve">
+    <value>Ramp (ms)</value>
+  </data>
+  <data name="DuckDialogRampTooltip" xml:space="preserve">
+    <value>Fade time into and out of the dip.</value>
+  </data>
+  <data name="DuckDialogLeadLabel" xml:space="preserve">
+    <value>Lead in/out (ms)</value>
+  </data>
+  <data name="DuckDialogLeadTooltip" xml:space="preserve">
+    <value>Start ducking this long before each overlap begins and recover this long after it ends.</value>
+  </data>
+  <data name="DuckDialogCurveLabel" xml:space="preserve">
+    <value>Curve</value>
   </data>
 </root>

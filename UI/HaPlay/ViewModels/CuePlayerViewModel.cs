@@ -514,42 +514,99 @@ public partial class CuePlayerViewModel : ViewModelBase
                 nameof(Strings.SchedulesArmedOtherListsWarningFormat), outsideCount);
     }
 
+    /// <summary>Master "Triggers armed" gate for per-cue MIDI/OSC/hotkey trigger bindings
+    /// (Ideas/CuePlayer-Enhancements.md §6). Deliberately a SEPARATE toggle from
+    /// <see cref="SchedulesArmed"/> - an operator arming wall-clock schedules must not silently
+    /// open the MIDI/OSC surface (and vice versa) - but with identical semantics: session-scoped,
+    /// never persisted, defaults OFF, and bindings fire only while this is on AND
+    /// <see cref="IsCueEditMode"/> is off. <c>CueTriggerService</c> observes this and the toggle in
+    /// the cue transport row binds it.</summary>
+    [ObservableProperty]
+    private bool _triggersArmed;
+
+    /// <summary>Trigger fires ride the SELECTED list's transport (the schedule scoping); surface an
+    /// enabled binding sitting in another list at arm time so it is never a silent no-show.</summary>
+    partial void OnTriggersArmedChanged(bool value)
+    {
+        if (!value)
+            return;
+        var outsideCount = CueLists
+            .Where(list => !ReferenceEquals(list, SelectedCueList))
+            .SelectMany(list => EnumerateAllCueNodes(list.Nodes))
+            .Count(node => node.HasActiveTriggers);
+        if (outsideCount > 0)
+            StatusMessage = Strings.Format(
+                nameof(Strings.TriggersArmedOtherListsWarningFormat), outsideCount);
+    }
+
+    /// <summary>Hotkey entry for trigger bindings, set by the host (MainViewModel) to
+    /// <c>CueTriggerService.TryHandleHotkey</c>; the cue view's transport-key handler calls it LAST
+    /// (after the transport keys and the legacy per-cue hotkey). Null in tests.</summary>
+    public Func<Avalonia.Input.KeyEventArgs, bool>? TriggerHotkeyProbe { get; set; }
+
+    /// <summary>The binding row currently capturing the next incoming MIDI message ("Learn"),
+    /// or null. Session-transient; <c>CueTriggerService</c> fills the row and clears this. Learn
+    /// works regardless of the armed gate - it is an EDIT-mode affordance (the control workspace's
+    /// I/O must be armed for messages to flow at all).</summary>
+    [ObservableProperty]
+    private CueTriggerBindingViewModel? _midiLearnTarget;
+
+    partial void OnMidiLearnTargetChanged(
+        CueTriggerBindingViewModel? oldValue, CueTriggerBindingViewModel? newValue)
+    {
+        if (oldValue is not null)
+            oldValue.IsMidiLearning = false;
+        if (newValue is not null)
+            newValue.IsMidiLearning = true;
+    }
+
     /// <summary>Host callback - pushes the master-trim scale (0..1) into the playback session
     /// (<c>ShowSession.SetMasterTrimAsync</c>). Wired by <c>CueShowSessionCoordinator</c>; null in
     /// tests, where the slider still tracks its value.</summary>
     public Func<float, Task>? SetMasterTrimCallback { get; set; }
 
+    /// <summary>The fader's bottom of travel: at (or below) this the trim is a hard 0 (silence),
+    /// not 10^(-60/20).</summary>
+    public const double MasterTrimFloorDb = -60.0;
+
     /// <summary>The transport row's "Master" fader (Ideas/CuePlayer-Enhancements.md §6): a live
-    /// session-wide trim over EVERY playing cue (and inherited by cues fired while reduced), linear
-    /// 0..1 with 1 = unity. It multiplies fades/envelopes/cue levels in the session - a manual
-    /// show-level trim, not a stop. Deliberately SESSION-scoped and never persisted (the
+    /// session-wide trim over EVERY playing cue (and inherited by cues fired while reduced), in dB
+    /// (<see cref="MasterTrimFloorDb"/>..0 with 0 = unity; the floor maps to silence). The linear
+    /// factor (<see cref="MasterTrimLinear"/>) multiplies fades/envelopes/cue levels in the session -
+    /// a manual show-level trim, not a stop. Deliberately SESSION-scoped and never persisted (the
     /// <see cref="SchedulesArmed"/> precedent): every app start begins at unity. Double-click on the
     /// slider resets it (<see cref="ResetMasterTrimCommand"/>).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(MasterTrimDisplay))]
-    private double _masterTrim = 1.0;
+    [NotifyPropertyChangedFor(nameof(MasterTrimLinear))]
+    private double _masterTrimDb;
 
-    partial void OnMasterTrimChanged(double value)
+    partial void OnMasterTrimDbChanged(double value)
     {
-        var clamped = Math.Clamp(double.IsNaN(value) ? 1.0 : value, 0.0, 1.0);
+        var clamped = Math.Clamp(double.IsNaN(value) ? 0.0 : value, MasterTrimFloorDb, 0.0);
         if (clamped != value)
         {
-            MasterTrim = clamped; // re-enters this handler with the clamped value
+            MasterTrimDb = clamped; // re-enters this handler with the clamped value
             return;
         }
 
-        _ = SetMasterTrimCallback?.Invoke((float)clamped);
+        _ = SetMasterTrimCallback?.Invoke(MasterTrimLinear);
     }
 
-    /// <summary>dB readout beside the fader ("0.0 dB" at unity, "-inf" at zero).</summary>
+    /// <summary>The fader's dB position as the linear scale the session multiplies by
+    /// (dB -&gt; 10^(dB/20); the <see cref="MasterTrimFloorDb"/> floor -&gt; 0).</summary>
+    public float MasterTrimLinear =>
+        MasterTrimDb <= MasterTrimFloorDb ? 0f : (float)Math.Pow(10.0, MasterTrimDb / 20.0);
+
+    /// <summary>dB readout beside the fader ("0.0 dB" at unity, "-inf" at the floor).</summary>
     public string MasterTrimDisplay =>
-        MasterTrim <= 0
+        MasterTrimDb <= MasterTrimFloorDb
             ? "-inf dB"
-            : (20.0 * Math.Log10(MasterTrim)).ToString("0.0;-0.0", CultureInfo.InvariantCulture) + " dB";
+            : MasterTrimDb.ToString("0.0;-0.0", CultureInfo.InvariantCulture) + " dB";
 
     /// <summary>Snaps the master fader back to unity (the slider's double-click gesture).</summary>
     [RelayCommand]
-    private void ResetMasterTrim() => MasterTrim = 1.0;
+    private void ResetMasterTrim() => MasterTrimDb = 0.0;
 
     public ObservableCollection<CueNodeViewModel> VisibleNodes =>
         SelectedCueList?.Nodes ?? _emptyNodes;
@@ -1651,6 +1708,14 @@ public partial class CuePlayerViewModel : ViewModelBase
         // UpdateSelection. Keep the multi-edit subscriptions aligned in that path too.
         ResubscribeMultiEditSelection();
         _selectedCuePendingForGo = value is not null;
+        // Loaded trigger rows carry no edit-time transport-clash veto (FromModel has no player
+        // context); stamp it when the row surfaces in the drawer. Selecting away cancels MIDI learn.
+        MidiLearnTarget = null;
+        if (value is not null)
+        {
+            foreach (var row in value.Triggers)
+                row.HotkeyConflictProbe ??= ProbeTriggerHotkeyConflict;
+        }
         OnPropertyChanged(nameof(SelectedCueNumber));
         OnPropertyChanged(nameof(SelectedEndTargetText));
         OnPropertyChanged(nameof(SelectedCueLabel));
@@ -3368,6 +3433,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// selected list's transport.</summary>
     internal IEnumerable<CueNodeViewModel> EnumerateScheduledCueNodes() =>
         EnumerateAllCueNodes().Where(node => node.HasSchedule);
+
+    /// <summary>Cues in the SELECTED list carrying MIDI/OSC/hotkey trigger bindings - the
+    /// <c>CueTriggerService</c> match sweep. Same selected-list scoping (and reasoning) as
+    /// <see cref="EnumerateScheduledCueNodes"/>.</summary>
+    internal IEnumerable<CueNodeViewModel> EnumerateTriggeredCueNodes() =>
+        EnumerateAllCueNodes().Where(node => node.HasTriggers);
 
     private static IEnumerable<CueNodeViewModel> EnumerateAllCueNodes(IEnumerable<CueNodeViewModel> nodes)
     {

@@ -166,14 +166,17 @@ public partial class ControlWorkspaceViewModel
         {
             var armedConfig = _config with { IsArmed = true };
             var monitor = new ControlMonitorBuffer(Math.Max(1, _config.Monitor.MaxVisibleMessages));
+            // Tap decorator: the buffer records first (monitor pane), then every input-direction
+            // record fans out through InputObserved (the cue player's per-cue trigger seam).
+            var tappedMonitor = new InputTapMonitorSink(this, monitor);
             var osc = new UdpControlOSCSender(armedConfig);
-            var midi = new ControlSystemMIDIDeviceSessionManager(armedConfig, monitor);
+            var midi = new ControlSystemMIDIDeviceSessionManager(armedConfig, tappedMonitor);
             var session = new ControlSystemRuntimeSession(
                 armedConfig,
                 CreateSourceProvider(),
                 osc,
                 midi,
-                monitor: monitor,
+                monitor: tappedMonitor,
                 midiSessions: midi);
             pendingSession = session;
             pendingOSC = osc;

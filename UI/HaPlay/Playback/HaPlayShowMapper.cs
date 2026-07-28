@@ -192,6 +192,7 @@ public static class HaPlayShowMapper
             FadeOutCurve = MapFadeCurve(media.FadeOutCurve),
             VolumeEnvelope = MapVolumeEnvelope(media.VolumeEnvelope),
             Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
+            LoopCrossfade = TimeSpan.FromMilliseconds(Math.Max(0, media.LoopCrossfadeMs)),
             EndBehavior = MapEndBehavior(media.EndBehavior),
             // A text cue plays a held frame that never signals EOF, so end it at its duration via the time-based
             // monitor (EndAtDuration) rather than by source exhaustion - otherwise a resize/live-edit re-read ends

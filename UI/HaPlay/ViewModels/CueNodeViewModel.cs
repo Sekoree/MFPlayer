@@ -23,6 +23,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
     {
         Kind = kind;
         Children.CollectionChanged += OnChildrenCollectionChanged;
+        Triggers.CollectionChanged += OnTriggersCollectionChanged;
     }
 
     public CueNodeKind Kind { get; }
@@ -82,6 +83,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
         get
         {
             var badge = ScheduleBadgeDisplay;
+            var triggerBadge = TriggerBadgeDisplay;
+            if (triggerBadge.Length > 0)
+                badge = badge.Length == 0 ? triggerBadge : $"{badge} · {triggerBadge}";
             var core = badge.Length == 0
                 ? _targetDisplayBase
                 : _targetDisplayBase.Length == 0 ? badge : $"{_targetDisplayBase} · {badge}";
@@ -963,6 +967,80 @@ public sealed partial class CueNodeViewModel : ObservableObject
         }
     }
 
+    // ----- MIDI/OSC/hotkey trigger bindings (Ideas/CuePlayer-Enhancements.md §6) -------------------
+    // Live on the CueNode base like Schedule - every cue kind can carry them. Matched and fired by
+    // CueTriggerService while the transport row's "Triggers" toggle is armed and edit mode is off.
+
+    /// <summary>Editable trigger-binding rows (the drawer's Triggers section).</summary>
+    public ObservableCollection<CueTriggerBindingViewModel> Triggers { get; } = new();
+
+    private void OnTriggersCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (CueTriggerBindingViewModel row in e.OldItems)
+                row.PropertyChanged -= OnTriggerRowPropertyChanged;
+        }
+        if (e.NewItems is not null)
+        {
+            foreach (CueTriggerBindingViewModel row in e.NewItems)
+                row.PropertyChanged += OnTriggerRowPropertyChanged;
+        }
+        RaiseTriggerDisplayChanged();
+    }
+
+    private void OnTriggerRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(CueTriggerBindingViewModel.Enabled))
+            RaiseTriggerDisplayChanged();
+    }
+
+    private void RaiseTriggerDisplayChanged()
+    {
+        OnPropertyChanged(nameof(HasTriggers));
+        OnPropertyChanged(nameof(HasActiveTriggers));
+        OnPropertyChanged(nameof(HasAnyExternalTrigger));
+        OnPropertyChanged(nameof(TriggerBadgeDisplay));
+        OnPropertyChanged(nameof(TargetDisplay));
+    }
+
+    public bool HasTriggers => Triggers.Count > 0;
+
+    /// <summary>True when at least one binding is enabled - the arm-time other-lists warning and
+    /// the tree badge count use enabled bindings only.</summary>
+    public bool HasActiveTriggers => Triggers.Any(t => t.Enabled);
+
+    /// <summary>Keeps the drawer's Triggers expander open when the cue carries a hotkey or any
+    /// trigger bindings.</summary>
+    public bool HasAnyExternalTrigger => HasHotkey || HasTriggers;
+
+    /// <summary>Compact tree badge next to the schedule clock: "⚡ n" for n enabled bindings
+    /// ("⚡ n (off)" when every binding is disabled but some exist).</summary>
+    public string TriggerBadgeDisplay
+    {
+        get
+        {
+            if (Triggers.Count == 0)
+                return string.Empty;
+            var enabled = Triggers.Count(t => t.Enabled);
+            return enabled > 0 ? $"⚡ {enabled}" : $"⚡ {Triggers.Count} (off)";
+        }
+    }
+
+    /// <summary>Loads persisted trigger bindings into the row VMs (all cue kinds; called by
+    /// <see cref="FromModel"/> after the kind-specific mapping).</summary>
+    internal void ApplyTriggersFromModel(IReadOnlyList<CueTriggerBinding>? triggers)
+    {
+        if (triggers is null || triggers.Count == 0)
+            return;
+        foreach (var binding in triggers)
+            Triggers.Add(CueTriggerBindingViewModel.FromModel(binding));
+    }
+
+    /// <summary>The persisted binding list (null when empty - legacy cue JSON stays byte-identical).</summary>
+    internal List<CueTriggerBinding>? BuildTriggersModel() =>
+        Triggers.Count == 0 ? null : Triggers.Select(t => t.ToModel()).ToList();
+
     public ObservableCollection<CueAudioRouteViewModel> AudioRoutes { get; } = new();
 
     public ObservableCollection<CueVideoPlacementViewModel> VideoPlacements { get; } = new();
@@ -1015,8 +1093,27 @@ public sealed partial class CueNodeViewModel : ObservableObject
         }
     }
 
+    /// <summary>Time-code twin of <see cref="TimelineStartMs"/> for the drawer's "Timeline start"
+    /// field (canvas drag stays the primary editor). Rejected input restores the last valid text.</summary>
+    public string TimelineStartTimeText
+    {
+        get => FormatTimeCodeMs(TimelineStartMs);
+        set
+        {
+            if (TryParseTimeCodeMilliseconds(value, out var ms))
+                TimelineStartMs = ms;
+            else
+                OnPropertyChanged(nameof(TimelineStartTimeText)); // restore the last valid text
+        }
+    }
+
     [ObservableProperty]
     private bool _loop;
+
+    /// <summary>Loop-with-crossfade window (ms); 0 = seamless-seek butt splice. Editable next to Loop
+    /// on the General tab (visible only while Loop is on).</summary>
+    [ObservableProperty]
+    private int _loopCrossfadeMs;
 
     [ObservableProperty]
     private CueEndBehavior _endBehavior = CueEndBehavior.Stop;
@@ -1458,6 +1555,12 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(EndOffsetTimeText));
     }
 
+    partial void OnTimelineStartMsChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(TimelineStartTimeText));
+    }
+
     private static int ToOffsetMilliseconds(TimeSpan? value)
     {
         if (value is null || value.Value <= TimeSpan.Zero)
@@ -1525,6 +1628,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         var vm = FromModelCore(node, resolveLine);
         vm.ApplyScheduleFromModel(node.Schedule);
         vm.HotkeyGesture = string.IsNullOrWhiteSpace(node.HotkeyGesture) ? null : node.HotkeyGesture;
+        vm.ApplyTriggersFromModel(node.Triggers);
         return vm;
     }
 
@@ -1595,6 +1699,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     StartOffsetMs = m.StartOffsetMs,
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
+                    LoopCrossfadeMs = m.LoopCrossfadeMs,
                     EndBehavior = m.EndBehavior,
                     VolumeEnvelope = m.VolumeEnvelope,
                     SourceCapabilitiesKnown = m.HasVideo || m.HasAudio || m.AudioChannels > 0,
@@ -1742,6 +1847,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
                 HotkeyGesture = HotkeyGesture,
+                Triggers = BuildTriggersModel(),
                 FireMode = Enum.TryParse<CueGroupFireMode>(Extra, out var fm) ? fm : CueGroupFireMode.FirstCueOnly,
                 Playlist = BuildPlaylistOptionsModel(),
                 Children = Children.Select(c => c.ToModel()).ToList(),
@@ -1758,6 +1864,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
                 HotkeyGesture = HotkeyGesture,
+                Triggers = BuildTriggersModel(),
                 Source = MediaSourceItem
                            ?? (string.IsNullOrWhiteSpace(SourceOrAction)
                                ? null
@@ -1786,6 +1893,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 StartOffsetMs = Math.Max(0, StartOffsetMs),
                 EndOffsetMs = Math.Max(0, EndOffsetMs),
                 Loop = Loop,
+                LoopCrossfadeMs = Math.Max(0, LoopCrossfadeMs),
                 EndBehavior = EndBehavior,
                 VolumeEnvelope = VolumeEnvelope,
                 AudioRoutes = AudioRoutes.Select(r => r.ToModel()).ToList(),
@@ -1803,6 +1911,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
                 HotkeyGesture = HotkeyGesture,
+                Triggers = BuildTriggersModel(),
                 AddressOrMessage = SourceOrAction,
                 EndpointId = Guid.TryParse(EndpointIdText, out var endpointId) ? endpointId : null,
                 ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OSCOut,
@@ -1819,6 +1928,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
                 HotkeyGesture = HotkeyGesture,
+                Triggers = BuildTriggersModel(),
                 TargetCueIds = [.. JumpTargetIds],
                 RandomTarget = JumpRandom,
                 AvoidImmediateRepeat = JumpAvoidImmediateRepeat,
@@ -1836,6 +1946,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
                 HotkeyGesture = HotkeyGesture,
+                Triggers = BuildTriggersModel(),
                 CompositionId = VisualizerCompositionId,
                 StartVisualizer = !string.Equals(Extra, "Stop", StringComparison.OrdinalIgnoreCase),
                 PresetDirectory = string.IsNullOrWhiteSpace(SourceOrAction) ? null : SourceOrAction,
@@ -1868,6 +1979,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
                 HotkeyGesture = HotkeyGesture,
+                Triggers = BuildTriggersModel(),
                 TargetCueIds = [.. FadeTargetIds],
                 TargetAllPlaying = FadeTargetAllPlaying,
                 TargetLevelDb = FadeTargetLevelDb,
@@ -1888,6 +2000,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
                 HotkeyGesture = HotkeyGesture,
+                Triggers = BuildTriggersModel(),
                 Text = SourceOrAction,
             },
         };

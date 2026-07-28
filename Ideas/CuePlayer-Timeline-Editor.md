@@ -190,5 +190,26 @@ cycles the segment curve. All pure math + hit-testing in `TimelineMath`
 `CueNodeViewModel.VolumeEnvelope` (now change-notifying), so persistence/dirty-hash paths
 need nothing extra. Phase B is complete end-to-end.
 
-**Phase C**: markers + snapping shipped with A; waveforms-in-blocks not started. **D**: not
-started. Known nit: blocks render at `TimelineStartMs`, audible start is `+PreWaitMs`.
+**Phase C complete** (Round 2, later the same day): markers + snapping shipped with A;
+waveforms-in-blocks shipped after — whole-file peaks via `WaveformExtractor` (cached per path,
+progressive partial repaints), sliced to the trimmed window by `TimelineMath.WaveformWindow` and
+drawn as low-opacity centered bars under the fade/envelope overlays in
+`TimelineCanvas.RenderWaveform`. The block-position nit is fixed too: blocks render at the
+AUDIBLE start (`TimelineMath.BlockStartMs` = `TimelineStartMs + PreWaitMs`), with a dimmed
+pre-wait tail drawn ahead of the block. **D**: shipped (see below).
+
+**Phase D complete** (2026-07-28): "Duck under…" authoring helper. In edit mode, right-click a
+probed media block on the timeline → context menu → dialog (`DuckUnderDialog` +
+`DuckUnderDialogViewModel`, `RenameCueDialog` shell precedent) listing the OTHER media lanes
+whose audible block overlaps the bed (multi-select, default all) plus depth dB (−12), ramp ms
+(300), lead in/out ms (0) and curve (EqualPower). Apply writes plain envelope keyframes into the
+bed's `CueNodeViewModel.VolumeEnvelope` - pure editor sugar, zero runtime changes. All math is in
+`TimelineDuckMath` (`TimelineDuckMathTests`): overlaps are computed on the group timeline
+(audible starts), converted to bed CLIP time by subtracting `TimelineMath.BlockStartMs(bed)`
+(envelope times are post-StartOffset, anchored at the block's left edge - the offset itself never
+adds in), padded by lead+ramp, merged (adjacent/near overlaps fuse into one dip, no recover bump),
+then spliced: per dip `[start−lead−ramp, start−lead, end+lead, end+lead+ramp]` with levels
+`[restore, depth, depth, restore]` where restore = the bed's own envelope SAMPLED at the dip
+edges (a −6 dB bed stays −6 and dips relative) and depth = restore + depthDb, clamped to −60..+12.
+Points inside a dip span are replaced, outside preserved; re-apply is idempotent; dips clamp to
+the trimmed clip (a ramp squeezed fully off an edge holds the depth from/to that edge).

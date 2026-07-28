@@ -60,6 +60,37 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     internal Func<Task<string?>> ProfileExportDirectoryPrompt { get; set; } = DefaultProfileExportDirectoryPromptAsync;
 
+    /// <summary>Every incoming MIDI/OSC control record (Direction Input, plus Dropped - "no matching
+    /// device" still means the message physically arrived), observed synchronously as the armed
+    /// session records it to the monitor buffer. Raised on the I/O threads (PortMIDI poll / UDP
+    /// receive) - subscribers must marshal themselves. The cue player's per-cue trigger service
+    /// (<see cref="Services.CueTriggerService"/>) is the consumer; the event only carries data while
+    /// the control system is armed, by construction.</summary>
+    public event Action<ControlMonitorRecord>? InputObserved;
+
+    /// <summary>Monitor-sink decorator installed at arm time: records to the real buffer first
+    /// (the monitor pane must never miss what a subscriber sees), then forwards input-direction
+    /// records to <see cref="InputObserved"/>. A subscriber exception must never poison the
+    /// control I/O threads.</summary>
+    private sealed class InputTapMonitorSink(ControlWorkspaceViewModel owner, IControlMonitorSink inner)
+        : IControlMonitorSink
+    {
+        public void Record(ControlMonitorRecord record)
+        {
+            inner.Record(record);
+            if (record.Direction is not (ControlMonitorDirection.Input or ControlMonitorDirection.Dropped))
+                return;
+            try
+            {
+                owner.InputObserved?.Invoke(record);
+            }
+            catch
+            {
+                // Observation is best-effort; the mapping/monitor path already handled the record.
+            }
+        }
+    }
+
     public ControlWorkspaceViewModel()
     {
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };

@@ -213,6 +213,7 @@ public partial class CuePlayerViewModel
                      or nameof(CueNodeViewModel.StartOffsetMs)
                      or nameof(CueNodeViewModel.EndOffsetMs)
                      or nameof(CueNodeViewModel.Loop)
+                     or nameof(CueNodeViewModel.LoopCrossfadeMs)
                      or nameof(CueNodeViewModel.EndBehavior)
                      or nameof(CueNodeViewModel.EndTargetCueId))
         {
@@ -308,6 +309,7 @@ public partial class CuePlayerViewModel
             case nameof(CueNodeViewModel.EndOffsetMs): target.EndOffsetMs = source.EndOffsetMs; break;
             case nameof(CueNodeViewModel.DurationMs): target.DurationMs = source.DurationMs; break;
             case nameof(CueNodeViewModel.Loop): target.Loop = source.Loop; break;
+            case nameof(CueNodeViewModel.LoopCrossfadeMs): target.LoopCrossfadeMs = source.LoopCrossfadeMs; break;
             case nameof(CueNodeViewModel.EndBehavior): target.EndBehavior = source.EndBehavior; break;
             case nameof(CueNodeViewModel.EndTargetCueId): target.EndTargetCueId = source.EndTargetCueId; break;
             case nameof(CueNodeViewModel.SendToVisualizer): target.SendToVisualizer = source.SendToVisualizer; break;

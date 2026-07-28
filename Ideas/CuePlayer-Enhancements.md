@@ -311,6 +311,19 @@ persisted, surfaced on the Group tab, and implemented (pre-end fire via
 `ShowClipBinding.PreEndNotify` → `ClipApproachingEnd`; GO-on-playing-playlist takes over with the
 same window). Loop-with-crossfade is the one deferred piece (needs a per-binding crossfade field).
 
-**Still open:** MIDI/OSC/hotkey per-cue triggers, panic slider, loop-with-crossfade (ambient
+**Round 4 (2026-07-28, later still):** §6 MIDI/OSC/hotkey per-cue triggers DONE —
+`CueNode.Triggers` (`CueTriggerBinding {Kind Midi/Osc/Hotkey, Enabled, MIDI device/type/channel/
+number/value-min, OSC address + first-arg match, hotkey gesture}`, `set` props per the STJ
+gotcha, null on legacy files), drawer Triggers section (per-kind fields, MIDI Learn, transport-
+hotkey clash veto), "⚡ n" tree badge, and a `CueTriggerService` (`CueSchedulerService` sibling,
+injected clock, 250 ms per-binding retrigger guard, fires via `FireTriggeredCueSafeAsync`).
+Gated by a NEW session-scoped `TriggersArmed` transport toggle (separate from Schedules by
+design) + edit-mode off, selected-list scope with the arm-time other-lists warning. Input seam:
+a monitor-sink tap in `ControlWorkspaceViewModel` arm path (`InputObserved` event, HaPlay-only
+change) — MIDI/OSC triggers therefore flow while the Control workspace is armed with the
+device/listener configured; hotkey bindings ride the cue view's key handler (transport keys and
+the legacy per-cue hotkey win clashes).
+
+**Still open:** panic slider, loop-with-crossfade (ambient
 beds), timeline duck presets (Phase D), `TimelineStartMs` numeric
 drawer field, true cross-list scheduling (needs multi-list sessions).

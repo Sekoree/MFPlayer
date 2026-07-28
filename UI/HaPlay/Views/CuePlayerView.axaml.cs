@@ -151,6 +151,13 @@ public partial class CuePlayerView : UserControl
         {
             e.Handled = true;
         }
+        // Hotkey TRIGGER BINDINGS (drawer Triggers section, §6) run after everything, incl. the
+        // legacy per-cue hotkey: they additionally require the transport row's Triggers toggle to
+        // be armed (CueTriggerService applies that gate + the edit-mode gate itself).
+        else if (vm.TriggerHotkeyProbe?.Invoke(e) == true)
+        {
+            e.Handled = true;
+        }
     }
 
     private void OnMasterTrimSliderDoubleTapped(object? sender, TappedEventArgs e)

@@ -39,6 +39,51 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
     public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new BlockingOpenProvider()));
 }
 
+/// <summary>A provider that opens any <c>tone://</c> URI as a constant-amplitude source
+/// (<see cref="Amplitude"/> in every sample) - lets a headless test measure the route gain actually
+/// written for a clip by peak-reading its output's submits (the silent fake would hide any gain
+/// error, e.g. a level factor applied twice).</summary>
+internal sealed class ToneAudioDecoderProvider(int chunks = 100_000, int sampleRate = 48_000) : IMediaDecoderProvider
+{
+    public const float Amplitude = 0.8f;
+
+    public string Name => "tone";
+
+    public double Probe(string uri, MediaKind kind) =>
+        kind == MediaKind.Audio && uri.StartsWith("tone://", StringComparison.Ordinal) ? 1.0 : 0.0;
+
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) =>
+        throw new NotSupportedException("tone provider is audio-only");
+
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
+        new ConstantToneSource(chunks, sampleRate);
+
+    public static IMediaRegistry Registry(int chunks = 100_000, int sampleRate = 48_000) =>
+        MediaRegistry.Build(b => b.AddDecoder(new ToneAudioDecoderProvider(chunks, sampleRate)));
+
+    private sealed class ConstantToneSource(int chunks, int sampleRate) : IAudioSource, ISeekableSource
+    {
+        private int _remaining = chunks;
+        private TimeSpan _position;
+
+        public AudioFormat Format { get; } = new(sampleRate, 2);
+
+        public bool IsExhausted => Volatile.Read(ref _remaining) <= 0;
+
+        public int ReadInto(Span<float> destination)
+        {
+            if (Interlocked.Decrement(ref _remaining) < 0)
+                return 0;
+            destination.Fill(Amplitude);
+            return destination.Length - (destination.Length % Format.Channels);
+        }
+
+        public TimeSpan Duration => TimeSpan.FromSeconds(10);
+        public TimeSpan Position => _position;
+        public void Seek(TimeSpan position) => _position = position;
+    }
+}
+
 /// <summary>A provider whose open FAILS immediately - the crossfade tests prove an incoming clip's open
 /// failure leaves the current Active untouched (design doc: open failure = no fade). Probes only the
 /// <c>fail://</c> scheme, so it composes with the fake audio provider in one registry (registered FIRST,

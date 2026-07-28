@@ -583,8 +583,20 @@ public sealed class TimelineCanvas : Control
 
         if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
         {
+            // Envelope-line right-click (curve cycling) wins; otherwise a right-click on a media
+            // block's body asks the window for the block context menu ("Duck under…").
             if (ShowEnvelopes && TryCycleEnvelopeCurve(lanes, pxPerMs, p))
+            {
                 e.Handled = true;
+                return;
+            }
+
+            var contextNode = HitTestMediaBlockBody(lanes, pxPerMs, p);
+            if (contextNode is not null)
+            {
+                BlockContextRequested?.Invoke(this, new TimelineBlockContextEventArgs(contextNode, p));
+                e.Handled = true;
+            }
             return;
         }
 
@@ -651,6 +663,29 @@ public sealed class TimelineCanvas : Control
         }
 
         ClearEnvelopeSelection(); // clicked empty canvas
+    }
+
+    /// <summary>Raised (edit mode only) when a right-click lands on a trimmable media block's body
+    /// without hitting the envelope line - the window shows the block's context menu (Phase D
+    /// "Duck under…"). The position is in canvas coordinates.</summary>
+    public event EventHandler<TimelineBlockContextEventArgs>? BlockContextRequested;
+
+    /// <summary>The topmost trimmable media block whose body contains <paramref name="p"/> - the
+    /// duck helper needs a probed trimmed span to clamp the dip against, same gate as the envelope
+    /// and trim handles.</summary>
+    private CueNodeViewModel? HitTestMediaBlockBody(List<CueNodeViewModel> lanes, double pxPerMs, Point p)
+    {
+        for (var i = 0; i < lanes.Count; i++)
+        {
+            var node = lanes[i];
+            if (TimelineMath.IsMarker(node) || !TimelineMath.IsTrimmable(node))
+                continue;
+            var block = TimelineMath.BlockRect(
+                i, TimelineMath.BlockStartMs(node), TimelineMath.BlockDurationMs(node), pxPerMs);
+            if (block.Contains(p))
+                return node;
+        }
+        return null;
     }
 
     /// <summary>Envelope editing needs a media block whose trimmed span is known - same probe gate as
@@ -923,4 +958,14 @@ public sealed class TimelineCanvas : Control
         }
         return edges;
     }
+}
+
+/// <summary>A right-clicked media block on the timeline canvas (see
+/// <see cref="TimelineCanvas.BlockContextRequested"/>); <see cref="Position"/> is in canvas
+/// coordinates.</summary>
+public sealed class TimelineBlockContextEventArgs(CueNodeViewModel node, Point position) : EventArgs
+{
+    public CueNodeViewModel Node { get; } = node;
+
+    public Point Position { get; } = position;
 }
