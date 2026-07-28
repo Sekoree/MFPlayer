@@ -45,6 +45,8 @@ public sealed partial class CueListEditorViewModel : ObservableObject
         Name = Name,
         DefaultTriggerMode = DefaultTriggerMode,
         AutoRenumberOnInsert = AutoRenumberOnInsert,
+        StopFadeMs = StopFadeMs,
+        StopFadeCurve = StopFadeCurve,
         Compositions = Compositions.Select(c => c.ToModel()).ToList(),
         VideoOutputs = VideoOutputs.Select(o => o.ToModel()).ToList(),
         Nodes = Nodes.Select(n => n.ToModel()).ToList(),
@@ -56,6 +58,13 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     [ObservableProperty]
     private bool _autoRenumberOnInsert;
 
+    /// <summary>Null = fall back to the app-settings stop fade (<c>AppSettings.StopFadeMs</c>).</summary>
+    [ObservableProperty]
+    private int? _stopFadeMs;
+
+    [ObservableProperty]
+    private CueFadeCurve _stopFadeCurve = CueFadeCurve.Linear;
+
     public static CueListEditorViewModel FromModel(
         CueList list,
         string? path = null,
@@ -66,6 +75,8 @@ public sealed partial class CueListEditorViewModel : ObservableObject
             Path = path,
             DefaultTriggerMode = list.DefaultTriggerMode,
             AutoRenumberOnInsert = list.AutoRenumberOnInsert,
+            StopFadeMs = list.StopFadeMs,
+            StopFadeCurve = list.StopFadeCurve,
         };
         foreach (var c in list.Compositions)
             vm.Compositions.Add(CueCompositionViewModel.FromModel(c));

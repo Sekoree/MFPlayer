@@ -17,7 +17,13 @@ public sealed class EnumDisplayConverter : IValueConverter
 
             CueGroupFireMode.FirstCueOnly => "First cue only",
             CueGroupFireMode.FireAllSimultaneously => "Fire all together",
-            CueGroupFireMode.ArmedList => "Armed list",
+            CueGroupFireMode.ArmedList => "Armed list (GO advances)",
+            CueGroupFireMode.Timeline => "Timeline",
+            CueGroupFireMode.Playlist => "Playlist",
+
+            CuePlaylistEndBehavior.Stop => "Stop",
+            CuePlaylistEndBehavior.AdvancePastGroup => "Continue past group",
+            CuePlaylistEndBehavior.Hold => "Hold",
 
             CueEndBehavior.Stop => "Stop",
             CueEndBehavior.FreezeLastFrame => "Freeze last frame",
@@ -40,6 +46,10 @@ public sealed class EnumDisplayConverter : IValueConverter
 
             CueActionKind.OSCOut => "OSC output",
             CueActionKind.MIDIOut => "MIDI output",
+
+            CueScheduleKind.TimeOfDay => "Daily at time",
+            CueScheduleKind.DateTime => "Once (date + time)",
+            CueScheduleKind.Recurring => "Weekly (days + time)",
 
             CueMIDICommandType.NRPN => "NRPN",
             CueMIDICommandType.RPN => "RPN",

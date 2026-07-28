@@ -100,6 +100,20 @@ public partial class CuePlayerViewModel
         return [.. nodes.OrderBy(n => order.GetValueOrDefault(n, int.MaxValue))];
     }
 
+    /// <summary>Entry point for wall-clock schedule fires (<c>CueSchedulerService</c>). Exactly the
+    /// operator-selected fire semantics of <see cref="FireSelectedCueNow"/>: the immediate Jump chain
+    /// resets like any operator GO, a pending row-click override is consumed, and the cue then rides
+    /// <see cref="FireOperatorSelectedCueAsync"/> so pre-waits, group modes, jump resolution and
+    /// Now-Playing behave identically to a manual fire. Callers must be on the UI thread (the
+    /// scheduler's DispatcherTimer already is).</summary>
+    public Task FireScheduledCueAsync(CueNodeViewModel cue)
+    {
+        ArgumentNullException.ThrowIfNull(cue);
+        _selectedCuePendingForGo = false;
+        _immediateJumpChain.Clear();
+        return FireOperatorSelectedCueAsync(cue);
+    }
+
     private Task FireOperatorSelectedCueAsync(CueNodeViewModel cue)
     {
         if (cue.Kind == CueNodeKind.Visualizer)
@@ -203,7 +217,22 @@ public partial class CuePlayerViewModel
             return;
 
         var resolvedFire = ResolveFireableCue(fire) ?? fire;
-        var nextStandby = NextCueAfter(resolvedFire, ordered);
+        CueNodeViewModel? nextStandby;
+        if (IsPlaylistGroup(fire))
+        {
+            // Firing a playlist/armed-list group consumes its armed pick. Standby stays ON the
+            // group while the run continues (GO = skip / armed-advance, and pre-roll then warms the
+            // NEXT pick), and moves past the group once the final pick has fired.
+            ConsumePlaylistPick(fire);
+            nextStandby = HasFinishedPlaylistRun(fire.Id)
+                ? NextCueAfterGroup(fire, ordered)
+                : fire;
+        }
+        else
+        {
+            nextStandby = NextCueAfter(resolvedFire, ordered);
+        }
+
         CurrentCueNode = plan[0].Cue;
         IsTransportPaused = false;
         _suppressStandbyPreRollRefresh = true;
@@ -255,11 +284,12 @@ public partial class CuePlayerViewModel
     private void Stop()
     {
         CancelTransportRun();
+        ClearPlaylistRuns(); // Stop ends any playlist/armed-list run - a fresh GO starts over
         if (StopPlaybackCallback is { } stopPlayback)
         {
             // The host ShowSession owns the synchronized clip + persistent-surface fade. Retire the UI rows
             // immediately, but do not issue an individual visualizer Stop that would detach the surface early.
-            _ = stopPlayback();
+            _ = stopPlayback(ResolveStopFade());
             OnVisualizerLayersCleared();
         }
         else
@@ -273,13 +303,32 @@ public partial class CuePlayerViewModel
         StatusMessage = Strings.CueStoppedStatus;
     }
 
+    /// <summary>The Stop button's effective fade: cue-list <see cref="CueListEditorViewModel.StopFadeMs"/>,
+    /// else the app-settings default (750 ms out of the box). 0 = hard cut. Settings are re-read per press -
+    /// the review-H5 "always load fresh" contract - so an edit in another window applies immediately.</summary>
+    private CueStopFadeRequest ResolveStopFade()
+    {
+        var ms = SelectedCueList?.StopFadeMs ?? Models.AppSettings.Load().StopFadeMs;
+        return new CueStopFadeRequest(
+            Fade: ms > 0,
+            FadeDuration: TimeSpan.FromMilliseconds(Math.Max(0, ms)),
+            Curve: HaPlayShowMapper.MapFadeCurve(SelectedCueList?.StopFadeCurve ?? CueFadeCurve.Linear));
+    }
+
     [RelayCommand]
     private void Panic()
     {
         CancelTransportRun();
+        ClearPlaylistRuns();
         if (StopPlaybackCallback is { } stopPlayback)
         {
-            _ = stopPlayback();
+            // Panic's own app-level fade; the 0 ms default hard-cuts (panic means NOW), skipping even
+            // per-clip configured fade-outs.
+            var panicMs = Models.AppSettings.Load().PanicFadeMs;
+            _ = stopPlayback(new CueStopFadeRequest(
+                Fade: panicMs > 0,
+                FadeDuration: TimeSpan.FromMilliseconds(Math.Max(0, panicMs)),
+                Curve: S.Media.Session.FadeCurve.Linear));
             OnVisualizerLayersCleared();
         }
         else

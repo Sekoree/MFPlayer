@@ -22,6 +22,15 @@
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Opacity" Value="1" />
     </Style>
+    <!-- "Schedules armed" transport toggle: distinctly amber while armed (the standby-armed chip
+         palette) so a booth glance shows wall-clock triggers are live. -->
+    <Style Selector="ToggleButton.schedarm:checked /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#F9A825" />
+      <Setter Property="TextElement.Foreground" Value="#1B1B1B" />
+    </Style>
+    <Style Selector="ToggleButton.schedarm:checked">
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
   </UserControl.Styles>
   <DockPanel LastChildFill="True">
     <!-- Status messages surface via the MainView toast overlay (ToastCenter) - the old inline
@@ -126,6 +135,8 @@
                       ToolTip.Tip="Starts (or stops) the projectM visualizer as a placeable layer on a composition - position/size and audio-feed routing in the drawer. It keeps running across later cues until a Stop visualizer cue." />
             <MenuItem Header="{x:Static res:Strings.AddJumpCueButton}" Command="{Binding AddJumpCueCommand}"
                       ToolTip.Tip="Adds a control-flow cue that jumps the playhead to its target cue(s) - select the loop-back target first. Random mode picks one of several targets." />
+            <MenuItem Header="{x:Static res:Strings.AddFadeCueButton}" Command="{Binding AddFadeCueCommand}"
+                      ToolTip.Tip="Adds a fade cue that ramps its target cues (or everything playing) to a level over a duration - select the cue to fade first. At silence it can stop the faded cues." />
           </MenuFlyout>
         </Button.Flyout>
       </Button>
@@ -157,7 +168,7 @@
     <!-- Transport. GO is the show's primary action - keep it visually dominant; the tooltips double
          as the keyboard-shortcut reference for the code-behind transport bindings. Panic is the
          panic-path exit and wears Danger red, same as the media deck's Stop. -->
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
       <Button Grid.Column="0" Content="{x:Static res:Strings.StandbySelectedButton}"
               Command="{Binding StandbySelectedCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportStandbyTooltip}" />
@@ -178,9 +189,20 @@
               Classes="Touch Danger"
               Command="{Binding PanicCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportPanicTooltip}" />
+      <!-- Timed-trigger master gate (§4). Session-scoped: always starts OFF; scheduled cues only
+           fire while this is armed AND edit mode is off. -->
+      <ToggleButton Grid.Column="6" Classes="schedarm"
+                    IsChecked="{Binding SchedulesArmed, Mode=TwoWay}"
+                    ToolTip.Tip="{x:Static res:Strings.SchedulesArmedToggleTooltip}"
+                    AutomationProperties.Name="{x:Static res:Strings.SchedulesArmedToggleLabel}">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="&#x23F0;" FontSize="12" VerticalAlignment="Center" />
+          <TextBlock Text="{x:Static res:Strings.SchedulesArmedToggleLabel}" VerticalAlignment="Center" />
+        </StackPanel>
+      </ToggleButton>
       <!-- State chip, same palette as the deck's state pill: green running, amber paused or
            standby-armed, gray idle - readable across a booth without parsing the text. -->
-      <Border Grid.Column="6" Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
+      <Border Grid.Column="7" Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
               Background="{Binding TransportStateColor}">
         <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TransportState}"
                    TextTrimming="CharacterEllipsis" />
@@ -216,7 +238,7 @@
                      between rows. A row collapses to zero height when its cue-kind hides all
                      its children. -->
                 <Grid ColumnDefinitions="Auto,170,Auto,170"
-                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                       ColumnSpacing="8" RowSpacing="8">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.CueTreeNumberColumnHeader}" VerticalAlignment="Center" />
                   <TextBox Grid.Row="0" Grid.Column="1"
@@ -256,40 +278,65 @@
                                  IsVisible="{Binding HasSelectedMediaCue}"
                                  Value="{Binding SelectedMediaCue.FadeOutMs, Mode=TwoWay}" />
 
-                  <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static res:Strings.StartMsLabel}" VerticalAlignment="Center"
+                  <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static res:Strings.FadeInCurveLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedMediaCue}" />
-                  <TextBox Grid.Row="3" Grid.Column="1"
+                  <ComboBox Grid.Row="3" Grid.Column="1"
+                            ItemsSource="{Binding CueFadeCurves}"
+                            IsVisible="{Binding HasSelectedMediaCue}"
+                            SelectedItem="{Binding SelectedMediaCue.FadeInCurve, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <TextBlock Grid.Row="3" Grid.Column="2" Text="{x:Static res:Strings.FadeOutCurveLabel}" VerticalAlignment="Center"
+                             IsVisible="{Binding HasSelectedMediaCue}" />
+                  <ComboBox Grid.Row="3" Grid.Column="3"
+                            ItemsSource="{Binding CueFadeCurves}"
+                            IsVisible="{Binding HasSelectedMediaCue}"
+                            SelectedItem="{Binding SelectedMediaCue.FadeOutCurve, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+
+                  <TextBlock Grid.Row="4" Grid.Column="0" Text="{x:Static res:Strings.StartMsLabel}" VerticalAlignment="Center"
+                             IsVisible="{Binding HasSelectedMediaCue}" />
+                  <TextBox Grid.Row="4" Grid.Column="1"
                            Text="{Binding SelectedMediaCue.StartOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                            PlaceholderText="00:00:00.000"
                            TextAlignment="Right"
                            IsVisible="{Binding HasSelectedMediaCue}" />
-                  <TextBlock Grid.Row="3" Grid.Column="2" Text="{x:Static res:Strings.EndTrimMsLabel}" VerticalAlignment="Center"
+                  <TextBlock Grid.Row="4" Grid.Column="2" Text="{x:Static res:Strings.EndTrimMsLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedMediaCue}" />
-                  <TextBox Grid.Row="3" Grid.Column="3"
+                  <TextBox Grid.Row="4" Grid.Column="3"
                            Text="{Binding SelectedMediaCue.EndOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                            PlaceholderText="00:00:00.000"
                            TextAlignment="Right"
                            IsVisible="{Binding HasSelectedMediaCue}" />
 
-                  <TextBlock Grid.Row="4" Grid.Column="0" Text="{x:Static res:Strings.HoldDurationLabel}" VerticalAlignment="Center"
+                  <TextBlock Grid.Row="5" Grid.Column="0" Text="{x:Static res:Strings.HoldDurationLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedStaticCue}" />
-                  <TextBox Grid.Row="4" Grid.Column="1"
+                  <TextBox Grid.Row="5" Grid.Column="1"
                            Text="{Binding SelectedStaticCue.DurationTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                            PlaceholderText="00:00:05.000"
                            TextAlignment="Right"
                            IsVisible="{Binding HasSelectedStaticCue}" />
-                  <TextBlock Grid.Row="4" Grid.Column="2" Grid.ColumnSpan="2"
+                  <TextBlock Grid.Row="5" Grid.Column="2" Grid.ColumnSpan="2"
                              VerticalAlignment="Center" Opacity="0.55" FontSize="11"
                              IsVisible="{Binding HasSelectedStaticCue}"
                              Text="{x:Static res:Strings.DurationFormatHint}" />
 
-                  <CheckBox Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2"
+                  <CheckBox Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2"
                             Content="{x:Static res:Strings.LoopLabel}" VerticalAlignment="Center"
                             IsVisible="{Binding HasSelectedMediaCue}"
                             IsChecked="{Binding SelectedMediaCue.Loop, Mode=TwoWay}" />
-                  <TextBlock Grid.Row="5" Grid.Column="2" Text="{x:Static res:Strings.EndLabel}" VerticalAlignment="Center"
+                  <TextBlock Grid.Row="6" Grid.Column="2" Text="{x:Static res:Strings.EndLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedMediaCue}" />
-                  <ComboBox Grid.Row="5" Grid.Column="3"
+                  <ComboBox Grid.Row="6" Grid.Column="3"
                             IsVisible="{Binding HasSelectedMediaCue}"
                             ItemsSource="{Binding CueEndBehaviors}"
                             SelectedItem="{Binding SelectedMediaCue.EndBehavior, Mode=TwoWay}">
@@ -333,7 +380,101 @@
                             IsChecked="{Binding SelectedJumpFiresTarget, Mode=TwoWay}" />
                 </StackPanel>
 
-                                <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
+                <!-- Fade-cue editor: targets entered as cue NUMBERS (stored as stable IDs, the Jump
+                     pattern), level in dB (-60 or lower = silence), duration/curve, and the
+                     stop-at-silence / video-opacity toggles. -->
+                <StackPanel Spacing="6" IsVisible="{Binding IsFadeCueSelected}">
+                  <TextBlock Text="{x:Static res:Strings.CueFadeTargetsLabel}" FontWeight="SemiBold" />
+                  <TextBox Text="{Binding SelectedFadeTargetsText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="e.g. 3, 7, 12"
+                           IsEnabled="{Binding !SelectedFadeCue.FadeTargetAllPlaying}" />
+                  <CheckBox Content="{x:Static res:Strings.CueFadeAllPlayingLabel}"
+                            IsChecked="{Binding SelectedFadeCue.FadeTargetAllPlaying, Mode=TwoWay}" />
+                  <Grid ColumnDefinitions="Auto,170,Auto,170" RowDefinitions="Auto,Auto"
+                        ColumnSpacing="8" RowSpacing="8">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.CueFadeLevelDbLabel}" VerticalAlignment="Center"
+                               ToolTip.Tip="{x:Static res:Strings.CueFadeLevelHint}" />
+                    <NumericUpDown FormatString="0.#" Grid.Row="0" Grid.Column="1"
+                                   Minimum="-90" Maximum="0" Increment="1"
+                                   ToolTip.Tip="{x:Static res:Strings.CueFadeLevelHint}"
+                                   Value="{Binding SelectedFadeCue.FadeTargetLevelDb, Mode=TwoWay}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.CueFadeDurationMsLabel}" VerticalAlignment="Center" />
+                    <NumericUpDown FormatString="0" Grid.Row="0" Grid.Column="3"
+                                   Minimum="0" Maximum="600000" Increment="100"
+                                   Value="{Binding SelectedFadeCue.DurationMs, Mode=TwoWay}" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.CueFadeCurveLabel}" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="1" Grid.Column="1"
+                              ItemsSource="{Binding CueFadeCurves}"
+                              SelectedItem="{Binding SelectedFadeCue.FadeOutCurve, Mode=TwoWay}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                          <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </Grid>
+                  <CheckBox Content="{x:Static res:Strings.CueFadeStopWhenSilentLabel}"
+                            IsChecked="{Binding SelectedFadeCue.FadeStopWhenSilent, Mode=TwoWay}" />
+                  <CheckBox Content="{x:Static res:Strings.CueFadeAlsoVideoLabel}"
+                            IsChecked="{Binding SelectedFadeCue.FadeAlsoFadeVideo, Mode=TwoWay}" />
+                </StackPanel>
+
+                <!-- Wall-clock schedule (§4). Lives on the CueNode base like ColorTag, so every cue
+                     kind can carry one. Time/date fields parse on LostFocus like the trim fields;
+                     schedules only FIRE while the transport row's Schedules toggle is armed and
+                     edit mode is off. -->
+                <Expander Classes="dense" Margin="0,4,0,0"
+                          Header="{x:Static res:Strings.CueScheduleSectionHeader}"
+                          IsExpanded="{Binding SelectedCueNode.ScheduleEnabled, Mode=OneWay}">
+                  <StackPanel Spacing="6" Margin="6,4,6,4">
+                    <CheckBox Content="{x:Static res:Strings.CueScheduleEnableLabel}"
+                              IsChecked="{Binding SelectedCueNode.ScheduleEnabled, Mode=TwoWay}" />
+                    <Grid ColumnDefinitions="Auto,170,Auto,170" RowDefinitions="Auto,Auto"
+                          ColumnSpacing="8" RowSpacing="8">
+                      <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.CueScheduleKindLabel}" VerticalAlignment="Center" />
+                      <ComboBox Grid.Row="0" Grid.Column="1"
+                                ItemsSource="{Binding CueScheduleKinds}"
+                                SelectedItem="{Binding SelectedCueNode.ScheduleKind, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate>
+                            <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                      <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.CueScheduleTimeLabel}" VerticalAlignment="Center" />
+                      <TextBox Grid.Row="0" Grid.Column="3"
+                               Text="{Binding SelectedCueNode.ScheduleTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                               PlaceholderText="15:00"
+                               TextAlignment="Right" />
+                      <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.CueScheduleDateLabel}" VerticalAlignment="Center"
+                                 IsVisible="{Binding SelectedCueNode.IsScheduleOneShot}" />
+                      <TextBox Grid.Row="1" Grid.Column="1"
+                               Text="{Binding SelectedCueNode.ScheduleDateText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                               PlaceholderText="2026-12-31"
+                               TextAlignment="Right"
+                               IsVisible="{Binding SelectedCueNode.IsScheduleOneShot}" />
+                      <TextBlock Grid.Row="1" Grid.Column="2" Text="{x:Static res:Strings.CueScheduleGraceLabel}" VerticalAlignment="Center" />
+                      <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="3"
+                                     Minimum="0" Maximum="600000" Increment="500"
+                                     Value="{Binding SelectedCueNode.ScheduleGraceMs, Mode=TwoWay}" />
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding SelectedCueNode.IsScheduleRecurring}">
+                      <TextBlock Text="{x:Static res:Strings.CueScheduleDaysLabel}" VerticalAlignment="Center" Margin="0,0,4,0" />
+                      <ToggleButton Content="{x:Static res:Strings.CueScheduleDayMon}" IsChecked="{Binding SelectedCueNode.ScheduleOnMonday, Mode=TwoWay}" />
+                      <ToggleButton Content="{x:Static res:Strings.CueScheduleDayTue}" IsChecked="{Binding SelectedCueNode.ScheduleOnTuesday, Mode=TwoWay}" />
+                      <ToggleButton Content="{x:Static res:Strings.CueScheduleDayWed}" IsChecked="{Binding SelectedCueNode.ScheduleOnWednesday, Mode=TwoWay}" />
+                      <ToggleButton Content="{x:Static res:Strings.CueScheduleDayThu}" IsChecked="{Binding SelectedCueNode.ScheduleOnThursday, Mode=TwoWay}" />
+                      <ToggleButton Content="{x:Static res:Strings.CueScheduleDayFri}" IsChecked="{Binding SelectedCueNode.ScheduleOnFriday, Mode=TwoWay}" />
+                      <ToggleButton Content="{x:Static res:Strings.CueScheduleDaySat}" IsChecked="{Binding SelectedCueNode.ScheduleOnSaturday, Mode=TwoWay}" />
+                      <ToggleButton Content="{x:Static res:Strings.CueScheduleDaySun}" IsChecked="{Binding SelectedCueNode.ScheduleOnSunday, Mode=TwoWay}" />
+                    </StackPanel>
+                    <TextBlock Opacity="0.55" FontSize="11" Text="{x:Static res:Strings.CueScheduleFormatHint}" />
+                    <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueScheduleHint}" />
+                  </StackPanel>
+                </Expander>
+
+                <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
                 <TextBox AcceptsReturn="True"
                          MinHeight="60"
                          TextWrapping="Wrap"
@@ -1029,6 +1170,46 @@
                   </ComboBox.ItemTemplate>
                 </ComboBox>
               </Grid>
+              <Button Content="{x:Static res:Strings.GroupTimelineButton}"
+                      ToolTip.Tip="{x:Static res:Strings.GroupTimelineButtonTooltip}"
+                      HorizontalAlignment="Left"
+                      IsVisible="{Binding SelectedGroupCue.IsTimelineFireMode, FallbackValue=False}"
+                      Click="OnOpenTimelineEditorClick" />
+              <!-- Playlist options (Playlist auto-advances; Armed list is the same runtime with
+                   GO-only advance, so both share this panel). -->
+              <StackPanel Spacing="8"
+                          IsVisible="{Binding SelectedGroupCue.IsPlaylistFireMode, FallbackValue=False}">
+                <CheckBox Content="{x:Static res:Strings.PlaylistShuffleLabel}"
+                          IsChecked="{Binding SelectedGroupCue.PlaylistShuffle, Mode=TwoWay}" />
+                <CheckBox Content="{x:Static res:Strings.PlaylistAvoidImmediateRepeatLabel}"
+                          IsChecked="{Binding SelectedGroupCue.PlaylistAvoidImmediateRepeat, Mode=TwoWay}" />
+                <CheckBox Content="{x:Static res:Strings.PlaylistReshuffleEachPassLabel}"
+                          IsChecked="{Binding SelectedGroupCue.PlaylistReshuffleEachPass, Mode=TwoWay}"
+                          IsEnabled="{Binding SelectedGroupCue.PlaylistShuffle, FallbackValue=False}" />
+                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                  <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"
+                             Text="{x:Static res:Strings.PlaylistLoopCountLabel}" />
+                  <NumericUpDown FormatString="0" Grid.Row="0" Grid.Column="1"
+                                 Minimum="0" Maximum="9999"
+                                 Value="{Binding SelectedGroupCue.PlaylistLoopCount, Mode=TwoWay}" />
+                  <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center"
+                             Text="{x:Static res:Strings.PlaylistPlayCountLabel}" />
+                  <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="1"
+                                 Minimum="1" Maximum="9999"
+                                 Value="{Binding SelectedGroupCue.PlaylistPlayCountValue, Mode=TwoWay}" />
+                  <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"
+                             Text="{x:Static res:Strings.PlaylistEndBehaviorLabel}" />
+                  <ComboBox Grid.Row="2" Grid.Column="1"
+                            ItemsSource="{Binding PlaylistEndBehaviors}"
+                            SelectedItem="{Binding SelectedGroupCue.PlaylistEndBehavior, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </Grid>
+              </StackPanel>
             </StackPanel>
           </TabItem>
         </TabControl>
@@ -1159,6 +1340,10 @@
                                      TextTrimming="CharacterEllipsis" />
                           <TextBlock Text="{Binding Children.Count, StringFormat='({0})'}" Opacity="0.6" FontSize="11"
                                      VerticalAlignment="Center" />
+                          <!-- Playlist run status ("item 3/12 · pass 1/2") - only while a run is live. -->
+                          <TextBlock Text="{Binding PlaylistStatus}" Opacity="0.6" FontSize="11"
+                                     VerticalAlignment="Center"
+                                     IsVisible="{Binding PlaylistStatus, Converter={x:Static ObjectConverters.IsNotNull}}" />
                         </StackPanel>
                         <Button Grid.Column="2" Padding="6,0" MinWidth="22"
                                 Command="{Binding CancelAllCommand}"

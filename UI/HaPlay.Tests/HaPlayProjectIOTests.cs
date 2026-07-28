@@ -29,6 +29,24 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public void RoundTrip_CuePreviewAudioDeviceName_PreservesChoiceAndNull()
+    {
+        // Device-dependence fix #1: an explicit preview-device pick round-trips ("" = explicit
+        // "Default device"); absent/null keeps the automatic line-derived preselect live on load.
+        var picked = ProjectIO.Deserialize(ProjectIO.Serialize(
+            new HaPlayProject { CuePreviewAudioDeviceName = "USB Interface" }));
+        Assert.Equal("USB Interface", picked.CuePreviewAudioDeviceName);
+        Assert.Equal(3, picked.SchemaVersion); // additive field - no schema bump
+
+        var explicitDefault = ProjectIO.Deserialize(ProjectIO.Serialize(
+            new HaPlayProject { CuePreviewAudioDeviceName = "" }));
+        Assert.Equal("", explicitDefault.CuePreviewAudioDeviceName);
+
+        var legacy = ProjectIO.Deserialize("""{"schemaVersion":3}""");
+        Assert.Null(legacy.CuePreviewAudioDeviceName);
+    }
+
+    [Fact]
     public void Deserialize_LegacyFileWithoutAutoSaveField_DefaultsToFalse()
     {
         // A pre-feature project file (schema 3, no autoSaveEnabled property) must still load.
@@ -274,6 +292,16 @@ public sealed class HaPlayProjectIOTests
                     AddressOrMessage = "/lighting/go",
                     Arguments = { "12" },
                 },
+                new FadeCueNode
+                {
+                    Number = "3",
+                    Label = "Fade walk-in",
+                    TargetLevelDb = -12.5,
+                    DurationMs = 4500,
+                    Curve = CueFadeCurve.EqualPower,
+                    StopWhenSilent = false,
+                    AlsoFadeVideoOpacity = false,
+                },
             },
         };
 
@@ -292,6 +320,12 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(compId, media.VideoPlacements[0].CompositionId);
         Assert.IsType<CommentCueNode>(group.Children[1]);
         Assert.IsType<ActionCueNode>(loadedCueList.Nodes[1]);
+        var fade = Assert.IsType<FadeCueNode>(loadedCueList.Nodes[2]);
+        Assert.Equal(-12.5, fade.TargetLevelDb);
+        Assert.Equal(4500, fade.DurationMs);
+        Assert.Equal(CueFadeCurve.EqualPower, fade.Curve);
+        Assert.False(fade.StopWhenSilent);
+        Assert.False(fade.AlsoFadeVideoOpacity);
     }
 
     [Fact]
@@ -536,6 +570,85 @@ public sealed class HaPlayProjectIOTests
             Assert.Equal("Cue Test", loaded.Name);
             var media = Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes));
             Assert.IsType<FilePlaylistItem>(media.Source);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public async Task CueListIO_SaveLoad_RoundTripsStopFadeAndCueFadeCurves()
+    {
+        var cueList = new CueList
+        {
+            Name = "Fade Test",
+            StopFadeMs = 1200,
+            StopFadeCurve = CueFadeCurve.EqualPower,
+            Nodes =
+            {
+                new MediaCueNode
+                {
+                    Number = "1",
+                    Label = "Song",
+                    Source = new FilePlaylistItem("/show/song.flac"),
+                    FadeInMs = 400,
+                    FadeOutMs = 900,
+                    FadeInCurve = CueFadeCurve.SCurve,
+                    FadeOutCurve = CueFadeCurve.Exponential,
+                },
+            },
+        };
+
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        try
+        {
+            await CueListIO.SaveAsync(cueList, tmp);
+            var loaded = await CueListIO.LoadAsync(tmp);
+            Assert.Equal(1200, loaded.StopFadeMs);
+            Assert.Equal(CueFadeCurve.EqualPower, loaded.StopFadeCurve);
+            var media = Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes));
+            Assert.Equal(CueFadeCurve.SCurve, media.FadeInCurve);
+            Assert.Equal(CueFadeCurve.Exponential, media.FadeOutCurve);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public async Task CueListIO_Load_FileWithoutFadeFields_DefaultsToAppFallbackAndLinear()
+    {
+        // Old-file compat: a pre-curve .haplaycues written before StopFadeMs/curves existed loads with
+        // null StopFadeMs (= app-settings default) and Linear curves everywhere.
+        var cueList = new CueList
+        {
+            Name = "Legacy",
+            Nodes = { new MediaCueNode { Number = "1", Label = "Old", FadeOutMs = 500 } },
+        };
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        try
+        {
+            await CueListIO.SaveAsync(cueList, tmp);
+            // Strip the new fields from the JSON so the file matches what an older build wrote.
+            var json = await File.ReadAllTextAsync(tmp);
+            json = string.Join(
+                '\n',
+                json.Split('\n').Where(line =>
+                    !line.Contains("stopFadeMs") && !line.Contains("stopFadeCurve")
+                    && !line.Contains("fadeInCurve") && !line.Contains("fadeOutCurve")));
+            await File.WriteAllTextAsync(tmp, json);
+
+            var loaded = await CueListIO.LoadAsync(tmp);
+            Assert.Null(loaded.StopFadeMs);
+            Assert.Equal(CueFadeCurve.Linear, loaded.StopFadeCurve);
+            var media = Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes));
+            Assert.Equal(500, media.FadeOutMs);
+            Assert.Equal(CueFadeCurve.Linear, media.FadeInCurve);
+            Assert.Equal(CueFadeCurve.Linear, media.FadeOutCurve);
         }
         finally
         {

@@ -55,11 +55,14 @@ public sealed class ShowSession : IAsyncDisposable
     /// <see cref="OutputPatchRoute"/> (<c>OutputId</c>) to apply an N→M channel remap when clips play (03 §6).</summary>
     public const string MasterOutputId = "_master";
 
-    private static readonly TimeSpan SoftStopFadeDuration = TimeSpan.FromMilliseconds(750);
+    /// <summary>The soft-stop fade used when neither the clip's <see cref="ShowClipBinding.FadeOut"/> nor an
+    /// explicit <c>fadeDuration</c> supplies one - also the <see cref="ClipEndBehavior.FadeOutAndStop"/>
+    /// natural-end fallback. Defaults to the legacy HaPlay 750 ms; hosts set it once at wiring time
+    /// (a 64-bit write - no torn read on the fade paths that read it off the dispatcher).</summary>
+    public TimeSpan DefaultStopFade { get; set; } = TimeSpan.FromMilliseconds(750);
 
     private readonly IMediaRegistry _registry;
     private readonly IAudioBackend? _audioBackend;
-    private readonly string? _outputDeviceId;
     // Swapped atomically on load (NXT-12 transactional load); volatile because fires and the lock-free cue-
     // definition query read it OFF the dispatcher (the graph itself is internally locked).
     private volatile CueGraph _cueGraph = new();
@@ -135,6 +138,15 @@ public sealed class ShowSession : IAsyncDisposable
     private readonly record struct ClipAudioOutput(IAudioOutput Output, bool DisposeOnRelease, Action? Release);
     private sealed record AudioRouteTarget(string OutputId, float TargetGain, ShowClipAudioRoute? Route = null);
 
+    /// <summary>The route-less fallback output device (backend default, else first), resolved through the
+    /// 5 s device cache at every point of use - never frozen at construction, so a device plugged in after
+    /// app start becomes the fallback on the next cache refresh. Null without a backend or devices.</summary>
+    private string? ResolveFallbackOutputDeviceId()
+    {
+        var devices = _deviceCache.EnumerateOutputDevices();
+        return (devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault())?.Id;
+    }
+
     /// <summary>Resolves a route's device to a sink: the host audio factory first (a borrowed lease it owns),
     /// else the session's <see cref="IAudioBackend"/> creates one it owns. Called only when a backend exists.</summary>
     private ClipAudioOutput ResolveAudioOutput(string? deviceId, AudioFormat format)
@@ -174,7 +186,7 @@ public sealed class ShowSession : IAsyncDisposable
             var channels = route is { HasGainMatrix: true }
                 ? route.MatrixOutputChannels ?? route.MatrixCells!.Max(c => c.OutputChannel) + 1
                 : channelMap?.OutputChannels ?? 2;
-            o = ResolveAudioOutput(deviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+            o = ResolveAudioOutput(deviceId ?? ResolveFallbackOutputDeviceId(), new AudioFormat(rate, channels));
         }
         catch (Exception ex)
         {
@@ -256,16 +268,11 @@ public sealed class ShowSession : IAsyncDisposable
         _audioOutputFactory = audioOutputFactory;
         _metadataPublisher = new ShowSessionMetadataPublisher(MetadataHub, metadataProbe);
         _standby.StandbyStatesChanged += states => PreparedCuesChanged?.Invoke(states);
-        if (audioBackend is not null)
-        {
-            var devices = audioBackend.EnumerateOutputDevices();
-            _outputDeviceId = (devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault())?.Id;
-        }
 
         _visualizers = new ShowSessionVisualizerService(
             RegisterVisualizerTap, RemoveTapFromActiveClips, ReleaseVisualizerTapRegistration, MetadataHub);
         _fires = new CueFireOrchestrator(this);
-        _voicePlayer = new VoicePlayer(this, _standby, audioBackend, _outputDeviceId, BuildPreviewSpec, BuildVoiceSpec);
+        _voicePlayer = new VoicePlayer(this, _standby, audioBackend, ResolveFallbackOutputDeviceId, BuildPreviewSpec, BuildVoiceSpec);
         _voicePlayer.VoiceEnded += id => VoiceEnded?.Invoke(id);
         _voicePlayer.PreviewEnded += id => PreviewEnded?.Invoke(id);
         _completionMonitor = new SessionCompletionMonitor(
@@ -520,7 +527,9 @@ public sealed class ShowSession : IAsyncDisposable
     /// (JACK graphs reject the media's own rate - the same resolution every clip spec gets). Dispatcher-read.</summary>
     private ClipSpec BuildVoiceSpec(string outputId, string mediaPath, string? deviceId)
     {
-        var targetAudioRate = ResolveBackendSampleRate(deviceId ?? _outputDeviceId);
+        // Null deviceId → the cache's own default-else-first resolution (same rule as the fallback device),
+        // evaluated fresh instead of a construction-time snapshot.
+        var targetAudioRate = ResolveBackendSampleRate(deviceId);
         return new ClipSpec(
             outputId,
             ClipMediaSource.File(
@@ -990,12 +999,15 @@ public sealed class ShowSession : IAsyncDisposable
                                || binding.EndAtDuration || binding.NotifyNaturalEnd)
                 && player.Duration > TimeSpan.Zero
                 && end > binding.StartOffset;
-            if (fadeIn || endHandling)
+            var hasEnvelope = binding.VolumeEnvelope is { Count: > 0 } && routeTargets.Count > 0;
+            if (fadeIn || endHandling || hasEnvelope)
             {
                 var clipCts = new CancellationTokenSource();
                 group.SetClipWorkCts(clipCts);
                 if (fadeIn && routeTargets.Count > 0)
-                    StartFadeIn(groupId, player, routeTargets, binding.FadeIn, clipCts.Token);
+                    StartFadeIn(groupId, player, routeTargets, binding.FadeIn, binding.FadeInCurve, clipCts.Token);
+                if (hasEnvelope)
+                    StartEnvelopeRunner(groupId, player, binding.VolumeEnvelope!, clipCts.Token);
                 if (endHandling)
                     StartEndMonitor(groupId, binding, player, end, clipCts.Token);
             }
@@ -1023,8 +1035,8 @@ public sealed class ShowSession : IAsyncDisposable
         {
             { Count: 0 } => null, // explicitly silent: do not infer anything from the default hardware device
             { } routes => routes.Select(route => route.SampleRate).FirstOrDefault(rate => rate is > 0)
-                          ?? ResolveBackendSampleRate(routes.FirstOrDefault()?.DeviceId ?? _outputDeviceId),
-            null => ResolveBackendSampleRate(_outputDeviceId), // standalone/group-routing compatibility
+                          ?? ResolveBackendSampleRate(routes.FirstOrDefault()?.DeviceId),
+            null => ResolveBackendSampleRate(null), // standalone/group-routing compatibility (cache resolves default-else-first fresh)
         };
         // Multi-track select (03 §6): null indices are the automatic default, so one shape covers both.
         var options = S.Media.Players.MediaPlayerOpenOptions.Default with
@@ -1417,7 +1429,7 @@ public sealed class ShowSession : IAsyncDisposable
     /// set below or above unity fades up to exactly that level rather than to a hardcoded 1.0 (NXT-07).
     /// A <see cref="FadeRamp"/>; cancelled when the clip is replaced.</summary>
     private void StartFadeIn(string groupId, S.Media.Players.MediaPlayer player,
-        IReadOnlyList<AudioRouteTarget> routes, TimeSpan duration, CancellationToken ct)
+        IReadOnlyList<AudioRouteTarget> routes, TimeSpan duration, FadeCurve curve, CancellationToken ct)
     {
         if (player.AudioSourceId is null)
             return;
@@ -1428,9 +1440,38 @@ public sealed class ShowSession : IAsyncDisposable
                 _groups.GetValueOrDefault(groupId)?.Active?.Player != player ||
                 player.AudioRouter is null)
                 return Task.FromResult(true);
-            var frac = FadeRamp.LevelUp(elapsed, duration);
+            var frac = FadeRamp.LevelUp(elapsed, duration, curve);
             _groups.GetValueOrDefault(groupId)?.ApplyAudioScale(player, routes, frac);
             return Task.FromResult(frac >= 1f);
+        }));
+    }
+
+    /// <summary>Per-clip volume-envelope runner: a <see cref="FadeRamp"/>-style loop (same 25 ms step as
+    /// every session fade) that samples the envelope at the clip's CURRENT position - the group timeline's
+    /// <see cref="TransportTimelineSnapshot.CueTime"/>, i.e. post-StartOffset clip time, so the automation
+    /// survives seeks and restarts each loop pass - and writes the factor through the group's one
+    /// level-composition path (<see cref="TransportGroup.ApplyEnvelopeLevel"/> → <c>ApplyAudioScale</c>,
+    /// where fade × envelope multiply). Runs for the clip's whole life: cancelled on replacement (the
+    /// shared clip-work cts) or ended by its identity guard. Never started for an empty envelope.</summary>
+    private void StartEnvelopeRunner(
+        string groupId,
+        S.Media.Players.MediaPlayer player,
+        IReadOnlyList<ShowEnvelopePoint> envelope,
+        CancellationToken ct)
+    {
+        if (player.AudioSourceId is null)
+            return;
+
+        FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
+        {
+            if (ct.IsCancellationRequested ||
+                _groups.GetValueOrDefault(groupId) is not { } group ||
+                group.Active?.Player != player ||
+                player.AudioRouter is null)
+                return Task.FromResult(true);
+            var clipPosition = group.Timeline.GetSnapshot().CueTime;
+            group.ApplyEnvelopeLevel(player, VolumeEnvelopes.Sample(envelope, clipPosition));
+            return Task.FromResult(false); // no target to reach - the envelope rides the clip until release
         }));
     }
 
@@ -1540,7 +1581,7 @@ public sealed class ShowSession : IAsyncDisposable
         var naturalFade = binding.FadeOut > TimeSpan.Zero
             ? binding.FadeOut
             : binding.EndBehavior == ClipEndBehavior.FadeOutAndStop
-                ? SoftStopFadeDuration
+                ? DefaultStopFade
                 : TimeSpan.Zero;
         if (!loops && !freezes && naturalFade > TimeSpan.Zero
             && remaining > TimeSpan.Zero && remaining <= naturalFade
@@ -1553,6 +1594,7 @@ public sealed class ShowSession : IAsyncDisposable
                 group.ActiveAudioScale,
                 group.CaptureLayerOpacities(),
                 remaining,
+                binding.FadeOutCurve,
                 monitor.CancellationToken);
             return true;
         }
@@ -1601,6 +1643,7 @@ public sealed class ShowSession : IAsyncDisposable
         float startAudioScale,
         IReadOnlyList<float> startLayerOpacities,
         TimeSpan duration,
+        FadeCurve curve,
         CancellationToken ct)
     {
         FadeRamp.Start(
@@ -1611,7 +1654,7 @@ public sealed class ShowSession : IAsyncDisposable
                     || _groups.GetValueOrDefault(groupId) is not { } group
                     || !ReferenceEquals(group.Active, clip))
                     return Task.FromResult(true);
-                var scale = FadeRamp.LevelDown(elapsed, duration);
+                var scale = FadeRamp.LevelDown(elapsed, duration, curve);
                 group.ApplyFadeLevel(
                     clip.Player, routeTargets, startAudioScale, startLayerOpacities, scale);
                 return Task.FromResult(scale <= 0f);
@@ -1946,38 +1989,56 @@ public sealed class ShowSession : IAsyncDisposable
     }
 
     /// <summary>Soft-stops and releases the active clip on <paramref name="groupId"/>. The cue's configured
-    /// fade-out is used, falling back to the legacy HaPlay 750 ms stop fade. Cancels any in-flight cue fire first
-    /// so STOP never waits behind a long pre-wait/open (NXT-03). The fade ramp itself runs OFF the serial
-    /// dispatcher (NXT-18) - only short gain/opacity steps and the final release marshal onto it - so other
-    /// commands (pause, seek, load, a following GO's commit) never queue behind a long configured fade. The
-    /// returned task still completes only after the clip is released ("stopped means stopped").</summary>
+    /// fade-out is used, falling back to <paramref name="fadeDuration"/> and then <see cref="DefaultStopFade"/>.
+    /// Cancels any in-flight cue fire first so STOP never waits behind a long pre-wait/open (NXT-03). The fade
+    /// ramp itself runs OFF the serial dispatcher (NXT-18) - only short gain/opacity steps and the final release
+    /// marshal onto it - so other commands (pause, seek, load, a following GO's commit) never queue behind a
+    /// long configured fade. The returned task still completes only after the clip is released ("stopped means
+    /// stopped").</summary>
     /// <param name="fade">When true (the cue Stop/Panic default) the group's audio + layers ramp to silence over
-    /// its <see cref="ShowClipBinding.FadeOut"/> or <see cref="SoftStopFadeDuration"/> first; when false the clip is
+    /// its <see cref="ShowClipBinding.FadeOut"/> or the stop fade first; when false the clip is
     /// cut immediately (the media-player deck stops hard - it has no soft-stop fade).</param>
-    public Task StopAsync(string groupId = DefaultGroup, bool fade = true)
+    /// <param name="fadeDuration">Stop-fade override for clips with no configured <see cref="ShowClipBinding.FadeOut"/>
+    /// (a configured clip fade-out always wins - per-cue > host stop setting). Null = <see cref="DefaultStopFade"/>;
+    /// a non-positive value hard-cuts like <paramref name="fade"/> false.</param>
+    /// <param name="curve">Gain curve for the stop fade. A clip whose own <see cref="ShowClipBinding.FadeOut"/>
+    /// wins the duration precedence also keeps its own <see cref="ShowClipBinding.FadeOutCurve"/>.</param>
+    public Task StopAsync(
+        string groupId = DefaultGroup,
+        bool fade = true,
+        TimeSpan? fadeDuration = null,
+        FadeCurve curve = FadeCurve.Linear)
     {
         _fires.CancelActiveFire();
-        return StopGroupsCoreAsync(() => [GetOrAddGroup(groupId)], fade);
+        return StopGroupsCoreAsync(() => [GetOrAddGroup(groupId)], fade, fadeDuration, curve);
     }
 
     /// <summary>Soft-stops every active transport group together (HaPlay Stop/Panic parity).</summary>
-    public Task StopAllAsync()
+    /// <param name="fadeDuration">Same precedence as <see cref="StopAsync"/>: per-clip fade-out > this override >
+    /// <see cref="DefaultStopFade"/>. A non-positive value is a hard cut (Panic with a 0 ms setting) - clips
+    /// release and visualizers detach without a ramp.</param>
+    public Task StopAllAsync(TimeSpan? fadeDuration = null, FadeCurve curve = FadeCurve.Linear)
     {
         _fires.CancelActiveFire();
+        var fade = fadeDuration is not { } explicitDuration || explicitDuration > TimeSpan.Zero;
         // Visualizers are persistent composition surfaces rather than transport clips. Fade them on the same
         // stop clock instead of detaching them immediately: otherwise an opaque/partly-opaque visualizer vanishes
         // in one frame and exposes the still-fading media layer beneath it as a visible brightness flash.
         return Task.WhenAll(
-            StopGroupsCoreAsync(() => _groups.Values.Where(group => group.Active is not null).ToArray(), fade: true),
-            FadeOutAndRemoveVisualizersAsync());
+            StopGroupsCoreAsync(
+                () => _groups.Values.Where(group => group.Active is not null).ToArray(), fade, fadeDuration, curve),
+            FadeOutAndRemoveVisualizersAsync(
+                compositionId: null, fade ? fadeDuration ?? DefaultStopFade : TimeSpan.Zero, curve));
     }
 
     /// <summary>Soft-stops the persistent visualizer on one composition. Visualizer Stop cues use the
     /// same fade clock as global Stop/Panic instead of detaching the surface in a single frame.</summary>
-    public Task FadeOutCompositionVisualizerAsync(string compositionId)
+    /// <param name="fadeDuration">Fade length for this surface (a Stop cue passes its own transition time).
+    /// Null = <see cref="DefaultStopFade"/>; non-positive detaches without a ramp.</param>
+    public Task FadeOutCompositionVisualizerAsync(string compositionId, TimeSpan? fadeDuration = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(compositionId);
-        return FadeOutAndRemoveVisualizersAsync(compositionId);
+        return FadeOutAndRemoveVisualizersAsync(compositionId, fadeDuration ?? DefaultStopFade);
     }
 
     /// <summary>Stops the cue with <paramref name="cueId"/> wherever it is the active clip (per-cue stop /
@@ -2000,7 +2061,11 @@ public sealed class ShowSession : IAsyncDisposable
     /// commit behind the whole fade). A group whose fade claim lost to an in-flight natural fade-out skips the
     /// ramp (that fade task owns the levels) but is still released here - a STOP preempts a natural fade.
     /// <paramref name="selectGroups"/> runs on the dispatcher.</summary>
-    private async Task StopGroupsCoreAsync(Func<IReadOnlyList<TransportGroup>> selectGroups, bool fade)
+    private async Task StopGroupsCoreAsync(
+        Func<IReadOnlyList<TransportGroup>> selectGroups,
+        bool fade,
+        TimeSpan? fadeDuration = null,
+        FadeCurve curve = FadeCurve.Linear)
     {
         var claims = await InvokeAsync(() =>
         {
@@ -2012,12 +2077,15 @@ public sealed class ShowSession : IAsyncDisposable
                 GroupFade? groupFade = null;
                 if (fade && clip is not null && group.TryBeginFadeOut(clip.Player))
                 {
+                    // Duration precedence: per-clip FadeOut > the caller's stop-fade override > session
+                    // default. A clip fading on its OWN duration keeps its own curve too.
+                    var clipFadeWins =
+                        group.ActiveBinding?.FadeOut is { } configured && configured > TimeSpan.Zero;
                     groupFade = new GroupFade(
                         group,
                         clip,
-                        group.ActiveBinding?.FadeOut is { } configured && configured > TimeSpan.Zero
-                            ? configured
-                            : SoftStopFadeDuration,
+                        clipFadeWins ? group.ActiveBinding!.FadeOut : fadeDuration ?? DefaultStopFade,
+                        clipFadeWins ? group.ActiveBinding!.FadeOutCurve : curve,
                         group.ActiveAudioScale,
                         group.CaptureLayerOpacities(),
                         group.ActiveRouteTargets);
@@ -2073,7 +2141,7 @@ public sealed class ShowSession : IAsyncDisposable
                         continue; // replaced/ended during the fade - leave the new clip alone
                     fade.Group.ApplyFadeLevel(
                         fade.Clip.Player, fade.RouteTargets, fade.StartAudioScale, fade.StartLayerOpacities,
-                        FadeRamp.LevelDown(elapsed, fade.Duration));
+                        FadeRamp.LevelDown(elapsed, fade.Duration, fade.Curve));
                     applied = true;
                 }
 
@@ -2090,15 +2158,171 @@ public sealed class ShowSession : IAsyncDisposable
         TransportGroup Group,
         IArmedClip Clip,
         TimeSpan Duration,
+        FadeCurve Curve,
         float StartAudioScale,
         IReadOnlyList<float> StartLayerOpacities,
         IReadOnlyList<AudioRouteTarget> RouteTargets);
 
-    /// <summary>Soft-stops all persistent visualizer layers. The captured slot identity makes the final detach
-    /// safe when a new visualizer is fired onto the same composition while the old one is fading.</summary>
-    private Task FadeOutAndRemoveVisualizersAsync() => FadeOutAndRemoveVisualizersAsync(compositionId: null);
+    /// <summary>One clip claimed by <see cref="FadeClipAsync"/>: the group, the clip active at claim time
+    /// (the only clip this fade may touch), its levels THEN (the ramp's start - consecutive fades compose),
+    /// the authored full-level opacities (a fade UP knows where "level 1" is), and the claim's token
+    /// (cancelled when a newer fade cue takes the same clip over).</summary>
+    private sealed record ClipFade(
+        TransportGroup Group,
+        IArmedClip Clip,
+        IReadOnlyList<AudioRouteTarget> RouteTargets,
+        float StartLevel,
+        IReadOnlyList<float> StartLayerOpacities,
+        IReadOnlyList<float> BaseLayerOpacities,
+        CancellationToken Token);
 
-    private async Task FadeOutAndRemoveVisualizersAsync(string? compositionId)
+    /// <summary>Interpolates one fade-cue step between two arbitrary levels - the shared
+    /// <see cref="FadeCurves.LevelBetween"/> (also the envelope sampler's segment interpolation), so
+    /// target 0 matches the stop fade exactly and a fade up eases the same way a fade-in does.</summary>
+    private static float LevelBetween(
+        float start, float target, TimeSpan elapsed, TimeSpan duration, FadeCurve curve) =>
+        FadeCurves.LevelBetween(start, target, elapsed, duration, curve);
+
+    /// <summary>The persistent fade level (1 = full) of the active clip playing <paramref name="cueId"/>,
+    /// or null when that cue is not an active clip. This is the level consecutive
+    /// <see cref="FadeClipAsync"/> calls compose from.</summary>
+    public Task<float?> GetClipFadeLevelAsync(string cueId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return InvokeAsync(() => Task.FromResult(
+            _groups.Values.FirstOrDefault(g =>
+                    string.Equals(g.Active?.Spec.Id, cueId, StringComparison.Ordinal)) is { } group
+                ? (float?)group.ClipLevel
+                : null));
+    }
+
+    /// <summary>The live audio levels of the active clip playing <paramref name="cueId"/>, or null when
+    /// that cue is not an active clip. <see cref="ClipAudioLevels.EffectiveLevel"/> is the exact product
+    /// the route gains are written with (fade × envelope), read from the same group state.</summary>
+    public Task<ClipAudioLevels?> GetClipAudioLevelsAsync(string cueId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return InvokeAsync(() => Task.FromResult(
+            _groups.Values.FirstOrDefault(g =>
+                    string.Equals(g.Active?.Spec.Id, cueId, StringComparison.Ordinal)) is { } group
+                ? new ClipAudioLevels(group.ClipLevel, group.EnvelopeLevel, group.EffectiveAudioLevel)
+                : null));
+    }
+
+    /// <summary>Fades the cue with <paramref name="cueId"/> (wherever it is the active clip) to
+    /// <paramref name="targetLevel"/> over <paramref name="duration"/> - the Fade-cue entry point.
+    /// The ramp starts from the clip's CURRENT level (<see cref="TransportGroup.ClipLevel"/>), so
+    /// consecutive fades compose (fade to −10 dB then to silence starts at −10 dB) and a fade UP from a
+    /// reduced level works. Identity-guarded like the stop fade: a clip replaced mid-ramp is left alone.
+    /// A newer fade on the same clip preempts this ramp and takes over from its level; an operator
+    /// stop/natural fade-out (the <see cref="TransportGroup.TryBeginFadeOut"/> claim) also preempts it.
+    /// The returned task completes when the ramp ends (and, for a silent stop, the clip is released) or
+    /// when the fade was preempted. No-op when the cue isn't playing.</summary>
+    /// <param name="targetLevel">Absolute level [0,1] (1 = the clip's full authored gain/opacity).</param>
+    /// <param name="stopWhenSilent">With target 0: release the clip at ramp end (the stop-release path);
+    /// false keeps it running silently.</param>
+    /// <param name="alsoFadeVideo">Ramp the clip's composition-layer opacities in step (toward the
+    /// authored opacity × target level); false fades audio only.</param>
+    public async Task FadeClipAsync(
+        string cueId,
+        float targetLevel,
+        TimeSpan duration,
+        FadeCurve curve = FadeCurve.Linear,
+        bool stopWhenSilent = true,
+        bool alsoFadeVideo = true)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(cueId);
+        targetLevel = Math.Clamp(targetLevel, 0f, 1f);
+
+        IReadOnlyList<ClipFade> claims;
+        try
+        {
+            // Claim on the dispatcher: capture each targeted clip's current level as the ramp start and
+            // take the group's clip-fade slot (cancelling a previous fade cue's ramp on the same clip).
+            claims = await InvokeAsync(() =>
+            {
+                var list = new List<ClipFade>();
+                foreach (var group in _groups.Values)
+                {
+                    if (group.Active is not { } clip
+                        || !string.Equals(clip.Spec.Id, cueId, StringComparison.Ordinal)
+                        || group.IsFadeOutClaimed) // a stop/natural fade-out owns this clip's levels
+                        continue;
+                    list.Add(new ClipFade(
+                        group, clip, group.ActiveRouteTargets, group.ClipLevel,
+                        group.CaptureLayerOpacities(), group.BaseLayerOpacities, group.BeginClipFade()));
+                }
+
+                return Task.FromResult<IReadOnlyList<ClipFade>>(list);
+            }).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return; // session disposed while the fade was queued - disposal owns the teardown
+        }
+
+        if (claims.Count == 0)
+            return;
+
+        try
+        {
+            await FadeRamp.RunAsync(FadeStepInterval, CancellationToken.None, elapsed => InvokeAsync(() =>
+            {
+                var applied = false;
+                foreach (var fade in claims)
+                {
+                    if (fade.Token.IsCancellationRequested       // a newer fade cue took this clip over
+                        || !ReferenceEquals(fade.Group.Active, fade.Clip) // replaced/ended mid-ramp
+                        || fade.Group.IsFadeOutClaimed)          // an operator stop preempts the fade cue
+                        continue;
+                    var audioLevel = LevelBetween(fade.StartLevel, targetLevel, elapsed, duration, curve);
+                    float[]? opacities = null;
+                    if (alsoFadeVideo)
+                    {
+                        opacities = new float[fade.StartLayerOpacities.Count];
+                        for (var i = 0; i < opacities.Length; i++)
+                        {
+                            var baseOpacity = i < fade.BaseLayerOpacities.Count ? fade.BaseLayerOpacities[i] : 0f;
+                            opacities[i] = LevelBetween(
+                                fade.StartLayerOpacities[i], baseOpacity * targetLevel, elapsed, duration, curve);
+                        }
+                    }
+
+                    fade.Group.ApplyClipFadeLevel(fade.Clip.Player, fade.RouteTargets, audioLevel, opacities);
+                    applied = true;
+                }
+
+                return Task.FromResult(!applied || elapsed >= duration);
+            })).ConfigureAwait(false);
+
+            await InvokeAsync(async () =>
+            {
+                foreach (var fade in claims)
+                {
+                    fade.Group.EndClipFade(fade.Token);
+                    if (fade.Token.IsCancellationRequested
+                        || !ReferenceEquals(fade.Group.Active, fade.Clip)
+                        || fade.Group.IsFadeOutClaimed)
+                        continue; // preempted - the newer fade / the stop owns the clip from here
+                    // Silent stop: reuse the stop-release path, claiming the fade-out slot first so a
+                    // concurrent stop can't start a second (inaudible) ramp on the released clip.
+                    if (stopWhenSilent && targetLevel <= 0f && fade.Group.TryBeginFadeOut(fade.Clip.Player))
+                        await ReplaceActiveAsync(fade.Group, null, [], []).ConfigureAwait(false);
+                }
+            }).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // session disposed mid-fade - disposal owns the teardown
+        }
+    }
+
+    /// <summary>Soft-stops persistent visualizer layers (all, or one composition's) over
+    /// <paramref name="duration"/> - non-positive detaches without a ramp. The captured slot identity makes the
+    /// final detach safe when a new visualizer is fired onto the same composition while the old one is fading.</summary>
+    private async Task FadeOutAndRemoveVisualizersAsync(
+        string? compositionId, TimeSpan duration, FadeCurve curve = FadeCurve.Linear)
     {
         try
         {
@@ -2110,7 +2334,7 @@ public sealed class ShowSession : IAsyncDisposable
 
             await FadeRamp.RunAsync(FadeStepInterval, CancellationToken.None, elapsed => InvokeAsync(() =>
             {
-                var level = FadeRamp.LevelDown(elapsed, SoftStopFadeDuration);
+                var level = FadeRamp.LevelDown(elapsed, duration, curve);
                 var applied = _visualizers.ApplyFadeLevel(fades, level);
                 return Task.FromResult(!applied || level <= 0f);
             })).ConfigureAwait(false);
@@ -2619,6 +2843,88 @@ public sealed class ShowSession : IAsyncDisposable
         public IReadOnlyList<AudioRouteTarget> ActiveRouteTargets => _activeRouteTargets;
         public float ActiveAudioScale => _activeAudioScale;
 
+        /// <summary>The clip's persistent current fade level, default 1. Full level is always audio scale
+        /// 1 (route TargetGains carry the authored gains), so the audio scale doubles as the level every
+        /// fade path already writes through - a fade cue composes from it (fade to −10 dB then to silence
+        /// starts at −10) and the stop fade's ActiveAudioScale capture keeps composing on top.</summary>
+        public float ClipLevel => _activeAudioScale;
+
+        /// <summary>The clip's current volume-envelope factor (1 = no automation). Held SEPARATE from the
+        /// fade level so the envelope multiplies fades instead of polluting the level fades compose from
+        /// (a fade cue starting mid-dip must capture the fade level, not fade × envelope).</summary>
+        public float EnvelopeLevel => _envelopeLevel;
+        private float _envelopeLevel = 1f;
+
+        /// <summary>The audio level actually written to the routes: fade level × envelope factor - the
+        /// product <see cref="ApplyAudioScale"/> computes in the ONE place route gains are set.</summary>
+        public float EffectiveAudioLevel => _activeAudioScale * _envelopeLevel;
+
+        /// <summary>Applies one envelope-automation step: stores the factor and rewrites the route gains
+        /// through <see cref="ApplyAudioScale"/> so the fade × envelope product stays in that one place.
+        /// Identity-guarded like every fade write; an unchanged factor (flat segment) skips the router
+        /// writes entirely. Audio-only - layer opacities belong to the fades.</summary>
+        public void ApplyEnvelopeLevel(S.Media.Players.MediaPlayer player, float level)
+        {
+            if (Active?.Player != player)
+                return;
+            level = Math.Clamp(level, 0f, VolumeEnvelopes.MaxLevel);
+            if (level == _envelopeLevel)
+                return;
+            _envelopeLevel = level;
+            ApplyAudioScale(player, _activeRouteTargets, _activeAudioScale);
+        }
+
+        /// <summary>True once a stop/natural fade-out claimed the active clip (<see cref="TryBeginFadeOut"/>).
+        /// A fade-cue ramp checks it every step so an operator stop preempts a running fade cue.</summary>
+        public bool IsFadeOutClaimed => Volatile.Read(ref _fadeOutStarted) != 0;
+
+        // The one in-flight fade-cue ramp per group: a newer fade cue on the same clip cancels the
+        // previous ramp and takes over from the clip's current level (BeginClipFade), and clip
+        // replacement cancels it outright (ReplaceAsync).
+        private CancellationTokenSource? _clipFadeCts;
+
+        /// <summary>Claims the clip-fade slot for a new fade-cue ramp: cancels the previous ramp (if any)
+        /// and returns the new ramp's token. Dispatcher-confined.</summary>
+        public CancellationToken BeginClipFade()
+        {
+            _clipFadeCts?.Cancel();
+            _clipFadeCts?.Dispose();
+            _clipFadeCts = new CancellationTokenSource();
+            return _clipFadeCts.Token;
+        }
+
+        /// <summary>Releases the clip-fade slot when the ramp holding <paramref name="token"/> ends -
+        /// only its own claim (a newer fade's slot stays). Dispatcher-confined.</summary>
+        public void EndClipFade(CancellationToken token)
+        {
+            if (_clipFadeCts is { } cts && cts.Token == token)
+            {
+                cts.Dispose();
+                _clipFadeCts = null;
+            }
+        }
+
+        /// <summary>The authored full-level opacity of each composition layer, captured when the clip
+        /// committed - what a fade UP ramps toward (opacity at level 1).</summary>
+        public IReadOnlyList<float> BaseLayerOpacities => _baseLayerOpacities;
+        private IReadOnlyList<float> _baseLayerOpacities = [];
+
+        /// <summary>Applies one fade-cue step: the absolute audio level (which writes through
+        /// <see cref="ClipLevel"/>) plus optional absolute per-layer opacities (null = audio-only fade).
+        /// Identity-guarded like <see cref="ApplyFadeLevel"/>.</summary>
+        public void ApplyClipFadeLevel(
+            S.Media.Players.MediaPlayer player,
+            IReadOnlyList<AudioRouteTarget> routeTargets,
+            float audioLevel,
+            IReadOnlyList<float>? layerOpacities)
+        {
+            if (Active?.Player != player)
+                return;
+            ApplyAudioScale(player, routeTargets, audioLevel);
+            for (var i = 0; layerOpacities is not null && i < _layers.Count && i < layerOpacities.Count; i++)
+                _layers[i].Slot.Opacity = Math.Clamp(layerOpacities[i], 0f, 1f);
+        }
+
         /// <summary>Captures every placement's own opacity. A cue may deliberately use different opacities on
         /// different compositions, so a stop fade must scale each from its own value rather than snapping all
         /// layers to the first placement's opacity on the first ramp step.</summary>
@@ -2651,15 +2957,19 @@ public sealed class ShowSession : IAsyncDisposable
             if (Active?.Player != player)
                 return;
             _activeAudioScale = Math.Clamp(scale, 0f, 1f);
+            // The one place the clip's effective audio level is computed: fade level × envelope factor.
+            // Every fade path (fade-in, fade cue, natural/stop fade) and the envelope runner write through
+            // here, so the two mechanisms compose by construction instead of overwriting each other.
+            var level = EffectiveAudioLevel;
             if (player.AudioRouter is { } router && player.AudioSourceId is { } sourceId)
                 foreach (var target in routeTargets)
                 {
                     if (target.Route is { HasGainMatrix: true } matrixRoute)
                         router.ApplyMatrix(
                             sourceId, target.OutputId,
-                            matrixRoute.ToGainMatrix(target.TargetGain * _activeAudioScale));
+                            matrixRoute.ToGainMatrix(target.TargetGain * level));
                     else
-                        router.SetRouteGain(sourceId, target.OutputId, target.TargetGain * _activeAudioScale);
+                        router.SetRouteGain(sourceId, target.OutputId, target.TargetGain * level);
                 }
         }
 
@@ -2712,11 +3022,17 @@ public sealed class ShowSession : IAsyncDisposable
             _clipWorkCts?.Cancel();
             _clipWorkCts?.Dispose();
             _clipWorkCts = null;
+            // A fade-cue ramp on the displaced clip must not touch its replacement (its identity guard
+            // would already skip, but cancelling ends the ramp instead of letting it idle to completion).
+            _clipFadeCts?.Cancel();
+            _clipFadeCts?.Dispose();
+            _clipFadeCts = null;
             EndMonitor = null;
             _activeBinding = null;
             _activeRouteTargets = [];
             _activeAudioPumps = [];
             _activeAudioScale = 1f;
+            _envelopeLevel = 1f;
             PausedByHost = false;
             Volatile.Write(ref _fadeOutStarted, 0);
 
@@ -2752,6 +3068,9 @@ public sealed class ShowSession : IAsyncDisposable
             Active = clip;
             _outputs = outputs;
             _layers = layers;
+            // Layer opacities at commit are the authored full-level values - the level-1 anchor a fade
+            // cue's upward ramp restores toward.
+            _baseLayerOpacities = layers.Select(placed => placed.Slot.Opacity).ToArray();
             _timelineClaims = timelineClaims ?? [];
             _subtitleAttachments = subtitleAttachments ?? [];
 
@@ -2781,3 +3100,8 @@ public sealed class ShowSession : IAsyncDisposable
     }
 
 }
+
+/// <summary>An active clip's live audio levels (<see cref="ShowSession.GetClipAudioLevelsAsync"/>):
+/// the persistent fade level (what fade cues compose from), the volume-envelope factor, and their
+/// product - the effective level the route gains are actually written with.</summary>
+public sealed record ClipAudioLevels(float FadeLevel, float EnvelopeLevel, float EffectiveLevel);

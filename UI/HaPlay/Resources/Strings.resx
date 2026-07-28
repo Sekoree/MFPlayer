@@ -391,6 +391,12 @@
   <data name="FadeInMsLabel" xml:space="preserve">
     <value>Fade in (ms)</value>
   </data>
+  <data name="FadeInCurveLabel" xml:space="preserve">
+    <value>Fade in curve</value>
+  </data>
+  <data name="FadeOutCurveLabel" xml:space="preserve">
+    <value>Fade out curve</value>
+  </data>
   <data name="FadeOutMsLabel" xml:space="preserve">
     <value>Fade out (ms)</value>
   </data>
@@ -1519,6 +1525,15 @@
   <data name="AutoRenumberOnInsertLabel" xml:space="preserve">
     <value>Auto-renumber on insert/reorder</value>
   </data>
+  <data name="StopFadeMsLabel" xml:space="preserve">
+    <value>Stop fade (ms)</value>
+  </data>
+  <data name="StopFadeCurveLabel" xml:space="preserve">
+    <value>Stop fade curve</value>
+  </data>
+  <data name="StopFadeMsAppDefaultHintFormat" xml:space="preserve">
+    <value>App default ({0} ms)</value>
+  </data>
   <data name="FilesMenuLabel" xml:space="preserve">
     <value>Files…</value>
   </data>
@@ -2151,6 +2166,42 @@
   </data>
   <data name="AddJumpCueButton" xml:space="preserve">
     <value>+ Jump</value>
+  </data>
+  <data name="CueKindFadeLabel" xml:space="preserve">
+    <value>Fade</value>
+  </data>
+  <data name="AddFadeCueButton" xml:space="preserve">
+    <value>+ Fade</value>
+  </data>
+  <data name="CueFadeNoTargets" xml:space="preserve">
+    <value>Fade cue has no targets - enter target cue numbers or enable "fade all playing".</value>
+  </data>
+  <data name="CueFadeExecutionNotConfigured" xml:space="preserve">
+    <value>Fade execution is not configured.</value>
+  </data>
+  <data name="CueFadeTargetsLabel" xml:space="preserve">
+    <value>Fade cue number(s)</value>
+  </data>
+  <data name="CueFadeAllPlayingLabel" xml:space="preserve">
+    <value>Fade all playing cues (ignores the target list)</value>
+  </data>
+  <data name="CueFadeLevelDbLabel" xml:space="preserve">
+    <value>Target level (dB)</value>
+  </data>
+  <data name="CueFadeLevelHint" xml:space="preserve">
+    <value>0 = full level; -60 or lower = silence</value>
+  </data>
+  <data name="CueFadeDurationMsLabel" xml:space="preserve">
+    <value>Fade time (ms)</value>
+  </data>
+  <data name="CueFadeCurveLabel" xml:space="preserve">
+    <value>Fade curve</value>
+  </data>
+  <data name="CueFadeStopWhenSilentLabel" xml:space="preserve">
+    <value>Stop cues that reach silence</value>
+  </data>
+  <data name="CueFadeAlsoVideoLabel" xml:space="preserve">
+    <value>Also fade video opacity</value>
   </data>
   <data name="CueKindDefaultLabel" xml:space="preserve">
     <value>Cue</value>
@@ -3034,6 +3085,12 @@
   <data name="SoundboardStopAllButton" xml:space="preserve">
     <value>Stop all</value>
   </data>
+  <data name="SoundboardTileLineMissingFormat" xml:space="preserve">
+    <value>Soundboard tile "{0}" not played: its output line no longer exists - pick an audio device output on the tile or board.</value>
+  </data>
+  <data name="SoundboardTileLineNotDeviceFormat" xml:space="preserve">
+    <value>Soundboard tile "{0}" not played: output line "{1}" is not an audio device output - route the tile to a device (PortAudio) line.</value>
+  </data>
   <data name="SoundboardTileSettingsHeader" xml:space="preserve">
     <value>Tile</value>
   </data>
@@ -3807,5 +3864,134 @@
   </data>
   <data name="ChromaKeySpillTooltip" xml:space="preserve">
     <value>Desaturates key-colored light bleeding onto the subject</value>
+  </data>
+  <data name="PlaylistShuffleLabel" xml:space="preserve">
+    <value>Shuffle</value>
+  </data>
+  <data name="PlaylistAvoidImmediateRepeatLabel" xml:space="preserve">
+    <value>Avoid immediate repeat</value>
+  </data>
+  <data name="PlaylistReshuffleEachPassLabel" xml:space="preserve">
+    <value>Reshuffle each pass</value>
+  </data>
+  <data name="PlaylistLoopCountLabel" xml:space="preserve">
+    <value>Passes (0 = infinite)</value>
+  </data>
+  <data name="PlaylistPlayCountLabel" xml:space="preserve">
+    <value>Items per pass (blank = all)</value>
+  </data>
+  <data name="PlaylistEndBehaviorLabel" xml:space="preserve">
+    <value>When finished</value>
+  </data>
+  <data name="CuePlaylistFinishedStatusFormat" xml:space="preserve">
+    <value>Playlist finished: {0}</value>
+  </data>
+  <data name="PlaylistStatusFormat" xml:space="preserve">
+    <value>item {0}/{1} · pass {2}/{3}</value>
+  </data>
+  <data name="PlaylistStatusInfiniteFormat" xml:space="preserve">
+    <value>item {0}/{1} · pass {2}</value>
+  </data>
+  <data name="GroupTimelineButton" xml:space="preserve">
+    <value>Timeline…</value>
+  </data>
+  <data name="GroupTimelineButtonTooltip" xml:space="preserve">
+    <value>Open the timeline editor to arrange this group's cues in time</value>
+  </data>
+  <data name="TimelineWindowTitleFormat" xml:space="preserve">
+    <value>Timeline - {0}</value>
+  </data>
+  <data name="TimelineZoomFitButton" xml:space="preserve">
+    <value>Fit</value>
+  </data>
+  <data name="TimelineZoomFitTooltip" xml:space="preserve">
+    <value>Zoom to fit the whole timeline</value>
+  </data>
+  <data name="TimelineZoomInTooltip" xml:space="preserve">
+    <value>Zoom in</value>
+  </data>
+  <data name="TimelineZoomOutTooltip" xml:space="preserve">
+    <value>Zoom out</value>
+  </data>
+  <data name="TimelineSnapLabel" xml:space="preserve">
+    <value>Snap</value>
+  </data>
+  <data name="TimelineGridLabel" xml:space="preserve">
+    <value>Grid</value>
+  </data>
+  <data name="TimelineGrid1s" xml:space="preserve">
+    <value>1 s</value>
+  </data>
+  <data name="TimelineGrid500ms" xml:space="preserve">
+    <value>500 ms</value>
+  </data>
+  <data name="TimelineGrid100ms" xml:space="preserve">
+    <value>100 ms</value>
+  </data>
+  <data name="TimelineLiveViewHint" xml:space="preserve">
+    <value>Live view - enable cue edit mode to arrange</value>
+  </data>
+  <data name="TimelineEmptyGroupHint" xml:space="preserve">
+    <value>This group has no cues yet - add cues to arrange them in time</value>
+  </data>
+  <data name="SchedulesArmedToggleLabel" xml:space="preserve">
+    <value>Schedules</value>
+  </data>
+  <data name="SchedulesArmedToggleTooltip" xml:space="preserve">
+    <value>Arm timed cue schedules for this session. Scheduled cues fire only while this is ON and cue edit mode is OFF. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
+  </data>
+  <data name="CueScheduleSectionHeader" xml:space="preserve">
+    <value>Schedule</value>
+  </data>
+  <data name="CueScheduleEnableLabel" xml:space="preserve">
+    <value>Enable schedule</value>
+  </data>
+  <data name="CueScheduleKindLabel" xml:space="preserve">
+    <value>Trigger</value>
+  </data>
+  <data name="CueScheduleTimeLabel" xml:space="preserve">
+    <value>Time</value>
+  </data>
+  <data name="CueScheduleDateLabel" xml:space="preserve">
+    <value>Date</value>
+  </data>
+  <data name="CueScheduleDaysLabel" xml:space="preserve">
+    <value>Days</value>
+  </data>
+  <data name="CueScheduleGraceLabel" xml:space="preserve">
+    <value>Grace (ms)</value>
+  </data>
+  <data name="CueScheduleFormatHint" xml:space="preserve">
+    <value>Time hh:mm or hh:mm:ss (24 h) · date yyyy-mm-dd</value>
+  </data>
+  <data name="CueScheduleHint" xml:space="preserve">
+    <value>Fires while Schedules are armed (transport row) and edit mode is off. Times are local wall-clock - DST follows the OS. A fire due while the app was busy still happens within the grace window; older misses are skipped, never caught up. One-shots fire once per session (re-arm or restart to reset).</value>
+  </data>
+  <data name="CueScheduleDayMon" xml:space="preserve">
+    <value>Mo</value>
+  </data>
+  <data name="CueScheduleDayTue" xml:space="preserve">
+    <value>Tu</value>
+  </data>
+  <data name="CueScheduleDayWed" xml:space="preserve">
+    <value>We</value>
+  </data>
+  <data name="CueScheduleDayThu" xml:space="preserve">
+    <value>Th</value>
+  </data>
+  <data name="CueScheduleDayFri" xml:space="preserve">
+    <value>Fr</value>
+  </data>
+  <data name="CueScheduleDaySat" xml:space="preserve">
+    <value>Sa</value>
+  </data>
+  <data name="CueScheduleDaySun" xml:space="preserve">
+    <value>Su</value>
+  </data>
+  <data name="CueScheduleFiredStatusFormat" xml:space="preserve">
+    <value>Scheduled fire: {0}</value>
+  </data>
+  <data name="CueScheduleMissedStatusFormat" xml:space="preserve">
+    <value>Missed schedule for {0} (due {1:HH:mm:ss}) - beyond grace, skipped</value>
   </data>
 </root>

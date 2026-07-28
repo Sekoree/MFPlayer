@@ -104,7 +104,8 @@ public sealed class SharedAudioOutput : IDisposable
 
             var clientId = ++_nextClientId;
             var sourceId = $"client_{clientId}";
-            var input = new ClientInput(Format, _clientBufferDuration, _clientTargetQueueSamples);
+            var input = new ClientInput(Format, _clientBufferDuration, _clientTargetQueueSamples,
+                _terminal as IPlaybackClock);
             _mixer.AddSource(input, sourceId, autoResample: false);
             try
             {
@@ -161,9 +162,11 @@ public sealed class SharedAudioOutput : IDisposable
 
     /// <summary>
     /// One SPSC client endpoint. It is clocked from the mixer's consumption of its private bus so
-    /// an upstream router applies backpressure instead of slowly overflowing the buffer. It does
-    /// not implement IPlaybackClock: the physical device has one continuous clock, while each
-    /// client has an independent transport epoch.
+    /// an upstream router applies backpressure instead of slowly overflowing the buffer. Its
+    /// <see cref="IPlaybackClock"/> is the terminal device clock minus a per-client epoch captured
+    /// at attach and on <see cref="Flush"/>, so each client sees its own transport starting at
+    /// zero while still advancing with actually-played samples. Falls back to a wall-clock
+    /// stopwatch when the terminal exposes no playback clock (or its reads fail).
     /// </summary>
     private sealed class ClientInput :
         IAudioOutput,
@@ -171,26 +174,98 @@ public sealed class SharedAudioOutput : IDisposable
         IAudioSource,
         IClockedOutput,
         IFlushableOutput,
+        IPlaybackClock,
         IDisposable
     {
         private readonly AudioBus _bus;
         private readonly int _targetQueueSamples;
         private readonly ManualResetEventSlim _spaceAvailable = new(false);
+        private readonly IPlaybackClock? _terminalClock;
+        private readonly System.Diagnostics.Stopwatch _fallbackElapsed = System.Diagnostics.Stopwatch.StartNew();
+        private long _terminalEpochTicks;
+        private long _fallbackEpochTicks;
         private int _disposed;
         // A timed Wait can inflate the event to a kernel-backed handle, so it IS disposed - but only
         // once the last waiter drained (review P3-1); disposing under a live Wait would race it.
         private int _activeWaiters;
         private int _eventDisposed;
 
-        public ClientInput(AudioFormat format, TimeSpan bufferDuration, int targetQueueSamples)
+        public ClientInput(AudioFormat format, TimeSpan bufferDuration, int targetQueueSamples,
+            IPlaybackClock? terminalClock)
         {
             _bus = new AudioBus(format, bufferDuration);
             _targetQueueSamples = Math.Min(_bus.CapacitySamples, targetQueueSamples);
+            _terminalClock = terminalClock;
+            ReanchorPlaybackEpoch();
         }
 
         public AudioFormat Format => _bus.Format;
         public AudioOutputChannelCapabilities ChannelCapabilities => _bus.ChannelCapabilities;
         public bool IsExhausted => false;
+
+        /// <summary>
+        /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: terminal device time minus this client's
+        /// epoch, clamped at zero (the clamp also absorbs an externally flushed terminal whose own
+        /// epoch regressed below ours). Terminal reads go through its thread-safe properties only
+        /// and never throw out of here - any failure degrades to the stopwatch domain.
+        /// </summary>
+        public TimeSpan ElapsedSinceStart
+        {
+            get
+            {
+                if (_terminalClock is not null)
+                {
+                    try
+                    {
+                        var ticks = _terminalClock.ElapsedSinceStart.Ticks - Volatile.Read(ref _terminalEpochTicks);
+                        return ticks > 0 ? new TimeSpan(ticks) : TimeSpan.Zero;
+                    }
+                    catch
+                    {
+                        // Terminal stopped/disposed mid-read - fall through to the wall-clock domain.
+                    }
+                }
+
+                var fallbackTicks = _fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _fallbackEpochTicks);
+                return fallbackTicks > 0 ? new TimeSpan(fallbackTicks) : TimeSpan.Zero;
+            }
+        }
+
+        /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: mirrors the terminal's; wall-clock fallback always advances.</summary>
+        public bool IsAdvancing
+        {
+            get
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                    return false;
+                if (_terminalClock is null)
+                    return true;
+                try
+                {
+                    return _terminalClock.IsAdvancing;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>Re-captures both epoch baselines so <see cref="ElapsedSinceStart"/> restarts at zero.</summary>
+        private void ReanchorPlaybackEpoch()
+        {
+            Volatile.Write(ref _fallbackEpochTicks, _fallbackElapsed.Elapsed.Ticks);
+            if (_terminalClock is null)
+                return;
+            try
+            {
+                Volatile.Write(ref _terminalEpochTicks, _terminalClock.ElapsedSinceStart.Ticks);
+            }
+            catch
+            {
+                // Keep the previous baseline; reads degrade to the stopwatch domain anyway.
+            }
+        }
 
         public void Submit(ReadOnlySpan<float> packedSamples)
         {
@@ -256,6 +331,8 @@ public sealed class SharedAudioOutput : IDisposable
         public void Flush()
         {
             _bus.Flush();
+            // Same contract as the hardware outputs: Flush re-anchors IPlaybackClock to zero.
+            ReanchorPlaybackEpoch();
             SignalSpaceAvailable();
         }
 

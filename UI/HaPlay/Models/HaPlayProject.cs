@@ -54,6 +54,14 @@ public sealed record HaPlayProject
     /// </summary>
     public bool AutoSaveEnabled { get; init; }
 
+    /// <summary>
+    /// Operator's cue preview (audition) device by PortAudio device name. "" = an explicit "Default
+    /// device" pick; null (older files / never picked) = the picker derives its preselect from the
+    /// first configured PortAudio cue output line. Document-level like <see cref="AutoSaveEnabled"/> -
+    /// partial section imports leave the live choice untouched. Additive/optional, so no schema bump.
+    /// </summary>
+    public string? CuePreviewAudioDeviceName { get; init; }
+
     /// <summary>Constant for callers that want to write SchemaVersion explicitly.</summary>
     public const int CurrentSchemaVersion = 3;
 }
@@ -81,14 +89,21 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(CueList))]
 [JsonSerializable(typeof(CueNode))]
 [JsonSerializable(typeof(CueGroupNode))]
+[JsonSerializable(typeof(CuePlaylistOptions))]
 [JsonSerializable(typeof(MediaCueNode))]
 [JsonSerializable(typeof(CueSubtitleSelection))]
 [JsonSerializable(typeof(ActionCueNode))]
 [JsonSerializable(typeof(CommentCueNode))]
+[JsonSerializable(typeof(JumpCueNode))]
+[JsonSerializable(typeof(VisualizerCueNode))]
+[JsonSerializable(typeof(FadeCueNode))]
 [JsonSerializable(typeof(CueComposition))]
 [JsonSerializable(typeof(CueVideoOutputBinding))]
 [JsonSerializable(typeof(CueAudioRoute))]
 [JsonSerializable(typeof(CueVideoPlacement))]
+[JsonSerializable(typeof(CueChromaKey))]
+[JsonSerializable(typeof(CueColorAdjust))]
+[JsonSerializable(typeof(CueSchedule))]
 [JsonSerializable(typeof(PlaylistItem))]
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]

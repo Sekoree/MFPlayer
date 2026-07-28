@@ -255,11 +255,15 @@ public sealed class CueShowSessionCoordinator
             // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
             // them to the executors, so we fire by id (FireCueAsync) - independent of ShowSession's GO anchor.
             // Each transport op is guarded so a failure is LOGGED (not only surfaced as a UI notification).
-            CuePlayer.StopPlaybackCallback = () => GuardedCueShowOp("stop", async () =>
+            CuePlayer.StopPlaybackCallback = request => GuardedCueShowOp("stop", async () =>
             {
                 var session = _cueShowSession!;
                 var sourcesAtStop = _cueVisualizerSources.ToArray();
-                await session.StopAllAsync().ConfigureAwait(false);
+                // The VM resolved the effective fade (cue-list / app-settings / Panic); a no-fade request
+                // maps to a zero duration = the session's hard cut.
+                await session.StopAllAsync(
+                        request.Fade ? request.FadeDuration : TimeSpan.Zero, request.Curve)
+                    .ConfigureAwait(false);
                 foreach (var (compositionId, source) in sourcesAtStop)
                 {
                     // Do not remove a replacement fired onto this composition during the fade.
@@ -295,7 +299,11 @@ public sealed class CueShowSessionCoordinator
                     foreach (var (stopComp, _) in groups)
                     {
                         _cueVisualizerSources.TryGetValue(stopComp, out var sourceAtStop);
-                        await session.FadeOutCompositionVisualizerAsync(stopComp.ToString()).ConfigureAwait(false);
+                        // The Stop cue's fade rides the cue's own preset-transition time - the knob the
+                        // operator already uses for this visualizer's cross-fades.
+                        await session.FadeOutCompositionVisualizerAsync(
+                                stopComp.ToString(), TimeSpan.FromSeconds(Math.Max(0, viz.TransitionSeconds)))
+                            .ConfigureAwait(false);
                         // A new Start cue may replace this composition's source while the old one fades.
                         // Never let the completing Stop remove that replacement from the operator controls.
                         if (_cueVisualizerSources.TryGetValue(stopComp, out var current)
@@ -379,6 +387,28 @@ public sealed class CueShowSessionCoordinator
                         viz.FeedAll ? "all" : "selective", viz.PresetDirectory ?? "(builtin)");
                 }
                 return firstError;
+            };
+            // Fade cue (Ideas/CuePlayer-Enhancements.md §2): ramp each resolved target's active clip to
+            // the cue's level. The ramps are fire-and-forget - a Fade cue is instant for the chain (the
+            // VM auto-follows immediately); FadeClipAsync itself is identity-guarded, composes from the
+            // clip's current level, and is preempted by operator Stop.
+            CuePlayer.FadeCueExecutor = (fade, targetIds, _) =>
+            {
+                if (_cueShowSession is not { } session)
+                    return Task.FromResult<string?>("cue session unavailable");
+                // dB → linear; the -60 dB floor (and anything below, incl. -inf) is silence.
+                var level = fade.TargetLevelDb <= FadeCueNode.SilenceLevelDb
+                    ? 0f
+                    : (float)Math.Min(1.0, Math.Pow(10, fade.TargetLevelDb / 20.0));
+                var duration = TimeSpan.FromMilliseconds(Math.Max(0, fade.DurationMs));
+                var curve = HaPlayShowMapper.MapFadeCurve(fade.Curve);
+                foreach (var targetId in targetIds)
+                    FireAndLog(
+                        session.FadeClipAsync(
+                            targetId.ToString(), level, duration, curve,
+                            fade.StopWhenSilent, fade.AlsoFadeVideoOpacity),
+                        "fade cue ramp");
+                return Task.FromResult<string?>(null);
             };
             // Pause must hit EVERY active group, not just the default one - a multi-group cue show would otherwise
             // keep the other groups running on pause (parity with StopAllAsync).
@@ -650,9 +680,26 @@ public sealed class CueShowSessionCoordinator
             {
                 try
                 {
-                    var device = OutputManagement.DefinitionsSnapshot
-                        .OfType<PortAudioOutputDefinition>()
-                        .FirstOrDefault(d => d.Id == req.OutputLineId)?.EffectiveAudioBackendDeviceId;
+                    // Device-dependence fix #2: a tile whose configured line is missing or not a device
+                    // (PortAudio) output must NOT fire - VoicePlayer would silently fall back to the
+                    // session's default device (house PA surprise). Refuse with an operator-visible toast
+                    // (the soundboard VM toasts any returned error string) instead of rerouting.
+                    var definition = OutputManagement.DefinitionsSnapshot
+                        .FirstOrDefault(d => d.Id == req.OutputLineId);
+                    if (definition is not PortAudioOutputDefinition portAudioLine)
+                    {
+                        var tileName = Soundboard.FindTile(req.TileId)?.DisplayName
+                                       ?? Path.GetFileName(req.FilePath);
+                        Trace.LogWarning(
+                            "HaPlay: soundboard tile {Tile} ('{Name}') not fired - output line {Line} is {Reason}",
+                            req.TileId, tileName, req.OutputLineId,
+                            definition is null ? "missing" : $"not a device output ({definition.GetType().Name})");
+                        return definition is null
+                            ? Strings.Format(nameof(Strings.SoundboardTileLineMissingFormat), tileName)
+                            : Strings.Format(nameof(Strings.SoundboardTileLineNotDeviceFormat),
+                                tileName, definition.EffectiveName);
+                    }
+                    var device = portAudioLine.EffectiveAudioBackendDeviceId;
                     _soundboardFadeMs[req.TileId] = req.FadeOutMs;
                     await _cueShowSession!.FireVoiceAsync(req.TileId.ToString(), req.FilePath, device, (float)req.Volume);
                     _soundboardActiveTiles.Add(req.TileId);

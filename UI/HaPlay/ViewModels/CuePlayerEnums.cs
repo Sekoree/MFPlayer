@@ -23,6 +23,7 @@ public enum CueNodeKind
     Comment,
     Jump,
     Visualizer,
+    Fade,
 }
 
 public enum CueRowStatus

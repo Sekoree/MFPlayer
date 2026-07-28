@@ -16,7 +16,9 @@ internal sealed class VoicePlayer
     private readonly ShowSession _session;
     private readonly ClipStandbyEngine _standby;
     private readonly IAudioBackend? _audioBackend;
-    private readonly string? _outputDeviceId;
+    // Device-dependence fix #3: the fallback device is resolved fresh at each use (through the session's
+    // 5 s device cache), never a construction-time snapshot - hot-plugged hardware becomes the fallback.
+    private readonly Func<string?> _resolveFallbackDeviceId;
     // Spec builders stay on the session (they read _clipsByCue / the registry / the device-rate cache); both
     // run inside a dispatcher work item, so they may read dispatcher-confined session state.
     private readonly Func<string, ClipSpec?> _buildPreviewSpec;
@@ -64,14 +66,14 @@ internal sealed class VoicePlayer
         ShowSession session,
         ClipStandbyEngine standby,
         IAudioBackend? audioBackend,
-        string? outputDeviceId,
+        Func<string?> resolveFallbackDeviceId,
         Func<string, ClipSpec?> buildPreviewSpec,
         Func<string, string, string?, ClipSpec> buildVoiceSpec)
     {
         _session = session;
         _standby = standby;
         _audioBackend = audioBackend;
-        _outputDeviceId = outputDeviceId;
+        _resolveFallbackDeviceId = resolveFallbackDeviceId;
         _buildPreviewSpec = buildPreviewSpec;
         _buildVoiceSpec = buildVoiceSpec;
     }
@@ -132,7 +134,7 @@ internal sealed class VoicePlayer
                 if (_audioBackend is not null && player.AudioRouter is not null)
                 {
                     var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-                    var output = _audioBackend.CreateOutput(previewDeviceId ?? _outputDeviceId, new AudioFormat(rate, 2));
+                    var output = _audioBackend.CreateOutput(previewDeviceId ?? _resolveFallbackDeviceId(), new AudioFormat(rate, 2));
                     player.AttachAudioOutput(output, "_preview");
                     outputs.Add(output);
                 }
@@ -252,7 +254,7 @@ internal sealed class VoicePlayer
                 if (_audioBackend is not null && player.AudioRouter is not null)
                 {
                     var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-                    var output = _audioBackend.CreateOutput(deviceId ?? _outputDeviceId, new AudioFormat(rate, 2));
+                    var output = _audioBackend.CreateOutput(deviceId ?? _resolveFallbackDeviceId(), new AudioFormat(rate, 2));
                     player.AttachAudioOutput(output, outputId, gain: volume);
                     outputs.Add(output);
                 }

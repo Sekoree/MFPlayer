@@ -50,6 +50,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// composition with placement. Wired by <see cref="CueShowSessionCoordinator"/>.</summary>
     public Func<VisualizerCueNode, CancellationToken, Task<string?>>? VisualizerCueExecutor { get; set; }
 
+    /// <summary>Host-provided Fade-cue executor: (fade cue, resolved target cue ids, ct) → error detail
+    /// or null. The VM resolves WHICH cues fade (explicit stable-id targets expanded through groups, or
+    /// every active cue for TargetAllPlaying); the host ramps each target's clip via the session. Wired
+    /// by <see cref="CueShowSessionCoordinator"/>.</summary>
+    public Func<FadeCueNode, IReadOnlyList<Guid>, CancellationToken, Task<string?>>? FadeCueExecutor { get; set; }
+
     /// <summary>Hot-updates the placement of a running visualizer surface. Visualizers are not session
     /// clips, so they need a separate callback from <see cref="UpdateActiveCueVideoPlacementCallback"/>.</summary>
     public Func<Guid, int, CueVideoPlacement, Task>? UpdateActiveVisualizerPlacementCallback { get; set; }
@@ -57,9 +63,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Requests a preset advance on the visualizer currently attached to a composition.</summary>
     public Func<Guid, Task<bool>>? NextVisualizerPresetCallback { get; set; }
 
-    /// <summary>Host-provided stop callback - Stop / Panic forwards to this so the playback
-    /// engine can tear down its session. Optional; null in tests.</summary>
-    public Func<Task>? StopPlaybackCallback { get; set; }
+    /// <summary>Host-provided stop callback - Stop / Panic forwards the resolved effective fade
+    /// (cue-list/app-settings precedence, Panic's hard cut) so the playback engine can tear down its
+    /// session. Optional; null in tests.</summary>
+    public Func<CueStopFadeRequest, Task>? StopPlaybackCallback { get; set; }
 
     /// <summary>Host-provided pause callback - Pause/Resume forwards to this so the playback
     /// engine freezes active media instead of only deferring pending cue delays.</summary>
@@ -93,8 +100,21 @@ public partial class CuePlayerViewModel : ViewModelBase
     [ObservableProperty]
     private PreviewAudioDeviceOption? _selectedPreviewAudioDevice;
 
-    partial void OnSelectedPreviewAudioDeviceChanged(PreviewAudioDeviceOption? value) =>
+    // Device-dependence fix #1: distinguishes operator picks (UI selection or a restored project choice)
+    // from automatic preselection, so only real choices are persisted and automatic ones stay re-derivable
+    // when the configured output lines change.
+    private bool _isAutomaticPreviewDeviceSelection;
+
+    /// <summary>True once the operator picked a preview device (or a project restored one) - automatic
+    /// derivation from the configured cue output lines then stops overriding the selection.</summary>
+    public bool HasExplicitPreviewAudioDeviceChoice { get; private set; }
+
+    partial void OnSelectedPreviewAudioDeviceChanged(PreviewAudioDeviceOption? value)
+    {
+        if (!_isAutomaticPreviewDeviceSelection && value is not null)
+            HasExplicitPreviewAudioDeviceChoice = true;
         OnPropertyChanged(nameof(PreviewAudioDeviceIndex));
+    }
 
     public int? PreviewAudioDeviceIndex => SelectedPreviewAudioDevice?.DeviceIndex;
 
@@ -110,7 +130,63 @@ public partial class CuePlayerViewModel : ViewModelBase
             foreach (var dev in S.Media.Audio.PortAudio.PortAudioDeviceCatalog.EnumerateOutputDevices())
                 PreviewAudioDevices.Add(new PreviewAudioDeviceOption(dev.GlobalDeviceIndex, dev.Name));
         }
-        SelectedPreviewAudioDevice ??= PreviewAudioDevices.FirstOrDefault();
+        ApplyAutomaticPreviewDeviceSelection();
+    }
+
+    /// <summary>Preselects the preview device while the operator has made no explicit choice: the first
+    /// configured PortAudio cue output line's device when one resolves, else "Default device" (fix #1 -
+    /// preview on a show machine must not implicitly land on the house default when lines are configured).</summary>
+    private void ApplyAutomaticPreviewDeviceSelection()
+    {
+        if (HasExplicitPreviewAudioDeviceChoice && SelectedPreviewAudioDevice is not null)
+            return;
+        // Index match first (the id the runtime saves), device name second (indices shift across restarts).
+        var derived = AvailableOutputs
+            .Select(l => l.Definition)
+            .OfType<Models.PortAudioOutputDefinition>()
+            .Where(d => d.UsesPortAudioBackend)
+            .Select(d => PreviewAudioDevices.FirstOrDefault(o => o.DeviceIndex == d.GlobalDeviceIndex)
+                         ?? PreviewAudioDevices.FirstOrDefault(o => o.DeviceIndex is not null
+                             && string.Equals(o.DisplayName, d.DeviceName, StringComparison.Ordinal)))
+            .FirstOrDefault(o => o is not null);
+        _isAutomaticPreviewDeviceSelection = true;
+        try
+        {
+            SelectedPreviewAudioDevice = derived ?? PreviewAudioDevices.FirstOrDefault();
+        }
+        finally
+        {
+            _isAutomaticPreviewDeviceSelection = false;
+        }
+    }
+
+    /// <summary>The preview-device choice to persist with the project: null while the operator never picked
+    /// one (the automatic first-configured-line derivation stays live on load), "" for an explicit
+    /// "Default device", else the picked device's name (stable across restarts, unlike its index).</summary>
+    public string? BuildPreviewAudioDeviceSnapshot() =>
+        !HasExplicitPreviewAudioDeviceChoice ? null
+        : SelectedPreviewAudioDevice is not { DeviceIndex: not null } sel ? string.Empty
+        : sel.DisplayName;
+
+    /// <summary>Restores a persisted preview-device choice (see <see cref="BuildPreviewAudioDeviceSnapshot"/>).
+    /// A persisted device that is no longer present is ignored - the selection falls back to the automatic
+    /// derivation instead of pinning a stale name.</summary>
+    public void RestorePreviewAudioDevice(string? persistedDeviceName)
+    {
+        var option = persistedDeviceName switch
+        {
+            null => null,
+            "" => PreviewAudioDevices.FirstOrDefault(o => o.DeviceIndex is null),
+            _ => PreviewAudioDevices.FirstOrDefault(o => o.DeviceIndex is not null
+                && string.Equals(o.DisplayName, persistedDeviceName, StringComparison.Ordinal)),
+        };
+        if (option is not null)
+        {
+            SelectedPreviewAudioDevice = option; // counts as an explicit choice - it round-trips on save
+            return;
+        }
+        HasExplicitPreviewAudioDeviceChoice = false;
+        ApplyAutomaticPreviewDeviceSelection();
     }
 
     private float[]? _selectedCueWaveform;
@@ -257,6 +333,9 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
         WatchVideoOutputLinesForResize();
         ResolveAllBindingLineRefs();
+        // Line-up changes re-derive the preview preselect (no-op once the operator picked a device):
+        // the first configured PortAudio line's device beats the implicit "Default device".
+        ApplyAutomaticPreviewDeviceSelection();
     }
 
     // A local output's window resize replaces the line's Definition (OutputManagementViewModel
@@ -312,7 +391,10 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public IReadOnlyList<CueEndBehavior> CueEndBehaviors { get; } = Enum.GetValues<CueEndBehavior>();
     public IReadOnlyList<CueTriggerMode> CueTriggerModes { get; } = Enum.GetValues<CueTriggerMode>();
+    public IReadOnlyList<CueFadeCurve> CueFadeCurves { get; } = Enum.GetValues<CueFadeCurve>();
+    public IReadOnlyList<CueScheduleKind> CueScheduleKinds { get; } = Enum.GetValues<CueScheduleKind>();
     public IReadOnlyList<CueGroupFireMode> GroupFireModes { get; } = Enum.GetValues<CueGroupFireMode>();
+    public IReadOnlyList<CuePlaylistEndBehavior> PlaylistEndBehaviors { get; } = Enum.GetValues<CuePlaylistEndBehavior>();
     public IReadOnlyList<CueLayerPosition> LayerPositions { get; } = Enum.GetValues<CueLayerPosition>();
 
     public IReadOnlyList<TextAlignH> TextHAlignOptions { get; } = Enum.GetValues<TextAlignH>();
@@ -398,6 +480,15 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _isCueEditMode = true;
+
+    /// <summary>Master "Schedules armed" gate for wall-clock cue triggers (Ideas/CuePlayer-
+    /// Enhancements.md §4). Deliberately SESSION-scoped and never persisted: arming schedules is a
+    /// per-show act, so every app start (and project load) begins disarmed. Schedules fire only while
+    /// this is on AND <see cref="IsCueEditMode"/> is off - an operator editing at 14:59 must not have
+    /// Q50 fire into the room. <c>CueSchedulerService</c> observes this and the toggle in the cue
+    /// transport row binds it.</summary>
+    [ObservableProperty]
+    private bool _schedulesArmed;
 
     public ObservableCollection<CueNodeViewModel> VisibleNodes =>
         SelectedCueList?.Nodes ?? _emptyNodes;
@@ -626,7 +717,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             if (node.EndTargetCueId is { } endId)
             {
-                node.TargetDisplay = byId.TryGetValue(endId, out var target)
+                node.TargetDisplayBase = byId.TryGetValue(endId, out var target)
                     ? $"End → {CueReference(target)}"
                     : "End → ?";
                 continue;
@@ -646,11 +737,26 @@ public partial class CuePlayerViewModel : ViewModelBase
                     : string.Equals(node.SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase)
                         ? "Standby"
                         : "Jump";
-                node.TargetDisplay = $"{mode} → {targets}";
+                node.TargetDisplayBase = $"{mode} → {targets}";
                 continue;
             }
 
-            node.TargetDisplay = string.Empty;
+            if (node.Kind == CueNodeKind.Fade)
+            {
+                var level = node.FadeTargetLevelDb <= FadeCueNode.SilenceLevelDb
+                    ? "silence"
+                    : $"{node.FadeTargetLevelDb:0.#} dB";
+                var targets = node.FadeTargetAllPlaying
+                    ? "all playing"
+                    : node.FadeTargetIds.Count == 0
+                        ? "?"
+                        : string.Join(", ", node.FadeTargetIds.Select(id =>
+                            byId.TryGetValue(id, out var target) ? CueReference(target) : "?"));
+                node.TargetDisplayBase = $"Fade → {targets} ({level})";
+                continue;
+            }
+
+            node.TargetDisplayBase = string.Empty;
         }
     }
 
@@ -1033,6 +1139,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             OnPropertyChanged(nameof(SelectedEndTargetText));
             OnPropertyChanged(nameof(SelectedVisualizerFeedText));
             OnPropertyChanged(nameof(SelectedJumpTargetsText));
+            OnPropertyChanged(nameof(SelectedFadeTargetsText));
             OnPropertyChanged(nameof(SelectedCueDrawerTitle));
         }
     }
@@ -1378,6 +1485,88 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Drawer gate for the fade-cue section.</summary>
+    public bool IsFadeCueSelected => SelectedFadeCue is not null;
+
+    /// <summary>Fade targets as CUE NUMBERS (display/entry) stored as stable cue IDs - the Jump-targets
+    /// pattern, including inclusive hierarchical ranges (2.2-2.4). Media cues and groups are valid
+    /// targets (a group fades its descendant media cues).</summary>
+    public string SelectedFadeTargetsText
+    {
+        get
+        {
+            if (SelectedFadeCue is not { } fade)
+                return string.Empty;
+            var byId = EnumerateAllCueNodes().ToDictionary(c => c.Id, c => c);
+            return string.Join(", ", fade.FadeTargetIds.Select(id =>
+                byId.TryGetValue(id, out var c)
+                    ? (string.IsNullOrWhiteSpace(c.Number) ? c.Label : c.Number)
+                    : "?"));
+        }
+        set
+        {
+            if (SelectedFadeCue is not { } fade)
+                return;
+            var tokens = (value ?? string.Empty)
+                .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var resolved = new List<Guid>();
+            var unknown = new List<string>();
+            foreach (var enteredToken in tokens)
+            {
+                foreach (var token in ExpandCueNumberToken(enteredToken))
+                {
+                    var match = EnumerateAllCueNodes().FirstOrDefault(c =>
+                        !ReferenceEquals(c, fade)
+                        && c.Kind is CueNodeKind.Media or CueNodeKind.Group
+                        && string.Equals(c.Number?.Trim(), token, StringComparison.OrdinalIgnoreCase));
+                    if (match is not null && !resolved.Contains(match.Id))
+                        resolved.Add(match.Id);
+                    else if (match is null)
+                        unknown.Add(token);
+                }
+            }
+
+            fade.FadeTargetIds = resolved;
+            foreach (var target in SelectedKindTargets(CueNodeKind.Fade))
+                if (!ReferenceEquals(target, fade))
+                    target.FadeTargetIds = [.. resolved];
+            StatusMessage = unknown.Count > 0
+                ? Strings.Format(nameof(Strings.CueJumpUnknownNumbersFormat), string.Join(", ", unknown))
+                : null;
+            RefreshCueTargetDisplays();
+            OnPropertyChanged(nameof(SelectedFadeTargetsText));
+        }
+    }
+
+    /// <summary>Resolves the cue ids a Fade cue actually ramps (UI thread - reads transport state):
+    /// every active cue for TargetAllPlaying, else the explicit targets with groups expanded to their
+    /// descendant media cues.</summary>
+    internal IReadOnlyList<Guid> ResolveFadeCueTargetsOnUi(CueNodeViewModel fade)
+    {
+        if (fade.FadeTargetAllPlaying)
+            return _activeCueIds.ToList();
+
+        var byId = EnumerateAllCueNodes().ToDictionary(c => c.Id, c => c);
+        var resolved = new List<Guid>();
+        foreach (var id in fade.FadeTargetIds)
+        {
+            if (!byId.TryGetValue(id, out var target))
+                continue;
+            if (target.Kind == CueNodeKind.Group)
+            {
+                foreach (var media in EnumerateMediaNodes(target.Children))
+                    if (!resolved.Contains(media.Id))
+                        resolved.Add(media.Id);
+            }
+            else if (target.Kind == CueNodeKind.Media && !resolved.Contains(target.Id))
+            {
+                resolved.Add(target.Id);
+            }
+        }
+
+        return resolved;
+    }
+
     partial void OnSelectedCueNodeChanged(CueNodeViewModel? value)
     {
         // Programmatic selections (add/duplicate/load) do not necessarily pass through
@@ -1398,6 +1587,9 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(SelectedJumpRandom));
         OnPropertyChanged(nameof(SelectedJumpAvoidImmediateRepeat));
         OnPropertyChanged(nameof(SelectedJumpFiresTarget));
+        OnPropertyChanged(nameof(SelectedFadeCue));
+        OnPropertyChanged(nameof(IsFadeCueSelected));
+        OnPropertyChanged(nameof(SelectedFadeTargetsText));
         // The selected cue's probe fields can land AFTER selection (when the operator picks a
         // file via "Browse media…"; the probe is async). Re-subscribe so the Video tab visibility
         // re-evaluates when the probe finishes.
@@ -1540,8 +1732,9 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private IReadOnlyList<CueNodeViewModel> GetStandbySimultaneousGroupTargets()
     {
+        // Timeline groups pre-roll like simultaneous ones: every planned child is opened from standby.
         if (StandbyCueNode is not { Kind: CueNodeKind.Group } group
-            || ParseGroupFireMode(group) != CueGroupFireMode.FireAllSimultaneously)
+            || ParseGroupFireMode(group) is not (CueGroupFireMode.FireAllSimultaneously or CueGroupFireMode.Timeline))
             return [];
 
         return BuildTriggerPlan(group).Select(step => step.Cue).ToList();
@@ -1706,6 +1899,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             }
 
             group.Children.Add(entry);
+            RefreshPlaylistNowPlayingStatus(groupNode.Id);
             return;
         }
 
@@ -2184,6 +2378,10 @@ public partial class CuePlayerViewModel : ViewModelBase
             return null;
         if (node.Kind != CueNodeKind.Group)
             return node;
+        // A playlist/armed-list group resolves to its armed NEXT PICK, so GO, standby pre-roll and
+        // the upcoming list all agree on the same item (§3 + spec point 5).
+        if (IsPlaylistGroup(node))
+            return PeekPlaylistPick(node);
         return EnumerateFireableCueOrder(node.Children).FirstOrDefault();
     }
 
@@ -2278,7 +2476,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             ? mode
             : CueGroupFireMode.FirstCueOnly;
 
-    private List<(CueNodeViewModel Cue, int DelayMs)> BuildTriggerPlan(CueNodeViewModel target)
+    internal List<(CueNodeViewModel Cue, int DelayMs)> BuildTriggerPlan(CueNodeViewModel target)
     {
         var plan = new List<(CueNodeViewModel Cue, int DelayMs)>();
         if (target.Kind != CueNodeKind.Group)
@@ -2299,6 +2497,58 @@ public partial class CuePlayerViewModel : ViewModelBase
             foreach (var cue in EnumerateFireableCueOrder(children))
                 plan.Add((cue, checked(groupPreWait + Math.Max(0, cue.PreWaitMs))));
             plan.Sort(static (a, b) => a.DelayMs.CompareTo(b.DelayMs));
+            return plan;
+        }
+
+        if (mode == CueGroupFireMode.Timeline)
+        {
+            // Same delay-sorted plan as FireAllSimultaneously, with the authored lane start added on the
+            // group's plan epoch. A nested group child keeps the sim-mode flattening (its fireable
+            // descendants), all anchored at the child group's own lane start.
+            foreach (var child in children)
+            {
+                if (child.Kind == CueNodeKind.Comment)
+                    continue;
+                var laneStart = checked(groupPreWait + Math.Max(0, child.TimelineStartMs));
+                if (child.Kind == CueNodeKind.Group)
+                {
+                    var nestedBase = checked(laneStart + Math.Max(0, child.PreWaitMs));
+                    foreach (var cue in EnumerateFireableCueOrder(child.Children))
+                        plan.Add((cue, checked(nestedBase + Math.Max(0, cue.PreWaitMs))));
+                }
+                else
+                {
+                    plan.Add((child, checked(laneStart + Math.Max(0, child.PreWaitMs))));
+                }
+            }
+            plan.Sort(static (a, b) => a.DelayMs.CompareTo(b.DelayMs));
+            return plan;
+        }
+
+        if (mode is CueGroupFireMode.Playlist or CueGroupFireMode.ArmedList)
+        {
+            // GO on a group whose run already finished deliberately restarts a fresh run (the
+            // Finished state only survives between "last pick fired" and its natural end so the
+            // end-of-run behavior can trigger exactly once).
+            if (_playlistRuns.TryGetValue(target.Id, out var finishedRun) && finishedRun.Finished)
+                _playlistRuns.Remove(target.Id);
+
+            var pick = PeekPlaylistPick(target);
+            if (pick is null)
+                return plan;
+            if (pick.Kind == CueNodeKind.Group)
+            {
+                // A nested-group item fires through its own fire mode's plan.
+                foreach (var (cue, delayMs) in BuildTriggerPlan(pick))
+                    plan.Add((cue, checked(groupPreWait + delayMs)));
+            }
+            else
+            {
+                // No AppendAutoContinueCues here: a playlist item plays alone - the run itself is
+                // the chain.
+                plan.Add((pick, checked(groupPreWait + Math.Max(0, pick.PreWaitMs))));
+            }
+
             return plan;
         }
 
@@ -2334,6 +2584,301 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
+    // ----- Playlist / armed-list group runs (Ideas/CuePlayer-Enhancements.md §3) -----------------
+    // Session-only state beside _lastRandomJumpTargetIds (the same "session state, not project
+    // data" philosophy): loading a project, Stop and Panic all start every playlist afresh.
+
+    private sealed class PlaylistRunState
+    {
+        /// <summary>This pass's item order (ids of direct non-comment children). For shuffle this IS
+        /// the bag: a Fisher–Yates order drawn without replacement guarantees every child once per pass.</summary>
+        public List<Guid> PassOrder = [];
+
+        /// <summary>Index of the next item to fire within <see cref="PassOrder"/>.</summary>
+        public int NextIndex;
+
+        /// <summary>Items actually played per pass: the resolved PlayCount subset, else the child count.</summary>
+        public int ItemsPerPass;
+
+        /// <summary>1-based pass counter.</summary>
+        public int Pass = 1;
+
+        /// <summary>The item currently playing (the last consumed pick); guards the pass boundary
+        /// no-repeat and routes natural-end events to this run.</summary>
+        public Guid? CurrentItemId;
+
+        // Display fields captured at consume time, BEFORE any pass rollover mutates the counters.
+        public int CurrentItemOrdinal;
+        public int CurrentItemPass;
+        public int CurrentPassItemCount;
+
+        /// <summary>The final pick of the final pass has fired; its natural end triggers the group's
+        /// end behavior exactly once, after which the run is removed.</summary>
+        public bool Finished;
+    }
+
+    private readonly Dictionary<Guid, PlaylistRunState> _playlistRuns = [];
+
+    /// <summary>Shuffle RNG - injectable so tests can drive deterministic bags.</summary>
+    internal Random PlaylistRandom { get; set; } = Random.Shared;
+
+    /// <summary>Test/diagnostic accessor: whether a playlist run (armed or playing) exists for the group.</summary>
+    internal bool HasActivePlaylistRun(Guid groupId) => _playlistRuns.ContainsKey(groupId);
+
+    private bool HasFinishedPlaylistRun(Guid groupId) =>
+        _playlistRuns.TryGetValue(groupId, out var run) && run.Finished;
+
+    internal void ClearPlaylistRuns() => _playlistRuns.Clear();
+
+    private bool IsPlaylistGroup(CueNodeViewModel? node) =>
+        node is { Kind: CueNodeKind.Group }
+        && ParseGroupFireMode(node) is CueGroupFireMode.Playlist or CueGroupFireMode.ArmedList;
+
+    /// <summary>The group's playlist items: direct non-comment children, skipping nested groups with
+    /// nothing fireable. Each item fires as a unit (a nested group runs through its own fire mode).</summary>
+    private static List<CueNodeViewModel> PlaylistItems(CueNodeViewModel group) =>
+        group.Children
+            .Where(c => c.Kind != CueNodeKind.Comment
+                        && (c.Kind != CueNodeKind.Group || EnumerateFireableCueOrder(c.Children).Any()))
+            .ToList();
+
+    /// <summary>The next pick of a playlist/armed-list group, creating (or repairing after tree
+    /// edits) its session run on demand so standby pre-roll and GO always agree on the same item.
+    /// Peeking commits the shuffle draw but consumes nothing - counters advance only when the pick
+    /// fires. Null when the group has no items or its run just finished (transient window until the
+    /// final item's natural end applies the end behavior).</summary>
+    private CueNodeViewModel? PeekPlaylistPick(CueNodeViewModel group)
+    {
+        var items = PlaylistItems(group);
+        if (items.Count == 0)
+            return null;
+
+        var run = GetPlaylistRun(group, items);
+        if (run.Finished)
+            return null;
+        var pickId = run.PassOrder[run.NextIndex];
+        return items.First(i => i.Id == pickId);
+    }
+
+    private PlaylistRunState GetPlaylistRun(CueNodeViewModel group, List<CueNodeViewModel> items)
+    {
+        if (_playlistRuns.TryGetValue(group.Id, out var run))
+        {
+            if (run.Finished)
+                return run;
+            // Repair after tree edits: the armed pick must reference a live child, else rebuild.
+            if (run.NextIndex < run.PassOrder.Count
+                && items.Any(i => i.Id == run.PassOrder[run.NextIndex]))
+                return run;
+            _playlistRuns.Remove(group.Id);
+        }
+
+        run = new PlaylistRunState();
+        StartPlaylistPass(run, group, items);
+        _playlistRuns[group.Id] = run;
+        return run;
+    }
+
+    /// <summary>(Re)builds the pass order and per-pass counters. Reuses the previous shuffled order
+    /// when ReshuffleEachPass is off; applies the AvoidImmediateRepeat pass-boundary guard.</summary>
+    private void StartPlaylistPass(PlaylistRunState run, CueNodeViewModel group, List<CueNodeViewModel> items)
+    {
+        var ids = items.Select(i => i.Id).ToList();
+        var keepOrder = group.PlaylistShuffle
+                        && !group.PlaylistReshuffleEachPass
+                        && run.PassOrder.Count == ids.Count
+                        && run.PassOrder.All(ids.Contains);
+        if (!keepOrder)
+        {
+            run.PassOrder = [.. ids];
+            if (group.PlaylistShuffle)
+            {
+                // Fisher–Yates: the whole pass is one bag drawn without replacement.
+                for (var i = run.PassOrder.Count - 1; i > 0; i--)
+                {
+                    var j = PlaylistRandom.Next(i + 1);
+                    (run.PassOrder[i], run.PassOrder[j]) = (run.PassOrder[j], run.PassOrder[i]);
+                }
+            }
+        }
+
+        // Pass-boundary guard: never open a pass with the item that just played when an
+        // alternative exists (what "avoid immediate repeat" means across a reshuffle).
+        if (group.PlaylistAvoidImmediateRepeat
+            && run.PassOrder.Count > 1
+            && run.CurrentItemId is { } lastPlayed
+            && run.PassOrder[0] == lastPlayed)
+        {
+            var swapWith = 1 + PlaylistRandom.Next(run.PassOrder.Count - 1);
+            (run.PassOrder[0], run.PassOrder[swapWith]) = (run.PassOrder[swapWith], run.PassOrder[0]);
+        }
+
+        run.ItemsPerPass = Math.Clamp(
+            group.PlaylistPlayCount ?? run.PassOrder.Count, 1, run.PassOrder.Count);
+        run.NextIndex = 0;
+    }
+
+    /// <summary>Advances the run after its armed pick fired: bumps the counters, rolls the pass
+    /// boundary (honoring LoopCount/PlayCount) and marks the run finished after the final pick.</summary>
+    private void ConsumePlaylistPick(CueNodeViewModel group)
+    {
+        var items = PlaylistItems(group);
+        if (items.Count == 0 || GetPlaylistRun(group, items) is not { Finished: false } run)
+            return;
+
+        run.CurrentItemId = run.PassOrder[run.NextIndex];
+        run.CurrentItemOrdinal = run.NextIndex + 1;
+        run.CurrentItemPass = run.Pass;
+        run.CurrentPassItemCount = run.ItemsPerPass;
+        run.NextIndex++;
+        if (run.NextIndex >= run.ItemsPerPass)
+        {
+            var loops = Math.Max(0, group.PlaylistLoopCount);
+            if (loops != 0 && run.Pass >= loops)
+            {
+                run.Finished = true;
+            }
+            else
+            {
+                run.Pass++;
+                StartPlaylistPass(run, group, items);
+            }
+        }
+
+        RefreshPlaylistNowPlayingStatus(group.Id);
+    }
+
+    /// <summary>First fireable cue after the whole group (skipping all its descendants).</summary>
+    private static CueNodeViewModel? NextCueAfterGroup(
+        CueNodeViewModel group, IReadOnlyList<CueNodeViewModel> ordered)
+    {
+        var lastDescendant = EnumerateFireableCueOrder(group.Children).LastOrDefault();
+        return lastDescendant is null ? null : NextCueAfter(lastDescendant, ordered);
+    }
+
+    /// <summary>Routes a natural-end event to the playlist run that owns it, if any. Innermost
+    /// playlist group wins. Returns null (default sequential logic applies) when a nested-group
+    /// item is still running its own internal Auto-Follow chain.</summary>
+    private (CueNodeViewModel Group, PlaylistRunState Run, bool IsCurrentItem)? FindPlaylistRunForEndedCue(
+        CueNodeViewModel ended)
+    {
+        if (_playlistRuns.Count == 0)
+            return null;
+
+        var path = FindContainingGroupPath(ended);
+        for (var i = path.Count - 1; i >= 0; i--)
+        {
+            var group = path[i];
+            if (!IsPlaylistGroup(group) || !_playlistRuns.TryGetValue(group.Id, out var run))
+                continue;
+
+            var item = i + 1 < path.Count ? path[i + 1] : ended;
+            if (item.Kind == CueNodeKind.Group)
+            {
+                // The item's own Auto-Follow chain continues inside it - not the item's end yet.
+                var ordered = EnumerateFireableCueOrder().ToList();
+                var idx = ordered.FindIndex(c => ReferenceEquals(c, ended));
+                if (idx >= 0 && idx + 1 < ordered.Count)
+                {
+                    var next = ordered[idx + 1];
+                    if (FindContainingGroupPath(next).Any(g => ReferenceEquals(g, item))
+                        && SequentialTransitionUsesMode(ended, next, CueTriggerMode.AutoFollow))
+                        return null;
+                }
+            }
+
+            return (group, run, run.CurrentItemId == item.Id);
+        }
+
+        return null;
+    }
+
+    private async Task HandlePlaylistItemEndedAsync(
+        CueNodeViewModel group, PlaylistRunState run, CueNodeViewModel ended, bool isCurrentItem)
+    {
+        // A skipped/overlapped item finishing late must not double-advance the run - swallow it
+        // (falling through to default Auto-Follow would defeat the group semantics too).
+        if (!isCurrentItem)
+            return;
+
+        // Armed list: GO advances, a natural end does not - and it must not fall through to the
+        // default next-sibling Auto-Follow either.
+        if (ParseGroupFireMode(group) == CueGroupFireMode.ArmedList)
+            return;
+
+        if (!run.Finished)
+        {
+            // Auto-advance: fire the next pick through the normal GO machinery (GoCore's playlist
+            // branch consumes the pick and keeps standby on the group).
+            StandbyCueNode = group;
+            _immediateJumpChain.Clear();
+            await GoCore(group);
+            return;
+        }
+
+        // Run complete - the run state is over either way; apply the configured end behavior.
+        _playlistRuns.Remove(group.Id);
+        RefreshPlaylistNowPlayingStatus(group.Id);
+        switch (group.PlaylistEndBehavior)
+        {
+            case CuePlaylistEndBehavior.AdvancePastGroup:
+            {
+                var ordered = EnumerateFireableCueOrder().ToList();
+                var next = NextCueAfterGroup(group, ordered);
+                if (next is null)
+                {
+                    CurrentCueNode = null;
+                    return;
+                }
+
+                StandbyCueNode = next;
+                if (SequentialTransitionUsesMode(ended, next, CueTriggerMode.AutoFollow))
+                {
+                    StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(next));
+                    _immediateJumpChain.Clear();
+                    await GoCore();
+                }
+
+                return;
+            }
+            case CuePlaylistEndBehavior.Hold:
+                // Leave the transport exactly where it is (held/freeze-frame clips keep showing).
+                return;
+            case CuePlaylistEndBehavior.Stop:
+            default:
+                CurrentCueNode = null;
+                StandbyCueNode = group; // a fresh GO restarts the playlist
+                StatusMessage = Strings.Format(nameof(Strings.CuePlaylistFinishedStatusFormat), CueDisplay(group));
+                return;
+        }
+    }
+
+    /// <summary>Now-Playing aggregate status for a playlist group row: "item i/N · pass p/M"
+    /// (or "… · pass p" for an infinite run). Null when the group has no live run item.</summary>
+    internal string? BuildPlaylistStatus(CueNodeViewModel group)
+    {
+        if (!IsPlaylistGroup(group)
+            || !_playlistRuns.TryGetValue(group.Id, out var run)
+            || run.CurrentItemId is null)
+            return null;
+
+        var loops = Math.Max(0, group.PlaylistLoopCount);
+        return loops == 0
+            ? Strings.Format(
+                nameof(Strings.PlaylistStatusInfiniteFormat),
+                run.CurrentItemOrdinal, run.CurrentPassItemCount, run.CurrentItemPass)
+            : Strings.Format(
+                nameof(Strings.PlaylistStatusFormat),
+                run.CurrentItemOrdinal, run.CurrentPassItemCount, run.CurrentItemPass, loops);
+    }
+
+    private void RefreshPlaylistNowPlayingStatus(Guid groupId)
+    {
+        var row = NowPlayingRows.OfType<ActiveGroupViewModel>().FirstOrDefault(g => g.GroupId == groupId);
+        if (row is not null)
+            row.PlaylistStatus = BuildPlaylistStatus(row.GroupNode);
+    }
+
     /// <summary>Called when the active player finishes a file naturally during cue-driven playback.</summary>
     public Task OnMediaCueNaturallyEndedAsync() =>
         CurrentCueNode is { Kind: CueNodeKind.Media } current
@@ -2345,6 +2890,15 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (EnumerateAllCueNodes().FirstOrDefault(cue => cue.Id == endedCueId)
             is not { Kind: CueNodeKind.Media } ended)
             return;
+
+        // Playlist runs own their children's end events (before per-cue EndTarget: the group's run
+        // semantics take precedence over a child's authored end-jump while the run is active).
+        if (FindPlaylistRunForEndedCue(ended) is { } playlistHit)
+        {
+            await HandlePlaylistItemEndedAsync(
+                playlistHit.Group, playlistHit.Run, ended, playlistHit.IsCurrentItem);
+            return;
+        }
 
         // End target ("then fire cue #"): an explicit on-end jump wins over the default
         // next-cue-Auto-Follow chain - "after this song, go anywhere".
@@ -2649,6 +3203,13 @@ public partial class CuePlayerViewModel : ViewModelBase
             yield return node;
     }
 
+    /// <summary>Cues in the SELECTED list carrying schedule configuration (enabled or retained-while-
+    /// disabled) - the <c>CueSchedulerService</c> sweep. Scheduling is scoped to the selected list
+    /// because scheduled fires ride the same operator-selected fire path as GO, which operates on the
+    /// selected list's transport.</summary>
+    internal IEnumerable<CueNodeViewModel> EnumerateScheduledCueNodes() =>
+        EnumerateAllCueNodes().Where(node => node.HasSchedule);
+
     private static IEnumerable<CueNodeViewModel> EnumerateAllCueNodes(IEnumerable<CueNodeViewModel> nodes)
     {
         foreach (var node in nodes)
@@ -2798,12 +3359,13 @@ public partial class CuePlayerViewModel : ViewModelBase
                 StartVisualizerRow(cue);
         }
 
-        // Runtime chaining for INSTANT cues (visualizer/action - jumps redirect themselves): the media
-        // end-machinery never fires for them, so a following Auto-Follow cue would otherwise never
-        // start. An infinite visualizer (or an action) is non-blocking → the chain advances NOW; a
-        // visualizer WITH a duration occupies the timeline like an image slide → advance after it.
+        // Runtime chaining for INSTANT cues (visualizer/action/fade - jumps redirect themselves): the
+        // media end-machinery never fires for them, so a following Auto-Follow cue would otherwise never
+        // start. An infinite visualizer (or an action, or a fade - its ramp runs in the background) is
+        // non-blocking → the chain advances NOW; a visualizer WITH a duration occupies the timeline like
+        // an image slide → advance after it.
         if (string.IsNullOrWhiteSpace(detail)
-            && cue.Kind is CueNodeKind.Visualizer or CueNodeKind.Action)
+            && cue.Kind is CueNodeKind.Visualizer or CueNodeKind.Action or CueNodeKind.Fade)
         {
             var delayMs = cue.Kind == CueNodeKind.Visualizer ? Math.Max(0, cue.VisualizerDurationMs) : 0;
             _ = AdvanceAutoFollowAfterInstantCueAsync(cue, delayMs);
@@ -3005,6 +3567,21 @@ public partial class CuePlayerViewModel : ViewModelBase
                 // pick) and, by default, fires it through the normal GO machinery.
                 return await Avalonia.Threading.Dispatcher.UIThread
                     .InvokeAsync(() => ExecuteJumpCueOnUi(cue));
+            case CueNodeKind.Fade:
+            {
+                if (FadeCueExecutor is null)
+                    return Strings.CueFadeExecutionNotConfigured;
+                if (cue.ToModel() is not FadeCueNode fade)
+                    return Strings.CueInvalidActionCue;
+                // Target resolution reads transport state (_activeCueIds) and the cue tree - UI thread.
+                var fadeTargets = await Avalonia.Threading.Dispatcher.UIThread
+                    .InvokeAsync(() => ResolveFadeCueTargetsOnUi(cue));
+                if (fadeTargets.Count == 0)
+                    // "Fade all playing" with nothing playing is a benign no-op; an explicit target
+                    // list that resolved to nothing is an authoring error worth surfacing.
+                    return cue.FadeTargetAllPlaying ? null : Strings.CueFadeNoTargets;
+                return await FadeCueExecutor(fade, fadeTargets, ct);
+            }
             case CueNodeKind.Group:
             default:
                 return null;
@@ -3149,6 +3726,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     public void ApplyCueLists(IReadOnlyList<CueList> lists, string? collectionPath = null)
     {
         _lastRandomJumpTargetIds.Clear();
+        _playlistRuns.Clear(); // playlist runs are session state - a (re)load starts them afresh
         _cueListsCollectionPath = collectionPath;
         OnPropertyChanged(nameof(CueListsCollectionPath));
         OnPropertyChanged(nameof(DisplayedCueFilePath));

@@ -40,6 +40,7 @@ public partial class CuePlayerViewModel
     public CueNodeViewModel? SelectedGroupCue => FindSelectedKind(CueNodeKind.Group);
     public CueNodeViewModel? SelectedJumpCue => FindSelectedKind(CueNodeKind.Jump);
     public CueNodeViewModel? SelectedVisualizerCue => FindSelectedKind(CueNodeKind.Visualizer);
+    public CueNodeViewModel? SelectedFadeCue => FindSelectedKind(CueNodeKind.Fade);
 
     public bool HasSelectedSubtitleCue => SelectedSubtitleCue is not null;
 
@@ -137,6 +138,9 @@ public partial class CuePlayerViewModel
         OnPropertyChanged(nameof(HasSelectedGroupCue));
         OnPropertyChanged(nameof(IsJumpCueSelected));
         OnPropertyChanged(nameof(IsVisualizerCueSelected));
+        OnPropertyChanged(nameof(SelectedFadeCue));
+        OnPropertyChanged(nameof(IsFadeCueSelected));
+        OnPropertyChanged(nameof(SelectedFadeTargetsText));
         OnPropertyChanged(nameof(VisibleAudioRoutes));
         OnPropertyChanged(nameof(VisibleVideoPlacements));
 
@@ -203,6 +207,8 @@ public partial class CuePlayerViewModel
         else if (ReferenceEquals(source, SelectedMediaCue)
                  && propertyName is nameof(CueNodeViewModel.FadeInMs)
                      or nameof(CueNodeViewModel.FadeOutMs)
+                     or nameof(CueNodeViewModel.FadeInCurve)
+                     or nameof(CueNodeViewModel.FadeOutCurve)
                      or nameof(CueNodeViewModel.StartOffsetMs)
                      or nameof(CueNodeViewModel.EndOffsetMs)
                      or nameof(CueNodeViewModel.Loop)
@@ -294,6 +300,8 @@ public partial class CuePlayerViewModel
             case nameof(CueNodeViewModel.Notes): target.Notes = source.Notes; break;
             case nameof(CueNodeViewModel.FadeInMs): target.FadeInMs = source.FadeInMs; break;
             case nameof(CueNodeViewModel.FadeOutMs): target.FadeOutMs = source.FadeOutMs; break;
+            case nameof(CueNodeViewModel.FadeInCurve): target.FadeInCurve = source.FadeInCurve; break;
+            case nameof(CueNodeViewModel.FadeOutCurve): target.FadeOutCurve = source.FadeOutCurve; break;
             case nameof(CueNodeViewModel.StartOffsetMs): target.StartOffsetMs = source.StartOffsetMs; break;
             case nameof(CueNodeViewModel.EndOffsetMs): target.EndOffsetMs = source.EndOffsetMs; break;
             case nameof(CueNodeViewModel.DurationMs): target.DurationMs = source.DurationMs; break;

@@ -81,6 +81,13 @@ public sealed class AppSettings
     /// <summary>Configurable cue-player transport and visualizer shortcuts.</summary>
     public CueHotkeyProfile CueHotkeys { get; set; } = new();
 
+    /// <summary>Cue transport Stop fade (ms) used when the cue list sets no <c>CueList.StopFadeMs</c> of its
+    /// own. 750 matches the previously hardcoded session stop fade; 0 = hard cut.</summary>
+    public int StopFadeMs { get; set; } = 750;
+
+    /// <summary>Cue transport Panic fade (ms). Default 0 = hard cut - panic means <em>now</em>.</summary>
+    public int PanicFadeMs { get; set; }
+
     private static string FilePath
     {
         get

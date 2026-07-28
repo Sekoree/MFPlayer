@@ -42,6 +42,14 @@ public sealed record CueList
     /// pre-5.8 behavior where operators set numbers themselves.</summary>
     public bool AutoRenumberOnInsert { get; init; }
 
+    /// <summary>Stop-fade length (ms) for the transport Stop on this list, applied to clips without
+    /// their own <see cref="MediaCueNode.FadeOutMs"/>. Null (older files) = the app-settings default
+    /// (<c>AppSettings.StopFadeMs</c>); 0 = hard cut.</summary>
+    public int? StopFadeMs { get; init; }
+
+    /// <summary>Gain curve for this list's stop fade. Default Linear so older files load unchanged.</summary>
+    public CueFadeCurve StopFadeCurve { get; init; } = CueFadeCurve.Linear;
+
     /// <summary>Virtual canvases used by the cue player. Multiple video outputs may reference the
     /// same composition (fan-out: composition is rendered once, fed to every referencing output).</summary>
     public List<CueComposition> Compositions { get; init; } = new();
@@ -218,6 +226,7 @@ public enum CueLayerPosition
 [JsonDerivedType(typeof(CommentCueNode), typeDiscriminator: "comment")]
 [JsonDerivedType(typeof(JumpCueNode), typeDiscriminator: "jump")]
 [JsonDerivedType(typeof(VisualizerCueNode), typeDiscriminator: "visualizer")]
+[JsonDerivedType(typeof(FadeCueNode), typeDiscriminator: "fade")]
 public abstract record CueNode
 {
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -235,13 +244,139 @@ public abstract record CueNode
     /// <summary>Color tag index 0..7 - 0 = none, 1..7 map to a fixed palette in
     /// <c>CueColorTagPalette</c>. Default-safe for pre-5.8 files (loads as 0 / no tag).</summary>
     public int ColorTag { get; init; }
+
+    /// <summary>Authored start offset (ms) on the parent group's plan epoch - meaningful only inside a
+    /// <see cref="CueGroupFireMode.Timeline"/> group. Default 0 (the CLR default, so <c>init</c> is safe
+    /// under the source-generated serializer) keeps pre-timeline files loading unchanged.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int TimelineStartMs { get; init; }
+
+    /// <summary>Optional wall-clock trigger (Ideas/CuePlayer-Enhancements.md §4). A schedule is an
+    /// ADDITIONAL trigger on the cue, not a replacement for <see cref="TriggerMode"/> - a scheduled
+    /// cue can still be fired manually. Null = no schedule; older files load (and re-save) unchanged
+    /// (null is the CLR default, so <c>init</c> is safe under the source-generated serializer, and
+    /// the context's WhenWritingNull policy keeps the field out of the JSON).</summary>
+    public CueSchedule? Schedule { get; init; }
+}
+
+/// <summary>Wall-clock schedule on a cue (Ideas/CuePlayer-Enhancements.md §4). Times are LOCAL
+/// wall-clock - shows are local-time creatures. <see cref="TimeOfDay"/> is stored as local time;
+/// the one-shot <see cref="At"/> is a <see cref="DateTimeOffset"/> so it survives timezone moves.
+/// Recurring times resolve against local wall time each day, so a DST-skipped/duplicated hour
+/// follows the OS clock (documented behavior - the scheduler does not fight it).
+/// <para>GOTCHA: properties use <c>set</c>, not <c>init</c>, deliberately. The source-generated
+/// serializer assigns EVERY init property through one object initializer, so fields absent from the
+/// JSON would load as CLR defaults (GraceMs 0, Enabled false) instead of these property
+/// initializers - a minimal <c>"schedule":{}</c> must keep GraceMs 5000 / Enabled true. See the
+/// <see cref="FadeCueNode"/> doc note.</para></summary>
+public sealed record CueSchedule
+{
+    /// <summary>What kind of occurrence this schedule produces.</summary>
+    public CueScheduleKind Kind { get; set; }
+
+    /// <summary>Local wall-clock time for <see cref="CueScheduleKind.TimeOfDay"/> (daily) and
+    /// <see cref="CueScheduleKind.Recurring"/>; null for one-shots.</summary>
+    public TimeOnly? TimeOfDay { get; set; }
+
+    /// <summary>Absolute one-shot instant for <see cref="CueScheduleKind.DateTime"/>; null otherwise.</summary>
+    public DateTimeOffset? At { get; set; }
+
+    /// <summary>Days a <see cref="CueScheduleKind.Recurring"/> schedule fires on. None = never
+    /// (an empty recurring schedule is inert, not "every day" - that is what TimeOfDay is for).</summary>
+    public CueScheduleDays Days { get; set; }
+
+    /// <summary>Late-fire window (ms): an occurrence due within [due, due+GraceMs] still fires once;
+    /// anything older is skipped and logged (app sleep/suspend recovery - a backlog is never
+    /// caught up).</summary>
+    public int GraceMs { get; set; } = 5000;
+
+    /// <summary>Per-schedule enable. Settings are retained while disabled (the VideoFx pattern).</summary>
+    public bool Enabled { get; set; } = true;
+}
+
+/// <summary>Occurrence kind of a <see cref="CueSchedule"/>.</summary>
+public enum CueScheduleKind
+{
+    /// <summary>Every day at <see cref="CueSchedule.TimeOfDay"/> (local).</summary>
+    TimeOfDay,
+    /// <summary>Once, at the absolute instant <see cref="CueSchedule.At"/>.</summary>
+    DateTime,
+    /// <summary>At <see cref="CueSchedule.TimeOfDay"/> on the days in <see cref="CueSchedule.Days"/>.</summary>
+    Recurring,
+}
+
+/// <summary>Day-of-week mask for recurring schedules.</summary>
+[Flags]
+public enum CueScheduleDays
+{
+    None = 0,
+    Monday = 1,
+    Tuesday = 2,
+    Wednesday = 4,
+    Thursday = 8,
+    Friday = 16,
+    Saturday = 32,
+    Sunday = 64,
 }
 
 public sealed record CueGroupNode : CueNode
 {
     public CueGroupFireMode FireMode { get; init; } = CueGroupFireMode.FirstCueOnly;
 
+    /// <summary>Playlist options, used when <see cref="FireMode"/> is
+    /// <see cref="CueGroupFireMode.Playlist"/> or <see cref="CueGroupFireMode.ArmedList"/>.
+    /// Null (older files / never configured) = the <see cref="CuePlaylistOptions"/> defaults.
+    /// Retained while the group is in another fire mode (the VideoFx retained-while-disabled
+    /// pattern) so toggling modes never loses the operator's configuration.</summary>
+    public CuePlaylistOptions? Playlist { get; init; }
+
     public List<CueNode> Children { get; init; } = new();
+}
+
+/// <summary>Playlist behavior for a <see cref="CueGroupNode"/> (Ideas/CuePlayer-Enhancements.md §3).
+/// Playlist mode auto-advances on each child's natural end; ArmedList shares this runtime but only
+/// advances on GO. All shuffle/pass state is session-only (never persisted) - loading a project
+/// starts every playlist afresh.
+/// <para>v1 is butt-splice only: the design sketch's <c>CrossfadeMs</c> is deliberately omitted -
+/// a true crossfade needs a dual-voice <c>TransportGroup</c> (§6 "Deck-style dual voice"); adding
+/// the field later is additive and old files stay valid.</para>
+/// <para>GOTCHA: properties use <c>set</c>, not <c>init</c>, deliberately. The source-generated
+/// serializer assigns EVERY init property through one object initializer, so fields absent from the
+/// JSON would load as CLR defaults (LoopCount 0, AvoidImmediateRepeat/ReshuffleEachPass false)
+/// instead of these property initializers. See the <see cref="FadeCueNode"/> doc note.</para></summary>
+public sealed record CuePlaylistOptions
+{
+    /// <summary>Draw children WITHOUT replacement from a bag (every child once per pass) instead of
+    /// playing them in tree order.</summary>
+    public bool Shuffle { get; set; }
+
+    /// <summary>Never open a pass with the child that just closed the previous pass when another
+    /// child is available (the reshuffled-pass-boundary guard).</summary>
+    public bool AvoidImmediateRepeat { get; set; } = true;
+
+    /// <summary>Number of passes to play: 0 = infinite, N = that many passes.</summary>
+    public int LoopCount { get; set; } = 1;
+
+    /// <summary>Play only this many items per pass (a subset); null = every child each pass.</summary>
+    public int? PlayCount { get; set; }
+
+    /// <summary>Reshuffle the bag on every pass boundary; false keeps the first pass's shuffled
+    /// order for all passes. Only meaningful when <see cref="Shuffle"/> is on.</summary>
+    public bool ReshuffleEachPass { get; set; } = true;
+
+    /// <summary>What happens when the final pass completes (Playlist mode's auto-run end).</summary>
+    public CuePlaylistEndBehavior EndBehavior { get; set; }
+}
+
+/// <summary>End-of-run behavior for a playlist group.</summary>
+public enum CuePlaylistEndBehavior
+{
+    /// <summary>Stop: nothing further fires; standby returns to the group so GO restarts it.</summary>
+    Stop,
+    /// <summary>Standby (and Auto-Follow, per the normal boundary gating) the next cue after the group.</summary>
+    AdvancePastGroup,
+    /// <summary>Leave the transport exactly where it is (held/freeze-frame clips keep showing).</summary>
+    Hold,
 }
 
 /// <summary>
@@ -357,6 +492,13 @@ public sealed record MediaCueNode : CueNode
 
     public int FadeOutMs { get; init; }
 
+    /// <summary>Gain curve for <see cref="FadeInMs"/>. Default Linear - older files load unchanged.</summary>
+    public CueFadeCurve FadeInCurve { get; init; } = CueFadeCurve.Linear;
+
+    /// <summary>Gain curve for <see cref="FadeOutMs"/> - also used when this cue's fade-out wins the
+    /// stop-fade precedence (per-cue &gt; list <see cref="CueList.StopFadeMs"/> &gt; app default).</summary>
+    public CueFadeCurve FadeOutCurve { get; init; } = CueFadeCurve.Linear;
+
     /// <summary>Legacy persisted per-cue pre-roll opt-out. Ignored by the current cue runtime.</summary>
     public bool DisablePreRoll { get; init; }
 
@@ -366,6 +508,35 @@ public sealed record MediaCueNode : CueNode
 
     /// <summary>Per-composition appearance - layer index, position preset, opacity.</summary>
     public List<CueVideoPlacement> VideoPlacements { get; init; } = new();
+
+    /// <summary>Volume-automation keyframes (Ideas/CuePlayer-Timeline-Editor.md Phase B), sorted by
+    /// time. Times are CLIP-relative (post-<see cref="StartOffsetMs"/>) so the envelope survives seeks
+    /// and restarts per loop pass; at runtime the envelope MULTIPLIES the fades, never replaces them.
+    /// Empty = no automation - older files load (and behave) unchanged.
+    /// <para>GOTCHA: <c>set</c>, not <c>init</c>, deliberately - the non-null <c>[]</c> default is a
+    /// non-CLR default, and the source-generated serializer assigns EVERY init property (JSON-absent
+    /// init fields load as CLR defaults, here null). See the <see cref="FadeCueNode"/> doc note.</para></summary>
+    public IReadOnlyList<CueAutomationPoint> VolumeEnvelope { get; set; } = [];
+}
+
+/// <summary>One volume-automation keyframe on a media cue. <see cref="TimeMs"/> is CLIP-relative
+/// (post-StartOffset); <see cref="LevelDb"/> is clamped to −60..+12 at edit time (at or below −60 dB =
+/// silence); <see cref="CurveToNext"/> shapes the segment from this point to the next. All property
+/// defaults are CLR defaults (0 / Linear = 0), so <c>init</c> is safe under the source-generated
+/// serializer - add any non-CLR default with <c>set</c> (see the <see cref="FadeCueNode"/> doc note).</summary>
+public sealed record CueAutomationPoint
+{
+    /// <summary>The silence floor: levels at or below this map to zero gain.</summary>
+    public const double SilenceLevelDb = -60;
+
+    /// <summary>The boost ceiling levels are clamped to.</summary>
+    public const double MaxLevelDb = 12;
+
+    public int TimeMs { get; init; }
+
+    public double LevelDb { get; init; }
+
+    public CueFadeCurve CurveToNext { get; init; } = CueFadeCurve.Linear;
 }
 
 public sealed record ActionCueNode : CueNode
@@ -454,17 +625,57 @@ public sealed record VisualizerCueNode : CueNode
 /// (the ActionCueNode precedent) - no ShowDocument mapping.</summary>
 public sealed record JumpCueNode : CueNode
 {
-    public List<Guid> TargetCueIds { get; init; } = new();
+    // set (not init) so a minimal/legacy "jump" node keeps these defaults: the source-generated
+    // serializer assigns EVERY init property through one object initializer, so JSON-absent fields
+    // would load as CLR defaults (TargetCueIds null → NRE at fire time, FireTargetOnJump false).
+    // See the FadeCueNode doc note.
+    public List<Guid> TargetCueIds { get; set; } = new();
 
     /// <summary>Pick a random target from <see cref="TargetCueIds"/> instead of the first live one.</summary>
-    public bool RandomTarget { get; init; }
+    public bool RandomTarget { get; set; }
 
     /// <summary>When randomly choosing, avoid the target picked by this Jump cue last time whenever
     /// another live target is available. Runtime choice history is intentionally not persisted.</summary>
-    public bool AvoidImmediateRepeat { get; init; }
+    public bool AvoidImmediateRepeat { get; set; }
 
     /// <summary>Fire the target on arrival (default). False = arm it as standby only (next GO fires it).</summary>
-    public bool FireTargetOnJump { get; init; } = true;
+    public bool FireTargetOnJump { get; set; } = true;
+}
+
+/// <summary>Fade cue (QLab's Fade-cue precedent): firing it ramps its target cues' audio level (and
+/// optionally video opacity) toward <see cref="TargetLevelDb"/> over <see cref="DurationMs"/>. It occupies
+/// the chain like an Action cue (instant - the ramp runs in the background). Targets are stable cue IDs
+/// like Jump targets; executes at the HaPlay transport layer (no ShowDocument mapping). All fields are
+/// default-safe so older files load unchanged.
+/// <para>GOTCHA: these properties use <c>set</c>, not <c>init</c>, deliberately. The source-generated
+/// serializer builds init-only types through one object initializer that assigns EVERY init property, so
+/// fields absent from the JSON would get CLR defaults (null list, 0 ms, false) instead of these property
+/// initializers - a minimal/legacy <c>"fade"</c> node must load as the documented safe fade-out.</para></summary>
+public sealed record FadeCueNode : CueNode
+{
+    /// <summary>The silence floor: levels at or below this fade to zero gain.</summary>
+    public const double SilenceLevelDb = -60;
+
+    /// <summary>Target cues (media cues and/or groups - a group fades its descendant media cues).</summary>
+    public List<Guid> TargetCueIds { get; set; } = new();
+
+    /// <summary>Ignore <see cref="TargetCueIds"/> and fade every currently playing cue.</summary>
+    public bool TargetAllPlaying { get; set; }
+
+    /// <summary>Target level in dB (0 = full). At or below <see cref="SilenceLevelDb"/> (incl. -inf) =
+    /// fade to silence. Default silence - a plain new Fade cue is "fade out".</summary>
+    [JsonNumberHandling(JsonNumberHandling.AllowNamedFloatingPointLiterals)]
+    public double TargetLevelDb { get; set; } = SilenceLevelDb;
+
+    public int DurationMs { get; set; } = 3000;
+
+    public CueFadeCurve Curve { get; set; } = CueFadeCurve.Linear;
+
+    /// <summary>Release the clip when the fade reached silence (else it keeps running silently).</summary>
+    public bool StopWhenSilent { get; set; } = true;
+
+    /// <summary>Ramp the targets' composition-layer opacity in step with the audio.</summary>
+    public bool AlsoFadeVideoOpacity { get; set; } = true;
 }
 
 public sealed record CueAudioRoute
@@ -579,6 +790,13 @@ public enum CueGroupFireMode
     FirstCueOnly,
     FireAllSimultaneously,
     ArmedList,
+    /// <summary>Fire every child at its authored <see cref="CueNode.TimelineStartMs"/> on the group's
+    /// plan epoch. An old build opening a Timeline group degrades to first-cue-only (unknown enum).</summary>
+    Timeline,
+    /// <summary>Auto-advancing playlist: each child's natural end fires the next pick per the group's
+    /// <see cref="CueGroupNode.Playlist"/> options (shuffle bag, passes, subset). An old build opening
+    /// a Playlist group degrades to first-cue-only (unknown enum).</summary>
+    Playlist,
 }
 
 public enum CueEndBehavior
@@ -587,6 +805,17 @@ public enum CueEndBehavior
     FreezeLastFrame,
     Loop,
     FadeOutAndStop,
+}
+
+/// <summary>GUI mirror of the framework's <c>S.Media.Session.FadeCurve</c> (models stay
+/// framework-type-free, like <see cref="CueEndBehavior"/> ↔ <c>ClipEndBehavior</c>). The mapper
+/// converts by name; Linear = 0 keeps pre-curve files loading unchanged.</summary>
+public enum CueFadeCurve
+{
+    Linear,
+    EqualPower,
+    Exponential,
+    SCurve,
 }
 
 public enum CueActionKind
@@ -602,14 +831,21 @@ public enum CueActionKind
 [JsonSerializable(typeof(CueList))]
 [JsonSerializable(typeof(CueNode))]
 [JsonSerializable(typeof(CueGroupNode))]
+[JsonSerializable(typeof(CuePlaylistOptions))]
 [JsonSerializable(typeof(MediaCueNode))]
 [JsonSerializable(typeof(CueSubtitleSelection))]
 [JsonSerializable(typeof(ActionCueNode))]
 [JsonSerializable(typeof(CommentCueNode))]
+[JsonSerializable(typeof(JumpCueNode))]
+[JsonSerializable(typeof(VisualizerCueNode))]
+[JsonSerializable(typeof(FadeCueNode))]
 [JsonSerializable(typeof(CueComposition))]
 [JsonSerializable(typeof(CueVideoOutputBinding))]
 [JsonSerializable(typeof(CueAudioRoute))]
 [JsonSerializable(typeof(CueVideoPlacement))]
+[JsonSerializable(typeof(CueChromaKey))]
+[JsonSerializable(typeof(CueColorAdjust))]
+[JsonSerializable(typeof(CueSchedule))]
 [JsonSerializable(typeof(PlaylistItem))]
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]

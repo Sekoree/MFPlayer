@@ -574,6 +574,40 @@ public partial class CuePlayerViewModel
         StatusMessage = Strings.Format(nameof(Strings.CueTriggeredStatusFormat), $"{jump.Label}: +{CueDisplay(target)}");
     }
 
+    /// <summary>Adds a Fade cue after the selection. When a media cue or group is selected it becomes
+    /// the fade's initial target (the natural "fade this out" gesture); otherwise the cue defaults to
+    /// fading everything playing. Targets are stable cue IDs like Jump targets.</summary>
+    [RelayCommand]
+    private void AddFadeCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var target = SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Group } sel
+                     // A Group selection inserts the new Fade as that Group's child - auto-targeting
+                     // the containing group is still fine (a fade cannot cycle), but pointless when
+                     // the fade sits inside it before any sibling; keep the Jump guard for symmetry.
+                     && !(sel.IsGroup && ReferenceEquals(parent, sel.Children))
+            ? sel
+            : null;
+        var row = new CueNodeViewModel(CueNodeKind.Fade)
+        {
+            Number = NextNumber(parent),
+            Label = target is null
+                ? Strings.CueKindFadeLabel
+                : $"{Strings.CueKindFadeLabel} → {(string.IsNullOrWhiteSpace(target.Number) ? target.Label : target.Number)}",
+            DurationMs = 3000,
+            FadeTargetAllPlaying = target is null,
+        };
+        if (target is not null)
+            row.FadeTargetIds.Add(target.Id);
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
     /// <summary>Adds a Visualizer cue (#26): fire = start (or stop) the projectM layer on a chosen
     /// composition at a configurable section of the frame. Defaults to the selected composition
     /// full-canvas; edit placement in the drawer.</summary>

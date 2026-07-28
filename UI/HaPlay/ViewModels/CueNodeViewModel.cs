@@ -58,18 +58,40 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(StartTriggerDisplay));
     }
 
-    private string _targetDisplay = string.Empty;
+    private string _targetDisplayBase = string.Empty;
 
-    /// <summary>Resolved control-flow target for the cue tree. Persisted links remain stable IDs;
-    /// the cue-player refreshes this display when targets or cue numbers change.</summary>
+    /// <summary>Resolved control-flow target text for the cue tree. Persisted links remain stable IDs;
+    /// the cue-player refreshes this when targets or cue numbers change. The tree column binds
+    /// <see cref="TargetDisplay"/>, which appends the schedule badge to this base text.</summary>
+    internal string TargetDisplayBase
+    {
+        get => _targetDisplayBase;
+        set
+        {
+            if (SetProperty(ref _targetDisplayBase, value))
+                OnPropertyChanged(nameof(TargetDisplay));
+        }
+    }
+
+    /// <summary>Tree "Target" column text: the control-flow target plus, when the cue carries a
+    /// schedule, a clock badge (the Jump-target display precedent for schedule visibility).</summary>
     public string TargetDisplay
     {
-        get => _targetDisplay;
-        internal set => SetProperty(ref _targetDisplay, value);
+        get
+        {
+            var badge = ScheduleBadgeDisplay;
+            if (badge.Length == 0)
+                return _targetDisplayBase;
+            return _targetDisplayBase.Length == 0 ? badge : $"{_targetDisplayBase} · {badge}";
+        }
     }
 
     [ObservableProperty]
     private int _preWaitMs;
+
+    /// <summary>Authored start (ms) on the parent Timeline group's plan epoch; ignored elsewhere.</summary>
+    [ObservableProperty]
+    private int _timelineStartMs;
 
     [ObservableProperty]
     private string? _notes;
@@ -86,6 +108,12 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     [ObservableProperty]
     private int _fadeOutMs;
+
+    [ObservableProperty]
+    private CueFadeCurve _fadeInCurve;
+
+    [ObservableProperty]
+    private CueFadeCurve _fadeOutCurve;
 
     [ObservableProperty]
     private int _durationMs;
@@ -613,6 +641,254 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(ColorTagBrush));
     }
 
+    // ----- Wall-clock schedule (Ideas/CuePlayer-Enhancements.md §4) --------------------------------
+    // Schedule lives on the CueNode base like ColorTag - every cue kind can carry one. All times are
+    // LOCAL wall-clock; the one-shot date+time pair maps to the model's absolute DateTimeOffset At.
+
+    /// <summary>Schedule enable. Settings are retained while disabled (the VideoFx pattern).</summary>
+    [ObservableProperty]
+    private bool _scheduleEnabled;
+
+    [ObservableProperty]
+    private CueScheduleKind _scheduleKind;
+
+    /// <summary>Local wall-clock time (all kinds; for one-shots it pairs with <see cref="ScheduleDate"/>).</summary>
+    [ObservableProperty]
+    private TimeOnly? _scheduleTimeOfDay;
+
+    /// <summary>Local date for <see cref="CueScheduleKind.DateTime"/> one-shots.</summary>
+    [ObservableProperty]
+    private DateOnly? _scheduleDate;
+
+    [ObservableProperty]
+    private CueScheduleDays _scheduleDays;
+
+    /// <summary>Late-fire window (ms) - see <see cref="CueSchedule.GraceMs"/>. Default 5000.</summary>
+    [ObservableProperty]
+    private int _scheduleGraceMs = 5000;
+
+    partial void OnScheduleEnabledChanged(bool value) { _ = value; RaiseScheduleDisplayChanged(); }
+    partial void OnScheduleTimeOfDayChanged(TimeOnly? value) { _ = value; OnPropertyChanged(nameof(ScheduleTimeText)); RaiseScheduleDisplayChanged(); }
+    partial void OnScheduleDateChanged(DateOnly? value) { _ = value; OnPropertyChanged(nameof(ScheduleDateText)); RaiseScheduleDisplayChanged(); }
+    partial void OnScheduleGraceMsChanged(int value) { _ = value; RaiseScheduleDisplayChanged(); }
+
+    partial void OnScheduleKindChanged(CueScheduleKind value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(IsScheduleOneShot));
+        OnPropertyChanged(nameof(IsScheduleRecurring));
+        RaiseScheduleDisplayChanged();
+    }
+
+    partial void OnScheduleDaysChanged(CueScheduleDays value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ScheduleOnMonday));
+        OnPropertyChanged(nameof(ScheduleOnTuesday));
+        OnPropertyChanged(nameof(ScheduleOnWednesday));
+        OnPropertyChanged(nameof(ScheduleOnThursday));
+        OnPropertyChanged(nameof(ScheduleOnFriday));
+        OnPropertyChanged(nameof(ScheduleOnSaturday));
+        OnPropertyChanged(nameof(ScheduleOnSunday));
+        RaiseScheduleDisplayChanged();
+    }
+
+    private void RaiseScheduleDisplayChanged()
+    {
+        OnPropertyChanged(nameof(HasSchedule));
+        OnPropertyChanged(nameof(ScheduleBadgeDisplay));
+        OnPropertyChanged(nameof(TargetDisplay));
+    }
+
+    /// <summary>Drawer visibility: one-shot schedules show the date field.</summary>
+    public bool IsScheduleOneShot => ScheduleKind == CueScheduleKind.DateTime;
+
+    /// <summary>Drawer visibility: recurring schedules show the day-of-week toggles.</summary>
+    public bool IsScheduleRecurring => ScheduleKind == CueScheduleKind.Recurring;
+
+    /// <summary>Time field text, hh:mm or hh:mm:ss (24 h). LostFocus-parsed like the trim fields;
+    /// unparseable text leaves the value unchanged, empty clears it.</summary>
+    public string ScheduleTimeText
+    {
+        get => ScheduleTimeOfDay is { } t
+            ? t.Second > 0
+                ? t.ToString("HH:mm:ss", CultureInfo.InvariantCulture)
+                : t.ToString("HH:mm", CultureInfo.InvariantCulture)
+            : string.Empty;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                ScheduleTimeOfDay = null;
+            else if (TryParseScheduleTime(value, out var parsed))
+                ScheduleTimeOfDay = parsed;
+            else
+                OnPropertyChanged(nameof(ScheduleTimeText)); // restore the last valid text
+        }
+    }
+
+    private static bool TryParseScheduleTime(string value, out TimeOnly time) =>
+        TimeOnly.TryParseExact(
+            value.Trim(),
+            ["H:mm", "H:mm:ss", "HH:mm", "HH:mm:ss"],
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out time);
+
+    /// <summary>One-shot date field text, yyyy-mm-dd. Same LostFocus parse contract as the time field.</summary>
+    public string ScheduleDateText
+    {
+        get => ScheduleDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                ScheduleDate = null;
+            else if (DateOnly.TryParse(value.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+                ScheduleDate = parsed;
+            else
+                OnPropertyChanged(nameof(ScheduleDateText));
+        }
+    }
+
+    public bool ScheduleOnMonday { get => ScheduleDays.HasFlag(CueScheduleDays.Monday); set => SetScheduleDay(CueScheduleDays.Monday, value); }
+    public bool ScheduleOnTuesday { get => ScheduleDays.HasFlag(CueScheduleDays.Tuesday); set => SetScheduleDay(CueScheduleDays.Tuesday, value); }
+    public bool ScheduleOnWednesday { get => ScheduleDays.HasFlag(CueScheduleDays.Wednesday); set => SetScheduleDay(CueScheduleDays.Wednesday, value); }
+    public bool ScheduleOnThursday { get => ScheduleDays.HasFlag(CueScheduleDays.Thursday); set => SetScheduleDay(CueScheduleDays.Thursday, value); }
+    public bool ScheduleOnFriday { get => ScheduleDays.HasFlag(CueScheduleDays.Friday); set => SetScheduleDay(CueScheduleDays.Friday, value); }
+    public bool ScheduleOnSaturday { get => ScheduleDays.HasFlag(CueScheduleDays.Saturday); set => SetScheduleDay(CueScheduleDays.Saturday, value); }
+    public bool ScheduleOnSunday { get => ScheduleDays.HasFlag(CueScheduleDays.Sunday); set => SetScheduleDay(CueScheduleDays.Sunday, value); }
+
+    private void SetScheduleDay(CueScheduleDays day, bool on)
+    {
+        var next = on ? ScheduleDays | day : ScheduleDays & ~day;
+        if (next != ScheduleDays)
+            ScheduleDays = next;
+    }
+
+    /// <summary>True when this cue carries any schedule configuration (enabled or retained-while-
+    /// disabled). Gates the scheduler sweep and the tree badge; when false, <see cref="ToModel"/>
+    /// emits a null <see cref="CueNode.Schedule"/> so legacy cue JSON stays byte-identical.</summary>
+    public bool HasSchedule =>
+        ScheduleEnabled
+        || ScheduleTimeOfDay is not null
+        || ScheduleDate is not null
+        || ScheduleDays != CueScheduleDays.None
+        || ScheduleKind != CueScheduleKind.TimeOfDay
+        || ScheduleGraceMs != 5000;
+
+    /// <summary>Live countdown ("in mm:ss") written by <c>CueSchedulerService</c> each tick; null
+    /// while no upcoming occurrence resolves or the schedule is disabled.</summary>
+    private string? _scheduleCountdownText;
+
+    public string? ScheduleCountdownText
+    {
+        get => _scheduleCountdownText;
+        internal set
+        {
+            if (SetProperty(ref _scheduleCountdownText, value))
+            {
+                OnPropertyChanged(nameof(ScheduleBadgeDisplay));
+                OnPropertyChanged(nameof(TargetDisplay));
+            }
+        }
+    }
+
+    /// <summary>Clock badge for the tree's Target column: "⏰ 15:00", plus days / date per kind,
+    /// "(off)" while disabled, and the live countdown while the scheduler runs.</summary>
+    public string ScheduleBadgeDisplay
+    {
+        get
+        {
+            if (!HasSchedule)
+                return string.Empty;
+            var time = ScheduleTimeOfDay is { } t
+                ? t.ToString(t.Second > 0 ? "HH:mm:ss" : "HH:mm", CultureInfo.InvariantCulture)
+                : "--:--";
+            var core = ScheduleKind switch
+            {
+                CueScheduleKind.DateTime =>
+                    $"⏰ {(ScheduleDate is { } d ? d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " " : string.Empty)}{time}",
+                CueScheduleKind.Recurring => $"⏰ {time} {ScheduleDaysShortDisplay}",
+                _ => $"⏰ {time}",
+            };
+            if (!ScheduleEnabled)
+                return $"{core} (off)";
+            return string.IsNullOrEmpty(ScheduleCountdownText) ? core : $"{core} · {ScheduleCountdownText}";
+        }
+    }
+
+    private string ScheduleDaysShortDisplay
+    {
+        get
+        {
+            if (ScheduleDays == CueScheduleDays.None)
+                return "(no days)";
+            Span<string?> parts =
+            [
+                ScheduleOnMonday ? "Mo" : null,
+                ScheduleOnTuesday ? "Tu" : null,
+                ScheduleOnWednesday ? "We" : null,
+                ScheduleOnThursday ? "Th" : null,
+                ScheduleOnFriday ? "Fr" : null,
+                ScheduleOnSaturday ? "Sa" : null,
+                ScheduleOnSunday ? "Su" : null,
+            ];
+            var result = new List<string>(7);
+            foreach (var p in parts)
+            {
+                if (p is not null)
+                    result.Add(p);
+            }
+            return string.Join(" ", result);
+        }
+    }
+
+    /// <summary>Loads the persisted schedule into the VM fields (all cue kinds; called by
+    /// <see cref="FromModel"/> after the kind-specific mapping).</summary>
+    internal void ApplyScheduleFromModel(CueSchedule? schedule)
+    {
+        if (schedule is null)
+            return;
+        ScheduleKind = schedule.Kind;
+        ScheduleGraceMs = Math.Max(0, schedule.GraceMs);
+        ScheduleDays = schedule.Days;
+        if (schedule.Kind == CueScheduleKind.DateTime && schedule.At is { } at)
+        {
+            // One-shots persist an absolute instant; the editor works in local wall time.
+            var local = at.ToLocalTime().DateTime;
+            ScheduleDate = DateOnly.FromDateTime(local);
+            ScheduleTimeOfDay = TimeOnly.FromDateTime(local);
+        }
+        else
+        {
+            ScheduleTimeOfDay = schedule.TimeOfDay;
+        }
+        ScheduleEnabled = schedule.Enabled;
+    }
+
+    /// <summary>The persisted schedule (null when nothing was ever configured - legacy cue JSON stays
+    /// byte-identical). One-shot At is rebuilt from the local date+time pair with the local UTC offset
+    /// at that wall time, so the stored instant survives timezone moves.</summary>
+    internal CueSchedule? BuildScheduleModel()
+    {
+        if (!HasSchedule)
+            return null;
+        DateTimeOffset? at = null;
+        if (ScheduleKind == CueScheduleKind.DateTime && ScheduleDate is { } d && ScheduleTimeOfDay is { } t)
+        {
+            var wall = d.ToDateTime(t);
+            at = new DateTimeOffset(wall, TimeZoneInfo.Local.GetUtcOffset(wall));
+        }
+        return new CueSchedule
+        {
+            Kind = ScheduleKind,
+            TimeOfDay = ScheduleKind == CueScheduleKind.DateTime ? null : ScheduleTimeOfDay,
+            At = at,
+            Days = ScheduleKind == CueScheduleKind.Recurring ? ScheduleDays : CueScheduleDays.None,
+            GraceMs = Math.Max(0, ScheduleGraceMs),
+            Enabled = ScheduleEnabled,
+        };
+    }
+
     public ObservableCollection<CueAudioRouteViewModel> AudioRoutes { get; } = new();
 
     public ObservableCollection<CueVideoPlacementViewModel> VideoPlacements { get; } = new();
@@ -686,6 +962,69 @@ public sealed partial class CueNodeViewModel : ObservableObject
         set => Extra = value.ToString();
     }
 
+    /// <summary>Gates the Group tab's "Timeline…" button - the editor only means something here.</summary>
+    public bool IsTimelineFireMode => Kind == CueNodeKind.Group && GroupFireMode == CueGroupFireMode.Timeline;
+
+    /// <summary>Gates the Group tab's playlist options panel: Playlist auto-advances, ArmedList is the
+    /// same runtime with GO-only advance - both are configured by the same options.</summary>
+    public bool IsPlaylistFireMode =>
+        Kind == CueNodeKind.Group
+        && GroupFireMode is CueGroupFireMode.Playlist or CueGroupFireMode.ArmedList;
+
+    // ----- Playlist group options (Ideas/CuePlayer-Enhancements.md §3) --------------------------
+    // Defaults mirror CuePlaylistOptions so a group without persisted options edits from the same
+    // baseline it will run with.
+
+    [ObservableProperty]
+    private bool _playlistShuffle;
+
+    [ObservableProperty]
+    private bool _playlistAvoidImmediateRepeat = true;
+
+    /// <summary>Passes to play: 0 = infinite.</summary>
+    [ObservableProperty]
+    private int _playlistLoopCount = 1;
+
+    /// <summary>Items per pass (subset); null = all children each pass.</summary>
+    [ObservableProperty]
+    private int? _playlistPlayCount;
+
+    [ObservableProperty]
+    private bool _playlistReshuffleEachPass = true;
+
+    [ObservableProperty]
+    private CuePlaylistEndBehavior _playlistEndBehavior = CuePlaylistEndBehavior.Stop;
+
+    /// <summary>NumericUpDown-friendly (decimal?) view of <see cref="PlaylistPlayCount"/>; clearing
+    /// the field restores "all children per pass".</summary>
+    public decimal? PlaylistPlayCountValue
+    {
+        get => PlaylistPlayCount is { } c ? c : null;
+        set => PlaylistPlayCount = value is null ? null : Math.Max(1, (int)value);
+    }
+
+    partial void OnPlaylistPlayCountChanged(int? value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(PlaylistPlayCountValue));
+    }
+
+    /// <summary>The persisted options this group runs with. Emits null for a non-playlist group whose
+    /// options were never touched, keeping legacy group JSON byte-identical.</summary>
+    internal CuePlaylistOptions? BuildPlaylistOptionsModel()
+    {
+        var options = new CuePlaylistOptions
+        {
+            Shuffle = PlaylistShuffle,
+            AvoidImmediateRepeat = PlaylistAvoidImmediateRepeat,
+            LoopCount = Math.Max(0, PlaylistLoopCount),
+            PlayCount = PlaylistPlayCount is { } count and > 0 ? count : null,
+            ReshuffleEachPass = PlaylistReshuffleEachPass,
+            EndBehavior = PlaylistEndBehavior,
+        };
+        return IsPlaylistFireMode || options != new CuePlaylistOptions() ? options : null;
+    }
+
     public CueActionKind ActionKind
     {
         get => Enum.TryParse<CueActionKind>(Extra, out var kind) ? kind : CueActionKind.OSCOut;
@@ -750,6 +1089,26 @@ public sealed partial class CueNodeViewModel : ObservableObject
     /// <summary>Jump-cue targets (stable cue IDs - renumbering never retargets a jump).</summary>
     public List<Guid> JumpTargetIds { get; set; } = [];
 
+    /// <summary>Fade-cue targets (stable cue IDs, like Jump targets - media cues and/or groups).</summary>
+    public List<Guid> FadeTargetIds { get; set; } = [];
+
+    /// <summary>Fade-cue: ignore <see cref="FadeTargetIds"/> and fade everything currently playing.</summary>
+    [ObservableProperty]
+    private bool _fadeTargetAllPlaying;
+
+    /// <summary>Fade-cue target level in dB (0 = full); ≤ −60 = silence. The cue's duration rides
+    /// <see cref="DurationMs"/> and its curve rides <see cref="FadeOutCurve"/>.</summary>
+    [ObservableProperty]
+    private double _fadeTargetLevelDb = HaPlay.Models.FadeCueNode.SilenceLevelDb;
+
+    /// <summary>Fade-cue: release clips that faded to silence (else they keep running silently).</summary>
+    [ObservableProperty]
+    private bool _fadeStopWhenSilent = true;
+
+    /// <summary>Fade-cue: ramp the targets' video-layer opacity in step with the audio.</summary>
+    [ObservableProperty]
+    private bool _fadeAlsoFadeVideo = true;
+
     /// <summary>Jump-cue random pick, stored in <see cref="Extra"/> like the other kind-specific enums.</summary>
     public bool JumpRandom
     {
@@ -775,6 +1134,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         CueNodeKind.Comment => Strings.CueKindCommentLabel,
         CueNodeKind.Jump => Strings.CueKindJumpLabel,
         CueNodeKind.Visualizer => Strings.CueKindVisualizerLabel,
+        CueNodeKind.Fade => Strings.CueKindFadeLabel,
         _ => Strings.CueKindDefaultLabel,
     };
 
@@ -798,6 +1158,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
         {
             case CueGroupFireMode.FireAllSimultaneously:
                 (rollupMs, itemCount) = AggregateChildrenDurations(static (sumMs, childMs) => Math.Max(sumMs, childMs));
+                break;
+            case CueGroupFireMode.Timeline:
+                rollupMs = TimelineSpanMs();
+                itemCount = Children.Count(static c => c.Kind != CueNodeKind.Comment);
                 break;
             case CueGroupFireMode.FirstCueOnly:
                 rollupMs = SequentialChainDurationMs();
@@ -838,9 +1202,24 @@ public sealed partial class CueNodeViewModel : ObservableObject
     /// durations; 0 for transparent kinds (jump/action/infinite visualizer). Shared by the group
     /// duration sum and the Now-Playing chain-position projection so they can never disagree.</summary>
     internal long ChainContributionMs =>
-        Kind is CueNodeKind.Jump or CueNodeKind.Action ? 0
+        Kind is CueNodeKind.Jump or CueNodeKind.Action or CueNodeKind.Fade ? 0
         : Kind == CueNodeKind.Visualizer && VisualizerDurationMs <= 0 ? 0
         : RolledDurationMs;
+
+    /// <summary>Authored span of a Timeline group on its own plan epoch: the furthest child end,
+    /// where each child starts at TimelineStartMs + PreWaitMs (the same offsets the trigger plan
+    /// uses, minus the group's own pre-wait which precedes every child equally).</summary>
+    internal long TimelineSpanMs()
+    {
+        long span = 0;
+        foreach (var child in Children)
+        {
+            if (child.Kind == CueNodeKind.Comment)
+                continue;
+            span = Math.Max(span, Math.Max(0, child.TimelineStartMs) + Math.Max(0, child.PreWaitMs) + child.RolledDurationMs);
+        }
+        return span;
+    }
 
     private long SequentialChainDurationMs()
     {
@@ -885,6 +1264,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     {
                         case CueGroupFireMode.FireAllSimultaneously:
                             return AggregateChildrenDurations(static (sumMs, childMs) => Math.Max(sumMs, childMs)).Ms;
+                        case CueGroupFireMode.Timeline:
+                            return TimelineSpanMs();
                         case CueGroupFireMode.FirstCueOnly:
                             // The chain that will ACTUALLY play: the first cue plus every consecutive
                             // Auto-Follow / Auto-Continue child (each fires when the previous ends), so
@@ -1009,6 +1390,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
     {
         _ = value;
         OnPropertyChanged(nameof(GroupFireMode));
+        OnPropertyChanged(nameof(IsTimelineFireMode));
+        OnPropertyChanged(nameof(IsPlaylistFireMode));
         OnPropertyChanged(nameof(ActionKind));
         // GroupFireMode determines the roll-up formula - refresh derived displays.
         if (Kind == CueNodeKind.Group)
@@ -1047,7 +1430,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
             or nameof(StartOffsetMs)
             or nameof(EndOffsetMs)
             or nameof(EffectiveDurationMs)
-            or nameof(GroupFireMode))
+            or nameof(GroupFireMode)
+            or nameof(TimelineStartMs)
+            or nameof(PreWaitMs))
         {
             OnPropertyChanged(nameof(DurationDisplay));
             OnPropertyChanged(nameof(RolledDurationMs));
@@ -1055,6 +1440,15 @@ public sealed partial class CueNodeViewModel : ObservableObject
     }
 
     public static CueNodeViewModel FromModel(CueNode node, Func<Guid, OutputLineViewModel?>? resolveLine = null)
+    {
+        // Schedule lives on the CueNode base (like ColorTag) - apply it once here rather than in
+        // every kind-specific initializer. Children recurse through this wrapper too.
+        var vm = FromModelCore(node, resolveLine);
+        vm.ApplyScheduleFromModel(node.Schedule);
+        return vm;
+    }
+
+    private static CueNodeViewModel FromModelCore(CueNode node, Func<Guid, OutputLineViewModel?>? resolveLine)
     {
         switch (node)
         {
@@ -1067,9 +1461,16 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Label = g.Label,
                     TriggerMode = g.TriggerMode,
                     PreWaitMs = g.PreWaitMs,
+                    TimelineStartMs = g.TimelineStartMs,
                     Notes = g.Notes,
                     ColorTag = g.ColorTag,
                     Extra = g.FireMode.ToString(),
+                    PlaylistShuffle = g.Playlist?.Shuffle ?? false,
+                    PlaylistAvoidImmediateRepeat = g.Playlist?.AvoidImmediateRepeat ?? true,
+                    PlaylistLoopCount = g.Playlist?.LoopCount ?? 1,
+                    PlaylistPlayCount = g.Playlist?.PlayCount,
+                    PlaylistReshuffleEachPass = g.Playlist?.ReshuffleEachPass ?? true,
+                    PlaylistEndBehavior = g.Playlist?.EndBehavior ?? CuePlaylistEndBehavior.Stop,
                 };
                 foreach (var c in g.Children)
                     vm.Children.Add(FromModel(c, resolveLine));
@@ -1084,11 +1485,14 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Label = m.Label,
                     TriggerMode = m.TriggerMode,
                     PreWaitMs = m.PreWaitMs,
+                    TimelineStartMs = m.TimelineStartMs,
                     Notes = m.Notes,
                     ColorTag = m.ColorTag,
                     SourceOrAction = m.Source?.DisplayName ?? string.Empty,
                     FadeInMs = m.FadeInMs,
                     FadeOutMs = m.FadeOutMs,
+                    FadeInCurve = m.FadeInCurve,
+                    FadeOutCurve = m.FadeOutCurve,
                     DurationMs = m.DurationMs,
                     SourceHasVideo = m.HasVideo,
                     SourceHasAudio = m.HasAudio,
@@ -1126,6 +1530,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Label = a.Label,
                     TriggerMode = a.TriggerMode,
                     PreWaitMs = a.PreWaitMs,
+                    TimelineStartMs = a.TimelineStartMs,
                     Notes = a.Notes,
                     ColorTag = a.ColorTag,
                     SourceOrAction = a.AddressOrMessage,
@@ -1140,6 +1545,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Label = j.Label,
                     TriggerMode = j.TriggerMode,
                     PreWaitMs = j.PreWaitMs,
+                    TimelineStartMs = j.TimelineStartMs,
                     Notes = j.Notes,
                     ColorTag = j.ColorTag,
                     JumpTargetIds = [.. j.TargetCueIds],
@@ -1156,6 +1562,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Label = v.Label,
                     TriggerMode = v.TriggerMode,
                     PreWaitMs = v.PreWaitMs,
+                    TimelineStartMs = v.TimelineStartMs,
                     Notes = v.Notes,
                     ColorTag = v.ColorTag,
                     VisualizerCompositionId = v.CompositionId,
@@ -1198,6 +1605,26 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 return vizVm;
             }
 
+            case FadeCueNode f:
+                return new CueNodeViewModel(CueNodeKind.Fade)
+                {
+                    Id = f.Id,
+                    Number = f.Number,
+                    Label = f.Label,
+                    TriggerMode = f.TriggerMode,
+                    PreWaitMs = f.PreWaitMs,
+                    TimelineStartMs = f.TimelineStartMs,
+                    Notes = f.Notes,
+                    ColorTag = f.ColorTag,
+                    FadeTargetIds = [.. f.TargetCueIds],
+                    FadeTargetAllPlaying = f.TargetAllPlaying,
+                    FadeTargetLevelDb = f.TargetLevelDb,
+                    DurationMs = f.DurationMs,
+                    FadeOutCurve = f.Curve,
+                    FadeStopWhenSilent = f.StopWhenSilent,
+                    FadeAlsoFadeVideo = f.AlsoFadeVideoOpacity,
+                };
+
             case CommentCueNode c:
                 return new CueNodeViewModel(CueNodeKind.Comment)
                 {
@@ -1206,6 +1633,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Label = c.Label,
                     TriggerMode = c.TriggerMode,
                     PreWaitMs = c.PreWaitMs,
+                    TimelineStartMs = c.TimelineStartMs,
                     Notes = c.Notes,
                     ColorTag = c.ColorTag,
                     SourceOrAction = c.Text,
@@ -1226,9 +1654,12 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Label = Label,
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
+                TimelineStartMs = Math.Max(0, TimelineStartMs),
                 Notes = Notes,
                 ColorTag = ColorTag,
+                Schedule = BuildScheduleModel(),
                 FireMode = Enum.TryParse<CueGroupFireMode>(Extra, out var fm) ? fm : CueGroupFireMode.FirstCueOnly,
+                Playlist = BuildPlaylistOptionsModel(),
                 Children = Children.Select(c => c.ToModel()).ToList(),
             },
             CueNodeKind.Media => new MediaCueNode
@@ -1238,14 +1669,18 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Label = Label,
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
+                TimelineStartMs = Math.Max(0, TimelineStartMs),
                 Notes = Notes,
                 ColorTag = ColorTag,
+                Schedule = BuildScheduleModel(),
                 Source = MediaSourceItem
                            ?? (string.IsNullOrWhiteSpace(SourceOrAction)
                                ? null
                                : new FilePlaylistItem(SourceOrAction)),
                 FadeInMs = Math.Max(0, FadeInMs),
                 FadeOutMs = Math.Max(0, FadeOutMs),
+                FadeInCurve = FadeInCurve,
+                FadeOutCurve = FadeOutCurve,
                 DurationMs = Math.Max(0, DurationMs),
                 HasVideo = SourceHasVideo,
                 HasAudio = SourceHasAudio,
@@ -1276,8 +1711,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Label = Label,
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
+                TimelineStartMs = Math.Max(0, TimelineStartMs),
                 Notes = Notes,
                 ColorTag = ColorTag,
+                Schedule = BuildScheduleModel(),
                 AddressOrMessage = SourceOrAction,
                 EndpointId = Guid.TryParse(EndpointIdText, out var endpointId) ? endpointId : null,
                 ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OSCOut,
@@ -1289,8 +1726,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Label = Label,
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
+                TimelineStartMs = Math.Max(0, TimelineStartMs),
                 Notes = Notes,
                 ColorTag = ColorTag,
+                Schedule = BuildScheduleModel(),
                 TargetCueIds = [.. JumpTargetIds],
                 RandomTarget = JumpRandom,
                 AvoidImmediateRepeat = JumpAvoidImmediateRepeat,
@@ -1303,8 +1742,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Label = Label,
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
+                TimelineStartMs = Math.Max(0, TimelineStartMs),
                 Notes = Notes,
                 ColorTag = ColorTag,
+                Schedule = BuildScheduleModel(),
                 CompositionId = VisualizerCompositionId,
                 StartVisualizer = !string.Equals(Extra, "Stop", StringComparison.OrdinalIgnoreCase),
                 PresetDirectory = string.IsNullOrWhiteSpace(SourceOrAction) ? null : SourceOrAction,
@@ -1325,6 +1766,25 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 TransitionSeconds = VisualizerTransitionSeconds,
                 VideoPlacements = VideoPlacements.Select(p => p.ToModel()).ToList(),
             },
+            CueNodeKind.Fade => new FadeCueNode
+            {
+                Id = Id,
+                Number = Number,
+                Label = Label,
+                TriggerMode = TriggerMode,
+                PreWaitMs = PreWaitMs,
+                TimelineStartMs = Math.Max(0, TimelineStartMs),
+                Notes = Notes,
+                ColorTag = ColorTag,
+                Schedule = BuildScheduleModel(),
+                TargetCueIds = [.. FadeTargetIds],
+                TargetAllPlaying = FadeTargetAllPlaying,
+                TargetLevelDb = FadeTargetLevelDb,
+                DurationMs = Math.Max(0, DurationMs),
+                Curve = FadeOutCurve,
+                StopWhenSilent = FadeStopWhenSilent,
+                AlsoFadeVideoOpacity = FadeAlsoFadeVideo,
+            },
             _ => new CommentCueNode
             {
                 Id = Id,
@@ -1332,8 +1792,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Label = Label,
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
+                TimelineStartMs = Math.Max(0, TimelineStartMs),
                 Notes = Notes,
                 ColorTag = ColorTag,
+                Schedule = BuildScheduleModel(),
                 Text = SourceOrAction,
             },
         };

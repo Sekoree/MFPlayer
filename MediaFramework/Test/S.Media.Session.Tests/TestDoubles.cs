@@ -153,6 +153,37 @@ internal sealed class SinkAudioOutput(AudioFormat format) : IAudioOutput
     public void Submit(ReadOnlySpan<float> packedSamples) { }
 }
 
+/// <summary>A backend whose device list can be swapped mid-test (hot-plug) - proves the session's fallback
+/// output device is resolved at the point of use through the device cache, not frozen at construction.</summary>
+internal sealed class HotPlugAudioBackend : IAudioBackend
+{
+    private readonly List<(int Channels, string? DeviceId, int SampleRate)> _created = [];
+    private volatile IReadOnlyList<AudioDeviceInfo> _devices = [];
+
+    public string Name => "hotplug";
+    public IReadOnlyList<(int Channels, string? DeviceId, int SampleRate)> Created => _created;
+
+    public IReadOnlyList<AudioDeviceInfo> Devices
+    {
+        get => _devices;
+        set => _devices = value;
+    }
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices() => _devices;
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices() => [];
+
+    public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)
+    {
+        lock (_created)
+            _created.Add((format.Channels, deviceId, format.SampleRate));
+        return new SinkAudioOutput(format);
+    }
+
+    public IAudioSource CreateInput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
+        throw new NotSupportedException();
+}
+
 /// <summary>An <see cref="IAudioOutput"/> that also counts Dispose calls - lets a test prove the session did
 /// (or did NOT) dispose a host-provided output, i.e. the borrowed-output ownership contract of the audio-output
 /// factory seam (an NDI carrier's audio side must never be disposed by the session).</summary>

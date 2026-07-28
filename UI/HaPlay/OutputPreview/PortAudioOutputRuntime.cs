@@ -166,21 +166,33 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         var deviceId = definition.EffectiveAudioBackendDeviceId;
         var useDefaultDevice = string.IsNullOrWhiteSpace(deviceId);
         var deviceName = string.IsNullOrWhiteSpace(definition.DeviceName) ? "System default" : definition.DeviceName;
+        AudioDeviceInfo? matched = null;
+        var enumerated = false;
         try
         {
             var devices = backend.EnumerateOutputDevices();
-            var matched = MatchBackendDevice(devices, deviceId, definition.DeviceName);
-            if (matched is not null)
-            {
-                if (!useDefaultDevice)
-                    deviceId = matched.Id;
-                deviceName = matched.Name;
-            }
+            enumerated = true;
+            matched = MatchBackendDevice(devices, deviceId, definition.DeviceName);
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "CreateBackendOutput: '{Name}' failed to enumerate {Backend} devices; using saved device id",
                 definition.DisplayName, backend.Name);
+        }
+
+        if (matched is not null)
+        {
+            if (!useDefaultDevice)
+                deviceId = matched.Id;
+            deviceName = matched.Name;
+        }
+        else if (enumerated && !useDefaultDevice)
+        {
+            // An explicitly configured device that no longer exists must fail loudly (the
+            // missing-outputs rebind flow handles it) - silently landing on the system default
+            // plays show audio out of the wrong physical output.
+            throw new InvalidOperationException(
+                $"saved {backend.Name} output '{definition.DisplayName}' device '{deviceName}' (id '{deviceId}') was not found; edit the output and choose an available output device");
         }
 
         resolvedDefinition = definition with
@@ -222,7 +234,10 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 return byName;
         }
 
-        return devices.FirstOrDefault(d => d.IsDefault);
+        // Default-device fallback ONLY for definitions that never named a device (default
+        // intent). An explicit id/name that failed to match returns null so the caller can
+        // fail loudly instead of rerouting to whatever the system default happens to be.
+        return string.IsNullOrWhiteSpace(deviceId) ? devices.FirstOrDefault(d => d.IsDefault) : null;
     }
 
     private static string FormatBackendNames()

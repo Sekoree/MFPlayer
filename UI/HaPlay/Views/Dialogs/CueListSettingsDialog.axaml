@@ -18,7 +18,7 @@
     </StackPanel>
 
     <StackPanel Spacing="10">
-      <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto" RowSpacing="8" ColumnSpacing="8">
+      <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="8">
         <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.DefaultTriggerModeLabel}" VerticalAlignment="Center" />
         <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding TriggerModes}"
                   SelectedItem="{Binding DefaultTriggerMode, Mode=TwoWay}" HorizontalAlignment="Stretch">
@@ -32,6 +32,23 @@
         <CheckBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
                   Content="{x:Static res:Strings.AutoRenumberOnInsertLabel}"
                   IsChecked="{Binding AutoRenumberOnInsert, Mode=TwoWay}" />
+
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="{x:Static res:Strings.StopFadeMsLabel}" VerticalAlignment="Center" />
+        <NumericUpDown FormatString="0" Grid.Row="2" Grid.Column="1"
+                       Minimum="0"
+                       Maximum="120000"
+                       PlaceholderText="{Binding StopFadeMsHint}"
+                       Value="{Binding StopFadeMs, Mode=TwoWay}" />
+
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static res:Strings.StopFadeCurveLabel}" VerticalAlignment="Center" />
+        <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{Binding FadeCurves}"
+                  SelectedItem="{Binding StopFadeCurve, Mode=TwoWay}" HorizontalAlignment="Stretch">
+          <ComboBox.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding Converter={x:Static rootvm:EnumDisplayConverter.Instance}}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
       </Grid>
     </StackPanel>
   </DockPanel>

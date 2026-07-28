@@ -176,7 +176,9 @@ public static class HaPlayShowMapper
             StartOffset = TimeSpan.FromMilliseconds(media.StartOffsetMs),
             EndOffset = TimeSpan.FromMilliseconds(media.EndOffsetMs),
             FadeIn = TimeSpan.FromMilliseconds(media.FadeInMs),
+            FadeInCurve = MapFadeCurve(media.FadeInCurve),
             FadeOut = TimeSpan.FromMilliseconds(media.FadeOutMs),
+            FadeOutCurve = MapFadeCurve(media.FadeOutCurve),
             Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
             EndBehavior = MapEndBehavior(media.EndBehavior),
             // A text cue plays a held frame that never signals EOF, so end it at its duration via the time-based
@@ -325,6 +327,15 @@ public static class HaPlayShowMapper
         CueEndBehavior.Loop => ClipEndBehavior.Loop,
         CueEndBehavior.FadeOutAndStop => ClipEndBehavior.FadeOutAndStop,
         _ => ClipEndBehavior.Stop,
+    };
+
+    /// <summary>GUI curve → framework curve (Linear on anything unrecognized, never a fade failure).</summary>
+    public static FadeCurve MapFadeCurve(CueFadeCurve curve) => curve switch
+    {
+        CueFadeCurve.EqualPower => FadeCurve.EqualPower,
+        CueFadeCurve.Exponential => FadeCurve.Exponential,
+        CueFadeCurve.SCurve => FadeCurve.SCurve,
+        _ => FadeCurve.Linear,
     };
 
     private static ShowComposition MapComposition(CueComposition composition) => new(

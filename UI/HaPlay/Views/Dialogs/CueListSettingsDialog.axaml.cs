@@ -15,7 +15,7 @@ public partial class CueListSettingsDialog : Window
     private void OkClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not CueListSettingsDialogViewModel vm) return;
-        Close(new CueListSettingsDialogResult(vm.DefaultTriggerMode, vm.AutoRenumberOnInsert));
+        Close(vm.ToResult());
     }
 
     private void CancelClick(object? sender, RoutedEventArgs e) => Close(null);

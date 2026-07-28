@@ -142,8 +142,15 @@ public sealed record ShowClipBinding(
     /// <summary>Fade-in at clip start (GUI <c>FadeInMs</c>).</summary>
     public TimeSpan FadeIn { get; init; }
 
+    /// <summary>Gain curve for <see cref="FadeIn"/> (GUI <c>FadeInCurve</c>). Linear = pre-curve behavior.</summary>
+    public FadeCurve FadeInCurve { get; init; } = FadeCurve.Linear;
+
     /// <summary>Fade-out at clip end (GUI <c>FadeOutMs</c>).</summary>
     public TimeSpan FadeOut { get; init; }
+
+    /// <summary>Gain curve for <see cref="FadeOut"/> - the natural fade-out AND the stop fade whenever the
+    /// clip's own <see cref="FadeOut"/> wins the stop-duration precedence.</summary>
+    public FadeCurve FadeOutCurve { get; init; } = FadeCurve.Linear;
 
     /// <summary>Loop the trimmed clip (GUI <c>MediaCueNode.Loop</c>, also implied by <see cref="ClipEndBehavior.Loop"/>).</summary>
     public bool Loop { get; init; }
@@ -195,7 +202,18 @@ public sealed record ShowClipBinding(
     /// Non-empty plays on exactly these outputs; an empty list is explicitly silent; <see langword="null"/>
     /// inherits the show/group outputs (including the standalone session's implicit master fallback).</summary>
     public IReadOnlyList<ShowClipAudioRoute>? AudioRoutes { get; init; }
+
+    /// <summary>Volume-automation keyframes (GUI <c>MediaCueNode.VolumeEnvelope</c>), sorted by time.
+    /// Times are CLIP positions (post-<see cref="StartOffset"/>), so the envelope survives seeks and
+    /// restarts on every loop pass. The envelope factor MULTIPLIES the fade level (fade-in/out, fade
+    /// cue, stop fade) - it never replaces it. Null/empty = no automation (and no runner started).</summary>
+    public IReadOnlyList<ShowEnvelopePoint>? VolumeEnvelope { get; init; }
 }
+
+/// <summary>One volume-envelope keyframe: the clip-relative <paramref name="Time"/>, the LINEAR gain
+/// factor <paramref name="Level"/> (0 = silence; may exceed 1 up to +12 dB - the GUI/mapper converts dB),
+/// and the curve shaping the segment from this point to the next (<see cref="VolumeEnvelopes.Sample"/>).</summary>
+public sealed record ShowEnvelopePoint(TimeSpan Time, float Level, FadeCurve CurveToNext = FadeCurve.Linear);
 
 /// <summary>A selected subtitle source. <paramref name="Path"/> null means the clip's media container;
 /// <paramref name="StreamIndex"/> <c>-1</c> selects the best subtitle stream.</summary>

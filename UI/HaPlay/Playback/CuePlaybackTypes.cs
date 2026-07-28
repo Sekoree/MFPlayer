@@ -27,6 +27,15 @@ public enum PreparedCueState
 /// <summary>Per-cue preparation status snapshot (driven by <c>ShowSession.PreparedCuesChanged</c>).</summary>
 public readonly record struct CuePreparationStatus(Guid CueId, PreparedCueState State, string? Error);
 
+/// <summary>The effective stop fade a transport Stop/Panic hands the playback host. The VM resolves
+/// the precedence (cue-list <c>StopFadeMs</c> → app-settings default; Panic → <c>PanicFadeMs</c>)
+/// so the host only forwards to <c>ShowSession.StopAllAsync</c>. <see cref="Fade"/> false = hard cut
+/// (per-clip configured fade-outs are also skipped - Panic means <em>now</em>).</summary>
+public readonly record struct CueStopFadeRequest(
+    bool Fade,
+    TimeSpan FadeDuration,
+    S.Media.Session.FadeCurve Curve);
+
 /// <summary>Everything a soundboard fire needs for one tile. The view model resolves board defaults
 /// (output line etc.) before building this, so the playback side stays board-agnostic.</summary>
 public readonly record struct SoundboardPlayRequest(

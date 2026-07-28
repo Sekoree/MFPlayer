@@ -44,6 +44,9 @@ public partial class MainViewModel : ViewModelBase
     private bool _midiInitialized;
     private readonly EndpointHealthMonitor _endpointHealth;
 
+    /// <summary>Wall-clock cue scheduler (timed triggers §4) - owns the single 250 ms sweep timer.</summary>
+    private readonly CueSchedulerService _cueScheduler;
+
     /// <summary>Crash-recovery autosave (§ session restore): captures the full project to the cache on a cadence
     /// and, on a clean shutdown, deletes its session folder so nothing is offered for restore.</summary>
     private readonly SessionRecoveryService _recovery;
@@ -81,6 +84,10 @@ public partial class MainViewModel : ViewModelBase
         // its output leases, reloads, and polls are owned by the coordinator.
         _cueShow = new CueShowSessionCoordinator(CuePlayer, Soundboard, OutputManagement);
         _cueShow.WireShowSessionCueTransport();
+        // Timed cue triggers (Ideas/CuePlayer-Enhancements.md §4): one central 250 ms sweep over every
+        // scheduled cue. Fires are gated on the session-scoped "Schedules armed" toggle + edit mode.
+        _cueScheduler = new CueSchedulerService(CuePlayer);
+        _cueScheduler.Start();
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
@@ -206,6 +213,7 @@ public partial class MainViewModel : ViewModelBase
             discardChanges: _discardUnsavedOnShutdown,
             retainRecovery: !_discardUnsavedOnShutdown && HasUnsavedChanges);
         _endpointHealth.Dispose();
+        _cueScheduler.Dispose();
         _remoteApi.Dispose();
         _cueShow.ShutdownCleanup();
         // Finalize armed file recordings LAST-ish but before the media host teardown: flushes encoders
@@ -1426,6 +1434,8 @@ public partial class MainViewModel : ViewModelBase
             SavedSections = sections is null ? null : ProjectSections.Normalize(sections),
             // Per-project session-restore setting travels with the document (not gated by a section).
             AutoSaveEnabled = AutoSaveEnabled,
+            // Preview-device choice is document-level too; null until the operator explicitly picks one.
+            CuePreviewAudioDeviceName = CuePlayer.BuildPreviewAudioDeviceSnapshot(),
             Outputs = outputs,
             Players = Has(ProjectSections.Players) ? Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList() : [],
             ActionEndpoints = ActionEndpoints
@@ -1473,6 +1483,12 @@ public partial class MainViewModel : ViewModelBase
             merged.AddRange(project.Outputs);
             OutputManagement.ReplaceDefinitionsForLoad(merged);
         }
+
+        // Preview-device choice is document-level (like AutoSaveEnabled) but restored AFTER the outputs
+        // merge so an unpersisted choice derives its preselect from the freshly loaded cue output lines.
+        // A persisted device that no longer exists is ignored (falls back to that same derivation).
+        if (sections is null)
+            CuePlayer.RestorePreviewAudioDevice(project.CuePreviewAudioDeviceName);
 
         // UI rewrite P2: the virtual-audio-channel ("VOut") model was removed in favor of output
         // aliases + per-player matrix presets. Old projects still load; tell the operator once.

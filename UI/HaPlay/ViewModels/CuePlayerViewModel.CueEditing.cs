@@ -62,13 +62,18 @@ public partial class CuePlayerViewModel
 
         var dialogVm = new Dialogs.CueListSettingsDialogViewModel(
             SelectedCueList.DefaultTriggerMode,
-            SelectedCueList.AutoRenumberOnInsert);
+            SelectedCueList.AutoRenumberOnInsert,
+            SelectedCueList.StopFadeMs,
+            SelectedCueList.StopFadeCurve,
+            Models.AppSettings.Load().StopFadeMs);
         var dialog = new Views.Dialogs.CueListSettingsDialog { DataContext = dialogVm };
         var result = await dialog.ShowDialog<Dialogs.CueListSettingsDialogResult?>(owner);
         if (result is null) return;
 
         SelectedCueList.DefaultTriggerMode = result.DefaultTriggerMode;
         SelectedCueList.AutoRenumberOnInsert = result.AutoRenumberOnInsert;
+        SelectedCueList.StopFadeMs = result.StopFadeMs;
+        SelectedCueList.StopFadeCurve = result.StopFadeCurve;
         RebuildUpcomingCues();
         StatusMessage = Strings.CueListSettingsAppliedStatus;
         SuggestPreRollRefresh();

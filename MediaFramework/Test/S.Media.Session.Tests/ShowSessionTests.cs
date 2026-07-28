@@ -913,6 +913,26 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task VoiceFallbackDevice_ResolvesAtUse_NotFrozenAtConstruction()
+    {
+        // Device-dependence fix #3: the session used to capture "default-else-first output device" ONCE in
+        // the ctor, so hardware plugged in after app start never became the fallback. The fallback must be
+        // re-resolved through the device cache at the point of use - here, a voice fired with no device.
+        var backend = new HotPlugAudioBackend(); // constructed with NO devices at all
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+
+        backend.Devices =
+        [
+            new AudioDeviceInfo("usb:9", "Hot-plugged interface", MaxChannels: 2,
+                DefaultSampleRate: 48_000, IsDefault: true),
+        ];
+
+        await session.FireVoiceAsync("v1", "fake://1"); // no explicit device → session fallback
+        Assert.True(await session.IsVoicePlayingAsync("v1"));
+        Assert.Contains("usb:9", backend.Created.Select(c => c.DeviceId));
+    }
+
+    [Fact]
     public async Task SoundboardVoices_FirePolyphonicOnDevices_StopAndStopAll()
     {
         // Soundboard voices (task #10): concurrent one-shots on independent output devices, keyed by tile id.
@@ -1534,6 +1554,48 @@ public sealed class ShowSessionTests
         sw.Stop();
 
         Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(140), $"stop returned before its fade ({sw.Elapsed})");
+        Assert.Contains(output.Alphas, alpha => alpha is > 0 and < 255);
+        Assert.False(Assert.Single(await session.SnapshotAsync()).IsRunning);
+    }
+
+    [Fact]
+    public async Task StopAllAsync_AppliesConfiguredFadeCurve_ToTheStopRamp()
+    {
+        // A clip whose own FadeOut wins the stop precedence fades on its own FadeOutCurve: the non-linear
+        // ramp still runs 1 → 0 (intermediate levels visible on the composited layer) and still releases at
+        // the fade's end - the curve shapes the levels, never the duration or the release contract.
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "Video")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "screen")
+                {
+                    FadeOut = TimeSpan.FromMilliseconds(250),
+                    FadeOutCurve = FadeCurve.SCurve,
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
+        await using var session = new ShowSession(
+            FakeVideoDecoderProvider.Registry(frameCount: 900), // outlive the stop (see the linear variant above)
+            videoOutputFactory: (_, _, _, _) =>
+                [new ClipCompositionOutputLease("screen-out", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        output.ClearAlphas();
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await session.StopAllAsync(curve: FadeCurve.EqualPower); // clip fade wins → SCurve applies
+        sw.Stop();
+
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(200), $"stop returned before its fade ({sw.Elapsed})");
         Assert.Contains(output.Alphas, alpha => alpha is > 0 and < 255);
         Assert.False(Assert.Single(await session.SnapshotAsync()).IsRunning);
     }

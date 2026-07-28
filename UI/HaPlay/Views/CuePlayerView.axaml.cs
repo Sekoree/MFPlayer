@@ -25,6 +25,10 @@ public partial class CuePlayerView : UserControl
 
     private IReadOnlyList<CueNodeViewModel>? _rowDragNodes;
 
+    // One timeline editor PER GROUP (keyed by group id, the ControlScriptsView per-script-window
+    // pattern) - selecting another group opens another window instead of hijacking an open one.
+    private readonly Dictionary<Guid, TimelineEditorWindow> _timelineEditorWindows = new();
+
     /// <summary>P4 close-out (plan §3.1): last drawer tab the operator used per cue type, so
     /// switching cue types lands on the tab that matters for that type (media → Audio stays
     /// Audio, groups remember Group, …) instead of always falling back to the first tab.</summary>
@@ -734,5 +738,30 @@ public partial class CuePlayerView : UserControl
         rect.DetachedFromVisualTree += (_, _) => Rebind(null);
         Rebind(rect.DataContext as CueNodeViewModel);
         return rect;
+    }
+
+    private void OnOpenTimelineEditorClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuePlayerViewModel vm || vm.SelectedGroupCue is not { } group)
+            return;
+
+        if (_timelineEditorWindows.TryGetValue(group.Id, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+
+        var window = new TimelineEditorWindow
+        {
+            DataContext = new TimelineEditorWindowViewModel(vm, group),
+        };
+        var groupId = group.Id;
+        window.Closed += (_, _) => _timelineEditorWindows.Remove(groupId);
+        _timelineEditorWindows[groupId] = window;
+
+        if (TopLevel.GetTopLevel(this) is Window owner)
+            window.Show(owner);
+        else
+            window.Show();
     }
 }

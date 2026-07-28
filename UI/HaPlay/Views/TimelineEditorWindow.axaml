@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:HaPlay.Views.Controls"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels"
+        x:Class="HaPlay.Views.TimelineEditorWindow"
+        x:DataType="vm:TimelineEditorWindowViewModel"
+        Title="{Binding WindowTitle}"
+        Width="1100" Height="460"
+        MinWidth="640" MinHeight="280"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="Auto,*" RowSpacing="8" Margin="12">
+
+    <!-- Toolbar: zoom fit/±, snap toggle, grid choice. Zoom acts on the canvas directly (view
+         concern - the viewport width lives here, not in the VM). -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+      <Button Grid.Column="0" Content="{x:Static res:Strings.TimelineZoomFitButton}"
+              ToolTip.Tip="{x:Static res:Strings.TimelineZoomFitTooltip}" Click="OnZoomFitClick" />
+      <Button Grid.Column="1" Content="−" MinWidth="32"
+              ToolTip.Tip="{x:Static res:Strings.TimelineZoomOutTooltip}" Click="OnZoomOutClick" />
+      <Button Grid.Column="2" Content="+" MinWidth="32"
+              ToolTip.Tip="{x:Static res:Strings.TimelineZoomInTooltip}" Click="OnZoomInClick" />
+      <CheckBox Grid.Column="3" Content="{x:Static res:Strings.TimelineSnapLabel}"
+                IsChecked="{Binding SnapEnabled, Mode=TwoWay}" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="4" Text="{x:Static res:Strings.TimelineGridLabel}"
+                 VerticalAlignment="Center" Opacity="0.7" />
+      <ComboBox Grid.Column="5" MinWidth="92"
+                ItemsSource="{Binding GridOptions}"
+                SelectedItem="{Binding SelectedGridOption, Mode=TwoWay}"
+                IsEnabled="{Binding SnapEnabled}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate DataType="vm:TimelineGridOption">
+            <TextBlock Text="{Binding Label}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+      <TextBlock Grid.Column="6" HorizontalAlignment="Right" VerticalAlignment="Center"
+                 Opacity="0.6" Text="{x:Static res:Strings.TimelineLiveViewHint}"
+                 IsVisible="{Binding IsLiveView}" />
+    </Grid>
+
+    <!-- Body: fixed lane-label column + horizontally scrolling canvas, sharing one vertical
+         scroll. Label heights mirror the canvas lane metrics (26 ruler, 36 lane, 4 gap). -->
+    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
+      <Panel>
+        <TextBlock Text="{x:Static res:Strings.TimelineEmptyGroupHint}" Opacity="0.6"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   IsVisible="{Binding !HasLanes}" />
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      IsVisible="{Binding HasLanes}">
+          <Grid ColumnDefinitions="180,*">
+            <ItemsControl Grid.Column="0" Margin="0,26,0,0" ItemsSource="{Binding Lanes}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:CueNodeViewModel">
+                  <Border Height="36" Margin="0,0,6,4" Padding="8,0"
+                          Background="#14FFFFFF" CornerRadius="0">
+                    <StackPanel VerticalAlignment="Center" Spacing="1">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="{Binding Number}" FontWeight="SemiBold" FontSize="12" />
+                        <TextBlock Text="{Binding Label}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                      <TextBlock Text="{Binding KindLabel}" FontSize="10" Opacity="0.55" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <ScrollViewer Grid.Column="1" x:Name="TimelineScroll"
+                          HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+              <controls:TimelineCanvas x:Name="Timeline"
+                                       Lanes="{Binding Lanes}"
+                                       SnapEnabled="{Binding SnapEnabled}"
+                                       GridMs="{Binding SelectedGridOption.Ms}"
+                                       IsEditable="{Binding IsCueEditMode}"
+                                       PlayheadMs="{Binding PlayheadMs}" />
+            </ScrollViewer>
+          </Grid>
+        </ScrollViewer>
+      </Panel>
+    </Border>
+  </Grid>
+</Window>

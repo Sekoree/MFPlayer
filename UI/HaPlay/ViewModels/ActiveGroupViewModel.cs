@@ -49,6 +49,11 @@ public sealed partial class ActiveGroupViewModel : ObservableObject
     [ObservableProperty]
     private bool _isNearEnd;
 
+    /// <summary>Playlist run status ("item 3/12 · pass 1/2"), set by the cue player while this
+    /// group has an active playlist/armed-list run; null hides the badge.</summary>
+    [ObservableProperty]
+    private string? _playlistStatus;
+
     /// <summary>Longest child duration - the timeline the aggregate progress runs on.</summary>
     public long LongestDurationMs { get; private set; }
 
@@ -85,6 +90,20 @@ public sealed partial class ActiveGroupViewModel : ObservableObject
                 chain.Add((node, offset));
                 offset += node.ChainContributionMs;
             }
+        }
+        else if (GroupNode.GroupFireMode == CueGroupFireMode.Timeline)
+        {
+            // Authored-span timeline: every child sits at its authored start (plus its own pre-wait, the
+            // same offset the trigger plan uses), the total is the group roll-up (max child end), and the
+            // position projects as the furthest-along active child - the timeline sibling of the summed
+            // sequential chain above. Start-ordered so the upcoming rows read in firing order.
+            foreach (var node in GroupNode.Children)
+            {
+                if (node.Kind == CueNodeKind.Comment)
+                    continue;
+                chain.Add((node, Math.Max(0, node.TimelineStartMs) + Math.Max(0, node.PreWaitMs)));
+            }
+            chain.Sort(static (a, b) => a.StartMs.CompareTo(b.StartMs));
         }
 
         var chainTotal = GroupNode.RolledDurationMs;

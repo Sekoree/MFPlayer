@@ -59,6 +59,61 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void PreviewDevice_AutoPreselectsFirstConfiguredLineDevice_NotDefault()
+    {
+        // Device-dependence fix #1: with configured PortAudio lines, the preview picker must preselect
+        // the first line's device - "Default device" only when no line is configured.
+        var vm = new CuePlayerViewModel();
+        vm.PreviewAudioDevices.Add(new PreviewAudioDeviceOption(null, "Default device"));
+        vm.PreviewAudioDevices.Add(new PreviewAudioDeviceOption(3, "Onboard Analog"));
+        vm.PreviewAudioDevices.Add(new PreviewAudioDeviceOption(7, "USB Interface"));
+
+        vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel>
+        {
+            Line(new PortAudioOutputDefinition(
+                Guid.NewGuid(), "Main PA", 0, "ALSA", GlobalDeviceIndex: 7, "USB Interface", 2, 48000)),
+        });
+
+        Assert.Equal(7, vm.SelectedPreviewAudioDevice?.DeviceIndex);
+        Assert.False(vm.HasExplicitPreviewAudioDeviceChoice);
+        Assert.Null(vm.BuildPreviewAudioDeviceSnapshot()); // automatic preselect is never persisted
+    }
+
+    [Fact]
+    public void PreviewDevice_ExplicitChoicePersists_AndStaleRestoreFallsBackToLineDerivation()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.PreviewAudioDevices.Add(new PreviewAudioDeviceOption(null, "Default device"));
+        vm.PreviewAudioDevices.Add(new PreviewAudioDeviceOption(3, "Onboard Analog"));
+        vm.PreviewAudioDevices.Add(new PreviewAudioDeviceOption(7, "USB Interface"));
+        vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel>
+        {
+            Line(new PortAudioOutputDefinition(
+                Guid.NewGuid(), "Main PA", 0, "ALSA", GlobalDeviceIndex: 7, "USB Interface", 2, 48000)),
+        });
+
+        // Operator picks a device → the name is persisted and round-trips through restore.
+        vm.SelectedPreviewAudioDevice = vm.PreviewAudioDevices.First(o => o.DeviceIndex == 3);
+        Assert.True(vm.HasExplicitPreviewAudioDeviceChoice);
+        Assert.Equal("Onboard Analog", vm.BuildPreviewAudioDeviceSnapshot());
+        vm.RestorePreviewAudioDevice("Onboard Analog");
+        Assert.Equal(3, vm.SelectedPreviewAudioDevice?.DeviceIndex);
+
+        // "Default device" is a legitimate explicit choice, persisted as "".
+        vm.SelectedPreviewAudioDevice = vm.PreviewAudioDevices.First(o => o.DeviceIndex is null);
+        Assert.Equal(string.Empty, vm.BuildPreviewAudioDeviceSnapshot());
+        vm.RestorePreviewAudioDevice(string.Empty);
+        Assert.Null(vm.SelectedPreviewAudioDevice?.DeviceIndex);
+        Assert.True(vm.HasExplicitPreviewAudioDeviceChoice);
+
+        // A persisted device that is gone is ignored - back to the configured-line derivation.
+        vm.RestorePreviewAudioDevice("Unplugged Interface");
+        Assert.Equal(7, vm.SelectedPreviewAudioDevice?.DeviceIndex);
+        Assert.False(vm.HasExplicitPreviewAudioDeviceChoice);
+        Assert.Null(vm.BuildPreviewAudioDeviceSnapshot());
+    }
+
+    [Fact]
     public void AddAudioRoute_UsesNDIChannelCount()
     {
         var vm = new CuePlayerViewModel();
@@ -1442,7 +1497,7 @@ public sealed class CuePlayerViewModelTests
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         var hostStops = 0;
         var individualVisualizerStops = 0;
-        vm.StopPlaybackCallback = () =>
+        vm.StopPlaybackCallback = _ =>
         {
             hostStops++;
             return Task.CompletedTask;
