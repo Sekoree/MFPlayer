@@ -64,6 +64,26 @@ internal static class TimelineMath
     public static bool IsTrimmable(CueNodeViewModel node) =>
         node.Kind == CueNodeKind.Media && node.DurationMs > 0;
 
+    /// <summary>The lane position (ms on the group's plan epoch) a node's block/marker renders at: the
+    /// authored <c>TimelineStartMs</c> PLUS its <c>PreWaitMs</c> - the AUDIBLE start the trigger plan
+    /// fires at. Rendering at the raw authored start understated a pre-waited lane's real start; drags
+    /// write back <c>blockStart − PreWaitMs</c> (floored at 0, so a block can never sit left of its own
+    /// pre-wait).</summary>
+    public static int BlockStartMs(CueNodeViewModel node) =>
+        Math.Max(0, node.TimelineStartMs) + Math.Max(0, node.PreWaitMs);
+
+    /// <summary>Normalized window [0,1] of a media source's full duration that the (trimmed) block
+    /// shows - the slice of the whole-file waveform peaks to draw inside the block.</summary>
+    public static (double StartFrac, double EndFrac) WaveformWindow(
+        int startOffsetMs, int effectiveMs, int endOffsetMs)
+    {
+        var total = (double)Math.Max(0, startOffsetMs) + Math.Max(0, effectiveMs) + Math.Max(0, endOffsetMs);
+        if (total <= 0 || effectiveMs <= 0)
+            return (0, 1);
+        var start = Math.Max(0, startOffsetMs) / total;
+        return (start, Math.Clamp(start + effectiveMs / total, start, 1));
+    }
+
     public static Rect BlockRect(int laneIndex, int startMs, int durationMs, double pxPerMs) => new(
         XForMs(Math.Max(0, startMs), pxPerMs),
         LaneTop(laneIndex) + BlockVPad,

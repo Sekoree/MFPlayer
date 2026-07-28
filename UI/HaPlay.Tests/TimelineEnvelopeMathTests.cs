@@ -209,4 +209,44 @@ public sealed class TimelineEnvelopeMathTests
         Assert.Equal(-6, point.LevelDb);
         Assert.Equal(CueFadeCurve.SCurve, point.CurveToNext);
     }
+
+    // ---- Phase C block-position + waveform-window math ----
+
+    [Fact]
+    public void BlockStartMs_IsAuthoredStartPlusPreWait_FlooredAtZero()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddEmptyMediaCue();
+        var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        media.TimelineStartMs = 1000;
+        media.PreWaitMs = 250;
+        Assert.Equal(1250, TimelineMath.BlockStartMs(media));
+
+        media.PreWaitMs = 0;
+        Assert.Equal(1000, TimelineMath.BlockStartMs(media));
+
+        media.TimelineStartMs = -50; // defensive: negative authored values clamp
+        media.PreWaitMs = -10;
+        Assert.Equal(0, TimelineMath.BlockStartMs(media));
+    }
+
+    [Fact]
+    public void WaveformWindow_SlicesTheTrimmedRangeOfTheFullFile()
+    {
+        // 10 s file trimmed to [2 s, 8 s): window = [0.2, 0.8].
+        var (start, end) = TimelineMath.WaveformWindow(2000, 6000, 2000);
+        Assert.Equal(0.2, start, 6);
+        Assert.Equal(0.8, end, 6);
+
+        // Untrimmed = the whole file.
+        (start, end) = TimelineMath.WaveformWindow(0, 10_000, 0);
+        Assert.Equal(0.0, start, 6);
+        Assert.Equal(1.0, end, 6);
+
+        // Degenerate inputs fall back to the whole file instead of dividing by zero.
+        (start, end) = TimelineMath.WaveformWindow(0, 0, 0);
+        Assert.Equal(0.0, start, 6);
+        Assert.Equal(1.0, end, 6);
+    }
 }

@@ -1546,6 +1546,12 @@
   <data name="PanicFadeMsLabel" xml:space="preserve">
     <value>Panic fade (ms)</value>
   </data>
+  <data name="CueLevelDbLabel" xml:space="preserve">
+    <value>Level (dB)</value>
+  </data>
+  <data name="CueLevelDbTooltip" xml:space="preserve">
+    <value>Master level for this cue: multiplies every audio route (−60 = silent, 0 = unity, up to +12). Applies live while the cue is playing.</value>
+  </data>
   <data name="FilesMenuLabel" xml:space="preserve">
     <value>Files…</value>
   </data>
@@ -3956,7 +3962,10 @@
     <value>Schedules</value>
   </data>
   <data name="SchedulesArmedToggleTooltip" xml:space="preserve">
-    <value>Arm timed cue schedules for this session. Scheduled cues fire only while this is ON and cue edit mode is OFF. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
+    <value>Arm timed cue schedules for this session. Scheduled cues fire only while this is ON and cue edit mode is OFF, and only from the SELECTED cue list. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
+  </data>
+  <data name="SchedulesArmedOtherListsWarningFormat" xml:space="preserve">
+    <value>Schedules armed for the selected list only - {0} scheduled cue(s) in other lists will NOT fire.</value>
   </data>
   <data name="CueScheduleSectionHeader" xml:space="preserve">
     <value>Schedule</value>

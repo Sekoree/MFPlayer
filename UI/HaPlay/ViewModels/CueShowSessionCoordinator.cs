@@ -602,9 +602,9 @@ public sealed class CueShowSessionCoordinator
             // The audio counterpart of the live placement edit: re-apply the active cue's audio routing to the
             // running clip (was left on the now-inactive engine, so live level/channel tweaks silently no-op'd).
             // Mapped through the same MapAudioRoutes the fire path uses so the clip{i} outputs line up.
-            CuePlayer.UpdateActiveCueAudioRoutesCallback = async (cueId, routes) =>
+            CuePlayer.UpdateActiveCueAudioRoutesCallback = async (cueId, routes, levelDb) =>
             {
-                var mapped = HaPlayShowMapper.MapActiveAudioRoutes(routes, OutputManagement.DefinitionsSnapshot);
+                var mapped = HaPlayShowMapper.MapActiveAudioRoutes(routes, OutputManagement.DefinitionsSnapshot, levelDb);
                 var applied = await _cueShowSession!.ApplyActiveAudioRoutesAsync(cueId.ToString(), mapped)
                     .ConfigureAwait(false);
                 if (!applied)

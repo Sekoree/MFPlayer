@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,10 @@ public sealed unsafe class MiniAudioOutput :
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.MiniAudio.MiniAudioOutput");
     private static readonly delegate* unmanaged[Cdecl]<nint, float*, float*, uint, void> CallbackPtr = &Callback;
+    private static readonly delegate* unmanaged[Cdecl]<nint, void> StopCallbackPtr = &StopNotification;
+
+    /// <summary>Fallback period estimate before the first callback reveals the real one (miniaudio's low-latency default is 10 ms).</summary>
+    private const double DefaultPeriodSeconds = 0.010;
 
     private readonly AudioFormat _format;
     private readonly string? _deviceId;
@@ -31,6 +36,16 @@ public sealed unsafe class MiniAudioOutput :
     private int _deviceStoppedAfterFlush;
     private int _callbackFaulted;
     private Exception? _callbackFaultException;
+    /// <summary>1 once the device stopped without us asking (device lost/removed). Latched until the next <see cref="Start"/>.</summary>
+    private int _deviceLost;
+    /// <summary>1 while a deliberate stop (Stop/Flush/Dispose) is in flight or pending restart, so the native stop notification is not mistaken for device loss.</summary>
+    private int _intentionalStopPending;
+    /// <summary>Stopwatch timestamp taken at the end of the last data callback; 0 = no callback yet this segment.</summary>
+    private long _lastCallbackTimestamp;
+    /// <summary>Largest frameCount observed in a data callback - the device's effective period size.</summary>
+    private int _maxCallbackFrames;
+    /// <summary>Monotonic guard for <see cref="ElapsedSinceStart"/>; reset with the playback epoch on Start/Flush.</summary>
+    private long _elapsedHighWaterTicks;
     private nint _device;
     private GCHandle _selfHandle;
     private bool _isRunning;
@@ -88,15 +103,54 @@ public sealed unsafe class MiniAudioOutput :
 
     public Exception? CallbackFaultException => Volatile.Read(ref _callbackFaultException);
 
+    /// <summary>
+    /// True once the device stopped without a deliberate Stop/Flush (device unplugged, backend error).
+    /// Latched from miniaudio's stop notification until the next <see cref="Start"/>; while latched,
+    /// <see cref="Submit"/> throws, <see cref="WaitForCapacity"/> reports no capacity and
+    /// <see cref="IsAdvancing"/> is false, so the router surfaces the loss via <c>OutputErrored</c>/<c>Faulted</c>
+    /// instead of freezing the mastered clock silently. Best-effort: backends that reroute instead of
+    /// stopping (e.g. WASAPI shared-mode default-device moves) may not fire the notification.
+    /// </summary>
+    public bool DeviceLost => Volatile.Read(ref _deviceLost) != 0;
+
     public int TargetQueueSamples { get; set; }
 
+    /// <summary>
+    /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic <strong>audible</strong> playback time.
+    /// Base is the consumed-sample counter (segment-local, like PortAudio); between data callbacks it is
+    /// interpolated with wall time since the last callback (clamped to one device period so it can never
+    /// run ahead of the next callback's sample count), and one device period is subtracted as the DAC-side
+    /// latency this config knows about. In the healthy steady state the two effects cancel per callback, so
+    /// the clock advances smoothly instead of in period-sized stair steps. A CAS high-water keeps the result
+    /// monotonic per segment even across underrun-shortened callbacks. Residual accuracy: miniaudio buffers
+    /// up to (periods − 1) additional periods internally that this property cannot see, so the reported
+    /// position may still lead the speaker by up to that much (typically ≤ 2 periods, ~20 ms at defaults) -
+    /// better than the previous raw counter (period stair steps, no latency subtraction) but not
+    /// PortAudio's <c>Pa_GetStreamTime</c>-grade accuracy. No native calls on this read path.
+    /// </summary>
     public TimeSpan ElapsedSinceStart
     {
         get
         {
             var samples = Volatile.Read(ref _playedSamples) - Volatile.Read(ref _playbackEpochSamples);
             if (samples < 0) samples = 0;
-            return TimeSpan.FromSeconds(samples / (double)_format.SampleRate);
+
+            var periodSeconds = PeriodSeconds();
+            double interpolatedSeconds = 0;
+            var lastCallback = Volatile.Read(ref _lastCallbackTimestamp);
+            if (lastCallback != 0
+                && Volatile.Read(ref _isRunning)
+                && Volatile.Read(ref _deviceStoppedAfterFlush) == 0
+                && Volatile.Read(ref _deviceLost) == 0
+                && Volatile.Read(ref _callbackFaulted) == 0)
+            {
+                interpolatedSeconds = ComputeCallbackInterpolationSeconds(
+                    lastCallback, Stopwatch.GetTimestamp(), periodSeconds);
+            }
+
+            var audibleSeconds = samples / (double)_format.SampleRate + interpolatedSeconds - periodSeconds;
+            var candidateTicks = audibleSeconds > 0 ? (long)(audibleSeconds * TimeSpan.TicksPerSecond) : 0;
+            return TimeSpan.FromTicks(AdvanceElapsedHighWater(candidateTicks));
         }
     }
 
@@ -104,11 +158,53 @@ public sealed unsafe class MiniAudioOutput :
     {
         get
         {
-            if (!Volatile.Read(ref _isRunning) || Volatile.Read(ref _deviceStoppedAfterFlush) != 0)
+            if (!Volatile.Read(ref _isRunning)
+                || Volatile.Read(ref _deviceStoppedAfterFlush) != 0
+                || Volatile.Read(ref _deviceLost) != 0)
                 return false;
             lock (_deviceLifecycleGate)
                 return _device != nint.Zero && MiniAudioNative.DeviceIsStarted(_device) != 0;
         }
+    }
+
+    /// <summary>
+    /// Wall time to add on top of the consumed-sample count: elapsed Stopwatch time since the last data
+    /// callback, clamped to one period (the most the next callback can add), never negative. Pure so the
+    /// interpolation contract is unit-testable without a device.
+    /// </summary>
+    internal static double ComputeCallbackInterpolationSeconds(
+        long lastCallbackTimestamp, long nowTimestamp, double periodSeconds)
+    {
+        if (lastCallbackTimestamp == 0 || periodSeconds <= 0)
+            return 0;
+        var wallSeconds = (nowTimestamp - lastCallbackTimestamp) / (double)Stopwatch.Frequency;
+        if (wallSeconds <= 0)
+            return 0;
+        return Math.Min(wallSeconds, periodSeconds);
+    }
+
+    /// <summary>One device period in seconds: observed callback size, else the configured period, else miniaudio's 10 ms default.</summary>
+    private double PeriodSeconds()
+    {
+        var frames = Volatile.Read(ref _maxCallbackFrames);
+        if (frames <= 0 && _periodSizeFrames > 0)
+            frames = (int)_periodSizeFrames;
+        return frames > 0 ? frames / (double)_format.SampleRate : DefaultPeriodSeconds;
+    }
+
+    /// <summary>Lock-free CAS max: returns the greater of the candidate and the segment's previous report.</summary>
+    private long AdvanceElapsedHighWater(long candidateTicks)
+    {
+        var prev = Volatile.Read(ref _elapsedHighWaterTicks);
+        while (candidateTicks > prev)
+        {
+            var seen = Interlocked.CompareExchange(ref _elapsedHighWaterTicks, candidateTicks, prev);
+            if (seen == prev)
+                return candidateTicks;
+            prev = seen;
+        }
+
+        return prev;
     }
 
     public void Start()
@@ -125,6 +221,10 @@ public sealed unsafe class MiniAudioOutput :
 
             Interlocked.Exchange(ref _callbackFaultException, null);
             Volatile.Write(ref _callbackFaulted, 0);
+            Volatile.Write(ref _deviceLost, 0);
+            Volatile.Write(ref _intentionalStopPending, 0);
+            Volatile.Write(ref _lastCallbackTimestamp, 0);
+            Volatile.Write(ref _elapsedHighWaterTicks, 0);
 
             _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
             var deviceIdBytes = MiniAudioNative.ToUtf8NullTerminated(_deviceId);
@@ -138,7 +238,8 @@ public sealed unsafe class MiniAudioOutput :
                     _periodSizeFrames,
                     CallbackPtr,
                     GCHandle.ToIntPtr(_selfHandle),
-                    out _device);
+                    out _device,
+                    StopCallbackPtr);
                 if (createResult != MiniAudioNative.Success)
                 {
                     _selfHandle.Free();
@@ -180,6 +281,9 @@ public sealed unsafe class MiniAudioOutput :
                 return;
             }
 
+            // Deliberate stop: the native stop notification this triggers must not latch _deviceLost.
+            // Stays set - the device is gone until the next Start, which clears it.
+            Volatile.Write(ref _intentionalStopPending, 1);
             var device = _device;
             var stopResult = MiniAudioNative.Success;
             try
@@ -210,6 +314,7 @@ public sealed unsafe class MiniAudioOutput :
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ThrowIfCallbackFaulted();
+        ThrowIfDeviceLost();
         EnsureDeviceRunningAfterFlush();
         if (packedSamples.Length % _format.Channels != 0)
             throw new ArgumentException(
@@ -253,9 +358,31 @@ public sealed unsafe class MiniAudioOutput :
             Volatile.Read(ref _callbackFaultException));
     }
 
+    /// <summary>
+    /// A lost device (unexpected native stop) will never drain the ring again. Surfacing it as a
+    /// Submit exception routes the failure into the router's <c>OutputErrored</c> path instead of
+    /// leaving silence with a frozen clock.
+    /// </summary>
+    private void ThrowIfDeviceLost()
+    {
+        if (Volatile.Read(ref _deviceLost) == 0)
+            return;
+        throw new InvalidOperationException(
+            "miniaudio playback device was lost (stopped unexpectedly); the output is no longer draining");
+    }
+
     public bool WaitForCapacity(int chunkSamples, CancellationToken token)
     {
         if (chunkSamples <= 0) return !token.IsCancellationRequested;
+
+        // A lost device can never drain the ring - fail pacing immediately (checked before the
+        // not-running early-out: a latched output must never report capacity again).
+        if (Volatile.Read(ref _deviceLost) != 0)
+        {
+            Trace.LogWarning("WaitForCapacity: device lost - reporting no capacity");
+            return false;
+        }
+
         if (!Volatile.Read(ref _isRunning))
             return !token.IsCancellationRequested;
 
@@ -295,6 +422,9 @@ public sealed unsafe class MiniAudioOutput :
         lock (_deviceLifecycleGate)
         {
             if (_disposed || !Volatile.Read(ref _isRunning) || _device == nint.Zero) return;
+            // Deliberate stop: the native stop notification this triggers must not latch _deviceLost.
+            // Cleared by EnsureDeviceRunningAfterFlush once the device is deliberately restarted.
+            Volatile.Write(ref _intentionalStopPending, 1);
             // A failing stop must not abort the flush half-way (ring/epoch/flag inconsistent) -
             // finish the bookkeeping regardless and only log, matching PortAudioOutput.Flush's
             // treatment of a failed Pa_AbortStream.
@@ -304,6 +434,9 @@ public sealed unsafe class MiniAudioOutput :
             _ring.Clear();
             Interlocked.Exchange(ref _underrunSamples, 0);
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
+            // Re-anchor the clock's interpolation state with the epoch (segment-local, like the epoch itself).
+            Volatile.Write(ref _lastCallbackTimestamp, 0);
+            Volatile.Write(ref _elapsedHighWaterTicks, 0);
             Volatile.Write(ref _deviceStoppedAfterFlush, 1);
             timing?.SetOutcome($"queued={QueuedSamples}");
         }
@@ -323,6 +456,8 @@ public sealed unsafe class MiniAudioOutput :
 
             MiniAudioException.ThrowIfError(MiniAudioNative.DeviceStart(_device), "ma_device_start(playback after flush)");
             Volatile.Write(ref _deviceStoppedAfterFlush, 0);
+            // The deliberate Flush stop is over; from here an unexpected stop is device loss again.
+            Volatile.Write(ref _intentionalStopPending, 0);
         }
     }
 
@@ -367,6 +502,13 @@ public sealed unsafe class MiniAudioOutput :
             // content on every dropout - permanent lip-sync drift on the miniaudio backend.
             if (toRead > 0)
                 Interlocked.Add(ref self._playedSamples, toRead / self._format.Channels);
+
+            // Clock interpolation state (ElapsedSinceStart): remember the device's effective period
+            // and when this callback ran, so the read path can advance smoothly between callbacks.
+            var callbackFrames = (int)frameCount;
+            if (callbackFrames > Volatile.Read(ref self._maxCallbackFrames))
+                Volatile.Write(ref self._maxCallbackFrames, callbackFrames);
+            Volatile.Write(ref self._lastCallbackTimestamp, Stopwatch.GetTimestamp());
         }
         catch (Exception ex)
         {
@@ -380,6 +522,54 @@ public sealed unsafe class MiniAudioOutput :
                 new Span<float>(outputBuffer, checked((int)frameCount * self._format.Channels)).Clear();
         }
     }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void StopNotification(nint userData)
+    {
+        try
+        {
+            var handle = GCHandle.FromIntPtr(userData);
+            if (handle.Target is MiniAudioOutput self)
+                self.OnDeviceStoppedNotification();
+        }
+        catch
+        {
+            // A managed callback must never let an exception cross the native boundary.
+        }
+    }
+
+    /// <summary>
+    /// Runs on miniaudio's device worker thread whenever the device stops. Must never take
+    /// <see cref="_deviceLifecycleGate"/> (some backends fire it synchronously from inside
+    /// ma_device_stop/ma_device_uninit, which our lifecycle methods call while holding the gate) -
+    /// it only reads latches and sets the device-lost latch.
+    /// </summary>
+    private void OnDeviceStoppedNotification()
+    {
+        if (!ShouldLatchDeviceLost(
+                Volatile.Read(ref _isRunning),
+                Volatile.Read(ref _intentionalStopPending) != 0,
+                Volatile.Read(ref _deviceStoppedAfterFlush) != 0))
+            return;
+        LatchDeviceLost();
+    }
+
+    /// <summary>
+    /// The device-loss decision, pure for unit testing: an unexpected native stop counts as device loss
+    /// only while we believe the device is running and no deliberate Stop/Flush is in flight.
+    /// </summary>
+    internal static bool ShouldLatchDeviceLost(bool isRunning, bool intentionalStopPending, bool stoppedAfterFlush) =>
+        isRunning && !intentionalStopPending && !stoppedAfterFlush;
+
+    private void LatchDeviceLost()
+    {
+        if (Interlocked.Exchange(ref _deviceLost, 1) != 0)
+            return;
+        Trace.LogError(
+            "miniaudio playback device stopped unexpectedly (lost/removed); failing Submit/WaitForCapacity so the router surfaces OutputErrored");
+    }
+
+    internal void ForceDeviceLostForTest() => LatchDeviceLost();
 
     public void Dispose()
     {

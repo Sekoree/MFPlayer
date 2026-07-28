@@ -16,7 +16,9 @@ namespace HaPlay.Views.Controls;
 
 /// <summary>
 /// Timeline editor surface for one Timeline group: a time ruler plus one lane per child in tree
-/// order. Media (and nested-group) blocks sit at <c>TimelineStartMs</c>; dragging the body moves the
+/// order. Media (and nested-group) blocks sit at the AUDIBLE start
+/// (<see cref="TimelineMath.BlockStartMs"/> = <c>TimelineStartMs + PreWaitMs</c>, with a dimmed
+/// pre-wait strip back to the authored start); dragging the body moves the
 /// start, edge-drags trim <c>Start/EndOffsetMs</c> (content-anchored), corner handles drag
 /// <c>FadeIn/FadeOutMs</c>, zero-length cues are draggable diamond markers. Media lanes overlay the
 /// volume envelope (Phase B): click the line to add a point, drag a point to move it (dB/time
@@ -153,7 +155,7 @@ public sealed class TimelineCanvas : Control
     {
         double span = TailPaddingMs;
         foreach (var node in LaneNodes())
-            span = Math.Max(span, Math.Max(0, node.TimelineStartMs) + TimelineMath.BlockDurationMs(node) + TailPaddingMs);
+            span = Math.Max(span, TimelineMath.BlockStartMs(node) + TimelineMath.BlockDurationMs(node) + TailPaddingMs);
         return span;
     }
 
@@ -183,6 +185,7 @@ public sealed class TimelineCanvas : Control
     {
         base.OnDetachedFromVisualTree(e);
         _readoutClearTimer.Stop();
+        try { _waveformCts.Cancel(); } catch { /* best effort */ }
         // The lane nodes outlive this window - drop the subscriptions or they pin the canvas.
         if (Lanes is INotifyCollectionChanged col)
             col.CollectionChanged -= OnLanesCollectionChanged;
@@ -213,6 +216,7 @@ public sealed class TimelineCanvas : Control
     private void OnLaneItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(CueNodeViewModel.TimelineStartMs)
+            or nameof(CueNodeViewModel.PreWaitMs) // shifts the block position (audible start)
             or nameof(CueNodeViewModel.DurationMs)
             or nameof(CueNodeViewModel.StartOffsetMs)
             or nameof(CueNodeViewModel.EndOffsetMs)
@@ -311,12 +315,29 @@ public sealed class TimelineCanvas : Control
             return;
         }
 
-        var block = TimelineMath.BlockRect(laneIndex, node.TimelineStartMs, TimelineMath.BlockDurationMs(node), pxPerMs);
+        var block = TimelineMath.BlockRect(laneIndex, TimelineMath.BlockStartMs(node), TimelineMath.BlockDurationMs(node), pxPerMs);
         var probed = node.Kind != CueNodeKind.Media || node.DurationMs > 0;
         var fill = new SolidColorBrush(Color.FromArgb(probed ? (byte)0x3C : (byte)0x20, 0x4F, 0x9C, 0xFF));
         var stroke = new Pen(new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x9C, 0xFF)), 1);
+
+        // Pre-wait span: a dimmed strip from the authored start to the block's (audible) left edge,
+        // so a pre-waited lane reads as "arms here, sounds there".
+        if (node.PreWaitMs > 0)
+        {
+            var preWaitX = TimelineMath.XForMs(Math.Max(0, node.TimelineStartMs), pxPerMs);
+            var strip = new Rect(
+                preWaitX, block.Y + block.Height * 0.35, Math.Max(0, block.X - preWaitX), block.Height * 0.3);
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(0x28, 0x4F, 0x9C, 0xFF)), strip);
+            ctx.DrawLine(
+                new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0x4F, 0x9C, 0xFF)), 1),
+                new Point(preWaitX, block.Y), new Point(preWaitX, block.Bottom));
+        }
+
         ctx.FillRectangle(fill, block);
         ctx.DrawRectangle(null, stroke, block);
+
+        if (node.Kind == CueNodeKind.Media)
+            RenderWaveform(ctx, node, block);
 
         if (TimelineMath.IsTrimmable(node))
             RenderFades(ctx, node, block, pxPerMs);
@@ -336,6 +357,101 @@ public sealed class TimelineCanvas : Control
 
         if (ShowEnvelopes && node.Kind == CueNodeKind.Media)
             RenderEnvelope(ctx, node, block, pxPerMs);
+    }
+
+    // Whole-file peak cache for waveform-in-block rendering (timeline doc Phase C). Keyed by source
+    // path; null = extraction failed (don't retry every frame). Extraction runs off-thread via the
+    // Preview tab's WaveformExtractor; partial snapshots repaint left-to-right. All dictionary access
+    // is UI-thread only (extraction results marshal back via Dispatcher.UIThread.Post).
+    private readonly Dictionary<string, float[]?> _waveformPeaks = new();
+    private readonly HashSet<string> _waveformLoading = new();
+    private readonly System.Threading.CancellationTokenSource _waveformCts = new();
+    private long _lastWaveformPartialInvalidate;
+
+    /// <summary>Waveform inside a media block: the whole-file peaks sliced to the trimmed window
+    /// (<see cref="TimelineMath.WaveformWindow"/>), drawn as centered vertical bars every 2 px at low
+    /// opacity so fades and the envelope overlay stay readable. File-backed sources only; extraction
+    /// kicks off on first sight of a path and repaints as snapshots arrive.</summary>
+    private void RenderWaveform(DrawingContext ctx, CueNodeViewModel node, Rect block)
+    {
+        if (node.MediaSourceItem is not HaPlay.Models.FilePlaylistItem file
+            || string.IsNullOrEmpty(file.Path)
+            || node.DurationMs <= 0
+            || block.Width < 8)
+            return;
+
+        if (!_waveformPeaks.TryGetValue(file.Path, out var peaks))
+        {
+            BeginWaveformExtraction(file.Path);
+            return;
+        }
+
+        if (peaks is not { Length: > 0 })
+            return;
+
+        var (startFrac, endFrac) = TimelineMath.WaveformWindow(
+            node.StartOffsetMs, node.EffectiveDurationMs, node.EndOffsetMs);
+        var windowSpan = endFrac - startFrac;
+        if (windowSpan <= 0)
+            return;
+
+        var pen = new Pen(new SolidColorBrush(Color.FromArgb(0x48, 0xCF, 0xE8, 0xFF)), 1);
+        var midY = block.Center.Y;
+        var halfMax = block.Height / 2 - 2;
+        for (var x = block.X + 1; x < block.Right - 1; x += 2)
+        {
+            var frac = startFrac + (x - block.X) / block.Width * windowSpan;
+            var bucket = Math.Clamp((int)(frac * peaks.Length), 0, peaks.Length - 1);
+            var half = Math.Max(0.5, peaks[bucket] * halfMax);
+            ctx.DrawLine(pen, new Point(x, midY - half), new Point(x, midY + half));
+        }
+    }
+
+    private void BeginWaveformExtraction(string path)
+    {
+        if (!_waveformLoading.Add(path))
+            return;
+        var ct = _waveformCts.Token;
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            float[]? peaks = null;
+            try
+            {
+                peaks = await HaPlay.Playback.WaveformExtractor.ExtractAsync(path, ct, partial =>
+                {
+                    // Throttled left-to-right fill-in (the extractor already rate-limits snapshots,
+                    // this guard just coalesces bursts).
+                    var now = Environment.TickCount64;
+                    if (now - System.Threading.Interlocked.Read(ref _lastWaveformPartialInvalidate) < 150)
+                        return;
+                    System.Threading.Interlocked.Exchange(ref _lastWaveformPartialInvalidate, now);
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (ct.IsCancellationRequested)
+                            return;
+                        _waveformPeaks[path] = partial;
+                        InvalidateVisual();
+                    });
+                }).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return; // canvas closed - drop the result
+            }
+            catch (Exception)
+            {
+                // Extraction failure = no waveform; the null cache entry below stops per-frame retries.
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+                _waveformPeaks[path] = peaks;
+                _waveformLoading.Remove(path);
+                InvalidateVisual();
+            });
+        }, ct);
     }
 
     /// <summary>
@@ -439,7 +555,7 @@ public sealed class TimelineCanvas : Control
 
     private void RenderMarker(DrawingContext ctx, CueNodeViewModel node, int laneIndex, double pxPerMs, Color color)
     {
-        var c = TimelineMath.MarkerCenter(laneIndex, node.TimelineStartMs, pxPerMs);
+        var c = TimelineMath.MarkerCenter(laneIndex, TimelineMath.BlockStartMs(node), pxPerMs);
         const double r = TimelineMath.MarkerHalfPx;
         var diamond = new PolylineGeometry(
             [new Point(c.X, c.Y - r), new Point(c.X + r, c.Y), new Point(c.X, c.Y + r), new Point(c.X - r, c.Y)], true);
@@ -478,13 +594,13 @@ public sealed class TimelineCanvas : Control
             TimelineHitKind kind;
             if (TimelineMath.IsMarker(node))
             {
-                kind = TimelineMath.MarkerContains(TimelineMath.MarkerCenter(i, node.TimelineStartMs, pxPerMs), p)
+                kind = TimelineMath.MarkerContains(TimelineMath.MarkerCenter(i, TimelineMath.BlockStartMs(node), pxPerMs), p)
                     ? TimelineHitKind.Marker
                     : TimelineHitKind.None;
             }
             else
             {
-                var block = TimelineMath.BlockRect(i, node.TimelineStartMs, TimelineMath.BlockDurationMs(node), pxPerMs);
+                var block = TimelineMath.BlockRect(i, TimelineMath.BlockStartMs(node), TimelineMath.BlockDurationMs(node), pxPerMs);
                 kind = TimelineMath.HitTestBlock(block, node.FadeInMs, node.FadeOutMs, pxPerMs, p, TimelineMath.IsTrimmable(node));
 
                 // Envelope hits beat the edge grips and the body (points are precise targets) but
@@ -524,7 +640,7 @@ public sealed class TimelineCanvas : Control
             _drag = node;
             _dragKind = kind;
             _dragLaneIndex = i;
-            _dragStartMs = Math.Max(0, node.TimelineStartMs);
+            _dragStartMs = TimelineMath.BlockStartMs(node); // block coordinates (audible start)
             _dragStartOffsetMs = Math.Max(0, node.StartOffsetMs);
             _dragEndOffsetMs = Math.Max(0, node.EndOffsetMs);
             _dragBlockDurationMs = TimelineMath.BlockDurationMs(node);
@@ -555,7 +671,7 @@ public sealed class TimelineCanvas : Control
             var node = lanes[i];
             if (!CanEditEnvelope(node))
                 continue;
-            var block = TimelineMath.BlockRect(i, node.TimelineStartMs, TimelineMath.BlockDurationMs(node), pxPerMs);
+            var block = TimelineMath.BlockRect(i, TimelineMath.BlockStartMs(node), TimelineMath.BlockDurationMs(node), pxPerMs);
             var envelope = node.VolumeEnvelope;
             if (!TimelineMath.EnvelopeLineHit(block, envelope, pxPerMs, p))
                 continue;
@@ -625,21 +741,29 @@ public sealed class TimelineCanvas : Control
         {
             case TimelineHitKind.Block:
             case TimelineHitKind.Marker:
-                _drag.TimelineStartMs = TimelineMath.Snap(
+            {
+                // Drag operates on the BLOCK (audible) start; the authored TimelineStartMs is the
+                // block start minus the cue's own pre-wait - floored at 0, so a block can never sit
+                // left of its pre-wait span.
+                var snapped = TimelineMath.Snap(
                     pointerMs - _grabOffsetMs, SnapEnabled, GridMs, EdgeCandidates(_drag), pxPerMs);
+                _drag.TimelineStartMs = Math.Max(0, snapped - Math.Max(0, _drag.PreWaitMs));
                 break;
+            }
 
             case TimelineHitKind.LeftEdge:
             {
                 // Content-anchored trim: the media keeps its absolute position; the block's left edge
-                // slides over it, so TimelineStartMs and StartOffsetMs move together.
-                var contentMin = _dragStartMs - _dragStartOffsetMs;
+                // slides over it, so TimelineStartMs and StartOffsetMs move together. All in block
+                // (audible-start) coordinates; the pre-wait floor keeps TimelineStartMs non-negative.
+                var preWait = Math.Max(0, _drag.PreWaitMs);
+                var contentMin = Math.Max(preWait, _dragStartMs - _dragStartOffsetMs);
                 var contentMax = _dragStartMs + _dragBlockDurationMs - MinEffectiveMs;
                 var newStart = Math.Clamp(
                     TimelineMath.Snap(pointerMs, SnapEnabled, GridMs, EdgeCandidates(_drag), pxPerMs),
                     contentMin, contentMax);
                 _drag.StartOffsetMs = _dragStartOffsetMs + (newStart - _dragStartMs);
-                _drag.TimelineStartMs = newStart;
+                _drag.TimelineStartMs = newStart - preWait;
                 break;
             }
 
@@ -656,14 +780,14 @@ public sealed class TimelineCanvas : Control
             case TimelineHitKind.FadeInHandle:
             {
                 var span = TimelineMath.BlockDurationMs(_drag);
-                _drag.FadeInMs = Math.Clamp((int)Math.Round(pointerMs - _drag.TimelineStartMs), 0, span);
+                _drag.FadeInMs = Math.Clamp((int)Math.Round(pointerMs - TimelineMath.BlockStartMs(_drag)), 0, span);
                 break;
             }
 
             case TimelineHitKind.FadeOutHandle:
             {
                 var span = TimelineMath.BlockDurationMs(_drag);
-                var end = _drag.TimelineStartMs + span;
+                var end = TimelineMath.BlockStartMs(_drag) + span;
                 _drag.FadeOutMs = Math.Clamp((int)Math.Round(end - pointerMs), 0, span);
                 break;
             }
@@ -677,7 +801,7 @@ public sealed class TimelineCanvas : Control
                 // Time clamps between the neighbors and the trimmed clip; level clamps −60..+12.
                 // The record is immutable - every step writes a NEW list through the VM.
                 var block = TimelineMath.BlockRect(
-                    _dragLaneIndex, _drag.TimelineStartMs, TimelineMath.BlockDurationMs(_drag), pxPerMs);
+                    _dragLaneIndex, TimelineMath.BlockStartMs(_drag), TimelineMath.BlockDurationMs(_drag), pxPerMs);
                 var timeMs = TimelineMath.EnvelopeClampDragTime(
                     envelope, _dragEnvelopeIndex, (pointer.X - block.X) / pxPerMs, _drag.EffectiveDurationMs);
                 var levelDb = RoundLevel(TimelineMath.EnvelopeDbForY(block, pointer.Y));
@@ -746,13 +870,13 @@ public sealed class TimelineCanvas : Control
             var envelopeLine = false;
             if (TimelineMath.IsMarker(node))
             {
-                kind = TimelineMath.MarkerContains(TimelineMath.MarkerCenter(i, node.TimelineStartMs, pxPerMs), p)
+                kind = TimelineMath.MarkerContains(TimelineMath.MarkerCenter(i, TimelineMath.BlockStartMs(node), pxPerMs), p)
                     ? TimelineHitKind.Marker
                     : TimelineHitKind.None;
             }
             else
             {
-                var block = TimelineMath.BlockRect(i, node.TimelineStartMs, TimelineMath.BlockDurationMs(node), pxPerMs);
+                var block = TimelineMath.BlockRect(i, TimelineMath.BlockStartMs(node), TimelineMath.BlockDurationMs(node), pxPerMs);
                 kind = TimelineMath.HitTestBlock(block, node.FadeInMs, node.FadeOutMs, pxPerMs, p, TimelineMath.IsTrimmable(node));
 
                 // Mirror the press-time priority: envelope points (and the add-a-point line) win over
@@ -791,7 +915,7 @@ public sealed class TimelineCanvas : Control
         {
             if (ReferenceEquals(node, dragged))
                 continue;
-            var start = Math.Max(0, node.TimelineStartMs);
+            var start = TimelineMath.BlockStartMs(node);
             edges.Add(start);
             var duration = TimelineMath.IsMarker(node) ? 0 : TimelineMath.BlockDurationMs(node);
             if (duration > 0)

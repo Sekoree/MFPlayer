@@ -773,6 +773,9 @@ public static class Strings
     public static string CueTransportHeader => Get(nameof(CueTransportHeader));
     public static string CueTransportSettingsHint => Get(nameof(CueTransportSettingsHint));
     public static string PanicFadeMsLabel => Get(nameof(PanicFadeMsLabel));
+    public static string CueLevelDbLabel => Get(nameof(CueLevelDbLabel));
+    public static string CueLevelDbTooltip => Get(nameof(CueLevelDbTooltip));
+    public static string SchedulesArmedOtherListsWarningFormat => Get(nameof(SchedulesArmedOtherListsWarningFormat));
     public static string StopFadeMsAppDefaultHintFormat => Get(nameof(StopFadeMsAppDefaultHintFormat));
     public static string FilesMenuLabel => Get(nameof(FilesMenuLabel));
     public static string PreviewCueButton => Get(nameof(PreviewCueButton));

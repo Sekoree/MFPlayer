@@ -499,6 +499,13 @@ public sealed record MediaCueNode : CueNode
     /// stop-fade precedence (per-cue &gt; list <see cref="CueList.StopFadeMs"/> &gt; app default).</summary>
     public CueFadeCurve FadeOutCurve { get; init; } = CueFadeCurve.Linear;
 
+    /// <summary>Per-cue master level (dB, default 0 = unity so older files load unchanged). Multiplies
+    /// EVERY audio route of the cue on top of the per-route <see cref="CueAudioRoute.GainDb"/> - the
+    /// "how loud is this cue overall" trim the review's §6 asked for, and the anchor fade cues and
+    /// envelopes compose against (they multiply the routed gains, which carry this level). Clamped to
+    /// −60..+12 at edit time; at or below −60 dB the cue is routed silent.</summary>
+    public double LevelDb { get; init; }
+
     /// <summary>Legacy persisted per-cue pre-roll opt-out. Ignored by the current cue runtime.</summary>
     public bool DisablePreRoll { get; init; }
 

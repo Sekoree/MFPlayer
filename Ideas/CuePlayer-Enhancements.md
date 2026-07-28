@@ -290,9 +290,21 @@ fire each media cue in its OWN runtime transport group at every delay (not just 
 batches) — previously a later lane's fire replaced the earlier lane's clip in the shared
 authored group, so lanes couldn't actually overlap.
 
-**Still open:** §6 `MediaCueNode.LevelDb` per-cue master (wants the route-matrix anchor, now in
-place), pre-wait countdown visibility, MIDI/OSC/hotkey per-cue triggers, panic slider,
-dual-voice crossfade (§3 `CrossfadeMs` still deliberately unimplemented). Scheduler remains
-scoped to the SELECTED cue list (documented in code; schedules in other lists never fire) —
-surface or widen next round. Timeline canvas renders blocks at `TimelineStartMs` while the
-audible start is `+PreWaitMs`, and `TimelineStartMs` has no numeric drawer field yet.
+**Round 2 (2026-07-28, later):** §6 `MediaCueNode.LevelDb` per-cue master DONE — model + drawer
+field (−60..+12 dB, multi-edit propagated), baked into the routed gains/matrix cells by the
+mapper so fades/envelopes compose for free, applied LIVE to a playing clip via the (extended)
+route-update callback, standby re-prepared on change. Pre-wait visibility DONE — a live
+"⏳ in m:ss" badge on each waiting cue's tree row while the trigger plan counts down delays
+≥1.5 s (pause-aware, cleared on fire/cancel). Scheduler scope SURFACED (not widened - the
+session maps one list, cross-list firing needs multi-list sessions): the armed tooltip states
+the selected-list scope and arming with enabled schedules in other lists warns with the count.
+Timeline blocks now render at the AUDIBLE start (`TimelineStartMs + PreWaitMs`,
+`TimelineMath.BlockStartMs`) with a dimmed pre-wait strip back to the authored start; drags
+write back block-start − pre-wait (floored at 0). Timeline Phase C waveforms DONE (whole-file
+peaks via `WaveformExtractor`, cached per path, sliced to the trimmed window, drawn as low-
+opacity bars under fades/envelope).
+
+**Still open:** MIDI/OSC/hotkey per-cue triggers, panic slider, dual-voice crossfade (§3
+`CrossfadeMs` still deliberately unimplemented — design doc now exists:
+`Dual-Voice-Crossfade-Design.md`), timeline duck presets (Phase D), `TimelineStartMs` numeric
+drawer field, true cross-list scheduling (needs multi-list sessions).

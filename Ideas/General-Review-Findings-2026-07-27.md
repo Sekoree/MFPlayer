@@ -169,9 +169,19 @@ instead of freezing at zero). Known limitation: the client clock leads the DAC b
 client-bus + pump + device-ring latency (~100 ms constant bias), unlike `PortAudioOutput`'s
 latency-compensated clock — acceptable for now, noted for a latency pass.
 
-**Still open:** 2 (device-loss detection/OutputLost — no miniaudio notification callback, no
-polling; the biggest remaining "silent death" hole), 8 (miniaudio clock quality: no
-interpolation, no DAC-latency subtraction), 14 (seek/flush epoch generations), 15 (PortAudio
-0-then-jump startup latency), 16 (per-enumeration ma_context), and the §1 wire-or-prune
-decision for `CompositePlaybackClock`/`VideoPtsClock`/`NDIIngestPlaybackClock`(now monotonic
-but still unwired)/`OutputSyncGroup`/`TimecodeSyncKind`.
+**Round 2 (2026-07-28, later):** **2 fixed** — miniaudio registers the layout-safe `ma_stop_proc`
+stop callback (unexpected stop → `_deviceLost` latch → the same fail-fast triple as callback
+faults → `OutputErrored`/`Faulted` → `PlaybackAlert`; deliberate Stop/Flush guarded by an
+intentional-stop flag; WASAPI silent-reroute caveat documented), and PortAudio latches loss via
+gated `Pa_IsStreamActive` health checks on the existing clock-poll path plus a 250 ms probe
+inside a blocked `WaitForCapacity`. **8 fixed** — miniaudio clock now interpolates between data
+callbacks (clamped to one period, monotonic via a CAS high-water) and subtracts a period of DAC
+latency; residual ≤ ~(periods−1) internal periods, documented. **15 fixed** — audible position
+eases in quadratically over the first `2×latency` window, C¹-continuous into `elapsed − latency`.
+**16 fixed** — one cached `ma_context` per backend instance with a stale-context rebuild-once
+path; backend is now `IDisposable`. Truth-table/state-machine tests in
+`S.Media.Audio.Backends.Tests` (41 tests, hardware-dependent cases device-gated).
+
+**Still open:** 14 (seek/flush epoch generations — deliberate deferral) and the §1
+wire-or-prune decision for `CompositePlaybackClock`/`VideoPtsClock`/`NDIIngestPlaybackClock`
+(now monotonic but still unwired)/`OutputSyncGroup`/`TimecodeSyncKind`.

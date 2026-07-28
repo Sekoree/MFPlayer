@@ -238,7 +238,7 @@
                      between rows. A row collapses to zero height when its cue-kind hides all
                      its children. -->
                 <Grid ColumnDefinitions="Auto,170,Auto,170"
-                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                       ColumnSpacing="8" RowSpacing="8">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.CueTreeNumberColumnHeader}" VerticalAlignment="Center" />
                   <TextBox Grid.Row="0" Grid.Column="1"
@@ -346,6 +346,20 @@
                       </DataTemplate>
                     </ComboBox.ItemTemplate>
                   </ComboBox>
+
+                  <!-- Per-cue master level (review §6): multiplies every audio route, applies live to a
+                       playing clip via the same path as a per-route gain edit. -->
+                  <TextBlock Grid.Row="7" Grid.Column="0" Text="{x:Static res:Strings.CueLevelDbLabel}"
+                             VerticalAlignment="Center"
+                             IsVisible="{Binding HasSelectedMediaCue}"
+                             ToolTip.Tip="{x:Static res:Strings.CueLevelDbTooltip}" />
+                  <NumericUpDown FormatString="0.0" Grid.Row="7" Grid.Column="1"
+                                 Minimum="-60"
+                                 Maximum="12"
+                                 Increment="0.5"
+                                 IsVisible="{Binding HasSelectedMediaCue}"
+                                 ToolTip.Tip="{x:Static res:Strings.CueLevelDbTooltip}"
+                                 Value="{Binding SelectedMediaCue.LevelDb, Mode=TwoWay}" />
                 </Grid>
 
                 <!-- Custom natural-end trigger. The target can itself be a random Jump cue, keeping

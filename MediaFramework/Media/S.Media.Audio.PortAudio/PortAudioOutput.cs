@@ -36,6 +36,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     private long _lastSubmitDropLogTicks;
     private int _callbackFaulted;
     private Exception? _callbackFaultException;
+    /// <summary>1 once the stream went inactive while we believe it should be running (device lost/removed). Latched until the next <see cref="Start"/>.</summary>
+    private int _deviceLost;
 
     private nint _stream;
     private GCHandle _selfHandle;
@@ -53,6 +55,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.PortAudio.PortAudioOutput");
     private long _waitForCapacityWarnTicks;
+
+    /// <summary>How often <see cref="WaitForCapacity"/> probes stream health while blocked on a full ring.</summary>
+    private const int DeviceHealthProbeIntervalMs = 250;
 
     /// <summary>Pa_GetStreamTime at <see cref="_segmentPlayed0Samples"/> - set on first callback after Start/Flush.</summary>
     private double _segmentStreamT0;
@@ -96,6 +101,19 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// retain only for inspection on another thread.
     /// </summary>
     public Exception? CallbackFaultException => Volatile.Read(ref _callbackFaultException);
+
+    /// <summary>
+    /// True once the stream read inactive while it should have been running - PortAudio has no
+    /// device-loss callback on all hostapis, so loss is detected by this cheap health check on the
+    /// reads the clock/pacing paths already make (<see cref="StreamActive"/>,
+    /// <see cref="ElapsedSinceStart"/>, <see cref="WaitForCapacity"/>). While latched,
+    /// <see cref="Submit"/> throws, <see cref="WaitForCapacity"/> reports no capacity and
+    /// <see cref="IsAdvancing"/> is false, so the router surfaces the loss via
+    /// <c>OutputErrored</c>/<c>Faulted</c> instead of freezing the mastered clock silently.
+    /// Cleared by the next <see cref="Start"/>.
+    /// </summary>
+    public bool DeviceLost => Volatile.Read(ref _deviceLost) != 0;
+
     /// <summary>1 = PA reports stream active, 0 = inactive, negative = error/closed.</summary>
     public int StreamActive
     {
@@ -104,9 +122,49 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             // Native calls must not race Stop()'s Pa_CloseStream (use-after-free); the gate is
             // reentrant and only contended during rare lifecycle transitions.
             lock (_streamLifecycleGate)
-                return _stream != nint.Zero ? (int)Native.Pa_IsStreamActive(_stream) : -1;
+            {
+                var active = _stream != nint.Zero ? (int)Native.Pa_IsStreamActive(_stream) : -1;
+                MaybeLatchDeviceLostUnderGate(active);
+                return active;
+            }
         }
     }
+
+    /// <summary>
+    /// The device-loss decision, pure for unit testing: a stream we started (and did not stop via
+    /// Flush, and whose callback did not abort with its own latched fault) must report active;
+    /// reading inactive (exactly 0 - negative is an unopened/errored handle query, handled by the
+    /// lifecycle paths) means the host stopped it under us: device removed or backend error.
+    /// </summary>
+    internal static bool ShouldLatchDeviceLost(bool isRunning, bool stoppedAfterFlush, bool callbackFaulted, int streamActive) =>
+        isRunning && !stoppedAfterFlush && !callbackFaulted && streamActive == 0;
+
+    /// <summary>
+    /// Must be called with <see cref="_streamLifecycleGate"/> held so the flag reads are serialized
+    /// against Flush/Stop mid-transition (Pa_AbortStream and <c>_streamStoppedAfterFlush</c> are
+    /// written under the same gate - no window where a deliberate stop reads as loss).
+    /// </summary>
+    private void MaybeLatchDeviceLostUnderGate(int streamActive)
+    {
+        if (!ShouldLatchDeviceLost(
+                Volatile.Read(ref _isRunning),
+                Volatile.Read(ref _streamStoppedAfterFlush) != 0,
+                Volatile.Read(ref _callbackFaulted) != 0,
+                streamActive))
+            return;
+        LatchDeviceLost();
+    }
+
+    private void LatchDeviceLost()
+    {
+        if (Interlocked.Exchange(ref _deviceLost, 1) != 0)
+            return;
+        Trace.LogError(
+            "PortAudio stream on device {Device} went inactive while it should be running (device lost/removed); failing Submit/WaitForCapacity so the router surfaces OutputErrored",
+            _deviceIndex);
+    }
+
+    internal void ForceDeviceLostForTest() => LatchDeviceLost();
 
     /// <summary>PortAudio's stream clock - wall-clock seconds since the stream started.</summary>
     public double StreamTime
@@ -129,7 +187,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// subtraction is what keeps A/V in sync: the device holds ~outputLatency of audio after we hand it over, so
     /// the consumed count leads the speaker by that much - without it, video scheduled against the master clock
     /// leads the audio (lip-sync drift, pronounced on high-latency hosts like JACK/ALSA). Falls back to sample
-    /// counts before the first callback.
+    /// counts before the first callback. During the startup window (first 2×outputLatency of a segment) the
+    /// latency subtraction is eased in quadratically instead of clamped at zero - see
+    /// <see cref="ComputeAudibleSeconds"/> - so the playhead advances smoothly from 0 instead of holding 0 for
+    /// ~outputLatency and then jumping.
     /// </summary>
     public TimeSpan ElapsedSinceStart
     {
@@ -146,36 +207,68 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             // transition is mid-flight, in which case blocking briefly is the correct outcome.
             lock (_streamLifecycleGate)
             {
-                if (_stream != nint.Zero
-                    && (int)Native.Pa_IsStreamActive(_stream) == 1
-                    && Volatile.Read(ref _streamSmoothCalibrated) != 0)
+                if (_stream != nint.Zero)
                 {
-                    Thread.MemoryBarrier();
-                    var st = Native.Pa_GetStreamTime(_stream);
-                    if (double.IsFinite(st))
+                    var active = (int)Native.Pa_IsStreamActive(_stream);
+                    // This ~30 Hz poll doubles as the device-loss health check (PortAudio has no
+                    // loss callback on all hostapis); the flags are read under the gate we hold.
+                    MaybeLatchDeviceLostUnderGate(active);
+                    if (active == 1 && Volatile.Read(ref _streamSmoothCalibrated) != 0)
                     {
-                        // _segmentPlayed0Samples is already segment-local (played - epoch at calibration).
-                        var segmentPlayed0 = Volatile.Read(ref _segmentPlayed0Samples);
-                        if (segmentPlayed0 < 0) segmentPlayed0 = 0;
-                        var streamElapsedSec = segmentPlayed0 / (double)_format.SampleRate + (st - _segmentStreamT0);
-                        if (streamElapsedSec < 0)
-                            streamElapsedSec = 0;
-                        // After Pa_AbortStream + Pa_StartStream, Pa_GetStreamTime can stall while callbacks
-                        // still drain the ring - never let the master clock lag behind sample progress.
-                        elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
+                        Thread.MemoryBarrier();
+                        var st = Native.Pa_GetStreamTime(_stream);
+                        if (double.IsFinite(st))
+                        {
+                            // _segmentPlayed0Samples is already segment-local (played - epoch at calibration).
+                            var segmentPlayed0 = Volatile.Read(ref _segmentPlayed0Samples);
+                            if (segmentPlayed0 < 0) segmentPlayed0 = 0;
+                            var streamElapsedSec = segmentPlayed0 / (double)_format.SampleRate + (st - _segmentStreamT0);
+                            if (streamElapsedSec < 0)
+                                streamElapsedSec = 0;
+                            // After Pa_AbortStream + Pa_StartStream, Pa_GetStreamTime can stall while callbacks
+                            // still drain the ring - never let the master clock lag behind sample progress.
+                            elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
+                        }
                     }
                 }
             }
 
-            // Report the audible (speaker) position. Clamped at zero so the clock doesn't go negative while
-            // the device buffer is still filling at startup.
-            var audibleSec = elapsedSec - Volatile.Read(ref _outputLatencyTicks) / (double)TimeSpan.TicksPerSecond;
-            return TimeSpan.FromSeconds(audibleSec > 0 ? audibleSec : 0);
+            // Report the audible (speaker) position, easing the latency subtraction in over the startup window.
+            var latencySec = Volatile.Read(ref _outputLatencyTicks) / (double)TimeSpan.TicksPerSecond;
+            return TimeSpan.FromSeconds(ComputeAudibleSeconds(elapsedSec, latencySec));
         }
     }
 
-    /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: true when the PA stream is open and reporting active.</summary>
-    public bool IsAdvancing => StreamActive == 1;
+    /// <summary>
+    /// Maps the consumed/stream elapsed time of a segment to the reported audible time. Steady state is
+    /// <c>elapsed − latency</c>. During the startup window (<c>elapsed &lt; 2×latency</c>, while the device
+    /// buffer is still filling) it reports the quadratic ease-in <c>elapsed²∕(4×latency)</c>: starts at 0,
+    /// strictly monotonic in <paramref name="elapsedSeconds"/>, meets <c>elapsed − latency</c> at the window
+    /// edge with matching value <em>and</em> slope (both are <c>latency</c> resp. 1 at <c>elapsed = 2×latency</c>),
+    /// and always lies between the true audible position and the consumed position. Replaces the old
+    /// clamp-at-zero, which reported 0 for the whole first <c>outputLatency</c> and then jumped.
+    /// </summary>
+    internal static double ComputeAudibleSeconds(double elapsedSeconds, double outputLatencySeconds)
+    {
+        if (elapsedSeconds <= 0)
+            return 0;
+        if (outputLatencySeconds <= 0)
+            return elapsedSeconds;
+        if (elapsedSeconds < 2 * outputLatencySeconds)
+            return elapsedSeconds * elapsedSeconds / (4 * outputLatencySeconds);
+        return elapsedSeconds - outputLatencySeconds;
+    }
+
+    /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: true when the PA stream is open, reporting active, and the device has not been lost.</summary>
+    public bool IsAdvancing
+    {
+        get
+        {
+            if (Volatile.Read(ref _deviceLost) != 0)
+                return false;
+            return StreamActive == 1;
+        }
+    }
 
     /// <summary>
     /// <see cref="IFlushableOutput.Flush"/>: aborts the PortAudio stream
@@ -277,6 +370,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
 
             Interlocked.Exchange(ref _callbackFaultException, null);
             Volatile.Write(ref _callbackFaulted, 0);
+            Volatile.Write(ref _deviceLost, 0);
 
             _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
 
@@ -378,6 +472,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ThrowIfCallbackFaulted();
+        ThrowIfDeviceLost();
         EnsureStreamRunningAfterFlush();
         if (packedSamples.Length % _format.Channels != 0)
             throw new ArgumentException(
@@ -480,6 +575,19 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             Volatile.Read(ref _callbackFaultException));
     }
 
+    /// <summary>
+    /// A lost device (stream went inactive under us) will never drain the ring again. Surfacing it as
+    /// a Submit exception routes the failure into the router's <c>OutputErrored</c> path instead of
+    /// leaving silence with a frozen clock.
+    /// </summary>
+    private void ThrowIfDeviceLost()
+    {
+        if (Volatile.Read(ref _deviceLost) == 0)
+            return;
+        throw new InvalidOperationException(
+            $"PortAudio output device {_deviceIndex} was lost (stream stopped unexpectedly); the output is no longer draining");
+    }
+
     public bool WaitForCapacity(int chunkSamples, CancellationToken token)
     {
         if (chunkSamples <= 0) return !token.IsCancellationRequested;
@@ -489,6 +597,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         if (Volatile.Read(ref _callbackFaulted) != 0)
         {
             Trace.LogWarning("WaitForCapacity: stream callback faulted (device={Device}) - reporting no capacity", _deviceIndex);
+            return false;
+        }
+
+        // Same for a lost device (checked before the not-running early-out: a latched output must
+        // never report capacity again).
+        if (Volatile.Read(ref _deviceLost) != 0)
+        {
+            Trace.LogWarning("WaitForCapacity: device lost (device={Device}) - reporting no capacity", _deviceIndex);
             return false;
         }
 
@@ -506,8 +622,23 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         var target = TargetQueueSamples;
         var startTicks = Environment.TickCount64;
         var deadlineTicks = startTicks + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
+        var nextHealthProbeTicks = startTicks + DeviceHealthProbeIntervalMs;
         while (!token.IsCancellationRequested)
         {
+            // Cheap health probe while blocked on a full ring: if the device died, the ring never
+            // drains and we would otherwise burn the whole 5s timeout before the router notices.
+            // StreamActive latches _deviceLost under the lifecycle gate.
+            if (Environment.TickCount64 >= nextHealthProbeTicks)
+            {
+                nextHealthProbeTicks = Environment.TickCount64 + DeviceHealthProbeIntervalMs;
+                _ = StreamActive;
+                if (Volatile.Read(ref _deviceLost) != 0)
+                {
+                    Trace.LogWarning("WaitForCapacity: device lost while waiting (device={Device}) - reporting no capacity", _deviceIndex);
+                    return false;
+                }
+            }
+
             if (Environment.TickCount64 >= deadlineTicks)
             {
                 var now = Environment.TickCount64;

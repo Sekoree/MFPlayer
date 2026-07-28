@@ -490,6 +490,22 @@ public partial class CuePlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _schedulesArmed;
 
+    /// <summary>Scheduling is scoped to the SELECTED list (fires ride the selected-list transport);
+    /// surface that at arm time so an enabled schedule sitting in another list is never a silent
+    /// no-show - the operator reads exactly which scope is live.</summary>
+    partial void OnSchedulesArmedChanged(bool value)
+    {
+        if (!value)
+            return;
+        var outsideCount = CueLists
+            .Where(list => !ReferenceEquals(list, SelectedCueList))
+            .SelectMany(list => EnumerateAllCueNodes(list.Nodes))
+            .Count(node => node.HasSchedule && node.ScheduleEnabled);
+        if (outsideCount > 0)
+            StatusMessage = Strings.Format(
+                nameof(Strings.SchedulesArmedOtherListsWarningFormat), outsideCount);
+    }
+
     public ObservableCollection<CueNodeViewModel> VisibleNodes =>
         SelectedCueList?.Nodes ?? _emptyNodes;
 
@@ -859,6 +875,15 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private void OnWatchedCuePreRollPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        // The cue master level is baked into the routed gains: apply it to the running clip live
+        // (same path as a per-route gain tweak) and let the stale-standby refresh re-prepare.
+        if (e.PropertyName is nameof(CueNodeViewModel.LevelDb))
+        {
+            PushActiveAudioRoutesUpdate();
+            OnWatchedCueEdited();
+            return;
+        }
+
         if (e.PropertyName is nameof(CueNodeViewModel.StartOffsetMs)
             or nameof(CueNodeViewModel.EndOffsetMs)
             or nameof(CueNodeViewModel.Loop)
@@ -1050,7 +1075,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
 
         var routes = cue.AudioRoutes.Select(route => route.ToModel()).ToArray();
-        _ = callback(cue.Id, routes);
+        _ = callback(cue.Id, routes, cue.LevelDb);
     }
 
     /// <summary>An edit-relevant change to the watched (selected) cue: immediately flag its warm
@@ -1963,7 +1988,10 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>Host callback for reconciling the selected cue's running audio routes after route
     /// row edits. No-op in tests or when the cue is not playing.</summary>
-    public Func<Guid, IReadOnlyList<CueAudioRoute>, Task>? UpdateActiveCueAudioRoutesCallback { get; set; }
+    /// <summary>Host callback: re-apply a playing cue's audio routing live. Receives the edited routes
+    /// plus the cue's master <see cref="CueNodeViewModel.LevelDb"/> (baked into the routed gains by the
+    /// mapper, so every live re-apply must carry it or the cue would pop to unity).</summary>
+    public Func<Guid, IReadOnlyList<CueAudioRoute>, double, Task>? UpdateActiveCueAudioRoutesCallback { get; set; }
 
     /// <summary>Host callback to live-re-render a playing text cue after a text/style edit (so it updates in
     /// place instead of only on the next fire). No-op in tests or when the cue is not playing.</summary>
@@ -3270,7 +3298,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         var groups = plan.GroupBy(s => s.DelayMs).OrderBy(g => g.Key).ToList();
         foreach (var group in groups)
         {
-            await WaitUntilDelayAsync(startedAt, group.Key, ct);
+            await WaitUntilDelayAsync(
+                startedAt, group.Key, ct, countdownCues: group.Select(s => s.Cue).ToList());
             ct.ThrowIfCancellationRequested();
 
             var steps = group.ToList();
@@ -3739,13 +3768,22 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
-    private async Task WaitUntilDelayAsync(DateTime startedAtUtc, int delayMs, CancellationToken ct)
+    /// <summary>Pre-wait visibility threshold: shorter waits are perceptually immediate and a badge
+    /// would only flicker.</summary>
+    private static readonly TimeSpan PreWaitCountdownThreshold = TimeSpan.FromMilliseconds(1500);
+
+    private async Task WaitUntilDelayAsync(
+        DateTime startedAtUtc, int delayMs, CancellationToken ct,
+        IReadOnlyList<CueNodeViewModel>? countdownCues = null)
     {
         if (delayMs <= 0)
             return;
 
-        while (true)
+        var showingCountdown = false;
+        try
         {
+            while (true)
+            {
                 ct.ThrowIfCancellationRequested();
                 while (IsTransportPaused)
                 {
@@ -3754,14 +3792,43 @@ public partial class CuePlayerViewModel : ViewModelBase
                     startedAtUtc = startedAtUtc.AddMilliseconds(40);
                 }
 
-            var due = startedAtUtc.AddMilliseconds(delayMs);
-            var remaining = due - DateTime.UtcNow;
-            if (remaining <= TimeSpan.Zero)
-                return;
+                var due = startedAtUtc.AddMilliseconds(delayMs);
+                var remaining = due - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                    return;
 
-            var slice = remaining > TimeSpan.FromMilliseconds(50) ? TimeSpan.FromMilliseconds(50) : remaining;
-            await Task.Delay(slice, ct);
+                // Pre-wait visibility (review §6): a live "⏳ in m:ss" badge on the waiting cues' rows
+                // so the operator sees WHY nothing is sounding yet. Runs on the UI thread already.
+                if (countdownCues is not null && remaining >= PreWaitCountdownThreshold)
+                {
+                    showingCountdown = true;
+                    var text = $"⏳ in {(int)remaining.TotalMinutes}:{remaining.Seconds:D2}";
+                    foreach (var cue in countdownCues)
+                        cue.PreWaitCountdownText = text;
+                }
+                else if (showingCountdown)
+                {
+                    ClearPreWaitCountdown(countdownCues);
+                    showingCountdown = false;
+                }
+
+                var slice = remaining > TimeSpan.FromMilliseconds(50) ? TimeSpan.FromMilliseconds(50) : remaining;
+                await Task.Delay(slice, ct);
+            }
         }
+        finally
+        {
+            if (showingCountdown)
+                ClearPreWaitCountdown(countdownCues);
+        }
+    }
+
+    private static void ClearPreWaitCountdown(IReadOnlyList<CueNodeViewModel>? cues)
+    {
+        if (cues is null)
+            return;
+        foreach (var cue in cues)
+            cue.PreWaitCountdownText = null;
     }
 
     private void CancelTransportRun()

@@ -215,22 +215,32 @@ public static class HaPlayShowMapper
     /// to an inferred/default device.</summary>
     private static IReadOnlyList<ShowClipAudioRoute>? MapAudioRoutes(
         MediaCueNode media, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
-        => MapAudioRoutes(media.AudioRoutes, outputsById);
+        => MapAudioRoutes(media.AudioRoutes, outputsById, media.LevelDb);
 
     /// <summary>Live-edit entry: map a cue's edited <see cref="CueAudioRoute"/>s with the current output
     /// definitions, for <c>ShowSession.ApplyActiveAudioRoutesAsync</c>. Same conversion + ordering as the load
     /// path so the <c>clip{i}</c> output order lines up with what the fire path attached.</summary>
+    /// <param name="levelDb">The cue's master level (<see cref="MediaCueNode.LevelDb"/>) - it is baked into
+    /// the routed gains, so a live route edit must re-apply it or the cue would pop to unity.</param>
     public static IReadOnlyList<ShowClipAudioRoute> MapActiveAudioRoutes(
-        IReadOnlyList<CueAudioRoute> routes, IReadOnlyList<OutputDefinition>? outputs)
+        IReadOnlyList<CueAudioRoute> routes, IReadOnlyList<OutputDefinition>? outputs, double levelDb = 0)
     {
         var outputsById = outputs?.GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First())
                           ?? new Dictionary<Guid, OutputDefinition>();
-        return MapAudioRoutes(routes, outputsById);
+        return MapAudioRoutes(routes, outputsById, levelDb);
     }
 
     private static IReadOnlyList<ShowClipAudioRoute> MapAudioRoutes(
-        IReadOnlyList<CueAudioRoute>? cueRoutes, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
+        IReadOnlyList<CueAudioRoute>? cueRoutes,
+        IReadOnlyDictionary<Guid, OutputDefinition> outputsById,
+        double levelDb = 0)
     {
+        // Per-cue master (review §6): a single linear factor over every route; ≤ −60 dB = routed silent.
+        // Baked into the emitted gains/matrix cells, so fades and envelopes (which multiply the routed
+        // gains) compose against it for free.
+        var masterGain = levelDb <= CueAutomationPoint.SilenceLevelDb
+            ? 0f
+            : (float)Math.Pow(10, Math.Min(levelDb, CueAutomationPoint.MaxLevelDb) / 20.0);
         if (cueRoutes is not { Count: > 0 } routes)
             return []; // HaPlay is manual-route-only: no cue routes means deliberately silent.
 
@@ -290,7 +300,8 @@ public static class HaPlayShowMapper
                 : lineRoutes
                     .Where(r => r.SourceChannel >= 0)
                     .Select(r => new ShowAudioMatrixCell(
-                        r.SourceChannel, r.OutputChannel - 1, (float)Math.Pow(10, r.GainDb / 20.0)))
+                        r.SourceChannel, r.OutputChannel - 1,
+                        (float)Math.Pow(10, r.GainDb / 20.0) * masterGain))
                     .ToList();
             if (cells is { Count: > 0 })
             {
@@ -302,7 +313,7 @@ public static class HaPlayShowMapper
             }
             else
             {
-                var gain = (float)Math.Pow(10, lineRoutes[0].GainDb / 20.0);
+                var gain = (float)Math.Pow(10, lineRoutes[0].GainDb / 20.0) * masterGain;
                 mapped.Add(new ShowClipAudioRoute(deviceId, matrix, gain, sampleRate > 0 ? sampleRate : null));
             }
         }

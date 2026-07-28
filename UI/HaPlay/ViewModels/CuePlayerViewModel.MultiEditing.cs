@@ -209,6 +209,7 @@ public partial class CuePlayerViewModel
                      or nameof(CueNodeViewModel.FadeOutMs)
                      or nameof(CueNodeViewModel.FadeInCurve)
                      or nameof(CueNodeViewModel.FadeOutCurve)
+                     or nameof(CueNodeViewModel.LevelDb)
                      or nameof(CueNodeViewModel.StartOffsetMs)
                      or nameof(CueNodeViewModel.EndOffsetMs)
                      or nameof(CueNodeViewModel.Loop)
@@ -302,6 +303,7 @@ public partial class CuePlayerViewModel
             case nameof(CueNodeViewModel.FadeOutMs): target.FadeOutMs = source.FadeOutMs; break;
             case nameof(CueNodeViewModel.FadeInCurve): target.FadeInCurve = source.FadeInCurve; break;
             case nameof(CueNodeViewModel.FadeOutCurve): target.FadeOutCurve = source.FadeOutCurve; break;
+            case nameof(CueNodeViewModel.LevelDb): target.LevelDb = source.LevelDb; break;
             case nameof(CueNodeViewModel.StartOffsetMs): target.StartOffsetMs = source.StartOffsetMs; break;
             case nameof(CueNodeViewModel.EndOffsetMs): target.EndOffsetMs = source.EndOffsetMs; break;
             case nameof(CueNodeViewModel.DurationMs): target.DurationMs = source.DurationMs; break;
@@ -533,7 +535,7 @@ public partial class CuePlayerViewModel
         if (ReferenceEquals(cue, _preRollWatchedCue))
             return;
         if (_activeCueIds.Contains(cue.Id) && UpdateActiveCueAudioRoutesCallback is { } callback)
-            _ = callback(cue.Id, cue.AudioRoutes.Select(route => route.ToModel()).ToArray());
+            _ = callback(cue.Id, cue.AudioRoutes.Select(route => route.ToModel()).ToArray(), cue.LevelDb);
     }
 
     private void NotifyMultiEditedVideoCue(CueNodeViewModel cue, int placementIndex)

@@ -74,15 +74,35 @@ public sealed partial class CueNodeViewModel : ObservableObject
     }
 
     /// <summary>Tree "Target" column text: the control-flow target plus, when the cue carries a
-    /// schedule, a clock badge (the Jump-target display precedent for schedule visibility).</summary>
+    /// schedule, a clock badge (the Jump-target display precedent for schedule visibility) - and,
+    /// while the transport counts down this cue's pre-wait, a live "⏳ in m:ss" badge in front so the
+    /// operator sees WHY nothing is sounding yet.</summary>
     public string TargetDisplay
     {
         get
         {
             var badge = ScheduleBadgeDisplay;
-            if (badge.Length == 0)
-                return _targetDisplayBase;
-            return _targetDisplayBase.Length == 0 ? badge : $"{_targetDisplayBase} · {badge}";
+            var core = badge.Length == 0
+                ? _targetDisplayBase
+                : _targetDisplayBase.Length == 0 ? badge : $"{_targetDisplayBase} · {badge}";
+            if (string.IsNullOrEmpty(PreWaitCountdownText))
+                return core;
+            return core.Length == 0 ? PreWaitCountdownText : $"{PreWaitCountdownText} · {core}";
+        }
+    }
+
+    /// <summary>Live "⏳ in m:ss" badge while the transport counts down this cue's plan delay
+    /// (pre-wait / timeline lane start). Session-transient - written by the trigger-plan runner,
+    /// never persisted.</summary>
+    private string? _preWaitCountdownText;
+
+    public string? PreWaitCountdownText
+    {
+        get => _preWaitCountdownText;
+        internal set
+        {
+            if (SetProperty(ref _preWaitCountdownText, value))
+                OnPropertyChanged(nameof(TargetDisplay));
         }
     }
 
@@ -108,6 +128,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     [ObservableProperty]
     private int _fadeOutMs;
+
+    /// <summary>Per-cue master level (dB, 0 = unity, −60..+12) - multiplies every audio route.</summary>
+    [ObservableProperty]
+    private double _levelDb;
 
     [ObservableProperty]
     private CueFadeCurve _fadeInCurve;
@@ -1506,6 +1530,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     FadeOutMs = m.FadeOutMs,
                     FadeInCurve = m.FadeInCurve,
                     FadeOutCurve = m.FadeOutCurve,
+                    LevelDb = m.LevelDb,
                     DurationMs = m.DurationMs,
                     SourceHasVideo = m.HasVideo,
                     SourceHasAudio = m.HasAudio,
@@ -1695,6 +1720,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 FadeOutMs = Math.Max(0, FadeOutMs),
                 FadeInCurve = FadeInCurve,
                 FadeOutCurve = FadeOutCurve,
+                LevelDb = Math.Clamp(LevelDb, CueAutomationPoint.SilenceLevelDb, CueAutomationPoint.MaxLevelDb),
                 DurationMs = Math.Max(0, DurationMs),
                 HasVideo = SourceHasVideo,
                 HasAudio = SourceHasAudio,

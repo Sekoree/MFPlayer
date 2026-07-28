@@ -3,21 +3,58 @@ namespace S.Media.Audio.MiniAudio;
 
 /// <summary>
 /// Backend-neutral miniaudio adapter: device discovery plus ready-to-use capture/playback devices.
+/// Enumeration reuses one cached <c>ma_context</c> per backend instance (building and destroying a
+/// fresh context per call was pure waste for direct callers); the cache is thread-safe, rebuilt once
+/// per call if a call fails on a stale context (e.g. after an audio-server restart), and released by
+/// <see cref="Dispose"/>. Registry-registered backends live for the process, so their single context
+/// does too - that is the intended footprint.
 /// </summary>
-public sealed class MiniAudioBackend : IAudioBackend
+public sealed class MiniAudioBackend : IAudioBackend, IDisposable
 {
+    private readonly Lock _contextGate = new();
+    private MiniAudioContext? _context;
+    private bool _disposed;
+
     public string Name => "miniaudio";
 
-    public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices()
+    public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices() => Enumerate(MiniAudioDeviceType.Playback);
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices() => Enumerate(MiniAudioDeviceType.Capture);
+
+    private IReadOnlyList<AudioDeviceInfo> Enumerate(MiniAudioDeviceType deviceType)
     {
-        using var context = MiniAudioContext.Create();
-        return context.Enumerate(MiniAudioDeviceType.Playback);
+        // All native context use stays under the gate: Enumerate and Dispose must never race the
+        // ma_context handle (same lifecycle-gate convention as the outputs' device gates).
+        lock (_contextGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _context ??= MiniAudioContext.Create();
+            try
+            {
+                return _context.Enumerate(deviceType);
+            }
+            catch (MiniAudioException)
+            {
+                // The cached context can go stale (audio server restarted under us). Rebuild once and
+                // retry; if that also fails, let the error surface.
+                _context.Dispose();
+                _context = null;
+                _context = MiniAudioContext.Create();
+                return _context.Enumerate(deviceType);
+            }
+        }
     }
 
-    public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices()
+    public void Dispose()
     {
-        using var context = MiniAudioContext.Create();
-        return context.Enumerate(MiniAudioDeviceType.Capture);
+        lock (_contextGate)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _context?.Dispose();
+            _context = null;
+        }
     }
 
     public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)

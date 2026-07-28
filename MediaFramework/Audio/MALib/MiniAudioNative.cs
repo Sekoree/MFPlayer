@@ -41,7 +41,7 @@ public static unsafe partial class MiniAudioNative
 
     private const string Library = "miniaudio";
 
-    private readonly record struct DeviceCallback(nint CallbackPtr, nint UserData);
+    private readonly record struct DeviceCallback(nint CallbackPtr, nint StopCallbackPtr, nint UserData);
     private static readonly ConcurrentDictionary<nint, DeviceCallback> DeviceCallbacks = new();
 
     // --- mirrored structs (sequential layout = runtime computes C-matching offsets) --------------
@@ -136,6 +136,28 @@ public static unsafe partial class MiniAudioNative
         }
     }
 
+    // --- the stop-callback bridge ----------------------------------------------------------------
+    // miniaudio's ma_stop_proc is void(ma_device*). It fires from the device worker thread whenever the
+    // device stops - explicitly (ma_device_stop / ma_device_uninit) or implicitly (device unplugged,
+    // backend error). The signature carries no layout-sensitive struct (unlike the richer
+    // ma_device_notification), so it is the safe binding for device-loss detection. Routed exactly like
+    // DataProc: keyed by the device pointer, forwarded to the caller's function pointer with its userData.
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void StopProc(nint pDevice)
+    {
+        if (!DeviceCallbacks.TryGetValue(pDevice, out var cb) || cb.StopCallbackPtr == nint.Zero)
+            return;
+        try
+        {
+            ((delegate* unmanaged[Cdecl]<nint, void>)cb.StopCallbackPtr)(cb.UserData);
+        }
+        catch
+        {
+            // A managed callback must never let an exception cross the native boundary.
+        }
+    }
+
     // --- public operations (same surface S.Media.MiniAudio consumes) -----------------------------
 
     public static int ContextCreate(out nint context)
@@ -208,7 +230,8 @@ public static unsafe partial class MiniAudioNative
 
     public static int DeviceCreate(
         int deviceType, byte* deviceIdHex, uint sampleRate, uint channels, uint periodSizeFrames,
-        delegate* unmanaged[Cdecl]<nint, float*, float*, uint, void> callback, nint userData, out nint device)
+        delegate* unmanaged[Cdecl]<nint, float*, float*, uint, void> callback, nint userData, out nint device,
+        delegate* unmanaged[Cdecl]<nint, void> stopCallback = null)
     {
         device = nint.Zero;
 
@@ -216,6 +239,8 @@ public static unsafe partial class MiniAudioNative
         config.SampleRate = sampleRate;
         config.PeriodSizeInFrames = periodSizeFrames;
         config.DataCallback = (nint)(delegate* unmanaged[Cdecl]<nint, void*, void*, uint, void>)&DataProc;
+        if (stopCallback != null)
+            config.StopCallback = (nint)(delegate* unmanaged[Cdecl]<nint, void>)&StopProc;
 
         Span<byte> id = stackalloc byte[MaDeviceIdSize];
         var hasId = TryDecodeHex(deviceIdHex, id);
@@ -240,7 +265,7 @@ public static unsafe partial class MiniAudioNative
                 config.Playback.DeviceId = hasId ? (nint)idPtr : nint.Zero;
             }
 
-            DeviceCallbacks[devicePtr] = new DeviceCallback((nint)callback, userData);
+            DeviceCallbacks[devicePtr] = new DeviceCallback((nint)callback, (nint)stopCallback, userData);
             result = ma_device_init(nint.Zero, &config, devicePtr);
         }
 

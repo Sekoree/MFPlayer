@@ -337,6 +337,55 @@ public class ShowDocumentMapperTests
     }
 
     [Fact]
+    public void CueLevelDb_MultipliesEveryRoutedGain_OnBothMappingPaths()
+    {
+        var lineId = Guid.NewGuid();
+        var output = new PortAudioOutputDefinition(
+            Id: lineId, DisplayName: "Main Out", HostApiIndex: 0, HostApiName: "JACK",
+            GlobalDeviceIndex: 7, DeviceName: "system", ChannelCount: 2, SampleRate: 48_000);
+
+        // Uniform route gains keep the single-line-gain path: master multiplies the line gain.
+        var uniform = new MediaCueNode
+        {
+            Label = "Trimmed",
+            Source = new FilePlaylistItem("/m/a.wav"),
+            LevelDb = -6,
+            AudioRoutes =
+            {
+                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 1, GainDb = 0 },
+                new CueAudioRoute { SourceChannel = 1, OutputLineId = lineId, OutputChannel = 2, GainDb = 0 },
+            },
+        };
+        var uniformClip = Assert.Single(
+            HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { uniform } }, [output]).Clips);
+        var uniformRoute = Assert.Single(uniformClip.AudioRoutes!);
+        Assert.Equal(Math.Pow(10, -6 / 20.0), uniformRoute.Gain, 4);
+
+        // Differing route gains use the per-cell matrix path: master multiplies every cell.
+        var mixed = uniform with
+        {
+            AudioRoutes =
+            [
+                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 1, GainDb = 0 },
+                new CueAudioRoute { SourceChannel = 1, OutputLineId = lineId, OutputChannel = 2, GainDb = -20 },
+            ],
+        };
+        var mixedClip = Assert.Single(
+            HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { mixed } }, [output]).Clips);
+        var mixedRoute = Assert.Single(mixedClip.AudioRoutes!);
+        Assert.True(mixedRoute.HasGainMatrix);
+        var cells = mixedRoute.MatrixCells!.OrderBy(c => c.OutputChannel).ToList();
+        Assert.Equal(Math.Pow(10, -6 / 20.0), cells[0].Gain, 4);
+        Assert.Equal(Math.Pow(10, -26 / 20.0), cells[1].Gain, 4);
+
+        // At or below the −60 dB floor the cue routes silent; the live-edit entry applies the same master.
+        var silent = HaPlayShowMapper.MapActiveAudioRoutes(uniform.AudioRoutes, [output], levelDb: -60);
+        Assert.Equal(0f, Assert.Single(silent).Gain);
+        var live = HaPlayShowMapper.MapActiveAudioRoutes(uniform.AudioRoutes, [output], levelDb: -6);
+        Assert.Equal(Math.Pow(10, -6 / 20.0), Assert.Single(live).Gain, 4);
+    }
+
+    [Fact]
     public void NoAudioRoutes_MapsToExplicitSilence()
     {
         var cue = new MediaCueNode { Label = "Plain", Source = new FilePlaylistItem("/m/a.wav") };

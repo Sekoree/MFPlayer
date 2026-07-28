@@ -668,7 +668,7 @@ public sealed class CuePlayerViewModelTests
         var vm = new CuePlayerViewModel();
         var outputId = Guid.NewGuid();
         var calls = new List<(Guid CueId, IReadOnlyList<CueAudioRoute> Routes)>();
-        vm.UpdateActiveCueAudioRoutesCallback = (cueId, routes) =>
+        vm.UpdateActiveCueAudioRoutesCallback = (cueId, routes, _) =>
         {
             calls.Add((cueId, routes.ToArray()));
             return Task.CompletedTask;
