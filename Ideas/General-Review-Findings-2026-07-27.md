@@ -182,6 +182,18 @@ eases in quadratically over the first `2×latency` window, C¹-continuous into `
 path; backend is now `IDisposable`. Truth-table/state-machine tests in
 `S.Media.Audio.Backends.Tests` (41 tests, hardware-dependent cases device-gated).
 
-**Still open:** 14 (seek/flush epoch generations — deliberate deferral) and the §1
-wire-or-prune decision for `CompositePlaybackClock`/`VideoPtsClock`/`NDIIngestPlaybackClock`
-(now monotonic but still unwired)/`OutputSyncGroup`/`TimecodeSyncKind`.
+**Still open:** 14 (seek/flush epoch generations — in progress 2026-07-28).
+
+## 6. Wire-or-prune decision (§1 table) — 2026-07-28
+
+Per-piece verdict, applied as documentation (no deletions - several pieces are persisted or
+public API, and the "wire" candidates are real features worth their own rounds):
+
+| Piece | Verdict | Rationale |
+|---|---|---|
+| `VideoPtsClock` | **WIRE (next framework round)** | Video-only playback still paces on wall time; mastering the clock from video PTS fixes a real drift class. Smallest of the wire candidates - one `videoOnlyMaster` call site in `MediaPlayer`. |
+| `NDIIngestPlaybackClock` | **KEEP, wire behind an opt-in** | Now monotonic (fixed this round). `SlaveToIngest` for NDI sources is the genlock-to-ingest feature; wire it as an explicit `NDISourceOptions` opt-in when an app needs it, never auto-promotion. |
+| `CompositePlaybackClock` / `SetMasterChain` | **KEEP as test/lab machinery, document as such** | Priority/blend/handoff has no production consumer and no near-term feature pulling it in; its tests keep it honest. Prune only if it starts costing maintenance. |
+| `OutputSyncGroup` / `VideoPresentSyncGroup` / `LiveTimelineDriver` | **KEEP, dormant** | The genlock-domain design target; docs/tools/tests only today. Revisit when multi-output frame-lock becomes a requirement. |
+| `SoundboardGrid.TryCreateScheduledFire` | **PRUNE-candidate (needs owner sign-off)** | Computes a quantized fire time nothing dispatches; the cue scheduler now owns wall-clock firing. Either dispatch it from the soundboard VM (quantized tile launch - a real musician feature) or delete; flagging for the owner rather than deleting persisted-adjacent behavior unilaterally. |
+| `TimecodeSyncKind { Mtc, Ltc, Smpte }` | **KEEP (persisted enum)** | Declared in `TriggerBindingSet`; removing breaks files. `CueSchedulerService` is the natural chase-source home when MTC/LTC lands. |

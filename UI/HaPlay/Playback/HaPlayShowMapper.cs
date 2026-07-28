@@ -90,7 +90,7 @@ public static class HaPlayShowMapper
         var clips = new List<ShowClipBinding>();
         var number = 0;
 
-        void Walk(IEnumerable<CueNode> nodes, string? groupId)
+        void Walk(IEnumerable<CueNode> nodes, string? groupId, TimeSpan preEndNotify)
         {
             foreach (var node in nodes)
             {
@@ -105,7 +105,18 @@ public static class HaPlayShowMapper
                         // WHICH cues fire on GO - including per-subgroup fire modes (FirstCueOnly / …) - is
                         // resolved by the VM's trigger plan and fired by explicit cue id, so it needs no
                         // representation in the ShowDocument.
-                        Walk(group.Children, groupId ?? group.Id.ToString());
+                        // Playlist crossfade: DIRECT media children of a Playlist group with CrossfadeMs
+                        // carry the window as their pre-end notify offset, so the session's end monitor
+                        // raises ClipApproachingEnd exactly CrossfadeMs before each item's out-point and
+                        // the VM fires the next pick early. Recomputed per group - a nested non-playlist
+                        // group's children do NOT inherit it (nested-group picks stay butt splice).
+                        Walk(
+                            group.Children,
+                            groupId ?? group.Id.ToString(),
+                            group.FireMode == CueGroupFireMode.Playlist
+                            && group.Playlist is { CrossfadeMs: > 0 } playlistOptions
+                                ? TimeSpan.FromMilliseconds(playlistOptions.CrossfadeMs)
+                                : TimeSpan.Zero);
                         break;
 
                     case MediaCueNode media:
@@ -118,7 +129,7 @@ public static class HaPlayShowMapper
                             GroupId: groupId));
 
                         if (MapClip(cueId, media, outputsById) is { } binding)
-                            clips.Add(binding);
+                            clips.Add(binding with { PreEndNotify = preEndNotify });
                         break;
 
                     // ActionCueNode / CommentCueNode / JumpCueNode have no ShowDocument equivalent - action
@@ -127,7 +138,7 @@ public static class HaPlayShowMapper
             }
         }
 
-        Walk(cueList.Nodes, groupId: null);
+        Walk(cueList.Nodes, groupId: null, preEndNotify: TimeSpan.Zero);
 
         var compositions = cueList.Compositions.Select(MapComposition).ToArray();
 

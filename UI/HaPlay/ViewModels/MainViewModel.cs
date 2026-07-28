@@ -305,6 +305,7 @@ public partial class MainViewModel : ViewModelBase
     public IReadOnlyList<Remote.RemoteApiEndpointDoc> RestApiEndpointDocs { get; } =
     [
         new("/api/v1/cues/go · pause · resume · stop · panic", Strings.RemoteApiDocCues),
+        new("/api/v1/cues/{cue}/go · stop", Strings.RemoteApiDocCueByRef),
         new("/api/v1/players/{player}/play · pause · toggle · stop · next · prev", Strings.RemoteApiDocPlayerTransport),
         new("/api/v1/players/{player}/volume?db=-10", Strings.RemoteApiDocPlayerVolume),
         new("/api/v1/players/{player}/hold?on=true", Strings.RemoteApiDocPlayerHold),

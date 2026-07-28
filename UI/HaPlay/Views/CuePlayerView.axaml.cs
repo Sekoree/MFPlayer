@@ -58,6 +58,8 @@ public partial class CuePlayerView : UserControl
         // Double-click a row = standby that cue (cue-software convention; GO then fires it).
         CueTreeGrid.DoubleTapped += OnCueTreeDoubleTapped;
         KeyDown += OnUserControlKeyDown;
+        // Master fader (§6): double-click snaps the show-level trim back to unity.
+        MasterTrimSlider.DoubleTapped += OnMasterTrimSliderDoubleTapped;
         // The Preview tab's scrubber is the deck's ONLY scrub surface (the General tab used to
         // carry a second slider - and it was the only one wired to commit the seek).
         CuePreviewScrubber.AddHandler(PointerReleasedEvent, OnCueScrubberPointerReleased, RoutingStrategies.Bubble);
@@ -142,6 +144,21 @@ public partial class CuePlayerView : UserControl
             CueSearchBox.SelectAll();
             e.Handled = true;
         }
+        // Per-cue hotkeys (drawer Triggers section) run LAST so every fixed/configurable transport
+        // key above wins a clash, and only in show mode - firing cues from the keyboard while the
+        // operator edits the list is the same hazard the scheduler gate exists for.
+        else if (!vm.IsCueEditMode && vm.TryFireCueHotkey(e))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void OnMasterTrimSliderDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        if (DataContext is CuePlayerViewModel vm)
+            vm.ResetMasterTrimCommand.Execute(null);
     }
 
     private void OnCueScrubberPointerReleased(object? sender, PointerReleasedEventArgs e)

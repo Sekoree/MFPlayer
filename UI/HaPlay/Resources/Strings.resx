@@ -1552,6 +1552,12 @@
   <data name="CueLevelDbTooltip" xml:space="preserve">
     <value>Master level for this cue: multiplies every audio route (−60 = silent, 0 = unity, up to +12). Applies live while the cue is playing.</value>
   </data>
+  <data name="TimelineStartMsLabel" xml:space="preserve">
+    <value>Lane start (ms)</value>
+  </data>
+  <data name="TimelineStartMsTooltip" xml:space="preserve">
+    <value>Authored start on the Timeline group's clock. The cue becomes audible at this start plus its pre-wait; the timeline editor drags the same value.</value>
+  </data>
   <data name="FilesMenuLabel" xml:space="preserve">
     <value>Files…</value>
   </data>
@@ -3898,6 +3904,12 @@
   <data name="PlaylistPlayCountLabel" xml:space="preserve">
     <value>Items per pass (blank = all)</value>
   </data>
+  <data name="PlaylistCrossfadeMsLabel" xml:space="preserve">
+    <value>Crossfade (ms, 0 = none)</value>
+  </data>
+  <data name="PlaylistCrossfadeMsTooltip" xml:space="preserve">
+    <value>Overlap between consecutive playlist items: the next item starts this long before the current one ends, fading in while it fades out. 0 = cut straight to the next item at its natural end.</value>
+  </data>
   <data name="PlaylistEndBehaviorLabel" xml:space="preserve">
     <value>When finished</value>
   </data>
@@ -4020,5 +4032,29 @@
   </data>
   <data name="CueScheduleMissedStatusFormat" xml:space="preserve">
     <value>Missed schedule for {0} (due {1:HH:mm:ss}) - beyond grace, skipped</value>
+  </data>
+  <data name="CueTriggersSectionHeader" xml:space="preserve">
+    <value>Triggers</value>
+  </data>
+  <data name="CueHotkeyLabel" xml:space="preserve">
+    <value>Hotkey</value>
+  </data>
+  <data name="CueHotkeyHint" xml:space="preserve">
+    <value>Fires this cue exactly like a GO on it (pre-waits and group behavior included), only while cue edit mode is OFF. Forms such as F5, Ctrl+K or Shift+Space; empty = none. The transport keys (GO/Stop/…) always win a clash. MIDI/OSC controllers fire cues via the remote API (/api/v1/cues/{cue}/go).</value>
+  </data>
+  <data name="CueHotkeyFiredStatusFormat" xml:space="preserve">
+    <value>Hotkey fire: {0}</value>
+  </data>
+  <data name="CueRemoteFiredStatusFormat" xml:space="preserve">
+    <value>Remote fire: {0}</value>
+  </data>
+  <data name="RemoteApiDocCueByRef" xml:space="preserve">
+    <value>Fire or stop ONE cue - {cue} is its cue number in the selected list (fallback: its id). Go rides the exact operator GO path.</value>
+  </data>
+  <data name="CueMasterTrimLabel" xml:space="preserve">
+    <value>Master</value>
+  </data>
+  <data name="CueMasterTrimTooltip" xml:space="preserve">
+    <value>Live show-level trim over everything playing (cues fired while reduced inherit it). Multiplies fades, envelopes and cue levels - a manual fader, not a stop. Double-click resets to full. Session-only, never saved.</value>
   </data>
 </root>

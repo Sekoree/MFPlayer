@@ -421,6 +421,12 @@ public sealed class CueShowSessionCoordinator
                 _cueShowSession!.SeekManyAsync(
                     positions.Select(p => (ResolveCueShowRuntimeGroup(p.CueId), p.Position)).ToList()));
             CuePlayer.CancelCueCallback = id => GuardedCueShowOp("cancel", () => _cueShowSession!.StopCueAsync(id.ToString()));
+            // Master fader (Ideas §6): a live session-wide trim over every playing clip; clips fired
+            // while reduced inherit it. Slider drags stream through here - each step is only a few
+            // route-gain writes on the session dispatcher. The session outlives cue-list reloads, so
+            // the trim survives them like the rest of its session state.
+            CuePlayer.SetMasterTrimCallback = trim => GuardedCueShowOp(
+                "master-trim", () => _cueShowSession!.SetMasterTrimAsync(trim));
             // Cue preview (audition on the preview/headphone device) goes through ShowSession too - otherwise it was
             // the last cue callback still driving the now-inactive engine under the gate. The PortAudio backend takes
             // the global device index as its device id (see CuePreviewSession), so the preview device selection
@@ -467,38 +473,12 @@ public sealed class CueShowSessionCoordinator
                     CuePlayer.OnPreparedCueStatesChanged(mapped);
                 });
             };
-            CuePlayer.MediaCueExecutor = async (cue, _) =>
-            {
-                try
-                {
-                    await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
-                    if (!_cueShowBoundCueIds.Contains(cue.Id))
-                    {
-                        var detail = "cue has no current ShowSession media binding; its source may be empty or unsupported";
-                        Trace.LogError("HaPlay: cue '{Label}' ({Id}) cannot fire - {Detail}", cue.Label, cue.Id, detail);
-                        return detail;
-                    }
-                    var status = await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
-                    if (status != CueExecutionStatus.Fired)
-                    {
-                        var detail = await DescribeCueShowFailureAsync(cue.Id, status).ConfigureAwait(false);
-                        Trace.LogWarning(
-                            "HaPlay: cue '{Label}' ({Id}) did not fire - status {Status}: {Detail}",
-                            cue.Label, cue.Id, status, detail);
-                        return detail;
-                    }
-                    // Engine-callback parity: report the cue active so the UI shows it Triggered/now-playing -
-                    // the result handler treats a cue absent from _activeCueIds as "Failed to start" even on a
-                    // successful fire, because the ShowSession path doesn't raise the engine's OnCueStarted.
-                    await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
-                    return null;
-                }
-                catch (Exception ex)
-                {
-                    Trace.LogError(ex, "HaPlay: firing cue '{Label}' ({Id}) through ShowSession failed", cue.Label, cue.Id);
-                    return ex.Message;
-                }
-            };
+            CuePlayer.MediaCueExecutor = (cue, _) => FireCueShowMediaAsync(cue, crossfade: null, FadeCurve.Linear);
+            // Playlist crossfade advance (dual-voice): the same fire-by-id path, carrying the overlap
+            // window into the session's crossfade overload. A null/zero window there is the exact
+            // butt-splice path, so CrossfadeMs = 0 playlists are untouched.
+            CuePlayer.MediaCueCrossfadeExecutor = (cue, crossfade, curve, _) =>
+                FireCueShowMediaAsync(cue, crossfade, curve);
             CuePlayer.MediaCueIndependentExecutor = async (cue, ct) =>
             {
                 try
@@ -751,6 +731,17 @@ public sealed class CueShowSessionCoordinator
                         FireAndLog(OnCueClipNaturallyEndedAsync(id), "cue auto-follow");
                 });
 
+            // Playlist crossfade (dual-voice): a monitored clip entering its CrossfadeMs pre-end window
+            // fires the playlist's next pick EARLY so both clips overlap. UI-thread routed like the
+            // natural-end event above; the VM decides whether the cue is actually a crossfading playlist's
+            // current item (everything else - armed lists, finished runs, zero windows - is a no-op).
+            _cueShowSession.ClipApproachingEnd += cueId =>
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (Guid.TryParse(cueId, out var id))
+                        FireAndLog(CuePlayer.OnMediaCueApproachingEndAsync(id), "cue crossfade pre-advance");
+                });
+
             // Mid-clip audio-path failures (a backend callback fault, a lost device, a dead router pacing
             // clock). Before this subscription existed the operator saw a frozen playhead and silence with
             // nothing in the log (review §2.3). Raised on audio/pump threads - marshal before touching VMs.
@@ -778,6 +769,44 @@ public sealed class CueShowSessionCoordinator
             Trace.LogError(ex, "HaPlay: ShowSession cue transport wiring FAILED - cue playback is unavailable.");
             CuePlayer.StatusMessage = $"Cue playback unavailable: {ex.Message}";
             _cueShowSession = null;
+        }
+    }
+
+    /// <summary>The one media-cue fire path (the body every media executor shares): flush pending edits,
+    /// refuse unbound cues loudly, fire by id - with the dual-voice <paramref name="crossfade"/> window when
+    /// the playlist advance passes one (null = the historical butt-splice fire) - and report the cue active
+    /// for the UI on success.</summary>
+    private async Task<string?> FireCueShowMediaAsync(MediaCueNode cue, TimeSpan? crossfade, FadeCurve curve)
+    {
+        try
+        {
+            await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
+            if (!_cueShowBoundCueIds.Contains(cue.Id))
+            {
+                var detail = "cue has no current ShowSession media binding; its source may be empty or unsupported";
+                Trace.LogError("HaPlay: cue '{Label}' ({Id}) cannot fire - {Detail}", cue.Label, cue.Id, detail);
+                return detail;
+            }
+            var status = await _cueShowSession!.FireCueAsync(cue.Id.ToString(), crossfade, curve)
+                .ConfigureAwait(false);
+            if (status != CueExecutionStatus.Fired)
+            {
+                var detail = await DescribeCueShowFailureAsync(cue.Id, status).ConfigureAwait(false);
+                Trace.LogWarning(
+                    "HaPlay: cue '{Label}' ({Id}) did not fire - status {Status}: {Detail}",
+                    cue.Label, cue.Id, status, detail);
+                return detail;
+            }
+            // Engine-callback parity: report the cue active so the UI shows it Triggered/now-playing -
+            // the result handler treats a cue absent from _activeCueIds as "Failed to start" even on a
+            // successful fire, because the ShowSession path doesn't raise the engine's OnCueStarted.
+            await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "HaPlay: firing cue '{Label}' ({Id}) through ShowSession failed", cue.Label, cue.Id);
+            return ex.Message;
         }
     }
 

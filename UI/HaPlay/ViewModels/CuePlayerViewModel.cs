@@ -35,6 +35,14 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// transport slot so it can play alongside other children instead of replacing the group's active cue.</summary>
     public Func<MediaCueNode, CancellationToken, Task<string?>>? MediaCueIndependentExecutor { get; set; }
 
+    /// <summary>Playlist crossfade fire (cue, window, curve, ct → error detail or null): fires the next
+    /// pick into its authored group with an overlap window so the outgoing item fades out under it - the
+    /// framework's dual-voice crossfade (Ideas/Dual-Voice-Crossfade-Design.md). Wired by
+    /// <see cref="CueShowSessionCoordinator"/>; null hosts (tests without the seam) never advance early -
+    /// their playlists keep the butt-splice natural-end path.</summary>
+    public Func<MediaCueNode, TimeSpan, S.Media.Session.FadeCurve, CancellationToken, Task<string?>>?
+        MediaCueCrossfadeExecutor { get; set; }
+
     /// <summary>
     /// Host-provided coordinated group execution callback. Opens all cues in parallel, then starts
     /// them in sync. When null, falls back to dispatching each cue independently.
@@ -506,6 +514,43 @@ public partial class CuePlayerViewModel : ViewModelBase
                 nameof(Strings.SchedulesArmedOtherListsWarningFormat), outsideCount);
     }
 
+    /// <summary>Host callback - pushes the master-trim scale (0..1) into the playback session
+    /// (<c>ShowSession.SetMasterTrimAsync</c>). Wired by <c>CueShowSessionCoordinator</c>; null in
+    /// tests, where the slider still tracks its value.</summary>
+    public Func<float, Task>? SetMasterTrimCallback { get; set; }
+
+    /// <summary>The transport row's "Master" fader (Ideas/CuePlayer-Enhancements.md §6): a live
+    /// session-wide trim over EVERY playing cue (and inherited by cues fired while reduced), linear
+    /// 0..1 with 1 = unity. It multiplies fades/envelopes/cue levels in the session - a manual
+    /// show-level trim, not a stop. Deliberately SESSION-scoped and never persisted (the
+    /// <see cref="SchedulesArmed"/> precedent): every app start begins at unity. Double-click on the
+    /// slider resets it (<see cref="ResetMasterTrimCommand"/>).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MasterTrimDisplay))]
+    private double _masterTrim = 1.0;
+
+    partial void OnMasterTrimChanged(double value)
+    {
+        var clamped = Math.Clamp(double.IsNaN(value) ? 1.0 : value, 0.0, 1.0);
+        if (clamped != value)
+        {
+            MasterTrim = clamped; // re-enters this handler with the clamped value
+            return;
+        }
+
+        _ = SetMasterTrimCallback?.Invoke((float)clamped);
+    }
+
+    /// <summary>dB readout beside the fader ("0.0 dB" at unity, "-inf" at zero).</summary>
+    public string MasterTrimDisplay =>
+        MasterTrim <= 0
+            ? "-inf dB"
+            : (20.0 * Math.Log10(MasterTrim)).ToString("0.0;-0.0", CultureInfo.InvariantCulture) + " dB";
+
+    /// <summary>Snaps the master fader back to unity (the slider's double-click gesture).</summary>
+    [RelayCommand]
+    private void ResetMasterTrim() => MasterTrim = 1.0;
+
     public ObservableCollection<CueNodeViewModel> VisibleNodes =>
         SelectedCueList?.Nodes ?? _emptyNodes;
 
@@ -577,6 +622,14 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public bool HasSelectedMediaCue => SelectedMediaCue is not null;
     public bool HasSelectedTextCue => SelectedTextCue is not null;
+
+    /// <summary>The selected cue sits directly in a Timeline-mode group, so its authored lane start
+    /// (<see cref="CueNodeViewModel.TimelineStartMs"/>) is meaningful - shows the numeric drawer
+    /// field (canvas-drag stays the primary editor).</summary>
+    public bool IsSelectedCueInTimelineGroup =>
+        SelectedCueNode is { } cue
+        && FindContainingGroupPath(cue) is { Count: > 0 } path
+        && ParseGroupFireMode(path[^1]) == CueGroupFireMode.Timeline;
 
     /// <summary>Image/text cues have no inherent length, so the operator sets the hold duration directly.</summary>
     public bool HasSelectedStaticCue =>
@@ -1649,6 +1702,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSelectedCommentCue));
         OnPropertyChanged(nameof(HasSelectedGroupCue));
         OnPropertyChanged(nameof(HasSelectedCue));
+        OnPropertyChanged(nameof(IsSelectedCueInTimelineGroup));
         OnPropertyChanged(nameof(SelectedCueDrawerTitle));
         OnPropertyChanged(nameof(SelectedActionEndpointSummary));
         AddAudioRouteCommand.NotifyCanExecuteChanged();
@@ -3004,6 +3058,42 @@ public partial class CuePlayerViewModel : ViewModelBase
         await GoCore();
     }
 
+    /// <summary>Called when a playing media cue enters its playlist group's crossfade window (the
+    /// session's <c>ClipApproachingEnd</c>, routed by the coordinator): fires the run's NEXT pick early,
+    /// with the group's <see cref="CueNodeViewModel.PlaylistCrossfadeMs"/> as the dual-voice overlap, so
+    /// the outgoing item fades out under the incoming one. Advancing here moves the run's current item,
+    /// and the outgoing clip then never raises a natural end as the ACTIVE clip (it releases as the
+    /// crossfade tail) - the natural-end handler's not-current-item guard swallows any straggler.
+    /// Everything else is a no-op and keeps the butt-splice natural-end path: armed lists (GO-only
+    /// advance), finished runs (the final item's natural end applies the end behavior), non-playlist
+    /// cues, a zero window, and hosts without the crossfade seam.</summary>
+    public async Task OnMediaCueApproachingEndAsync(Guid endingCueId)
+    {
+        if (MediaCueCrossfadeExecutor is null)
+            return; // no dual-voice seam - advancing early would CUT the current item, not crossfade it
+        if (EnumerateAllCueNodes().FirstOrDefault(cue => cue.Id == endingCueId)
+            is not { Kind: CueNodeKind.Media } ending)
+            return;
+        if (FindPlaylistRunForEndedCue(ending) is not { } hit
+            || !hit.IsCurrentItem
+            || hit.Run.Finished
+            || ParseGroupFireMode(hit.Group) != CueGroupFireMode.Playlist)
+            return;
+        var crossfadeMs = hit.Group.PlaylistCrossfadeMs;
+        if (crossfadeMs <= 0)
+            return;
+
+        // The same advance as HandlePlaylistItemEndedAsync's auto-advance (GoCore consumes the pick and
+        // keeps standby on the group), except the fire carries the overlap window. EqualPower is the
+        // crossfade's law by construction: complementary up/down legs sum to constant power, which is
+        // what an overlapping music transition should do (a linear pair dips audibly at the midpoint).
+        StandbyCueNode = hit.Group;
+        _immediateJumpChain.Clear();
+        await GoCore(
+            hit.Group,
+            (TimeSpan.FromMilliseconds(crossfadeMs), S.Media.Session.FadeCurve.EqualPower));
+    }
+
     public void RefreshBrokenEndpointFlags()
     {
         var ids = ActionEndpoints.Select(e => e.Id).ToHashSet();
@@ -3290,7 +3380,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     private async Task RunTriggerPlanAsync(
-        IReadOnlyList<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan, CancellationToken ct)
+        IReadOnlyList<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan, CancellationToken ct,
+        (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null)
     {
         var startedAt = DateTime.UtcNow;
 
@@ -3321,9 +3412,15 @@ public partial class CuePlayerViewModel : ViewModelBase
                     // their own runtime transport group: the shared authored group holds ONE active
                     // clip, so this fire would otherwise cut the earlier lane's clip mid-play.
                     if (step.Independent && step.Cue.Kind == CueNodeKind.Media)
+                    {
                         DispatchIndependentCueExecution(step.Cue, ct);
+                    }
                     else
-                        DispatchCueExecution(step.Cue, ct);
+                    {
+                        DispatchCueExecution(step.Cue, ct, advanceCrossfade);
+                        if (step.Cue.Kind == CueNodeKind.Media)
+                            advanceCrossfade = null; // the window belongs to the FIRST media fire only
+                    }
                 }
             }
         }
@@ -3356,13 +3453,15 @@ public partial class CuePlayerViewModel : ViewModelBase
         }, ct);
     }
 
-    private void DispatchCueExecution(CueNodeViewModel cue, CancellationToken ct)
+    private void DispatchCueExecution(
+        CueNodeViewModel cue, CancellationToken ct,
+        (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null)
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
+                var exec = await ExecuteCueAsync(cue, ct, advanceCrossfade).ConfigureAwait(false);
                 await ApplyCueExecutionResultOnUiAsync(cue, exec, MediaExecutionConfigured).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { /* Stop / Panic cancelled the dispatched cue. */ }
@@ -3643,16 +3742,22 @@ public partial class CuePlayerViewModel : ViewModelBase
         await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => StatusMessage = message);
     }
 
-    private async Task<string?> ExecuteCueAsync(CueNodeViewModel cue, CancellationToken ct)
+    private async Task<string?> ExecuteCueAsync(
+        CueNodeViewModel cue, CancellationToken ct,
+        (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null)
     {
         switch (cue.Kind)
         {
             case CueNodeKind.Media:
                 if (MediaCueExecutor is null)
                     return Strings.CueMediaExecutionNotConfigured;
-                return cue.ToModel() is MediaCueNode media
-                    ? await MediaCueExecutor(media, ct)
-                    : Strings.CueInvalidMediaCue;
+                if (cue.ToModel() is not MediaCueNode media)
+                    return Strings.CueInvalidMediaCue;
+                // A playlist-crossfade advance fires through the dual-voice seam; without one (a host
+                // that cleared it mid-run) the plain executor is the butt-splice safety net.
+                return advanceCrossfade is { } crossfade && MediaCueCrossfadeExecutor is { } crossfadeExecutor
+                    ? await crossfadeExecutor(media, crossfade.Duration, crossfade.Curve, ct)
+                    : await MediaCueExecutor(media, ct);
             case CueNodeKind.Action:
                 if (ActionCueExecutor is null)
                     return Strings.CueActionExecutionNotConfigured;

@@ -926,6 +926,43 @@ public sealed partial class CueNodeViewModel : ObservableObject
         };
     }
 
+    // ----- Per-cue fire hotkey (Ideas/CuePlayer-Enhancements.md §6) --------------------------------
+    // Lives on the CueNode base like Schedule - every cue kind can carry one. Dispatched by the cue
+    // view's transport-key handler (after the configurable transport keys, which therefore win a
+    // clash) and only while cue edit mode is OFF, the schedule gate's reasoning.
+
+    /// <summary>Persisted per-cue fire hotkey gesture (<see cref="CueHotkeyGesture"/> text such as
+    /// "F5" or "Ctrl+K"); null = none.</summary>
+    [ObservableProperty]
+    private string? _hotkeyGesture;
+
+    partial void OnHotkeyGestureChanged(string? value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(HotkeyGestureText));
+        OnPropertyChanged(nameof(HasHotkey));
+    }
+
+    /// <summary>True when a hotkey is configured - keeps the drawer's Triggers expander open for
+    /// cues that carry one.</summary>
+    public bool HasHotkey => !string.IsNullOrWhiteSpace(HotkeyGesture);
+
+    /// <summary>Hotkey field text. LostFocus-parsed like the schedule time field: empty clears the
+    /// hotkey, unparseable text restores the last valid value.</summary>
+    public string HotkeyGestureText
+    {
+        get => HotkeyGesture ?? string.Empty;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                HotkeyGesture = null;
+            else if (CueHotkeyGesture.IsValid(value.Trim()))
+                HotkeyGesture = value.Trim();
+            else
+                OnPropertyChanged(nameof(HotkeyGestureText)); // restore the last valid text
+        }
+    }
+
     public ObservableCollection<CueAudioRouteViewModel> AudioRoutes { get; } = new();
 
     public ObservableCollection<CueVideoPlacementViewModel> VideoPlacements { get; } = new();
@@ -1029,6 +1066,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private bool _playlistReshuffleEachPass = true;
 
+    /// <summary>Crossfade window (ms) between consecutive playlist items; 0 = butt splice.</summary>
+    [ObservableProperty]
+    private int _playlistCrossfadeMs;
+
     [ObservableProperty]
     private CuePlaylistEndBehavior _playlistEndBehavior = CuePlaylistEndBehavior.Stop;
 
@@ -1057,6 +1098,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             LoopCount = Math.Max(0, PlaylistLoopCount),
             PlayCount = PlaylistPlayCount is { } count and > 0 ? count : null,
             ReshuffleEachPass = PlaylistReshuffleEachPass,
+            CrossfadeMs = Math.Max(0, PlaylistCrossfadeMs),
             EndBehavior = PlaylistEndBehavior,
         };
         return IsPlaylistFireMode || options != new CuePlaylistOptions() ? options : null;
@@ -1478,10 +1520,11 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     public static CueNodeViewModel FromModel(CueNode node, Func<Guid, OutputLineViewModel?>? resolveLine = null)
     {
-        // Schedule lives on the CueNode base (like ColorTag) - apply it once here rather than in
-        // every kind-specific initializer. Children recurse through this wrapper too.
+        // Schedule and hotkey live on the CueNode base (like ColorTag) - apply them once here rather
+        // than in every kind-specific initializer. Children recurse through this wrapper too.
         var vm = FromModelCore(node, resolveLine);
         vm.ApplyScheduleFromModel(node.Schedule);
+        vm.HotkeyGesture = string.IsNullOrWhiteSpace(node.HotkeyGesture) ? null : node.HotkeyGesture;
         return vm;
     }
 
@@ -1507,6 +1550,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     PlaylistLoopCount = g.Playlist?.LoopCount ?? 1,
                     PlaylistPlayCount = g.Playlist?.PlayCount,
                     PlaylistReshuffleEachPass = g.Playlist?.ReshuffleEachPass ?? true,
+                    PlaylistCrossfadeMs = g.Playlist?.CrossfadeMs ?? 0,
                     PlaylistEndBehavior = g.Playlist?.EndBehavior ?? CuePlaylistEndBehavior.Stop,
                 };
                 foreach (var c in g.Children)
@@ -1697,6 +1741,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Notes = Notes,
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
+                HotkeyGesture = HotkeyGesture,
                 FireMode = Enum.TryParse<CueGroupFireMode>(Extra, out var fm) ? fm : CueGroupFireMode.FirstCueOnly,
                 Playlist = BuildPlaylistOptionsModel(),
                 Children = Children.Select(c => c.ToModel()).ToList(),
@@ -1712,6 +1757,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Notes = Notes,
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
+                HotkeyGesture = HotkeyGesture,
                 Source = MediaSourceItem
                            ?? (string.IsNullOrWhiteSpace(SourceOrAction)
                                ? null
@@ -1756,6 +1802,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Notes = Notes,
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
+                HotkeyGesture = HotkeyGesture,
                 AddressOrMessage = SourceOrAction,
                 EndpointId = Guid.TryParse(EndpointIdText, out var endpointId) ? endpointId : null,
                 ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OSCOut,
@@ -1771,6 +1818,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Notes = Notes,
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
+                HotkeyGesture = HotkeyGesture,
                 TargetCueIds = [.. JumpTargetIds],
                 RandomTarget = JumpRandom,
                 AvoidImmediateRepeat = JumpAvoidImmediateRepeat,
@@ -1787,6 +1835,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Notes = Notes,
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
+                HotkeyGesture = HotkeyGesture,
                 CompositionId = VisualizerCompositionId,
                 StartVisualizer = !string.Equals(Extra, "Stop", StringComparison.OrdinalIgnoreCase),
                 PresetDirectory = string.IsNullOrWhiteSpace(SourceOrAction) ? null : SourceOrAction,
@@ -1818,6 +1867,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Notes = Notes,
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
+                HotkeyGesture = HotkeyGesture,
                 TargetCueIds = [.. FadeTargetIds],
                 TargetAllPlaying = FadeTargetAllPlaying,
                 TargetLevelDb = FadeTargetLevelDb,
@@ -1837,6 +1887,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 Notes = Notes,
                 ColorTag = ColorTag,
                 Schedule = BuildScheduleModel(),
+                HotkeyGesture = HotkeyGesture,
                 Text = SourceOrAction,
             },
         };

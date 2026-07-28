@@ -172,6 +172,13 @@ public sealed record ShowClipBinding(
     /// poll and advance themselves (the media-player deck).</summary>
     public bool NotifyNaturalEnd { get; init; }
 
+    /// <summary>Pre-end notification window (dual-voice crossfade, <c>Ideas/Dual-Voice-Crossfade-Design.md</c>):
+    /// when positive, the end-of-clip monitor raises <c>ShowSession.ClipApproachingEnd</c> once when the clip is
+    /// within this window of its natural out-point - the host's "fire the next item early" hook (HaPlay's
+    /// playlist <c>CrossfadeMs</c>). One-shot per committed clip (a later backwards seek does not re-arm it);
+    /// never raised for looping/freezing clips. Zero (the default) raises nothing - behavior unchanged.</summary>
+    public TimeSpan PreEndNotify { get; init; }
+
     /// <summary>Where/how this clip's video sits on its <see cref="CompositionId"/> canvas (GUI
     /// <c>CueVideoPlacement</c>). Null ⇒ full-canvas, opaque, Cover (the prior hardcoded placement).</summary>
     public ShowVideoPlacement? Placement { get; init; }

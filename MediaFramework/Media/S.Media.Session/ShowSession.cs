@@ -602,6 +602,15 @@ public sealed class ShowSession : IAsyncDisposable
     /// dispatcher; marshal in the handler.</summary>
     public event Action<string>? ClipNaturallyEnded;
 
+    /// <summary>Raised (with the cue id) when a monitored clip enters its binding's
+    /// <see cref="ShowClipBinding.PreEndNotify"/> window before its natural out-point - the host's "fire the
+    /// next item early" hook for dual-voice playlist crossfades (the pre-end companion of
+    /// <see cref="ClipNaturallyEnded"/>, sharing the same end monitor rather than a second timer). At most
+    /// once per committed clip (a later backwards seek does not re-arm it); never raised for looping/freezing
+    /// clips, or when the clip is stopped/replaced first. Raised from the session dispatcher; marshal in the
+    /// handler. Never raised when <see cref="ShowClipBinding.PreEndNotify"/> is zero (the default).</summary>
+    public event Action<string>? ClipApproachingEnd;
+
     /// <summary>Raised when an active clip's audio path fails mid-show: an output's Submit threw (a latched
     /// backend callback fault, a dying device stream) or the clip's whole audio router faulted (its pacing
     /// clock failed - primary output lost). Without a subscriber these were silent - the operator saw a
@@ -769,7 +778,8 @@ public sealed class ShowSession : IAsyncDisposable
             // Future control/stop cues need their own action binding rather than relying on an empty clip.
             newCueGraph.AddCue(
                 cue,
-                ct => PlayClipAsync(groupId, binding, ct),
+                ct => PlayClipAsync(
+                    groupId, binding, ct, waitForStartBarrier: null, crossfade: TakePendingFireCrossfade()),
                 binding is null ? static () => false : null);
         }
 
@@ -825,7 +835,8 @@ public sealed class ShowSession : IAsyncDisposable
         string groupId,
         ShowClipBinding? binding,
         CancellationToken cancellationToken,
-        Func<Task>? waitForStartBarrier = null)
+        Func<Task>? waitForStartBarrier = null,
+        (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (binding is null)
@@ -866,7 +877,8 @@ public sealed class ShowSession : IAsyncDisposable
 
         // --- COMMIT (on the dispatcher): swap the armed clip in, or discard it if the show was reloaded / the
         // fire was cancelled (STOP) during the open (NXT-03).
-        await InvokeAsync(() => CommitClipAsync(groupId, binding, cancellationToken, setup, armed)).ConfigureAwait(false);
+        await InvokeAsync(() => CommitClipAsync(groupId, binding, cancellationToken, setup, armed, crossfade))
+            .ConfigureAwait(false);
     }
 
     /// <summary>The on-dispatcher commit half of <see cref="PlayClipAsync"/> (NXT-03): attaches the freshly-armed
@@ -878,7 +890,8 @@ public sealed class ShowSession : IAsyncDisposable
         ShowClipBinding binding,
         CancellationToken cancellationToken,
         (int generation, TransportGroup group) setup,
-        IArmedClip armed)
+        IArmedClip armed,
+        (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
     {
         if (cancellationToken.IsCancellationRequested || _showGeneration != setup.generation || _disposed)
         {
@@ -887,12 +900,22 @@ public sealed class ShowSession : IAsyncDisposable
         }
 
         var group = setup.group;
+        // A crossfade only means something when it actually replaces a live clip: a fire onto an idle
+        // group (or a non-positive window) is the plain butt-splice path, unchanged. Resolved here on
+        // the dispatcher - the incoming clip has already opened, so an open failure never reaches this
+        // point and the old Active stays untouched (design doc: open failure = no fade).
+        if (crossfade is not { Duration.Ticks: > 0 } || group.Active is null)
+            crossfade = null;
         var player = armed.Player;
         var layers = new List<PlacedLayer>();
         var timelineClaims = new List<IDisposable>();
         var outputs = new List<ClipAudioOutput>();
         var subtitleAttachments = new List<IDisposable>();
-        var fadeIn = binding.FadeIn > TimeSpan.Zero;
+        // A crossfade implies a fade-in over the same window/curve when the binding has none - the
+        // incoming half of the cross; a configured per-cue FadeIn (and its curve) always wins.
+        var fadeIn = binding.FadeIn > TimeSpan.Zero || crossfade is not null;
+        var fadeInDuration = binding.FadeIn > TimeSpan.Zero ? binding.FadeIn : crossfade?.Duration ?? TimeSpan.Zero;
+        var fadeInCurve = binding.FadeIn > TimeSpan.Zero ? binding.FadeInCurve : crossfade?.Curve ?? FadeCurve.Linear;
         // Retained for the active clip so both fade-in and every stop path ramp each route relative to its
         // configured gain rather than assuming unity.
         var routeTargets = new List<AudioRouteTarget>();
@@ -1027,12 +1050,23 @@ public sealed class ShowSession : IAsyncDisposable
 
             armed.Start();
             await ReplaceActiveAsync(
-                group, armed, outputs, layers, timelineClaims, subtitleAttachments, binding).ConfigureAwait(false);
+                group, armed, outputs, layers, timelineClaims, subtitleAttachments, binding, crossfade)
+                .ConfigureAwait(false);
             group.SetActiveFadeMetadata(binding, routeTargets, fadeIn ? 0f : 1f);
+            // Master trim: routes attach at the full authored gain, so a clip fired while the
+            // session-wide trim is below unity needs one ApplyAudioScale pass to fold the trim in
+            // (with a fade-in the ramp writes through the same path every step anyway).
+            if (group.MasterTrim != 1f)
+                group.ApplyAudioScale(player, group.ActiveRouteTargets, group.ActiveAudioScale);
             // Publish the device-tagged audio outputs for the line-health poll (ReplaceActiveAsync republished
             // the group views before these were set, so refresh once more now they're known).
             group.SetActiveAudioPumps(audioPumps);
             PublishGroupViews();
+
+            // Dual-voice crossfade: the displaced clip now sits in the group's Outgoing slot - ramp it
+            // 1→0 over the window and release it at ramp end (or on stop/panic/the next replacement).
+            if (crossfade is { } cross && group.Outgoing is { } outgoingClip)
+                StartOutgoingFadeRamp(groupId, group, outgoingClip, cross.Duration, cross.Curve);
 
             // Background per-clip work - the fade-in ramp + the end-of-clip (loop/trim-out/freeze) monitor -
             // shares one cancellation, cancelled when the clip is replaced. Both gated, so a plain
@@ -1040,7 +1074,8 @@ public sealed class ShowSession : IAsyncDisposable
             var end = player.Duration - binding.EndOffset;
             var endHandling = (binding.Loop || binding.EndBehavior != ClipEndBehavior.Stop
                                || binding.EndOffset > TimeSpan.Zero || binding.FadeOut > TimeSpan.Zero
-                               || binding.EndAtDuration || binding.NotifyNaturalEnd)
+                               || binding.EndAtDuration || binding.NotifyNaturalEnd
+                               || binding.PreEndNotify > TimeSpan.Zero)
                 && player.Duration > TimeSpan.Zero
                 && end > binding.StartOffset;
             var hasEnvelope = binding.VolumeEnvelope is { Count: > 0 } && routeTargets.Count > 0;
@@ -1049,7 +1084,7 @@ public sealed class ShowSession : IAsyncDisposable
                 var clipCts = new CancellationTokenSource();
                 group.SetClipWorkCts(clipCts);
                 if (fadeIn && routeTargets.Count > 0)
-                    StartFadeIn(groupId, player, routeTargets, binding.FadeIn, binding.FadeInCurve, clipCts.Token);
+                    StartFadeIn(groupId, player, routeTargets, fadeInDuration, fadeInCurve, clipCts.Token);
                 if (hasEnvelope)
                     StartEnvelopeRunner(groupId, player, binding.VolumeEnvelope!, clipCts.Token);
                 if (endHandling)
@@ -1639,6 +1674,18 @@ public sealed class ShowSession : IAsyncDisposable
             monitor.StalledTicks = 0;
         }
 
+        // Pre-end notify (dual-voice crossfade): one-shot per committed clip, so a crossfading host fires
+        // the next item exactly once even though the poll keeps ticking inside the window - and a backwards
+        // seek after the notification does not re-fire it (the host has already advanced).
+        if (!monitor.PreEndNotified
+            && binding.PreEndNotify > TimeSpan.Zero
+            && !loops && !freezes
+            && remaining > TimeSpan.Zero && remaining <= binding.PreEndNotify)
+        {
+            monitor.PreEndNotified = true;
+            ClipApproachingEnd?.Invoke(binding.CueId);
+        }
+
         var naturalFade = binding.FadeOut > TimeSpan.Zero
             ? binding.FadeOut
             : binding.EndBehavior == ClipEndBehavior.FadeOutAndStop
@@ -1693,6 +1740,10 @@ public sealed class ShowSession : IAsyncDisposable
         public CancellationToken CancellationToken { get; } = cancellationToken;
         public int StalledTicks { get; set; }
         public int LastTimelineGeneration { get; set; } = -1;
+
+        /// <summary>Whether this clip's one-shot <see cref="ShowClipBinding.PreEndNotify"/> notification
+        /// (<see cref="ClipApproachingEnd"/>) already fired.</summary>
+        public bool PreEndNotified { get; set; }
     }
 
     /// <summary>Runs a natural-end audio/video fade without occupying the session dispatcher between steps
@@ -1732,6 +1783,38 @@ public sealed class ShowSession : IAsyncDisposable
             }));
     }
 
+    /// <summary>Runs the dual-voice crossfade's outgoing ramp without occupying the session dispatcher
+    /// between steps (a <see cref="FadeRamp"/>, like every session fade): the displaced clip's routes and
+    /// layers ramp from their frozen handoff level to silence over the window, then it releases through
+    /// the group's outgoing teardown. Identity-guarded on the group's OUTGOING slot each step; a stop claim
+    /// (<see cref="TransportGroup.TryClaimOutgoingForStop"/>) or the next replacement cancels the ramp and
+    /// owns the release instead.</summary>
+    private void StartOutgoingFadeRamp(
+        string groupId, TransportGroup group, IArmedClip clip, TimeSpan duration, FadeCurve curve)
+    {
+        var ct = group.BeginOutgoingRamp();
+        FadeRamp.Start(
+            FadeStepInterval, ct,
+            step: elapsed => InvokeAsync<bool>(() =>
+            {
+                if (ct.IsCancellationRequested
+                    || _groups.GetValueOrDefault(groupId) is not { } g
+                    || !ReferenceEquals(g.Outgoing, clip)
+                    || g.IsOutgoingStopClaimed)
+                    return Task.FromResult(true);
+                var scale = FadeRamp.LevelDown(elapsed, duration, curve);
+                g.ApplyOutgoingFadeLevel(clip, scale);
+                return Task.FromResult(scale <= 0f);
+            }),
+            onCompleted: () => InvokeAsync(async () =>
+            {
+                if (_groups.GetValueOrDefault(groupId) is { } g
+                    && ReferenceEquals(g.Outgoing, clip)
+                    && !g.IsOutgoingStopClaimed)
+                    await g.ReleaseOutgoingAsync().ConfigureAwait(false);
+            }));
+    }
+
     /// <summary>Resolves the N→M channel map for this clip's source→output route, or null for the source-derived default.</summary>
     private ChannelMap? ResolveOutputChannelMap(ShowClipBinding binding, string outputId)
     {
@@ -1761,6 +1844,23 @@ public sealed class ShowSession : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _fires.FireCueAsync(cueId);
+    }
+
+    /// <summary>Fires a cue with a dual-voice crossfade window (Ideas/Dual-Voice-Crossfade-Design.md): when
+    /// the cue's group already holds an active clip, that clip moves to the group's OUTGOING slot - keeping
+    /// its outputs/routes/layers - and ramps to silence over <paramref name="crossfade"/> while the incoming
+    /// clip fades in over the same window (an implied fade-in when the binding has none; a configured per-cue
+    /// FadeIn wins). The outgoing releases at ramp end, or earlier on stop/panic/the next replacement. A null
+    /// or non-positive <paramref name="crossfade"/> (or an idle group) is exactly
+    /// <see cref="FireCueAsync(string)"/> - the butt-splice path, byte for byte. Transport (pause/seek/
+    /// end-monitor) targets the incoming clip only; the outgoing tail is fire-and-forget. An incoming open
+    /// failure leaves the current clip untouched (fail loud via the returned status).</summary>
+    public Task<CueExecutionStatus> FireCueAsync(
+        string cueId, TimeSpan? crossfade, FadeCurve crossfadeCurve = FadeCurve.Linear)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _fires.FireCueAsync(
+            cueId, crossfade is { } duration && duration > TimeSpan.Zero ? (duration, crossfadeCurve) : null);
     }
 
     /// <summary>Fires one media cue on a caller-owned transport group instead of the group encoded in the
@@ -1825,11 +1925,40 @@ public sealed class ShowSession : IAsyncDisposable
         }
     }
 
+    // The one in-flight explicit crossfade fire's window: published by FireOnGraphAsync just before the
+    // graph fire runs (the orchestrator holds the fire lock, so at most one exists) and consumed exactly
+    // once by the fired cue's clip action - the graph action closures are fixed at load time, so the
+    // window rides beside the fire rather than through the CueGraph signature. Interlocked because the
+    // set (fire worker) and consume (dispatcher, inside the fire's PlayClipAsync) are different threads.
+    private Tuple<TimeSpan, FadeCurve>? _pendingFireCrossfade;
+
+    /// <summary>Takes (and clears) the pending crossfade window for the clip action of an in-flight
+    /// explicit crossfade fire. Null for every other fire - the plain path is untouched.</summary>
+    private (TimeSpan Duration, FadeCurve Curve)? TakePendingFireCrossfade() =>
+        Interlocked.Exchange(ref _pendingFireCrossfade, null) is { } pending
+            ? (pending.Item1, pending.Item2)
+            : null;
+
     /// <summary>Runs the current cue graph's fire - the <see cref="CueFireOrchestrator"/>'s state seam. Reads
     /// <see cref="_cueGraph"/> off-dispatcher exactly as the fire core always has (the graph reference swaps
     /// atomically on load; the show-generation guard makes a straddling fire discard its stale clip at commit).</summary>
-    internal Task<CueExecutionStatus> FireOnGraphAsync(string cueId, CancellationToken token) =>
-        _cueGraph.FireAsync(cueId, token).AsTask();
+    internal async Task<CueExecutionStatus> FireOnGraphAsync(
+        string cueId, CancellationToken token, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+    {
+        if (crossfade is { } window)
+            Interlocked.Exchange(ref _pendingFireCrossfade, Tuple.Create(window.Duration, window.Curve));
+        try
+        {
+            return await _cueGraph.FireAsync(cueId, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A skipped/failed/cancelled fire may never reach its clip action - the unconsumed window
+            // must not leak into a later plain fire.
+            if (crossfade is not null)
+                Interlocked.Exchange(ref _pendingFireCrossfade, null);
+        }
+    }
 
     /// <summary>Fires several cues together with a coordinated start - the fire-time counterpart of the seek/pause
     /// barriers (NXT-04 start skew / old-engine <c>FireGroupAsync</c> parity). Every cue's clip opens
@@ -2116,8 +2245,21 @@ public sealed class ShowSession : IAsyncDisposable
     }
 
     /// <summary>What one stop targeted, captured on the dispatcher at claim time: the group, the clip that was
-    /// active THEN (the only clip this stop may release), and - when the fade claim succeeded - its ramp.</summary>
-    private sealed record StopClaim(TransportGroup Group, IArmedClip? Clip, GroupFade? Fade);
+    /// active THEN (the only clip this stop may release), and - when the fade claim succeeded - its ramp. When
+    /// a dual-voice crossfade was mid-flight, the claimed outgoing tail (and its ramp) ride along so the stop
+    /// takes BOTH clips down on one stop clock.</summary>
+    private sealed record StopClaim(
+        TransportGroup Group,
+        IArmedClip? Clip,
+        GroupFade? Fade,
+        IArmedClip? OutgoingClip = null,
+        OutgoingStopFade? OutgoingFade = null);
+
+    /// <summary>An outgoing (crossfading-out) tail claimed by a stop: it rides the stop's clock/curve from
+    /// <see cref="StartScale"/> - the scale its crossfade ramp had reached at claim time - so claiming the
+    /// tail never pops it back up to full level.</summary>
+    private sealed record OutgoingStopFade(
+        TransportGroup Group, IArmedClip Clip, TimeSpan Duration, FadeCurve Curve, float StartScale);
 
     /// <summary>The shared stop path (NXT-18): resolves the target groups and claims their fades ON the
     /// dispatcher, ramps OFF it (<see cref="RunStopFadeAsync"/>), then releases each claimed clip back ON the
@@ -2156,23 +2298,49 @@ public sealed class ShowSession : IAsyncDisposable
                         group.ActiveRouteTargets);
                 }
 
-                list.Add(new StopClaim(group, clip, groupFade));
+                // A dual-voice crossfade tail is claimed alongside the active clip: the claim cancels the
+                // crossfade ramp, and the tail then rides THIS stop's clock (from wherever its ramp had
+                // reached) so a stop mid-crossfade takes both clips down together.
+                IArmedClip? outgoingClip = null;
+                OutgoingStopFade? outgoingFade = null;
+                if (group.Outgoing is { } outgoing && group.TryClaimOutgoingForStop(outgoing))
+                {
+                    outgoingClip = outgoing;
+                    if (fade)
+                        outgoingFade = new OutgoingStopFade(
+                            group,
+                            outgoing,
+                            groupFade?.Duration ?? fadeDuration ?? DefaultStopFade,
+                            groupFade?.Curve ?? curve,
+                            group.OutgoingCurrentScale);
+                }
+
+                list.Add(new StopClaim(group, clip, groupFade, outgoingClip, outgoingFade));
             }
 
             return Task.FromResult<IReadOnlyList<StopClaim>>(list);
         }).ConfigureAwait(false);
 
         var fades = claims.Where(c => c.Fade is not null).Select(c => c.Fade!).ToArray();
-        if (fades.Length > 0)
-            await RunStopFadeAsync(fades).ConfigureAwait(false);
+        var outgoingFades = claims.Where(c => c.OutgoingFade is not null).Select(c => c.OutgoingFade!).ToArray();
+        if (fades.Length > 0 || outgoingFades.Length > 0)
+            await RunStopFadeAsync(fades, outgoingFades).ConfigureAwait(false);
 
         try
         {
             await InvokeAsync(async () =>
             {
                 foreach (var claim in claims)
+                {
+                    // Release the claimed outgoing tail explicitly: the active release below funnels through
+                    // ReplaceAsync (which also hard-releases it), but a group whose active was replaced by a
+                    // fresh fire mid-stop-fade skips that path - the claimed tail must still come down.
+                    if (claim.OutgoingClip is not null
+                        && ReferenceEquals(claim.Group.Outgoing, claim.OutgoingClip))
+                        await claim.Group.ReleaseOutgoingAsync().ConfigureAwait(false);
                     if (claim.Clip is not null && ReferenceEquals(claim.Group.Active, claim.Clip))
                         await ReplaceActiveAsync(claim.Group, null, [], []).ConfigureAwait(false);
+                }
             }).ConfigureAwait(false);
         }
         catch (ObjectDisposedException)
@@ -2184,12 +2352,17 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>Ramps the claimed stop fades to silence OFF the dispatcher (an awaited <see cref="FadeRamp"/>):
     /// each step marshals one short gain/opacity commit onto it, so the serial loop is never parked for the
     /// fade duration (NXT-18). All fades advance from one clock so Panic fades groups concurrently - each
-    /// computes its own level from its own duration. Exits early when every claimed clip has been replaced
-    /// (nothing left to fade).</summary>
-    private async Task RunStopFadeAsync(IReadOnlyList<GroupFade> fades)
+    /// computes its own level from its own duration - and any claimed crossfade tails
+    /// (<paramref name="outgoingFades"/>) ride the same clock, so a stop mid-crossfade takes both clips of a
+    /// group down together. Exits early when every claimed clip has been replaced (nothing left to fade).</summary>
+    private async Task RunStopFadeAsync(
+        IReadOnlyList<GroupFade> fades, IReadOnlyList<OutgoingStopFade> outgoingFades)
     {
         var maxDuration = TimeSpan.Zero;
         foreach (var fade in fades)
+            if (fade.Duration > maxDuration)
+                maxDuration = fade.Duration;
+        foreach (var fade in outgoingFades)
             if (fade.Duration > maxDuration)
                 maxDuration = fade.Duration;
         if (maxDuration <= TimeSpan.Zero)
@@ -2207,6 +2380,15 @@ public sealed class ShowSession : IAsyncDisposable
                     fade.Group.ApplyFadeLevel(
                         fade.Clip.Player, fade.RouteTargets, fade.StartAudioScale, fade.StartLayerOpacities,
                         FadeRamp.LevelDown(elapsed, fade.Duration, fade.Curve));
+                    applied = true;
+                }
+
+                foreach (var fade in outgoingFades)
+                {
+                    if (!ReferenceEquals(fade.Group.Outgoing, fade.Clip))
+                        continue; // hard-released by a newer replacement mid-stop - nothing left to fade
+                    fade.Group.ApplyOutgoingFadeLevel(
+                        fade.Clip, fade.StartScale * FadeRamp.LevelDown(elapsed, fade.Duration, fade.Curve));
                     applied = true;
                 }
 
@@ -2263,7 +2445,7 @@ public sealed class ShowSession : IAsyncDisposable
 
     /// <summary>The live audio levels of the active clip playing <paramref name="cueId"/>, or null when
     /// that cue is not an active clip. <see cref="ClipAudioLevels.EffectiveLevel"/> is the exact product
-    /// the route gains are written with (fade × envelope), read from the same group state.</summary>
+    /// the route gains are written with (fade × envelope × master trim), read from the same group state.</summary>
     public Task<ClipAudioLevels?> GetClipAudioLevelsAsync(string cueId)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -2272,6 +2454,47 @@ public sealed class ShowSession : IAsyncDisposable
                     string.Equals(g.Active?.Spec.Id, cueId, StringComparison.Ordinal)) is { } group
                 ? new ClipAudioLevels(group.ClipLevel, group.EnvelopeLevel, group.EffectiveAudioLevel)
                 : null));
+    }
+
+    // --- master trim --------------------------------------------------------------------------------
+
+    /// <summary>The current session-wide master trim (1 = unity). Written only on the session
+    /// dispatcher by <see cref="SetMasterTrimAsync"/>; a plain float read is atomic, so hosts may
+    /// poll it for display.</summary>
+    public float MasterTrim => _masterTrim;
+
+    private float _masterTrim = 1f;
+
+    /// <summary>
+    /// Sets the session-wide manual master trim - the live "bring the show down by hand" fader
+    /// (Ideas/CuePlayer-Enhancements.md §6). One clamped scalar [0, 1] that MULTIPLIES every playing
+    /// clip's routed audio through the same <see cref="TransportGroup.ApplyAudioScale"/> level
+    /// composition as fades and envelopes, so it composes with (never overwrites) the levels those
+    /// mechanisms ride: fade level × envelope × trim. Session-level state, not per-clip - clips fired
+    /// AFTER a trim change inherit it, and a crossfade's outgoing tail rides it too (unless a stop
+    /// fade already claimed that tail and owns its levels). This is a manual trim, not a stop: it is
+    /// deliberately never persisted anywhere.
+    /// </summary>
+    public Task SetMasterTrimAsync(float scale)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return InvokeAsync(() =>
+        {
+            var clamped = float.IsNaN(scale) ? 1f : Math.Clamp(scale, 0f, 1f);
+            if (clamped == _masterTrim)
+                return Task.CompletedTask;
+            _masterTrim = clamped;
+            foreach (var group in _groups.Values)
+            {
+                group.MasterTrim = clamped;
+                if (group.Active is { } active)
+                    group.ApplyAudioScale(active.Player, group.ActiveRouteTargets, group.ActiveAudioScale);
+                if (group.Outgoing is { } outgoing && !group.IsOutgoingStopClaimed)
+                    group.ApplyOutgoingFadeLevel(outgoing, group.OutgoingCurrentScale);
+            }
+
+            return Task.CompletedTask;
+        });
     }
 
     /// <summary>Fades the cue with <paramref name="cueId"/> (wherever it is the active clip) to
@@ -2616,7 +2839,7 @@ public sealed class ShowSession : IAsyncDisposable
     {
         if (!_groups.TryGetValue(groupId, out var group))
         {
-            _groups[groupId] = group = new TransportGroup();
+            _groups[groupId] = group = new TransportGroup { MasterTrim = _masterTrim };
             PublishGroupViews();
         }
         return group;
@@ -2765,10 +2988,11 @@ public sealed class ShowSession : IAsyncDisposable
         TransportGroup group, IArmedClip? clip, IReadOnlyList<ClipAudioOutput> outputs,
         IReadOnlyList<PlacedLayer> layers, IReadOnlyList<IDisposable>? timelineClaims = null,
         IReadOnlyList<IDisposable>? subtitleAttachments = null,
-        ShowClipBinding? binding = null)
+        ShowClipBinding? binding = null,
+        (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
     {
         await group.ReplaceAsync(
-            clip, outputs, layers, timelineClaims, subtitleAttachments, binding).ConfigureAwait(false);
+            clip, outputs, layers, timelineClaims, subtitleAttachments, binding, crossfade).ConfigureAwait(false);
         PublishGroupViews();
     }
 
@@ -2868,6 +3092,119 @@ public sealed class ShowSession : IAsyncDisposable
         private int _fadeOutStarted;
         public int LastFiredNumber { get; set; } = int.MinValue;
 
+        // --- Outgoing slot (dual-voice crossfade - Ideas/Dual-Voice-Crossfade-Design.md) -----------
+        // Non-null only mid-crossfade: the displaced Active keeps playing here with its OWN outputs/
+        // routes/layers while a FadeRamp takes it 1→0, then releases through the exact teardown a plain
+        // replacement uses. One outgoing max - any next replacement (or stop/panic/dispose) hard-releases
+        // it first. All state is dispatcher-confined, exactly like the Active fields above; transport
+        // (pause/seek/position/end-monitor) never targets it.
+        public IArmedClip? Outgoing { get; private set; }
+        private IReadOnlyList<ClipAudioOutput> _outgoingOutputs = [];
+        private IReadOnlyList<PlacedLayer> _outgoingLayers = [];
+        private IReadOnlyList<IDisposable> _outgoingTimelineClaims = [];
+        private IReadOnlyList<IDisposable> _outgoingSubtitles = [];
+        private IReadOnlyList<AudioRouteTarget> _outgoingRouteTargets = [];
+        private IReadOnlyList<float> _outgoingStartOpacities = [];
+        // The outgoing clip's fade × envelope product frozen at handoff - its levels are frozen-config
+        // from here (design doc "Level composition"): only the ramp scalar moves.
+        private float _outgoingStartLevel = 1f;
+        private int _outgoingStopClaimed;
+        private CancellationTokenSource? _outgoingRampCts;
+
+        /// <summary>The outgoing ramp's latest applied scalar (1 = handoff level). A stop that claims the
+        /// tail mid-crossfade composes its own ramp on top of this, so the tail never pops back up.</summary>
+        public float OutgoingCurrentScale { get; private set; } = 1f;
+
+        /// <summary>True once a stop path claimed the outgoing tail (<see cref="TryClaimOutgoingForStop"/>) -
+        /// the crossfade ramp's step guard, mirroring <see cref="IsFadeOutClaimed"/> for the Active slot.</summary>
+        public bool IsOutgoingStopClaimed => Volatile.Read(ref _outgoingStopClaimed) != 0;
+
+        /// <summary>Issues the crossfade ramp's cancellation token (cancelled by a stop claim, the next
+        /// replacement's hard release, or disposal). Dispatcher-confined; called once per handoff.</summary>
+        public CancellationToken BeginOutgoingRamp()
+        {
+            _outgoingRampCts?.Cancel();
+            _outgoingRampCts?.Dispose();
+            _outgoingRampCts = new CancellationTokenSource();
+            return _outgoingRampCts.Token;
+        }
+
+        /// <summary>Claims the outgoing tail for a stop path (at most once per outgoing clip) and cancels
+        /// the crossfade ramp - the stop fade owns the tail's levels and release from here. The parallel of
+        /// <see cref="TryBeginFadeOut"/> on the Active slot; identity-guarded on OUTGOING.</summary>
+        public bool TryClaimOutgoingForStop(IArmedClip clip)
+        {
+            if (!ReferenceEquals(Outgoing, clip) || Interlocked.Exchange(ref _outgoingStopClaimed, 1) != 0)
+                return false;
+            _outgoingRampCts?.Cancel();
+            return true;
+        }
+
+        /// <summary>Applies one outgoing-ramp step: route gains = frozen handoff level × <paramref name="scale"/>,
+        /// layer opacities = handoff opacity × scale. Identity-guarded on OUTGOING - the parallel of
+        /// <see cref="ApplyFadeLevel"/>'s Active guard, never shared with it.</summary>
+        public void ApplyOutgoingFadeLevel(IArmedClip clip, float scale)
+        {
+            if (!ReferenceEquals(Outgoing, clip))
+                return;
+            scale = Math.Clamp(scale, 0f, 1f);
+            OutgoingCurrentScale = scale;
+            // The frozen handoff level rides the live master trim like every other playing voice.
+            var level = _outgoingStartLevel * scale * MasterTrim;
+            var player = clip.Player;
+            if (player.AudioRouter is { } router && player.AudioSourceId is { } sourceId)
+                foreach (var target in _outgoingRouteTargets)
+                {
+                    if (target.Route is { HasGainMatrix: true } matrixRoute)
+                        router.ApplyMatrix(
+                            sourceId, target.OutputId,
+                            matrixRoute.ToGainMatrix(target.TargetGain * level));
+                    else
+                        router.SetRouteGain(sourceId, target.OutputId, target.TargetGain * level);
+                }
+            for (var i = 0; i < _outgoingLayers.Count; i++)
+            {
+                var startOpacity = i < _outgoingStartOpacities.Count ? _outgoingStartOpacities[i] : 0f;
+                _outgoingLayers[i].Slot.Opacity = startOpacity * scale;
+            }
+        }
+
+        /// <summary>Releases the outgoing clip through the exact teardown a plain replacement uses
+        /// (subtitles → layers → timeline claims → clip → outputs) and clears the slot. Cancels the
+        /// crossfade ramp first, so a racing step can never touch the released clip (its identity guard
+        /// would skip anyway). Dispatcher-confined; a no-op when no outgoing exists.</summary>
+        public async ValueTask ReleaseOutgoingAsync()
+        {
+            if (Outgoing is not { } outgoing)
+                return;
+            _outgoingRampCts?.Cancel();
+            _outgoingRampCts?.Dispose();
+            _outgoingRampCts = null;
+            var outputs = _outgoingOutputs;
+            var layers = _outgoingLayers;
+            var timelineClaims = _outgoingTimelineClaims;
+            var subtitles = _outgoingSubtitles;
+            Outgoing = null;
+            _outgoingOutputs = [];
+            _outgoingLayers = [];
+            _outgoingTimelineClaims = [];
+            _outgoingSubtitles = [];
+            _outgoingRouteTargets = [];
+            _outgoingStartOpacities = [];
+            _outgoingStartLevel = 1f;
+            OutgoingCurrentScale = 1f;
+
+            foreach (var attachment in subtitles)
+                attachment.Dispose();
+            foreach (var placed in layers)
+                placed.Slot.Dispose();
+            foreach (var timelineClaim in timelineClaims)
+                timelineClaim.Dispose();
+            await outgoing.ReleaseAsync().ConfigureAwait(false);
+            foreach (var output in outputs)
+                ReleaseClipAudioOutput(output);
+        }
+
         public TransportGroup() => Timeline = new TransportTimeline(Clock);
 
         /// <summary>True while the host holds this group paused (Set(All)PausedAsync). The end monitor's
@@ -2920,9 +3257,16 @@ public sealed class ShowSession : IAsyncDisposable
         public float EnvelopeLevel => _envelopeLevel;
         private float _envelopeLevel = 1f;
 
-        /// <summary>The audio level actually written to the routes: fade level × envelope factor - the
-        /// product <see cref="ApplyAudioScale"/> computes in the ONE place route gains are set.</summary>
-        public float EffectiveAudioLevel => _activeAudioScale * _envelopeLevel;
+        /// <summary>The session-wide master trim (<see cref="ShowSession.SetMasterTrimAsync"/>) as this
+        /// group last saw it. Held SEPARATE from the fade level for the same reason the envelope is -
+        /// fades must compose from the operator-authored level, never from a trimmed product. The session
+        /// stamps it at group creation and fans out changes, so newly fired clips inherit it.</summary>
+        public float MasterTrim { get; set; } = 1f;
+
+        /// <summary>The audio level actually written to the routes: fade level × envelope factor ×
+        /// master trim - the product <see cref="ApplyAudioScale"/> computes in the ONE place route
+        /// gains are set.</summary>
+        public float EffectiveAudioLevel => _activeAudioScale * _envelopeLevel * MasterTrim;
 
         /// <summary>Applies one envelope-automation step: stores the factor and rewrites the route gains
         /// through <see cref="ApplyAudioScale"/> so the fade × envelope product stays in that one place.
@@ -3081,8 +3425,35 @@ public sealed class ShowSession : IAsyncDisposable
             IReadOnlyList<PlacedLayer> layers,
             IReadOnlyList<IDisposable>? timelineClaims = null,
             IReadOnlyList<IDisposable>? subtitleAttachments = null,
-            ShowClipBinding? binding = null)
+            ShowClipBinding? binding = null,
+            (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
         {
+            // One outgoing max (dual-voice design): whatever this replacement is - crossfade, butt
+            // splice, stop, or dispose - a still-fading previous outgoing hard-releases FIRST. Every
+            // stop/teardown path funnels through here, so the tail can never outlive its group.
+            if (Outgoing is not null)
+                await ReleaseOutgoingAsync().ConfigureAwait(false);
+
+            // Crossfade handoff: the displaced Active moves to the Outgoing slot (keeping its outputs/
+            // routes/layers) instead of releasing below. Its levels freeze at the CURRENT fade × envelope
+            // product and per-layer opacities - captured before the active-state reset wipes them - and
+            // only the ramp scalar moves from here. A null crossfade (or nothing to displace) is the
+            // historical path, byte for byte.
+            var handoff = crossfade is not null && clip is not null && Active is not null;
+            if (handoff)
+            {
+                Outgoing = Active;
+                _outgoingOutputs = _outputs;
+                _outgoingLayers = _layers;
+                _outgoingTimelineClaims = _timelineClaims;
+                _outgoingSubtitles = _subtitleAttachments;
+                _outgoingRouteTargets = _activeRouteTargets;
+                _outgoingStartLevel = EffectiveAudioLevel;
+                _outgoingStartOpacities = _layers.Select(placed => placed.Slot.Opacity).ToArray();
+                OutgoingCurrentScale = 1f;
+                Volatile.Write(ref _outgoingStopClaimed, 0);
+            }
+
             // Stop the displaced clip's background work (fade ramp + end-of-clip monitor) before anything else.
             _clipWorkCts?.Cancel();
             _clipWorkCts?.Dispose();
@@ -3139,6 +3510,11 @@ public sealed class ShowSession : IAsyncDisposable
             _timelineClaims = timelineClaims ?? [];
             _subtitleAttachments = subtitleAttachments ?? [];
 
+            // Crossfade handoff: the displaced clip's teardown belongs to the outgoing ramp now (or to a
+            // stop / the next replacement) - nothing releases here.
+            if (handoff)
+                return;
+
             // Release the displaced clip BEFORE its outputs (the player feeds them). Runs on the serial
             // dispatcher, so the brief Active=new / old-not-yet-released window is never observed.
             foreach (var attachment in oldSubtitles)
@@ -3167,8 +3543,9 @@ public sealed class ShowSession : IAsyncDisposable
 }
 
 /// <summary>An active clip's live audio levels (<see cref="ShowSession.GetClipAudioLevelsAsync"/>):
-/// the persistent fade level (what fade cues compose from), the volume-envelope factor, and their
-/// product - the effective level the route gains are actually written with.</summary>
+/// the persistent fade level (what fade cues compose from), the volume-envelope factor, and the
+/// effective level the route gains are actually written with - fade × envelope × the session-wide
+/// <see cref="ShowSession.MasterTrim"/>.</summary>
 public sealed record ClipAudioLevels(float FadeLevel, float EnvelopeLevel, float EffectiveLevel);
 
 /// <summary>A mid-show audio-path failure surfaced by <see cref="ShowSession.PlaybackAlert"/>: the cue

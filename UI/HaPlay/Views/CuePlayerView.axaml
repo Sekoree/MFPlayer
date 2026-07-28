@@ -168,7 +168,7 @@
     <!-- Transport. GO is the show's primary action - keep it visually dominant; the tooltips double
          as the keyboard-shortcut reference for the code-behind transport bindings. Panic is the
          panic-path exit and wears Danger red, same as the media deck's Stop. -->
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
       <Button Grid.Column="0" Content="{x:Static res:Strings.StandbySelectedButton}"
               Command="{Binding StandbySelectedCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportStandbyTooltip}" />
@@ -189,9 +189,22 @@
               Classes="Touch Danger"
               Command="{Binding PanicCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportPanicTooltip}" />
+      <!-- Master fader (§6): a live session-wide trim over everything playing - a manual
+           "bring the show down by hand", not a stop. Session-scoped like the Schedules toggle;
+           double-click resets to unity (code-behind). -->
+      <StackPanel Grid.Column="6" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                  ToolTip.Tip="{x:Static res:Strings.CueMasterTrimTooltip}">
+        <TextBlock Text="{x:Static res:Strings.CueMasterTrimLabel}" VerticalAlignment="Center" />
+        <Slider x:Name="MasterTrimSlider" Width="120" Minimum="0" Maximum="1"
+                VerticalAlignment="Center" Padding="0" Margin="0"
+                Value="{Binding MasterTrim, Mode=TwoWay}"
+                AutomationProperties.Name="{x:Static res:Strings.CueMasterTrimLabel}" />
+        <TextBlock MinWidth="52" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
+                   Text="{Binding MasterTrimDisplay}" />
+      </StackPanel>
       <!-- Timed-trigger master gate (§4). Session-scoped: always starts OFF; scheduled cues only
            fire while this is armed AND edit mode is off. -->
-      <ToggleButton Grid.Column="6" Classes="schedarm"
+      <ToggleButton Grid.Column="7" Classes="schedarm"
                     IsChecked="{Binding SchedulesArmed, Mode=TwoWay}"
                     ToolTip.Tip="{x:Static res:Strings.SchedulesArmedToggleTooltip}"
                     AutomationProperties.Name="{x:Static res:Strings.SchedulesArmedToggleLabel}">
@@ -202,7 +215,7 @@
       </ToggleButton>
       <!-- State chip, same palette as the deck's state pill: green running, amber paused or
            standby-armed, gray idle - readable across a booth without parsing the text. -->
-      <Border Grid.Column="7" Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
+      <Border Grid.Column="8" Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
               Background="{Binding TransportStateColor}">
         <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TransportState}"
                    TextTrimming="CharacterEllipsis" />
@@ -360,6 +373,20 @@
                                  IsVisible="{Binding HasSelectedMediaCue}"
                                  ToolTip.Tip="{x:Static res:Strings.CueLevelDbTooltip}"
                                  Value="{Binding SelectedMediaCue.LevelDb, Mode=TwoWay}" />
+
+                  <!-- Authored lane start for cues in a Timeline group - the numeric twin of the
+                       timeline canvas's block drag (blocks render at start + pre-wait). -->
+                  <TextBlock Grid.Row="7" Grid.Column="2" Text="{x:Static res:Strings.TimelineStartMsLabel}"
+                             VerticalAlignment="Center"
+                             IsVisible="{Binding IsSelectedCueInTimelineGroup}"
+                             ToolTip.Tip="{x:Static res:Strings.TimelineStartMsTooltip}" />
+                  <NumericUpDown FormatString="0" Grid.Row="7" Grid.Column="3"
+                                 Minimum="0"
+                                 Maximum="86400000"
+                                 Increment="100"
+                                 IsVisible="{Binding IsSelectedCueInTimelineGroup}"
+                                 ToolTip.Tip="{x:Static res:Strings.TimelineStartMsTooltip}"
+                                 Value="{Binding SelectedCueNode.TimelineStartMs, Mode=TwoWay}" />
                 </Grid>
 
                 <!-- Custom natural-end trigger. The target can itself be a random Jump cue, keeping
@@ -485,6 +512,23 @@
                     </StackPanel>
                     <TextBlock Opacity="0.55" FontSize="11" Text="{x:Static res:Strings.CueScheduleFormatHint}" />
                     <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueScheduleHint}" />
+                  </StackPanel>
+                </Expander>
+
+                <!-- Per-cue triggers beyond GO (§6): today a keyboard hotkey - dispatched by the same
+                     transport-key layer as GO/Stop, gated on cue edit mode being OFF (the schedule
+                     gate's reasoning). Hotkey text parses on LostFocus like the schedule fields. -->
+                <Expander Classes="dense" Margin="0,4,0,0"
+                          Header="{x:Static res:Strings.CueTriggersSectionHeader}"
+                          IsExpanded="{Binding SelectedCueNode.HasHotkey, Mode=OneWay}">
+                  <StackPanel Spacing="6" Margin="6,4,6,4">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="{x:Static res:Strings.CueHotkeyLabel}" VerticalAlignment="Center" />
+                      <TextBox Width="170"
+                               Text="{Binding SelectedCueNode.HotkeyGestureText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                               PlaceholderText="F5" />
+                    </StackPanel>
+                    <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueHotkeyHint}" />
                   </StackPanel>
                 </Expander>
 
@@ -1200,7 +1244,7 @@
                 <CheckBox Content="{x:Static res:Strings.PlaylistReshuffleEachPassLabel}"
                           IsChecked="{Binding SelectedGroupCue.PlaylistReshuffleEachPass, Mode=TwoWay}"
                           IsEnabled="{Binding SelectedGroupCue.PlaylistShuffle, FallbackValue=False}" />
-                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
                   <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"
                              Text="{x:Static res:Strings.PlaylistLoopCountLabel}" />
                   <NumericUpDown FormatString="0" Grid.Row="0" Grid.Column="1"
@@ -1211,9 +1255,18 @@
                   <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="1"
                                  Minimum="1" Maximum="9999"
                                  Value="{Binding SelectedGroupCue.PlaylistPlayCountValue, Mode=TwoWay}" />
+                  <!-- Dual-voice crossfade between consecutive playlist items (Playlist mode; an armed
+                       list advances on GO and ignores it). -->
                   <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"
+                             Text="{x:Static res:Strings.PlaylistCrossfadeMsLabel}"
+                             ToolTip.Tip="{x:Static res:Strings.PlaylistCrossfadeMsTooltip}" />
+                  <NumericUpDown FormatString="0" Grid.Row="2" Grid.Column="1"
+                                 Minimum="0" Maximum="60000" Increment="100"
+                                 ToolTip.Tip="{x:Static res:Strings.PlaylistCrossfadeMsTooltip}"
+                                 Value="{Binding SelectedGroupCue.PlaylistCrossfadeMs, Mode=TwoWay}" />
+                  <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center"
                              Text="{x:Static res:Strings.PlaylistEndBehaviorLabel}" />
-                  <ComboBox Grid.Row="2" Grid.Column="1"
+                  <ComboBox Grid.Row="3" Grid.Column="1"
                             ItemsSource="{Binding PlaylistEndBehaviors}"
                             SelectedItem="{Binding SelectedGroupCue.PlaylistEndBehavior, Mode=TwoWay}">
                     <ComboBox.ItemTemplate>

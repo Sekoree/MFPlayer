@@ -29,6 +29,7 @@ public sealed class PlaylistGroupTests
                 LoopCount = 3,
                 PlayCount = 2,
                 ReshuffleEachPass = false,
+                CrossfadeMs = 1500,
                 EndBehavior = CuePlaylistEndBehavior.AdvancePastGroup,
             },
         };
@@ -41,6 +42,7 @@ public sealed class PlaylistGroupTests
         Assert.Equal(3, vm.PlaylistLoopCount);
         Assert.Equal(2, vm.PlaylistPlayCount);
         Assert.False(vm.PlaylistReshuffleEachPass);
+        Assert.Equal(1500, vm.PlaylistCrossfadeMs);
         Assert.Equal(CuePlaylistEndBehavior.AdvancePastGroup, vm.PlaylistEndBehavior);
         var back = Assert.IsType<CueGroupNode>(vm.ToModel());
         Assert.Equal(CueGroupFireMode.Playlist, back.FireMode);
@@ -77,6 +79,7 @@ public sealed class PlaylistGroupTests
         Assert.Equal(1, options.LoopCount);
         Assert.Null(options.PlayCount);
         Assert.True(options.ReshuffleEachPass);
+        Assert.Equal(0, options.CrossfadeMs); // legacy files stay butt splice
         Assert.Equal(CuePlaylistEndBehavior.Stop, options.EndBehavior);
     }
 
@@ -593,5 +596,218 @@ public sealed class PlaylistGroupTests
         // …and GO fires exactly that pick.
         await h.Vm.GoCommand.ExecuteAsync(null);
         Assert.Equal(preRollTargets[0].Id, await NextFiredAsync(h));
+    }
+
+    // ---- Crossfade (dual-voice) advance: Ideas/Dual-Voice-Crossfade-Design.md ----
+
+    /// <summary>Arms the harness's crossfade seam: records each crossfade fire's window/curve and rides
+    /// the same started/fired/signal bookkeeping as the plain executor.</summary>
+    private static ConcurrentQueue<(Guid CueId, TimeSpan Window, S.Media.Session.FadeCurve Curve)>
+        ArmCrossfadeSeam(Harness h)
+    {
+        var crossfadeFired = new ConcurrentQueue<(Guid, TimeSpan, S.Media.Session.FadeCurve)>();
+        h.Vm.MediaCueCrossfadeExecutor = (cue, window, curve, _) =>
+        {
+            h.Vm.OnCueStarted(cue.Id);
+            crossfadeFired.Enqueue((cue.Id, window, curve));
+            h.Fired.Enqueue(cue.Id);
+            h.FireSignal.Release();
+            return Task.FromResult<string?>(null);
+        };
+        return crossfadeFired;
+    }
+
+    [Fact]
+    public async Task Playlist_CrossfadeWindow_FiresTheNextPickEarly_ThroughTheCrossfadeSeam()
+    {
+        var h = BuildPlaylistVm(3, CueGroupFireMode.Playlist, new CuePlaylistOptions { CrossfadeMs = 800 });
+        var crossfadeFired = ArmCrossfadeSeam(h);
+
+        // GO opens the run through the PLAIN executor (nothing to crossfade out of yet).
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        Assert.Equal(h.ChildIds[0], await NextFiredAsync(h));
+        Assert.Empty(crossfadeFired);
+
+        // The pre-end window (the session's ClipApproachingEnd) advances EARLY through the crossfade
+        // seam, with the group's window and the constant-power curve.
+        await h.Vm.OnMediaCueApproachingEndAsync(h.ChildIds[0]);
+        Assert.Equal(h.ChildIds[1], await NextFiredAsync(h));
+        Assert.True(crossfadeFired.TryDequeue(out var advance));
+        Assert.Equal(h.ChildIds[1], advance.CueId);
+        Assert.Equal(TimeSpan.FromMilliseconds(800), advance.Window);
+        Assert.Equal(S.Media.Session.FadeCurve.EqualPower, advance.Curve);
+        Assert.Equal("item 2/3 · pass 1/1", h.Vm.BuildPlaylistStatus(h.GroupVm));
+
+        // The outgoing item's (now stale) natural end must NOT double-advance the run: it is no
+        // longer the current item, so the natural-end router swallows it.
+        await h.Vm.OnMediaCueNaturallyEndedAsync(h.ChildIds[0]);
+        await AssertNoFurtherFiresAsync(h);
+
+        // Second advance reaches the final pick; its pre-end window is a no-op (the run is finished -
+        // the final item plays out and its NATURAL end applies the end behavior exactly once).
+        await h.Vm.OnMediaCueApproachingEndAsync(h.ChildIds[1]);
+        Assert.Equal(h.ChildIds[2], await NextFiredAsync(h));
+        await h.Vm.OnMediaCueApproachingEndAsync(h.ChildIds[2]);
+        await AssertNoFurtherFiresAsync(h);
+
+        await h.Vm.OnMediaCueNaturallyEndedAsync(h.ChildIds[2]);
+        await AssertNoFurtherFiresAsync(h);
+        Assert.Null(h.Vm.CurrentCueNode); // default Stop end behavior ran
+        Assert.Same(h.GroupVm, h.Vm.StandbyCueNode);
+    }
+
+    [Fact]
+    public async Task Playlist_CrossfadeZero_NeverAdvancesEarly()
+    {
+        // CrossfadeMs 0 must stay exactly the butt-splice path: even a stray pre-end notification
+        // (the mapper never requests one for a zero window) advances nothing.
+        var h = BuildPlaylistVm(2, CueGroupFireMode.Playlist, new CuePlaylistOptions());
+        var crossfadeFired = ArmCrossfadeSeam(h);
+
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        Assert.Equal(h.ChildIds[0], await NextFiredAsync(h));
+
+        await h.Vm.OnMediaCueApproachingEndAsync(h.ChildIds[0]);
+        await AssertNoFurtherFiresAsync(h);
+        Assert.Empty(crossfadeFired);
+
+        // The natural end still advances - through the PLAIN executor.
+        await h.Vm.OnMediaCueNaturallyEndedAsync(h.ChildIds[0]);
+        Assert.Equal(h.ChildIds[1], await NextFiredAsync(h));
+        Assert.Empty(crossfadeFired);
+    }
+
+    [Fact]
+    public async Task ArmedList_IgnoresTheApproachingEndWindow()
+    {
+        // Armed lists advance on GO only - a pre-end notification must not auto-advance them even
+        // with a configured window.
+        var h = BuildPlaylistVm(2, CueGroupFireMode.ArmedList, new CuePlaylistOptions { CrossfadeMs = 800 });
+        ArmCrossfadeSeam(h);
+
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        Assert.Equal(h.ChildIds[0], await NextFiredAsync(h));
+
+        await h.Vm.OnMediaCueApproachingEndAsync(h.ChildIds[0]);
+        await AssertNoFurtherFiresAsync(h);
+    }
+
+    [Fact]
+    public async Task WithoutTheCrossfadeSeam_ApproachingEndIsANoOp()
+    {
+        // A host without the dual-voice seam must not advance early: firing the next pick through
+        // the plain executor would CUT the current item instead of crossfading it - the natural-end
+        // path stays the only advance.
+        var h = BuildPlaylistVm(2, CueGroupFireMode.Playlist, new CuePlaylistOptions { CrossfadeMs = 800 });
+        Assert.Null(h.Vm.MediaCueCrossfadeExecutor);
+
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        Assert.Equal(h.ChildIds[0], await NextFiredAsync(h));
+
+        await h.Vm.OnMediaCueApproachingEndAsync(h.ChildIds[0]);
+        await AssertNoFurtherFiresAsync(h);
+
+        await h.Vm.OnMediaCueNaturallyEndedAsync(h.ChildIds[0]);
+        Assert.Equal(h.ChildIds[1], await NextFiredAsync(h));
+    }
+
+    [Fact]
+    public async Task Playlist_GoWhilePlaying_TakesOverWithTheCrossfadeWindow()
+    {
+        // The manual skip (GO while an item plays) is the "fire next early" takeover: it rides the
+        // same dual-voice window as the automatic pre-end advance instead of cutting the item.
+        var h = BuildPlaylistVm(3, CueGroupFireMode.Playlist, new CuePlaylistOptions { CrossfadeMs = 800 });
+        var crossfadeFired = ArmCrossfadeSeam(h);
+
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        Assert.Equal(h.ChildIds[0], await NextFiredAsync(h));
+        Assert.Empty(crossfadeFired); // the run opener has nothing to fade out of
+
+        await h.Vm.GoCommand.ExecuteAsync(null); // skip while child 1 is still playing
+        Assert.Equal(h.ChildIds[1], await NextFiredAsync(h));
+        Assert.True(crossfadeFired.TryDequeue(out var takeover));
+        Assert.Equal(h.ChildIds[1], takeover.CueId);
+        Assert.Equal(TimeSpan.FromMilliseconds(800), takeover.Window);
+        Assert.Equal(S.Media.Session.FadeCurve.EqualPower, takeover.Curve);
+    }
+
+    [Fact]
+    public async Task Playlist_GoWhilePlaying_WithoutACrossfadeWindow_SkipsHard()
+    {
+        // CrossfadeMs 0 keeps the historical hard skip - the plain executor, never the seam.
+        var h = BuildPlaylistVm(3, CueGroupFireMode.Playlist, new CuePlaylistOptions());
+        var crossfadeFired = ArmCrossfadeSeam(h);
+
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        Assert.Equal(h.ChildIds[0], await NextFiredAsync(h));
+
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        Assert.Equal(h.ChildIds[1], await NextFiredAsync(h));
+        Assert.Empty(crossfadeFired);
+    }
+
+    // ---- Mapper: CrossfadeMs → ShowClipBinding.PreEndNotify ----
+
+    [Fact]
+    public void Mapper_PlaylistCrossfade_SetsPreEndNotify_OnDirectMediaChildrenOnly()
+    {
+        MediaCueNode Media(string label) => new()
+        {
+            Label = label,
+            Source = new FilePlaylistItem($"/tmp/{label}.wav"),
+        };
+
+        var inPlaylist = Media("in-playlist");
+        var inNested = Media("in-nested");
+        var nested = new CueGroupNode
+        {
+            Label = "Nested plain group",
+            Children = [inNested],
+        };
+        var playlist = new CueGroupNode
+        {
+            Label = "Set",
+            FireMode = CueGroupFireMode.Playlist,
+            Playlist = new CuePlaylistOptions { CrossfadeMs = 1200 },
+            Children = [inPlaylist, nested],
+        };
+        var outside = Media("outside");
+        var doc = HaPlay.Playback.HaPlayShowMapper.ToShowDocument(
+            new CueList { Nodes = [playlist, outside] });
+
+        // Direct media children of the crossfading playlist carry the window as their pre-end notify
+        // offset (the session's ClipApproachingEnd hook)…
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(1200),
+            doc.Clips.Single(c => c.CueId == inPlaylist.Id.ToString()).PreEndNotify);
+        // …while a nested group's children and cues outside the playlist stay at zero (butt splice).
+        Assert.Equal(
+            TimeSpan.Zero,
+            doc.Clips.Single(c => c.CueId == inNested.Id.ToString()).PreEndNotify);
+        Assert.Equal(
+            TimeSpan.Zero,
+            doc.Clips.Single(c => c.CueId == outside.Id.ToString()).PreEndNotify);
+    }
+
+    [Fact]
+    public void Mapper_PlaylistWithoutCrossfade_LeavesPreEndNotifyZero()
+    {
+        var media = new MediaCueNode { Label = "song", Source = new FilePlaylistItem("/tmp/song.wav") };
+        var playlist = new CueGroupNode
+        {
+            Label = "Set",
+            FireMode = CueGroupFireMode.Playlist,
+            Playlist = new CuePlaylistOptions(), // CrossfadeMs 0
+            Children = [media],
+        };
+
+        var doc = HaPlay.Playback.HaPlayShowMapper.ToShowDocument(new CueList { Nodes = [playlist] });
+        Assert.Equal(TimeSpan.Zero, doc.Clips.Single().PreEndNotify);
     }
 }

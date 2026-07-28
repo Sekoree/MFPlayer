@@ -304,7 +304,13 @@ write back block-start − pre-wait (floored at 0). Timeline Phase C waveforms D
 peaks via `WaveformExtractor`, cached per path, sliced to the trimmed window, drawn as low-
 opacity bars under fades/envelope).
 
-**Still open:** MIDI/OSC/hotkey per-cue triggers, panic slider, dual-voice crossfade (§3
-`CrossfadeMs` still deliberately unimplemented — design doc now exists:
-`Dual-Voice-Crossfade-Design.md`), timeline duck presets (Phase D), `TimelineStartMs` numeric
+**Round 3 (2026-07-28, later still):** dual-voice crossfade DONE per
+`Dual-Voice-Crossfade-Design.md` — `TransportGroup.Outgoing` + `ReplaceAsync(crossfade:)` +
+`FireCueAsync(cueId, crossfade, curve)` in the framework; §3 `CuePlaylistOptions.CrossfadeMs` now
+persisted, surfaced on the Group tab, and implemented (pre-end fire via
+`ShowClipBinding.PreEndNotify` → `ClipApproachingEnd`; GO-on-playing-playlist takes over with the
+same window). Loop-with-crossfade is the one deferred piece (needs a per-binding crossfade field).
+
+**Still open:** MIDI/OSC/hotkey per-cue triggers, panic slider, loop-with-crossfade (ambient
+beds), timeline duck presets (Phase D), `TimelineStartMs` numeric
 drawer field, true cross-list scheduling (needs multi-list sessions).

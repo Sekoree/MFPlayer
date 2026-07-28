@@ -336,6 +336,9 @@ public sealed class MediaPlayer : IDisposable
         // present Scheduled against the session clock (Doc 03 §2), not master-less. No-op for file sources.
         _liveVideoSource?.RebaseToLatest(_liveClock?.CurrentPosition ?? TimeSpan.Zero);
         _liveSession!.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+        // Record the timebase generation this run plays under - the natural-EOF Duration clamp in
+        // Position is only valid while the generation is unchanged (i.e. no seek since this Play).
+        Volatile.Write(ref _playTimebaseGeneration, _liveAudioClock?.TimebaseGeneration ?? 0);
     }
 
     public void Pause(CancellationToken cancellationToken = default)
@@ -408,13 +411,43 @@ public sealed class MediaPlayer : IDisposable
     public int SampleRate => _liveAudioRouter?.SampleRate ?? 0;
 
     /// <summary>The master playhead position. Once playback COMPLETED NATURALLY (every routed audio
-    /// source exhausted) this clamps to <see cref="Duration"/>: the natural-EOF output flush rewinds the
-    /// hardware clock's epoch, so the raw playhead would read ~0:00 - the "deck shows playing, stuck at
-    /// the beginning" report (2026-07-03). A restart (seek + play) clears the completion and reads live again.</summary>
+    /// source exhausted) this clamps to <see cref="Duration"/>, for two reasons: it reports EXACT duration
+    /// (the raw clock can sit at <c>Duration - ε</c>: the natural-EOF output flush rewinds the hardware
+    /// clock's segment epoch, and <see cref="MediaClock"/>'s epoch fold can only preserve position up to
+    /// the last read before the flush), and it guards hosts whose position polls are sparser than the
+    /// clock's own 30 Hz driver reads. The clamp is generation-scoped (review §2.14): it only applies
+    /// while <see cref="MediaClock.TimebaseGeneration"/> still equals the generation recorded at
+    /// <see cref="Play"/> - a Seek after EOF bumps the generation, so this reads the live clock (the seek
+    /// target) instead of stale-clamping to Duration until the next Play. A restart (seek + play) clears
+    /// the completion and reads live again.</summary>
     public TimeSpan Position =>
-        _liveAudioRouter is { CompletedNaturally: true } && Duration > TimeSpan.Zero
+        ShouldReportDurationAtNaturalEof(
+            _liveAudioRouter is { CompletedNaturally: true },
+            Duration,
+            _liveAudioClock?.TimebaseGeneration ?? 0,
+            Volatile.Read(ref _playTimebaseGeneration))
             ? Duration
             : PlayClock.CurrentPosition;
+
+    /// <summary>
+    /// The natural-EOF Duration clamp decision for <see cref="Position"/>, factored pure so the racing
+    /// orders (position read vs. EOF latch vs. seek) are truth-table testable. The clamp is valid only
+    /// while no timebase re-anchor (seek/reset/master swap) happened since the Play that ran to
+    /// completion - <paramref name="currentTimebaseGeneration"/> must still equal
+    /// <paramref name="playTimebaseGeneration"/>.
+    /// </summary>
+    internal static bool ShouldReportDurationAtNaturalEof(
+        bool completedNaturally,
+        TimeSpan duration,
+        long currentTimebaseGeneration,
+        long playTimebaseGeneration) =>
+        completedNaturally
+        && duration > TimeSpan.Zero
+        && currentTimebaseGeneration == playTimebaseGeneration;
+
+    /// <summary><see cref="MediaClock.TimebaseGeneration"/> of the audio clock captured at the most recent
+    /// <see cref="Play"/> (0 before the first Play, matching a fresh clock). See <see cref="Position"/>.</summary>
+    private long _playTimebaseGeneration;
 
     /// <summary>True while the active playback clock is advancing. Reports false once the audio router
     /// completed naturally - the clock OBJECT keeps its running flag at EOF, so without this every

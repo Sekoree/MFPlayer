@@ -100,9 +100,11 @@ public partial class CuePlayerViewModel
         return [.. nodes.OrderBy(n => order.GetValueOrDefault(n, int.MaxValue))];
     }
 
-    /// <summary>Entry point for wall-clock schedule fires (<c>CueSchedulerService</c>). Exactly the
-    /// operator-selected fire semantics of <see cref="FireSelectedCueNow"/>: the immediate Jump chain
-    /// resets like any operator GO, a pending row-click override is consumed, and the cue then rides
+    /// <summary>Entry point for non-GO trigger fires - wall-clock schedules (<c>CueSchedulerService</c>),
+    /// per-cue hotkeys, and the remote API's per-cue <c>/go</c> (both via
+    /// <see cref="FireTriggeredCueSafeAsync"/>). Exactly the operator-selected fire semantics of
+    /// <see cref="FireSelectedCueNow"/>: the immediate Jump chain resets like any operator GO, a
+    /// pending row-click override is consumed, and the cue then rides
     /// <see cref="FireOperatorSelectedCueAsync"/> so pre-waits, group modes, jump resolution and
     /// Now-Playing behave identically to a manual fire. Callers must be on the UI thread (the
     /// scheduler's DispatcherTimer already is).</summary>
@@ -112,6 +114,91 @@ public partial class CuePlayerViewModel
         _selectedCuePendingForGo = false;
         _immediateJumpChain.Clear();
         return FireOperatorSelectedCueAsync(cue);
+    }
+
+    /// <summary>Fires <paramref name="cue"/> for an external trigger (per-cue hotkey / remote API):
+    /// the scheduler's exact fire semantics (<see cref="FireScheduledCueAsync"/>), then the trigger-
+    /// specific status stamped over the generic GO status the synchronous fire head set (the
+    /// <c>CueSchedulerService</c> pattern - the operator sees WHY the cue started), with failures
+    /// surfaced on the status strip because external callers are fire-and-forget and must never
+    /// observe the exception. UI thread only.</summary>
+    /// <param name="statusFormatKey">A one-argument status resource key, e.g.
+    /// <c>nameof(Strings.CueHotkeyFiredStatusFormat)</c>.</param>
+    public async Task FireTriggeredCueSafeAsync(CueNodeViewModel cue, string statusFormatKey)
+    {
+        ArgumentNullException.ThrowIfNull(cue);
+        try
+        {
+            var fire = FireScheduledCueAsync(cue);
+            StatusMessage = Strings.Format(statusFormatKey, CueDisplay(cue));
+            await fire;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = Strings.Format(
+                nameof(Strings.CueExecutionFailedWithDetailStatusFormat), CueDisplay(cue), ex.Message);
+        }
+    }
+
+    /// <summary>Per-cue hotkey dispatch (the drawer's Triggers section): fires the first cue in tree
+    /// order whose <see cref="CueNodeViewModel.HotkeyGesture"/> matches <paramref name="e"/> through
+    /// the operator-selected fire path. The cue view's transport-key handler calls this LAST (the
+    /// configurable transport keys always win a clash) and only while cue edit mode is off - hotkeys
+    /// are a show-mode surface for the same reason the scheduler is. Returns false when no cue claims
+    /// the gesture.</summary>
+    public bool TryFireCueHotkey(Avalonia.Input.KeyEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        foreach (var cue in EnumerateAllCueNodes())
+        {
+            if (string.IsNullOrWhiteSpace(cue.HotkeyGesture)
+                || !CueHotkeyGesture.Matches(cue.HotkeyGesture, e))
+                continue;
+            _ = FireTriggeredCueSafeAsync(cue, nameof(Strings.CueHotkeyFiredStatusFormat));
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Resolves a remote per-cue reference in the SELECTED list (the transport per-cue
+    /// fires ride, like scheduling): the operator-facing cue NUMBER first (tree order,
+    /// case-insensitive), then the cue's Guid id. Null when nothing matches.</summary>
+    public CueNodeViewModel? FindCueByReference(string cueRef)
+    {
+        if (string.IsNullOrWhiteSpace(cueRef))
+            return null;
+        var trimmed = cueRef.Trim();
+        foreach (var cue in EnumerateAllCueNodes())
+        {
+            if (string.Equals(cue.Number?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase))
+                return cue;
+        }
+
+        return Guid.TryParse(trimmed, out var id)
+            ? EnumerateAllCueNodes().FirstOrDefault(cue => cue.Id == id)
+            : null;
+    }
+
+    /// <summary>Stops one cue if it is currently running - the remote API's per-cue <c>/stop</c>.
+    /// Exactly the per-row semantics of <see cref="StopSelectedCue"/> (running visualizer layer or
+    /// active clip); returns false when the cue isn't running.</summary>
+    public bool TryStopCue(CueNodeViewModel cue)
+    {
+        ArgumentNullException.ThrowIfNull(cue);
+        if (_runningVisualizers.ContainsKey(cue.Id))
+        {
+            _ = StopVisualizerAsync(cue.Id);
+            return true;
+        }
+
+        if (_activeCueIds.Contains(cue.Id))
+        {
+            _ = CancelCueCallback?.Invoke(cue.Id) ?? Task.CompletedTask;
+            return true;
+        }
+
+        return false;
     }
 
     private Task FireOperatorSelectedCueAsync(CueNodeViewModel cue)
@@ -187,7 +274,9 @@ public partial class CuePlayerViewModel
             : GoCore();
     }
 
-    private async Task GoCore(CueNodeViewModel? operatorSelectedCue = null)
+    private async Task GoCore(
+        CueNodeViewModel? operatorSelectedCue = null,
+        (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null)
     {
         var ordered = EnumerateFireableCueOrder().ToList();
         if (ordered.Count == 0)
@@ -220,6 +309,24 @@ public partial class CuePlayerViewModel
         CueNodeViewModel? nextStandby;
         if (IsPlaylistGroup(fire))
         {
+            // GO on a PLAYING crossfade playlist is the "fire next early" takeover (the design doc's
+            // DJ-style skip): the manual skip rides the same dual-voice window as the automatic
+            // pre-end advance instead of cutting the current item. Resolved BEFORE the pick is
+            // consumed (CurrentItemId is still the playing item). Butt-splice lists (CrossfadeMs 0),
+            // idle groups, armed lists, and hosts without the seam skip hard, exactly as before.
+            if (advanceCrossfade is null
+                && MediaCueCrossfadeExecutor is not null
+                && ParseGroupFireMode(fire) == CueGroupFireMode.Playlist
+                && fire.PlaylistCrossfadeMs > 0
+                && _playlistRuns.TryGetValue(fire.Id, out var playingRun)
+                && playingRun.CurrentItemId is { } playingItem
+                && _activeCueIds.Contains(playingItem))
+            {
+                advanceCrossfade = (
+                    TimeSpan.FromMilliseconds(fire.PlaylistCrossfadeMs),
+                    S.Media.Session.FadeCurve.EqualPower);
+            }
+
             // Firing a playlist/armed-list group consumes its armed pick. Standby stays ON the
             // group while the run continues (GO = skip / armed-advance, and pre-roll then warms the
             // NEXT pick), and moves past the group once the final pick has fired.
@@ -255,7 +362,7 @@ public partial class CuePlayerViewModel
         _transportRunCts = new CancellationTokenSource();
         try
         {
-            await RunTriggerPlanAsync(plan, _transportRunCts.Token);
+            await RunTriggerPlanAsync(plan, _transportRunCts.Token, advanceCrossfade);
             SuggestPreRollRefresh();
         }
         catch (OperationCanceledException)

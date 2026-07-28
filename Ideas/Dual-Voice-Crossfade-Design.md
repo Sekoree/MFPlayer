@@ -1,6 +1,16 @@
 # Dual-voice transport groups (true crossfade)
 
-Status: design, 2026-07-28. The framework feature the enhancement round repeatedly deferred:
+Status: IMPLEMENTED, 2026-07-28 (order steps 1–2 fully; step 3's GO-early takeover too - only
+loop-with-crossfade remains open, since it needs a per-binding crossfade field neither this doc's
+model nor the cue UI defines yet). `TransportGroup.Outgoing` + `ReplaceAsync(crossfade:)` +
+`FireCueAsync(cueId, crossfade, curve)`; the pre-end fire rides `ShowClipBinding.PreEndNotify` →
+`ShowSession.ClipApproachingEnd` (the end monitor's one-shot pre-end offset, no second timer);
+HaPlay maps `CuePlaylistOptions.CrossfadeMs` (now persisted AND implemented, group-tab field) onto
+it and advances early through `CuePlayerViewModel.MediaCueCrossfadeExecutor` (EqualPower). Tests:
+`S.Media.Session.Tests/CrossfadeTests.cs`, `HaPlay.Tests/PlaylistGroupTests.cs` (crossfade
+section). Original design below.
+
+The framework feature the enhancement round repeatedly deferred:
 `CuePlaylistOptions.CrossfadeMs` (persisted, unimplemented), group-boundary crossfade for
 AutoFollow chains, "fire next early" takeovers, and seamless loop-with-crossfade all need **two
 simultaneously-live clips in one transport group**, which `TransportGroup` (single `Active`

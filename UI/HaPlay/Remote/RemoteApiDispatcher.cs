@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Avalonia.Threading;
+using HaPlay.Resources;
 using HaPlay.ViewModels;
 
 namespace HaPlay.Remote;
@@ -28,6 +29,7 @@ public readonly record struct RemoteApiResult(int Status, string Body, string? A
 /// URL scheme (all indices 1-based, matching the UI labels; status is GET, mutations are POST):
 ///   /api/v1/status
 ///   /api/v1/cues/go|pause|resume|stop|panic
+///   /api/v1/cues/{cue}/go|stop
 ///   /api/v1/players/{player}/play|pause|toggle|stop|next|prev
 ///   /api/v1/players/{player}/volume?db=-10
 ///   /api/v1/players/{player}/hold[?on=true|false]
@@ -136,8 +138,13 @@ public sealed class RemoteApiDispatcher
 
     private RemoteApiResult HandleCues(string[] rest)
     {
+        // Two segments = per-cue addressing: /cues/{cue}/go|stop (never ambiguous with the
+        // transport verbs below, which are always a single segment).
+        if (rest.Length == 2)
+            return HandleCueByReference(rest[0], rest[1]);
+
         if (rest.Length != 1)
-            return RemoteApiResult.Fail(404, "Cue endpoint: /cues/go|pause|resume|stop|panic.");
+            return RemoteApiResult.Fail(404, "Cue endpoint: /cues/go|pause|resume|stop|panic or /cues/{cue}/go|stop.");
 
         switch (rest[0].ToLowerInvariant())
         {
@@ -168,6 +175,36 @@ public sealed class RemoteApiDispatcher
                 return RemoteApiResult.Fail(404, $"Unknown cue command '{rest[0]}'.");
         }
     }
+
+    /// <summary>Per-cue transport: <c>{cue}</c> is the operator-facing cue NUMBER resolved in the
+    /// selected list (the labels the operator reads, like every other address here), falling back to
+    /// the cue's Guid id. <c>/go</c> fires through the exact operator-selected GO path (pre-waits,
+    /// group semantics, jump-chain reset, Now-Playing - identical to a manual fire); <c>/stop</c>
+    /// stops that one cue when it is running.</summary>
+    private RemoteApiResult HandleCueByReference(string cueRef, string verb)
+    {
+        var cue = _cuePlayer.FindCueByReference(cueRef);
+        if (cue is null)
+            return RemoteApiResult.Fail(404,
+                $"Unknown cue '{cueRef}' - no cue number or id matches in the selected list.");
+
+        switch (verb.ToLowerInvariant())
+        {
+            case "go":
+                _ = _cuePlayer.FireTriggeredCueSafeAsync(
+                    cue, nameof(Strings.CueRemoteFiredStatusFormat));
+                return RemoteApiResult.Ok($"go {DescribeCue(cue)}");
+            case "stop":
+                return _cuePlayer.TryStopCue(cue)
+                    ? RemoteApiResult.Ok($"stop {DescribeCue(cue)}")
+                    : RemoteApiResult.Fail(409, $"Cue '{cueRef}' is not playing.");
+            default:
+                return RemoteApiResult.Fail(404, $"Unknown cue command '{verb}' - use go or stop.");
+        }
+    }
+
+    private static string DescribeCue(CueNodeViewModel cue) =>
+        string.IsNullOrWhiteSpace(cue.Number) ? cue.Label : cue.Number;
 
     private RemoteApiResult HandlePlayers(string[] rest, IReadOnlyDictionary<string, string> query)
     {

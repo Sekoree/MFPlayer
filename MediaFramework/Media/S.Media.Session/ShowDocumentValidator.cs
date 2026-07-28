@@ -87,6 +87,8 @@ public static class ShowDocumentValidator
                 errors.Add($"the clip for cue '{clip.CueId}' has a negative fade-in.");
             if (clip.FadeOut < TimeSpan.Zero)
                 errors.Add($"the clip for cue '{clip.CueId}' has a negative fade-out.");
+            if (clip.PreEndNotify < TimeSpan.Zero)
+                errors.Add($"the clip for cue '{clip.CueId}' has a negative pre-end notify window.");
             if (clip.LayerIndex < 0)
                 errors.Add($"the clip for cue '{clip.CueId}' has a negative layer index {clip.LayerIndex}.");
             if (clip.VideoStreamIndex is { } vsi && vsi < -1)

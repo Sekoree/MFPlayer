@@ -257,6 +257,14 @@ public abstract record CueNode
     /// (null is the CLR default, so <c>init</c> is safe under the source-generated serializer, and
     /// the context's WhenWritingNull policy keeps the field out of the JSON).</summary>
     public CueSchedule? Schedule { get; init; }
+
+    /// <summary>Optional per-cue fire hotkey (Ideas/CuePlayer-Enhancements.md §6) - a
+    /// <see cref="CueHotkeyGesture"/> text such as "F5" or "Ctrl+K", captured in the drawer's
+    /// Triggers section. Fires the cue through the operator-selected GO path while cue edit mode is
+    /// OFF (the schedule gate's reasoning); the configurable transport keys win a clash. Null = no
+    /// hotkey - the CLR default, so <c>init</c> is safe under the source-generated serializer, and
+    /// the context's WhenWritingNull policy keeps legacy cue JSON byte-identical.</summary>
+    public string? HotkeyGesture { get; init; }
 }
 
 /// <summary>Wall-clock schedule on a cue (Ideas/CuePlayer-Enhancements.md §4). Times are LOCAL
@@ -337,9 +345,6 @@ public sealed record CueGroupNode : CueNode
 /// Playlist mode auto-advances on each child's natural end; ArmedList shares this runtime but only
 /// advances on GO. All shuffle/pass state is session-only (never persisted) - loading a project
 /// starts every playlist afresh.
-/// <para>v1 is butt-splice only: the design sketch's <c>CrossfadeMs</c> is deliberately omitted -
-/// a true crossfade needs a dual-voice <c>TransportGroup</c> (§6 "Deck-style dual voice"); adding
-/// the field later is additive and old files stay valid.</para>
 /// <para>GOTCHA: properties use <c>set</c>, not <c>init</c>, deliberately. The source-generated
 /// serializer assigns EVERY init property through one object initializer, so fields absent from the
 /// JSON would load as CLR defaults (LoopCount 0, AvoidImmediateRepeat/ReshuffleEachPass false)
@@ -363,6 +368,14 @@ public sealed record CuePlaylistOptions
     /// <summary>Reshuffle the bag on every pass boundary; false keeps the first pass's shuffled
     /// order for all passes. Only meaningful when <see cref="Shuffle"/> is on.</summary>
     public bool ReshuffleEachPass { get; set; } = true;
+
+    /// <summary>Crossfade window (ms) between consecutive Playlist items: the next pick fires this
+    /// long BEFORE the current item's natural end and both clips overlap - the outgoing one fades
+    /// out under the incoming one (the framework's dual-voice crossfade,
+    /// <c>Ideas/Dual-Voice-Crossfade-Design.md</c>). 0 (the default, and every older file) = butt
+    /// splice - the historical advance-on-natural-end path, unchanged. Playlist mode only; an
+    /// ArmedList advances on GO and ignores it.</summary>
+    public int CrossfadeMs { get; set; }
 
     /// <summary>What happens when the final pass completes (Playlist mode's auto-run end).</summary>
     public CuePlaylistEndBehavior EndBehavior { get; set; }

@@ -169,6 +169,50 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
         }
     }
 
+    [Theory]
+    // Natural EOF, unchanged timebase generation since Play → report exact Duration.
+    [InlineData(true, 2.0, 5, 5, true)]
+    // A seek (or reset/master swap) after EOF bumped the generation → the clamp is stale; read the
+    // live clock (the seek target) instead of lying with Duration until the next Play (§2.14).
+    [InlineData(true, 2.0, 6, 5, false)]
+    // Not completed → never clamp, regardless of generation.
+    [InlineData(false, 2.0, 5, 5, false)]
+    [InlineData(false, 2.0, 6, 5, false)]
+    // Live/unknown duration → nothing meaningful to clamp to.
+    [InlineData(true, 0.0, 5, 5, false)]
+    public void ShouldReportDurationAtNaturalEof_TruthTable(
+        bool completedNaturally, double durationSeconds, long currentGeneration, long playGeneration, bool expected)
+    {
+        Assert.Equal(expected, MediaPlayer.ShouldReportDurationAtNaturalEof(
+            completedNaturally, TimeSpan.FromSeconds(durationSeconds), currentGeneration, playGeneration));
+    }
+
+    [Fact]
+    public void Position_AfterNaturalEof_ClampsToDuration_ThenSeekReadsSeekTarget()
+    {
+        // §2.14 regression: after a natural EOF the clamp used to apply until the next Play, so a
+        // Seek between EOF and Play still reported Duration instead of the seek target.
+        var source = new SeekableToneSource(sampleRate: 48_000, channels: 2, chunks: 8);
+        var backend = new CollectingBackend();
+        var registry = MediaRegistry.Build(b => b.AddDecoder(new FixedDecoderProvider(source)));
+
+        using var player = MediaPlayer.OpenAudio(registry, backend, "file:///tone.wav");
+        Assert.Equal(source.Duration, player.Duration);
+        player.Play();
+
+        Assert.True(
+            SpinWait.SpinUntil(() => player.AudioRouter!.CompletedNaturally, TimeSpan.FromSeconds(5)),
+            "player did not reach natural EOF within the window.");
+        Assert.Equal(player.Duration, player.Position);
+        Assert.False(player.IsRunning);
+
+        var target = TimeSpan.FromMilliseconds(300);
+        player.Seek(target);
+
+        Assert.Equal(target, player.Position);
+        Assert.False(player.IsRunning);
+    }
+
     private sealed class FixedDecoderProvider(IAudioSource source) : IMediaDecoderProvider
     {
         public string Name => "fixed";
@@ -217,6 +261,36 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
             for (var i = 0; i < destination.Length; i++)
                 destination[i] = ((i % channels) + 1) / 16f;
             return destination.Length;
+        }
+    }
+
+    /// <summary>A <see cref="ToneSource"/> that is also seekable: carries a fixed Duration (so the
+    /// natural-EOF clamp has something to clamp to) and refills on Seek (a real decoder becomes
+    /// readable again after seeking back from EOF).</summary>
+    private sealed class SeekableToneSource(int sampleRate, int channels, int chunks) : IAudioSource, ISeekableSource
+    {
+        private readonly int _chunks = chunks;
+        private int _remainingChunks = chunks;
+
+        public AudioFormat Format { get; } = new(sampleRate, channels);
+        public bool IsExhausted => Volatile.Read(ref _remainingChunks) <= 0;
+        public TimeSpan Duration { get; } = TimeSpan.FromSeconds(2);
+        public TimeSpan Position { get; private set; }
+
+        public int ReadInto(Span<float> destination)
+        {
+            if (Interlocked.Decrement(ref _remainingChunks) < 0)
+                return 0;
+
+            for (var i = 0; i < destination.Length; i++)
+                destination[i] = ((i % channels) + 1) / 16f;
+            return destination.Length;
+        }
+
+        public void Seek(TimeSpan position)
+        {
+            Position = position;
+            Volatile.Write(ref _remainingChunks, _chunks);
         }
     }
 

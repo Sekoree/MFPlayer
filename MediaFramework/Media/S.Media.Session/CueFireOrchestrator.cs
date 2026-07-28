@@ -25,11 +25,14 @@ internal sealed class CueFireOrchestrator
 
     public CueFireOrchestrator(ShowSession session) => _session = session;
 
-    /// <summary>See <see cref="ShowSession.FireCueAsync"/> (the public doc lives there).</summary>
-    public async Task<CueExecutionStatus> FireCueAsync(string cueId)
+    /// <summary>See <see cref="ShowSession.FireCueAsync(string)"/> (the public doc lives there).
+    /// <paramref name="crossfade"/> is the optional dual-voice window of the crossfade overload; null is the
+    /// historical butt-splice fire, untouched.</summary>
+    public async Task<CueExecutionStatus> FireCueAsync(
+        string cueId, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
     {
         await _fireLock.WaitAsync().ConfigureAwait(false);
-        try { return await FireCoreAsync(cueId).ConfigureAwait(false); }
+        try { return await FireCoreAsync(cueId, crossfade).ConfigureAwait(false); }
         catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled by stop/load/dispose
         finally { _fireLock.Release(); }
     }
@@ -39,11 +42,12 @@ internal sealed class CueFireOrchestrator
     /// state commits re-enter it. The fire's cancellation source is published to <see cref="_activeFireCts"/> so
     /// <see cref="CancelActiveFire"/> aborts it; cancellation propagates as
     /// <see cref="OperationCanceledException"/> (callers map it to a non-advancing result).</summary>
-    private async Task<CueExecutionStatus> FireCoreAsync(string cueId)
+    private async Task<CueExecutionStatus> FireCoreAsync(
+        string cueId, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
     {
         using var cts = new CancellationTokenSource();
         _activeFireCts = cts;
-        try { return await _session.FireOnGraphAsync(cueId, cts.Token).ConfigureAwait(false); }
+        try { return await _session.FireOnGraphAsync(cueId, cts.Token, crossfade).ConfigureAwait(false); }
         finally { _activeFireCts = null; }
     }
 

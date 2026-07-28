@@ -39,6 +39,24 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
     public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new BlockingOpenProvider()));
 }
 
+/// <summary>A provider whose open FAILS immediately - the crossfade tests prove an incoming clip's open
+/// failure leaves the current Active untouched (design doc: open failure = no fade). Probes only the
+/// <c>fail://</c> scheme, so it composes with the fake audio provider in one registry (registered FIRST,
+/// because ties go to the earliest-registered provider and the fake probes every audio URI).</summary>
+internal sealed class FailingOpenProvider : IMediaDecoderProvider
+{
+    public string Name => "failing";
+
+    public double Probe(string uri, MediaKind kind) =>
+        uri.StartsWith("fail://", StringComparison.Ordinal) ? 1.0 : 0.0;
+
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) =>
+        throw new InvalidOperationException("synthetic open failure (FailingOpenProvider)");
+
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
+        throw new InvalidOperationException("synthetic open failure (FailingOpenProvider)");
+}
+
 /// <summary>Opens one URI immediately and another after a delay, then records whether the fast source was allowed
 /// to start producing before the slow sibling finished opening. Used to verify the simultaneous-fire arm barrier.</summary>
 internal sealed class StaggeredOpenProvider(TimeSpan slowOpenDelay) : IMediaDecoderProvider

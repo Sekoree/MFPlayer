@@ -775,6 +775,8 @@ public static class Strings
     public static string PanicFadeMsLabel => Get(nameof(PanicFadeMsLabel));
     public static string CueLevelDbLabel => Get(nameof(CueLevelDbLabel));
     public static string CueLevelDbTooltip => Get(nameof(CueLevelDbTooltip));
+    public static string TimelineStartMsLabel => Get(nameof(TimelineStartMsLabel));
+    public static string TimelineStartMsTooltip => Get(nameof(TimelineStartMsTooltip));
     public static string SchedulesArmedOtherListsWarningFormat => Get(nameof(SchedulesArmedOtherListsWarningFormat));
     public static string StopFadeMsAppDefaultHintFormat => Get(nameof(StopFadeMsAppDefaultHintFormat));
     public static string FilesMenuLabel => Get(nameof(FilesMenuLabel));
@@ -1311,6 +1313,8 @@ public static class Strings
     public static string PlaylistReshuffleEachPassLabel => Get(nameof(PlaylistReshuffleEachPassLabel));
     public static string PlaylistLoopCountLabel => Get(nameof(PlaylistLoopCountLabel));
     public static string PlaylistPlayCountLabel => Get(nameof(PlaylistPlayCountLabel));
+    public static string PlaylistCrossfadeMsLabel => Get(nameof(PlaylistCrossfadeMsLabel));
+    public static string PlaylistCrossfadeMsTooltip => Get(nameof(PlaylistCrossfadeMsTooltip));
     public static string PlaylistEndBehaviorLabel => Get(nameof(PlaylistEndBehaviorLabel));
     public static string CuePlaylistFinishedStatusFormat => Get(nameof(CuePlaylistFinishedStatusFormat));
     public static string PlaylistStatusFormat => Get(nameof(PlaylistStatusFormat));
@@ -1349,4 +1353,12 @@ public static class Strings
     public static string CueScheduleDaySun => Get(nameof(CueScheduleDaySun));
     public static string CueScheduleFiredStatusFormat => Get(nameof(CueScheduleFiredStatusFormat));
     public static string CueScheduleMissedStatusFormat => Get(nameof(CueScheduleMissedStatusFormat));
+    public static string CueTriggersSectionHeader => Get(nameof(CueTriggersSectionHeader));
+    public static string CueHotkeyLabel => Get(nameof(CueHotkeyLabel));
+    public static string CueHotkeyHint => Get(nameof(CueHotkeyHint));
+    public static string CueHotkeyFiredStatusFormat => Get(nameof(CueHotkeyFiredStatusFormat));
+    public static string CueRemoteFiredStatusFormat => Get(nameof(CueRemoteFiredStatusFormat));
+    public static string RemoteApiDocCueByRef => Get(nameof(RemoteApiDocCueByRef));
+    public static string CueMasterTrimLabel => Get(nameof(CueMasterTrimLabel));
+    public static string CueMasterTrimTooltip => Get(nameof(CueMasterTrimTooltip));
 }
