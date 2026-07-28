@@ -1501,6 +1501,9 @@
   <data name="CueAutoFollowFailedFormat" xml:space="preserve">
     <value>Auto-follow failed: {0}</value>
   </data>
+  <data name="CuePlaybackAlertFormat" xml:space="preserve">
+    <value>Audio fault on cue {0}: {1}</value>
+  </data>
   <data name="NDIPumpPressureStatusFormat" xml:space="preserve">
     <value>NDI output '{0}' dropped {1} frames in the last 5 s (total {2}) - receiver may be slow.</value>
   </data>
@@ -1533,6 +1536,15 @@
   </data>
   <data name="StopFadeMsAppDefaultHintFormat" xml:space="preserve">
     <value>App default ({0} ms)</value>
+  </data>
+  <data name="CueTransportHeader" xml:space="preserve">
+    <value>Cue transport</value>
+  </data>
+  <data name="CueTransportSettingsHint" xml:space="preserve">
+    <value>Per-machine defaults for the cue Stop and Panic fades. A cue list's own Stop fade setting overrides the Stop default; Panic always uses the Panic fade (0 = hard cut).</value>
+  </data>
+  <data name="PanicFadeMsLabel" xml:space="preserve">
+    <value>Panic fade (ms)</value>
   </data>
   <data name="FilesMenuLabel" xml:space="preserve">
     <value>Files…</value>
@@ -3933,6 +3945,12 @@
   </data>
   <data name="TimelineEmptyGroupHint" xml:space="preserve">
     <value>This group has no cues yet - add cues to arrange them in time</value>
+  </data>
+  <data name="TimelineEnvelopeLabel" xml:space="preserve">
+    <value>Envelope</value>
+  </data>
+  <data name="TimelineEnvelopeTooltip" xml:space="preserve">
+    <value>Show volume envelopes on media lanes. In edit mode: click the line to add a point, drag a point to move it, Delete removes it, right-click a segment to change its curve</value>
   </data>
   <data name="SchedulesArmedToggleLabel" xml:space="preserve">
     <value>Schedules</value>

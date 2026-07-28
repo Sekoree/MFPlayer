@@ -47,6 +47,8 @@ public sealed class TimelineGroupTests
 
         Assert.Equal([first.Id, middle.Id, late.Id], plan.Select(p => p.Cue.Id));
         Assert.Equal([100, 850, 2100], plan.Select(p => p.DelayMs));
+        // Timeline lanes overlap: every step fires in its own runtime transport group.
+        Assert.All(plan, p => Assert.True(p.Independent));
     }
 
     [Fact]
@@ -76,6 +78,42 @@ public sealed class TimelineGroupTests
         Assert.Contains(plan, p => p.Cue.Id == inner1.Id && p.DelayMs == 1075);
         Assert.Contains(plan, p => p.Cue.Id == inner2.Id && p.DelayMs == 1050);
         Assert.Equal(plan.OrderBy(p => p.DelayMs).Select(p => p.Cue.Id), plan.Select(p => p.Cue.Id));
+        Assert.All(plan, p => Assert.True(p.Independent)); // nested-lane flattening keeps the overlap flag
+    }
+
+    [Fact]
+    public void BuildTriggerPlan_IndependentFlag_TracksOverlapModes()
+    {
+        // Overlap modes (FireAllSimultaneously, Timeline - covered above) mark every step Independent;
+        // the sequential shared-group paths (FirstCueOnly, AutoContinue chains) never do.
+        var sim = new CueGroupNode
+        {
+            Label = "Sim",
+            FireMode = CueGroupFireMode.FireAllSimultaneously,
+            Children = { new MediaCueNode { Label = "A" }, new MediaCueNode { Label = "B" } },
+        };
+        var firstOnly = new CueGroupNode
+        {
+            Label = "First",
+            FireMode = CueGroupFireMode.FirstCueOnly,
+            Children = { new MediaCueNode { Label = "C" }, new MediaCueNode { Label = "D" } },
+        };
+        var anchor = new MediaCueNode { Label = "Anchor" };
+        var chained = new MediaCueNode { Label = "Chained", TriggerMode = CueTriggerMode.AutoContinue };
+
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([new CueList { Nodes = [sim, firstOnly, anchor, chained] }]);
+        var nodes = vm.SelectedCueList!.Nodes;
+
+        var simPlan = vm.BuildTriggerPlan(nodes[0]);
+        Assert.Equal(2, simPlan.Count);
+        Assert.All(simPlan, p => Assert.True(p.Independent));
+
+        Assert.False(Assert.Single(vm.BuildTriggerPlan(nodes[1])).Independent);
+
+        var chainPlan = vm.BuildTriggerPlan(nodes[2]); // anchor + its AutoContinue follower
+        Assert.Equal(2, chainPlan.Count);
+        Assert.All(chainPlan, p => Assert.False(p.Independent));
     }
 
     [Fact]

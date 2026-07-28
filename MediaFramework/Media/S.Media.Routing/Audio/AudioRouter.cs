@@ -1440,7 +1440,24 @@ public sealed partial class AudioRouter : IDisposable
 
                 if (!_clock.WaitForNextChunk(token))
                 {
-                    Trace.LogTrace("RunLoop: WaitForNextChunk returned false (cancelled={Cancelled})", token.IsCancellationRequested);
+                    if (!token.IsCancellationRequested)
+                    {
+                        // Not a stop: the pacing clock itself failed - typically the primary output's
+                        // callback faulted or the device vanished (its fail-fast WaitForCapacity returns
+                        // false). Exiting here kills every route on this router, so surface it as a fault
+                        // instead of dying with a trace line ("the show goes silent with no error").
+                        var reason = new InvalidOperationException(
+                            "AudioRouter pacing clock failed (primary output faulted or lost); run loop stopping.");
+                        if (_log is { } log)
+                            log.LogError(reason, "RunLoop: WaitForNextChunk failed without cancellation");
+                        else
+                            MediaDiagnostics.LogError(reason, "AudioRouter RunLoop: WaitForNextChunk failed without cancellation");
+                        RaiseFaulted(reason);
+                    }
+                    else
+                    {
+                        Trace.LogTrace("RunLoop: WaitForNextChunk returned false (cancelled=true)");
+                    }
                     break;
                 }
 

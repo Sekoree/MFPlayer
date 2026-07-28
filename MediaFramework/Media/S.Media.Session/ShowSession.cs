@@ -513,6 +513,42 @@ public sealed class ShowSession : IAsyncDisposable
         }
     }
 
+    // Routers already wired for alert forwarding: a router lives and dies with its clip's player, so
+    // entries expire with the router; the table only guards against double-subscribing the same
+    // router if one armed clip ever commits twice.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, object> _alertWiredRouters = new();
+
+    /// <summary>Forwards a freshly-committed clip's audio-router failure events to
+    /// <see cref="PlaybackAlert"/> (review §2.3: the backends latch callback faults and the pumps raise
+    /// <c>OutputErrored</c>, but without a session-level subscriber the app saw silence and a frozen
+    /// clock with no error anywhere). Handlers fire on audio/pump threads; the subscription lifetime is
+    /// the router's own (it is disposed with the player when the clip releases).</summary>
+    private void WireRouterAlerts(S.Media.Players.MediaPlayer player, string cueId)
+    {
+        if (player.AudioRouter is not { } router)
+            return;
+        if (!_alertWiredRouters.TryAdd(router, router))
+            return; // already forwarding for this router
+        router.OutputErrored += (_, e) => RaisePlaybackAlert(new ShowPlaybackAlert(
+            cueId, e.OutputId,
+            $"audio output '{e.OutputId}' failed mid-clip: {e.Exception.Message}", e.Exception));
+        router.Faulted += (_, e) => RaisePlaybackAlert(new ShowPlaybackAlert(
+            cueId, OutputId: null,
+            $"audio router faulted mid-clip (pacing output lost?): {e.Exception.Message}", e.Exception));
+    }
+
+    private void RaisePlaybackAlert(ShowPlaybackAlert alert)
+    {
+        try
+        {
+            PlaybackAlert?.Invoke(alert);
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "ShowSession.PlaybackAlert handler threw");
+        }
+    }
+
     /// <summary>Publishes what's playing to <see cref="MetadataHub"/>: an immediate filename-derived
     /// entry, refined by the host's metadata probe (tags + cover art) off the dispatcher when set.</summary>
     private void PublishItemMetadata(ShowClipBinding binding) =>
@@ -565,6 +601,13 @@ public sealed class ShowSession : IAsyncDisposable
     /// the host's cue auto-follow trigger (the legacy engine's <c>NaturalEnd</c>). Raised from the session
     /// dispatcher; marshal in the handler.</summary>
     public event Action<string>? ClipNaturallyEnded;
+
+    /// <summary>Raised when an active clip's audio path fails mid-show: an output's Submit threw (a latched
+    /// backend callback fault, a dying device stream) or the clip's whole audio router faulted (its pacing
+    /// clock failed - primary output lost). Without a subscriber these were silent - the operator saw a
+    /// frozen playhead and no sound with nothing in the log. Raised from audio/pump threads; marshal in the
+    /// handler. Best-effort diagnostics: the clip is NOT auto-stopped (video may still be running).</summary>
+    public event Action<ShowPlaybackAlert>? PlaybackAlert;
 
     /// <summary>Whether the session is disposed - for owned components' commit-time staleness checks
     /// (<see cref="VoicePlayer"/>); the public API throws via <see cref="ObjectDisposedException.ThrowIf"/>.</summary>
@@ -980,6 +1023,7 @@ public sealed class ShowSession : IAsyncDisposable
             // metadata hub learns what's playing (visualizers/overlays pick both up).
             AttachAudioTaps(player, binding.CueId);
             PublishItemMetadata(binding);
+            WireRouterAlerts(player, binding.CueId);
 
             armed.Start();
             await ReplaceActiveAsync(
@@ -1427,22 +1471,39 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>Ramps each route's gain from silence up to its configured target over <paramref name="duration"/>
     /// (the clip was attached silent). The ramp fraction multiplies each route's <c>TargetGain</c>, so a route
     /// set below or above unity fades up to exactly that level rather than to a hardcoded 1.0 (NXT-07).
-    /// A <see cref="FadeRamp"/>; cancelled when the clip is replaced.</summary>
+    /// A <see cref="FadeRamp"/>; cancelled when the clip is replaced. The ramp holds the group's clip-fade
+    /// slot: a Fade cue fired during the fade-in window preempts it via <see cref="TransportGroup.BeginClipFade"/>
+    /// and composes from whatever level the fade-in reached, and a claimed fade-out (operator stop/natural end)
+    /// stops it - without either, two 25 ms ramps would alternately overwrite the clip level and the fade-in's
+    /// final full-level step would destroy the fade cue's result.</summary>
     private void StartFadeIn(string groupId, S.Media.Players.MediaPlayer player,
         IReadOnlyList<AudioRouteTarget> routes, TimeSpan duration, FadeCurve curve, CancellationToken ct)
     {
         if (player.AudioSourceId is null)
             return;
 
+        // Dispatcher-confined caller (the fire path); a fresh clip can't have an in-flight fade cue,
+        // so this claim never cancels anything.
+        var slotToken = _groups.GetValueOrDefault(groupId)?.BeginClipFade() ?? CancellationToken.None;
         FadeRamp.Start(FadeStepInterval, ct, elapsed => InvokeAsync<bool>(() =>
         {
+            var group = _groups.GetValueOrDefault(groupId);
             if (ct.IsCancellationRequested ||
-                _groups.GetValueOrDefault(groupId)?.Active?.Player != player ||
+                slotToken.IsCancellationRequested || // a Fade cue took the clip's level over
+                group is null ||
+                group.Active?.Player != player ||
+                group.IsFadeOutClaimed ||            // a stop/natural fade-out owns the level now
                 player.AudioRouter is null)
+            {
+                group?.EndClipFade(slotToken);
                 return Task.FromResult(true);
+            }
             var frac = FadeRamp.LevelUp(elapsed, duration, curve);
-            _groups.GetValueOrDefault(groupId)?.ApplyAudioScale(player, routes, frac);
-            return Task.FromResult(frac >= 1f);
+            group.ApplyAudioScale(player, routes, frac);
+            if (frac < 1f)
+                return Task.FromResult(false);
+            group.EndClipFade(slotToken);
+            return Task.FromResult(true);
         }));
     }
 
@@ -2010,6 +2071,10 @@ public sealed class ShowSession : IAsyncDisposable
         FadeCurve curve = FadeCurve.Linear)
     {
         _fires.CancelActiveFire();
+        // An explicit non-positive duration hard-cuts even past a configured clip FadeOut (Panic
+        // semantics), matching StopAllAsync and this method's own contract.
+        if (fadeDuration is { } explicitDuration && explicitDuration <= TimeSpan.Zero)
+            fade = false;
         return StopGroupsCoreAsync(() => [GetOrAddGroup(groupId)], fade, fadeDuration, curve);
     }
 
@@ -3105,3 +3170,8 @@ public sealed class ShowSession : IAsyncDisposable
 /// the persistent fade level (what fade cues compose from), the volume-envelope factor, and their
 /// product - the effective level the route gains are actually written with.</summary>
 public sealed record ClipAudioLevels(float FadeLevel, float EnvelopeLevel, float EffectiveLevel);
+
+/// <summary>A mid-show audio-path failure surfaced by <see cref="ShowSession.PlaybackAlert"/>: the cue
+/// whose clip hit it, the router output id when one specific output errored (null = the clip's whole
+/// audio router faulted, i.e. its pacing clock/primary output died), and the underlying exception.</summary>
+public sealed record ShowPlaybackAlert(string CueId, string? OutputId, string Message, Exception Exception);

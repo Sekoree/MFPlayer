@@ -138,11 +138,8 @@ public sealed class NDIOutput : IDisposable
         }
         catch (Exception ex)
         {
-#if DEBUG
+            // Unconditional (review §2.9): Release must record why the sender never came up.
             MediaDiagnostics.LogError(ex, "NDIOutput: NDISender.Create");
-#else
-            _ = ex;
-#endif
             _runtime.Dispose();
             throw;
         }

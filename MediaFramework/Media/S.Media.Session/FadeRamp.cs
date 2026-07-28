@@ -11,8 +11,9 @@ public enum FadeCurve
     EqualPower,
 
     /// <summary>Cube law (p³) - the standard polynomial stand-in for a dB-linear (exponential) taper.
-    /// Tracks a true −60 dB exponential within ~2 dB over the audible ramp while still reaching exactly 0
-    /// (a real exponential never does).</summary>
+    /// Reaches exactly 0 (a real exponential never does) at the cost of accuracy: against a true −60 dB
+    /// dB-linear ramp it reads up to ~12 dB hot around the midpoint (−18 dB vs −30 dB at p=0.5), converging
+    /// again toward both ends - the classic audio-fader compromise, not a precise dB-linear law.</summary>
     Exponential,
 
     /// <summary>Smoothstep (p²(3−2p)): eases both ends of the ramp.</summary>

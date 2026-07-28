@@ -176,4 +176,8 @@ the wall-clock schedule, with the hardware-head wait only for an attached monito
 tail. `VizNdiEngine` now creates its sender with `clockVideo: false` (the pump's Stopwatch
 loop is the single video pacer; audio keeps the SDK throttle). On-device: playback with no
 AudioTrack at all, live monitor attach/detach mid-track, and track skip all verified with a
-clean error log. **Still open: input-device persistence (desktop, minor).**
+clean error log. **Input-device persistence (desktop) implemented 2026-07-28**:
+`HaVizDesktopSettings` (`%APPDATA%/HaViz/desktop.json`) persists the line-in device (by name -
+PortAudio ids are enumeration indexes), its channel picks, the monitor output device, and the
+Play-on-device toggle; selections restore by name at startup and fall back to the system
+default only when the saved device is absent. Nothing HaViz-side remains open in this doc.

@@ -145,3 +145,33 @@ Missing, and worth adding alongside the fixes above:
    correct and gives the app a real sample clock.
 4. Decide wire-or-prune for the dead clock machinery (§1 table).
 5. Cue player feature work (`CuePlayer-Enhancements.md` build order).
+
+## 5. Fix-round status (2026-07-28, verified by post-implementation review)
+
+§2 findings: **1, 4, 5, 10, 11 fixed and verified**; **6, 7 fixed** with benign residuals
+(documented in the review transcript). **3 now complete**: backends fail Submit/WaitForCapacity
+fast on a latched callback fault (commit `cdc326a2`), and the follow-up round closed the two
+gaps that made that dangerous — the router run loop raises `Faulted` (log-error, not a trace
+`break`) when the pacing clock fails without cancellation, and `ShowSession` subscribes every
+committed clip router's `OutputErrored`/`Faulted` into a new `ShowSession.PlaybackAlert` event
+that HaPlay's coordinator logs + surfaces as an operator status message. **9 fixed** (all
+`#if DEBUG`-only sink-failure logging in `VideoPlayer`/`NDISource`/`NDIOutput`/`OutputPump` is
+now unconditional, streak-throttled on hot paths; `NDISource` keeps its state consistent in
+Release). **12 fixed** (a wedged leaked pump raises `OutputErrored` → `PlaybackAlert`).
+**13 fixed** (nullable prime sentinel — a 0-position master no longer re-primes every tick).
+
+§1 additions: `NullClockedAudioOutput` implemented + tested (post-review: Start/Dispose race
+closed, dispose observed within ~100 ms in `WaitForCapacity`) but still has no production
+consumer. `SharedAudioOutput.ClientInput` now implements `IPlaybackClock` and the router
+promotes it to MediaClock master — the HaPlay shared-output drift gap is closed (post-review:
+a terminal-clock re-anchor is detected and the client clock resumes from its high-water mark
+instead of freezing at zero). Known limitation: the client clock leads the DAC by the
+client-bus + pump + device-ring latency (~100 ms constant bias), unlike `PortAudioOutput`'s
+latency-compensated clock — acceptable for now, noted for a latency pass.
+
+**Still open:** 2 (device-loss detection/OutputLost — no miniaudio notification callback, no
+polling; the biggest remaining "silent death" hole), 8 (miniaudio clock quality: no
+interpolation, no DAC-latency subtraction), 14 (seek/flush epoch generations), 15 (PortAudio
+0-then-jump startup latency), 16 (per-enumeration ma_context), and the §1 wire-or-prune
+decision for `CompositePlaybackClock`/`VideoPtsClock`/`NDIIngestPlaybackClock`(now monotonic
+but still unwired)/`OutputSyncGroup`/`TimecodeSyncKind`.

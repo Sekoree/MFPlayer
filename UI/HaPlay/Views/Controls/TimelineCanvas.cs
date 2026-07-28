@@ -9,6 +9,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Threading;
 using HaPlay.ViewModels;
 
 namespace HaPlay.Views.Controls;
@@ -17,8 +18,11 @@ namespace HaPlay.Views.Controls;
 /// Timeline editor surface for one Timeline group: a time ruler plus one lane per child in tree
 /// order. Media (and nested-group) blocks sit at <c>TimelineStartMs</c>; dragging the body moves the
 /// start, edge-drags trim <c>Start/EndOffsetMs</c> (content-anchored), corner handles drag
-/// <c>FadeIn/FadeOutMs</c>, zero-length cues are draggable diamond markers. All edits write through
-/// the bound <see cref="CueNodeViewModel"/> properties; geometry/snap math lives in
+/// <c>FadeIn/FadeOutMs</c>, zero-length cues are draggable diamond markers. Media lanes overlay the
+/// volume envelope (Phase B): click the line to add a point, drag a point to move it (dB/time
+/// readout), Delete removes the selected point, right-click a segment cycles its curve - every edit
+/// writes a NEW list to <see cref="CueNodeViewModel.VolumeEnvelope"/>. All edits write through the
+/// bound <see cref="CueNodeViewModel"/> properties; geometry/snap math lives in
 /// <see cref="TimelineMath"/> (the <see cref="CompositionPlacementCanvas"/> manual hit-test pattern).
 /// </summary>
 public sealed class TimelineCanvas : Control
@@ -47,6 +51,10 @@ public sealed class TimelineCanvas : Control
     public static readonly StyledProperty<double> PlayheadMsProperty =
         AvaloniaProperty.Register<TimelineCanvas, double>(nameof(PlayheadMs), -1);
 
+    /// <summary>Toolbar toggle: overlay the volume-envelope polyline on media lanes (default on).</summary>
+    public static readonly StyledProperty<bool> ShowEnvelopesProperty =
+        AvaloniaProperty.Register<TimelineCanvas, bool>(nameof(ShowEnvelopes), true);
+
     private readonly List<CueNodeViewModel> _watched = new();
 
     private CueNodeViewModel? _drag;
@@ -56,11 +64,28 @@ public sealed class TimelineCanvas : Control
     private int _dragStartOffsetMs;
     private int _dragEndOffsetMs;
     private int _dragBlockDurationMs;
+    private int _dragLaneIndex;
+    private int _dragEnvelopeIndex = -1;
+
+    // Envelope selection (Delete target) + the transient drag/right-click readout.
+    private CueNodeViewModel? _selectedEnvelopeNode;
+    private int _selectedEnvelopeIndex = -1;
+    private string? _readoutText;
+    private Point _readoutAnchor;
+    private readonly DispatcherTimer _readoutClearTimer;
 
     static TimelineCanvas()
     {
-        AffectsRender<TimelineCanvas>(SnapEnabledProperty, GridMsProperty, IsEditableProperty, PlayheadMsProperty);
+        AffectsRender<TimelineCanvas>(
+            SnapEnabledProperty, GridMsProperty, IsEditableProperty, PlayheadMsProperty, ShowEnvelopesProperty);
         AffectsMeasure<TimelineCanvas>(PixelsPerMsProperty, LanesProperty);
+    }
+
+    public TimelineCanvas()
+    {
+        Focusable = true; // Delete/Backspace remove the selected envelope point.
+        _readoutClearTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        _readoutClearTimer.Tick += (_, _) => ClearReadout();
     }
 
     public IEnumerable? Lanes
@@ -97,6 +122,12 @@ public sealed class TimelineCanvas : Control
     {
         get => GetValue(PlayheadMsProperty);
         set => SetValue(PlayheadMsProperty, value);
+    }
+
+    public bool ShowEnvelopes
+    {
+        get => GetValue(ShowEnvelopesProperty);
+        set => SetValue(ShowEnvelopesProperty, value);
     }
 
     public void ZoomIn() => SetZoom(PixelsPerMs * 1.5);
@@ -151,6 +182,7 @@ public sealed class TimelineCanvas : Control
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnDetachedFromVisualTree(e);
+        _readoutClearTimer.Stop();
         // The lane nodes outlive this window - drop the subscriptions or they pin the canvas.
         if (Lanes is INotifyCollectionChanged col)
             col.CollectionChanged -= OnLanesCollectionChanged;
@@ -214,6 +246,25 @@ public sealed class TimelineCanvas : Control
             var x = TimelineMath.XForMs(PlayheadMs, pxPerMs);
             ctx.DrawLine(new Pen(new SolidColorBrush(Color.FromRgb(0xE5, 0x39, 0x35)), 2), new Point(x, 0), new Point(x, height));
         }
+
+        RenderReadout(ctx, width);
+    }
+
+    /// <summary>Tooltip-style dB/time (or curve-name) readout near the pointer while an envelope
+    /// point drags or a segment curve was just cycled.</summary>
+    private void RenderReadout(DrawingContext ctx, double width)
+    {
+        if (_readoutText is null)
+            return;
+        var text = new FormattedText(_readoutText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            Typeface.Default, 11, Brushes.White);
+        var pos = new Point(
+            Math.Clamp(_readoutAnchor.X, 4, Math.Max(4, width - text.Width - 8)),
+            Math.Max(TimelineMath.RulerHeight, _readoutAnchor.Y));
+        ctx.FillRectangle(
+            new SolidColorBrush(Color.FromArgb(0xD8, 0x20, 0x20, 0x20)),
+            new Rect(pos.X - 4, pos.Y - 2, text.Width + 8, text.Height + 4));
+        ctx.DrawText(text, pos);
     }
 
     private void RenderGridAndRuler(DrawingContext ctx, double width, double height, double pxPerMs)
@@ -282,6 +333,76 @@ public sealed class TimelineCanvas : Control
             if (block.Width > 20)
                 ctx.DrawText(text, new Point(block.X + 4, block.Center.Y - text.Height / 2));
         }
+
+        if (ShowEnvelopes && node.Kind == CueNodeKind.Media)
+            RenderEnvelope(ctx, node, block, pxPerMs);
+    }
+
+    /// <summary>
+    /// Volume-envelope overlay for one media block: the level curve sampled every ~4 px (plus every
+    /// keyframe x, so vertices land exactly) through <see cref="TimelineMath.EnvelopeLevelDbAt"/> -
+    /// non-linear segments draw the same gain-domain shape playback applies. In edit mode it adds the
+    /// dotted 0 dB reference line and the keyframe dots (selected = ringed); an EMPTY envelope shows
+    /// only a dashed unity line while editing, as the click target for the first point.
+    /// </summary>
+    private void RenderEnvelope(DrawingContext ctx, CueNodeViewModel node, Rect block, double pxPerMs)
+    {
+        var envelope = node.VolumeEnvelope;
+        var editable = IsEditable && TimelineMath.IsTrimmable(node);
+        if (envelope.Count == 0 && !editable)
+            return;
+
+        var lineColor = Color.FromArgb(0xE6, 0x7F, 0xD8, 0x62);
+        if (envelope.Count == 0)
+        {
+            var flatPen = new Pen(
+                new SolidColorBrush(Color.FromArgb(0x80, lineColor.R, lineColor.G, lineColor.B)), 1)
+            { DashStyle = DashStyle.Dash };
+            var unityY = TimelineMath.EnvelopeYForDb(block, 0);
+            ctx.DrawLine(flatPen, new Point(block.X, unityY), new Point(block.Right, unityY));
+            return;
+        }
+
+        if (editable)
+        {
+            var refPen = new Pen(new SolidColorBrush(Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)), 1)
+            { DashStyle = DashStyle.Dot };
+            var refY = TimelineMath.EnvelopeYForDb(block, 0);
+            ctx.DrawLine(refPen, new Point(block.X, refY), new Point(block.Right, refY));
+        }
+
+        var xs = new List<double>();
+        for (var x = block.X; x < block.Right; x += 4)
+            xs.Add(x);
+        xs.Add(block.Right);
+        foreach (var point in envelope)
+        {
+            var px = block.X + Math.Max(0, point.TimeMs) * pxPerMs;
+            if (px <= block.Right)
+                xs.Add(px);
+        }
+        xs.Sort();
+
+        var line = new List<Point>(xs.Count);
+        foreach (var x in xs)
+        {
+            var levelDb = TimelineMath.EnvelopeLevelDbAt(envelope, (x - block.X) / pxPerMs);
+            line.Add(new Point(x, TimelineMath.EnvelopeYForDb(block, levelDb)));
+        }
+        ctx.DrawGeometry(null, new Pen(new SolidColorBrush(lineColor), 1.5), new PolylineGeometry(line, false));
+
+        if (!editable)
+            return;
+
+        var dotBrush = new SolidColorBrush(lineColor);
+        var selectedPen = new Pen(Brushes.White, 1.5);
+        for (var i = 0; i < envelope.Count; i++)
+        {
+            var center = TimelineMath.EnvelopePointCenter(block, envelope[i], pxPerMs);
+            var selected = ReferenceEquals(node, _selectedEnvelopeNode) && i == _selectedEnvelopeIndex;
+            var radius = TimelineMath.EnvelopePointRadiusPx + (selected ? 1.5 : 0);
+            ctx.DrawEllipse(dotBrush, selected ? selectedPen : null, center, radius, radius);
+        }
     }
 
     private void RenderFades(DrawingContext ctx, CueNodeViewModel node, Rect block, double pxPerMs)
@@ -338,10 +459,18 @@ public sealed class TimelineCanvas : Control
         base.OnPointerPressed(e);
         if (!IsEditable)
             return;
+        Focus(); // Delete/Backspace target the selected envelope point.
 
         var p = e.GetPosition(this);
         var lanes = LaneNodes();
         var pxPerMs = PixelsPerMs;
+
+        if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
+        {
+            if (ShowEnvelopes && TryCycleEnvelopeCurve(lanes, pxPerMs, p))
+                e.Handled = true;
+            return;
+        }
 
         for (var i = 0; i < lanes.Count; i++)
         {
@@ -357,13 +486,44 @@ public sealed class TimelineCanvas : Control
             {
                 var block = TimelineMath.BlockRect(i, node.TimelineStartMs, TimelineMath.BlockDurationMs(node), pxPerMs);
                 kind = TimelineMath.HitTestBlock(block, node.FadeInMs, node.FadeOutMs, pxPerMs, p, TimelineMath.IsTrimmable(node));
+
+                // Envelope hits beat the edge grips and the body (points are precise targets) but
+                // never the corner fade handles.
+                if (CanEditEnvelope(node)
+                    && kind is not (TimelineHitKind.FadeInHandle or TimelineHitKind.FadeOutHandle))
+                {
+                    var envelope = node.VolumeEnvelope;
+                    var pointIndex = TimelineMath.EnvelopePointHit(block, envelope, pxPerMs, p);
+                    if (pointIndex < 0 && kind == TimelineHitKind.Block
+                        && TimelineMath.EnvelopeLineHit(block, envelope, pxPerMs, p))
+                    {
+                        // Click ON the line (not on a point): add a keyframe at that time, sitting on
+                        // the line so nothing jumps, then drag it from here.
+                        var timeMs = TimelineMath.EnvelopeTimeForX(block, p.X, pxPerMs, node.EffectiveDurationMs);
+                        var levelDb = RoundLevel(TimelineMath.EnvelopeLevelDbAt(envelope, timeMs));
+                        pointIndex = TimelineMath.EnvelopeInsertIndex(envelope, timeMs);
+                        var added = new List<CueAutomationPoint>(envelope);
+                        added.Insert(pointIndex, new CueAutomationPoint { TimeMs = timeMs, LevelDb = levelDb });
+                        node.VolumeEnvelope = added;
+                    }
+
+                    if (pointIndex >= 0)
+                    {
+                        kind = TimelineHitKind.EnvelopePoint;
+                        _dragEnvelopeIndex = pointIndex;
+                        SelectEnvelopePoint(node, pointIndex);
+                    }
+                }
             }
 
             if (kind == TimelineHitKind.None)
                 continue;
 
+            if (kind != TimelineHitKind.EnvelopePoint)
+                ClearEnvelopeSelection();
             _drag = node;
             _dragKind = kind;
+            _dragLaneIndex = i;
             _dragStartMs = Math.Max(0, node.TimelineStartMs);
             _dragStartOffsetMs = Math.Max(0, node.StartOffsetMs);
             _dragEndOffsetMs = Math.Max(0, node.EndOffsetMs);
@@ -373,6 +533,79 @@ public sealed class TimelineCanvas : Control
             e.Handled = true;
             return;
         }
+
+        ClearEnvelopeSelection(); // clicked empty canvas
+    }
+
+    /// <summary>Envelope editing needs a media block whose trimmed span is known - same probe gate as
+    /// the trim/fade handles (the envelope time range has nothing to clamp against otherwise).</summary>
+    private bool CanEditEnvelope(CueNodeViewModel node) =>
+        ShowEnvelopes && node.Kind == CueNodeKind.Media && TimelineMath.IsTrimmable(node);
+
+    private static double RoundLevel(double levelDb) =>
+        Math.Round(levelDb / TimelineMath.EnvelopeLevelStepDb) * TimelineMath.EnvelopeLevelStepDb;
+
+    /// <summary>Right-click on the envelope line: cycle that segment's <c>CurveToNext</c>
+    /// (Linear → EqualPower → Exponential → SCurve) and flash the new curve's name - same enum names
+    /// the drawer's fade-curve combos display. The flat lead-in/tail have no segment to curve.</summary>
+    private bool TryCycleEnvelopeCurve(List<CueNodeViewModel> lanes, double pxPerMs, Point p)
+    {
+        for (var i = 0; i < lanes.Count; i++)
+        {
+            var node = lanes[i];
+            if (!CanEditEnvelope(node))
+                continue;
+            var block = TimelineMath.BlockRect(i, node.TimelineStartMs, TimelineMath.BlockDurationMs(node), pxPerMs);
+            var envelope = node.VolumeEnvelope;
+            if (!TimelineMath.EnvelopeLineHit(block, envelope, pxPerMs, p))
+                continue;
+
+            var segment = TimelineMath.EnvelopeSegmentAt(envelope, (p.X - block.X) / pxPerMs);
+            if (segment < 0)
+                return false;
+            var next = TimelineMath.NextCurve(envelope[segment].CurveToNext);
+            var updated = new List<CueAutomationPoint>(envelope);
+            updated[segment] = envelope[segment] with { CurveToNext = next };
+            node.VolumeEnvelope = updated;
+            ShowReadout(next.ToString(), new Point(p.X + 10, p.Y - 22), transient: true);
+            return true;
+        }
+        return false;
+    }
+
+    private void SelectEnvelopePoint(CueNodeViewModel node, int index)
+    {
+        _selectedEnvelopeNode = node;
+        _selectedEnvelopeIndex = index;
+        InvalidateVisual();
+    }
+
+    private void ClearEnvelopeSelection()
+    {
+        if (_selectedEnvelopeNode is null)
+            return;
+        _selectedEnvelopeNode = null;
+        _selectedEnvelopeIndex = -1;
+        InvalidateVisual();
+    }
+
+    private void ShowReadout(string text, Point anchor, bool transient)
+    {
+        _readoutText = text;
+        _readoutAnchor = anchor;
+        _readoutClearTimer.Stop();
+        if (transient)
+            _readoutClearTimer.Start();
+        InvalidateVisual();
+    }
+
+    private void ClearReadout()
+    {
+        _readoutClearTimer.Stop();
+        if (_readoutText is null)
+            return;
+        _readoutText = null;
+        InvalidateVisual();
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -385,7 +618,8 @@ public sealed class TimelineCanvas : Control
         }
 
         var pxPerMs = PixelsPerMs;
-        var pointerMs = TimelineMath.MsForX(e.GetPosition(this).X, pxPerMs);
+        var pointer = e.GetPosition(this);
+        var pointerMs = TimelineMath.MsForX(pointer.X, pxPerMs);
 
         switch (_dragKind)
         {
@@ -433,6 +667,30 @@ public sealed class TimelineCanvas : Control
                 _drag.FadeOutMs = Math.Clamp((int)Math.Round(end - pointerMs), 0, span);
                 break;
             }
+
+            case TimelineHitKind.EnvelopePoint:
+            {
+                var envelope = _drag.VolumeEnvelope;
+                if (_dragEnvelopeIndex < 0 || _dragEnvelopeIndex >= envelope.Count)
+                    break;
+
+                // Time clamps between the neighbors and the trimmed clip; level clamps −60..+12.
+                // The record is immutable - every step writes a NEW list through the VM.
+                var block = TimelineMath.BlockRect(
+                    _dragLaneIndex, _drag.TimelineStartMs, TimelineMath.BlockDurationMs(_drag), pxPerMs);
+                var timeMs = TimelineMath.EnvelopeClampDragTime(
+                    envelope, _dragEnvelopeIndex, (pointer.X - block.X) / pxPerMs, _drag.EffectiveDurationMs);
+                var levelDb = RoundLevel(TimelineMath.EnvelopeDbForY(block, pointer.Y));
+                var updated = new List<CueAutomationPoint>(envelope);
+                updated[_dragEnvelopeIndex] = envelope[_dragEnvelopeIndex] with { TimeMs = timeMs, LevelDb = levelDb };
+                _drag.VolumeEnvelope = updated;
+
+                var center = TimelineMath.EnvelopePointCenter(block, updated[_dragEnvelopeIndex], pxPerMs);
+                ShowReadout(
+                    $"{TimelineMath.FormatDbLabel(levelDb)} · {TimelineMath.FormatRulerLabel(timeMs)}",
+                    new Point(center.X + 10, center.Y - 22), transient: false);
+                break;
+            }
         }
 
         e.Handled = true;
@@ -443,11 +701,32 @@ public sealed class TimelineCanvas : Control
         base.OnPointerReleased(e);
         if (_drag is not null)
         {
+            if (_dragKind == TimelineHitKind.EnvelopePoint)
+                ClearReadout(); // the drag readout; the point stays selected for Delete
             _drag = null;
             _dragKind = TimelineHitKind.None;
+            _dragEnvelopeIndex = -1;
             e.Pointer.Capture(null);
             e.Handled = true;
         }
+    }
+
+    /// <summary>Delete/Backspace removes the selected envelope point (selection set by clicking or
+    /// adding a point; the canvas focuses itself on press so the keys land here).</summary>
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (!IsEditable || e.Key is not (Key.Delete or Key.Back))
+            return;
+        var node = _selectedEnvelopeNode;
+        if (node is null || _selectedEnvelopeIndex < 0 || _selectedEnvelopeIndex >= node.VolumeEnvelope.Count)
+            return;
+
+        var updated = new List<CueAutomationPoint>(node.VolumeEnvelope);
+        updated.RemoveAt(_selectedEnvelopeIndex);
+        node.VolumeEnvelope = updated;
+        ClearEnvelopeSelection();
+        e.Handled = true;
     }
 
     private void UpdateHoverCursor(Point p)
@@ -464,6 +743,7 @@ public sealed class TimelineCanvas : Control
         {
             var node = lanes[i];
             TimelineHitKind kind;
+            var envelopeLine = false;
             if (TimelineMath.IsMarker(node))
             {
                 kind = TimelineMath.MarkerContains(TimelineMath.MarkerCenter(i, node.TimelineStartMs, pxPerMs), p)
@@ -474,6 +754,18 @@ public sealed class TimelineCanvas : Control
             {
                 var block = TimelineMath.BlockRect(i, node.TimelineStartMs, TimelineMath.BlockDurationMs(node), pxPerMs);
                 kind = TimelineMath.HitTestBlock(block, node.FadeInMs, node.FadeOutMs, pxPerMs, p, TimelineMath.IsTrimmable(node));
+
+                // Mirror the press-time priority: envelope points (and the add-a-point line) win over
+                // edge grips and the body, never over the fade handles.
+                if (CanEditEnvelope(node)
+                    && kind is not (TimelineHitKind.FadeInHandle or TimelineHitKind.FadeOutHandle))
+                {
+                    if (TimelineMath.EnvelopePointHit(block, node.VolumeEnvelope, pxPerMs, p) >= 0)
+                        kind = TimelineHitKind.EnvelopePoint;
+                    else if (kind == TimelineHitKind.Block
+                             && TimelineMath.EnvelopeLineHit(block, node.VolumeEnvelope, pxPerMs, p))
+                        envelopeLine = true;
+                }
             }
 
             if (kind == TimelineHitKind.None)
@@ -482,6 +774,7 @@ public sealed class TimelineCanvas : Control
             Cursor = kind switch
             {
                 TimelineHitKind.LeftEdge or TimelineHitKind.RightEdge => new Cursor(StandardCursorType.SizeWestEast),
+                TimelineHitKind.Block when envelopeLine => new Cursor(StandardCursorType.Cross),
                 _ => new Cursor(StandardCursorType.Hand),
             };
             return;

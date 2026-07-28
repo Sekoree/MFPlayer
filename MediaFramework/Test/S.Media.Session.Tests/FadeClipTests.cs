@@ -98,6 +98,36 @@ public sealed class FadeClipTests
     }
 
     [Fact]
+    public async Task FadeCue_PreemptsARunningFadeInRamp()
+    {
+        // The fade-in ramp holds the group's clip-fade slot: a Fade cue fired during the fade-in
+        // window preempts it via BeginClipFade and owns the level from there. Regression: the
+        // fade-in ramp used to keep running underneath the fade cue and its final full-level step
+        // popped the level back to 1.0 once the FadeIn duration elapsed.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips: [new ShowClipBinding("c", "fake://x") { FadeIn = TimeSpan.FromSeconds(2) }],
+            Compositions: [], Routes: []);
+        // A real audio backend matters here: the fade-in ramp only starts when the clip actually
+        // routed to an output (routeTargets non-empty) - without one there is no ramp to preempt.
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(chunks: 100_000), new RecordingAudioBackend());
+        await session.LoadDocumentAsync(doc);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+
+        await Task.Delay(200); // the 2s fade-in ramp is underway
+        await session.FadeClipAsync("c", 0.3f, TimeSpan.FromMilliseconds(200), stopWhenSilent: false);
+
+        await Task.Delay(2200); // well past the FadeIn window - a surviving fade-in would have hit 1.0
+        var levels = await session.GetClipAudioLevelsAsync("c");
+        Assert.NotNull(levels);
+        Assert.Equal(0.3f, levels!.FadeLevel, 3); // the fade cue's level held
+        Assert.Equal(0.3f, levels.EffectiveLevel, 3); // and it is what the routes are written with
+        Assert.True(Assert.Single(session.Snapshot()).IsActive);
+    }
+
+    [Fact]
     public async Task FadeClip_ForACueThatIsNotPlaying_IsANoOp()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));

@@ -442,6 +442,30 @@
               </StackPanel>
             </Border>
 
+            <!-- Cue transport fade defaults - per-machine (AppSettings), the fallbacks the cue Stop/Panic
+                 press resolves when the cue list carries no override (CuePlayer-Enhancements §1). -->
+            <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{x:Static res:Strings.CueTransportHeader}" FontWeight="SemiBold" />
+                <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
+                           Text="{x:Static res:Strings.CueTransportSettingsHint}" />
+                <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto" Margin="0,4,0,0">
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StopFadeMsLabel}"
+                             VerticalAlignment="Center" TextWrapping="Wrap" />
+                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="60000" Increment="50"
+                                 FormatString="0"
+                                 Value="{Binding CueStopFadeMs}"
+                                 HorizontalAlignment="Stretch" />
+                  <TextBlock Grid.Column="3" Text="{x:Static res:Strings.PanicFadeMsLabel}"
+                             VerticalAlignment="Center" TextWrapping="Wrap" />
+                  <NumericUpDown Grid.Column="4" Minimum="0" Maximum="60000" Increment="50"
+                                 FormatString="0"
+                                 Value="{Binding CuePanicFadeMs}"
+                                 HorizontalAlignment="Stretch" />
+                </Grid>
+              </StackPanel>
+            </Border>
+
             <!-- Remote API - per-machine HTTP control surface for show controllers. -->
             <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">

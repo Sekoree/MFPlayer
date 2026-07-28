@@ -182,8 +182,12 @@ public sealed class SharedAudioOutput : IDisposable
         private readonly ManualResetEventSlim _spaceAvailable = new(false);
         private readonly IPlaybackClock? _terminalClock;
         private readonly System.Diagnostics.Stopwatch _fallbackElapsed = System.Diagnostics.Stopwatch.StartNew();
+        private readonly Lock _epochGate = new();
         private long _terminalEpochTicks;
         private long _fallbackEpochTicks;
+        /// <summary>High-water mark of reported elapsed since the last deliberate re-anchor - the
+        /// resume point when a terminal-clock regression forces the epoch to be re-derived.</summary>
+        private long _maxSinceEpochTicks;
         private int _disposed;
         // A timed Wait can inflate the event to a kernel-backed handle, so it IS disposed - but only
         // once the last waiter drained (review P3-1); disposing under a live Wait would race it.
@@ -205,9 +209,11 @@ public sealed class SharedAudioOutput : IDisposable
 
         /// <summary>
         /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: terminal device time minus this client's
-        /// epoch, clamped at zero (the clamp also absorbs an externally flushed terminal whose own
-        /// epoch regressed below ours). Terminal reads go through its thread-safe properties only
-        /// and never throw out of here - any failure degrades to the stopwatch domain.
+        /// epoch, clamped at zero. A terminal whose own clock re-anchored (device stop/start, an
+        /// external flush) is detected as a regression below our epoch and the epoch is re-derived
+        /// so this clock resumes from its high-water mark instead of freezing at zero until the
+        /// terminal re-passes the stale epoch. Terminal reads go through its thread-safe properties
+        /// only and never throw out of here - any failure degrades to the stopwatch domain.
         /// </summary>
         public TimeSpan ElapsedSinceStart
         {
@@ -217,7 +223,17 @@ public sealed class SharedAudioOutput : IDisposable
                 {
                     try
                     {
-                        var ticks = _terminalClock.ElapsedSinceStart.Ticks - Volatile.Read(ref _terminalEpochTicks);
+                        var terminalTicks = _terminalClock.ElapsedSinceStart.Ticks;
+                        var ticks = terminalTicks - Volatile.Read(ref _terminalEpochTicks);
+                        if (ticks < 0)
+                            ticks = RecoverFromTerminalRegression(terminalTicks);
+                        // High-water mark: the resume point for a later regression recovery.
+                        for (var seen = Volatile.Read(ref _maxSinceEpochTicks); ticks > seen;)
+                        {
+                            var previous = Interlocked.CompareExchange(ref _maxSinceEpochTicks, ticks, seen);
+                            if (previous == seen) break;
+                            seen = previous;
+                        }
                         return ticks > 0 ? new TimeSpan(ticks) : TimeSpan.Zero;
                     }
                     catch
@@ -228,6 +244,24 @@ public sealed class SharedAudioOutput : IDisposable
 
                 var fallbackTicks = _fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _fallbackEpochTicks);
                 return fallbackTicks > 0 ? new TimeSpan(fallbackTicks) : TimeSpan.Zero;
+            }
+        }
+
+        /// <summary>Re-derives the epoch after the terminal clock regressed below it (it re-anchored):
+        /// epoch = terminal-now − high-water mark, so the client clock continues monotonically from the
+        /// furthest position it ever reported rather than freezing. Returns the recovered elapsed ticks.
+        /// Serialized so concurrent readers re-derive once; a deliberate re-anchor (attach/Flush) that
+        /// raced in first wins - its fresh epoch shows no regression on the re-check.</summary>
+        private long RecoverFromTerminalRegression(long terminalTicks)
+        {
+            lock (_epochGate)
+            {
+                var ticks = terminalTicks - Volatile.Read(ref _terminalEpochTicks);
+                if (ticks >= 0)
+                    return ticks; // another reader (or a Flush) already fixed the epoch
+                var resume = Volatile.Read(ref _maxSinceEpochTicks);
+                Volatile.Write(ref _terminalEpochTicks, terminalTicks - resume);
+                return resume;
             }
         }
 
@@ -254,16 +288,20 @@ public sealed class SharedAudioOutput : IDisposable
         /// <summary>Re-captures both epoch baselines so <see cref="ElapsedSinceStart"/> restarts at zero.</summary>
         private void ReanchorPlaybackEpoch()
         {
-            Volatile.Write(ref _fallbackEpochTicks, _fallbackElapsed.Elapsed.Ticks);
-            if (_terminalClock is null)
-                return;
-            try
+            lock (_epochGate)
             {
-                Volatile.Write(ref _terminalEpochTicks, _terminalClock.ElapsedSinceStart.Ticks);
-            }
-            catch
-            {
-                // Keep the previous baseline; reads degrade to the stopwatch domain anyway.
+                Volatile.Write(ref _fallbackEpochTicks, _fallbackElapsed.Elapsed.Ticks);
+                Volatile.Write(ref _maxSinceEpochTicks, 0); // a deliberate reset-to-zero clears the resume point
+                if (_terminalClock is null)
+                    return;
+                try
+                {
+                    Volatile.Write(ref _terminalEpochTicks, _terminalClock.ElapsedSinceStart.Ticks);
+                }
+                catch
+                {
+                    // Keep the previous baseline; reads degrade to the stopwatch domain anyway.
+                }
             }
         }
 

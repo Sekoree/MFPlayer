@@ -156,6 +156,10 @@ public partial class MainViewModel : ViewModelBase
         _restApiAccessToken = _appSettings.RestApiAccessToken ?? string.Empty;
         RestartRestApi();
 
+        // Cue transport fade defaults (per-machine) - same seed-via-backing-field pattern.
+        _cueStopFadeMs = Math.Max(0, _appSettings.StopFadeMs);
+        _cuePanicFadeMs = Math.Max(0, _appSettings.PanicFadeMs);
+
         // Session restore: start capturing to the cache. The startup scan for a crashed session runs later, once
         // the window is up (MainWindow.OnOpened → CheckForRecoverableSessionAsync), so it can show a dialog.
         _recovery = new SessionRecoveryService(
@@ -231,6 +235,15 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RestApiBaseUrlDisplay))]
     private bool _restApiEnabled;
+
+    /// <summary>Per-machine cue transport Stop-fade default (ms) - the fallback when a cue list sets
+    /// no <c>CueList.StopFadeMs</c> of its own (Ideas/CuePlayer-Enhancements.md §1).</summary>
+    [ObservableProperty]
+    private int _cueStopFadeMs;
+
+    /// <summary>Per-machine Panic fade (ms); 0 (the default) = hard cut - panic means NOW.</summary>
+    [ObservableProperty]
+    private int _cuePanicFadeMs;
 
     [ObservableProperty]
     private int _restApiPort = 8990;
@@ -323,6 +336,18 @@ public partial class MainViewModel : ViewModelBase
         RestartRestApi();
     }
 
+    partial void OnCueStopFadeMsChanged(int value)
+    {
+        _appSettings.StopFadeMs = Math.Max(0, value);
+        SaveOwnedAppSettings();
+    }
+
+    partial void OnCuePanicFadeMsChanged(int value)
+    {
+        _appSettings.PanicFadeMs = Math.Max(0, value);
+        SaveOwnedAppSettings();
+    }
+
     /// <summary>Persists ONLY this view-model's owned settings fields via the merge-safe write path
     /// (review H5): serializing the long-lived `_appSettings` snapshot clobbered fields other writers
     /// (visualizer dialog, playlist toggles, dialog sizes) had saved since startup.</summary>
@@ -339,6 +364,8 @@ public partial class MainViewModel : ViewModelBase
         s.Theme = _appSettings.Theme;
         s.Density = _appSettings.Density;
         s.CueHotkeys = _appSettings.CueHotkeys.Copy();
+        s.StopFadeMs = _appSettings.StopFadeMs;
+        s.PanicFadeMs = _appSettings.PanicFadeMs;
     });
 
     private void RestartRestApi()

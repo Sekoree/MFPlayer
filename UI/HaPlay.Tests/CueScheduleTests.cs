@@ -219,6 +219,34 @@ public sealed class CueScheduleTests
     }
 
     [Fact]
+    public async Task Scheduler_ZeroGrace_StillFires_WhenObservedLateByLessThanTheSweepFloor()
+    {
+        // The sweep itself observes an occurrence 0..TickInterval late, so the effective grace is
+        // floored at 2×TickInterval (500 ms): GraceMs 0 means "fire at the next tick", not "never
+        // fires". Regression: a 300 ms-late observation was silently skipped as beyond grace.
+        var h = BuildHarness(
+            new CueSchedule { Kind = CueScheduleKind.TimeOfDay, TimeOfDay = new TimeOnly(15, 0), GraceMs = 0 },
+            start: At(new TimeSpan(14, 59, 50)));
+
+        h.Scheduler.Tick(); // not due yet
+        await AssertNoFiresAsync(h);
+
+        h.Clock.Now = At(new TimeSpan(15, 0, 0)) + TimeSpan.FromMilliseconds(300); // < 2×TickInterval late
+        h.Scheduler.Tick();
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+
+        // Beyond the floor the zero grace still skips (the floor is a sweep allowance, not a new
+        // minimum grace of "whenever"): a fresh occurrence observed 2 s late is dropped with a log.
+        var late = BuildHarness(
+            new CueSchedule { Kind = CueScheduleKind.TimeOfDay, TimeOfDay = new TimeOnly(15, 0), GraceMs = 0 },
+            start: At(new TimeSpan(14, 59, 50)));
+        late.Clock.Now = At(new TimeSpan(15, 0, 2));
+        late.Scheduler.Tick();
+        await AssertNoFiresAsync(late);
+        Assert.Contains("beyond grace", late.Vm.StatusMessage ?? string.Empty);
+    }
+
+    [Fact]
     public async Task Scheduler_SkipsBeyondGrace_LogsOnce_AndCatchesTheNextDay()
     {
         var h = BuildHarness(

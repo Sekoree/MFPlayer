@@ -264,3 +264,35 @@ path and the rebind dialog); scheduler misfire policy once §4 exists.
 6. Timeline editor (`CuePlayer-Timeline-Editor.md`) — builds on §1 curves and the per-route
    gain fix.
 7. Dual-voice crossfade (framework feature, unlocks playlist crossfade).
+
+---
+
+## Implementation status (2026-07-28)
+
+**Done (commit `e2def532` + the post-review fix round):** §1 stop fade + curves end to end
+(instance `ShowSession.DefaultStopFade`, Stop/StopAll fade+curve overloads, per-cue curves,
+`CueList.StopFadeMs`/`StopFadeCurve`, `AppSettings.StopFadeMs`/`PanicFadeMs` — now editable in
+the Project workspace's "Cue transport" box; explicit zero fade hard-cuts on BOTH Stop entry
+points). §2 FadeCueNode fully wired (`FadeClipAsync`, `ClipLevel` composition; the fade-in ramp
+now holds the clip-fade slot so a Fade cue preempts it instead of fighting/destroying its
+level). §3 playlist groups incl. ArmedList-as-GO-advance (post-review: `AvoidImmediateRepeat`
+is shuffle-only; nested playlist picks consume recursively and a completed inner run routes to
+the enclosing run — nesting no longer stalls). §4 scheduler (post-review: effective grace is
+floored at 2× the sweep period so `GraceMs = 0` means "next tick", not "never"). §5 leaks
+#1–#4 fixed (#5: HaPlay's Add-input dialog already persists concrete device names; blank-name
+descriptors only occur hand-authored, where default-follow is arguably intended — dropped).
+§6: per-route gain fix DONE (differing-gain routes now map to per-cell `MatrixCells`; the
+dB-mean collapse only survives as the uniform-gain fast path), `.haplaycues` version guard
+DONE (fails closed on `HaPlayCueList/v4+`), JSON contexts complete (incl. `CueAutomationPoint`).
+
+**Overlap semantics fix worth knowing about:** Timeline/FireAllSimultaneously plan steps now
+fire each media cue in its OWN runtime transport group at every delay (not just same-delay
+batches) — previously a later lane's fire replaced the earlier lane's clip in the shared
+authored group, so lanes couldn't actually overlap.
+
+**Still open:** §6 `MediaCueNode.LevelDb` per-cue master (wants the route-matrix anchor, now in
+place), pre-wait countdown visibility, MIDI/OSC/hotkey per-cue triggers, panic slider,
+dual-voice crossfade (§3 `CrossfadeMs` still deliberately unimplemented). Scheduler remains
+scoped to the SELECTED cue list (documented in code; schedules in other lists never fire) —
+surface or widen next round. Timeline canvas renders blocks at `TimelineStartMs` while the
+audible start is `+PreWaitMs`, and `TimelineStartMs` has no numeric drawer field yet.

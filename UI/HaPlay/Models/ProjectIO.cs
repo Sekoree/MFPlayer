@@ -103,6 +103,9 @@ public static class CueListIO
 {
     public const string FileExtension = "haplaycues";
 
+    /// <summary>Highest <c>HaPlayCueList/vN</c> schema this build reads (the version written today).</summary>
+    public const int MaxSupportedSchemaVersion = 3;
+
     public static async Task<CueList> LoadAsync(string path, CancellationToken cancellationToken = default)
     {
         await using var stream = File.OpenRead(path);
@@ -111,7 +114,21 @@ public static class CueListIO
             .ConfigureAwait(false);
         if (config is null)
             throw new InvalidDataException($"Cue list file '{path}' contains no JSON object.");
+        // Fail closed on files written by a NEWER build: a future v4 file would otherwise
+        // half-deserialize into v3 defaults (every other document type already range-checks).
+        // Blank or unrecognized schema strings load leniently - old/hand-edited files are covered
+        // by the record defaults; only an explicit higher version is a hard error.
+        if (TryParseSchemaVersion(config.Schema) is { } version && version > MaxSupportedSchemaVersion)
+            throw new UnsupportedCueListSchemaException(config.Schema, MaxSupportedSchemaVersion);
         return config;
+    }
+
+    private static int? TryParseSchemaVersion(string? schema)
+    {
+        const string prefix = "HaPlayCueList/v";
+        if (schema is null || !schema.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return int.TryParse(schema.AsSpan(prefix.Length), out var version) ? version : null;
     }
 
     public static async Task SaveAsync(CueList config, string path, CancellationToken cancellationToken = default)
@@ -247,6 +264,19 @@ public static class SoundboardsIO
             path,
             HaPlayProjectJsonContext.Default.SoundboardsCollectionDocument,
             cancellationToken);
+}
+
+public sealed class UnsupportedCueListSchemaException : Exception
+{
+    public UnsupportedCueListSchemaException(string? schema, int supportedVersion)
+        : base($"Cue list schema '{schema}' is newer than this build supports (max: HaPlayCueList/v{supportedVersion}).")
+    {
+        Schema = schema;
+        SupportedVersion = supportedVersion;
+    }
+
+    public string? Schema { get; }
+    public int SupportedVersion { get; }
 }
 
 public sealed class UnsupportedSoundboardsSchemaVersionException : Exception

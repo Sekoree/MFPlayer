@@ -65,9 +65,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private const int MaxConsecutivePlaybackErrors = 3;
     private int _consecutivePlaybackErrors;
 
+    // Loaded once at startup; device selections are matched by name after each device refresh and
+    // written back on every operator change (a show box must keep its picks across USB churn/restarts).
+    private HaVizDesktopSettings _settings;
+    private bool _restoringSettings;
+
     public MainViewModel()
     {
         PresetDirectory = ResolvePresetDirectory() ?? "";
+        _settings = HaVizDesktopSettings.Load();
 
         try
         {
@@ -98,7 +104,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             };
             _player.PlaybackEnded += OnTrackEnded;
             _player.PlaybackError += OnPlaybackError;
-            // The property default (off) never fires the changed hook - sync it explicitly.
+            // Restore the persisted toggle BEFORE the explicit sync; the hook only fires on a
+            // change, so the sync below still covers the (default) unchanged case.
+            _restoringSettings = true;
+            PlayOnDevice = _settings.PlayOnDevice;
+            _restoringSettings = false;
             _player.SetLocalOutputEnabled(PlayOnDevice);
             if (backend is null)
                 PlayerStatus = "no audio backend (PortAudio missing?) - playback works, local monitoring is unavailable";
@@ -377,13 +387,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 OutputDevices.Add(new OutputDeviceChoice(device.Id, device.Name));
         }
 
-        SelectedOutputDevice = OutputDevices[0];
+        // Restore the persisted monitor device by NAME (ids are enumeration indexes); a device
+        // that is gone right now falls back to "System default" without erasing the saved pick.
+        _restoringSettings = true;
+        SelectedOutputDevice = (_settings.OutputDeviceName is { } savedName
+                                   ? OutputDevices.FirstOrDefault(d => d.Display == savedName)
+                                   : null)
+                               ?? OutputDevices[0];
+        _restoringSettings = false;
+        _player?.SetOutputDevice(SelectedOutputDevice?.Id); // the hook only fires on a change
     }
 
-    partial void OnSelectedOutputDeviceChanged(OutputDeviceChoice? value) =>
+    partial void OnSelectedOutputDeviceChanged(OutputDeviceChoice? value)
+    {
         _player?.SetOutputDevice(value?.Id); // applies from the next track
+        PersistDeviceSettings();
+    }
 
-    partial void OnPlayOnDeviceChanged(bool value) => _player?.SetLocalOutputEnabled(value);
+    partial void OnPlayOnDeviceChanged(bool value)
+    {
+        _player?.SetLocalOutputEnabled(value);
+        PersistDeviceSettings();
+    }
 
     // --- line-in capture ---
     private void RefreshInputDevices()
@@ -391,7 +416,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         InputDevices.Clear();
         foreach (var entry in LineInCapture.EnumerateDevices())
             InputDevices.Add(new InputDeviceChoice(entry));
-        SelectedInputDevice = InputDevices.FirstOrDefault(d => d.Entry.IsDefault) ?? InputDevices.FirstOrDefault();
+        // Persisted pick (by name) first - a show box's "default" input moves with USB churn;
+        // only fall back to the system default when the saved device is absent (or none saved).
+        _restoringSettings = true;
+        SelectedInputDevice = (_settings.InputDeviceName is { } savedName
+                                  ? InputDevices.FirstOrDefault(d => d.Entry.Name == savedName)
+                                  : null)
+                              ?? InputDevices.FirstOrDefault(d => d.Entry.IsDefault)
+                              ?? InputDevices.FirstOrDefault();
+        _restoringSettings = false;
         if (InputDevices.Count == 0)
             CaptureStatus = "No input devices found (PortAudio missing or no hardware).";
     }
@@ -401,8 +434,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         InputChannels.Clear();
         if (value is null)
             return;
+        // The saved channel picks apply only to the saved device; any other device gets the
+        // first-stereo-pair default.
+        var saved = value.Entry.Name == _settings.InputDeviceName ? _settings.InputChannelIndices : null;
         for (var i = 0; i < value.Entry.MaxInputChannels; i++)
-            InputChannels.Add(new ChannelChoice(i) { IsSelected = i < 2 }); // default: first stereo pair
+        {
+            var selected = saved is { Length: > 0 } ? Array.IndexOf(saved, i) >= 0 : i < 2;
+            InputChannels.Add(new ChannelChoice(i) { IsSelected = selected });
+        }
+
+        PersistDeviceSettings();
+    }
+
+    /// <summary>Writes the current device selections through to disk (no-op while a refresh is
+    /// restoring them). Channel indices are captured from the live checkbox states so a capture
+    /// start persists the channels actually in use.</summary>
+    private void PersistDeviceSettings()
+    {
+        if (_restoringSettings)
+            return;
+        _settings = _settings with
+        {
+            InputDeviceName = SelectedInputDevice?.Entry.Name,
+            InputChannelIndices = InputChannels.Where(c => c.IsSelected).Select(c => c.Index).ToArray(),
+            OutputDeviceName = SelectedOutputDevice?.Id is null ? null : SelectedOutputDevice.Display,
+            PlayOnDevice = PlayOnDevice,
+        };
+        _settings.Save();
     }
 
     [RelayCommand]
@@ -434,6 +492,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _capture.Start(device.Entry, channels, SubmitPcm);
             IsCapturing = true;
             CaptureStatus = $"Capturing ch {string.Join("+", channels.Select(c => c + 1))} of '{device.Entry.Name}' → visualizer + NDI.";
+            PersistDeviceSettings(); // checkbox toggles have no hook - capture start commits the channel picks
         }
         catch (Exception ex)
         {

@@ -475,6 +475,19 @@ public sealed partial class CueNodeViewModel : ObservableObject
     /// and to preserve sidecar selections / style overrides not editable in the embedded-track picker.</summary>
     public IReadOnlyList<HaPlay.Models.CueSubtitleSelection> PersistedSubtitles { get; init; } = [];
 
+    /// <summary>The media cue's volume-automation envelope (timeline editor Phase B). Mutable passthrough:
+    /// today only the timeline editor writes it; everything else must round-trip it unchanged so a file
+    /// carrying an envelope never loses it on save (it is NOT edited via the drawer). Change-notifies so
+    /// the timeline canvas re-renders on edits; dirty tracking needs nothing extra (the project hash is
+    /// the dirty flag, and <c>ToModel</c> carries the new list into the snapshot).</summary>
+    public IReadOnlyList<HaPlay.Models.CueAutomationPoint> VolumeEnvelope
+    {
+        get => _volumeEnvelope;
+        set => SetProperty(ref _volumeEnvelope, value);
+    }
+
+    private IReadOnlyList<HaPlay.Models.CueAutomationPoint> _volumeEnvelope = [];
+
     /// <summary>Embedded subtitle tracks for this cue's source, each with its own none/one/many toggle.</summary>
     public ObservableCollection<CueSubtitleTrackChoice> SubtitleTrackChoices { get; } = new();
 
@@ -1514,6 +1527,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
+                    VolumeEnvelope = m.VolumeEnvelope,
                     SourceCapabilitiesKnown = m.HasVideo || m.HasAudio || m.AudioChannels > 0,
                 };
                 foreach (var route in m.AudioRoutes)
@@ -1701,6 +1715,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 EndOffsetMs = Math.Max(0, EndOffsetMs),
                 Loop = Loop,
                 EndBehavior = EndBehavior,
+                VolumeEnvelope = VolumeEnvelope,
                 AudioRoutes = AudioRoutes.Select(r => r.ToModel()).ToList(),
                 VideoPlacements = VideoPlacements.Select(p => p.ToModel()).ToList(),
             },

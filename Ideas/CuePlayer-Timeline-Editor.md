@@ -162,3 +162,33 @@ block/handle/point picking as pure functions.
 3. **C**: Waveforms in blocks, snapping polish, event markers for non-media cues.
 4. **D**: Duck presets ("sidechain-lite": authoring helper that writes an envelope dip into
    the bed for the duration of an overlapping voice-over lane — pure editor sugar, no runtime).
+
+## Implementation status (2026-07-28)
+
+**Phase A shipped** (`e2def532`): Timeline fire mode, `TimelineStartMs`, editor window +
+`TimelineCanvas`/`TimelineMath` with lanes/drag/trim/fade handles/snap/markers/live playhead,
+plan integration with pause shift. Post-review fix: plan steps now fire each media lane in its
+own runtime transport group, so lanes genuinely overlap (the shared authored group used to
+replace the earlier lane's clip).
+
+**Phase B is plumbed end-to-end but has no editor UI yet.** Framework side complete
+(`ShowClipBinding.VolumeEnvelope`, `VolumeEnvelopes.Sample`, per-clip runner,
+`EnvelopeLevel × ClipLevel` composition in `ApplyAudioScale`); GUI model field
+`MediaCueNode.VolumeEnvelope` + `CueAutomationPoint` exist, round-trip through
+`CueNodeViewModel` and the JSON contexts, and the mapper now converts dB points → linear
+`ShowEnvelopePoint`s (`HaPlayShowMapper.MapVolumeEnvelope`). A hand-authored envelope in a
+`.haplaycues` file plays correctly today.
+
+**Phase B editor UI shipped later the same day**: envelope overlay in `TimelineCanvas`
+(toolbar toggle, default on) - sampled polyline whose interpolation mirrors
+`VolumeEnvelopes.Sample` exactly (WYSIWYG vs playback), keyframe dots, dotted 0 dB reference
+at 1/6 from the block top (+12 dB top edge, −60 dB bottom), dashed unity line on empty
+envelopes while editing. Edit-mode interactions: click-the-line adds a point, drag moves
+(clamped at neighbors and the trimmed range, dB/time readout), Delete removes, right-click
+cycles the segment curve. All pure math + hit-testing in `TimelineMath`
+(`TimelineEnvelopeMathTests`, 13 facts). Edits write new lists through
+`CueNodeViewModel.VolumeEnvelope` (now change-notifying), so persistence/dirty-hash paths
+need nothing extra. Phase B is complete end-to-end.
+
+**Phase C**: markers + snapping shipped with A; waveforms-in-blocks not started. **D**: not
+started. Known nit: blocks render at `TimelineStartMs`, audible start is `+PreWaitMs`.

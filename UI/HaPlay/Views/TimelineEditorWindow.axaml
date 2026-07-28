@@ -11,9 +11,9 @@
         WindowStartupLocation="CenterOwner">
   <Grid RowDefinitions="Auto,*" RowSpacing="8" Margin="12">
 
-    <!-- Toolbar: zoom fit/±, snap toggle, grid choice. Zoom acts on the canvas directly (view
-         concern - the viewport width lives here, not in the VM). -->
-    <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+    <!-- Toolbar: zoom fit/±, snap toggle, grid choice, envelope overlay toggle. Zoom acts on the
+         canvas directly (view concern - the viewport width lives here, not in the VM). -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
       <Button Grid.Column="0" Content="{x:Static res:Strings.TimelineZoomFitButton}"
               ToolTip.Tip="{x:Static res:Strings.TimelineZoomFitTooltip}" Click="OnZoomFitClick" />
       <Button Grid.Column="1" Content="−" MinWidth="32"
@@ -34,7 +34,10 @@
           </DataTemplate>
         </ComboBox.ItemTemplate>
       </ComboBox>
-      <TextBlock Grid.Column="6" HorizontalAlignment="Right" VerticalAlignment="Center"
+      <CheckBox Grid.Column="6" Content="{x:Static res:Strings.TimelineEnvelopeLabel}"
+                ToolTip.Tip="{x:Static res:Strings.TimelineEnvelopeTooltip}"
+                IsChecked="{Binding ShowEnvelopes, Mode=TwoWay}" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="7" HorizontalAlignment="Right" VerticalAlignment="Center"
                  Opacity="0.6" Text="{x:Static res:Strings.TimelineLiveViewHint}"
                  IsVisible="{Binding IsLiveView}" />
     </Grid>
@@ -72,6 +75,7 @@
                                        SnapEnabled="{Binding SnapEnabled}"
                                        GridMs="{Binding SelectedGridOption.Ms}"
                                        IsEditable="{Binding IsCueEditMode}"
+                                       ShowEnvelopes="{Binding ShowEnvelopes}"
                                        PlayheadMs="{Binding PlayheadMs}" />
             </ScrollViewer>
           </Grid>

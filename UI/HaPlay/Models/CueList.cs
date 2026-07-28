@@ -846,6 +846,7 @@ public enum CueActionKind
 [JsonSerializable(typeof(CueChromaKey))]
 [JsonSerializable(typeof(CueColorAdjust))]
 [JsonSerializable(typeof(CueSchedule))]
+[JsonSerializable(typeof(CueAutomationPoint))]
 [JsonSerializable(typeof(PlaylistItem))]
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]

@@ -200,6 +200,59 @@ public sealed class PlaylistGroupTests
     }
 
     [Fact]
+    public async Task Playlist_Sequential_IgnoresAvoidImmediateRepeat_KeepsAuthoredOrderAcrossPasses()
+    {
+        // AvoidImmediateRepeat is a SHUFFLE pass-boundary guard: a sequential playlist's order is
+        // authored, and the guard must never rearrange it at a pass boundary.
+        var h = BuildPlaylistVm(3, CueGroupFireMode.Playlist, new CuePlaylistOptions
+        {
+            AvoidImmediateRepeat = true,
+            LoopCount = 2,
+        });
+
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        var sequence = new List<Guid> { await NextFiredAsync(h) };
+        for (var i = 0; i < 5; i++)
+        {
+            await h.Vm.OnMediaCueNaturallyEndedAsync(sequence[^1]);
+            sequence.Add(await NextFiredAsync(h));
+        }
+
+        // Both passes play the children in document order.
+        Assert.Equal(h.ChildIds.Concat(h.ChildIds).ToList(), sequence);
+
+        await h.Vm.OnMediaCueNaturallyEndedAsync(sequence[^1]);
+        await AssertNoFurtherFiresAsync(h);
+    }
+
+    [Fact]
+    public async Task Playlist_Sequential_PlayCountOne_ReplaysTheAuthoredOpenerEveryPass()
+    {
+        // The discriminating shape: sequential + PlayCount 1 means every pass replays child #1 -
+        // an immediate repeat BY DESIGN. The old pass-boundary swap applied to sequential runs too
+        // and replaced the authored opener with a random other child on the second pass.
+        var h = BuildPlaylistVm(3, CueGroupFireMode.Playlist, new CuePlaylistOptions
+        {
+            AvoidImmediateRepeat = true,
+            LoopCount = 2,
+            PlayCount = 1,
+        });
+
+        h.Vm.StandbyCueFromView(h.GroupVm);
+        await h.Vm.GoCommand.ExecuteAsync(null);
+        var first = await NextFiredAsync(h);
+        await h.Vm.OnMediaCueNaturallyEndedAsync(first);
+        var second = await NextFiredAsync(h);
+
+        Assert.Equal(h.ChildIds[0], first);
+        Assert.Equal(h.ChildIds[0], second); // pass 2 replays the authored opener, not a swap
+
+        await h.Vm.OnMediaCueNaturallyEndedAsync(second);
+        await AssertNoFurtherFiresAsync(h);
+    }
+
+    [Fact]
     public async Task Playlist_ShuffleBag_PlaysEveryChildOncePerPass_NoRepeatAcrossPassBoundary()
     {
         var h = BuildPlaylistVm(4, CueGroupFireMode.Playlist, new CuePlaylistOptions
@@ -383,6 +436,124 @@ public sealed class PlaylistGroupTests
 
         // Single pass exhausted: the next GO targets the cue after the group.
         Assert.Equal(afterCue.Id, h.Vm.StandbyCueNode!.Id);
+    }
+
+    // ---- Nested playlist items ----
+
+    [Fact]
+    public async Task Playlist_NestedPlaylistItem_PlaysThrough_AndTheOuterRunAdvancesPastIt()
+    {
+        // An outer playlist whose item is ITSELF a playlist group: firing the outer pick must also
+        // consume the inner run's pick (regression: the inner CurrentItemId stayed null, natural-end
+        // routing swallowed the inner item's end and both runs stalled), and the inner run's
+        // completion must advance the OUTER run past the nested group instead of stalling on it.
+        MediaCueNode Media(string number, string label) => new()
+        {
+            Number = number,
+            Label = label,
+            Source = new FilePlaylistItem($"/tmp/{label}.wav"),
+        };
+
+        var m1 = Media("1.1", "opener");
+        var n1 = Media("1.2.1", "inner-a");
+        var n2 = Media("1.2.2", "inner-b");
+        var nested = new CueGroupNode
+        {
+            Number = "1.2",
+            Label = "Inner set",
+            FireMode = CueGroupFireMode.Playlist,
+            Playlist = new CuePlaylistOptions { LoopCount = 1 },
+            Children = [n1, n2],
+        };
+        var m2 = Media("1.3", "closer");
+        var outer = new CueGroupNode
+        {
+            Number = "1",
+            Label = "Outer set",
+            FireMode = CueGroupFireMode.Playlist,
+            Playlist = new CuePlaylistOptions { LoopCount = 1 },
+            Children = [m1, nested, m2],
+        };
+
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([new CueList { Nodes = [outer] }]);
+        var fired = new ConcurrentQueue<Guid>();
+        var signal = new SemaphoreSlim(0);
+        vm.MediaCueExecutor = (cue, _) =>
+        {
+            vm.OnCueStarted(cue.Id);
+            fired.Enqueue(cue.Id);
+            signal.Release();
+            return Task.FromResult<string?>(null);
+        };
+        async Task<Guid> NextAsync()
+        {
+            Assert.True(await signal.WaitAsync(TimeSpan.FromSeconds(5)), "timed out waiting for a cue fire");
+            Assert.True(fired.TryDequeue(out var id));
+            return id;
+        }
+
+        var outerVm = vm.SelectedCueList!.Nodes[0];
+        vm.StandbyCueFromView(outerVm);
+        await vm.GoCommand.ExecuteAsync(null);
+        var sequence = new List<Guid> { await NextAsync() };
+        for (var i = 0; i < 3; i++)
+        {
+            await vm.OnMediaCueNaturallyEndedAsync(sequence[^1]);
+            sequence.Add(await NextAsync());
+        }
+
+        // Inner items played in place of the nested group, then the outer run advanced past it.
+        Assert.Equal([m1.Id, n1.Id, n2.Id, m2.Id], sequence);
+
+        // Final natural end finishes the outer run: nothing further fires. Standing the group by
+        // again re-arms a FRESH outer run for pre-roll (the sequential test's contract), so the
+        // observable "run over" signals are the empty status and the absent inner run.
+        await vm.OnMediaCueNaturallyEndedAsync(sequence[^1]);
+        await Task.Delay(250);
+        Assert.Empty(fired);
+        Assert.Null(vm.BuildPlaylistStatus(outerVm));
+        Assert.False(vm.HasActivePlaylistRun(nested.Id));
+    }
+
+    // ---- Trigger-plan Independent flag ----
+
+    [Fact]
+    public void BuildTriggerPlan_PlaylistMediaPick_IsShared_ButANestedTimelinePickKeepsIndependence()
+    {
+        // A plain media pick plays alone through the authored shared group - not Independent…
+        var h = BuildPlaylistVm(2, CueGroupFireMode.Playlist, new CuePlaylistOptions());
+        var mediaStep = Assert.Single(h.Vm.BuildTriggerPlan(h.GroupVm));
+        Assert.False(mediaStep.Independent);
+
+        // …while a pick that is a nested Timeline group propagates its lanes' overlap independence
+        // through the playlist branch.
+        var laneA = new MediaCueNode { Label = "Lane A", Source = new FilePlaylistItem("/tmp/a.wav") };
+        var laneB = new MediaCueNode
+        {
+            Label = "Lane B",
+            Source = new FilePlaylistItem("/tmp/b.wav"),
+            TimelineStartMs = 500,
+        };
+        var timeline = new CueGroupNode
+        {
+            Label = "Bed + voice",
+            FireMode = CueGroupFireMode.Timeline,
+            Children = [laneA, laneB],
+        };
+        var outer = new CueGroupNode
+        {
+            Label = "Set",
+            FireMode = CueGroupFireMode.Playlist,
+            Playlist = new CuePlaylistOptions(),
+            Children = [timeline],
+        };
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([new CueList { Nodes = [outer] }]);
+
+        var plan = vm.BuildTriggerPlan(vm.SelectedCueList!.Nodes[0]);
+        Assert.Equal(2, plan.Count);
+        Assert.All(plan, p => Assert.True(p.Independent));
     }
 
     // ---- Session-state lifecycle ----

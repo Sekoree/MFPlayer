@@ -57,6 +57,10 @@ public sealed partial class TimelineEditorWindowViewModel : ObservableObject, ID
     [ObservableProperty]
     private bool _snapEnabled = true;
 
+    /// <summary>Toolbar toggle: overlay the volume-envelope polylines on media lanes (default on).</summary>
+    [ObservableProperty]
+    private bool _showEnvelopes = true;
+
     public IReadOnlyList<TimelineGridOption> GridOptions { get; } =
     [
         new(1000, Strings.TimelineGrid1s),

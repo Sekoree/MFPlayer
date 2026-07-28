@@ -115,8 +115,12 @@ public sealed class CueSchedulerService : IDisposable
             if (!_handled.Add((node.Id, due.Ticks)))
                 continue; // already fired (or skipped) this occurrence
 
+            // Effective grace is floored at two sweep periods: the sweep itself observes an
+            // occurrence 0..TickInterval late, so a user-entered grace below that (0 in
+            // particular) would otherwise mean "never fires" instead of "fire at the next tick".
+            var minimumGraceMs = 2 * TickInterval.TotalMilliseconds;
             var lateMs = (nowWall - due).TotalMilliseconds;
-            if (lateMs > Math.Max(0, node.ScheduleGraceMs))
+            if (lateMs > Math.Max(minimumGraceMs, node.ScheduleGraceMs))
             {
                 // Beyond grace (app sleep / edit-mode window / long stall): skip and log, never
                 // catch up a backlog of missed fires.

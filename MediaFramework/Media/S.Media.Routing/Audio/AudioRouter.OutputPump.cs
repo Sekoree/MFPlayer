@@ -330,11 +330,7 @@ public sealed partial class AudioRouter
                 try { _cts.Cancel(); }
                 catch (Exception ex)
                 {
-#if DEBUG
                     MediaDiagnostics.LogError(ex, "OutputPump.Dispose: CancellationTokenSource.Cancel");
-#else
-                    _ = ex;
-#endif
                 }
 
                 CooperativePlaybackJoin.JoinThread(_thread, TimeSpan.FromSeconds(1));
@@ -347,6 +343,10 @@ public sealed partial class AudioRouter
                 Trace.LogError(
                     "AudioRouter.OutputPump '{OutputId}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.",
                     _sinkId);
+                // Health event (review §2.12): a wedged pump poisons the router non-restartably, so
+                // hosts need a signal to rebuild instead of discovering a dead output by silence.
+                _router.RaiseOutputErrored(_sinkId, new TimeoutException(
+                    $"audio output pump '{_sinkId}' wedged in a native Submit and was leaked; the router should be rebuilt."));
                 return;
             }
 

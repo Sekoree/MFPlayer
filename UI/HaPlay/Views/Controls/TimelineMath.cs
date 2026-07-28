@@ -15,6 +15,7 @@ internal enum TimelineHitKind
     RightEdge,
     FadeInHandle,
     FadeOutHandle,
+    EnvelopePoint,
 }
 
 /// <summary>
@@ -160,6 +161,187 @@ internal static class TimelineMath
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
         return ms % 1000 == 0 ? head : $"{head}.{ts.Milliseconds:D3}".TrimEnd('0');
     }
+
+    // ---- Volume envelope (Phase B) -------------------------------------------------------------
+    //
+    // Coordinate mapping: envelope times are CLIP-relative (post-StartOffset) and the block spans
+    // exactly the trimmed clip, so time 0 = the block's LEFT edge and x = block.X + timeMs·pxPerMs.
+    // Levels map linearly IN dB onto the block's inner height: +12 dB (CueAutomationPoint.MaxLevelDb)
+    // at the block's top edge, −60 dB (SilenceLevelDb) at its bottom. That puts the 0 dB unity line
+    // at a FIXED reference 12/72 = ⅙ of the block height below the top (not mid-lane): the top sixth
+    // is boost headroom, everything below the line is attenuation - the renderer draws the line so
+    // points are easy to park at unity.
+
+    public const double EnvelopePointHitPx = 6;
+    public const double EnvelopeLineHitPx = 5;
+    public const double EnvelopePointRadiusPx = 3;
+
+    /// <summary>Rounding step for dragged point levels - keeps authored values tidy (0.1 dB).</summary>
+    public const double EnvelopeLevelStepDb = 0.1;
+
+    /// <summary>Y for a level: linear in dB, +12 dB = block top, −60 dB = block bottom (see the
+    /// mapping note above). Levels outside the authoring range clamp onto the edges.</summary>
+    public static double EnvelopeYForDb(Rect block, double levelDb)
+    {
+        var clamped = Math.Clamp(levelDb, CueAutomationPoint.SilenceLevelDb, CueAutomationPoint.MaxLevelDb);
+        return block.Y + (CueAutomationPoint.MaxLevelDb - clamped)
+            / (CueAutomationPoint.MaxLevelDb - CueAutomationPoint.SilenceLevelDb) * block.Height;
+    }
+
+    /// <summary>Inverse of <see cref="EnvelopeYForDb"/>, clamped to the −60..+12 authoring range.</summary>
+    public static double EnvelopeDbForY(Rect block, double y)
+    {
+        var t = block.Height <= 0 ? 0 : (y - block.Y) / block.Height;
+        return Math.Clamp(
+            CueAutomationPoint.MaxLevelDb - t * (CueAutomationPoint.MaxLevelDb - CueAutomationPoint.SilenceLevelDb),
+            CueAutomationPoint.SilenceLevelDb, CueAutomationPoint.MaxLevelDb);
+    }
+
+    /// <summary>Clip-relative time for an x position, clamped to the trimmed clip [0, maxTimeMs].</summary>
+    public static int EnvelopeTimeForX(Rect block, double x, double pxPerMs, int maxTimeMs) =>
+        pxPerMs <= 0 ? 0 : (int)Math.Clamp(Math.Round((x - block.X) / pxPerMs), 0, Math.Max(0, maxTimeMs));
+
+    /// <summary>Canvas position of one envelope keyframe. X clamps to the block's right edge so a
+    /// point authored past the trimmed range (e.g. after a re-trim) stays visible and grabbable -
+    /// dragging it pulls its time back into range.</summary>
+    public static Point EnvelopePointCenter(Rect block, CueAutomationPoint point, double pxPerMs) =>
+        new(Math.Min(block.X + Math.Max(0, point.TimeMs) * pxPerMs, block.Right),
+            EnvelopeYForDb(block, point.LevelDb));
+
+    /// <summary>
+    /// The envelope level (dB) at a clip time - the editor-side mirror of the runtime's
+    /// <c>VolumeEnvelopes.Sample</c>: flat before the first / after the last point, and in between the
+    /// segment's curve-shaped interpolation IN LINEAR GAIN (converted back to dB), so the drawn line
+    /// is exactly what playback applies. Empty envelope = unity (0 dB).
+    /// </summary>
+    public static double EnvelopeLevelDbAt(IReadOnlyList<CueAutomationPoint> envelope, double timeMs)
+    {
+        if (envelope.Count == 0)
+            return 0;
+        if (timeMs <= envelope[0].TimeMs)
+            return ClampDb(envelope[0].LevelDb);
+        if (timeMs >= envelope[^1].TimeMs)
+            return ClampDb(envelope[^1].LevelDb);
+
+        var i = 0;
+        while (i + 1 < envelope.Count && envelope[i + 1].TimeMs <= timeMs)
+            i++;
+        var from = envelope[i];
+        var to = envelope[i + 1];
+        var span = to.TimeMs - from.TimeMs;
+        var t = span <= 0 ? 1 : (timeMs - from.TimeMs) / span;
+
+        // FadeCurves.LevelBetween: rising segments shape progress, falling ones shape the mirror, so
+        // every curve eases the same way in both directions.
+        var start = DbToGain(from.LevelDb);
+        var target = DbToGain(to.LevelDb);
+        var gain = target < start
+            ? target + (start - target) * ShapeCurve(1 - t, from.CurveToNext)
+            : start + (target - start) * ShapeCurve(t, from.CurveToNext);
+        return GainToDb(gain);
+    }
+
+    /// <summary>Insert position that keeps the envelope time-sorted (after any point at the same time).</summary>
+    public static int EnvelopeInsertIndex(IReadOnlyList<CueAutomationPoint> envelope, int timeMs)
+    {
+        var i = 0;
+        while (i < envelope.Count && envelope[i].TimeMs <= timeMs)
+            i++;
+        return i;
+    }
+
+    /// <summary>Nearest keyframe within <see cref="EnvelopePointHitPx"/> of <paramref name="p"/>, else −1.</summary>
+    public static int EnvelopePointHit(Rect block, IReadOnlyList<CueAutomationPoint> envelope, double pxPerMs, Point p)
+    {
+        var best = -1;
+        var bestDistance = EnvelopePointHitPx;
+        for (var i = 0; i < envelope.Count; i++)
+        {
+            var distance = Distance(EnvelopePointCenter(block, envelope[i], pxPerMs), p);
+            if (distance <= bestDistance)
+            {
+                best = i;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>True when <paramref name="p"/> sits on the envelope line: within the block's x range
+    /// and vertically within <see cref="EnvelopeLineHitPx"/> of the curve at that x (near-vertical
+    /// steps are only grabbable right at the step - click beside them instead).</summary>
+    public static bool EnvelopeLineHit(Rect block, IReadOnlyList<CueAutomationPoint> envelope, double pxPerMs, Point p)
+    {
+        if (pxPerMs <= 0 || p.X < block.X || p.X > block.Right)
+            return false;
+        var y = EnvelopeYForDb(block, EnvelopeLevelDbAt(envelope, (p.X - block.X) / pxPerMs));
+        return Math.Abs(p.Y - y) <= EnvelopeLineHitPx;
+    }
+
+    /// <summary>Index of the segment (the point owning <c>CurveToNext</c>) containing
+    /// <paramref name="timeMs"/>: i where points[i].TimeMs ≤ t &lt; points[i+1].TimeMs, −1 in the
+    /// flat lead-in/tail regions (no segment to curve there).</summary>
+    public static int EnvelopeSegmentAt(IReadOnlyList<CueAutomationPoint> envelope, double timeMs)
+    {
+        for (var i = 0; i + 1 < envelope.Count; i++)
+        {
+            if (envelope[i].TimeMs <= timeMs && timeMs < envelope[i + 1].TimeMs)
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Clamp a dragged point's candidate time so the list STAYS time-sorted: a point cannot pass its
+    /// neighbors (it stops at them - chosen over reordering so a drag never changes which point owns
+    /// which segment curve; coincident times are allowed and render as an instant step) nor leave the
+    /// trimmed clip [0, maxTimeMs].
+    /// </summary>
+    public static int EnvelopeClampDragTime(
+        IReadOnlyList<CueAutomationPoint> envelope, int index, double candidateMs, int maxTimeMs)
+    {
+        var lower = index > 0 ? envelope[index - 1].TimeMs : 0;
+        var upper = index < envelope.Count - 1 ? envelope[index + 1].TimeMs : Math.Max(0, maxTimeMs);
+        upper = Math.Min(upper, Math.Max(0, maxTimeMs));
+        if (double.IsNaN(candidateMs))
+            candidateMs = lower;
+        return (int)Math.Clamp(Math.Round(candidateMs), lower, Math.Max(lower, upper));
+    }
+
+    /// <summary>Right-click cycle order for a segment's curve: Linear → EqualPower → Exponential →
+    /// SCurve → Linear.</summary>
+    public static CueFadeCurve NextCurve(CueFadeCurve curve) => curve switch
+    {
+        CueFadeCurve.Linear => CueFadeCurve.EqualPower,
+        CueFadeCurve.EqualPower => CueFadeCurve.Exponential,
+        CueFadeCurve.Exponential => CueFadeCurve.SCurve,
+        _ => CueFadeCurve.Linear,
+    };
+
+    /// <summary>Signed dB readout ("+3.0 dB" / "-6.5 dB" / "0.0 dB") for the drag tooltip.</summary>
+    public static string FormatDbLabel(double db) =>
+        db.ToString("+0.0;-0.0;0.0", System.Globalization.CultureInfo.InvariantCulture) + " dB";
+
+    private static double ClampDb(double db) => double.IsNaN(db)
+        ? 0
+        : Math.Clamp(db, CueAutomationPoint.SilenceLevelDb, CueAutomationPoint.MaxLevelDb);
+
+    /// <summary>−60 dB floor and below map to zero gain (the runtime mapper's convention).</summary>
+    private static double DbToGain(double db) =>
+        db <= CueAutomationPoint.SilenceLevelDb ? 0 : Math.Pow(10, db / 20);
+
+    private static double GainToDb(double gain) => gain <= 0
+        ? CueAutomationPoint.SilenceLevelDb
+        : Math.Clamp(20 * Math.Log10(gain), CueAutomationPoint.SilenceLevelDb, CueAutomationPoint.MaxLevelDb);
+
+    /// <summary>UI mirror of the session's <c>FadeCurves.Shape</c> (0→0, 1→1, monotonic).</summary>
+    private static double ShapeCurve(double p, CueFadeCurve curve) => curve switch
+    {
+        CueFadeCurve.EqualPower => Math.Sin(p * Math.PI / 2d),
+        CueFadeCurve.Exponential => p * p * p,
+        CueFadeCurve.SCurve => p * p * (3d - 2d * p),
+        _ => p,
+    };
 
     private static double Distance(Point a, Point b)
     {

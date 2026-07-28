@@ -759,6 +759,7 @@ public static class Strings
     public static string MIDIDeviceCatalogStatusFormat => Get(nameof(MIDIDeviceCatalogStatusFormat));
     public static string PlayerNameFormat => Get(nameof(PlayerNameFormat));
     public static string CueAutoFollowFailedFormat => Get(nameof(CueAutoFollowFailedFormat));
+    public static string CuePlaybackAlertFormat => Get(nameof(CuePlaybackAlertFormat));
     public static string NDIPumpPressureStatusFormat => Get(nameof(NDIPumpPressureStatusFormat));
     public static string ColorTagLabel => Get(nameof(ColorTagLabel));
     public static string CueListSettingsButton => Get(nameof(CueListSettingsButton));
@@ -769,6 +770,9 @@ public static class Strings
     public static string AutoRenumberOnInsertLabel => Get(nameof(AutoRenumberOnInsertLabel));
     public static string StopFadeMsLabel => Get(nameof(StopFadeMsLabel));
     public static string StopFadeCurveLabel => Get(nameof(StopFadeCurveLabel));
+    public static string CueTransportHeader => Get(nameof(CueTransportHeader));
+    public static string CueTransportSettingsHint => Get(nameof(CueTransportSettingsHint));
+    public static string PanicFadeMsLabel => Get(nameof(PanicFadeMsLabel));
     public static string StopFadeMsAppDefaultHintFormat => Get(nameof(StopFadeMsAppDefaultHintFormat));
     public static string FilesMenuLabel => Get(nameof(FilesMenuLabel));
     public static string PreviewCueButton => Get(nameof(PreviewCueButton));
@@ -1320,6 +1324,8 @@ public static class Strings
     public static string TimelineGrid100ms => Get(nameof(TimelineGrid100ms));
     public static string TimelineLiveViewHint => Get(nameof(TimelineLiveViewHint));
     public static string TimelineEmptyGroupHint => Get(nameof(TimelineEmptyGroupHint));
+    public static string TimelineEnvelopeLabel => Get(nameof(TimelineEnvelopeLabel));
+    public static string TimelineEnvelopeTooltip => Get(nameof(TimelineEnvelopeTooltip));
     public static string SchedulesArmedToggleLabel => Get(nameof(SchedulesArmedToggleLabel));
     public static string SchedulesArmedToggleTooltip => Get(nameof(SchedulesArmedToggleTooltip));
     public static string CueScheduleSectionHeader => Get(nameof(CueScheduleSectionHeader));

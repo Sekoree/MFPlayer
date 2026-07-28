@@ -2126,6 +2126,13 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
+    /// <summary>Operator-facing "number label" for a cue id (status/alert messages), or null when the id
+    /// isn't in the loaded lists. UI thread.</summary>
+    internal string? DescribeCue(Guid id) =>
+        FindNodeById(id) is { } node
+            ? string.IsNullOrWhiteSpace(node.Number) ? node.Label : $"{node.Number} {node.Label}".TrimEnd()
+            : null;
+
     /// <summary>Host callback - the set of warmed (standby-ready) cues changed. Snapshot lists the cue ids
     /// that are currently warmed. Walks every loaded cue node and sets <c>IsPreRollWarm</c>
     /// accordingly so the status badge column can render the warming indicator (Phase 5.7.2).
@@ -2476,12 +2483,16 @@ public partial class CuePlayerViewModel : ViewModelBase
             ? mode
             : CueGroupFireMode.FirstCueOnly;
 
-    internal List<(CueNodeViewModel Cue, int DelayMs)> BuildTriggerPlan(CueNodeViewModel target)
+    /// <summary><c>Independent</c> steps fire each media cue in its OWN runtime transport group
+    /// (<see cref="MediaCueIndependentExecutor"/>): overlap modes (Timeline, FireAllSimultaneously)
+    /// need concurrent clips, and the authored shared group holds only one active clip - firing a
+    /// later lane through it would REPLACE the earlier lane's still-playing clip.</summary>
+    internal List<(CueNodeViewModel Cue, int DelayMs, bool Independent)> BuildTriggerPlan(CueNodeViewModel target)
     {
-        var plan = new List<(CueNodeViewModel Cue, int DelayMs)>();
+        var plan = new List<(CueNodeViewModel Cue, int DelayMs, bool Independent)>();
         if (target.Kind != CueNodeKind.Group)
         {
-            plan.Add((target, Math.Max(0, target.PreWaitMs)));
+            plan.Add((target, Math.Max(0, target.PreWaitMs), false));
             AppendAutoContinueCues(plan, target);
             return plan;
         }
@@ -2495,7 +2506,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (mode == CueGroupFireMode.FireAllSimultaneously)
         {
             foreach (var cue in EnumerateFireableCueOrder(children))
-                plan.Add((cue, checked(groupPreWait + Math.Max(0, cue.PreWaitMs))));
+                plan.Add((cue, checked(groupPreWait + Math.Max(0, cue.PreWaitMs)), true));
             plan.Sort(static (a, b) => a.DelayMs.CompareTo(b.DelayMs));
             return plan;
         }
@@ -2514,11 +2525,11 @@ public partial class CuePlayerViewModel : ViewModelBase
                 {
                     var nestedBase = checked(laneStart + Math.Max(0, child.PreWaitMs));
                     foreach (var cue in EnumerateFireableCueOrder(child.Children))
-                        plan.Add((cue, checked(nestedBase + Math.Max(0, cue.PreWaitMs))));
+                        plan.Add((cue, checked(nestedBase + Math.Max(0, cue.PreWaitMs)), true));
                 }
                 else
                 {
-                    plan.Add((child, checked(laneStart + Math.Max(0, child.PreWaitMs))));
+                    plan.Add((child, checked(laneStart + Math.Max(0, child.PreWaitMs)), true));
                 }
             }
             plan.Sort(static (a, b) => a.DelayMs.CompareTo(b.DelayMs));
@@ -2538,15 +2549,16 @@ public partial class CuePlayerViewModel : ViewModelBase
                 return plan;
             if (pick.Kind == CueNodeKind.Group)
             {
-                // A nested-group item fires through its own fire mode's plan.
-                foreach (var (cue, delayMs) in BuildTriggerPlan(pick))
-                    plan.Add((cue, checked(groupPreWait + delayMs)));
+                // A nested-group item fires through its own fire mode's plan (keeping each inner
+                // step's own independence).
+                foreach (var (cue, delayMs, independent) in BuildTriggerPlan(pick))
+                    plan.Add((cue, checked(groupPreWait + delayMs), independent));
             }
             else
             {
                 // No AppendAutoContinueCues here: a playlist item plays alone - the run itself is
                 // the chain.
-                plan.Add((pick, checked(groupPreWait + Math.Max(0, pick.PreWaitMs))));
+                plan.Add((pick, checked(groupPreWait + Math.Max(0, pick.PreWaitMs)), false));
             }
 
             return plan;
@@ -2555,13 +2567,14 @@ public partial class CuePlayerViewModel : ViewModelBase
         var first = EnumerateFireableCueOrder(children).FirstOrDefault();
         if (first is not null)
         {
-            plan.Add((first, checked(groupPreWait + Math.Max(0, first.PreWaitMs))));
+            plan.Add((first, checked(groupPreWait + Math.Max(0, first.PreWaitMs)), false));
             AppendAutoContinueCues(plan, first);
         }
         return plan;
     }
 
-    private void AppendAutoContinueCues(List<(CueNodeViewModel Cue, int DelayMs)> plan, CueNodeViewModel anchor)
+    private void AppendAutoContinueCues(
+        List<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan, CueNodeViewModel anchor)
     {
         var ordered = EnumerateFireableCueOrder().ToList();
         var idx = ordered.FindIndex(c => ReferenceEquals(c, anchor));
@@ -2579,7 +2592,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 previous = next;
                 continue;
             }
-            plan.Add((next, Math.Max(0, next.PreWaitMs)));
+            plan.Add((next, Math.Max(0, next.PreWaitMs), false));
             previous = next;
         }
     }
@@ -2703,8 +2716,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
 
         // Pass-boundary guard: never open a pass with the item that just played when an
-        // alternative exists (what "avoid immediate repeat" means across a reshuffle).
-        if (group.PlaylistAvoidImmediateRepeat
+        // alternative exists (what "avoid immediate repeat" means across a reshuffle). Shuffle
+        // only - a sequential playlist's order is authored, and the guard would scramble it
+        // (with PlayCount=1 every pass replays child #1, which IS an immediate repeat by design).
+        if (group.PlaylistShuffle
+            && group.PlaylistAvoidImmediateRepeat
             && run.PassOrder.Count > 1
             && run.CurrentItemId is { } lastPlayed
             && run.PassOrder[0] == lastPlayed)
@@ -2719,14 +2735,19 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     /// <summary>Advances the run after its armed pick fired: bumps the counters, rolls the pass
-    /// boundary (honoring LoopCount/PlayCount) and marks the run finished after the final pick.</summary>
+    /// boundary (honoring LoopCount/PlayCount) and marks the run finished after the final pick.
+    /// A pick that is itself a playlist/armed-list group is consumed recursively: its plan
+    /// (<c>BuildTriggerPlan</c>'s nested branch) peeked the INNER run's armed pick, and without the
+    /// inner consume that run's <see cref="PlaylistRunState.CurrentItemId"/> stays null - natural-end
+    /// routing then swallows the item's end and neither run ever advances.</summary>
     private void ConsumePlaylistPick(CueNodeViewModel group)
     {
         var items = PlaylistItems(group);
         if (items.Count == 0 || GetPlaylistRun(group, items) is not { Finished: false } run)
             return;
 
-        run.CurrentItemId = run.PassOrder[run.NextIndex];
+        var pickId = run.PassOrder[run.NextIndex];
+        run.CurrentItemId = pickId;
         run.CurrentItemOrdinal = run.NextIndex + 1;
         run.CurrentItemPass = run.Pass;
         run.CurrentPassItemCount = run.ItemsPerPass;
@@ -2746,6 +2767,9 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
 
         RefreshPlaylistNowPlayingStatus(group.Id);
+
+        if (items.FirstOrDefault(i => i.Id == pickId) is { } pick && IsPlaylistGroup(pick))
+            ConsumePlaylistPick(pick);
     }
 
     /// <summary>First fireable cue after the whole group (skipping all its descendants).</summary>
@@ -2816,9 +2840,26 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
         }
 
-        // Run complete - the run state is over either way; apply the configured end behavior.
+        // Run complete - the run state is over either way.
         _playlistRuns.Remove(group.Id);
         RefreshPlaylistNowPlayingStatus(group.Id);
+
+        // A nested playlist completing while an ENCLOSING run plays it as its current item is that
+        // outer item's natural end: route completion to the outer run (its semantics take precedence
+        // over the inner group's own end behavior, the same rule that trumps per-cue end-jumps).
+        // Without this the outer run stalls forever on its nested-group item.
+        foreach (var outer in FindContainingGroupPath(group).Reverse())
+        {
+            if (IsPlaylistGroup(outer)
+                && _playlistRuns.TryGetValue(outer.Id, out var outerRun)
+                && outerRun.CurrentItemId == group.Id)
+            {
+                await HandlePlaylistItemEndedAsync(outer, outerRun, ended, isCurrentItem: true);
+                return;
+            }
+        }
+
+        // No enclosing run owns this group - apply its own configured end behavior.
         switch (group.PlaylistEndBehavior)
         {
             case CuePlaylistEndBehavior.AdvancePastGroup:
@@ -3220,7 +3261,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
-    private async Task RunTriggerPlanAsync(IReadOnlyList<(CueNodeViewModel Cue, int DelayMs)> plan, CancellationToken ct)
+    private async Task RunTriggerPlanAsync(
+        IReadOnlyList<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan, CancellationToken ct)
     {
         var startedAt = DateTime.UtcNow;
 
@@ -3245,9 +3287,44 @@ public partial class CuePlayerViewModel : ViewModelBase
             else
             {
                 foreach (var step in steps)
-                    DispatchCueExecution(step.Cue, ct);
+                {
+                    // Overlap-mode media steps (Timeline lanes, staggered sim-mode pre-waits) get
+                    // their own runtime transport group: the shared authored group holds ONE active
+                    // clip, so this fire would otherwise cut the earlier lane's clip mid-play.
+                    if (step.Independent && step.Cue.Kind == CueNodeKind.Media)
+                        DispatchIndependentCueExecution(step.Cue, ct);
+                    else
+                        DispatchCueExecution(step.Cue, ct);
+                }
             }
         }
+    }
+
+    /// <summary>Dispatches one media cue into its OWN runtime transport group (the
+    /// <see cref="MediaCueIndependentExecutor"/> host path, same machinery as same-delay batches and
+    /// operator overlap-fires). Falls back to the shared-group dispatch when no independent executor
+    /// is configured (headless tests / degraded host).</summary>
+    private void DispatchIndependentCueExecution(CueNodeViewModel cue, CancellationToken ct)
+    {
+        if (MediaCueIndependentExecutor is not { } executor || cue.ToModel() is not MediaCueNode media)
+        {
+            DispatchCueExecution(cue, ct);
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await executor(media, ct).ConfigureAwait(false);
+                await ApplyCueExecutionResultOnUiAsync(cue, result, MediaExecutionConfigured).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { /* Stop / Panic cancelled the dispatched cue. */ }
+            catch (Exception ex)
+            {
+                await ApplyCueExecutionFailureOnUiAsync(cue, ex.Message).ConfigureAwait(false);
+            }
+        }, ct);
     }
 
     private void DispatchCueExecution(CueNodeViewModel cue, CancellationToken ct)

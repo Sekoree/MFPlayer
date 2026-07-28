@@ -81,6 +81,7 @@ public sealed class VideoPlayer : IDisposable
     private int _firstTickLogged;
     private int _firstSubmittedLogged;
     private long _submitFailureStreak;
+    private long _presentSubscriberFailureStreak;
     private int _firstDecodedLogged;
     private int _syncDebugTicksRemaining;
     private long _lastSlowDecodeReadWarningTicks;
@@ -878,22 +879,16 @@ public sealed class VideoPlayer : IDisposable
         }
         catch (Exception ex)
         {
-#if DEBUG
-            // A persistently failing sink would otherwise log a full stack every tick - report the
-            // first failure, then summarize once per 100 while the streak lasts.
+            // Unconditional (review §2.9: Release must not swallow sink failures - a dead output
+            // otherwise looks like a healthy black screen). A persistently failing sink would log a
+            // full stack every tick, so report the first failure, then once per 100 while it lasts.
             var streak = Interlocked.Increment(ref _submitFailureStreak);
             if (streak == 1 || streak % 100 == 0)
                 MediaDiagnostics.LogError(ex, $"VideoPlayer.{operation} output Submit (consecutive failures={streak})");
-#endif
             // Output threw - ownership did not move; release the frame to avoid a
             // native buffer leak. Rethrow would kill MediaClock's driver.
             try { frame.Dispose(); }
-#if DEBUG
             catch (Exception dex) { MediaDiagnostics.LogError(dex, $"VideoPlayer.{operation} frame Dispose after Submit failure"); }
-#else
-            catch { /* best effort */ }
-#endif
-            _ = ex;
         }
 
         if (!submitted)
@@ -940,11 +935,7 @@ public sealed class VideoPlayer : IDisposable
         }
         catch (Exception ex)
         {
-#if DEBUG
             MediaDiagnostics.LogError(ex, "VideoPlayer.TrySubmitHeldFrame: VideoFrame ctor");
-#else
-            _ = ex;
-#endif
             ReleaseHeldFrame();
             CompletedNaturally = true;
             return;
@@ -958,11 +949,11 @@ public sealed class VideoPlayer : IDisposable
         }
         catch (Exception ex)
         {
-#if DEBUG
-            MediaDiagnostics.LogError(ex, "VideoPlayer.TrySubmitHeldFrame: output Submit");
-#else
-            _ = ex;
-#endif
+            // Same streak throttle as the live path: hold frames resubmit on a cadence, so a dead
+            // sink would otherwise spam a stack per resubmit.
+            var streak = Interlocked.Increment(ref _submitFailureStreak);
+            if (streak == 1 || streak % 100 == 0)
+                MediaDiagnostics.LogError(ex, $"VideoPlayer.TrySubmitHeldFrame: output Submit (consecutive failures={streak})");
             try { frame.Dispose(); }
             catch { /* best effort */ }
         }
@@ -986,11 +977,12 @@ public sealed class VideoPlayer : IDisposable
         try { FramePresentationTimePresented?.Invoke(pts); }
         catch (Exception ex)
         {
-#if DEBUG
-            MediaDiagnostics.LogError(ex, "VideoPlayer.FramePresentationTimePresented subscriber threw");
-#else
-            _ = ex;
-#endif
+            // Per-frame path: throttle like the submit streaks so a persistently throwing
+            // subscriber can't flood the log in Release.
+            var streak = Interlocked.Increment(ref _presentSubscriberFailureStreak);
+            if (streak == 1 || streak % 100 == 0)
+                MediaDiagnostics.LogError(ex,
+                    $"VideoPlayer.FramePresentationTimePresented subscriber threw (failures={streak})");
         }
     }
 

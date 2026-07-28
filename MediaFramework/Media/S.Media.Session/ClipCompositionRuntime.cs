@@ -78,7 +78,9 @@ public sealed class ClipCompositionRuntime : IDisposable
     private long _lastBehindMasterReport;
     private long _pumpStartCount;
     private long _lastDriftCheckTicks;
-    private TimeSpan _lastMasterPosition;
+    // Nullable so "not yet primed" is distinct from a master parked at exactly 0 - with a
+    // TimeSpan.Zero sentinel a 0-position master re-primed every tick and drift was never measured.
+    private TimeSpan? _lastMasterPosition;
     private IPlaybackClock? _master;
     private IPlayhead? _timeline;
     private ITransportTimeline? _transportTimeline;
@@ -921,7 +923,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         try { masterPos = master.ElapsedSinceStart; }
         catch { return; }
 
-        if (_lastMasterPosition == default)
+        if (_lastMasterPosition is not { } lastMasterPosition)
         {
             _lastMasterPosition = masterPos;
             _lastDriftCheckTicks = Stopwatch.GetTimestamp();
@@ -929,7 +931,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         var wallElapsed = Stopwatch.GetElapsedTime(_lastDriftCheckTicks);
-        var masterElapsed = masterPos - _lastMasterPosition;
+        var masterElapsed = masterPos - lastMasterPosition;
         if (masterElapsed < TimeSpan.FromMilliseconds(50)) return;
 
         var diff = wallElapsed - masterElapsed;

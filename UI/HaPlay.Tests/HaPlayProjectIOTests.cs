@@ -743,6 +743,133 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public async Task CueListIO_Load_FutureSchema_ThrowsUnsupportedCueListSchema()
+    {
+        // A .haplaycues written by a NEWER build must fail closed instead of half-deserializing
+        // into v3 defaults (regression: the schema string was never checked).
+        var json = """{"schema":"HaPlayCueList/v4","nodes":[]}""";
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        await File.WriteAllTextAsync(tmp, json);
+        try
+        {
+            var ex = await Assert.ThrowsAsync<UnsupportedCueListSchemaException>(() => CueListIO.LoadAsync(tmp));
+            Assert.Equal("HaPlayCueList/v4", ex.Schema);
+            Assert.Equal(CueListIO.MaxSupportedSchemaVersion, ex.SupportedVersion);
+        }
+        finally
+        {
+            File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public async Task CueListIO_Load_CurrentSchema_Loads()
+    {
+        var json = """{"schema":"HaPlayCueList/v3","name":"Current","nodes":[{"kind":"media","label":"Song"}]}""";
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        await File.WriteAllTextAsync(tmp, json);
+        try
+        {
+            var loaded = await CueListIO.LoadAsync(tmp);
+            Assert.Equal("Current", loaded.Name);
+            Assert.Equal("Song", Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes)).Label);
+        }
+        finally
+        {
+            File.Delete(tmp);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"name":"NoSchema","nodes":[]}""")] // old/hand-edited file with no schema at all
+    [InlineData("""{"schema":"SomethingElse/v9","name":"NoSchema","nodes":[]}""")] // foreign string
+    [InlineData("""{"schema":"HaPlayCueList/vNext","name":"NoSchema","nodes":[]}""")] // unparseable version
+    public async Task CueListIO_Load_MissingOrUnrecognizedSchema_LoadsLeniently(string json)
+    {
+        // Only an EXPLICIT higher HaPlayCueList version is a hard error - blank or unknown schema
+        // strings load via the record defaults.
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        await File.WriteAllTextAsync(tmp, json);
+        try
+        {
+            var loaded = await CueListIO.LoadAsync(tmp);
+            Assert.Equal("NoSchema", loaded.Name);
+        }
+        finally
+        {
+            File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public void VolumeEnvelope_RoundTrips_ThroughTheCueNodeViewModel()
+    {
+        // The VM is a pure passthrough for the envelope (only the timeline editor writes it):
+        // FromModel → ToModel must never drop it, or every ordinary edit-and-save loses automation.
+        var node = new MediaCueNode
+        {
+            Number = "1",
+            Label = "Bed",
+            Source = new FilePlaylistItem("/show/bed.wav"),
+            VolumeEnvelope =
+            [
+                new CueAutomationPoint { TimeMs = 0, LevelDb = 0, CurveToNext = CueFadeCurve.SCurve },
+                new CueAutomationPoint { TimeMs = 4000, LevelDb = -12.5 },
+            ],
+        };
+
+        var back = Assert.IsType<MediaCueNode>(HaPlay.ViewModels.CueNodeViewModel.FromModel(node).ToModel());
+        Assert.Equal(node.VolumeEnvelope, back.VolumeEnvelope);
+    }
+
+    [Fact]
+    public async Task CueListIO_SaveLoad_RoundTripsVolumeEnvelope()
+    {
+        // CueAutomationPoint must be registered in CueListJsonContext (and the project context below)
+        // for the envelope to survive persistence.
+        var envelope = new[]
+        {
+            new CueAutomationPoint { TimeMs = 1000, LevelDb = -6, CurveToNext = CueFadeCurve.EqualPower },
+            new CueAutomationPoint { TimeMs = 8000, LevelDb = -60 },
+        };
+        var cueList = new CueList
+        {
+            Name = "Automated",
+            Nodes =
+            {
+                new MediaCueNode
+                {
+                    Number = "1",
+                    Label = "Bed",
+                    Source = new FilePlaylistItem("/show/bed.wav"),
+                    VolumeEnvelope = envelope,
+                },
+            },
+        };
+
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        try
+        {
+            await CueListIO.SaveAsync(cueList, tmp);
+            var loaded = await CueListIO.LoadAsync(tmp);
+            var media = Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes));
+            Assert.Equal(envelope, media.VolumeEnvelope);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
+        }
+
+        // Project-level persistence rides HaPlayProjectJsonContext - same registration requirement.
+        var project = new HaPlayProject { CueLists = { cueList } };
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+        var projectMedia = Assert.IsType<MediaCueNode>(
+            Assert.Single(Assert.Single(roundTripped.CueLists).Nodes));
+        Assert.Equal(envelope, projectMedia.VolumeEnvelope);
+    }
+
+    [Fact]
     public async Task LoadAsync_FutureSchemaVersion_ThrowsUnsupportedSchemaVersion()
     {
         // Hand-crafted JSON simulating a project written by a future build.

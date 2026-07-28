@@ -115,9 +115,11 @@ public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlus
 
     public void Start()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            // Checked under the gate: a Start racing Dispose must never mark a disposed
+            // instance running (its counters would keep advancing after disposal).
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_isRunning) return;
             _segmentAnchorTimestamp = Stopwatch.GetTimestamp();
             _segmentConsumedBase = _consumedSamples;
@@ -210,8 +212,11 @@ public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlus
                 waitTimestampTicks = deadline - now;
             }
 
+            // Cap each sleep slice so a Dispose (which has no waiter handle to signal) is
+            // observed within ~100 ms instead of a full drain deadline; the absolute-deadline
+            // recompute on the next pass keeps the slicing drift-free.
             var waitMs = (int)Math.Clamp(
-                (long)Math.Ceiling(waitTimestampTicks * 1000.0 / Stopwatch.Frequency), 1, 1000);
+                (long)Math.Ceiling(waitTimestampTicks * 1000.0 / Stopwatch.Frequency), 1, 100);
             if (token.WaitHandle.WaitOne(waitMs)) return false;
         }
 

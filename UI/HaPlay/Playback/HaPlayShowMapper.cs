@@ -179,6 +179,7 @@ public static class HaPlayShowMapper
             FadeInCurve = MapFadeCurve(media.FadeInCurve),
             FadeOut = TimeSpan.FromMilliseconds(media.FadeOutMs),
             FadeOutCurve = MapFadeCurve(media.FadeOutCurve),
+            VolumeEnvelope = MapVolumeEnvelope(media.VolumeEnvelope),
             Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
             EndBehavior = MapEndBehavior(media.EndBehavior),
             // A text cue plays a held frame that never signals EOF, so end it at its duration via the time-based
@@ -207,10 +208,11 @@ public static class HaPlayShowMapper
     }
 
     /// <summary>GUI per-cue <see cref="CueAudioRoute"/>s → per-clip <see cref="ShowClipAudioRoute"/>s, one per
-    /// output line: the line's shared PortAudio runtime, an N→M <see cref="ChannelMap"/> array (out-channel ← src-channel,
-    /// unrouted = silent), and a line gain (mean of its routes' dB → linear). Muted routes are dropped; a fully
-    /// muted line contributes no output. Returns an explicit empty list when the cue has no usable routes so
-    /// HaPlay never falls back to an inferred/default device.</summary>
+    /// output line: the line's shared PortAudio runtime plus either an N→M <see cref="ChannelMap"/> array
+    /// (out-channel ← src-channel, unrouted = silent) with one line gain when every route shares a gain, or a
+    /// per-cell gain matrix when route gains differ. Muted routes are dropped; a fully muted line contributes
+    /// no output. Returns an explicit empty list when the cue has no usable routes so HaPlay never falls back
+    /// to an inferred/default device.</summary>
     private static IReadOnlyList<ShowClipAudioRoute>? MapAudioRoutes(
         MediaCueNode media, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
         => MapAudioRoutes(media.AudioRoutes, outputsById);
@@ -277,8 +279,32 @@ public static class HaPlayShowMapper
                 NDIOutputDefinition ndi => ndi.AudioSampleRate,
                 _ => 0,
             };
-            var gain = (float)Math.Pow(10, lineRoutes.Average(r => r.GainDb) / 20.0);
-            mapped.Add(new ShowClipAudioRoute(deviceId, matrix, gain, sampleRate > 0 ? sampleRate : null));
+            // Per-route gains (review §6): routes with DIFFERING gains become a per-cell gain matrix -
+            // the old collapse to one line gain used the linear of the MEAN dB, so 0 dB + −60 dB routes
+            // both played at −30 dB. Uniform-gain lines (the common case, and all-0 dB in particular)
+            // keep the plain channel map + single line gain: the fade ride then stays on the cheap
+            // SetRouteGain path instead of writing a full matrix every 25 ms step.
+            var uniformGainDb = lineRoutes.All(r => r.GainDb == lineRoutes[0].GainDb);
+            var cells = uniformGainDb
+                ? null
+                : lineRoutes
+                    .Where(r => r.SourceChannel >= 0)
+                    .Select(r => new ShowAudioMatrixCell(
+                        r.SourceChannel, r.OutputChannel - 1, (float)Math.Pow(10, r.GainDb / 20.0)))
+                    .ToList();
+            if (cells is { Count: > 0 })
+            {
+                mapped.Add(new ShowClipAudioRoute(deviceId, null, 1f, sampleRate > 0 ? sampleRate : null)
+                {
+                    MatrixCells = cells,
+                    MatrixOutputChannels = matrix.Length,
+                });
+            }
+            else
+            {
+                var gain = (float)Math.Pow(10, lineRoutes[0].GainDb / 20.0);
+                mapped.Add(new ShowClipAudioRoute(deviceId, matrix, gain, sampleRate > 0 ? sampleRate : null));
+            }
         }
 
         return mapped; // all invalid/muted routes is also explicitly silent, never an implicit default device.
@@ -337,6 +363,26 @@ public static class HaPlayShowMapper
         CueFadeCurve.SCurve => FadeCurve.SCurve,
         _ => FadeCurve.Linear,
     };
+
+    /// <summary>GUI volume-automation points (dB, clip-relative ms) → the session's linear-gain envelope
+    /// (<see cref="ShowClipBinding.VolumeEnvelope"/>). The dB→linear conversion happens here, at the
+    /// GUI/mapper boundary the framework sampler documents: at or below the −60 dB silence floor maps to
+    /// exact 0, and levels clamp to the +12 dB authoring ceiling. Points are emitted time-sorted (the
+    /// sampler's binary search requires it). Null/empty stays null - no envelope runner is started.</summary>
+    public static IReadOnlyList<ShowEnvelopePoint>? MapVolumeEnvelope(IReadOnlyList<CueAutomationPoint>? points)
+    {
+        if (points is not { Count: > 0 })
+            return null;
+        return points
+            .OrderBy(p => p.TimeMs)
+            .Select(p => new ShowEnvelopePoint(
+                TimeSpan.FromMilliseconds(Math.Max(0, p.TimeMs)),
+                p.LevelDb <= CueAutomationPoint.SilenceLevelDb
+                    ? 0f
+                    : (float)Math.Pow(10, Math.Min(p.LevelDb, CueAutomationPoint.MaxLevelDb) / 20.0),
+                MapFadeCurve(p.CurveToNext)))
+            .ToList();
+    }
 
     private static ShowComposition MapComposition(CueComposition composition) => new(
         Id: composition.Id.ToString(),

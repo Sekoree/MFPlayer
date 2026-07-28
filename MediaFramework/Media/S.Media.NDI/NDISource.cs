@@ -161,12 +161,10 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         }
         catch (Exception ex)
         {
-#if DEBUG
+            // Unconditional (review §2.9): Release must record why the receiver never came up, and
+            // the state must be consistent in both configurations.
             MediaDiagnostics.LogError(ex, "NDISource: NDIReceiver.Create/Connect");
             _state = NDIConnectionState.Disconnected;
-#else
-            _ = ex;
-#endif
             _runtime.Dispose();
             throw;
         }

@@ -751,6 +751,24 @@ public sealed class CueShowSessionCoordinator
                         FireAndLog(OnCueClipNaturallyEndedAsync(id), "cue auto-follow");
                 });
 
+            // Mid-clip audio-path failures (a backend callback fault, a lost device, a dead router pacing
+            // clock). Before this subscription existed the operator saw a frozen playhead and silence with
+            // nothing in the log (review §2.3). Raised on audio/pump threads - marshal before touching VMs.
+            _cueShowSession.PlaybackAlert += alert =>
+            {
+                Trace.LogError(alert.Exception,
+                    "cue {CueId} audio path failed (output {OutputId}): {Message}",
+                    alert.CueId, alert.OutputId ?? "<router>", alert.Message);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    var cueLabel = Guid.TryParse(alert.CueId, out var id)
+                        ? CuePlayer.DescribeCue(id) ?? alert.CueId
+                        : alert.CueId;
+                    CuePlayer.StatusMessage = Strings.Format(
+                        nameof(Strings.CuePlaybackAlertFormat), cueLabel, alert.Message);
+                });
+            };
+
             Trace.LogInformation("HaPlay: cue transport + soundboard running on ShowSession.");
         }
         catch (Exception ex)

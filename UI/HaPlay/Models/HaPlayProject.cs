@@ -104,6 +104,7 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(CueChromaKey))]
 [JsonSerializable(typeof(CueColorAdjust))]
 [JsonSerializable(typeof(CueSchedule))]
+[JsonSerializable(typeof(CueAutomationPoint))]
 [JsonSerializable(typeof(PlaylistItem))]
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
