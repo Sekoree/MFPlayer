@@ -58,11 +58,18 @@
                   <Border Height="36" Margin="0,0,6,4" Padding="8,0"
                           Background="#14FFFFFF" CornerRadius="0">
                     <StackPanel VerticalAlignment="Center" Spacing="1">
-                      <StackPanel Orientation="Horizontal" Spacing="5">
-                        <TextBlock Text="{Binding Number}" FontWeight="SemiBold" FontSize="12" />
-                        <TextBlock Text="{Binding Label}" FontSize="12" TextTrimming="CharacterEllipsis" />
-                      </StackPanel>
-                      <TextBlock Text="{Binding KindLabel}" FontSize="10" Opacity="0.55" />
+                      <!-- Number in an Auto column, name in the star column. As a horizontal StackPanel
+                           the name was measured with infinite width, so its TextTrimming never engaged:
+                           a long cue name was laid out ~880 px into the canvas column and the canvas -
+                           declared after this ItemsControl - then painted its stripes, blocks and ruler
+                           straight over the escaped text. Bounding it here means nothing escapes at all. -->
+                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="5">
+                        <TextBlock Grid.Column="0" Text="{Binding Number}" FontWeight="SemiBold" FontSize="12" />
+                        <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12"
+                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
+                      </Grid>
+                      <TextBlock Text="{Binding KindLabel}" FontSize="10" Opacity="0.55"
+                                 TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                   </Border>
                 </DataTemplate>

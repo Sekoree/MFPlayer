@@ -40,13 +40,36 @@ Also fixed in the same pass: live per-cue route re-apply and hot output rebuild 
 gains WITHOUT the master trim/envelope (a cue could jump to 5× the fader's level, or to unity,
 and stay there), and `ShowSession.MasterTrim` was a non-volatile cross-thread read.
 
-**Known gap:** the GPU surface path (`SurfaceLayerSlot`, NXT-10) has the same problem in a
-different shape — a surface *renders* at the composite's stamped master time rather than
-selecting from a frame queue, so a crossfade tail's surface would render at the incoming clip's
-time. Fixing it needs a per-surface time source threaded through
-`IVideoCompositorLayerSurface.Render`'s `masterTime` in the compositor + the GL compositor. It is
-GL-only (the CPU compositor refuses surfaces) and therefore not testable headlessly, so
-`DetachFromMasterAlignment()` is a documented no-op there for now.
+### GPU surface path (closed, 2026-07-29)
+
+The gap this section used to record: the GPU surface path (`SurfaceLayerSlot`, NXT-10) has the same
+problem in a different shape — a surface *renders* at the composite's stamped master time rather
+than selecting from a frame queue, so a crossfade tail's surface rendered at the incoming clip's
+time (the tail's model posed at 0:00 while its audio played out at 3:12).
+
+Fixed with a **per-surface render clock**, additive at every hop and null on every ordinary
+placement (which then reaches the compositor byte for byte as before):
+
+`ShowSession.ReplaceAsync` handoff captures the outgoing clip's own `Player.PlayClock` once and
+passes it to `IPlacedClipLayer.DetachFromMasterAlignment(Func<TimeSpan>? ownClipTime)` →
+`SurfaceLayerSlot` stores it as `VideoCompositorSource.SurfaceSlot.RenderTimeSource` (a lock-free
+plain property, like `Slot.KeepPolicy`) → the mixer samples it once per composite, outside every
+lock, into the new `CompositorSurfaceLayer.RenderTime` → `GlVideoCompositor.CompositeWithSurfaces`
+renders that surface at `RenderTime ?? presentationTime` (both the direct and the
+effects/mapping-intermediate paths). `LayerSlot` ignores the clock — its frames carry their own
+PTS, so latest-wins already tracks the outgoing player. `IVideoCompositorLayerSurface.Render`'s
+signature is **unchanged** (only what it is handed moves), so external/native surface implementers
+are unaffected; the C ABI's `master_ticks` doc now says a layer may be given its own clock. A
+render clock that throws (its player is being torn down under the composite thread) degrades to the
+master time instead of faulting the pump.
+
+It IS testable: `S.Media.Compositor.Tests/SurfaceRenderTimeGlTests` drives a fake surface that
+records the `masterTime` it is asked to render at, on a real SDL3/GL context
+(`Skip.IfNot(SDL3GLVideoCompositor.TryProbe)`), so the GL half is pinned on real GL; the mixer half
+is pure CPU (`SurfaceLayerTests`), and `S.Media.Session.Tests/CrossfadeSurfaceTests` runs the whole
+crossfade end-to-end against a CPU compositor wearing the surface-host capability. All three fail
+when the fix is reverted. (GL test classes now share one xunit collection — two SDL/GL contexts
+live at once took the test host down.)
 
 The framework feature the enhancement round repeatedly deferred:
 `CuePlaylistOptions.CrossfadeMs` (persisted, unimplemented), group-boundary crossfade for

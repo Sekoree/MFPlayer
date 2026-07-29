@@ -54,6 +54,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     // Surface layers (NXT-10): rendered by the compositor on top of the frame layers when it is an
     // IVideoCompositorSurfaceHost. Guarded by _slotsGate like _slots; snapshotted per composite.
     private readonly List<SurfaceSlot> _surfaceSlots = [];
+    private readonly List<SurfaceSlot> _surfaceSnapshotScratch = [];
     private readonly List<CompositorSurfaceLayer> _surfaceScratch = [];
     private TimeSpan _nextPts = TimeSpan.Zero;
     private long _compositesEmitted;
@@ -376,18 +377,32 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 }
 
                 // Surface layers (NXT-10) ride the same composite: snapshot under _slotsGate, then let
-                // the surface-hosting compositor render them on top of the frame layers.
+                // the surface-hosting compositor render them on top of the frame layers. The slot REFS
+                // are copied under the gate (same brief-hold pattern the frame slots use above) and the
+                // placements read outside it, because a slot may carry a caller-supplied
+                // RenderTimeSource delegate - arbitrary code must never run under the mixer's slot lock.
                 _surfaceScratch.Clear();
                 if (_compositor is IVideoCompositorSurfaceHost surfaceHost)
                 {
+                    _surfaceSnapshotScratch.Clear();
                     lock (_slotsGate)
+                        _surfaceSnapshotScratch.AddRange(_surfaceSlots);
+
+                    foreach (var s in _surfaceSnapshotScratch)
                     {
-                        foreach (var s in _surfaceSlots)
+                        var placed = s.Placement;
+                        if (placed.Opacity <= 0f)
+                            continue;
+                        // Detached surface (a crossfade tail): render at its OWN clip time instead of
+                        // this composite's master time. Unset on every ordinary placement, which then
+                        // reaches the host exactly as before. A source that throws (its clip is being
+                        // torn down under us) falls back to the master time rather than faulting the pump.
+                        if (s.RenderTimeSource is { } renderTimeSource)
                         {
-                            var placed = s.Placement;
-                            if (placed.Opacity > 0f)
-                                _surfaceScratch.Add(placed);
+                            try { placed = placed with { RenderTime = renderTimeSource() }; }
+                            catch { /* fall back to the composite's master time */ }
                         }
+                        _surfaceScratch.Add(placed);
                     }
 
                     if (_surfaceScratch.Count > 0)
@@ -410,6 +425,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 _layerScratch.Clear();
                 _snapshotScratch.Clear();
                 _surfaceScratch.Clear();
+                _surfaceSnapshotScratch.Clear();
             }
         }
     }
@@ -529,7 +545,23 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             set { lock (_gate) _mappingSections = value; }
         }
 
-        /// <summary>Atomic placement snapshot for the composite thread.</summary>
+        /// <summary>
+        /// Optional clock this surface renders on INSTEAD of the composition's master time - the
+        /// surface-layer counterpart of <see cref="Slot.KeepPolicy"/> = <see cref="SlotKeepPolicy.Latest"/>
+        /// on a frame slot. Null (default) = the composite's master/presentation time, byte for byte the
+        /// historical behavior; non-null is sampled once per composite and delivered as the placement's
+        /// <see cref="CompositorSurfaceLayer.RenderTime"/>. A delegate that throws is treated as unset for
+        /// that composite. Set it for a layer whose source no longer follows the canvas clock - a
+        /// dual-voice crossfade's outgoing tail, which must keep rendering ITS clip while the composition's
+        /// master time has already moved to the incoming clip.
+        /// <para>Threading: a lock-free plain property (matching <see cref="Slot.KeepPolicy"/>) - written
+        /// from a control thread, read once per composite by the read thread; reference assignment is
+        /// atomic and the composite either sees the old delegate or the new one.</para>
+        /// </summary>
+        public Func<TimeSpan>? RenderTimeSource { get; set; }
+
+        /// <summary>Atomic placement snapshot for the composite thread. <see cref="RenderTimeSource"/> is
+        /// deliberately NOT sampled here - the mixer resolves it outside every lock.</summary>
         internal CompositorSurfaceLayer Placement
         {
             get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity, _effects, _mappingSections); }

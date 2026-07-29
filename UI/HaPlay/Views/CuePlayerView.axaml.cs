@@ -93,6 +93,8 @@ public partial class CuePlayerView : UserControl
         KeyDown += OnUserControlKeyDown;
         // Master fader (§6): double-click snaps the show-level trim back to unity.
         MasterTrimSlider.DoubleTapped += OnMasterTrimSliderDoubleTapped;
+        CueDrawerExpander.PropertyChanged += OnCueDrawerExpanderPropertyChanged;
+        SyncCueDrawerRow();
         // The Preview tab's scrubber is the deck's ONLY scrub surface (the General tab used to
         // carry a second slider - and it was the only one wired to commit the seek).
         CuePreviewScrubber.AddHandler(PointerReleasedEvent, OnCueScrubberPointerReleased, RoutingStrategies.Bubble);
@@ -438,6 +440,40 @@ public partial class CuePlayerView : UserControl
         }
 
         _ = vm.AddMediaFilesFromDrop(paths, dropTarget);
+    }
+
+    private void OnCueDrawerExpanderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        _ = sender;
+        if (e.Property == Expander.IsExpandedProperty)
+            SyncCueDrawerRow();
+    }
+
+    /// <summary>
+    /// Keeps "collapse the drawer" meaning "give the space back to the cue list". The drawer's row is
+    /// a STAR row so the two surfaces always share the window (a docked/Auto drawer took its desired
+    /// height first and starved the tree to a few pixels on short windows) - but a star row also keeps
+    /// its share when the Expander is collapsed, which would leave a band of dead space where the
+    /// drawer used to be. Collapsed, the row goes Auto (header height only) and the splitter hides,
+    /// since there is no longer a boundary to drag.
+    /// </summary>
+    private void SyncCueDrawerRow()
+    {
+        var drawerRow = CueWorkspaceGrid.RowDefinitions[2];
+        if (CueDrawerExpander.IsExpanded)
+        {
+            drawerRow.Height = new GridLength(1, GridUnitType.Star);
+            drawerRow.MinHeight = 88;
+            drawerRow.MaxHeight = 470;
+            CueDrawerSplitter.IsVisible = true;
+        }
+        else
+        {
+            drawerRow.Height = GridLength.Auto;
+            drawerRow.MinHeight = 0;
+            drawerRow.MaxHeight = double.PositiveInfinity;
+            CueDrawerSplitter.IsVisible = false;
+        }
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)

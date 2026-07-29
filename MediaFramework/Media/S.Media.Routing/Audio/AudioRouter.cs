@@ -960,6 +960,15 @@ public sealed partial class AudioRouter : IDisposable
     /// transparently falls back to a wall-clock impl. Only safe while
     /// stopped.
     /// </summary>
+    /// <summary>
+    /// How long a pause waits for an in-flight <c>Submit</c> on a drainer thread before flushing
+    /// anyway - a wedged device must not hang Pause forever. Overridable ONLY so tests that assert
+    /// the "don't flush while a Submit is in flight" gating can raise the cap above their probe
+    /// window; a loaded machine could otherwise let the 100 ms cap expire mid-probe and turn a
+    /// correctness assertion into a timing race. Production behaviour is unchanged.
+    /// </summary>
+    internal TimeSpan BoundedPauseWait { get; set; } = TimeSpan.FromMilliseconds(100);
+
     public void SlaveTo(string outputId)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputId);
@@ -1089,7 +1098,7 @@ public sealed partial class AudioRouter : IDisposable
         foreach (var p in activePumps)
         {
             p.AbandonQueue();
-            p.WaitForIdle(TimeSpan.FromMilliseconds(100), cancellationToken);
+            p.WaitForIdle(BoundedPauseWait, cancellationToken);
         }
 
         foreach (var s in sinksForFlush)

@@ -10,6 +10,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using HaPlay.ViewModels;
 
 namespace HaPlay.Views.Controls;
@@ -243,7 +244,7 @@ public sealed class TimelineCanvas : Control
         RenderGridAndRuler(ctx, width, height, pxPerMs);
 
         for (var i = 0; i < lanes.Count; i++)
-            RenderLaneItem(ctx, lanes[i], i, pxPerMs);
+            RenderLaneItem(ctx, lanes[i], i, width, pxPerMs);
 
         if (PlayheadMs >= 0)
         {
@@ -255,20 +256,39 @@ public sealed class TimelineCanvas : Control
     }
 
     /// <summary>Tooltip-style dB/time (or curve-name) readout near the pointer while an envelope
-    /// point drags or a segment curve was just cycled.</summary>
+    /// point drags or a segment curve was just cycled. Clamped to the SCROLLED VIEWPORT, not to the
+    /// canvas extent: the canvas is many screens wide at normal zoom, so clamping against the extent
+    /// let the readout land off-screen whenever the anchor sat near the right of the visible area.</summary>
     private void RenderReadout(DrawingContext ctx, double width)
     {
         if (_readoutText is null)
             return;
         var text = new FormattedText(_readoutText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             Typeface.Default, 11, Brushes.White);
+        var (visibleLeft, visibleRight) = VisibleXRange(width);
+        var minX = visibleLeft + 4;
         var pos = new Point(
-            Math.Clamp(_readoutAnchor.X, 4, Math.Max(4, width - text.Width - 8)),
+            Math.Clamp(_readoutAnchor.X, minX, Math.Max(minX, visibleRight - text.Width - 8)),
             Math.Max(TimelineMath.RulerHeight, _readoutAnchor.Y));
         ctx.FillRectangle(
             new SolidColorBrush(Color.FromArgb(0xD8, 0x20, 0x20, 0x20)),
             new Rect(pos.X - 4, pos.Y - 2, text.Width + 8, text.Height + 4));
         ctx.DrawText(text, pos);
+    }
+
+    /// <summary>The canvas-local x range that is actually on screen: the host
+    /// <see cref="ScrollViewer"/>'s horizontal window, or the whole extent when the canvas is not
+    /// scrolled (design surface, tests).</summary>
+    private (double Left, double Right) VisibleXRange(double width)
+    {
+        foreach (var ancestor in this.GetVisualAncestors())
+        {
+            if (ancestor is not ScrollViewer { Viewport.Width: > 0 } scroll)
+                continue;
+            var left = Math.Clamp(scroll.Offset.X, 0, Math.Max(0, width));
+            return (left, Math.Min(width, left + scroll.Viewport.Width));
+        }
+        return (0, width);
     }
 
     private void RenderGridAndRuler(DrawingContext ctx, double width, double height, double pxPerMs)
@@ -296,22 +316,24 @@ public sealed class TimelineCanvas : Control
             var label = new FormattedText(
                 TimelineMath.FormatRulerLabel(ms), CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
                 Typeface.Default, 10, labelBrush);
-            ctx.DrawText(label, new Point(x + 3, 2));
+            // Clamp to the extent: the last tick sits at (or within a few px of) the right edge, so a
+            // label drawn at x+3 ran past the measured width and was clipped mid-digit.
+            ctx.DrawText(label, new Point(Math.Max(0, Math.Min(x + 3, width - label.Width)), 2));
         }
         ctx.DrawLine(tickPen, new Point(0, TimelineMath.RulerHeight), new Point(width, TimelineMath.RulerHeight));
     }
 
-    private void RenderLaneItem(DrawingContext ctx, CueNodeViewModel node, int laneIndex, double pxPerMs)
+    private void RenderLaneItem(DrawingContext ctx, CueNodeViewModel node, int laneIndex, double width, double pxPerMs)
     {
         if (node.Kind == CueNodeKind.Comment)
         {
-            RenderMarker(ctx, node, laneIndex, pxPerMs, Color.FromArgb(0xB0, 0x90, 0x90, 0x90));
+            RenderMarker(ctx, node, laneIndex, width, pxPerMs, Color.FromArgb(0xB0, 0x90, 0x90, 0x90));
             return;
         }
 
         if (TimelineMath.IsMarker(node))
         {
-            RenderMarker(ctx, node, laneIndex, pxPerMs, Color.FromArgb(0xD0, 0xFF, 0xD1, 0x66));
+            RenderMarker(ctx, node, laneIndex, width, pxPerMs, Color.FromArgb(0xD0, 0xFF, 0xD1, 0x66));
             return;
         }
 
@@ -510,6 +532,16 @@ public sealed class TimelineCanvas : Control
         if (!editable)
             return;
 
+        // KNOWN LIMITATION (not fixable from here): TimelineMath.EnvelopePointCenter deliberately
+        // clamps a keyframe authored past the trimmed-in right edge onto that edge - a contract
+        // TimelineEnvelopeMathTests.EnvelopePointCenter_ClampsToBlockRightEdge pins - so after a
+        // right-edge trim SEVERAL out-of-range keyframes can land on the same pixel column. They then
+        // draw as one dot, and TimelineMath.EnvelopePointHit's nearest-point search resolves the tie to
+        // the LAST of them, so only that one can be dragged back into range (repeated Delete does peel
+        // them off one at a time, since each removal exposes the next). Fixing it means fanning the
+        // clamped points apart in BOTH EnvelopePointCenter and EnvelopePointHit so drawing and hit
+        // testing stay in agreement - i.e. in TimelineMath, alongside its tests, not here: duplicating
+        // the geometry canvas-side would put the renderer and the shared math permanently out of sync.
         var dotBrush = new SolidColorBrush(lineColor);
         var selectedPen = new Pen(Brushes.White, 1.5);
         for (var i = 0; i < envelope.Count; i++)
@@ -553,7 +585,8 @@ public sealed class TimelineCanvas : Control
     private static void DrawHandle(DrawingContext ctx, IBrush brush, Point center) =>
         ctx.FillRectangle(brush, new Rect(center.X - 3, center.Y - 3, 6, 6));
 
-    private void RenderMarker(DrawingContext ctx, CueNodeViewModel node, int laneIndex, double pxPerMs, Color color)
+    private void RenderMarker(
+        DrawingContext ctx, CueNodeViewModel node, int laneIndex, double width, double pxPerMs, Color color)
     {
         var c = TimelineMath.MarkerCenter(laneIndex, TimelineMath.BlockStartMs(node), pxPerMs);
         const double r = TimelineMath.MarkerHalfPx;
@@ -564,9 +597,17 @@ public sealed class TimelineCanvas : Control
         var label = $"{node.Number} {node.Label}".Trim();
         if (label.Length > 0)
         {
+            // Bounded exactly like the block label above: an unbounded FormattedText let a long
+            // comment/marker name draw straight past the measured extent (and, on the last lane,
+            // outside the canvas entirely).
+            var labelX = c.X + r + 4;
             var text = new FormattedText(label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                Typeface.Default, 11, new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF)));
-            ctx.DrawText(text, new Point(c.X + r + 4, c.Y - text.Height / 2));
+                Typeface.Default, 11, new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF)))
+            {
+                MaxTextWidth = Math.Max(1, width - labelX - 4),
+                MaxLineCount = 1,
+            };
+            ctx.DrawText(text, new Point(labelX, c.Y - text.Height / 2));
         }
     }
 

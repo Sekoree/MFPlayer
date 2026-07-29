@@ -142,6 +142,62 @@ public sealed class SurfaceLayerTests
     }
 
     [Fact]
+    public void SurfaceSlotRenderTimeSource_OverridesOnlyThatSlotsRenderTime()
+    {
+        // Dual-voice crossfade, surface half: the tail's surface must render at ITS clip's time while
+        // every other surface on the same canvas keeps the composite's master time.
+        var host = new FakeSurfaceHost(Canvas);
+        using var mixer = new VideoCompositorSource(Canvas, host);
+        var tail = mixer.AddSurfaceSlot(new RecordingSurface(), "tail");
+        var normal = mixer.AddSurfaceSlot(new RecordingSurface(), "normal");
+
+        // Before detaching, both placements carry no render time at all - the host uses the composite's.
+        Assert.True(mixer.TryReadNextFrame(TimeSpan.FromSeconds(1), out var frame));
+        frame.Dispose();
+        Assert.All(Assert.Single(host.SurfaceComposites).Surfaces, s => Assert.Null(s.RenderTime));
+
+        var tailTime = TimeSpan.FromSeconds(192);
+        tail.RenderTimeSource = () => tailTime;
+        Assert.True(mixer.TryReadNextFrame(TimeSpan.FromSeconds(2), out frame));
+        frame.Dispose();
+
+        var detached = host.SurfaceComposites[^1];
+        Assert.Equal(TimeSpan.FromSeconds(2), detached.Pts); // the composite itself is unmoved
+        Assert.Equal(tailTime, detached.Surfaces[0].RenderTime);
+        Assert.Null(detached.Surfaces[1].RenderTime);
+
+        // Sampled per composite: the tail's own clock keeps advancing under the frozen master time.
+        tailTime = TimeSpan.FromSeconds(193);
+        Assert.True(mixer.TryReadNextFrame(TimeSpan.FromSeconds(2), out frame));
+        frame.Dispose();
+        Assert.Equal(TimeSpan.FromSeconds(193), host.SurfaceComposites[^1].Surfaces[0].RenderTime);
+
+        // Clearing the source returns the slot to the composition's master time.
+        tail.RenderTimeSource = null;
+        Assert.True(mixer.TryReadNextFrame(TimeSpan.FromSeconds(3), out frame));
+        frame.Dispose();
+        Assert.All(host.SurfaceComposites[^1].Surfaces, s => Assert.Null(s.RenderTime));
+    }
+
+    [Fact]
+    public void ThrowingRenderTimeSource_FallsBackToTheCompositeMasterTime_WithoutFaultingThePump()
+    {
+        // The tail's clock lives on a player that is being torn down under the composite thread; a
+        // throwing read must degrade to the master time, never kill the composition pump.
+        var host = new FakeSurfaceHost(Canvas);
+        using var mixer = new VideoCompositorSource(Canvas, host);
+        var slot = mixer.AddSurfaceSlot(new RecordingSurface());
+        slot.RenderTimeSource = () => throw new ObjectDisposedException("clock");
+
+        Assert.True(mixer.TryReadNextFrame(TimeSpan.FromSeconds(5), out var frame));
+        frame.Dispose();
+
+        var call = Assert.Single(host.SurfaceComposites);
+        Assert.Equal(TimeSpan.FromSeconds(5), call.Pts);
+        Assert.Null(Assert.Single(call.Surfaces).RenderTime);
+    }
+
+    [Fact]
     public void SurfaceSlots_OrderBySortComparison()
     {
         var host = new FakeSurfaceHost(Canvas);

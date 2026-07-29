@@ -168,67 +168,74 @@
     <!-- Transport. GO is the show's primary action - keep it visually dominant; the tooltips double
          as the keyboard-shortcut reference for the code-behind transport bindings. Panic is the
          panic-path exit and wears Danger red, same as the media deck's Stop. -->
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
-      <Button Grid.Column="0" Content="{x:Static res:Strings.StandbySelectedButton}"
-              Command="{Binding StandbySelectedCommand}"
-              ToolTip.Tip="{x:Static res:Strings.CueTransportStandbyTooltip}" />
-      <Button Grid.Column="1" Content="{x:Static res:Strings.GoButton}"
-              Classes="Touch Go" MinWidth="96"
-              Command="{Binding GoCommand}"
-              ToolTip.Tip="{x:Static res:Strings.CueTransportGoTooltip}" />
-      <Button Grid.Column="2" Content="{x:Static res:Strings.BackButton}"
-              Command="{Binding BackCommand}"
-              ToolTip.Tip="{x:Static res:Strings.CueTransportBackTooltip}" />
-      <Button Grid.Column="3" Content="{x:Static res:Strings.PauseButton}"
-              Command="{Binding PauseCommand}"
-              ToolTip.Tip="{x:Static res:Strings.CueTransportPauseTooltip}" />
-      <Button Grid.Column="4" Content="{x:Static res:Strings.StopButton}"
-              Command="{Binding StopCommand}"
-              ToolTip.Tip="{x:Static res:Strings.CueTransportStopTooltip}" />
-      <Button Grid.Column="5" Content="{x:Static res:Strings.PanicButton}"
-              Classes="Touch Danger"
-              Command="{Binding PanicCommand}"
-              ToolTip.Tip="{x:Static res:Strings.CueTransportPanicTooltip}" />
-      <!-- Master fader (§6): a live session-wide trim over everything playing - a manual
-           "bring the show down by hand", not a stop. Session-scoped like the Schedules toggle;
-           double-click resets to unity (code-behind). -->
-      <StackPanel Grid.Column="6" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
-                  ToolTip.Tip="{x:Static res:Strings.CueMasterTrimTooltip}">
-        <TextBlock Text="{x:Static res:Strings.CueMasterTrimLabel}" VerticalAlignment="Center" />
-        <Slider x:Name="MasterTrimSlider" Width="120" Minimum="-60" Maximum="0"
-                VerticalAlignment="Center" Padding="0" Margin="0"
-                Value="{Binding MasterTrimDb, Mode=TwoWay}"
-                AutomationProperties.Name="{x:Static res:Strings.CueMasterTrimLabel}" />
-        <TextBlock MinWidth="52" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
-                   Text="{Binding MasterTrimDisplay}" />
-      </StackPanel>
-      <!-- Timed-trigger master gate (§4). Session-scoped: always starts OFF; scheduled cues only
-           fire while this is armed AND edit mode is off. -->
-      <ToggleButton Grid.Column="7" Classes="schedarm"
-                    IsChecked="{Binding SchedulesArmed, Mode=TwoWay}"
-                    ToolTip.Tip="{Binding SchedulesArmedTooltip}"
-                    AutomationProperties.Name="{x:Static res:Strings.SchedulesArmedToggleLabel}">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <TextBlock Text="&#x23F0;" FontSize="12" VerticalAlignment="Center" />
-          <TextBlock Text="{x:Static res:Strings.SchedulesArmedToggleLabel}" VerticalAlignment="Center" />
+    <!-- The row is a WRAP panel, not a strip of Auto grid columns: as a Grid it had exactly one width
+         at which it was whole (~1670 px), so at 1280 the MTC chase chip started 8 px past the window
+         edge and at 1024 the Triggers toggle was cut in half - with no scroll or overflow affordance
+         anywhere on the row. Wrapping keeps the single-line look wherever it fits (>=1670 px) and
+         folds the right-hand groups onto a second line instead of hiding them. The Grid wrapper is
+         the row's measurable scope (and keeps the transport a single DockPanel child). -->
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+      <WrapPanel ItemSpacing="6" LineSpacing="4">
+        <Button Content="{x:Static res:Strings.StandbySelectedButton}"
+                Command="{Binding StandbySelectedCommand}"
+                ToolTip.Tip="{x:Static res:Strings.CueTransportStandbyTooltip}" />
+        <Button Content="{x:Static res:Strings.GoButton}"
+                Classes="Touch Go" MinWidth="96"
+                Command="{Binding GoCommand}"
+                ToolTip.Tip="{x:Static res:Strings.CueTransportGoTooltip}" />
+        <Button Content="{x:Static res:Strings.BackButton}"
+                Command="{Binding BackCommand}"
+                ToolTip.Tip="{x:Static res:Strings.CueTransportBackTooltip}" />
+        <Button Content="{x:Static res:Strings.PauseButton}"
+                Command="{Binding PauseCommand}"
+                ToolTip.Tip="{x:Static res:Strings.CueTransportPauseTooltip}" />
+        <Button Content="{x:Static res:Strings.StopButton}"
+                Command="{Binding StopCommand}"
+                ToolTip.Tip="{x:Static res:Strings.CueTransportStopTooltip}" />
+        <Button Content="{x:Static res:Strings.PanicButton}"
+                Classes="Touch Danger"
+                Command="{Binding PanicCommand}"
+                ToolTip.Tip="{x:Static res:Strings.CueTransportPanicTooltip}" />
+        <!-- Master fader (§6): a live session-wide trim over everything playing - a manual
+             "bring the show down by hand", not a stop. Session-scoped like the Schedules toggle;
+             double-click resets to unity (code-behind). -->
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                    ToolTip.Tip="{x:Static res:Strings.CueMasterTrimTooltip}">
+          <TextBlock Text="{x:Static res:Strings.CueMasterTrimLabel}" VerticalAlignment="Center" />
+          <Slider x:Name="MasterTrimSlider" Width="120" Minimum="-60" Maximum="0"
+                  VerticalAlignment="Center" Padding="0" Margin="0"
+                  Value="{Binding MasterTrimDb, Mode=TwoWay}"
+                  AutomationProperties.Name="{x:Static res:Strings.CueMasterTrimLabel}" />
+          <TextBlock MinWidth="52" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
+                     Text="{Binding MasterTrimDisplay}" />
         </StackPanel>
-      </ToggleButton>
-      <!-- MIDI/OSC/hotkey trigger master gate (§6). A SEPARATE arm from Schedules (arming one
-           surface must never silently open the other), same semantics: session-scoped, starts
-           OFF, fires only while armed AND edit mode is off. -->
-      <ToggleButton Grid.Column="8" Classes="schedarm"
-                    IsChecked="{Binding TriggersArmed, Mode=TwoWay}"
-                    ToolTip.Tip="{Binding TriggersArmedTooltip}"
-                    AutomationProperties.Name="{x:Static res:Strings.TriggersArmedToggleLabel}">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <TextBlock Text="&#x26A1;" FontSize="12" VerticalAlignment="Center" />
-          <TextBlock Text="{x:Static res:Strings.TriggersArmedToggleLabel}" VerticalAlignment="Center" />
-        </StackPanel>
-      </ToggleButton>
-      <StackPanel Grid.Column="9" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+        <!-- Timed-trigger master gate (§4). Session-scoped: always starts OFF; scheduled cues only
+             fire while this is armed AND edit mode is off. -->
+        <ToggleButton Classes="schedarm"
+                      IsChecked="{Binding SchedulesArmed, Mode=TwoWay}"
+                      ToolTip.Tip="{Binding SchedulesArmedTooltip}"
+                      AutomationProperties.Name="{x:Static res:Strings.SchedulesArmedToggleLabel}">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="&#x23F0;" FontSize="12" VerticalAlignment="Center" />
+            <TextBlock Text="{x:Static res:Strings.SchedulesArmedToggleLabel}" VerticalAlignment="Center" />
+          </StackPanel>
+        </ToggleButton>
+        <!-- MIDI/OSC/hotkey trigger master gate (§6). A SEPARATE arm from Schedules (arming one
+             surface must never silently open the other), same semantics: session-scoped, starts
+             OFF, fires only while armed AND edit mode is off. -->
+        <ToggleButton Classes="schedarm"
+                      IsChecked="{Binding TriggersArmed, Mode=TwoWay}"
+                      ToolTip.Tip="{Binding TriggersArmedTooltip}"
+                      AutomationProperties.Name="{x:Static res:Strings.TriggersArmedToggleLabel}">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="&#x26A1;" FontSize="12" VerticalAlignment="Center" />
+            <TextBlock Text="{x:Static res:Strings.TriggersArmedToggleLabel}" VerticalAlignment="Center" />
+          </StackPanel>
+        </ToggleButton>
         <!-- State chip, same palette as the deck's state pill: green running, amber paused or
-             standby-armed, gray idle - readable across a booth without parsing the text. -->
-        <Border Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
+             standby-armed, gray idle - readable across a booth without parsing the text. The extra
+             left margin is the gap that separated the chips from the arm toggles on the old row. -->
+        <Border Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center"
                 Background="{Binding TransportStateColor}">
           <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TransportState}"
                      TextTrimming="CharacterEllipsis" />
@@ -236,32 +243,61 @@
         <!-- MTC chase readout (D1). Only present once some loaded list carries a Timecode schedule -
              the operator needs to see whether timecode is arriving, at what rate, and where it is,
              BEFORE arming. Written by CueSchedulerService's sweep. -->
-        <Border Classes="Chip" HorizontalAlignment="Left"
+        <Border Classes="Chip" VerticalAlignment="Center"
                 IsVisible="{Binding HasTimecodeChaseStatus}"
                 ToolTip.Tip="{x:Static res:Strings.CueScheduleTimecodeHint}">
           <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TimecodeChaseStatus}"
                      TextTrimming="CharacterEllipsis" />
         </Border>
-      </StackPanel>
+      </WrapPanel>
     </Grid>
 
-    <DockPanel LastChildFill="True">
-      <Expander DockPanel.Dock="Bottom"
+    <!-- Workspace split. The drawer used to be DockPanel.Dock="Bottom" over a LastChildFill cue tree:
+         a docked child takes its DESIRED height first, so the drawer's 220..440 px TabControl won on
+         every short window and the cue list - the workspace's primary surface, and the drop target
+         for external files - was starved to 7 px at 1024x600 and 0 px at 560, with the drawer itself
+         then laid out past the client bottom. Both surfaces now own a star row (so each is guaranteed
+         a share at ANY height), the drawer is capped at its old ~470 px on tall windows, and a
+         GridSplitter lets the operator move the boundary. -->
+    <Grid x:Name="CueWorkspaceGrid">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*" MinHeight="120" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" MinHeight="88" MaxHeight="470" />
+      </Grid.RowDefinitions>
+
+      <GridSplitter x:Name="CueDrawerSplitter"
+                    Grid.Row="1" Height="4" Margin="0,4,0,0"
+                    ResizeDirection="Rows"
+                    Background="{DynamicResource BorderSubtle}"
+                    HorizontalAlignment="Stretch" />
+
+      <!-- The 1 px bottom margin is layout-rounding slack, not styling: with two equal star rows and an
+           odd amount of free height each row lands on x.5 and Avalonia rounds BOTH away from zero, so
+           the row grid resolves 1 px taller than its container and the drawer's last pixel row falls
+           outside the client area. The overflow is provably at most 1 px (the two fractions sum to 1),
+           so one pixel of margin absorbs it at every window height. -->
+      <Expander x:Name="CueDrawerExpander"
+                Grid.Row="2"
                 Classes="dense"
-                Margin="0,4,0,0"
+                Margin="0,4,0,1"
                 IsExpanded="True"
                 Header="{Binding SelectedCueDrawerTitle}"
                 HorizontalAlignment="Stretch"
                 HorizontalContentAlignment="Stretch">
-        <StackPanel>
-        <TextBlock Margin="6,4,6,8"
+        <!-- Grid, not a StackPanel: a vertical StackPanel measures the TabControl with infinite height,
+             so the drawer kept its full desired height and was clipped off the bottom of the window
+             instead of shrinking. In the star row the TabControl gets exactly what is left and its
+             per-tab ScrollViewers take over. -->
+        <Grid RowDefinitions="Auto,*">
+        <TextBlock Grid.Row="0" Margin="6,4,6,8"
                    Text="{x:Static res:Strings.CueDetailsEmptyHint}"
                    TextWrapping="Wrap"
                    Opacity="0.65"
                    IsVisible="{Binding !HasSelectedCue}" />
         <!-- MaxHeight caps the bottom drawer so a tall tab (e.g. several video placements) can't push it
              out of the window; each tab's content is in a ScrollViewer, which then scrolls within the cap. -->
-        <TabControl x:Name="CueDrawerTabs" Classes="Segmented" Margin="0,4,0,0" MinHeight="220" MaxHeight="440"
+        <TabControl Grid.Row="1" x:Name="CueDrawerTabs" Classes="Segmented" Margin="0,4,0,0" MaxHeight="440"
                     IsVisible="{Binding HasSelectedCue}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch">
@@ -619,7 +655,10 @@
                                         Command="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).RemoveSelectedCueTriggerCommand}"
                                         CommandParameter="{Binding}" />
                               </StackPanel>
-                              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsMidi}">
+                              <!-- WrapPanel: nine fixed-width editors need ~880 px, and the drawer tab's
+                                   ScrollViewer cannot scroll horizontally - below ~900 px of drawer width
+                                   the "Learn" toggle was clipped away with no way to reach it. -->
+                              <WrapPanel ItemSpacing="8" LineSpacing="6" IsVisible="{Binding IsMidi}">
                                 <TextBox Width="150"
                                          Text="{Binding MidiDeviceName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                          PlaceholderText="{x:Static res:Strings.CueTriggerMidiDeviceWatermark}"
@@ -649,8 +688,8 @@
                                               ToolTip.Tip="{x:Static res:Strings.CueTriggerLearnTooltip}"
                                               Command="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).ToggleMidiLearnTriggerCommand}"
                                               CommandParameter="{Binding}" />
-                              </StackPanel>
-                              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsOsc}">
+                              </WrapPanel>
+                              <WrapPanel ItemSpacing="8" LineSpacing="6" IsVisible="{Binding IsOsc}">
                                 <TextBlock Text="{x:Static res:Strings.CueTriggerOscAddressLabel}" VerticalAlignment="Center" />
                                 <TextBox Width="220"
                                          Text="{Binding OscAddress, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
@@ -660,7 +699,7 @@
                                          Text="{Binding OscArgument, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                          ToolTip.Tip="{x:Static res:Strings.CueTriggerOscArgumentTooltip}"
                                          PlaceholderText="{x:Static res:Strings.CueTriggerOscArgumentWatermark}" />
-                              </StackPanel>
+                              </WrapPanel>
                               <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsHotkey}">
                                 <TextBlock Text="{x:Static res:Strings.CueHotkeyLabel}" VerticalAlignment="Center" />
                                 <TextBox Width="170"
@@ -1426,10 +1465,10 @@
             </StackPanel>
           </TabItem>
         </TabControl>
-        </StackPanel>
+        </Grid>
       </Expander>
 
-      <Grid ColumnDefinitions="*,Auto,260">
+      <Grid Grid.Row="0" ColumnDefinitions="*,Auto,260">
         <Grid Grid.Column="0" RowDefinitions="Auto,*">
           <!-- Ctrl+F jump-to-cue search. Not a filter: the full list stays visible (transport
                context), matches are selected/expanded/scrolled. Enter = next, Shift+Enter =
@@ -1513,10 +1552,16 @@
                   <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0"
                           Padding="6,4" Margin="0,0,0,4">
                     <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
-                      <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="6">
-                        <TextBlock Text="{Binding CueNumberDisplay}" FontWeight="SemiBold" Opacity="0.7" />
-                        <TextBlock Text="{Binding CueLabel}" TextTrimming="CharacterEllipsis" />
-                      </StackPanel>
+                      <!-- Number in an Auto column, label in the star column: a horizontal StackPanel
+                           measures its children with INFINITE width, so the label's TextTrimming never
+                           engages and the (cross-list prefixed) name runs straight out of the row.
+                           Same shape as the UpcomingChainItemViewModel template below. -->
+                      <Grid Grid.Row="0" Grid.Column="0" ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                        <TextBlock Grid.Column="0" Text="{Binding CueNumberDisplay}" FontWeight="SemiBold" Opacity="0.7" />
+                        <TextBlock Grid.Column="1" Text="{Binding CueLabel}" TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding CueLabel}" />
+                      </Grid>
+                      <!-- Declared AFTER the label grid so it paints above any overlap and stays clickable. -->
                       <Button Grid.Row="0" Grid.Column="1" Padding="6,0" MinWidth="22"
                               Command="{Binding CancelCommand}"
                               ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}"
@@ -1547,17 +1592,22 @@
                                       IsChecked="{Binding IsExpanded}"
                                       Content="▸"
                                       ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupExpandTooltip}" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                          <TextBlock Text="{Binding GroupNode.Number}" FontWeight="SemiBold" Opacity="0.7" />
-                          <TextBlock Text="{Binding GroupLabel}" FontWeight="SemiBold"
-                                     TextTrimming="CharacterEllipsis" />
-                          <TextBlock Text="{Binding Children.Count, StringFormat='({0})'}" Opacity="0.6" FontSize="11"
+                        <!-- Auto columns for the fixed badges, star column for the trimming label - in a
+                             horizontal StackPanel the label is measured with infinite width, never trims,
+                             and pushes the (n) count and the run status clean off the window. -->
+                        <Grid Grid.Column="1" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6"
+                              VerticalAlignment="Center">
+                          <TextBlock Grid.Column="0" Text="{Binding GroupNode.Number}" FontWeight="SemiBold" Opacity="0.7" />
+                          <TextBlock Grid.Column="1" Text="{Binding GroupLabel}" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding GroupLabel}" />
+                          <TextBlock Grid.Column="2" Text="{Binding Children.Count, StringFormat='({0})'}" Opacity="0.6" FontSize="11"
                                      VerticalAlignment="Center" />
                           <!-- Playlist run status ("item 3/12 · pass 1/2") - only while a run is live. -->
-                          <TextBlock Text="{Binding PlaylistStatus}" Opacity="0.6" FontSize="11"
+                          <TextBlock Grid.Column="3" Text="{Binding PlaylistStatus}" Opacity="0.6" FontSize="11"
                                      VerticalAlignment="Center"
                                      IsVisible="{Binding PlaylistStatus, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                        </StackPanel>
+                        </Grid>
                         <Button Grid.Column="2" Padding="6,0" MinWidth="22"
                                 Command="{Binding CancelAllCommand}"
                                 ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}"
@@ -1597,6 +1647,6 @@
           </DockPanel>
         </HeaderedContentControl>
       </Grid>
-    </DockPanel>
+    </Grid>
   </DockPanel>
 </UserControl>

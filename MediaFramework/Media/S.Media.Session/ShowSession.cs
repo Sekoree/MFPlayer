@@ -3587,11 +3587,17 @@ public sealed class ShowSession : IAsyncDisposable
                 // crossfading into B at 0:00 ⇒ ~192 s), master alignment would reject all of them and keep
                 // re-presenting the frame it already held, and the tail would fade out as a FROZEN STILL.
                 // Nothing targets the tail's transport for the rest of its life, so hand its layers the
-                // free-running latest-wins selection: they advance on the outgoing player's own paced
-                // submissions. Per-layer and only on the handoff branch - the Active clip's layers (and
-                // every non-crossfade path) keep master alignment untouched.
+                // free-running selection: a FRAME layer goes latest-wins and advances on the outgoing
+                // player's own paced submissions; a GPU SURFACE layer has no frame queue - it renders at
+                // whatever instant it is handed - so it gets the tail's own source clock instead, sampled
+                // per composite (the compositor's per-surface CompositorSurfaceLayer.RenderTime). The clock
+                // is captured ONCE here so the tail never re-reads a player field that its release nulls.
+                // Per-layer and only on the handoff branch - the Active clip's layers (and every
+                // non-crossfade path) keep master alignment untouched.
+                var outgoingClock = Outgoing!.Player.PlayClock;
+                var outgoingSourceTime = () => outgoingClock.CurrentPosition;
                 foreach (var placed in _outgoingLayers)
-                    placed.Slot.DetachFromMasterAlignment();
+                    placed.Slot.DetachFromMasterAlignment(outgoingSourceTime);
             }
 
             // Stop the displaced clip's background work (fade ramp + end-of-clip monitor) before anything else.

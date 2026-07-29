@@ -1615,22 +1615,30 @@ public sealed class ClipCompositionRuntime : IDisposable
         void UpdatePlacement(VideoPlacementSpec placement);
 
         /// <summary>
-        /// Stops selecting this layer's frames against the composition's master (transport) time and takes
-        /// the newest submitted frame instead - the free-running, latest-wins selection an unmastered
-        /// composition uses. Irreversible and per LAYER, so the composition's other layers (and every
-        /// normal clip) keep their master alignment untouched.
+        /// Stops rendering this layer against the composition's master (transport) time. Irreversible and
+        /// per LAYER, so the composition's other layers (and every normal clip) keep their master alignment
+        /// untouched.
         /// <para>
         /// The one caller is the dual-voice crossfade handoff: the outgoing clip keeps its layers and its
         /// transport-timeline claim, but that timeline is re-bound to the INCOMING clip's playhead, so the
-        /// pump would feed the tail a master time from a different clip. Master-aligned selection rejects
-        /// every candidate more than one canvas period in the future and falls back to the frame it is
-        /// already holding, which freezes the tail on a still (crossfading out of a clip at 3:12 into one
-        /// starting at 0:00 puts every outgoing frame ~192 s "in the future"). Nothing targets the tail's
-        /// transport for its remaining fade window, so latest-wins is exactly right: it advances on the
-        /// outgoing player's own paced submissions.
+        /// pump would feed the tail a master time from a different clip. Nothing targets the tail's
+        /// transport for its remaining fade window, so it is free to run on its own clip's time.
+        /// </para>
+        /// <para>
+        /// A <see cref="LayerSlot"/> needs no clock: it picks a picture out of its slot's submitted frames,
+        /// so it just switches to latest-wins and advances on the outgoing player's own paced submissions.
+        /// (Master-aligned selection would reject every candidate more than one canvas period in the future
+        /// and keep re-presenting the frame it already holds, freezing the tail on a still - crossfading out
+        /// of a clip at 3:12 into one starting at 0:00 puts every outgoing frame ~192 s "in the future".)
+        /// A <see cref="SurfaceLayerSlot"/> has no such queue - it RENDERS at whatever instant it is handed -
+        /// so it needs <paramref name="ownClipTime"/> to render the right clip.
         /// </para>
         /// </summary>
-        void DetachFromMasterAlignment();
+        /// <param name="ownClipTime">The outgoing clip's own source clock, sampled once per composite.
+        /// Required for a GPU surface layer (which otherwise keeps rendering the composition's - i.e. the
+        /// INCOMING clip's - time); ignored by frame layers, whose frames carry their own timestamps. Null
+        /// leaves a surface layer on the composition's master time.</param>
+        void DetachFromMasterAlignment(Func<TimeSpan>? ownClipTime = null);
     }
 
     /// <summary>
@@ -1688,11 +1696,14 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         /// <inheritdoc />
-        /// <remarks>No-op for a surface layer: a surface holds no submitted-frame queue to select from -
-        /// it RENDERS at the master time the composite is stamped with. Giving a crossfade tail's surface
-        /// its own render time would need a per-surface time source in the compositor's surface contract
-        /// (<c>IVideoCompositorLayerSurface.Render</c>'s <c>masterTime</c>), which is a GL-only path.</remarks>
-        public void DetachFromMasterAlignment() { }
+        /// <remarks>Installs <paramref name="ownClipTime"/> as this surface's per-placement render clock
+        /// (<see cref="VideoCompositorSource.SurfaceSlot.RenderTimeSource"/> →
+        /// <see cref="CompositorSurfaceLayer.RenderTime"/> → the surface's <c>Render</c> <c>masterTime</c>).
+        /// A surface holds no submitted-frame queue to select from, so this - not a keep policy - is how it
+        /// leaves the composition's clock. A null clock leaves the surface on the composition's master time,
+        /// which is also every non-detached surface's unchanged path.</remarks>
+        public void DetachFromMasterAlignment(Func<TimeSpan>? ownClipTime = null) =>
+            RawSlot.RenderTimeSource = ownClipTime;
 
         /// <summary>Resolves the placement to the surface's canvas transform - the same
         /// <see cref="PlacementResolver"/> math a frame layer uses, with the canvas as the source size
@@ -1846,7 +1857,11 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         /// <inheritdoc />
-        public void DetachFromMasterAlignment() => RawSlot.KeepPolicy = SlotKeepPolicy.Latest;
+        /// <remarks><paramref name="ownClipTime"/> is deliberately unused: a frame layer's pictures carry
+        /// their own presentation timestamps, so latest-wins already tracks the outgoing player's paced
+        /// submissions exactly.</remarks>
+        public void DetachFromMasterAlignment(Func<TimeSpan>? ownClipTime = null) =>
+            RawSlot.KeepPolicy = SlotKeepPolicy.Latest;
 
         public void ApplyPlacement()
         {

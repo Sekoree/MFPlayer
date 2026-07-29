@@ -18,7 +18,10 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
     // Dialogs/, and the ControlPanes/ dock panes). RATCHET ONLY DOWNWARD - never raise this to accommodate a
     // new literal. (Jumped from 166 to 264 when the scan went recursive: the previous top-level-only glob was
     // blind to Dialogs/ and to the ControlPanes/ views the Control workspace tabs were extracted into.)
-    private const int Baseline = 264;
+    // Ratcheted 264 -> 260 on 2026-07-29: this round's cue-player work (triggers, timecode chase,
+    // master fader, layout rebuild) routed all of its text through Strings.resx and migrated a few
+    // existing literals on the way, so the floor drops with it.
+    private const int Baseline = 260;
 
     private static readonly Regex Attr = new(
         @"\b(Text|Content|Header|Title|ToolTip\.Tip|Watermark)\s*=\s*""([^""]*)""", RegexOptions.Compiled);

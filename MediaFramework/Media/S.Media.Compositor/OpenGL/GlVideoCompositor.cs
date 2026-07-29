@@ -627,15 +627,22 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                     configured.Value = _output;
                 }
 
+                // Per-surface render clock: a placement that carries its OWN RenderTime (a dual-voice
+                // crossfade's outgoing tail, whose clip no longer drives this canvas) renders at that
+                // instant; every ordinary placement leaves it null and gets the composite's master time,
+                // unchanged. Only the value handed to Render moves - the frame is still stamped, read
+                // back and returned at presentationTime.
+                var surfaceTime = surfaceLayer.RenderTime ?? presentationTime;
+
                 if (surfaceLayer.Effects is { Count: > 0 } || surfaceLayer.MappingSections is not null)
                 {
-                    DrawSurfaceLayerIndirect(surfaceLayer, opacity, presentationTime);
+                    DrawSurfaceLayerIndirect(surfaceLayer, opacity, surfaceTime);
                     continue;
                 }
 
                 _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
                 _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
-                surfaceLayer.Surface.Render(_gl, _fbo, presentationTime, surfaceLayer.Transform, opacity);
+                surfaceLayer.Surface.Render(_gl, _fbo, surfaceTime, surfaceLayer.Transform, opacity);
             }
 
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
@@ -676,10 +683,12 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     /// alpha over the transparent intermediate arrives premultiplied-by-coverage, which only
     /// matters for translucent surfaces - the visualizer renders opaque.
     /// </summary>
+    /// <param name="renderTime">The instant handed to the surface - the composite's master time, or the
+    /// placement's own <see cref="CompositorSurfaceLayer.RenderTime"/> when it has one.</param>
     private void DrawSurfaceLayerIndirect(
         in CompositorSurfaceLayer surfaceLayer,
         float opacity,
-        TimeSpan presentationTime)
+        TimeSpan renderTime)
     {
         var sections = surfaceLayer.MappingSections;
         if (sections is { Count: 0 })
@@ -693,7 +702,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         _gl.ClearColor(0f, 0f, 0f, 0f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
         surfaceLayer.Surface.Render(
-            _gl, _surfaceEffectFbo, presentationTime, LayerTransform2D.Identity, 1f);
+            _gl, _surfaceEffectFbo, renderTime, LayerTransform2D.Identity, 1f);
 
         // The surface may leave scissor enabled; it must not clip the composite draws below.
         _gl.Disable(EnableCap.ScissorTest);

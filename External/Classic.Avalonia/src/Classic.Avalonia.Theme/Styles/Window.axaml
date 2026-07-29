@@ -36,7 +36,12 @@
 
               <utils:AutoAttachTitleBar DockPanel.Dock="Top" Margin="0,0,0,1" />
 
-              <VisualLayerManager>
+              <!-- LOCAL PATCH: TopLevel declares PART_VisualLayerManager as a template part and only
+              enables its OverlayLayer when it can find it by that name. Unnamed here,
+              the whole overlay layer was absent under Classic - flyouts/menus with no
+              platform popup, light-dismiss overlays, drag adorners and the text
+              selector all silently dead. Keep the name if this theme is re-vendored. -->
+              <VisualLayerManager Name="PART_VisualLayerManager">
                 <ContentPresenter Name="PART_ContentPresenter"
                                   Margin="{TemplateBinding Padding}"
                                   Background="{TemplateBinding Background}"
@@ -87,7 +92,7 @@
                   IsHitTestVisible="False" />
           <Panel Margin="{TemplateBinding WindowDecorationMargin}"
                  Background="Transparent" />
-          <VisualLayerManager>
+          <VisualLayerManager Name="PART_VisualLayerManager">
             <ContentPresenter Name="PART_ContentPresenter"
                               Margin="{TemplateBinding Padding}"
                               HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"

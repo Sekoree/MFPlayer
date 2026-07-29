@@ -8,12 +8,24 @@ using PixelFormat = S.Media.Core.Video.PixelFormat;
 namespace S.Media.Compositor.Tests;
 
 /// <summary>
+/// Every GL-backed test class stands up a real SDL window + GL context per test. xunit parallelizes test
+/// CLASSES by default, which would have two contexts live at once and takes the test host down with it, so
+/// all GL classes join this collection and run serially.
+/// </summary>
+[CollectionDefinition(GlContextCollection.Name, DisableParallelization = true)]
+public sealed class GlContextCollection
+{
+    public const string Name = "gl-context";
+}
+
+/// <summary>
 /// Real-GL coverage for the surface-layer effect path: a surface with a chroma-key/color chain is
 /// rendered into the intermediate texture and composited through the effect-variant layer shader.
 /// Two guarantees pinned here: (1) a no-op effect chain is pixel-identical to the direct surface
 /// render (the intermediate hop must not flip/shift/re-tint anything), and (2) a green-screen key
 /// actually keys the surface's green output. Skips when the host has no GL.
 /// </summary>
+[Collection(GlContextCollection.Name)]
 public sealed class SurfaceEffectGlTests
 {
     private const int W = 32;

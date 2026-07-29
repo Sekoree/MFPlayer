@@ -40,6 +40,11 @@ public class AudioRouterControlTests
     public async Task Pause_WaitsForInFlightSubmitBeforeFlush()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
+        // The gating is what's under test, not the 100 ms wedged-device cap. With the production cap
+        // a loaded box could let it expire DURING the negative probe below - Flush then fires legally
+        // and the assertion reads as a gating failure (this test flaked roughly one full-suite run in
+        // three). Raising the cap well past the probe removes the race without weakening the check.
+        r.BoundedPauseWait = TimeSpan.FromSeconds(5);
         var src = new TestSource(Stereo, _ => 1f);
         var output = new BlockingFlushableOutput(Stereo);
 

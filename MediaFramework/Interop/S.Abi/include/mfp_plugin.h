@@ -359,6 +359,10 @@ typedef struct MfpVideoOutputVTable {
 typedef struct MfpLayerSurfaceVTable {
     MFP_STRUCT_HEADER;
     int  (*configure_gl)(void* surface, const MfpGlContext* ctx, uint32_t canvas_w, uint32_t canvas_h);
+    /* master_ticks is the instant the host wants THIS layer rendered at. It is normally the composite's
+     * master time, but the host may hand one layer its own clock (a crossfade tail keeps playing its clip
+     * while the canvas clock has already moved to the incoming one), so a plugin MUST NOT assume the value
+     * is shared with the other layers of a frame, nor that it is monotonic across a source change. */
     int  (*render)(void* surface, const MfpGlContext* ctx, uint32_t target_fbo,
                    int64_t master_ticks, const MfpTransform2D* placement, float opacity);
     void (*destroy)(void* surface);

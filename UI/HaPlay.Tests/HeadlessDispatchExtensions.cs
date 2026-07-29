@@ -23,14 +23,17 @@ internal static class HeadlessAppTheme
     public static void ApplyProductionBaseTheme() => ApplyBaseTheme(AppBaseTheme.Classic);
 
     /// <summary>
-    /// For tests that need a working <see cref="Avalonia.Controls.Primitives.OverlayLayer"/> - i.e. anything
-    /// that opens a Flyout/Popup. The headless platform has no <c>IPopupImpl</c>, so a popup can only fall
-    /// back to the top level's overlay layer, and <c>TopLevel</c> only enables that layer when it can find a
-    /// <c>VisualLayerManager</c> NAMED <c>PART_VisualLayerManager</c> in the Window template
-    /// (Avalonia.Controls/TopLevel.cs:748 + Window.cs:909). The Simple and Fluent Window templates name it;
-    /// the in-repo Classic one does not, so under Classic the overlay layer is absent and
-    /// <c>FlyoutBase.ShowAt</c> throws "Unable to create IPopupImpl and no overlay layer is found".
-    /// Pass <see cref="AppBaseTheme.Simple"/> for those tests - still a shipped production theme.
+    /// Applies one of the shipped base themes. Any of the three now works for tests that need a real
+    /// <see cref="Avalonia.Controls.Primitives.OverlayLayer"/> - i.e. anything opening a Flyout/Popup:
+    /// the headless platform has no <c>IPopupImpl</c>, so a popup can only fall back to the top level's
+    /// overlay layer, and <c>TopLevel</c> only enables that layer when it finds a
+    /// <c>VisualLayerManager</c> NAMED <c>PART_VisualLayerManager</c> in the template.
+    /// <para>The in-repo Classic theme used to leave that name off every one of its TopLevel templates,
+    /// so under Classic - the app's STARTUP DEFAULT - there was no overlay layer at all and
+    /// <c>FlyoutBase.ShowAt</c> threw "Unable to create IPopupImpl and no overlay layer is found";
+    /// tests worked around it by asking for Simple. Fixed 2026-07-29 in
+    /// <c>External/Classic.Avalonia/.../Styles/{Window,PopupRoot,EmbeddableControlRoot}.axaml</c> (each
+    /// carries a LOCAL PATCH comment), and pinned by <c>ThemeOverlayLayerTests</c>.</para>
     /// </summary>
     public static void ApplyBaseTheme(AppBaseTheme baseTheme)
     {

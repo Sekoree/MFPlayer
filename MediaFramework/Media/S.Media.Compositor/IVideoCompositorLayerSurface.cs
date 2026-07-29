@@ -18,6 +18,13 @@ public interface IVideoCompositorLayerSurface : IDisposable
     /// Render this layer into <paramref name="targetFbo"/> (the bound canvas framebuffer) at
     /// <paramref name="masterTime"/>, applying the layer <paramref name="transform"/> and
     /// <paramref name="opacity"/>. Runs on the compositor thread with its context current.
+    /// <para>
+    /// <paramref name="masterTime"/> is the composite's master/presentation time unless the placement
+    /// carries a <see cref="CompositorSurfaceLayer.RenderTime"/>, in which case it is THAT per-surface
+    /// instant. Implementations need no special handling either way - render the content for the time
+    /// they are handed - but they must not assume the value is shared with the other layers of the
+    /// composite, nor that it is monotonic across a source change.
+    /// </para>
     /// </summary>
     void Render(GL gl, uint targetFbo, TimeSpan masterTime, LayerTransform2D transform, float opacity);
 }
@@ -46,7 +53,25 @@ public readonly record struct CompositorSurfaceLayer(
     LayerTransform2D Transform,
     float Opacity,
     IReadOnlyList<VideoLayerEffect>? Effects = null,
-    IReadOnlyList<WarpSection>? MappingSections = null);
+    IReadOnlyList<WarpSection>? MappingSections = null)
+{
+    /// <summary>
+    /// Optional per-surface render instant. Null (the default, and every ordinary placement) means the
+    /// surface renders at the composite's master/presentation time - unchanged behavior. When set, the
+    /// host passes THIS value to <see cref="IVideoCompositorLayerSurface.Render"/>'s <c>masterTime</c>
+    /// for this placement only; every other layer of the same composite is untouched.
+    /// <para>
+    /// A frame layer selects a picture out of its slot's submitted queue, so it can be taken off master
+    /// alignment simply by switching to latest-wins (<see cref="SlotKeepPolicy.Latest"/>). A surface has
+    /// no queue - it RENDERS whatever instant it is handed - so detaching it from the composite's clock
+    /// needs this explicit alternative. The one shipping caller is the dual-voice crossfade handoff: the
+    /// outgoing clip's tail keeps compositing for the fade window while the composition's master time has
+    /// already moved to the INCOMING clip's playhead, and without this the tail would render the wrong
+    /// clip's instant (a model posed at 0:00 while its audio plays out at 3:12).
+    /// </para>
+    /// </summary>
+    public TimeSpan? RenderTime { get; init; }
+}
 
 /// <summary>
 /// Capability interface for compositors that can host <see cref="CompositorSurfaceLayer"/>s (NXT-10 -
@@ -62,7 +87,9 @@ public interface IVideoCompositorSurfaceHost : IVideoCompositor
     /// <summary>
     /// Composite <paramref name="frameLayers"/> (back-to-front), then render
     /// <paramref name="surfaceLayers"/> on top (list order) directly into the canvas, and return the
-    /// finished frame at <paramref name="presentationTime"/>.
+    /// finished frame at <paramref name="presentationTime"/>. Each surface renders at
+    /// <paramref name="presentationTime"/> unless its placement carries a
+    /// <see cref="CompositorSurfaceLayer.RenderTime"/>, which overrides it for that placement only.
     /// </summary>
     VideoFrame CompositeWithSurfaces(
         IReadOnlyList<CompositorLayer> frameLayers,
