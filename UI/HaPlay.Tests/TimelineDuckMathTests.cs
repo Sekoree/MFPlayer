@@ -165,6 +165,30 @@ public sealed class TimelineDuckMathTests
         once = Duck(envelope, voices, leadMs: 200, curve: CueFadeCurve.SCurve);
         twice = Duck(once, voices, leadMs: 200, curve: CueFadeCurve.SCurve);
         Assert.Equal(once, twice);
+
+        // ...and for the TRIM-EDGE dips, where the clamped-away restore point used to leave the next
+        // pass sampling the previous pass's DEPTH at that edge and stacking another −12 dB onto it
+        // (first re-apply gave −24, the next −36). Same fixtures as the two clamping tests below.
+        once = Duck([], [I(3_000, 9_000)], bedStartMs: 5_000); // ramp fully before the clip start
+        twice = Duck(once, [I(3_000, 9_000)], bedStartMs: 5_000);
+        Assert.Equal(once, twice);
+        Assert.Equal(once, Duck(twice, [I(3_000, 9_000)], bedStartMs: 5_000)); // and a third pass
+
+        once = Duck([], [I(29_900, 32_000)]); // ramp fully past the clip end
+        twice = Duck(once, [I(29_900, 32_000)]);
+        Assert.Equal(once, twice);
+        Assert.Equal(once, Duck(twice, [I(29_900, 32_000)]));
+
+        // A ramp only PARTIALLY off the edge keeps its (compressed) restore point, so it lands on
+        // itself the ordinary way.
+        once = Duck([], [I(200, 5_000)]);
+        Assert.Equal(once, Duck(once, [I(200, 5_000)]));
+
+        // Edge dips over a bed that already rides below unity stay relative to that bed too.
+        var quiet = new[] { Pt(0, -6) };
+        once = Duck(quiet, [I(29_900, 32_000)]);
+        Assert.Equal(-18, once[^1].LevelDb, 6); // −6 bed + −12 depth, held to the clip end
+        Assert.Equal(once, Duck(once, [I(29_900, 32_000)]));
     }
 
     // ---- trim-edge clamping ----

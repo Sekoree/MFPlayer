@@ -7,6 +7,11 @@ namespace HaPlay.Playback;
 /// Maps a GUI <see cref="CueList"/> onto the framework's headless <see cref="ShowDocument"/> - the bridge
 /// that runs the cue workspace on <see cref="S.Media.Session.ShowSession"/> (Phase 8 "full superset"
 /// convergence; the ported <c>CuePlaybackEngine</c> it replaced is deleted).
+/// <para>Two entries: the single-list form (standalone / <c>ShowDocumentSidecar</c> export, one document
+/// per list) and the cross-list form
+/// (<see cref="ToShowDocument(IReadOnlyList{ValueTuple{Guid, CueList}}, IReadOnlyList{OutputDefinition})"/>),
+/// which concatenates every loaded list into the ONE document the cue workspace runs - the merged session
+/// that makes any list's cues fireable by schedules, triggers and the remote API.</para>
 /// </summary>
 /// <remarks>
 /// Lossless today for the cue core: the media/group node tree flattens to ordered cues carrying a
@@ -77,18 +82,112 @@ public static class HaPlayShowMapper
         return result;
     }
 
+    /// <summary>Merged form of <see cref="ResolveEffectiveVideoOutputMappings(CueList, IReadOnlyList{OutputDefinition})"/>
+    /// for the cross-list session: binding ids are Guids, so the per-list dictionaries concatenate without
+    /// collision.</summary>
+    public static IReadOnlyDictionary<Guid, CueOutputMapping?> ResolveEffectiveVideoOutputMappings(
+        IReadOnlyList<CueList> cueLists,
+        IReadOnlyList<OutputDefinition> outputs)
+    {
+        ArgumentNullException.ThrowIfNull(cueLists);
+        ArgumentNullException.ThrowIfNull(outputs);
+        var result = new Dictionary<Guid, CueOutputMapping?>();
+        foreach (var cueList in cueLists)
+            foreach (var (bindingId, mapping) in ResolveEffectiveVideoOutputMappings(cueList, outputs))
+                result[bindingId] = mapping;
+        return result;
+    }
+
+    /// <summary>The runtime transport group a list's TOP-LEVEL cues (those with no authored group) run on.
+    /// Cue / group / composition ids are already Guids and therefore unique across lists, but "no authored
+    /// group" is not: every list would otherwise land its top-level cues on the session's single default
+    /// group and cues from different lists would replace one another. The list-id prefix gives each list its
+    /// own default transport unit inside the one merged session.</summary>
+    public static string RuntimeGroupId(Guid listId) => listId.ToString("N");
+
+    /// <summary>The runtime transport group for an authored group, scoped to its list (see
+    /// <see cref="RuntimeGroupId(Guid)"/>).</summary>
+    public static string RuntimeGroupId(Guid listId, Guid groupId) => $"{listId:N}:{groupId}";
+
+    /// <summary>Builds ONE runnable <see cref="ShowDocument"/> from every loaded cue list (workstream A -
+    /// the cross-list merged session): the per-list documents are concatenated so any cue in any list is
+    /// fireable by schedules, triggers and the remote API, while the visible transport still follows the
+    /// selected list only. Identity is list-scoped exactly where it needs to be - cue / clip / composition
+    /// ids stay the authored Guids (globally unique), and only the runtime transport-group ids gain the
+    /// list-id prefix (<see cref="RuntimeGroupId(Guid)"/>). Cue numbers continue across lists in the given
+    /// order, so pass a STABLE order (the cue workspace passes its cue-list collection order): the
+    /// document must not renumber itself just because the operator selected a different list, or the
+    /// session's per-group "last fired number" state would silently stop matching it.</summary>
+    public static ShowDocument ToShowDocument(
+        IReadOnlyList<(Guid ListId, CueList List)> cueLists, IReadOnlyList<OutputDefinition>? outputs = null)
+    {
+        ArgumentNullException.ThrowIfNull(cueLists);
+
+        var outputsById = BuildOutputIndex(outputs);
+        var cues = new List<CueDefinition>();
+        var clips = new List<ShowClipBinding>();
+        var compositions = new List<ShowComposition>();
+        var number = 0;
+        foreach (var (listId, list) in cueLists)
+        {
+            ArgumentNullException.ThrowIfNull(list);
+            AppendCueList(list, listId, outputsById, cues, clips, ref number);
+            compositions.AddRange(list.Compositions.Select(MapComposition));
+        }
+
+        return ShowDocument.Empty with
+        {
+            Cues = cues,
+            Clips = clips,
+            Compositions = compositions,
+        };
+    }
+
     /// <summary>Builds a runnable <see cref="ShowDocument"/> from a GUI cue list. Pass the output definitions
     /// (<c>OutputManagement.DefinitionsSnapshot</c>) to resolve per-cue audio routes onto their real devices;
-    /// omit them and clips fall back to the per-group/default output.</summary>
+    /// omit them and clips fall back to the per-group/default output.
+    /// <para>Single-list form: transport groups are the bare authored group ids and top-level cues carry no
+    /// group at all (the session default). The cue workspace runs the cross-list
+    /// <see cref="ToShowDocument(IReadOnlyList{ValueTuple{Guid, CueList}}, IReadOnlyList{OutputDefinition})"/>
+    /// overload; this one stays the standalone/export mapping (<c>ShowDocumentSidecar</c> writes one document
+    /// per list).</para></summary>
     public static ShowDocument ToShowDocument(CueList cueList, IReadOnlyList<OutputDefinition>? outputs = null)
     {
         ArgumentNullException.ThrowIfNull(cueList);
 
-        var outputsById = outputs?.GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First())
-                          ?? new Dictionary<Guid, OutputDefinition>();
+        var outputsById = BuildOutputIndex(outputs);
         var cues = new List<CueDefinition>();
         var clips = new List<ShowClipBinding>();
         var number = 0;
+        AppendCueList(cueList, listId: null, outputsById, cues, clips, ref number);
+
+        return ShowDocument.Empty with
+        {
+            Cues = cues,
+            Clips = clips,
+            Compositions = cueList.Compositions.Select(MapComposition).ToArray(),
+        };
+    }
+
+    private static Dictionary<Guid, OutputDefinition> BuildOutputIndex(IReadOnlyList<OutputDefinition>? outputs) =>
+        outputs?.GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First())
+        ?? new Dictionary<Guid, OutputDefinition>();
+
+    /// <summary>Flattens one cue list's node tree onto the shared cue/clip lists. <paramref name="listId"/>
+    /// null = the standalone single-list mapping (bare group ids, no group for top-level cues); a value
+    /// scopes every runtime transport group to that list for the merged cross-list document.</summary>
+    private static void AppendCueList(
+        CueList cueList,
+        Guid? listId,
+        IReadOnlyDictionary<Guid, OutputDefinition> outputsById,
+        List<CueDefinition> cues,
+        List<ShowClipBinding> clips,
+        ref int number)
+    {
+        // Top-level cues: no group at all in the single-list document (ShowSession's own default group),
+        // the list's own default transport unit in the merged one.
+        var topLevelGroupId = listId is { } topLevelListId ? RuntimeGroupId(topLevelListId) : null;
+        var localNumber = number;
 
         void Walk(IEnumerable<CueNode> nodes, string? groupId, TimeSpan preEndNotify)
         {
@@ -112,7 +211,9 @@ public static class HaPlayShowMapper
                         // group's children do NOT inherit it (nested-group picks stay butt splice).
                         Walk(
                             group.Children,
-                            groupId ?? group.Id.ToString(),
+                            groupId ?? (listId is { } id
+                                ? RuntimeGroupId(id, group.Id)
+                                : group.Id.ToString()),
                             group.FireMode == CueGroupFireMode.Playlist
                             && group.Playlist is { CrossfadeMs: > 0 } playlistOptions
                                 ? TimeSpan.FromMilliseconds(playlistOptions.CrossfadeMs)
@@ -123,10 +224,10 @@ public static class HaPlayShowMapper
                         var cueId = media.Id.ToString();
                         cues.Add(new CueDefinition(
                             Id: cueId,
-                            Number: ++number,
+                            Number: ++localNumber,
                             Label: string.IsNullOrEmpty(media.Label) ? cueId : media.Label,
                             PreWait: TimeSpan.FromMilliseconds(media.PreWaitMs),
-                            GroupId: groupId));
+                            GroupId: groupId ?? topLevelGroupId));
 
                         if (MapClip(cueId, media, outputsById) is { } binding)
                             clips.Add(binding with { PreEndNotify = preEndNotify });
@@ -139,15 +240,7 @@ public static class HaPlayShowMapper
         }
 
         Walk(cueList.Nodes, groupId: null, preEndNotify: TimeSpan.Zero);
-
-        var compositions = cueList.Compositions.Select(MapComposition).ToArray();
-
-        return ShowDocument.Empty with
-        {
-            Cues = cues,
-            Clips = clips,
-            Compositions = compositions,
-        };
+        number = localNumber;
     }
 
     private static ShowClipBinding? MapClip(

@@ -13,12 +13,18 @@ namespace HaPlay.Tests;
 public sealed class KeyboardShortcutsTests
 {
     [Fact]
-    public void ShortcutsDialog_Renders_TheDocumentedGestures()
-    {
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which
+    // threw away every assertion failure raised inside the dispatched lambda (the test passed
+    // no matter what the code under test did).
+    public Task ShortcutsDialog_Renders_TheDocumentedGestures() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(KeyboardShortcutsTests).Assembly)
             .Dispatch(static () =>
             {
+                // The headless TestApp ships no Application.Styles, so an ItemsControl gets Avalonia's
+                // bare fallback template - no ItemsPresenter, so the shortcut rows were never realized
+                // and only the statically-placed TextBlocks showed up. Stand up the app's real theme.
+                HeadlessAppTheme.ApplyProductionBaseTheme();
                 var dialog = new KeyboardShortcutsDialog();
                 dialog.Show();
                 Dispatcher.UIThread.RunJobs();
@@ -32,7 +38,6 @@ public sealed class KeyboardShortcutsTests
                 Assert.Contains(gestures, gesture => gesture?.Contains("Esc", StringComparison.Ordinal) == true);
                 dialog.Close();
             }, CancellationToken.None);
-    }
 
 
     [Fact]

@@ -36,6 +36,8 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private bool _lowBandwidth;
     [ObservableProperty] private bool _audioOnly;
     [ObservableProperty] private bool _videoOnly;
+    /// <summary>Pace this line from the sender's ingest clock instead of the local wall clock (opt-in genlock).</summary>
+    [ObservableProperty] private bool _paceFromIngestClock;
     [ObservableProperty] private int _retrySeconds = 5;
     [ObservableProperty] private bool _isScanning;
     [ObservableProperty] private string? _discoveryStatus;
@@ -63,6 +65,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         LowBandwidth = existing.LowBandwidth;
         AudioOnly = existing.AudioOnly;
         VideoOnly = existing.VideoOnly;
+        PaceFromIngestClock = existing.PaceFromIngestClock;
         RetrySeconds = existing.RetrySeconds;
         AudioMinBufferedDurationMs = existing.AudioMinBufferedDurationMs;
         // Default to manual-name when editing - the saved name is authoritative and shouldn't be silently
@@ -314,6 +317,9 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             LowBandwidth = LowBandwidth,
             AudioOnly = AudioOnly,
             VideoOnly = VideoOnly,
+            // Video-only lines have no ingest audio to genlock to; drop the flag rather than persisting a
+            // combination the descriptor would reject.
+            PaceFromIngestClock = PaceFromIngestClock && !VideoOnly,
             RetrySeconds = RetrySeconds,
             AudioMinBufferedDurationMs = AudioMinBufferedDurationMs,
         };

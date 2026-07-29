@@ -8,6 +8,26 @@ namespace HaPlay.Tests;
 public sealed class MediaPlayerDeckAudioRoutingTests
 {
     [Fact]
+    public void NDIInputUri_carriesTheIngestGenlockOptIn_onlyWhenSet()
+    {
+        // D2: the descriptor is the opt-in. An untouched item must produce the same URI as before (no
+        // ingestClock key at all), and the flag is dropped for a video-only item - the provider rejects
+        // ingest pacing without audio, since the ingest clock is audio-driven.
+        var item = new NDIInputPlaylistItem("Camera A (LAN)");
+        Assert.DoesNotContain("ingestClock", MediaPlayerViewModel.BuildNDIInputUri(item), StringComparison.Ordinal);
+
+        var genlocked = item with { PaceFromIngestClock = true };
+        var parsed = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(MediaPlayerViewModel.BuildNDIInputUri(genlocked));
+        Assert.True(parsed.PaceFromIngestClock);
+        Assert.True(parsed.ReceiveAudio);
+
+        var videoOnly = genlocked with { VideoOnly = true };
+        var parsedVideoOnly = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(
+            MediaPlayerViewModel.BuildNDIInputUri(videoOnly));
+        Assert.False(parsedVideoOnly.PaceFromIngestClock);
+    }
+
+    [Fact]
     public void LiveInputUris_preservePerItemOptions()
     {
         var ndi = new NDIInputPlaylistItem("Camera A (LAN)")
@@ -23,6 +43,7 @@ public sealed class MediaPlayerDeckAudioRoutingTests
         Assert.True(parsedNDI.ReceiveVideo);
         Assert.True(parsedNDI.LowBandwidth);
         Assert.Equal(TimeSpan.FromMilliseconds(25), parsedNDI.AudioMinBufferedDuration);
+        Assert.False(parsedNDI.PaceFromIngestClock);
 
         var pa = new PortAudioInputPlaylistItem("USB In")
         {

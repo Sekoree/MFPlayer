@@ -18,10 +18,17 @@ namespace HaPlay.Tests;
 /// Light in a finally so it doesn't leak into the other view tests (the headless app is shared per-assembly).</summary>
 public sealed class AppThemeSwitchTests
 {
+    /// <summary>Runs <paramref name="body"/> on the headless UI session and OBSERVES the result.
+    /// <c>Dispatch</c> hands back a Task; discarding it (the shape this helper used to have) threw every
+    /// assertion failure inside the body away, so these tests passed no matter what the code under test
+    /// did. Blocking here is safe - the body is synchronous and the xunit thread is not the session's
+    /// dispatcher thread (the async sibling is <see cref="HeadlessDispatchExtensions.DispatchAsync"/>).</summary>
     private static void Dispatch(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(AppThemeSwitchTests).Assembly)
-            .Dispatch(body, CancellationToken.None);
+            .Dispatch(body, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
 
     [Fact]
     public void Classic_pins_Light_even_when_Dark_is_requested()

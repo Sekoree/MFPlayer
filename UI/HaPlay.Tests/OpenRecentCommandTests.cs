@@ -12,8 +12,10 @@ public sealed class OpenRecentCommandTests
     // File menu rendered - so the whole File menu couldn't open. The command takes object? and must tolerate
     // any parameter without throwing.
     [Fact]
-    public void OpenRecentCommand_CanExecute_ToleratesAnyParameterType()
-    {
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which
+    // threw away every assertion failure raised inside the dispatched lambda (the test passed
+    // no matter what the code under test did).
+    public Task OpenRecentCommand_CanExecute_ToleratesAnyParameterType() =>
         // MainViewModel's ctor applies the theme to Application.Current, which is owned by the
         // headless session's UI thread once any other test has started it - construct on that
         // thread like every other VM test, or this flakes order-dependently with VerifyAccess.
@@ -27,5 +29,4 @@ public sealed class OpenRecentCommandTests
                 Assert.True(vm.OpenRecentCommand.CanExecute(null));
                 Assert.True(vm.OpenRecentCommand.CanExecute("/tmp/example.haplayproj"));
             }, CancellationToken.None);
-    }
 }

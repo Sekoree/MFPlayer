@@ -31,6 +31,19 @@ public sealed partial class ActiveGroupViewModel : ObservableObject
 
     public Guid GroupId => GroupNode.Id;
 
+    /// <summary>Set when the group lives in a cue list OTHER than the selected one (cross-list merged
+    /// session) - the same qualifier <see cref="ActiveCueViewModel.ListName"/> puts on single rows.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GroupLabel))]
+    private string? _listName;
+
+    /// <summary>The row's display label: the group's own label, list-qualified when it comes from a
+    /// non-selected list.</summary>
+    public string GroupLabel => string.IsNullOrWhiteSpace(ListName)
+        ? GroupNode.Label
+        : Resources.Strings.Format(
+            nameof(Resources.Strings.CueListQualifiedNameFormat), ListName, GroupNode.Label);
+
     public ObservableCollection<ActiveCueViewModel> Children { get; } = new();
 
     /// <summary>Collapsed by default - the aggregate row is the at-a-glance surface; expanding

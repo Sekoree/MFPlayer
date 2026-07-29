@@ -23,8 +23,9 @@ public sealed class MediaPlayerTransportLayoutTests
     [InlineData(1100)] // comfortable: everything visible
     [InlineData(760)]  // the 960×640 DEFAULT window's content area - the reported clipping case
     [InlineData(510)]  // the 720px MinWidth window's content area - worst supported case
-    public void TransportGroups_NeverOverlapOrClip(double viewWidth)
-    {
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which threw
+    // away every assertion failure raised inside the dispatched lambda (the theory passed regardless).
+    public Task TransportGroups_NeverOverlapOrClip(double viewWidth) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerTransportLayoutTests).Assembly)
             .Dispatch(() =>
@@ -60,5 +61,4 @@ public sealed class MediaPlayerTransportLayoutTests
                     secondaryRight <= view.Bounds.Width + 0.5,
                     $"secondary transport group clips off the right edge at {viewWidth}px (ends at {secondaryRight:0.#}, view is {view.Bounds.Width:0.#})");
             }, CancellationToken.None);
-    }
 }

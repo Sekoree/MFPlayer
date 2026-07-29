@@ -58,6 +58,10 @@ internal static class HaPlayPlaybackHelpers
         };
         if (item.AudioMinBufferedDurationMs is { } bufferMs)
             query.Add($"audioBufferMs={bufferMs.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        // Only appended when opted in, so an untouched item's descriptor URI is unchanged. Meaningless
+        // without audio, and the provider rejects that combination - never emit it for a video-only item.
+        if (item.PaceFromIngestClock && !item.VideoOnly)
+            query.Add("ingestClock=1");
         return $"ndi://{Uri.EscapeDataString(item.SourceName)}?{string.Join('&', query)}";
     }
 

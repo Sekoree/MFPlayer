@@ -216,6 +216,38 @@ internal sealed class SinkAudioOutput(AudioFormat format) : IAudioOutput
     public void Submit(ReadOnlySpan<float> packedSamples) { }
 }
 
+/// <summary>An output that records the largest absolute sample it was ever submitted (resettable) - the
+/// observable end of the route-gain chain for a known-amplitude source (<see cref="ToneAudioDecoderProvider"/>).
+/// The only way a headless test can prove what gain was ACTUALLY written, rather than what the session
+/// reports it wrote.</summary>
+internal sealed class PeakAudioOutput(AudioFormat format) : IAudioOutput
+{
+    private float _peak;
+
+    public AudioFormat Format => format;
+
+    public float Peak => Volatile.Read(ref _peak);
+
+    public void Reset() => Volatile.Write(ref _peak, 0f);
+
+    public void Submit(ReadOnlySpan<float> packedSamples)
+    {
+        var max = 0f;
+        foreach (var sample in packedSamples)
+        {
+            var magnitude = Math.Abs(sample);
+            if (magnitude > max)
+                max = magnitude;
+        }
+
+        float current;
+        while ((current = Volatile.Read(ref _peak)) < max
+               && Interlocked.CompareExchange(ref _peak, max, current) != current)
+        {
+        }
+    }
+}
+
 /// <summary>A backend whose device list can be swapped mid-test (hot-plug) - proves the session's fallback
 /// output device is resolved at the point of use through the device cache, not frozen at construction.</summary>
 internal sealed class HotPlugAudioBackend : IAudioBackend

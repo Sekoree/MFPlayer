@@ -828,6 +828,14 @@ public sealed partial class AudioRouter : IDisposable
 
     // --- clocking ----------------------------------------------------------
 
+    /// <summary>The ingest master installed by <see cref="SlaveToIngest"/>, or <see langword="null"/> when the
+    /// router paces from its wall clock or a slaved output. Lets a host (or a test) verify that an opt-in
+    /// ingest genlock actually took effect - see <see cref="IIngestPacedSource"/>.</summary>
+    public IPlaybackClock? IngestPaceMaster
+    {
+        get { lock (_gate) return _ingestPaceMaster; }
+    }
+
     /// <summary>
     /// Pace the router from an ingest / media <see cref="IPlaybackClock"/> (e.g. NDI ingest timeline).
     /// Only safe while stopped - call before <see cref="Start"/> or after <see cref="Stop"/>.

@@ -1258,6 +1258,13 @@ public sealed class ShowSession : IAsyncDisposable
                     if (liveClipOutputs != routes.Count)
                         return Task.FromResult(true); // composition changed → applies on the next fire
 
+                    // Install the edited routes at the clip's CURRENT composed level, not at the fade level
+                    // alone: EffectiveAudioLevel is the single source of truth (fade × envelope × master
+                    // trim) that ApplyAudioScale writes with, and a live edit must not resurrect the
+                    // untrimmed/un-enveloped gain. Reading the composed product here (rather than
+                    // re-deriving it) also means the reconciling pass below writes identical values, so a
+                    // slider drag never blips through an untrimmed gain.
+                    var level = group.EffectiveAudioLevel;
                     var updatedTargets = new List<AudioRouteTarget>(routes.Count);
                     for (var i = 0; i < routes.Count; i++)
                     {
@@ -1282,10 +1289,10 @@ public sealed class ShowSession : IAsyncDisposable
                                 router.RemoveRoute(sourceId, outputId);
                             if (routes[i].HasGainMatrix)
                                 router.ApplyMatrix(sourceId, outputId,
-                                    routes[i].ToGainMatrix(routes[i].Gain * group.ActiveAudioScale));
+                                    routes[i].ToGainMatrix(routes[i].Gain * level));
                             else
                                 router.AddRoute(sourceId, outputId, map!.Value,
-                                    routes[i].Gain * group.ActiveAudioScale);
+                                    routes[i].Gain * level);
                             updatedTargets.Add(new AudioRouteTarget(outputId, routes[i].Gain, routes[i]));
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -1299,10 +1306,10 @@ public sealed class ShowSession : IAsyncDisposable
                                     {
                                         if (oldRoute.HasGainMatrix)
                                             router.ApplyMatrix(sourceId, outputId,
-                                                oldRoute.ToGainMatrix(old.TargetGain * group.ActiveAudioScale));
+                                                oldRoute.ToGainMatrix(old.TargetGain * level));
                                         else if (oldRoute.ToChannelMap() is { } oldMap)
                                             router.AddRoute(sourceId, outputId, oldMap,
-                                                old.TargetGain * group.ActiveAudioScale);
+                                                old.TargetGain * level);
                                     }
                                     catch (Exception rollbackEx) when (
                                         rollbackEx is ArgumentException or InvalidOperationException)
@@ -1316,6 +1323,11 @@ public sealed class ShowSession : IAsyncDisposable
                     }
 
                     group.SetActiveRouteTargets(updatedTargets);
+                    // One composition pass over the NEW target set, through the single place route gains
+                    // are written (fade × envelope × master trim). Value-wise a no-op after the installs
+                    // above, but it is what makes the level composition - not this method - authoritative,
+                    // and it covers the rolled-back/kept targets uniformly.
+                    group.ApplyAudioScale(active.Player, group.ActiveRouteTargets, group.ActiveAudioScale);
 
                     return Task.FromResult(true);
                 }
@@ -1353,6 +1365,12 @@ public sealed class ShowSession : IAsyncDisposable
                 //    un-openable device (e.g. a fixed-rate JACK graph rejecting the clip's mix rate) faulted the
                 //    whole rebuild and left the clip totally silent instead of playing its remaining routes.
                 var rate = active.Player.SampleRate > 0 ? active.Player.SampleRate : 48_000;
+                // Re-attach at the clip's CURRENT composed level (fade × envelope × master trim), never at
+                // the raw authored gain: the rebuild can land while the clip sits under a master trim, mid
+                // fade-in, or mid stop-fade, and attaching at unity would jump the cue to full level for
+                // the gap before the reconciling pass below (an audible pop, and permanent for a clip with
+                // no fade/envelope running to rewrite it). Read from the one place the product is defined.
+                var level = group.EffectiveAudioLevel;
                 var newOutputs = new List<ClipAudioOutput>(routes.Count);
                 var audioPumps = new List<(string OutputId, string DeviceId)>();
                 var routeTargets = new List<AudioRouteTarget>();
@@ -1362,7 +1380,7 @@ public sealed class ShowSession : IAsyncDisposable
                     var outputId = $"clip{i}";
                     if (!TryAttachRouteOutput(
                             active.Player, outputId, route.DeviceId, route.ToChannelMap(), rate,
-                            gain: route.Gain, newOutputs, route))
+                            gain: route.Gain * level, newOutputs, route))
                         continue;
                     routeTargets.Add(new AudioRouteTarget(outputId, route.Gain, route));
                     if (route.DeviceId is { } dev)
@@ -1373,6 +1391,10 @@ public sealed class ShowSession : IAsyncDisposable
                 foreach (var o in group.SwapAudioOutputs(newOutputs))
                     ReleaseClipAudioOutput(o);
                 group.SetActiveRouteTargets(routeTargets);
+                // 4) One level-composition pass over the rebuilt targets - the same thing the fire path does
+                //    after attaching (CommitClipAsync). The rebuilt routes are the ONLY ones the group's fade
+                //    ride now knows about, so this is what keeps a trimmed/faded clip at its real level.
+                group.ApplyAudioScale(active.Player, group.ActiveRouteTargets, group.ActiveAudioScale);
                 group.SetActiveAudioPumps(audioPumps);
                 PublishGroupViews();
                 return Task.FromResult(true);
@@ -2554,9 +2576,11 @@ public sealed class ShowSession : IAsyncDisposable
     // --- master trim --------------------------------------------------------------------------------
 
     /// <summary>The current session-wide master trim (1 = unity). Written only on the session
-    /// dispatcher by <see cref="SetMasterTrimAsync"/>; a plain float read is atomic, so hosts may
-    /// poll it for display.</summary>
-    public float MasterTrim => _masterTrim;
+    /// dispatcher by <see cref="SetMasterTrimAsync"/> and read from any thread (a host polls it to
+    /// draw the fader), so both ends go through <see cref="Volatile"/>: a float write is atomic, but
+    /// atomicity is not VISIBILITY - a plain read may be hoisted out of a polling loop and show a
+    /// stale value indefinitely.</summary>
+    public float MasterTrim => Volatile.Read(ref _masterTrim);
 
     private float _masterTrim = 1f;
 
@@ -2576,9 +2600,9 @@ public sealed class ShowSession : IAsyncDisposable
         return InvokeAsync(() =>
         {
             var clamped = float.IsNaN(scale) ? 1f : Math.Clamp(scale, 0f, 1f);
-            if (clamped == _masterTrim)
+            if (clamped == _masterTrim) // dispatcher-confined write ⇒ a plain read is fine HERE
                 return Task.CompletedTask;
-            _masterTrim = clamped;
+            Volatile.Write(ref _masterTrim, clamped);
             foreach (var group in _groups.Values)
             {
                 group.MasterTrim = clamped;
@@ -3556,6 +3580,18 @@ public sealed class ShowSession : IAsyncDisposable
                 _outgoingStartOpacities = _layers.Select(placed => placed.Slot.Opacity).ToArray();
                 OutgoingCurrentScale = 1f;
                 Volatile.Write(ref _outgoingStopClaimed, 0);
+                // VIDEO half of the handoff. The tail keeps its layers AND its transport-timeline claim,
+                // but Timeline.BindSource below re-points that very timeline at the INCOMING clip's
+                // playhead - and the composition pump feeds that source time to every master-aligned slot
+                // on the canvas. The tail's own frames would then look far in the future (A at 3:12
+                // crossfading into B at 0:00 ⇒ ~192 s), master alignment would reject all of them and keep
+                // re-presenting the frame it already held, and the tail would fade out as a FROZEN STILL.
+                // Nothing targets the tail's transport for the rest of its life, so hand its layers the
+                // free-running latest-wins selection: they advance on the outgoing player's own paced
+                // submissions. Per-layer and only on the handoff branch - the Active clip's layers (and
+                // every non-crossfade path) keep master alignment untouched.
+                foreach (var placed in _outgoingLayers)
+                    placed.Slot.DetachFromMasterAlignment();
             }
 
             // Stop the displaced clip's background work (fade ramp + end-of-clip monitor) before anything else.

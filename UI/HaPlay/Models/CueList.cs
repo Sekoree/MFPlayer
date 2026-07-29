@@ -339,8 +339,10 @@ public sealed record CueTriggerBinding
     public string? HotkeyGesture { get; set; }
 }
 
-/// <summary>Wall-clock schedule on a cue (Ideas/CuePlayer-Enhancements.md §4). Times are LOCAL
-/// wall-clock - shows are local-time creatures. <see cref="TimeOfDay"/> is stored as local time;
+/// <summary>Timed schedule on a cue (Ideas/CuePlayer-Enhancements.md §4, extended with the MTC chase
+/// in Ideas/Next-Round-Plan-2026-07-28.md D1). The three wall-clock kinds run on LOCAL
+/// wall-clock - shows are local-time creatures - while <see cref="CueScheduleKind.Timecode"/> runs on
+/// the incoming MIDI Time Code chase instead. <see cref="TimeOfDay"/> is stored as local time;
 /// the one-shot <see cref="At"/> is a <see cref="DateTimeOffset"/> so it survives timezone moves.
 /// Recurring times resolve against local wall time each day, so a DST-skipped/duplicated hour
 /// follows the OS clock (documented behavior - the scheduler does not fight it).
@@ -367,8 +369,21 @@ public sealed record CueSchedule
 
     /// <summary>Late-fire window (ms): an occurrence due within [due, due+GraceMs] still fires once;
     /// anything older is skipped and logged (app sleep/suspend recovery - a backlog is never
-    /// caught up).</summary>
+    /// caught up). Applies to the timecode chase identically, measured along the chase clock.</summary>
     public int GraceMs { get; set; } = 5000;
+
+    /// <summary>Target timecode "hh:mm:ss:ff" for <see cref="CueScheduleKind.Timecode"/>; null
+    /// otherwise. Retained while the schedule is on another kind (the VideoFx retained-while-disabled
+    /// pattern). Null is the CLR default, so older files load with no timecode target at all.</summary>
+    public string? Timecode { get; set; }
+
+    /// <summary>Frame rate the <see cref="Timecode"/> target's <c>ff</c> field is counted in. The
+    /// chase clock takes its own rate from the SENDER; this one only decides how many frames make a
+    /// second when the authored target is converted to a time, so it should match the sender.
+    /// <para>Defaults to 25 fps through a property initializer, which is exactly why this record uses
+    /// <c>set</c> and not <c>init</c> (see the type's gotcha note): a minimal <c>"schedule":{}</c> must
+    /// keep 25, not collapse to the CLR default.</para></summary>
+    public CueTimecodeRate TimecodeRate { get; set; } = CueTimecodeRate.Fps25;
 
     /// <summary>Per-schedule enable. Settings are retained while disabled (the VideoFx pattern).</summary>
     public bool Enabled { get; set; } = true;
@@ -383,6 +398,25 @@ public enum CueScheduleKind
     DateTime,
     /// <summary>At <see cref="CueSchedule.TimeOfDay"/> on the days in <see cref="CueSchedule.Days"/>.</summary>
     Recurring,
+    /// <summary>When the incoming MIDI Time Code chase crosses <see cref="CueSchedule.Timecode"/>.
+    /// Appended LAST: the source-generated contract writes enum values as NUMBERS, so the three
+    /// wall-clock kinds keep their persisted ordinals and older files load unchanged.</summary>
+    Timecode,
+}
+
+/// <summary>Frame rate of a <see cref="CueScheduleKind.Timecode"/> target. GUI mirror of the
+/// framework's <c>S.Control.MidiTimecodeRate</c> (models stay framework-type-free - the
+/// <see cref="CueFadeCurve"/> precedent), in the same order, which is the MTC wire order.</summary>
+public enum CueTimecodeRate
+{
+    /// <summary>24 fps (film).</summary>
+    Fps24,
+    /// <summary>25 fps (EBU / PAL).</summary>
+    Fps25,
+    /// <summary>29.97 fps drop-frame (NTSC).</summary>
+    Fps2997Drop,
+    /// <summary>30 fps non-drop.</summary>
+    Fps30,
 }
 
 /// <summary>Day-of-week mask for recurring schedules.</summary>

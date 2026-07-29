@@ -15,12 +15,18 @@ namespace HaPlay.Tests;
 public sealed class SoundboardAccessibilityTests
 {
     [Fact]
-    public void SoundboardTiles_AreFocusableButtons_WithAutomationNames()
-    {
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which
+    // threw away every assertion failure raised inside the dispatched lambda (the test passed
+    // no matter what the code under test did).
+    public Task SoundboardTiles_AreFocusableButtons_WithAutomationNames() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(SoundboardAccessibilityTests).Assembly)
             .Dispatch(static () =>
             {
+                // The headless TestApp ships no Application.Styles, so an ItemsControl gets Avalonia's
+                // bare fallback template - no ItemsPresenter, no realized tiles, and this test's
+                // GetVisualDescendants<Button>() came back EMPTY. Stand up the app's real theme first.
+                HeadlessAppTheme.ApplyProductionBaseTheme();
                 var vm = new SoundboardWorkspaceViewModel();
                 var board = vm.Boards[0];
                 vm.SelectedBoard = board;
@@ -46,5 +52,4 @@ public sealed class SoundboardAccessibilityTests
 
                 window.Close();
             }, CancellationToken.None);
-    }
 }

@@ -16,8 +16,10 @@ namespace HaPlay.Tests;
 public sealed class IconButtonAccessibilityTests
 {
     [Fact]
-    public void MediaPlayer_IconOnlyControls_ExposeAutomationNames()
-    {
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which
+    // threw away every assertion failure raised inside the dispatched lambda (the test passed
+    // no matter what the code under test did).
+    public Task MediaPlayer_IconOnlyControls_ExposeAutomationNames() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(IconButtonAccessibilityTests).Assembly)
             .Dispatch(static () =>
@@ -42,7 +44,6 @@ public sealed class IconButtonAccessibilityTests
                     unnamed.Count == 0,
                     "icon-only controls without an AutomationProperties.Name: " + string.Join(", ", unnamed));
             }, CancellationToken.None);
-    }
 
     // Icon-only = has a glyph (PathIcon/Image) somewhere in its realized template and no non-whitespace text.
     // A control that carries a visible text label is already announced by that label, so it is exempt.

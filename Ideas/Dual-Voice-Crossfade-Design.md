@@ -17,6 +17,37 @@ EqualPower; a failed re-open falls back to the butt-splice seek wrap). Tests:
 `S.Media.Session.Tests/CrossfadeTests.cs` (incl. opacity + loop-overlap sections),
 `HaPlay.Tests/PlaylistGroupTests.cs` (crossfade section). Original design below.
 
+## Post-implementation review fixes (2026-07-29)
+
+A review of the shipped code found the crossfade's **video half was broken**: the outgoing clip
+keeps its layers *and* its transport-timeline claim, but `ReplaceAsync` re-points that same
+timeline at the INCOMING clip's playhead, so the composition pump judged the tail's frames as
+far-future (`ChooseMasterAlignedFrame` rejects `PTS > masterPts + canvasPeriod`) and fell back to
+the last frame forever — the tail faded out as a **frozen still**. Both headline uses hit it
+(playlist crossfade: A at 3:12 vs B at 0; loop-with-crossfade likewise). The shipped opacity test
+could not see it, because the layer *was* composited every tick at the right opacity — with a
+stale picture.
+
+Fixed by detaching the outgoing layers from master alignment at handoff
+(`ClipCompositionRuntime.IPlacedClipLayer.DetachFromMasterAlignment()` → `SlotKeepPolicy.Latest`
+on the outgoing slots only). That seam needs **zero** change to `S.Media.Compositor`, is
+per-layer (the Active clip keeps master alignment on the same canvas), and `Latest` is what an
+unmastered composition already uses — the tail is fire-and-forget and its player is already
+clock-paced. The regression test asserts the tail's **presented frame PTS advances** across the
+window (the recorder now captures `LayerSample(Opacity, FramePts)`).
+
+Also fixed in the same pass: live per-cue route re-apply and hot output rebuild both wrote route
+gains WITHOUT the master trim/envelope (a cue could jump to 5× the fader's level, or to unity,
+and stay there), and `ShowSession.MasterTrim` was a non-volatile cross-thread read.
+
+**Known gap:** the GPU surface path (`SurfaceLayerSlot`, NXT-10) has the same problem in a
+different shape — a surface *renders* at the composite's stamped master time rather than
+selecting from a frame queue, so a crossfade tail's surface would render at the incoming clip's
+time. Fixing it needs a per-surface time source threaded through
+`IVideoCompositorLayerSurface.Render`'s `masterTime` in the compositor + the GL compositor. It is
+GL-only (the CPU compositor refuses surfaces) and therefore not testable headlessly, so
+`DetachFromMasterAlignment()` is a documented no-op there for now.
+
 The framework feature the enhancement round repeatedly deferred:
 `CuePlaylistOptions.CrossfadeMs` (persisted, unimplemented), group-boundary crossfade for
 AutoFollow chains, "fire next early" takeovers, and seamless loop-with-crossfade all need **two

@@ -54,7 +54,16 @@ public sealed partial class ActiveCueViewModel : ObservableObject
         ? string.Empty
         : Node.Number;
 
-    public string CueLabel => Node.Label;
+    /// <summary>Set when this cue was fired from a cue list OTHER than the selected one (the cross-list
+    /// merged session): every list plays into the same session, so the row belongs here - qualified with
+    /// its list name so the operator can tell it from the visible list's rows. Null = no prefix.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CueLabel))]
+    private string? _listName;
+
+    public string CueLabel => string.IsNullOrWhiteSpace(ListName)
+        ? Node.Label
+        : Resources.Strings.Format(nameof(Resources.Strings.CueListQualifiedNameFormat), ListName, Node.Label);
 
     partial void OnPositionMsChanged(long value)
     {

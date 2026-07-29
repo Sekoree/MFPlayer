@@ -65,8 +65,12 @@ internal static class TimelineDuckMath
     /// depth level is that sample + <paramref name="depthDb"/> (clamped to the −60..+12 authoring
     /// range). <paramref name="curve"/> shapes the two ramps. Existing keyframes inside a dip span
     /// are REPLACED, ones outside are preserved, and re-applying with the same inputs is a no-op
-    /// change-wise (idempotent). Dips are clamped to the trimmed clip <c>[0, bedEffectiveMs]</c>;
-    /// a ramp squeezed fully off the clip edge collapses to holding the depth from/to that edge.
+    /// change-wise (idempotent) - including for edge-clamped dips, whose dropped restore point
+    /// borrows the surviving one rather than re-sampling the depth it just wrote. Dips are clamped
+    /// to the trimmed clip <c>[0, bedEffectiveMs]</c>; a ramp squeezed fully off the clip edge
+    /// collapses to holding the depth from/to that edge. The one non-idempotent case left is a dip
+    /// that swallows the WHOLE clip (both ramps off both edges): nothing of the bed's own level
+    /// survives the splice to restore from, so a re-apply deepens it again.
     /// Overlaps closer than 2·(lead+ramp) merge into one dip (no recover-bump between them).
     /// </summary>
     public static IReadOnlyList<CueAutomationPoint> ApplyDucks(
@@ -126,28 +130,39 @@ internal static class TimelineDuckMath
         var t2 = dip.EndMs - rampMs;
         var t3 = dip.EndMs;
 
-        // Sampling at the unclamped edges keeps re-apply idempotent: the second pass lands exactly
-        // on (or flat-extrapolates to) the restore points the first pass wrote.
-        var restoreIn = RoundLevel(TimelineMath.EnvelopeLevelDbAt(envelope, t0));
-        var restoreOut = RoundLevel(TimelineMath.EnvelopeLevelDbAt(envelope, t3));
-        var depthIn = ClampLevel(RoundLevel(restoreIn + depthDb));
-        var depthOut = ClampLevel(RoundLevel(restoreOut + depthDb));
-
         var c0 = Math.Clamp(t0, 0, bedEffectiveMs);
         var c1 = Math.Clamp(t1, 0, bedEffectiveMs);
         var c2 = Math.Clamp(t2, 0, bedEffectiveMs);
         var c3 = Math.Clamp(t3, 0, bedEffectiveMs);
 
+        // A ramp clamped to zero width (the dip starts before / ends past the trimmed clip) drops its
+        // restore point - flat-before-first/after-last then holds the depth to the clip edge, which is
+        // what "the voice-over is already talking when the bed starts" should sound like. With
+        // ramp = 0 the coincident restore+depth pair is intentional instead: an instant step.
+        var dropRestoreIn = rampMs > 0 && c0 == c1;
+        var dropRestoreOut = rampMs > 0 && c2 == c3;
+
+        // Sampling at the unclamped edges keeps re-apply idempotent: the second pass lands exactly
+        // on (or flat-extrapolates to) the restore points the first pass wrote. A DROPPED restore
+        // point breaks that - there is nothing at that edge to land on, so the next pass would read
+        // the previous pass's DEPTH there and stack another depthDb onto it. The dip's surviving
+        // restore point is the only trustworthy reference left, so the clamped edge borrows it (for
+        // the flat-bed case they are the same value anyway, and the hold stays level).
+        var restoreIn = dropRestoreIn && !dropRestoreOut
+            ? RoundLevel(TimelineMath.EnvelopeLevelDbAt(envelope, t3))
+            : RoundLevel(TimelineMath.EnvelopeLevelDbAt(envelope, t0));
+        var restoreOut = dropRestoreOut && !dropRestoreIn
+            ? restoreIn
+            : RoundLevel(TimelineMath.EnvelopeLevelDbAt(envelope, t3));
+        var depthIn = ClampLevel(RoundLevel(restoreIn + depthDb));
+        var depthOut = ClampLevel(RoundLevel(restoreOut + depthDb));
+
         var synthesized = new List<CueAutomationPoint>(4);
-        // A ramp clamped to zero width (dip starts before / ends past the clip) drops its restore
-        // point - flat-before-first/after-last then holds the depth to the clip edge, which is what
-        // "the voice-over is already talking when the bed starts" should sound like. With ramp = 0
-        // the coincident restore+depth pair is intentional: an instant step.
-        if (!(rampMs > 0 && c0 == c1))
+        if (!dropRestoreIn)
             synthesized.Add(new CueAutomationPoint { TimeMs = c0, LevelDb = restoreIn, CurveToNext = curve });
         synthesized.Add(new CueAutomationPoint { TimeMs = c1, LevelDb = depthIn });
         synthesized.Add(new CueAutomationPoint { TimeMs = c2, LevelDb = depthOut, CurveToNext = curve });
-        if (!(rampMs > 0 && c2 == c3))
+        if (!dropRestoreOut)
             synthesized.Add(new CueAutomationPoint { TimeMs = c3, LevelDb = restoreOut });
 
         // Existing points strictly left of the (unclamped) span, the dip, then strictly right - the

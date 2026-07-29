@@ -8,6 +8,7 @@ using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using S.Media.Session;
 
 namespace HaPlay.ViewModels;
 
@@ -181,6 +182,14 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
         if (!tile.IsBound)
             return;
 
+        if (tile.IsPendingLaunch)
+        {
+            // Armed but not sounding yet: the tap disarms it. Nothing was started, so there is
+            // nothing to stop or fade.
+            DisarmPendingLaunch(tile);
+            return;
+        }
+
         if (tile.IsFading)
         {
             // Third tap: cut the running fade short.
@@ -208,7 +217,130 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
             return;
         }
 
+        // Launch quantization (board-global): an idle tile arms and starts on the next quantum
+        // boundary instead of under the finger. Off (quantum 0) = the classic immediate launch.
+        if (FindBoardOf(tile) is { LaunchQuantum.Ticks: > 0 } quantizedBoard)
+        {
+            ArmPendingLaunch(tile, quantizedBoard.LaunchQuantum);
+            return;
+        }
+
         await PlayTileAsync(tile).ConfigureAwait(false);
+    }
+
+    // ----- Quantized launch -----------------------------------------------------------------------
+
+    /// <summary>UI cadence for the pending-launch pump: fine enough that a launch lands within a
+    /// frame of its boundary, coarse enough to stay free. One timer for the whole workspace (never
+    /// per tile), and it only runs while something is actually armed.</summary>
+    private static readonly TimeSpan PendingPumpInterval = TimeSpan.FromMilliseconds(20);
+
+    private readonly System.Diagnostics.Stopwatch _transportClock = System.Diagnostics.Stopwatch.StartNew();
+    private readonly List<(SoundboardTileViewModel Tile, TimeSpan Due)> _pendingLaunches = [];
+    private Avalonia.Threading.DispatcherTimer? _pendingPump;
+
+    /// <summary>The workspace's transport origin - quantum boundaries are whole multiples of the
+    /// quantum from here. Overridable so tests can drive the grid deterministically.</summary>
+    internal Func<TimeSpan> TransportNow { get; set; } = null!;
+
+    private TimeSpan Now => (TransportNow ??= () => _transportClock.Elapsed)();
+
+    /// <summary>Test/diagnostic accessor: how many tiles are armed for a quantized launch.</summary>
+    internal int PendingLaunchCount => _pendingLaunches.Count;
+
+    private void ArmPendingLaunch(SoundboardTileViewModel tile, TimeSpan quantum)
+    {
+        var now = Now;
+        var due = SoundboardQuantization.NextBoundary(now, quantum);
+        // A tap landing exactly on a boundary would otherwise fire in the same pump pass it armed
+        // in, which reads as "not quantized at all"; push it to the following boundary.
+        if (due <= now)
+            due += quantum;
+
+        _pendingLaunches.RemoveAll(p => ReferenceEquals(p.Tile, tile));
+        _pendingLaunches.Add((tile, due));
+        tile.IsPendingLaunch = true;
+        tile.PendingLaunchRemainingMs = (long)Math.Max(0, (due - now).TotalMilliseconds);
+        EnsurePendingPump();
+    }
+
+    private void DisarmPendingLaunch(SoundboardTileViewModel tile)
+    {
+        _pendingLaunches.RemoveAll(p => ReferenceEquals(p.Tile, tile));
+        tile.IsPendingLaunch = false;
+        tile.PendingLaunchRemainingMs = 0;
+        if (_pendingLaunches.Count == 0)
+            StopPendingPump();
+    }
+
+    /// <summary>Drops every armed launch (Stop-all, board/project changes) without firing them.</summary>
+    public void ClearPendingLaunches()
+    {
+        foreach (var (tile, _) in _pendingLaunches.ToArray())
+        {
+            tile.IsPendingLaunch = false;
+            tile.PendingLaunchRemainingMs = 0;
+        }
+        _pendingLaunches.Clear();
+        StopPendingPump();
+    }
+
+    private void EnsurePendingPump()
+    {
+        if (_pendingPump is not null)
+            return;
+        _pendingPump = new Avalonia.Threading.DispatcherTimer(
+            PendingPumpInterval,
+            Avalonia.Threading.DispatcherPriority.Normal,
+            (_, _) => _ = PumpPendingLaunchesAsync());
+        _pendingPump.Start();
+    }
+
+    private void StopPendingPump()
+    {
+        _pendingPump?.Stop();
+        _pendingPump = null;
+    }
+
+    /// <summary>One pump pass: refreshes countdowns and fires everything whose boundary has passed.
+    /// Internal so tests can step it with a synthetic <see cref="TransportNow"/> instead of waiting
+    /// on a real timer. Fires through the ordinary <see cref="PlayTileAsync"/> path, so routing,
+    /// volume and error toasts behave exactly as an unquantized launch.</summary>
+    internal async Task PumpPendingLaunchesAsync()
+    {
+        if (_pendingLaunches.Count == 0)
+        {
+            StopPendingPump();
+            return;
+        }
+
+        var now = Now;
+        var due = new List<SoundboardTileViewModel>();
+        for (var i = _pendingLaunches.Count - 1; i >= 0; i--)
+        {
+            var (tile, at) = _pendingLaunches[i];
+            if (at <= now)
+            {
+                _pendingLaunches.RemoveAt(i);
+                due.Add(tile);
+            }
+            else
+            {
+                tile.PendingLaunchRemainingMs = (long)Math.Max(0, (at - now).TotalMilliseconds);
+            }
+        }
+
+        if (_pendingLaunches.Count == 0)
+            StopPendingPump();
+
+        // Fire in arm order so a chord armed across several taps starts in the order it was played.
+        due.Reverse();
+        foreach (var tile in due)
+        {
+            tile.IsPendingLaunch = false;
+            tile.PendingLaunchRemainingMs = 0;
+            await PlayTileAsync(tile).ConfigureAwait(true);
+        }
     }
 
     /// <summary>Force-(re)starts a bound tile regardless of its current state (the remote API's
@@ -341,6 +473,9 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
     [RelayCommand]
     private async Task StopAllAsync()
     {
+        // Armed-but-unstarted launches must die with everything else - otherwise Stop-all is
+        // followed by a stinger firing a beat later.
+        ClearPendingLaunches();
         if (StopAllSoundsCallback is { } stopAll)
             await stopAll().ConfigureAwait(false);
     }

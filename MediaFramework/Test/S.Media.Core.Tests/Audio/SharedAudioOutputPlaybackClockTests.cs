@@ -152,13 +152,79 @@ public sealed class SharedAudioOutputPlaybackClockTests
         var beforeChange = clock.ElapsedSinceStart;
         AssertMillisecondsNear(980, beforeChange);
 
-        // A device re-negotiating a much deeper buffer would step the raw estimate by 280 ms.
+        // A device re-negotiating a much deeper buffer would step the raw estimate by 280 ms. The lead
+        // filter integrates over the RAW clock, so a re-read without clock progress cannot move it either.
         terminal.SubmitToOutputLatency = TimeSpan.FromMilliseconds(300);
         Assert.Equal(beforeChange, clock.ElapsedSinceStart);
 
-        // Held, not frozen: the clock resumes once the raw reading passes the high-water mark.
+        // Held, not frozen: the clock resumes once the raw reading passes the high-water mark. The new
+        // lead is tracked over the filter's time constant rather than adopted in one step, so this
+        // intermediate read sits between the old and the new steady state.
         terminal.Advance(TimeSpan.FromMilliseconds(500));
-        AssertMillisecondsNear(1200, clock.ElapsedSinceStart);
+        var midway = clock.ElapsedSinceStart;
+        Assert.True(midway >= beforeChange, "client clock stepped back while the lead estimate grew");
+        Assert.InRange(midway, TimeSpan.FromMilliseconds(1200), TimeSpan.FromMilliseconds(1480));
+
+        // Converged: several time constants later the full new lead is subtracted.
+        terminal.Advance(TimeSpan.FromSeconds(2));
+        AssertMillisecondsNear(3200, clock.ElapsedSinceStart);
+    }
+
+    [Fact]
+    public void FluctuatingLead_SubtractsTheMeanLead_NotTheMinimumOfTheWindow()
+    {
+        // The C1 defect: both lead terms are instantaneous queue depths (the pump cycles over its whole
+        // capacity every chunk; the client bus sawtooths between its reservoir and empty), and feeding an
+        // instantaneous depth into the monotonic high-water makes the report max(raw − lead) ≈
+        // raw − MIN(lead) over a trailing window. Here the lead alternates 40/120 ms, so an unsmoothed
+        // estimate reports ~raw − 40 and keeps ~40 ms of the DAC lead C1 exists to remove.
+        var terminal = new FakeClockedTerminal(Stereo48k) { SubmitToOutputLatency = TimeSpan.FromMilliseconds(80) };
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 2);
+        using var lease = shared.Acquire();
+        var clock = Assert.IsAssignableFrom<IPlaybackClock>(lease.Output);
+
+        for (var step = 0; step < 300; step++)
+        {
+            terminal.SubmitToOutputLatency = TimeSpan.FromMilliseconds(step % 2 == 0 ? 40 : 120);
+            terminal.Advance(TimeSpan.FromMilliseconds(10));
+            _ = clock.ElapsedSinceStart;
+        }
+
+        // 3000 ms raw, mean lead 80 ms.
+        AssertMillisecondsNear(2920, clock.ElapsedSinceStart, toleranceMs: 10);
+    }
+
+    [Fact]
+    public void LeadThatDipsAndRecovers_KeepsTheClockAdvancing_InsteadOfFreezingForTheDip()
+    {
+        // Second-order form of the same defect: an under-run (or any transient dip in the measured lead)
+        // ratchets the high-water forward by the size of the dip, and the clock then FREEZES until the raw
+        // reading catches back up - a decoder stall that empties the client bus made the clock hold for
+        // ~80 ms and then jump. A smoothed estimate cannot be yanked by one sample, so every step advances.
+        var terminal = new FakeClockedTerminal(Stereo48k) { SubmitToOutputLatency = TimeSpan.FromMilliseconds(100) };
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 2);
+        using var lease = shared.Acquire();
+        var clock = Assert.IsAssignableFrom<IPlaybackClock>(lease.Output);
+
+        terminal.Advance(TimeSpan.FromSeconds(1));
+        var previous = clock.ElapsedSinceStart;
+        AssertMillisecondsNear(900, previous);
+
+        // The dip: the bus empties / the terminal briefly reports a shallow buffer.
+        terminal.SubmitToOutputLatency = TimeSpan.FromMilliseconds(20);
+        terminal.Advance(TimeSpan.FromMilliseconds(20));
+        _ = clock.ElapsedSinceStart;
+        terminal.SubmitToOutputLatency = TimeSpan.FromMilliseconds(100);
+
+        for (var step = 0; step < 4; step++)
+        {
+            terminal.Advance(TimeSpan.FromMilliseconds(40));
+            var current = clock.ElapsedSinceStart;
+            Assert.True(
+                current - previous >= TimeSpan.FromMilliseconds(30),
+                $"clock froze after the lead dip: step {step} advanced only {(current - previous).TotalMilliseconds:F1} ms");
+            previous = current;
+        }
     }
 
     [Fact]
@@ -214,8 +280,8 @@ public sealed class SharedAudioOutputPlaybackClockTests
         AssertMillisecondsNear(750, clock.ElapsedSinceStart);
     }
 
-    private static void AssertMillisecondsNear(double expectedMs, TimeSpan actual) =>
-        Assert.InRange(actual.TotalMilliseconds, expectedMs - PumpToleranceMs, expectedMs + PumpToleranceMs);
+    private static void AssertMillisecondsNear(double expectedMs, TimeSpan actual, double toleranceMs = PumpToleranceMs) =>
+        Assert.InRange(actual.TotalMilliseconds, expectedMs - toleranceMs, expectedMs + toleranceMs);
 
     // --- fakes -------------------------------------------------------------
 

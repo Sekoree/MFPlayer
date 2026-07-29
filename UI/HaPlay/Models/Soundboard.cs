@@ -74,5 +74,17 @@ public sealed record SoundboardConfig
 
     public bool DefaultLoop { get; init; }
 
+    /// <summary>Tempo (beats per minute) the board's launch quantization is measured in. Only
+    /// meaningful when <see cref="LaunchQuantizeBeats"/> is set. Default 120 so older files load
+    /// with a sane tempo the moment quantization is switched on.</summary>
+    public double Bpm { get; init; } = 120;
+
+    /// <summary>Global launch quantization for this board, in beats (Ableton-style: one setting for
+    /// the whole grid, not per tile). 0 (the default, and what older files load as) = tiles fire the
+    /// instant they are tapped - the pre-quantization behavior. 1 = next beat, 4 = next bar at 4/4.
+    /// Boundaries are multiples of the quantum from the workspace's own transport origin; there is
+    /// no external tempo sync.</summary>
+    public double LaunchQuantizeBeats { get; init; }
+
     public List<SoundboardTileConfig> Tiles { get; init; } = new();
 }

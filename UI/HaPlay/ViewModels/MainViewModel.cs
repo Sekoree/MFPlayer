@@ -44,8 +44,13 @@ public partial class MainViewModel : ViewModelBase
     private bool _midiInitialized;
     private readonly EndpointHealthMonitor _endpointHealth;
 
-    /// <summary>Wall-clock cue scheduler (timed triggers §4) - owns the single 250 ms sweep timer.</summary>
+    /// <summary>Wall-clock cue scheduler (timed triggers §4) - owns the single 250 ms sweep timer, and
+    /// with it the MTC chase source for <see cref="CueScheduleKind.Timecode"/> schedules (D1).</summary>
     private readonly CueSchedulerService _cueScheduler;
+
+    /// <summary>The scheduler's MTC chase, held directly so the I/O-thread input hook is one field
+    /// read rather than a property chain per MIDI message.</summary>
+    private readonly CueTimecodeChaseService _timecodeChase;
 
     /// <summary>Per-cue MIDI/OSC/hotkey trigger runtime (§6) - fed by the always-on control device
     /// input session and the cue view's key handler.</summary>
@@ -91,6 +96,7 @@ public partial class MainViewModel : ViewModelBase
         // Timed cue triggers (Ideas/CuePlayer-Enhancements.md §4): one central 250 ms sweep over every
         // scheduled cue. Fires are gated on the session-scoped "Schedules armed" toggle + edit mode.
         _cueScheduler = new CueSchedulerService(CuePlayer);
+        _timecodeChase = _cueScheduler.TimecodeChase;
         _cueScheduler.Start();
         // Per-cue MIDI/OSC/hotkey triggers (§6): incoming control I/O reaches the service from the
         // always-on device input session (runs whenever devices are configured - Control does not have
@@ -98,8 +104,7 @@ public partial class MainViewModel : ViewModelBase
         // is UI-thread-only, so marshal here. Hotkey bindings are dispatched by the cue view's key
         // handler through TriggerHotkeyProbe.
         _cueTriggers = new CueTriggerService(CuePlayer);
-        Control.InputObserved += record =>
-            Dispatcher.UIThread.Post(() => _cueTriggers.OnControlInput(record));
+        Control.InputObserved += OnControlInputObserved;
         CuePlayer.TriggerHotkeyProbe = _cueTriggers.TryHandleHotkey;
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
@@ -194,6 +199,38 @@ public partial class MainViewModel : ViewModelBase
         timing?.SetOutcome($"players={Players.Count} outputs={OutputManagement.Outputs.Count} endpoints={ActionEndpoints.Count} restApi={RestApiEnabled}");
     }
 
+    /// <summary>
+    /// Always-on device input → per-cue triggers. Runs on the PortMIDI poll / UDP receive thread, so the
+    /// cheap gate is applied HERE, before anything is captured or queued.
+    /// </summary>
+    /// <remarks>
+    /// Device input no longer stops when Control is disarmed, so this event now carries every message a
+    /// configured device produces: an X32 <c>/meters</c> subscription is ~50 Hz and an MTC or MIDI-clock
+    /// source is 100-1000 msg/s. Posting first and filtering on the UI thread meant a closure allocation
+    /// plus a dispatcher work item per message forever, even with triggers disarmed. The conditions below
+    /// mirror <see cref="CueTriggerService.OnControlInput"/>'s own accept set exactly - protocol/direction,
+    /// the armed + not-editing gate, and the ungated MIDI-learn capture - so nothing that would have acted
+    /// is dropped; when none of them hold, <c>OnControlInput</c> is a no-op and the post is pure waste.
+    /// </remarks>
+    private void OnControlInputObserved(ControlMonitorRecord record)
+    {
+        if (record.Direction is not (ControlMonitorDirection.Input or ControlMonitorDirection.Dropped))
+            return;
+        if (record.Protocol is not (ControlMonitorProtocol.MIDI or ControlMonitorProtocol.OSC))
+            return;
+        // MTC chase (D1) is decoded HERE, on the I/O thread, and never posted: a 25 fps sender is 100
+        // quarter-frames per second, which as dispatcher work items would dwarf everything else the UI
+        // thread does. The chase service swallows timecode records whether or not it is decoding them
+        // (a quarter-frame can never match a trigger binding), and while no loaded list carries a
+        // Timecode schedule this costs one enum compare.
+        if (_timecodeChase.OnControlInput(record))
+            return;
+        if (!((CuePlayer.TriggersArmed && !CuePlayer.IsCueEditMode) || CuePlayer.MidiLearnTarget is not null))
+            return;
+
+        Dispatcher.UIThread.Post(() => _cueTriggers.OnControlInput(record));
+    }
+
     private static void FireAndLog(Task task, string operation)
     {
         if (task.IsCompletedSuccessfully)
@@ -229,6 +266,7 @@ public partial class MainViewModel : ViewModelBase
         _recovery.FinalizeCleanShutdown(
             discardChanges: _discardUnsavedOnShutdown,
             retainRecovery: !_discardUnsavedOnShutdown && HasUnsavedChanges);
+        Control.InputObserved -= OnControlInputObserved;
         _endpointHealth.Dispose();
         _cueScheduler.Dispose();
         _cueTriggers.Dispose();

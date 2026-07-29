@@ -52,6 +52,10 @@
             <CheckBox Content="{x:Static res:Strings.LowBandwidthPreviewCheckbox}" IsChecked="{Binding LowBandwidth}" />
             <CheckBox Content="{x:Static res:Strings.AudioOnlyCheckbox}" IsChecked="{Binding AudioOnly}" />
             <CheckBox Content="{x:Static res:Strings.VideoOnlyCheckbox}" IsChecked="{Binding VideoOnly}" />
+            <CheckBox Content="{x:Static res:Strings.NDIPaceFromIngestClockCheckbox}"
+                      IsChecked="{Binding PaceFromIngestClock}"
+                      IsEnabled="{Binding !VideoOnly}"
+                      ToolTip.Tip="{x:Static res:Strings.NDIPaceFromIngestClockTooltip}" />
             <StackPanel Orientation="Horizontal" Spacing="6">
               <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.ReconnectIntervalSecondsLabel}" />
               <NumericUpDown FormatString="0" Minimum="0" Maximum="600" Increment="1" Value="{Binding RetrySeconds}" Width="100" />

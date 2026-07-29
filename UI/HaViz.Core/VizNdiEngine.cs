@@ -75,11 +75,14 @@ public sealed class VizNdiEngine : IDisposable
 
     /// <summary>Stereo frames dropped from the NDI audio ring because the SDK sender stalled longer
     /// than the ring is deep (drop-oldest). Visuals are unaffected - the visualizer tap stays on the
-    /// caller thread - but receivers hear a gap, so it belongs in the status line.</summary>
-    public long DroppedNdiAudioFrames => _ndiAudioRing?.DroppedFrames ?? 0;
+    /// caller thread - but receivers hear a gap, so it belongs in the status line. Latched at
+    /// <see cref="Dispose"/> so a post-run read still reports the session's final count instead of 0.</summary>
+    public long DroppedNdiAudioFrames =>
+        _ndiAudioRing?.DroppedFrames ?? Volatile.Read(ref _finalDroppedNdiAudioFrames);
 
     private int _faulted;
     private long _droppedMismatchedRateFrames;
+    private long _finalDroppedNdiAudioFrames;
     private bool _rateMismatchLogged;
 
     public string? CurrentPresetName => _source?.CurrentPresetName;
@@ -363,6 +366,10 @@ public sealed class VizNdiEngine : IDisposable
         lock (_audioGate)
         {
             audioRing = _ndiAudioRing;
+            // Latch the final drop count before the ring goes: no further Submit can add to it (the gate
+            // is the barrier), and a host reading the status line after a stop must not see it reset to 0.
+            if (audioRing is not null)
+                Volatile.Write(ref _finalDroppedNdiAudioFrames, audioRing.DroppedFrames);
             _ndiAudioRing = null;
             _ndiAudio = null;
         }

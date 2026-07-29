@@ -26,6 +26,12 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private CancellationTokenSource? _transportRunCts;
 
+    /// <summary>Cancellation scope of the headless run in each NON-selected list (cross-list merged
+    /// session). One per list, so a schedule/trigger re-firing list B replaces only B's own run -
+    /// <see cref="_transportRunCts"/> (the visible transport) is never touched by it, and vice versa.
+    /// Stop / Panic cancel every scope, matching their session-wide StopAll.</summary>
+    private readonly Dictionary<CueListEditorViewModel, CancellationTokenSource> _foreignListRuns = new();
+
     /// <summary>
     /// Host-provided media execution callback. When null, media cues only update transport state.
     /// </summary>
@@ -401,6 +407,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     public IReadOnlyList<CueTriggerMode> CueTriggerModes { get; } = Enum.GetValues<CueTriggerMode>();
     public IReadOnlyList<CueFadeCurve> CueFadeCurves { get; } = Enum.GetValues<CueFadeCurve>();
     public IReadOnlyList<CueScheduleKind> CueScheduleKinds { get; } = Enum.GetValues<CueScheduleKind>();
+    public IReadOnlyList<CueTimecodeRate> CueTimecodeRates { get; } = Enum.GetValues<CueTimecodeRate>();
     public IReadOnlyList<CueGroupFireMode> GroupFireModes { get; } = Enum.GetValues<CueGroupFireMode>();
     public IReadOnlyList<CuePlaylistEndBehavior> PlaylistEndBehaviors { get; } = Enum.GetValues<CuePlaylistEndBehavior>();
     public IReadOnlyList<CueLayerPosition> LayerPositions { get; } = Enum.GetValues<CueLayerPosition>();
@@ -498,20 +505,93 @@ public partial class CuePlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _schedulesArmed;
 
-    /// <summary>Scheduling is scoped to the SELECTED list (fires ride the selected-list transport);
-    /// surface that at arm time so an enabled schedule sitting in another list is never a silent
-    /// no-show - the operator reads exactly which scope is live.</summary>
+    /// <summary>Scheduling covers EVERY loaded list (cross-list merged session): a schedule in a
+    /// non-selected list fires into the same <c>ShowSession</c> without moving the visible transport.
+    /// The old "other lists will NOT fire" arm warning is gone with the scoping it described; the arm
+    /// toggle's tooltip now carries the live armed-item count instead.</summary>
     partial void OnSchedulesArmedChanged(bool value)
     {
-        if (!value)
-            return;
-        var outsideCount = CueLists
-            .Where(list => !ReferenceEquals(list, SelectedCueList))
-            .SelectMany(list => EnumerateAllCueNodes(list.Nodes))
-            .Count(node => node.HasSchedule && node.ScheduleEnabled);
-        if (outsideCount > 0)
-            StatusMessage = Strings.Format(
-                nameof(Strings.SchedulesArmedOtherListsWarningFormat), outsideCount);
+        _ = value;
+        OnPropertyChanged(nameof(SchedulesArmedTooltip));
+    }
+
+    /// <summary>Live tooltip for the Schedules-armed toggle: the static explanation plus how many
+    /// enabled schedules are armed and across how many loaded lists (the cross-list scope the merged
+    /// session gives them).</summary>
+    public string SchedulesArmedTooltip
+    {
+        get
+        {
+            var (items, lists) = CountAcrossLists(node => node.HasSchedule && node.ScheduleEnabled);
+            var text = items == 0
+                ? Strings.SchedulesArmedToggleTooltip
+                : Strings.SchedulesArmedToggleTooltip + Environment.NewLine
+                  + Strings.Format(nameof(Strings.SchedulesArmedScopeCountFormat), items, lists);
+            // The MTC chase line only exists while some list actually carries a Timecode schedule.
+            return TimecodeChaseStatus is { Length: > 0 } chase
+                ? text + Environment.NewLine + chase
+                : text;
+        }
+    }
+
+    /// <summary>Live MTC chase readout ("Timecode 01:23:45:12 @ 25 fps" / parked / no signal), written
+    /// by <c>CueSchedulerService</c> each sweep and null unless a loaded list carries a Timecode
+    /// schedule. Feeds the transport-row chip and the Schedules-armed tooltip; session-transient,
+    /// never persisted.</summary>
+    private string? _timecodeChaseStatus;
+
+    public string? TimecodeChaseStatus
+    {
+        get => _timecodeChaseStatus;
+        internal set
+        {
+            if (!SetProperty(ref _timecodeChaseStatus, value))
+                return;
+            OnPropertyChanged(nameof(HasTimecodeChaseStatus));
+            OnPropertyChanged(nameof(SchedulesArmedTooltip));
+        }
+    }
+
+    /// <summary>Transport-row visibility for the chase chip.</summary>
+    public bool HasTimecodeChaseStatus => !string.IsNullOrEmpty(TimecodeChaseStatus);
+
+    /// <summary>Live tooltip for the Triggers-armed toggle - <see cref="SchedulesArmedTooltip"/>'s
+    /// sibling, counting cues with at least one ENABLED trigger binding.</summary>
+    public string TriggersArmedTooltip
+    {
+        get
+        {
+            var (items, lists) = CountAcrossLists(node => node.HasActiveTriggers);
+            return items == 0
+                ? Strings.TriggersArmedToggleTooltip
+                : Strings.TriggersArmedToggleTooltip + Environment.NewLine
+                  + Strings.Format(nameof(Strings.TriggersArmedScopeCountFormat), items, lists);
+        }
+    }
+
+    /// <summary>(matching cue count, number of loaded lists holding at least one match).</summary>
+    private (int Items, int Lists) CountAcrossLists(Func<CueNodeViewModel, bool> predicate)
+    {
+        var items = 0;
+        var lists = 0;
+        foreach (var list in CueLists)
+        {
+            var inList = EnumerateAllCueNodes(list.Nodes).Count(predicate);
+            if (inList == 0)
+                continue;
+            items += inList;
+            lists++;
+        }
+
+        return (items, lists);
+    }
+
+    /// <summary>Refreshes both arm tooltips (their counts span every loaded list, so a list switch,
+    /// a list add/remove and a project load all change them).</summary>
+    private void RefreshArmedScopeTooltips()
+    {
+        OnPropertyChanged(nameof(SchedulesArmedTooltip));
+        OnPropertyChanged(nameof(TriggersArmedTooltip));
     }
 
     /// <summary>Master "Triggers armed" gate for per-cue MIDI/OSC/hotkey trigger bindings
@@ -524,19 +604,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _triggersArmed;
 
-    /// <summary>Trigger fires ride the SELECTED list's transport (the schedule scoping); surface an
-    /// enabled binding sitting in another list at arm time so it is never a silent no-show.</summary>
+    /// <summary>Trigger bindings cover EVERY loaded list, exactly like schedules (see
+    /// <see cref="OnSchedulesArmedChanged"/>) - the count lives in the toggle's tooltip.</summary>
     partial void OnTriggersArmedChanged(bool value)
     {
-        if (!value)
-            return;
-        var outsideCount = CueLists
-            .Where(list => !ReferenceEquals(list, SelectedCueList))
-            .SelectMany(list => EnumerateAllCueNodes(list.Nodes))
-            .Count(node => node.HasActiveTriggers);
-        if (outsideCount > 0)
-            StatusMessage = Strings.Format(
-                nameof(Strings.TriggersArmedOtherListsWarningFormat), outsideCount);
+        _ = value;
+        OnPropertyChanged(nameof(TriggersArmedTooltip));
     }
 
     /// <summary>Hotkey entry for trigger bindings, set by the host (MainViewModel) to
@@ -830,6 +903,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         StandbySelectedCommand.NotifyCanExecuteChanged();
         ResubscribeCompositionFpsWatch(value);
         RefreshCueTargetDisplays();
+        // Cross-list session: rows fired from the list we just left need their list qualifier, and the
+        // newly-selected list's own rows must drop theirs. The armed counts span every list, but the
+        // "which list" part of the tooltip reads differently after a switch.
+        RefreshNowPlayingListNames();
+        RefreshArmedScopeTooltips();
     }
 
     private void RefreshCueTargetDisplays()
@@ -2008,26 +2086,41 @@ public partial class CuePlayerViewModel : ViewModelBase
             await SeekActiveCueToFractionAsync(child, fraction).ConfigureAwait(false);
     }
 
-    /// <summary>The group node a cue sits under, or null for top-level cues. Searches the selected
-    /// cue list's tree (active cues always come from the visible list).</summary>
-    private CueNodeViewModel? FindParentGroupOf(CueNodeViewModel node)
+    /// <summary>The group node a cue sits under, or null for top-level cues. Searches the tree of the
+    /// list that OWNS the cue - the selected one for a visible cue, otherwise the loaded list a
+    /// cross-list schedule/trigger fired from (its cues share the merged session's Now-Playing panel).</summary>
+    private CueNodeViewModel? FindParentGroupOf(CueNodeViewModel node) =>
+        FindOwningCueList(node) is { } owner ? Search(owner.Nodes, null, node) : null;
+
+    private static CueNodeViewModel? Search(
+        IEnumerable<CueNodeViewModel> nodes, CueNodeViewModel? parent, CueNodeViewModel node)
     {
-        if (SelectedCueList is null)
-            return null;
-        return Search(SelectedCueList.Nodes, null);
-
-        CueNodeViewModel? Search(IEnumerable<CueNodeViewModel> nodes, CueNodeViewModel? parent)
+        foreach (var candidate in nodes)
         {
-            foreach (var candidate in nodes)
-            {
-                if (ReferenceEquals(candidate, node))
-                    return parent is { IsGroup: true } ? parent : null;
-                if (Search(candidate.Children, candidate) is { } found)
-                    return found;
-            }
-
-            return null;
+            if (ReferenceEquals(candidate, node))
+                return parent is { IsGroup: true } ? parent : null;
+            if (Search(candidate.Children, candidate, node) is { } found)
+                return found;
         }
+
+        return null;
+    }
+
+    /// <summary>The owning list's name when <paramref name="node"/> lives in a list OTHER than the
+    /// selected one, else null (no prefix for the visible list's own rows).</summary>
+    private string? ForeignListNameOf(CueNodeViewModel node) =>
+        FindOwningCueList(node) is { } owner && !ReferenceEquals(owner, SelectedCueList)
+            ? owner.Name
+            : null;
+
+    /// <summary>Re-stamps the Now-Playing list qualifier after a list switch: rows fired from what is now
+    /// the selected list drop their prefix, and rows of the list just left gain one.</summary>
+    private void RefreshNowPlayingListNames()
+    {
+        foreach (var row in ActiveCues)
+            row.ListName = ForeignListNameOf(row.Node);
+        foreach (var group in NowPlayingRows.OfType<ActiveGroupViewModel>())
+            group.ListName = ForeignListNameOf(group.GroupNode);
     }
 
     private void AddNowPlayingRow(ActiveCueViewModel entry)
@@ -2038,7 +2131,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 .FirstOrDefault(g => g.GroupId == groupNode.Id);
             if (group is null)
             {
-                group = new ActiveGroupViewModel(groupNode);
+                group = new ActiveGroupViewModel(groupNode) { ListName = ForeignListNameOf(groupNode) };
                 NowPlayingRows.Add(group);
             }
 
@@ -2139,6 +2232,10 @@ public partial class CuePlayerViewModel : ViewModelBase
             var entry = new ActiveCueViewModel(node, cueId, id => _ = CancelActiveCueAsync(id))
             {
                 DurationMs = Math.Max(0, node.EffectiveDurationMs),
+                // Cross-list fire: the cue plays in the SAME merged session, so it belongs in
+                // Now-Playing - qualified with its list name so the operator can tell it apart from
+                // the visible list's rows.
+                ListName = ForeignListNameOf(node),
             };
             ActiveCues.Add(entry);
             AddNowPlayingRow(entry);
@@ -2265,9 +2362,12 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool CanSeekActiveCueFromScrubber() => IsCueScrubberVisible;
 
+    /// <summary>The cue node with this id in ANY loaded list (selected first). Cue ids are Guids, so the
+    /// cross-list lookup can never alias; it is what lets a cue fired from a non-selected list appear in
+    /// Now-Playing and answer progress/end events from the merged session.</summary>
     private CueNodeViewModel? FindNodeById(Guid id)
     {
-        foreach (var node in EnumerateAllCueNodes())
+        foreach (var node in EnumerateAllCueNodesAcrossLists())
             if (node.Id == id)
                 return node;
         return null;
@@ -2595,28 +2695,44 @@ public partial class CuePlayerViewModel : ViewModelBase
             : to.TriggerMode == requiredMode;
     }
 
+    /// <summary>The chain of groups enclosing <paramref name="target"/>, searched in the list that owns
+    /// it: the selected list first (unchanged for every visible cue), then the other loaded lists so a
+    /// cross-list fire resolves its own group modes / auto-follow boundaries.</summary>
     private IReadOnlyList<CueNodeViewModel> FindContainingGroupPath(CueNodeViewModel target)
     {
-        if (SelectedCueList is null)
-            return [];
-        var path = new List<CueNodeViewModel>();
-        return Find(SelectedCueList.Nodes) ? path : [];
-
-        bool Find(IEnumerable<CueNodeViewModel> nodes)
+        if (SelectedCueList is { } selected && FindPathIn(selected.Nodes) is { } selectedPath)
+            return selectedPath;
+        foreach (var list in CueLists)
         {
-            foreach (var node in nodes)
-            {
-                if (ReferenceEquals(node, target))
-                    return true;
-                if (!node.IsGroup)
-                    continue;
-                path.Add(node);
-                if (Find(node.Children))
-                    return true;
-                path.RemoveAt(path.Count - 1);
-            }
+            if (ReferenceEquals(list, SelectedCueList))
+                continue;
+            if (FindPathIn(list.Nodes) is { } foreignPath)
+                return foreignPath;
+        }
 
-            return false;
+        return [];
+
+        List<CueNodeViewModel>? FindPathIn(IEnumerable<CueNodeViewModel> roots)
+        {
+            var path = new List<CueNodeViewModel>();
+            return Find(roots) ? path : null;
+
+            bool Find(IEnumerable<CueNodeViewModel> nodes)
+            {
+                foreach (var node in nodes)
+                {
+                    if (ReferenceEquals(node, target))
+                        return true;
+                    if (!node.IsGroup)
+                        continue;
+                    path.Add(node);
+                    if (Find(node.Children))
+                        return true;
+                    path.RemoveAt(path.Count - 1);
+                }
+
+                return false;
+            }
         }
     }
 
@@ -2624,6 +2740,15 @@ public partial class CuePlayerViewModel : ViewModelBase
         string.IsNullOrWhiteSpace(cue.Number)
             ? cue.Label
             : $"{cue.Number} {cue.Label}".Trim();
+
+    /// <summary><see cref="CueDisplay"/>, prefixed with the owning list's name when the cue lives in a
+    /// list OTHER than the selected one: cue numbers restart per list, so an unqualified "3 Stinger" in
+    /// a status line would read as the visible list's cue 3. Identical to <see cref="CueDisplay"/> for
+    /// every cue in the selected list (and therefore for a single-list project).</summary>
+    internal string CueDisplayQualified(CueNodeViewModel cue) =>
+        ForeignListNameOf(cue) is { } listName
+            ? Strings.Format(nameof(Strings.CueListQualifiedNameFormat), listName, CueDisplay(cue))
+            : CueDisplay(cue);
 
     private static CueGroupFireMode ParseGroupFireMode(CueNodeViewModel group) =>
         Enum.TryParse<CueGroupFireMode>(group.Extra, out var mode)
@@ -2723,7 +2848,9 @@ public partial class CuePlayerViewModel : ViewModelBase
     private void AppendAutoContinueCues(
         List<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan, CueNodeViewModel anchor)
     {
-        var ordered = EnumerateFireableCueOrder().ToList();
+        // The chain runs inside the anchor's OWN list (the selected list for every visible cue), so a
+        // cross-list fire carries its list's Auto-Continue chain instead of stopping at the first cue.
+        var ordered = EnumerateFireableCueOrderFor(anchor).ToList();
         var idx = ordered.FindIndex(c => ReferenceEquals(c, anchor));
         if (idx < 0)
             return;
@@ -2947,7 +3074,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (item.Kind == CueNodeKind.Group)
             {
                 // The item's own Auto-Follow chain continues inside it - not the item's end yet.
-                var ordered = EnumerateFireableCueOrder().ToList();
+                var ordered = EnumerateFireableCueOrderFor(ended).ToList();
                 var idx = ordered.FindIndex(c => ReferenceEquals(c, ended));
                 if (idx >= 0 && idx + 1 < ordered.Count)
                 {
@@ -2964,8 +3091,12 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
+    /// <param name="foreign">The run lives in a cue list OTHER than the selected one (cross-list merged
+    /// session): its advance plays into the same session but must not move the visible transport, so every
+    /// Standby/Current write below is skipped and the advance rides the headless fire path.</param>
     private async Task HandlePlaylistItemEndedAsync(
-        CueNodeViewModel group, PlaylistRunState run, CueNodeViewModel ended, bool isCurrentItem)
+        CueNodeViewModel group, PlaylistRunState run, CueNodeViewModel ended, bool isCurrentItem,
+        bool foreign = false)
     {
         // A skipped/overlapped item finishing late must not double-advance the run - swallow it
         // (falling through to default Auto-Follow would defeat the group semantics too).
@@ -2981,6 +3112,12 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             // Auto-advance: fire the next pick through the normal GO machinery (GoCore's playlist
             // branch consumes the pick and keeps standby on the group).
+            if (foreign)
+            {
+                await GoForeignListAsync(group);
+                return;
+            }
+
             StandbyCueNode = group;
             _immediateJumpChain.Clear();
             await GoCore(group);
@@ -3001,7 +3138,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 && _playlistRuns.TryGetValue(outer.Id, out var outerRun)
                 && outerRun.CurrentItemId == group.Id)
             {
-                await HandlePlaylistItemEndedAsync(outer, outerRun, ended, isCurrentItem: true);
+                await HandlePlaylistItemEndedAsync(outer, outerRun, ended, isCurrentItem: true, foreign);
                 return;
             }
         }
@@ -3011,18 +3148,27 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             case CuePlaylistEndBehavior.AdvancePastGroup:
             {
-                var ordered = EnumerateFireableCueOrder().ToList();
+                var ordered = EnumerateFireableCueOrderFor(group).ToList();
                 var next = NextCueAfterGroup(group, ordered);
                 if (next is null)
                 {
-                    CurrentCueNode = null;
+                    if (!foreign)
+                        CurrentCueNode = null;
                     return;
                 }
 
-                StandbyCueNode = next;
+                if (!foreign)
+                    StandbyCueNode = next;
                 if (SequentialTransitionUsesMode(ended, next, CueTriggerMode.AutoFollow))
                 {
-                    StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(next));
+                    StatusMessage = Strings.Format(
+                        nameof(Strings.CueAutoFollowStatusFormat), CueDisplayQualified(next));
+                    if (foreign)
+                    {
+                        await GoForeignListAsync(next);
+                        return;
+                    }
+
                     _immediateJumpChain.Clear();
                     await GoCore();
                 }
@@ -3034,9 +3180,14 @@ public partial class CuePlayerViewModel : ViewModelBase
                 return;
             case CuePlaylistEndBehavior.Stop:
             default:
-                CurrentCueNode = null;
-                StandbyCueNode = group; // a fresh GO restarts the playlist
-                StatusMessage = Strings.Format(nameof(Strings.CuePlaylistFinishedStatusFormat), CueDisplay(group));
+                if (!foreign)
+                {
+                    CurrentCueNode = null;
+                    StandbyCueNode = group; // a fresh GO restarts the playlist
+                }
+
+                StatusMessage = Strings.Format(
+                    nameof(Strings.CuePlaylistFinishedStatusFormat), CueDisplayQualified(group));
                 return;
         }
     }
@@ -3075,16 +3226,20 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public async Task OnMediaCueNaturallyEndedAsync(Guid endedCueId)
     {
-        if (EnumerateAllCueNodes().FirstOrDefault(cue => cue.Id == endedCueId)
-            is not { Kind: CueNodeKind.Media } ended)
+        // Cross-list merged session: the ended clip may belong to any loaded list. Its chain (playlist
+        // advance / end target / Auto-Follow) is resolved inside that list; only the SELECTED list's
+        // chain is allowed to move the visible Standby/Current pointers, everything else advances
+        // headlessly into the same session.
+        if (FindNodeById(endedCueId) is not { Kind: CueNodeKind.Media } ended)
             return;
+        var foreign = IsForeignListNode(ended);
 
         // Playlist runs own their children's end events (before per-cue EndTarget: the group's run
         // semantics take precedence over a child's authored end-jump while the run is active).
         if (FindPlaylistRunForEndedCue(ended) is { } playlistHit)
         {
             await HandlePlaylistItemEndedAsync(
-                playlistHit.Group, playlistHit.Run, ended, playlistHit.IsCurrentItem);
+                playlistHit.Group, playlistHit.Run, ended, playlistHit.IsCurrentItem, foreign);
             return;
         }
 
@@ -3092,7 +3247,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         // next-cue-Auto-Follow chain - "after this song, go anywhere".
         if (ended.EndTargetCueId is { } targetId)
         {
-            var endTarget = EnumerateAllCueNodes().FirstOrDefault(c => c.Id == targetId);
+            var endTarget = EnumerateAllCueNodesFor(ended).FirstOrDefault(c => c.Id == targetId);
             if (endTarget is null || ReferenceEquals(endTarget, ended) || endTarget.Kind == CueNodeKind.Comment)
             {
                 // An authored end target is an override, not a best-effort hint. If its stable link became
@@ -3101,14 +3256,22 @@ public partial class CuePlayerViewModel : ViewModelBase
                 StatusMessage = Strings.CueEndTargetUnavailable;
                 return;
             }
+
+            StatusMessage = Strings.Format(
+                nameof(Strings.CueAutoFollowStatusFormat), CueDisplayQualified(endTarget));
+            if (foreign)
+            {
+                await GoForeignListAsync(endTarget);
+                return;
+            }
+
             StandbyCueNode = endTarget;
-            StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(endTarget));
             _immediateJumpChain.Clear();
             await GoCore();
             return;
         }
 
-        var ordered = EnumerateFireableCueOrder().ToList();
+        var ordered = EnumerateFireableCueOrderFor(ended).ToList();
         var idx = ordered.FindIndex(c => ReferenceEquals(c, ended));
         if (idx < 0 || idx + 1 >= ordered.Count)
             return;
@@ -3117,8 +3280,14 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (!SequentialTransitionUsesMode(ended, next, CueTriggerMode.AutoFollow))
             return;
 
+        StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplayQualified(next));
+        if (foreign)
+        {
+            await GoForeignListAsync(next);
+            return;
+        }
+
         StandbyCueNode = next;
-        StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(next));
         _immediateJumpChain.Clear();
         await GoCore();
     }
@@ -3136,8 +3305,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         if (MediaCueCrossfadeExecutor is null)
             return; // no dual-voice seam - advancing early would CUT the current item, not crossfade it
-        if (EnumerateAllCueNodes().FirstOrDefault(cue => cue.Id == endingCueId)
-            is not { Kind: CueNodeKind.Media } ending)
+        if (FindNodeById(endingCueId) is not { Kind: CueNodeKind.Media } ending)
             return;
         if (FindPlaylistRunForEndedCue(ending) is not { } hit
             || !hit.IsCurrentItem
@@ -3152,11 +3320,17 @@ public partial class CuePlayerViewModel : ViewModelBase
         // keeps standby on the group), except the fire carries the overlap window. EqualPower is the
         // crossfade's law by construction: complementary up/down legs sum to constant power, which is
         // what an overlapping music transition should do (a linear pair dips audibly at the midpoint).
+        var window = (TimeSpan.FromMilliseconds(crossfadeMs), S.Media.Session.FadeCurve.EqualPower);
+        if (IsForeignListNode(ending))
+        {
+            // Another list's playlist crossfades in the same session - without touching this list's standby.
+            await GoForeignListAsync(hit.Group, window);
+            return;
+        }
+
         StandbyCueNode = hit.Group;
         _immediateJumpChain.Clear();
-        await GoCore(
-            hit.Group,
-            (TimeSpan.FromMilliseconds(crossfadeMs), S.Media.Session.FadeCurve.EqualPower));
+        await GoCore(hit.Group, window);
     }
 
     public void RefreshBrokenEndpointFlags()
@@ -3427,18 +3601,64 @@ public partial class CuePlayerViewModel : ViewModelBase
             yield return node;
     }
 
-    /// <summary>Cues in the SELECTED list carrying schedule configuration (enabled or retained-while-
-    /// disabled) - the <c>CueSchedulerService</c> sweep. Scheduling is scoped to the selected list
-    /// because scheduled fires ride the same operator-selected fire path as GO, which operates on the
-    /// selected list's transport.</summary>
-    internal IEnumerable<CueNodeViewModel> EnumerateScheduledCueNodes() =>
-        EnumerateAllCueNodes().Where(node => node.HasSchedule);
+    /// <summary>Every cue node in EVERY loaded list, selected list first. The cross-list merged session
+    /// (workstream A) maps all lists into the one <c>ShowSession</c>, so schedules, triggers and the
+    /// remote API resolve their targets here; the visible transport (GO / standby / tree) keeps using the
+    /// selected-list <see cref="EnumerateAllCueNodes()"/>.</summary>
+    private IEnumerable<CueNodeViewModel> EnumerateAllCueNodesAcrossLists()
+    {
+        if (SelectedCueList is { } selected)
+            foreach (var node in EnumerateAllCueNodes(selected.Nodes))
+                yield return node;
+        foreach (var list in CueLists)
+        {
+            if (ReferenceEquals(list, SelectedCueList))
+                continue;
+            foreach (var node in EnumerateAllCueNodes(list.Nodes))
+                yield return node;
+        }
+    }
 
-    /// <summary>Cues in the SELECTED list carrying MIDI/OSC/hotkey trigger bindings - the
-    /// <c>CueTriggerService</c> match sweep. Same selected-list scoping (and reasoning) as
-    /// <see cref="EnumerateScheduledCueNodes"/>.</summary>
+    /// <summary>The loaded list that owns <paramref name="node"/> - the SELECTED list first (the common
+    /// case, and the only list a single-list project has), then the others so a cross-list schedule /
+    /// trigger / remote fire resolves against its OWN list's tree. Null when the node is not (or no
+    /// longer) in any loaded list.</summary>
+    internal CueListEditorViewModel? FindOwningCueList(CueNodeViewModel node)
+    {
+        if (SelectedCueList is { } selected && ContainsNode(selected.Nodes, node))
+            return selected;
+        foreach (var list in CueLists)
+            if (!ReferenceEquals(list, SelectedCueList) && ContainsNode(list.Nodes, node))
+                return list;
+        return null;
+    }
+
+    /// <summary>True when <paramref name="node"/> lives in a loaded list OTHER than the selected one -
+    /// a fire on it must play into the merged session WITHOUT moving the visible transport.</summary>
+    private bool IsForeignListNode(CueNodeViewModel node) =>
+        SelectedCueList is null || !ContainsNode(SelectedCueList.Nodes, node);
+
+    /// <summary>The fireable cue order of the list that OWNS <paramref name="node"/> (the selected list's
+    /// order for a visible cue) - the ordering auto-follow / auto-continue chains walk.</summary>
+    private IEnumerable<CueNodeViewModel> EnumerateFireableCueOrderFor(CueNodeViewModel node) =>
+        FindOwningCueList(node) is { } list ? EnumerateFireableCueOrder(list.Nodes) : [];
+
+    /// <summary>Every node (groups included) of the list that OWNS <paramref name="node"/> - the scope an
+    /// authored link like a cue's end target resolves in.</summary>
+    private IEnumerable<CueNodeViewModel> EnumerateAllCueNodesFor(CueNodeViewModel node) =>
+        FindOwningCueList(node) is { } list ? EnumerateAllCueNodes(list.Nodes) : [];
+
+    /// <summary>Cues carrying schedule configuration (enabled or retained-while-disabled) - the
+    /// <c>CueSchedulerService</c> sweep. Scoped to ALL loaded lists since the cross-list merged session:
+    /// every list's cues live in the one <c>ShowSession</c>, so a schedule in a non-selected list fires
+    /// into it headlessly instead of being a silent no-show.</summary>
+    internal IEnumerable<CueNodeViewModel> EnumerateScheduledCueNodes() =>
+        EnumerateAllCueNodesAcrossLists().Where(node => node.HasSchedule);
+
+    /// <summary>Cues carrying MIDI/OSC/hotkey trigger bindings - the <c>CueTriggerService</c> match
+    /// sweep. Same all-lists scoping (and reasoning) as <see cref="EnumerateScheduledCueNodes"/>.</summary>
     internal IEnumerable<CueNodeViewModel> EnumerateTriggeredCueNodes() =>
-        EnumerateAllCueNodes().Where(node => node.HasTriggers);
+        EnumerateAllCueNodesAcrossLists().Where(node => node.HasTriggers);
 
     private static IEnumerable<CueNodeViewModel> EnumerateAllCueNodes(IEnumerable<CueNodeViewModel> nodes)
     {
@@ -3450,9 +3670,12 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
+    /// <param name="trackCurrentCue">False for a headless cross-list run: the plan executes normally but
+    /// leaves the VISIBLE transport's playing pointer alone (that pointer describes the selected list).</param>
     private async Task RunTriggerPlanAsync(
         IReadOnlyList<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan, CancellationToken ct,
-        (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null)
+        (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null,
+        bool trackCurrentCue = true)
     {
         var startedAt = DateTime.UtcNow;
 
@@ -3467,8 +3690,9 @@ public partial class CuePlayerViewModel : ViewModelBase
             var steps = group.ToList();
             // Only the playing pointer follows fired steps. The editor selection is operator-owned and
             // transport never changes it; current/standby row dots show the live playhead instead.
-            foreach (var step in steps)
-                CurrentCueNode = step.Cue;
+            if (trackCurrentCue)
+                foreach (var step in steps)
+                    CurrentCueNode = step.Cue;
 
             if (steps.Count > 1 && MediaCueGroupExecutor is not null)
             {
@@ -3878,7 +4102,10 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (jump.JumpTargetIds.Count == 0)
             return Strings.CueJumpNoTargets;
 
-        var byId = EnumerateAllCueNodes().ToDictionary(c => c.Id, c => c);
+        // Targets resolve inside the jump's OWN list (the selected one for every visible jump): a cue
+        // fired from another list by a schedule/trigger runs its list's control flow, not the visible
+        // list's. Jump target ids are authored links within one list.
+        var byId = EnumerateAllCueNodesFor(jump).ToDictionary(c => c.Id, c => c);
         var live = jump.JumpTargetIds
             .Where(byId.ContainsKey)
             .Select(id => byId[id])
@@ -3929,6 +4156,17 @@ public partial class CuePlayerViewModel : ViewModelBase
         else
             _lastRandomJumpTargetIds.Remove(jump.Id);
         var resolvedTarget = ResolveFireableCue(target);
+
+        if (IsForeignListNode(jump))
+        {
+            // Cross-list merged session: this jump belongs to a list the operator is not looking at, so
+            // it must not arm the VISIBLE standby. "Standby" mode therefore has nothing to point at and
+            // ends the chain; a firing jump continues headlessly in its own list.
+            _immediateJumpChain.Clear();
+            if (!string.Equals(jump.SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase))
+                _ = GoForeignListAsync(target);
+            return null;
+        }
 
         StandbyCueNode = target;
         if (!string.Equals(jump.SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase))
@@ -4012,6 +4250,22 @@ public partial class CuePlayerViewModel : ViewModelBase
         try { _transportRunCts?.Cancel(); } catch { /* best effort */ }
         try { _transportRunCts?.Dispose(); } catch { /* best effort */ }
         _transportRunCts = null;
+    }
+
+    /// <summary>Cancels every headless cross-list run (Stop / Panic, which stop the whole session).
+    /// A list switch deliberately does NOT: those runs play in the same merged session and keep going,
+    /// exactly like the clips they started.</summary>
+    private void CancelForeignListRuns()
+    {
+        if (_foreignListRuns.Count == 0)
+            return;
+        foreach (var cts in _foreignListRuns.Values)
+        {
+            try { cts.Cancel(); } catch { /* best effort */ }
+            try { cts.Dispose(); } catch { /* best effort */ }
+        }
+
+        _foreignListRuns.Clear();
     }
 
     private static IEnumerable<CueNodeViewModel> EnumerateMediaNodes(IEnumerable<CueNodeViewModel> nodes)

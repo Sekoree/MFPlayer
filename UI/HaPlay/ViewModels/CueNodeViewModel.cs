@@ -12,6 +12,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using S.Control;
 
 namespace HaPlay.ViewModels;
 
@@ -708,6 +709,17 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private int _scheduleGraceMs = 5000;
 
+    /// <summary>Normalized "hh:mm:ss:ff" target for <see cref="CueScheduleKind.Timecode"/>; null when
+    /// none was entered. Written only through <see cref="ScheduleTimecodeText"/>, which validates
+    /// against <see cref="ScheduleTimecodeRate"/>.</summary>
+    [ObservableProperty]
+    private string? _scheduleTimecode;
+
+    /// <summary>Frame rate the timecode target's frame field counts in - see
+    /// <see cref="CueSchedule.TimecodeRate"/>. Default 25 fps.</summary>
+    [ObservableProperty]
+    private CueTimecodeRate _scheduleTimecodeRate = CueTimecodeRate.Fps25;
+
     partial void OnScheduleEnabledChanged(bool value) { _ = value; RaiseScheduleDisplayChanged(); }
     partial void OnScheduleTimeOfDayChanged(TimeOnly? value) { _ = value; OnPropertyChanged(nameof(ScheduleTimeText)); RaiseScheduleDisplayChanged(); }
     partial void OnScheduleDateChanged(DateOnly? value) { _ = value; OnPropertyChanged(nameof(ScheduleDateText)); RaiseScheduleDisplayChanged(); }
@@ -718,8 +730,49 @@ public sealed partial class CueNodeViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(IsScheduleOneShot));
         OnPropertyChanged(nameof(IsScheduleRecurring));
+        OnPropertyChanged(nameof(IsScheduleTimecode));
+        OnPropertyChanged(nameof(IsScheduleWallClock));
         RaiseScheduleDisplayChanged();
     }
+
+    partial void OnScheduleTimecodeChanged(string? value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ScheduleTimecodeText));
+        RaiseScheduleDisplayChanged();
+    }
+
+    /// <summary>Re-validates the stored target against the new rate: 01:00:00:29 is a legal 30 fps
+    /// label and an illegal 25 fps one, so the frame field is clamped rather than silently kept
+    /// out of range (the scheduler would refuse to parse it and the cue would never fire).</summary>
+    partial void OnScheduleTimecodeRateChanged(CueTimecodeRate value)
+    {
+        if (ScheduleTimecode is { } text
+            && MidiTimecodeValue.TryParse(text, ToMidiRate(value), out var reparsed))
+        {
+            ScheduleTimecode = reparsed.ToString();
+        }
+        else if (ScheduleTimecode is { } stale
+                 && MidiTimecodeValue.TryParse(stale, MidiTimecodeRate.Fps30, out var wide))
+        {
+            var maxFrame = MidiTimecodeRates.FramesPerSecond(ToMidiRate(value)) - 1;
+            ScheduleTimecode = new MidiTimecodeValue(
+                wide.Hours, wide.Minutes, wide.Seconds, Math.Min(wide.Frames, maxFrame), ToMidiRate(value))
+                .ToString();
+        }
+
+        RaiseScheduleDisplayChanged();
+    }
+
+    /// <summary>Model enum → framework enum (same order by construction; the models stay
+    /// framework-type-free, so the mapping lives here).</summary>
+    internal static MidiTimecodeRate ToMidiRate(CueTimecodeRate rate) => rate switch
+    {
+        CueTimecodeRate.Fps24 => MidiTimecodeRate.Fps24,
+        CueTimecodeRate.Fps25 => MidiTimecodeRate.Fps25,
+        CueTimecodeRate.Fps2997Drop => MidiTimecodeRate.Fps2997Drop,
+        _ => MidiTimecodeRate.Fps30,
+    };
 
     partial void OnScheduleDaysChanged(CueScheduleDays value)
     {
@@ -746,6 +799,37 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     /// <summary>Drawer visibility: recurring schedules show the day-of-week toggles.</summary>
     public bool IsScheduleRecurring => ScheduleKind == CueScheduleKind.Recurring;
+
+    /// <summary>Drawer visibility: timecode schedules show the hh:mm:ss:ff target + frame rate.</summary>
+    public bool IsScheduleTimecode => ScheduleKind == CueScheduleKind.Timecode;
+
+    /// <summary>Drawer visibility: the wall-clock kinds show the time-of-day field (a timecode
+    /// schedule has no wall time at all).</summary>
+    public bool IsScheduleWallClock => ScheduleKind != CueScheduleKind.Timecode;
+
+    /// <summary>Timecode target field text, hh:mm:ss:ff. Same LostFocus parse contract as the time
+    /// field: empty clears, unparseable (or out of range for the selected rate) restores the last
+    /// valid text.</summary>
+    public string ScheduleTimecodeText
+    {
+        get => ScheduleTimecode ?? string.Empty;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                ScheduleTimecode = null;
+            else if (MidiTimecodeValue.TryParse(value, ToMidiRate(ScheduleTimecodeRate), out var parsed))
+                ScheduleTimecode = parsed.ToString();
+            else
+                OnPropertyChanged(nameof(ScheduleTimecodeText)); // restore the last valid text
+        }
+    }
+
+    /// <summary>The parsed timecode target, or null when none is configured / it does not parse at the
+    /// configured rate. The scheduler's crossing test reads this.</summary>
+    internal MidiTimecodeValue? ScheduleTimecodeValue =>
+        MidiTimecodeValue.TryParse(ScheduleTimecode, ToMidiRate(ScheduleTimecodeRate), out var value)
+            ? value
+            : null;
 
     /// <summary>Time field text, hh:mm or hh:mm:ss (24 h). LostFocus-parsed like the trim fields;
     /// unparseable text leaves the value unchanged, empty clears it.</summary>
@@ -814,7 +898,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
         || ScheduleDate is not null
         || ScheduleDays != CueScheduleDays.None
         || ScheduleKind != CueScheduleKind.TimeOfDay
-        || ScheduleGraceMs != 5000;
+        || ScheduleGraceMs != 5000
+        || ScheduleTimecode is not null
+        || ScheduleTimecodeRate != CueTimecodeRate.Fps25;
 
     /// <summary>Live countdown ("in mm:ss") written by <c>CueSchedulerService</c> each tick; null
     /// while no upcoming occurrence resolves or the schedule is disabled.</summary>
@@ -833,8 +919,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
         }
     }
 
-    /// <summary>Clock badge for the tree's Target column: "⏰ 15:00", plus days / date per kind,
-    /// "(off)" while disabled, and the live countdown while the scheduler runs.</summary>
+    /// <summary>Clock badge for the tree's Target column: "⏰ 15:00", plus days / date per kind, a
+    /// "⏱ hh:mm:ss:ff @rate" stopwatch badge for the timecode-chase kind, "(off)" while disabled, and
+    /// the live countdown while the scheduler runs.</summary>
     public string ScheduleBadgeDisplay
     {
         get
@@ -849,6 +936,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 CueScheduleKind.DateTime =>
                     $"⏰ {(ScheduleDate is { } d ? d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " " : string.Empty)}{time}",
                 CueScheduleKind.Recurring => $"⏰ {time} {ScheduleDaysShortDisplay}",
+                CueScheduleKind.Timecode =>
+                    $"⏱ {ScheduleTimecode ?? "--:--:--:--"} @{MidiTimecodeRates.Label(ToMidiRate(ScheduleTimecodeRate))}",
                 _ => $"⏰ {time}",
             };
             if (!ScheduleEnabled)
@@ -892,6 +981,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
         ScheduleKind = schedule.Kind;
         ScheduleGraceMs = Math.Max(0, schedule.GraceMs);
         ScheduleDays = schedule.Days;
+        // Rate BEFORE the target: the rate setter re-validates whatever target is already loaded, and
+        // applying it to a stale (previous-rate) value would clamp the frame field for nothing.
+        ScheduleTimecodeRate = schedule.TimecodeRate;
+        ScheduleTimecode = string.IsNullOrWhiteSpace(schedule.Timecode) ? null : schedule.Timecode;
         if (schedule.Kind == CueScheduleKind.DateTime && schedule.At is { } at)
         {
             // One-shots persist an absolute instant; the editor works in local wall time.
@@ -926,6 +1019,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
             At = at,
             Days = ScheduleKind == CueScheduleKind.Recurring ? ScheduleDays : CueScheduleDays.None,
             GraceMs = Math.Max(0, ScheduleGraceMs),
+            // Retained across kinds (the VideoFx pattern) so switching to Timecode and back never
+            // loses the operator's target.
+            Timecode = ScheduleTimecode,
+            TimecodeRate = ScheduleTimecodeRate,
             Enabled = ScheduleEnabled,
         };
     }

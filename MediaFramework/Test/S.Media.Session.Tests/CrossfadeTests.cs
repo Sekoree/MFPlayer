@@ -227,12 +227,18 @@ public sealed class CrossfadeTests
 
     // ---- Video side of the cross (layer opacities) ---------------------------------------------
 
+    /// <summary>One composited layer as the compositor was actually handed it: the opacity the crossfade
+    /// ramps wrote into the slot, AND the presentation time of the frame that layer PRESENTED. Opacity
+    /// alone cannot see a frozen picture - a still frame fades out exactly like a moving one - so the
+    /// frame's PTS is the only observable that distinguishes "the tail is playing" from "the tail is a
+    /// held still".</summary>
+    private readonly record struct LayerSample(float Opacity, TimeSpan FramePts);
+
     /// <summary>Observation seam for the video leg: the canvas compositor is wrapped so every composite
-    /// records the per-layer opacities it was handed - the exact values the crossfade ramps write into
-    /// the layer slots. Each test composition gets a distinct canvas width, so the factory can key the
-    /// recording queue per composition.</summary>
-    private sealed class OpacityRecordingCompositor(
-        VideoFormat output, ConcurrentQueue<float[]> samples) : IVideoCompositor
+    /// records what each layer contributed. Each test composition gets a distinct canvas width, so the
+    /// factory can key the recording queue per composition.</summary>
+    private sealed class LayerRecordingCompositor(
+        VideoFormat output, ConcurrentQueue<LayerSample[]> samples) : IVideoCompositor
     {
         private readonly CpuVideoCompositor _inner = new(output);
 
@@ -242,21 +248,26 @@ public sealed class CrossfadeTests
 
         public VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime)
         {
-            samples.Enqueue(layersBackToFront.Select(l => l.Opacity).ToArray());
+            samples.Enqueue([.. layersBackToFront.Select(l => new LayerSample(l.Opacity, l.Frame.PresentationTime))]);
             return _inner.Composite(layersBackToFront, presentationTime);
         }
 
         public void Dispose() => _inner.Dispose();
     }
 
-    /// <summary>One composition per voice (distinct canvas widths), so opacity samples attribute to the
-    /// outgoing/incoming clip unambiguously. Video-only clips - the pure opacity leg, no audio riding along.</summary>
-    private static ShowDocument VideoCues(double incomingOpacity = 1) => new(
+    /// <summary>One composition per voice (distinct canvas widths), so samples attribute to the
+    /// outgoing/incoming clip unambiguously. Video-only clips - the pure video leg, no audio riding along.
+    /// <paramref name="outgoingStartOffset"/> starts the OUTGOING clip deep into its media, which is what
+    /// makes the tail's own source time far away from the incoming clip's (the playlist-crossfade shape).</summary>
+    private static ShowDocument VideoCues(double incomingOpacity = 1, TimeSpan outgoingStartOffset = default) => new(
         Version: 1,
         Cues: [new CueDefinition("c1", 1, "ONE"), new CueDefinition("c2", 2, "TWO")],
         Clips:
         [
-            new ShowClipBinding("c1", "fake://c1", CompositionId: "out-comp"),
+            new ShowClipBinding("c1", "fake://c1", CompositionId: "out-comp")
+            {
+                StartOffset = outgoingStartOffset,
+            },
             new ShowClipBinding("c2", "fake://c2", CompositionId: "in-comp")
             {
                 Placement = new ShowVideoPlacement(Opacity: incomingOpacity),
@@ -270,11 +281,11 @@ public sealed class CrossfadeTests
         Routes: []);
 
     private static ShowSession BuildVideoSession(
-        ConcurrentQueue<float[]> outSamples, ConcurrentQueue<float[]> inSamples) => new(
+        ConcurrentQueue<LayerSample[]> outSamples, ConcurrentQueue<LayerSample[]> inSamples) => new(
         FakeVideoDecoderProvider.Registry(frameCount: 3_000),
         compositorFactory: fmt => new ClipCompositionCompositor(
-            new OpacityRecordingCompositor(fmt, fmt.Width == 64 ? outSamples : inSamples),
-            RequiresBgraLayerConversion: true, "TEST-OPACITY-RECORDER"));
+            new LayerRecordingCompositor(fmt, fmt.Width == 64 ? outSamples : inSamples),
+            RequiresBgraLayerConversion: true, "TEST-LAYER-RECORDER"));
 
     /// <summary>The composition pump only composites while an output lease is attached.</summary>
     private static async Task AttachRecordingOutputsAsync(ShowSession session)
@@ -285,15 +296,15 @@ public sealed class CrossfadeTests
 
     /// <summary>Dequeues until a composite sample satisfies <paramref name="predicate"/> (consuming the
     /// backlog, so successive waits observe strictly later composites).</summary>
-    private static async Task WaitForOpacitySampleAsync(
-        ConcurrentQueue<float[]> samples, Func<float[], bool> predicate, TimeSpan timeout, string what)
+    private static async Task<LayerSample[]> WaitForSampleAsync(
+        ConcurrentQueue<LayerSample[]> samples, Func<LayerSample[], bool> predicate, TimeSpan timeout, string what)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (true)
         {
             while (samples.TryDequeue(out var sample))
                 if (predicate(sample))
-                    return;
+                    return sample;
             Assert.True(DateTime.UtcNow < deadline, $"timed out waiting for {what}");
             await Task.Delay(25);
         }
@@ -302,14 +313,14 @@ public sealed class CrossfadeTests
     [Fact]
     public async Task Crossfade_RampsVideoOpacity_IncomingUpToAuthored_OutgoingDown()
     {
-        var outSamples = new ConcurrentQueue<float[]>();
-        var inSamples = new ConcurrentQueue<float[]>();
+        var outSamples = new ConcurrentQueue<LayerSample[]>();
+        var inSamples = new ConcurrentQueue<LayerSample[]>();
         await using var session = BuildVideoSession(outSamples, inSamples);
         await session.LoadDocumentAsync(VideoCues(incomingOpacity: 0.8));
         await AttachRecordingOutputsAsync(session);
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
-        await WaitForOpacitySampleAsync(
-            outSamples, s => s.Length == 1 && s[0] >= 0.99f, TimeSpan.FromSeconds(15),
+        await WaitForSampleAsync(
+            outSamples, s => s.Length == 1 && s[0].Opacity >= 0.99f, TimeSpan.FromSeconds(15),
             "the outgoing clip's full-opacity composite before the crossfade");
 
         Assert.Equal(CueExecutionStatus.Fired,
@@ -317,38 +328,83 @@ public sealed class CrossfadeTests
 
         // Incoming: attaches BLACK and ramps up - an intermediate sample proves the ramp (a pop to
         // full would jump 0→0.8 with nothing in between at the 30 fps composite rate vs 25 ms steps).
-        await WaitForOpacitySampleAsync(
-            inSamples, s => s.Length == 1 && s[0] is > 0.05f and < 0.7f, TimeSpan.FromSeconds(10),
+        await WaitForSampleAsync(
+            inSamples, s => s.Length == 1 && s[0].Opacity is > 0.05f and < 0.7f, TimeSpan.FromSeconds(10),
             "an intermediate incoming opacity (fade-in mid-ramp)");
         // Outgoing: was at 1.0 - an intermediate sample proves its tail ramps down rather than vanishing.
-        await WaitForOpacitySampleAsync(
-            outSamples, s => s.Length == 1 && s[0] is > 0.05f and < 0.95f, TimeSpan.FromSeconds(10),
+        await WaitForSampleAsync(
+            outSamples, s => s.Length == 1 && s[0].Opacity is > 0.05f and < 0.95f, TimeSpan.FromSeconds(10),
             "an intermediate outgoing opacity (tail mid-ramp)");
         // The incoming ramp tops out at the AUTHORED opacity (0.8), not a hardcoded 1.0.
-        await WaitForOpacitySampleAsync(
-            inSamples, s => s.Length == 1 && s[0] is >= 0.79f and <= 0.81f, TimeSpan.FromSeconds(10),
+        await WaitForSampleAsync(
+            inSamples, s => s.Length == 1 && s[0].Opacity is >= 0.79f and <= 0.81f, TimeSpan.FromSeconds(10),
             "the incoming clip settling at its authored opacity");
+    }
+
+    [Fact]
+    public async Task Crossfade_OutgoingVideoTail_KeepsPlaying_InsteadOfFreezingOnAStill()
+    {
+        // Regression (post-implementation review of the dual-voice round): the outgoing clip keeps its
+        // layers AND its transport-timeline claim, but ReplaceAsync re-binds that SAME timeline to the
+        // incoming clip's playhead - and the composition pump feeds that source time to every
+        // master-aligned slot. The tail's own frames then look far in the FUTURE, master alignment
+        // rejects them all and keeps re-presenting the frame it already held, so the tail faded out as a
+        // frozen still. Opacity cannot see this (a still fades exactly like a moving picture), so this
+        // asserts on the PTS of the frame each composite actually presented.
+        var outSamples = new ConcurrentQueue<LayerSample[]>();
+        var inSamples = new ConcurrentQueue<LayerSample[]>();
+        await using var session = BuildVideoSession(outSamples, inSamples);
+        // The outgoing clip starts 40 s into its media (the "A at 3:12" shape) while the incoming starts
+        // at 0, so the incoming playhead cannot possibly catch up to the tail's frames during the window.
+        await session.LoadDocumentAsync(VideoCues(outgoingStartOffset: TimeSpan.FromSeconds(40)));
+        await AttachRecordingOutputsAsync(session);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+        await WaitForSampleAsync(
+            outSamples,
+            s => s.Length == 1 && s[0].FramePts >= TimeSpan.FromSeconds(40),
+            TimeSpan.FromSeconds(20),
+            "the outgoing clip presenting frames from its trimmed-in position");
+
+        // A 30 s window keeps the tail alive for the whole measurement.
+        Assert.Equal(CueExecutionStatus.Fired,
+            await session.FireCueAsync("c2", TimeSpan.FromSeconds(30), FadeCurve.EqualPower));
+
+        // Drain, then take the first POST-handoff composite as the baseline…
+        while (outSamples.TryDequeue(out _)) { }
+        var baseline = await WaitForSampleAsync(
+            outSamples, s => s.Length == 1, TimeSpan.FromSeconds(10),
+            "the first outgoing composite after the handoff");
+
+        // …and require the tail's presented frame to move on. Frozen ⇒ every later sample repeats the
+        // baseline PTS forever and this times out.
+        var advanced = await WaitForSampleAsync(
+            outSamples,
+            s => s.Length == 1 && s[0].FramePts >= baseline[0].FramePts + TimeSpan.FromMilliseconds(300),
+            TimeSpan.FromSeconds(10),
+            "the outgoing tail's presented frame to keep advancing (it froze on a still)");
+        // Still the tail, not the incoming voice: it is fading, and it is on the outgoing composition.
+        Assert.True(advanced[0].Opacity < 1f, "the outgoing tail was not ramping down");
     }
 
     [Fact]
     public async Task StopMidCrossfade_RampsBothVoicesOpacitiesDown_OnTheStopClock()
     {
-        var outSamples = new ConcurrentQueue<float[]>();
-        var inSamples = new ConcurrentQueue<float[]>();
+        var outSamples = new ConcurrentQueue<LayerSample[]>();
+        var inSamples = new ConcurrentQueue<LayerSample[]>();
         await using var session = BuildVideoSession(outSamples, inSamples);
         await session.LoadDocumentAsync(VideoCues());
         await AttachRecordingOutputsAsync(session);
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
-        await WaitForOpacitySampleAsync(
-            outSamples, s => s.Length == 1 && s[0] >= 0.99f, TimeSpan.FromSeconds(15),
+        await WaitForSampleAsync(
+            outSamples, s => s.Length == 1 && s[0].Opacity >= 0.99f, TimeSpan.FromSeconds(15),
             "the outgoing clip's full-opacity composite before the crossfade");
 
         // A LONG window, so neither voice could reach a low opacity through the crossfade itself
         // within this test: the incoming rises slowly, the outgoing falls slowly.
         Assert.Equal(CueExecutionStatus.Fired,
             await session.FireCueAsync("c2", TimeSpan.FromSeconds(20), FadeCurve.EqualPower));
-        await WaitForOpacitySampleAsync(
-            inSamples, s => s.Length == 1 && s[0] >= 0.15f, TimeSpan.FromSeconds(15),
+        await WaitForSampleAsync(
+            inSamples, s => s.Length == 1 && s[0].Opacity >= 0.15f, TimeSpan.FromSeconds(15),
             "the incoming clip part-way up before the stop");
 
         // Drain both queues so every sample below only proves POST-stop ramping (the incoming's own
@@ -359,16 +415,113 @@ public sealed class CrossfadeTests
 
         // Both voices reach near-black within the ~1 s stop clock - impossible on the 20 s crossfade
         // clock (the outgoing would still be ≥0.9, and the incoming only ever RISES on it).
-        await WaitForOpacitySampleAsync(
-            inSamples, s => s.Length == 1 && s[0] <= 0.05f, TimeSpan.FromSeconds(10),
+        await WaitForSampleAsync(
+            inSamples, s => s.Length == 1 && s[0].Opacity <= 0.05f, TimeSpan.FromSeconds(10),
             "the incoming clip ramping down to black on the stop clock");
-        await WaitForOpacitySampleAsync(
-            outSamples, s => s.Length == 1 && s[0] <= 0.1f, TimeSpan.FromSeconds(10),
+        await WaitForSampleAsync(
+            outSamples, s => s.Length == 1 && s[0].Opacity <= 0.1f, TimeSpan.FromSeconds(10),
             "the outgoing tail ramping down to black on the stop clock");
 
         var winner = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(20)));
         Assert.Same(stop, winner);
         await stop;
+        Assert.All(session.Snapshot(), s => Assert.False(s.IsActive));
+    }
+
+    // ---- Audio leg of the outgoing ramp --------------------------------------------------------
+
+    [Fact]
+    public async Task Crossfade_OutgoingAudioTail_ActuallyRampsToSilence()
+    {
+        // The opacity tests cover the video leg; this is the audio one, measured at the device. A
+        // constant-amplitude tone means the output peak IS the installed route gain, so a tail that was
+        // hard-cut at level (rather than ramped) never shows a quiet-but-still-flowing window before its
+        // release - which is exactly what this asserts.
+        var outputs = new ConcurrentDictionary<string, PeakAudioOutput>(StringComparer.Ordinal);
+        var released = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        await using var session = new ShowSession(
+            ToneAudioDecoderProvider.Registry(),
+            new RecordingAudioBackend(),
+            audioOutputFactory: (deviceId, format) => new ClipAudioOutputLease(
+                outputs.GetOrAdd(deviceId, _ => new PeakAudioOutput(format)),
+                DisposeOutputOnRuntimeDispose: false,
+                Release: () => released.TryAdd(deviceId, 0)));
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c1", 1, "One"), new CueDefinition("c2", 2, "Two")],
+            Clips:
+            [
+                new ShowClipBinding("c1", "tone://1") { AudioRoutes = [new ShowClipAudioRoute("dev-c1")] },
+                new ShowClipBinding("c2", "tone://2") { AudioRoutes = [new ShowClipAudioRoute("dev-c2")] },
+            ],
+            Compositions: [], Routes: []));
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+        await WaitUntilAsync(
+            () => outputs.TryGetValue("dev-c1", out var o) && o.Peak > ToneAudioDecoderProvider.Amplitude * 0.5f,
+            TimeSpan.FromSeconds(10), "the outgoing clip playing at full level");
+
+        // A 3 s linear window: the tail spends its last ~450 ms below 15 % of full, i.e. several of the
+        // 100 ms sampling windows below land there before the ramp's completion releases the clip.
+        Assert.Equal(CueExecutionStatus.Fired,
+            await session.FireCueAsync("c2", TimeSpan.FromSeconds(3), FadeCurve.Linear));
+
+        var sawSilentTail = false;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (!released.ContainsKey("dev-c1"))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for the outgoing tail's ramp");
+            outputs["dev-c1"].Reset();
+            await Task.Delay(100);
+            var peak = outputs["dev-c1"].Peak;
+            // > 0 excludes the post-release windows (no submits at all), which would pass vacuously.
+            if (peak > 0f && peak < ToneAudioDecoderProvider.Amplitude * 0.15f)
+            {
+                sawSilentTail = true;
+                break;
+            }
+        }
+
+        Assert.True(sawSilentTail, "the outgoing tail was cut at level instead of ramped to silence");
+    }
+
+    // ---- Teardown while a crossfade is in flight ------------------------------------------------
+
+    [Fact]
+    public async Task DisposeMidCrossfade_ReleasesBothVoices()
+    {
+        // The tail is fire-and-forget: nothing but the group's own teardown owns it. Session disposal
+        // must therefore reach it too, or a crossfaded shutdown leaks the outgoing clip's device lease
+        // (and its player) for the rest of the process.
+        var releases = new ReleaseLog();
+        var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Cues("c1", "c2"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c2", TimeSpan.FromSeconds(30)));
+        Assert.False(releases.IsReleased("dev-c1")); // mid-crossfade
+
+        await session.DisposeAsync();
+
+        Assert.True(releases.IsReleased("dev-c1"), "the outgoing tail's lease survived disposal");
+        Assert.True(releases.IsReleased("dev-c2"), "the active clip's lease survived disposal");
+    }
+
+    [Fact]
+    public async Task DocumentReloadMidCrossfade_ReleasesBothVoices()
+    {
+        // Same contract on the other teardown path: a reload retires every group, so the still-fading
+        // outgoing clip must go with it rather than playing on under the new document.
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Cues("c1", "c2"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c2", TimeSpan.FromSeconds(30)));
+        Assert.False(releases.IsReleased("dev-c1"));
+
+        await session.LoadDocumentAsync(Cues("c1", "c2"));
+
+        Assert.True(releases.IsReleased("dev-c1"), "the outgoing tail survived the reload");
+        Assert.True(releases.IsReleased("dev-c2"), "the active clip survived the reload");
         Assert.All(session.Snapshot(), s => Assert.False(s.IsActive));
     }
 

@@ -10,10 +10,17 @@ namespace HaPlay.Tests;
 /// merge into a cue list) and control-layer slices (extract + replace-by-name merge).</summary>
 public sealed class SectionExportMergeTests
 {
+    /// <summary>Runs <paramref name="action"/> on the headless UI session and OBSERVES the result.
+    /// <c>Dispatch</c> hands back a Task; discarding it (the shape this helper used to have) threw every
+    /// assertion failure inside the body away, so these tests passed no matter what the code under test
+    /// did. Blocking here is safe - the body is synchronous and the xunit thread is not the session's
+    /// dispatcher thread (the async sibling is <see cref="HeadlessDispatchExtensions.DispatchAsync"/>).</summary>
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(SectionExportMergeTests).Assembly)
-            .Dispatch(action, CancellationToken.None);
+            .Dispatch(action, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
 
     [Fact]
     public void MergeCompositions_UpdatesByNameKeepingId_AddsNewNames()

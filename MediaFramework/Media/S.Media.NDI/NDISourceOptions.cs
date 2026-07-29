@@ -27,6 +27,21 @@ public sealed class NDISourceOptions
     public NDIIngestPlaybackClock? IngestClock { get; init; }
 
     /// <summary>
+    /// Opt-in (default <see langword="false"/>): advertise this receiver's <see cref="NDISource.IngestClock"/>
+    /// through <see cref="S.Media.Routing.IIngestPacedSource"/> so a player slaves its
+    /// <see cref="S.Media.Routing.AudioRouter"/> to the sender's ingest timeline instead of the local wall
+    /// clock (genlock to ingest). Left off, the receiver behaves exactly as before - the ingest clock is still
+    /// maintained, just not used for pacing.
+    /// </summary>
+    /// <remarks>
+    /// Only meaningful with <see cref="ReceiveAudio"/>: the ingest clock is driven by captured audio frames,
+    /// so a video-only or silent sender never advances it and a slaved router would produce nothing. The same
+    /// applies while the sender is disconnected - production halts (no silence is emitted) until ingest
+    /// resumes, which is the intended genlock behaviour but is why this is not the default.
+    /// </remarks>
+    public bool PaceRouterFromIngestClock { get; init; }
+
+    /// <summary>
     /// Present received video at the sender's <strong>absolute</strong> egress timecode instead of the default
     /// first-frame-relative timeline. For multi-receiver wall sync: every receiver of one sender resolves a
     /// frame to the same time, so - driven by a shared/synced reference clock - they present in lock-step.

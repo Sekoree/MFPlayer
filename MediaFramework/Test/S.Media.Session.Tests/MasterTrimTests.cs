@@ -93,22 +93,20 @@ public sealed class MasterTrimTests
         var expected = ToneAudioDecoderProvider.Amplitude * 0.5f; // tone × trim
         await session.SetMasterTrimAsync(0.5f);
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
-        // The commit's trim pass has run by the time the fire returns (routes attach at authored gain
-        // and CommitClipAsync folds the trim in one ApplyAudioScale pass), so measure steady state:
-        // wait for audio, then reset the max-ever peak past that attach instant and sample.
         _ = await WaitForPeakAsync(outputs, "dev-c1");
-        outputs["dev-c1"].Reset();
-        await Task.Delay(300);
-        Assert.InRange(outputs["dev-c1"].Peak, expected - 0.1f, expected + 0.05f);
+        // The session-side state settles with the fire (routes attach at authored gain and
+        // CommitClipAsync folds the trim in one ApplyAudioScale pass); assert that directly, then let
+        // the OUTPUT catch up - the buffers already handed to the device at attach gain still have to
+        // drain, which is why a single fixed-offset window flaked at the full untrimmed amplitude.
+        Assert.Equal(0.5f, (await session.GetClipAudioLevelsAsync("c1"))!.EffectiveLevel, 3);
+        await AssertSettledPeakAsync(outputs["dev-c1"], expected - 0.1f, expected + 0.05f, "ACTIVE");
 
         // A 30 s window keeps the outgoing ramp scalar ≈1 for the whole measurement, so the tail's
         // peak isolates the trim factor: ≈0.4 correct, ≈0.2 with the trim applied twice.
         Assert.Equal(CueExecutionStatus.Fired,
             await session.FireCueAsync("c2", TimeSpan.FromSeconds(30)));
         await Task.Delay(250); // several 25 ms ramp steps have rewritten the tail's route gains
-        outputs["dev-c1"].Reset();
-        await Task.Delay(300); // sample the tail
-        Assert.InRange(outputs["dev-c1"].Peak, expected - 0.1f, expected + 0.05f);
+        await AssertSettledPeakAsync(outputs["dev-c1"], expected - 0.1f, expected + 0.05f, "TAIL");
     }
 
     private static async Task<float> WaitForPeakAsync(
@@ -124,34 +122,169 @@ public sealed class MasterTrimTests
         return outputs[deviceId].Peak;
     }
 
-    /// <summary>An output that records the largest absolute sample it was ever submitted (resettable) -
-    /// the observable end of the route-gain chain for a known-amplitude source.</summary>
-    private sealed class PeakAudioOutput(S.Media.Core.Audio.AudioFormat format) : IAudioOutput
+    /// <summary>
+    /// Asserts the device's STEADY-STATE peak sits inside <paramref name="min"/>..<paramref name="max"/>.
+    /// <para>Reads fresh max-ever windows until one lands in range, then requires a second window to hold
+    /// it - so the level must actually be the installed gain, not a value the signal swept through. A
+    /// wrong gain that is stable (the ≈0.2 double-trim this test guards, or the ≈0.8 untrimmed tone) never
+    /// settles and fails on the deadline with the last reading.</para>
+    /// The single fixed <c>Reset(); Delay(300)</c> window this replaces assumed the pipeline had already
+    /// flushed every buffer queued at the pre-trim gain; under CPU contention it had not, and the max-ever
+    /// peak read the untrimmed 0.7996 (seen twice in an 8× contended solution run).
+    /// </summary>
+    private static async Task<float> AssertSettledPeakAsync(
+        PeakAudioOutput output, float min, float max, string what, int windowMs = 300)
     {
-        private float _peak;
-
-        public S.Media.Core.Audio.AudioFormat Format => format;
-
-        public float Peak => Volatile.Read(ref _peak);
-
-        public void Reset() => Volatile.Write(ref _peak, 0f);
-
-        public void Submit(ReadOnlySpan<float> packedSamples)
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        float settled;
+        while (true)
         {
-            var max = 0f;
-            foreach (var sample in packedSamples)
-            {
-                var magnitude = Math.Abs(sample);
-                if (magnitude > max)
-                    max = magnitude;
-            }
-
-            float current;
-            while ((current = Volatile.Read(ref _peak)) < max
-                   && Interlocked.CompareExchange(ref _peak, max, current) != current)
-            {
-            }
+            output.Reset();
+            await Task.Delay(windowMs);
+            settled = output.Peak;
+            if (settled >= min && settled <= max)
+                break;
+            Assert.True(
+                DateTime.UtcNow < deadline,
+                $"{what} peak never settled into {min}..{max} (last reading {settled})");
         }
+
+        output.Reset();
+        await Task.Delay(windowMs);
+        var held = output.Peak;
+        Assert.True(
+            held >= min && held <= max,
+            $"{what} peak left {min}..{max} again (settled at {settled}, then {held})");
+        return held;
+    }
+
+    // ---- The trim must survive every path that REWRITES a live clip's route gains -----------------
+    //
+    // TransportGroup.ApplyAudioScale is the one place a route gain is computed
+    // (fade × envelope × MasterTrim). Anything that re-installs a route on a PLAYING clip has to end up
+    // at that same product; the two live-edit entry points below each used to write the fade level only,
+    // which silently un-trimmed (and un-enveloped) the cue for the rest of its life.
+
+    private const string TrimDevice = "dev-c";
+
+    /// <summary>One tone-cue session plus the peak-reading output map (keyed by device id). The tone's
+    /// constant amplitude turns "what gain is actually installed?" into a measurable output peak.</summary>
+    private static (ShowSession Session, ConcurrentDictionary<string, PeakAudioOutput> Outputs) BuildToneSession()
+    {
+        var outputs = new ConcurrentDictionary<string, PeakAudioOutput>(StringComparer.Ordinal);
+        var session = new ShowSession(
+            ToneAudioDecoderProvider.Registry(),
+            new RecordingAudioBackend(),
+            audioOutputFactory: (deviceId, format) => new ClipAudioOutputLease(
+                outputs.GetOrAdd(deviceId, _ => new PeakAudioOutput(format))));
+        return (session, outputs);
+    }
+
+    private static ShowDocument OneToneCue(params ShowClipAudioRoute[] routes) => new(
+        Version: 1,
+        Cues: [new CueDefinition("c", 1, "C")],
+        Clips: [new ShowClipBinding("c", "tone://1") { AudioRoutes = routes }],
+        Compositions: [], Routes: []);
+
+    /// <summary>Resets the max-ever peak, lets the output run, and returns what it saw - the gain
+    /// currently installed on the route, measured at the device.</summary>
+    private static async Task<float> SamplePeakAsync(PeakAudioOutput output, int settleMs = 300)
+    {
+        output.Reset();
+        await Task.Delay(settleMs);
+        return output.Peak;
+    }
+
+    [Fact]
+    public async Task MasterTrim_SurvivesALivePerCueRouteReApply()
+    {
+        // Regression: ApplyActiveAudioRoutesAsync rewrote each route with `route.Gain × ActiveAudioScale`
+        // (the FADE level alone), so nudging a playing cue's level under a 0.2 master fader re-installed
+        // the route 5× louder than the fader said - permanently, since nothing rewrites a clip with no
+        // fade or envelope running.
+        var (session, outputs) = BuildToneSession();
+        await using var scope = session;
+        var route = new ShowClipAudioRoute(TrimDevice, [0, 1]);
+        await session.LoadDocumentAsync(OneToneCue(route));
+        await session.SetMasterTrimAsync(0.2f);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        _ = await WaitForPeakAsync(outputs, TrimDevice);
+
+        // The operator drags the cue's level to 0.5 while the master fader sits at 0.2.
+        Assert.True(await session.ApplyActiveAudioRoutesAsync("c", [route with { Gain = 0.5f }]));
+
+        var expected = ToneAudioDecoderProvider.Amplitude * 0.5f * 0.2f; // tone × cue gain × trim
+        var peak = await SamplePeakAsync(outputs[TrimDevice]);
+        Assert.InRange(peak, expected * 0.7f, expected * 1.3f);
+        // …and the session agrees the fade level was untouched (the trim multiplies, never overwrites).
+        Assert.Equal(1f, (await session.GetClipAudioLevelsAsync("c"))!.FadeLevel, 3);
+    }
+
+    [Fact]
+    public async Task MasterTrim_SurvivesAHotAudioOutputRebuild()
+    {
+        // Regression: RebuildActiveClipAudioOutputsAsync re-attached at `route.Gain` and never ran a
+        // level-composition pass, so adding/removing an output line under a 0.1 master fader snapped the
+        // cue to unity and left it there (and popped if the rebuild landed mid fade).
+        var (session, outputs) = BuildToneSession();
+        await using var scope = session;
+        var route = new ShowClipAudioRoute(TrimDevice, [0, 1]);
+        await session.LoadDocumentAsync(OneToneCue(route));
+        await session.SetMasterTrimAsync(0.1f);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        _ = await WaitForPeakAsync(outputs, TrimDevice);
+
+        // The deck hot-adds a second output line - the count change forces the full rebuild path.
+        Assert.True(await session.RebuildActiveClipAudioOutputsAsync(
+            "c", [route, new ShowClipAudioRoute("dev-extra", [0, 1])]));
+
+        var expected = ToneAudioDecoderProvider.Amplitude * 0.1f; // tone × trim, still
+        var peak = await SamplePeakAsync(outputs[TrimDevice]);
+        Assert.InRange(peak, expected * 0.6f, expected * 1.4f);
+        Assert.InRange(await SamplePeakAsync(outputs["dev-extra"]), expected * 0.6f, expected * 1.4f);
+    }
+
+    [Fact]
+    public async Task MasterTrim_ComposesWithAStopFadeInFlight()
+    {
+        // The trim and a running ramp write through the SAME composition, so moving the fader mid-fade
+        // must scale whatever the ramp has reached rather than snapping the clip back to the ramp's
+        // untrimmed level (or the fade's level being lost). Measured at the output, mid-ramp.
+        var (session, outputs) = BuildToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(OneToneCue(new ShowClipAudioRoute(TrimDevice, [0, 1])));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        _ = await WaitForPeakAsync(outputs, TrimDevice);
+
+        // A long stop fade, waited into rather than slept through, so the ramp is PROVABLY mid-flight
+        // (never still on its first step) when the fader moves.
+        var stop = session.StopAsync(fadeDuration: TimeSpan.FromSeconds(6));
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        ClipAudioLevels? levels;
+        while ((levels = await session.GetClipAudioLevelsAsync("c")) is null or { FadeLevel: >= 0.9f })
+        {
+            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for the stop fade to ramp below 0.9");
+            await Task.Delay(25);
+        }
+
+        await session.SetMasterTrimAsync(0.25f);
+        levels = await session.GetClipAudioLevelsAsync("c");
+        Assert.NotNull(levels); // still playing - the stop fade has not released it yet
+        Assert.True(levels!.FadeLevel is > 0.05f and < 0.95f, $"the stop fade left its ramp (level {levels.FadeLevel})");
+        // The fader multiplies what the ramp has reached; neither side overwrites the other.
+        Assert.Equal(levels.FadeLevel * 0.25f, levels.EffectiveLevel, 3);
+
+        // …and that product is what the device actually receives. The ramp only falls from here, so the
+        // max-ever peak over the sample window cannot exceed the level read above.
+        await Task.Delay(100); // let the router's gain write land
+        var peak = await SamplePeakAsync(outputs[TrimDevice], settleMs: 200);
+        Assert.True(peak <= ToneAudioDecoderProvider.Amplitude * levels.FadeLevel * 0.25f + 0.05f,
+            $"the trim was dropped by the in-flight stop fade (peak {peak})");
+
+        var winner = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(20)));
+        Assert.Same(stop, winner);
+        await stop;
+        Assert.All(session.Snapshot(), s => Assert.False(s.IsActive));
     }
 
     [Fact]

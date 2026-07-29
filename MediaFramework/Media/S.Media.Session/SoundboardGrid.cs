@@ -67,6 +67,40 @@ public sealed record SoundboardScheduledFire(
     TimeSpan When,
     TimeSpan? Quantize);
 
+/// <summary>
+/// Launch-quantization math, shared by <see cref="SoundboardGrid.TryCreateScheduledFire"/> and by
+/// hosts that run their own soundboard surface (HaPlay's tile grid) so "when is the next boundary"
+/// has exactly one definition. Pure and allocation-free.
+/// </summary>
+public static class SoundboardQuantization
+{
+    /// <summary>
+    /// The next quantum boundary at or after <paramref name="when"/>, measured on the caller's own
+    /// transport origin (boundaries sit at whole multiples of <paramref name="quantum"/> from that
+    /// origin - the host owns what "zero" means). A non-positive quantum means "no quantization"
+    /// and returns <paramref name="when"/> unchanged; a <paramref name="when"/> that already sits
+    /// exactly on a boundary is returned as-is rather than pushed a full quantum out.
+    /// </summary>
+    public static TimeSpan NextBoundary(TimeSpan when, TimeSpan quantum)
+    {
+        if (quantum <= TimeSpan.Zero)
+            return when;
+        // Ceiling division on ticks; negative inputs (a transport origin ahead of `when`) floor to
+        // the origin instead of walking backwards through boundaries.
+        if (when.Ticks <= 0)
+            return TimeSpan.Zero;
+        var ticks = ((when.Ticks + quantum.Ticks - 1) / quantum.Ticks) * quantum.Ticks;
+        return TimeSpan.FromTicks(ticks);
+    }
+
+    /// <summary>The length of <paramref name="beats"/> beats at <paramref name="bpm"/>, or
+    /// <see cref="TimeSpan.Zero"/> ("no quantization") when either is non-positive.</summary>
+    public static TimeSpan BeatsToQuantum(double bpm, double beats) =>
+        bpm > 0 && beats > 0
+            ? TimeSpan.FromSeconds(beats * 60d / bpm)
+            : TimeSpan.Zero;
+}
+
 public sealed class SoundboardGrid
 {
     private readonly Lock _gate = new();
@@ -185,11 +219,8 @@ public sealed class SoundboardGrid
             }
 
             var when = pad.ScheduledAt ?? now;
-            if (pad.Quantize is { } quantum && quantum > TimeSpan.Zero)
-            {
-                var ticks = ((when.Ticks + quantum.Ticks - 1) / quantum.Ticks) * quantum.Ticks;
-                when = TimeSpan.FromTicks(ticks);
-            }
+            if (pad.Quantize is { } quantum)
+                when = SoundboardQuantization.NextBoundary(when, quantum);
 
             fire = new SoundboardScheduledFire(pad.PadId, pad.CueId, when, pad.Quantize);
             return true;

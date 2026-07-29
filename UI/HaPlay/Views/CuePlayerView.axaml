@@ -206,7 +206,7 @@
            fire while this is armed AND edit mode is off. -->
       <ToggleButton Grid.Column="7" Classes="schedarm"
                     IsChecked="{Binding SchedulesArmed, Mode=TwoWay}"
-                    ToolTip.Tip="{x:Static res:Strings.SchedulesArmedToggleTooltip}"
+                    ToolTip.Tip="{Binding SchedulesArmedTooltip}"
                     AutomationProperties.Name="{x:Static res:Strings.SchedulesArmedToggleLabel}">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <TextBlock Text="&#x23F0;" FontSize="12" VerticalAlignment="Center" />
@@ -218,20 +218,31 @@
            OFF, fires only while armed AND edit mode is off. -->
       <ToggleButton Grid.Column="8" Classes="schedarm"
                     IsChecked="{Binding TriggersArmed, Mode=TwoWay}"
-                    ToolTip.Tip="{x:Static res:Strings.TriggersArmedToggleTooltip}"
+                    ToolTip.Tip="{Binding TriggersArmedTooltip}"
                     AutomationProperties.Name="{x:Static res:Strings.TriggersArmedToggleLabel}">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <TextBlock Text="&#x26A1;" FontSize="12" VerticalAlignment="Center" />
           <TextBlock Text="{x:Static res:Strings.TriggersArmedToggleLabel}" VerticalAlignment="Center" />
         </StackPanel>
       </ToggleButton>
-      <!-- State chip, same palette as the deck's state pill: green running, amber paused or
-           standby-armed, gray idle - readable across a booth without parsing the text. -->
-      <Border Grid.Column="9" Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
-              Background="{Binding TransportStateColor}">
-        <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TransportState}"
-                   TextTrimming="CharacterEllipsis" />
-      </Border>
+      <StackPanel Grid.Column="9" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+        <!-- State chip, same palette as the deck's state pill: green running, amber paused or
+             standby-armed, gray idle - readable across a booth without parsing the text. -->
+        <Border Classes="Chip" Margin="8,0,0,0" HorizontalAlignment="Left"
+                Background="{Binding TransportStateColor}">
+          <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TransportState}"
+                     TextTrimming="CharacterEllipsis" />
+        </Border>
+        <!-- MTC chase readout (D1). Only present once some loaded list carries a Timecode schedule -
+             the operator needs to see whether timecode is arriving, at what rate, and where it is,
+             BEFORE arming. Written by CueSchedulerService's sweep. -->
+        <Border Classes="Chip" HorizontalAlignment="Left"
+                IsVisible="{Binding HasTimecodeChaseStatus}"
+                ToolTip.Tip="{x:Static res:Strings.CueScheduleTimecodeHint}">
+          <TextBlock FontSize="11" FontWeight="SemiBold" Text="{Binding TimecodeChaseStatus}"
+                     TextTrimming="CharacterEllipsis" />
+        </Border>
+      </StackPanel>
     </Grid>
 
     <DockPanel LastChildFill="True">
@@ -507,11 +518,23 @@
                           </DataTemplate>
                         </ComboBox.ItemTemplate>
                       </ComboBox>
-                      <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.CueScheduleTimeLabel}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.CueScheduleTimeLabel}" VerticalAlignment="Center"
+                                 IsVisible="{Binding SelectedCueNode.IsScheduleWallClock}" />
                       <TextBox Grid.Row="0" Grid.Column="3"
                                Text="{Binding SelectedCueNode.ScheduleTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                PlaceholderText="15:00"
-                               TextAlignment="Right" />
+                               TextAlignment="Right"
+                               IsVisible="{Binding SelectedCueNode.IsScheduleWallClock}" />
+                      <!-- Timecode chase (D1): hh:mm:ss:ff target + the rate its frame field counts
+                           in. Replaces the wall-clock time field for the Timecode kind - a chase
+                           schedule has no wall time at all. -->
+                      <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.CueScheduleTimecodeLabel}" VerticalAlignment="Center"
+                                 IsVisible="{Binding SelectedCueNode.IsScheduleTimecode}" />
+                      <TextBox Grid.Row="0" Grid.Column="3"
+                               Text="{Binding SelectedCueNode.ScheduleTimecodeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                               PlaceholderText="01:00:00:00"
+                               TextAlignment="Right"
+                               IsVisible="{Binding SelectedCueNode.IsScheduleTimecode}" />
                       <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.CueScheduleDateLabel}" VerticalAlignment="Center"
                                  IsVisible="{Binding SelectedCueNode.IsScheduleOneShot}" />
                       <TextBox Grid.Row="1" Grid.Column="1"
@@ -519,6 +542,18 @@
                                PlaceholderText="2026-12-31"
                                TextAlignment="Right"
                                IsVisible="{Binding SelectedCueNode.IsScheduleOneShot}" />
+                      <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.CueScheduleTimecodeRateLabel}" VerticalAlignment="Center"
+                                 IsVisible="{Binding SelectedCueNode.IsScheduleTimecode}" />
+                      <ComboBox Grid.Row="1" Grid.Column="1"
+                                ItemsSource="{Binding CueTimecodeRates}"
+                                SelectedItem="{Binding SelectedCueNode.ScheduleTimecodeRate, Mode=TwoWay}"
+                                IsVisible="{Binding SelectedCueNode.IsScheduleTimecode}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate>
+                            <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
                       <TextBlock Grid.Row="1" Grid.Column="2" Text="{x:Static res:Strings.CueScheduleGraceLabel}" VerticalAlignment="Center" />
                       <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="3"
                                      Minimum="0" Maximum="600000" Increment="500"
@@ -535,8 +570,14 @@
                       <ToggleButton Content="{x:Static res:Strings.CueScheduleDaySat}" IsChecked="{Binding SelectedCueNode.ScheduleOnSaturday, Mode=TwoWay}" />
                       <ToggleButton Content="{x:Static res:Strings.CueScheduleDaySun}" IsChecked="{Binding SelectedCueNode.ScheduleOnSunday, Mode=TwoWay}" />
                     </StackPanel>
-                    <TextBlock Opacity="0.55" FontSize="11" Text="{x:Static res:Strings.CueScheduleFormatHint}" />
-                    <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueScheduleHint}" />
+                    <TextBlock Opacity="0.55" FontSize="11" Text="{x:Static res:Strings.CueScheduleFormatHint}"
+                               IsVisible="{Binding SelectedCueNode.IsScheduleWallClock}" />
+                    <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueScheduleHint}"
+                               IsVisible="{Binding SelectedCueNode.IsScheduleWallClock}" />
+                    <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap" Text="{x:Static res:Strings.CueScheduleTimecodeHint}"
+                               IsVisible="{Binding SelectedCueNode.IsScheduleTimecode}" />
+                    <TextBlock Opacity="0.55" FontSize="11" Text="{Binding TimecodeChaseStatus}"
+                               IsVisible="{Binding HasTimecodeChaseStatus}" />
                   </StackPanel>
                 </Expander>
 
@@ -1508,7 +1549,7 @@
                                       ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupExpandTooltip}" />
                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                           <TextBlock Text="{Binding GroupNode.Number}" FontWeight="SemiBold" Opacity="0.7" />
-                          <TextBlock Text="{Binding GroupNode.Label}" FontWeight="SemiBold"
+                          <TextBlock Text="{Binding GroupLabel}" FontWeight="SemiBold"
                                      TextTrimming="CharacterEllipsis" />
                           <TextBlock Text="{Binding Children.Count, StringFormat='({0})'}" Opacity="0.6" FontSize="11"
                                      VerticalAlignment="Center" />

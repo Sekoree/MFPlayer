@@ -274,6 +274,12 @@ public sealed record NDIInputPlaylistItem(string SourceName) : PlaylistItem
     /// more underrun risk; use the dialog's probe to find the lowest glitch-free size for this network.</summary>
     public int? AudioMinBufferedDurationMs { get; init; }
 
+    /// <summary>Genlock this input's playback to the sender's ingest timeline: the player's audio router is
+    /// paced from the NDI receive clock instead of the local wall clock. Default <c>false</c> (wall clock).
+    /// Requires the audio stream (the ingest clock is audio-driven), and while the sender is away the line
+    /// produces nothing rather than silence - that is the point of genlock, but it is why it is opt-in.</summary>
+    public bool PaceFromIngestClock { get; init; }
+
     public override string DisplayName =>
         !string.IsNullOrWhiteSpace(CustomDisplayName) ? CustomDisplayName!
         : string.IsNullOrWhiteSpace(SourceName) ? "(NDI source unset)"

@@ -1613,6 +1613,24 @@ public sealed class ClipCompositionRuntime : IDisposable
         int LayerIndex { get; }
         float Opacity { get; set; }
         void UpdatePlacement(VideoPlacementSpec placement);
+
+        /// <summary>
+        /// Stops selecting this layer's frames against the composition's master (transport) time and takes
+        /// the newest submitted frame instead - the free-running, latest-wins selection an unmastered
+        /// composition uses. Irreversible and per LAYER, so the composition's other layers (and every
+        /// normal clip) keep their master alignment untouched.
+        /// <para>
+        /// The one caller is the dual-voice crossfade handoff: the outgoing clip keeps its layers and its
+        /// transport-timeline claim, but that timeline is re-bound to the INCOMING clip's playhead, so the
+        /// pump would feed the tail a master time from a different clip. Master-aligned selection rejects
+        /// every candidate more than one canvas period in the future and falls back to the frame it is
+        /// already holding, which freezes the tail on a still (crossfading out of a clip at 3:12 into one
+        /// starting at 0:00 puts every outgoing frame ~192 s "in the future"). Nothing targets the tail's
+        /// transport for its remaining fade window, so latest-wins is exactly right: it advances on the
+        /// outgoing player's own paced submissions.
+        /// </para>
+        /// </summary>
+        void DetachFromMasterAlignment();
     }
 
     /// <summary>
@@ -1668,6 +1686,13 @@ public sealed class ClipCompositionRuntime : IDisposable
                     _owner.SortSurfaceLayersLocked();
             }
         }
+
+        /// <inheritdoc />
+        /// <remarks>No-op for a surface layer: a surface holds no submitted-frame queue to select from -
+        /// it RENDERS at the master time the composite is stamped with. Giving a crossfade tail's surface
+        /// its own render time would need a per-surface time source in the compositor's surface contract
+        /// (<c>IVideoCompositorLayerSurface.Render</c>'s <c>masterTime</c>), which is a GL-only path.</remarks>
+        public void DetachFromMasterAlignment() { }
 
         /// <summary>Resolves the placement to the surface's canvas transform - the same
         /// <see cref="PlacementResolver"/> math a frame layer uses, with the canvas as the source size
@@ -1819,6 +1844,9 @@ public sealed class ClipCompositionRuntime : IDisposable
                     _owner.SortLayersLocked();
             }
         }
+
+        /// <inheritdoc />
+        public void DetachFromMasterAlignment() => RawSlot.KeepPolicy = SlotKeepPolicy.Latest;
 
         public void ApplyPlacement()
         {

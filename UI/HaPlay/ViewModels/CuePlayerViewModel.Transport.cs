@@ -127,29 +127,70 @@ public partial class CuePlayerViewModel
     public async Task FireTriggeredCueSafeAsync(CueNodeViewModel cue, string statusFormatKey)
     {
         ArgumentNullException.ThrowIfNull(cue);
+        // External triggers reach every loaded list (cross-list merged session), and cue numbers restart
+        // per list - so the status names the list too whenever the cue is not in the selected one.
+        var display = CueDisplayQualified(cue);
+        if (!CanFireCue(cue))
+        {
+            // The same refusal GoCore makes, but reported HERE: the trigger status below is stamped
+            // OVER whatever the fire head left on the strip, so a failure raised inside the fire
+            // would be replaced by a "MIDI trigger fire: …" line for a cue that never played.
+            StatusMessage = Strings.Format(nameof(Strings.CueNotFireableStatusFormat), display);
+            return;
+        }
+
         try
         {
             var fire = FireScheduledCueAsync(cue);
-            StatusMessage = Strings.Format(statusFormatKey, CueDisplay(cue));
+            StatusMessage = Strings.Format(statusFormatKey, display);
             await fire;
         }
         catch (Exception ex)
         {
             StatusMessage = Strings.Format(
-                nameof(Strings.CueExecutionFailedWithDetailStatusFormat), CueDisplay(cue), ex.Message);
+                nameof(Strings.CueExecutionFailedWithDetailStatusFormat), display, ex.Message);
         }
+    }
+
+    /// <summary>True when <paramref name="cue"/> would actually fire something right now - the
+    /// synchronous pre-check the remote API's per-cue <c>/go</c> needs (it answers before the fire
+    /// runs, so it cannot report a failure afterwards). False for the two cases
+    /// <see cref="GoCore"/> refuses: a group with no fireable child, and a playlist / armed-list
+    /// group with no items. Read-only - unlike <c>BuildTriggerPlan</c> it never consumes or
+    /// restarts a playlist run.</summary>
+    public bool CanFireCue(CueNodeViewModel cue)
+    {
+        ArgumentNullException.ThrowIfNull(cue);
+        // Visualizers and media inside a group fire independently of the transport plan.
+        if (cue.Kind is CueNodeKind.Visualizer or CueNodeKind.Media)
+            return true;
+        if (cue.Kind != CueNodeKind.Group)
+            return true;
+        // A FINISHED playlist run restarts from the top on the next GO (BuildTriggerPlan's rule), so
+        // such a group stays fireable as long as it still has items.
+        return IsPlaylistGroup(cue)
+            ? PlaylistItems(cue).Count > 0
+            : EnumerateFireableCueOrder(cue.Children).Any();
     }
 
     /// <summary>Per-cue hotkey dispatch (the drawer's Triggers section): fires the first cue in tree
     /// order whose <see cref="CueNodeViewModel.HotkeyGesture"/> matches <paramref name="e"/> through
     /// the operator-selected fire path. The cue view's transport-key handler calls this LAST (the
-    /// configurable transport keys always win a clash) and only while cue edit mode is off - hotkeys
-    /// are a show-mode surface for the same reason the scheduler is. Returns false when no cue claims
-    /// the gesture.</summary>
+    /// configurable transport keys always win a clash). Returns false when no cue claims the gesture.
+    /// <para>Gated exactly like a <see cref="CueTriggerKind.Hotkey"/> binding in
+    /// <c>CueTriggerService</c> - <see cref="TriggersArmed"/> ON and <see cref="IsCueEditMode"/> OFF.
+    /// The legacy field and a Hotkey binding are the same feature with two editors, so they must
+    /// answer to the same arm switch; without it the master Triggers toggle only disabled half the
+    /// keyboard surface, which is the opposite of what an arm control is for.</para></summary>
     public bool TryFireCueHotkey(Avalonia.Input.KeyEventArgs e)
     {
         ArgumentNullException.ThrowIfNull(e);
-        foreach (var cue in EnumerateAllCueNodes())
+        if (!TriggersArmed || IsCueEditMode)
+            return false;
+        // All loaded lists, selected first (a gesture claimed in both resolves to the visible list) -
+        // the legacy hotkey field and a Hotkey trigger binding are one feature with two editors, so
+        // they must share the cross-list scope as well as the arm switch.
+        foreach (var cue in EnumerateAllCueNodesAcrossLists())
         {
             if (string.IsNullOrWhiteSpace(cue.HotkeyGesture)
                 || !CueHotkeyGesture.Matches(cue.HotkeyGesture, e))
@@ -161,9 +202,11 @@ public partial class CuePlayerViewModel
         return false;
     }
 
-    /// <summary>Resolves a remote per-cue reference in the SELECTED list (the transport per-cue
-    /// fires ride, like scheduling): the operator-facing cue NUMBER first (tree order,
-    /// case-insensitive), then the cue's Guid id. Null when nothing matches.</summary>
+    /// <summary>Resolves a remote per-cue reference: the operator-facing cue NUMBER in the SELECTED
+    /// list first (tree order, case-insensitive - numbers restart per list, so the visible list has to
+    /// win), then the cue's Guid id in ANY loaded list, then a number in the other loaded lists (list
+    /// order). Everything past the first step exists because the cross-list merged session makes cues
+    /// in non-selected lists fireable too. Null when nothing matches.</summary>
     public CueNodeViewModel? FindCueByReference(string cueRef)
     {
         if (string.IsNullOrWhiteSpace(cueRef))
@@ -175,9 +218,11 @@ public partial class CuePlayerViewModel
                 return cue;
         }
 
-        return Guid.TryParse(trimmed, out var id)
-            ? EnumerateAllCueNodes().FirstOrDefault(cue => cue.Id == id)
-            : null;
+        if (Guid.TryParse(trimmed, out var id))
+            return EnumerateAllCueNodesAcrossLists().FirstOrDefault(cue => cue.Id == id);
+
+        return EnumerateAllCueNodesAcrossLists().FirstOrDefault(
+            cue => string.Equals(cue.Number?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Stops one cue if it is currently running - the remote API's per-cue <c>/stop</c>.
@@ -207,7 +252,80 @@ public partial class CuePlayerViewModel
             return FireVisualizerIndependentlyAsync(cue);
         if (cue.Kind == CueNodeKind.Media && FindContainingGroupPath(cue).Count > 0)
             return FireGroupedMediaIndependentlyAsync(cue);
-        return GoCore(cue);
+        // Cross-list merged session: a cue in another loaded list plays into the SAME ShowSession, but
+        // through a headless run - GoCore owns the VISIBLE transport (standby pointer, Current row,
+        // the tree's fireable order) and must never be moved by a schedule/trigger/remote fire aimed at
+        // a list the operator is not looking at. The two independent paths above already avoid it.
+        return IsForeignListNode(cue) ? GoForeignListAsync(cue) : GoCore(cue);
+    }
+
+    /// <summary>Fires <paramref name="fire"/> in a list OTHER than the selected one: the same trigger
+    /// plan, pre-waits, group fire modes and playlist-pick consumption as <see cref="GoCore"/>, resolved
+    /// against the cue's OWN list, but with no write to <see cref="CuePlayerViewModel.StandbyCueNode"/> /
+    /// <see cref="CuePlayerViewModel.CurrentCueNode"/> and its own per-list cancellation scope (so
+    /// re-firing the same list replaces its previous run without cancelling the visible transport's).
+    /// The fired clips land in the merged session and appear in Now-Playing with their list name.</summary>
+    private async Task GoForeignListAsync(
+        CueNodeViewModel fire,
+        (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null)
+    {
+        // Built BEFORE anything is cancelled so a request with nothing to fire leaves the run alone.
+        var plan = BuildTriggerPlan(fire);
+        if (plan.Count == 0)
+        {
+            StatusMessage = Strings.Format(
+                nameof(Strings.CueNotFireableStatusFormat), CueDisplayQualified(fire));
+            return;
+        }
+
+        if (IsPlaylistGroup(fire))
+        {
+            // GO on a PLAYING crossfade playlist takes over with the dual-voice window (GoCore's DJ-style
+            // skip), then consumes the armed pick - the run state is keyed by the group's Guid, so it is
+            // already per-list without any extra bookkeeping.
+            if (advanceCrossfade is null
+                && MediaCueCrossfadeExecutor is not null
+                && ParseGroupFireMode(fire) == CueGroupFireMode.Playlist
+                && fire.PlaylistCrossfadeMs > 0
+                && _playlistRuns.TryGetValue(fire.Id, out var playingRun)
+                && playingRun.CurrentItemId is { } playingItem
+                && _activeCueIds.Contains(playingItem))
+            {
+                advanceCrossfade = (
+                    TimeSpan.FromMilliseconds(fire.PlaylistCrossfadeMs),
+                    S.Media.Session.FadeCurve.EqualPower);
+            }
+
+            ConsumePlaylistPick(fire);
+        }
+
+        var owner = FindOwningCueList(fire);
+        var cts = new CancellationTokenSource();
+        if (owner is not null)
+        {
+            if (_foreignListRuns.Remove(owner, out var previous))
+            {
+                try { previous.Cancel(); } catch { /* best effort */ }
+                try { previous.Dispose(); } catch { /* best effort */ }
+            }
+
+            _foreignListRuns[owner] = cts;
+        }
+
+        StatusMessage = Strings.Format(
+            nameof(Strings.CueGoStatusFormat),
+            CueDisplayQualified(fire),
+            plan.Count,
+            plan.Count == 1 ? string.Empty : Strings.PluralSuffixS);
+
+        try
+        {
+            await RunTriggerPlanAsync(plan, cts.Token, advanceCrossfade, trackCurrentCue: false);
+        }
+        catch (OperationCanceledException)
+        {
+            // A later fire in the same list (or Stop/Panic) cancelled this run.
+        }
     }
 
     private async Task FireGroupedMediaIndependentlyAsync(CueNodeViewModel cue)
@@ -280,7 +398,15 @@ public partial class CuePlayerViewModel
     {
         var ordered = EnumerateFireableCueOrder().ToList();
         if (ordered.Count == 0)
+        {
+            // A plain GO on an empty list is a no-op; an explicit request still deserves an answer.
+            if (operatorSelectedCue is not null)
+            {
+                StatusMessage = Strings.Format(
+                    nameof(Strings.CueNotFireableStatusFormat), CueDisplay(operatorSelectedCue));
+            }
             return;
+        }
 
         if (CurrentCueNode is not null && IsTransportPaused)
         {
@@ -292,18 +418,27 @@ public partial class CuePlayerViewModel
 
         // A newly selected row is a one-shot operator override. Otherwise GO follows the live standby;
         // keeping the properties drawer on an older cue must not cause that cue to repeat forever.
-        var selectedFire = operatorSelectedCue is not null
-                           && ordered.Contains(ResolveFireableCue(operatorSelectedCue)!)
-            ? operatorSelectedCue
-            : null;
-        var fire = selectedFire ?? StandbyCueNode ?? ordered.FirstOrDefault();
+        // An EXPLICITLY requested cue is never silently swapped for the standby cue: the old
+        // "resolve, and fall through when the resolution comes back null" shape dropped an empty
+        // group / a playlist group with no next pick and fired STANDBY instead - and triggers, the
+        // scheduler and POST /api/v1/cues/{ref}/go all arrive here. It now fails loudly below.
+        var fire = operatorSelectedCue ?? StandbyCueNode ?? ordered.FirstOrDefault();
         if (fire is null)
             return;
 
-        CancelTransportRun();
+        // Built BEFORE the cancel so a request with nothing to fire leaves the running show alone.
         var plan = BuildTriggerPlan(fire);
         if (plan.Count == 0)
+        {
+            if (operatorSelectedCue is not null)
+            {
+                StatusMessage = Strings.Format(
+                    nameof(Strings.CueNotFireableStatusFormat), CueDisplay(fire));
+            }
             return;
+        }
+
+        CancelTransportRun();
 
         var resolvedFire = ResolveFireableCue(fire) ?? fire;
         CueNodeViewModel? nextStandby;
@@ -391,6 +526,7 @@ public partial class CuePlayerViewModel
     private void Stop()
     {
         CancelTransportRun();
+        CancelForeignListRuns(); // Stop is session-wide: cross-list runs end with the clips they started
         ClearPlaylistRuns(); // Stop ends any playlist/armed-list run - a fresh GO starts over
         if (StopPlaybackCallback is { } stopPlayback)
         {
@@ -426,6 +562,7 @@ public partial class CuePlayerViewModel
     private void Panic()
     {
         CancelTransportRun();
+        CancelForeignListRuns();
         ClearPlaylistRuns();
         if (StopPlaybackCallback is { } stopPlayback)
         {

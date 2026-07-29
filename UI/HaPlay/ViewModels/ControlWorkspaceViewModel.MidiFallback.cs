@@ -186,11 +186,24 @@ public partial class ControlWorkspaceViewModel
         await _inputSyncGate.WaitAsync().ConfigureAwait(true);
         try
         {
+            // Re-check under the gate, not only in the synchronous wrapper: DisposeAsync sets the flag and
+            // then tears the session down while holding THIS gate, so a sync queued before that (a config
+            // edit, a disarm, a project switch) would otherwise resume afterwards and create + start a
+            // brand-new session nothing ever disposes - leaked MIDI ports / UDP sockets for the rest of the
+            // process, and on a project switch the previous project's devices come back up.
+            if (_inputShutdown)
+                return;
+
             if (!string.Equals(signature, _inputSignature, StringComparison.Ordinal)
                 || (_inputSession is null && signature.Length > 0))
             {
                 await TearDownDeviceInputSessionAsync().ConfigureAwait(true);
                 _inputSignature = signature;
+                // ...and again after that await: tearing the old session down can take a while (its own
+                // stop/dispose gate, a listener still unbinding), and the workspace can go away meanwhile.
+                if (_inputShutdown)
+                    return;
+
                 if (signature.Length > 0)
                 {
                     var created = DeviceInputSessionFactory?.Invoke(config) ?? CreateDeviceInputSession(config);
@@ -202,7 +215,7 @@ public partial class ControlWorkspaceViewModel
             // A previous open may have failed (port in use, device unplugged); retry rather than
             // leaving the operator with silently dead triggers.
             var session = _inputSession;
-            if (session is null || session.IsOpen)
+            if (_inputShutdown || session is null || session.IsOpen)
                 return;
 
             try
@@ -252,8 +265,19 @@ public partial class ControlWorkspaceViewModel
         }
     }
 
-    /// <summary>Identity of everything the input session owns - enabled MIDI device bindings and enabled
-    /// OSC listeners. Unchanged signature = keep the live ports open across unrelated config edits.</summary>
+    /// <summary>
+    /// Identity of everything the live input session <em>behaves on</em>. An unchanged signature keeps the
+    /// open ports across unrelated config edits; a changed one rebuilds the session so the edit takes effect.
+    /// </summary>
+    /// <remarks>
+    /// The session captures the config by reference at construction, so this has to cover every field its
+    /// managers read - not just the ones that decide which ports get opened. In particular
+    /// <see cref="ControlOSCListenerManager"/> resolves an incoming message to a device by the device's
+    /// <c>OSCHost</c>/<c>OSCPort</c>/<c>OSCListenerId</c>, and both managers stamp raw wire bytes into
+    /// monitor records per <see cref="ControlMonitorOptions.IncludeRawBytes"/>. Leaving those out meant an
+    /// operator could edit an OSC device's host/port (the UI says "Re-arm to apply"), disarm and re-arm, and
+    /// get the pre-edit snapshot back - scripts firing for the wrong device until HaPlay restarted.
+    /// </remarks>
     private static string DeviceInputSignature(ControlSystemConfig config)
     {
         if (!ControlInputSession.HasConfiguredDevices(config))
@@ -270,11 +294,24 @@ public partial class ControlWorkspaceViewModel
                 d.Binding.MIDIInputDeviceName,
                 d.Binding.MIDIOutputDeviceId,
                 d.Binding.MIDIOutputDeviceName));
+        var osc = config.Devices
+            .Where(d => d.Protocol == ControlDeviceProtocol.OSC && d.IsEnabled)
+            .OrderBy(d => d.Id)
+            .Select(d => string.Join(
+                '|',
+                d.Id,
+                d.ProfileId,
+                d.Binding.OSCHost,
+                d.Binding.OSCPort,
+                d.Binding.OSCLocalPort,
+                d.Binding.OSCListenerId));
         var listeners = config.OSCListeners
             .Where(l => l.IsEnabled)
             .OrderBy(l => l.Id)
             .Select(l => $"{l.Id}|{l.LocalPort}");
-        return string.Join(';', midi.Concat(listeners));
+        return string.Join(
+            ';',
+            midi.Concat(osc).Concat(listeners).Append($"rawBytes={config.Monitor.IncludeRawBytes}"));
     }
 
     private async Task ArmInternalAsync()

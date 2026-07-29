@@ -34,6 +34,39 @@ public partial class CuePlayerView : UserControl
     /// Audio, groups remember Group, …) instead of always falling back to the first tab.</summary>
     private readonly Dictionary<CueNodeKind, int> _drawerTabMemory = new();
 
+    /// <summary>Non-zero from the instant a cue switch begins until its drawer retarget completes.
+    /// The TabControl churns its own selection to index 0 inside that window (the per-kind
+    /// IsVisible bindings flip while SelectedCueNode ALREADY points at the incoming cue), and those
+    /// events are indistinguishable from an operator gesture at the SelectionChanged handler - so
+    /// recording is suppressed for the duration and the authoritative capture happens in
+    /// <see cref="OnViewModelPropertyChanging"/> instead.</summary>
+    private int _drawerTabSwitchDepth;
+
+    /// <summary>
+    /// Captures the outgoing cue's drawer tab the instant BEFORE <c>SelectedCueNode</c> changes.
+    /// <para>The memory used to be recorded from every <c>TabControl.SelectionChanged</c>, which
+    /// could never work: selecting a cue raises the VM's per-kind <c>Has*</c> properties from inside
+    /// <c>OnSelectedCueNodeChanged</c> - i.e. BEFORE the <c>PropertyChanged</c> notification reaches
+    /// this view - so the tabs' <c>IsVisible</c> bindings flip and the TabControl churns its own
+    /// selection back to index 0 while <c>SelectedCueNode</c> already points at the INCOMING cue.
+    /// Those churn events were recorded as operator intent and overwrote the incoming kind's
+    /// remembered tab with 0 before the posted restore could read it, so the drawer always
+    /// "restored" General. <c>PropertyChanging</c> fires before the field is assigned, so nothing
+    /// has churned yet and the index read here is genuinely the operator's last tab.</para>
+    /// </summary>
+    private void OnViewModelPropertyChanging(object? sender, PropertyChangingEventArgs e)
+    {
+        _ = sender;
+        if (e.PropertyName != nameof(CuePlayerViewModel.SelectedCueNode))
+            return;
+        if (_subscribedVm?.SelectedCueNode is { } outgoing && CueDrawerTabs.SelectedIndex >= 0)
+            _drawerTabMemory[outgoing.Kind] = CueDrawerTabs.SelectedIndex;
+        // The churn starts as soon as the field is assigned (next statement in the VM's setter), so
+        // the suppression has to be raised here - by the time PropertyChanged reaches this view the
+        // clobbering SelectionChanged events have already fired.
+        _drawerTabSwitchDepth++;
+    }
+
     public CuePlayerView()
     {
         InitializeComponent();
@@ -414,12 +447,14 @@ public partial class CuePlayerView : UserControl
         if (_subscribedVm is not null)
         {
             _subscribedVm.PropertyChanged -= OnViewModelPropertyChanged;
+            _subscribedVm.PropertyChanging -= OnViewModelPropertyChanging;
             _subscribedVm.CueSearchNavigationRequested -= OnCueSearchNavigationRequested;
         }
         _subscribedVm = DataContext as CuePlayerViewModel;
         if (_subscribedVm is not null)
         {
             _subscribedVm.PropertyChanged += OnViewModelPropertyChanged;
+            _subscribedVm.PropertyChanging += OnViewModelPropertyChanging;
             _subscribedVm.CueSearchNavigationRequested += OnCueSearchNavigationRequested;
         }
         RebuildCueSource();
@@ -506,8 +541,14 @@ public partial class CuePlayerView : UserControl
     /// </summary>
     private void EnsureVisibleDrawerTabSelected()
     {
+        // Background, NOT Loaded: the per-kind IsVisible bindings settle on the layout pass, and at
+        // Loaded priority this ran BEFORE them - it saw the OUTGOING cue's visibility, judged the
+        // remembered tab hidden, and fell back to General. Background runs after that pass, so
+        // `IsVisible` here is the incoming cue's.
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
+            try
+            {
             // Per-type memory first: land on the tab last used for this cue type when it applies.
             if (_subscribedVm?.SelectedCueNode is { } node
                 && _drawerTabMemory.TryGetValue(node.Kind, out var remembered)
@@ -528,13 +569,26 @@ public partial class CuePlayerView : UserControl
                     return;
                 }
             }
-        }, Avalonia.Threading.DispatcherPriority.Loaded);
+            }
+            finally
+            {
+                // Counter, not a flag: rapid switches queue several restores, and an earlier one
+                // completing must not re-open recording while a later switch is still in flight.
+                _drawerTabSwitchDepth--;
+            }
+        }, Avalonia.Threading.DispatcherPriority.Background);
     }
 
+    /// <summary>Keeps the memory current for the cue that is showing, so a tab picked and then left
+    /// alone until the app closes is still the one remembered. The authoritative capture is
+    /// <see cref="OnViewModelPropertyChanging"/> - it runs before the TabControl's own churn, which
+    /// this handler cannot distinguish from an operator gesture.</summary>
     private void OnDrawerTabSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         _ = sender;
         _ = e;
+        if (_drawerTabSwitchDepth > 0)
+            return; // the TabControl retargeting itself for a cue switch - not the operator
         if (_subscribedVm?.SelectedCueNode is { } node && CueDrawerTabs.SelectedIndex >= 0)
             _drawerTabMemory[node.Kind] = CueDrawerTabs.SelectedIndex;
     }

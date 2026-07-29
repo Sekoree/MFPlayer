@@ -212,6 +212,25 @@
             <CheckBox Content="{x:Static res:Strings.SoundboardTileLoopLabel}"
                       IsChecked="{Binding SelectedBoard.DefaultLoop, Mode=TwoWay}" />
 
+            <!-- Launch quantization: board-global (Ableton-style). 0 beats = fire on tap. -->
+            <TextBlock Text="{x:Static res:Strings.SoundboardLaunchQuantizeHeader}"
+                       FontWeight="SemiBold" Margin="0,6,0,0" />
+            <TextBlock Text="{x:Static res:Strings.SoundboardLaunchQuantizeHint}"
+                       Opacity="0.65" FontSize="11" TextWrapping="Wrap" />
+            <Grid ColumnDefinitions="*,8,*" RowDefinitions="Auto,Auto">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.SoundboardBpmLabel}"
+                         Opacity="0.7" FontSize="11" />
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.SoundboardQuantizeBeatsLabel}"
+                         Opacity="0.7" FontSize="11" />
+              <NumericUpDown Grid.Row="1" Grid.Column="0" FormatString="0.##"
+                             Minimum="20" Maximum="300" Increment="1"
+                             Value="{Binding SelectedBoard.Bpm, Mode=TwoWay}" />
+              <NumericUpDown Grid.Row="1" Grid.Column="2" FormatString="0.###"
+                             Minimum="0" Maximum="64" Increment="1"
+                             ToolTip.Tip="{x:Static res:Strings.SoundboardQuantizeBeatsTooltip}"
+                             Value="{Binding SelectedBoard.LaunchQuantizeBeats, Mode=TwoWay}" />
+            </Grid>
+
             <Button Content="{x:Static res:Strings.SoundboardRemoveBoardButton}"
                     Command="{Binding RemoveSelectedBoardCommand}"
                     Margin="0,6,0,0" />

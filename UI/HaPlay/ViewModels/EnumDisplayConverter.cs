@@ -50,6 +50,12 @@ public sealed class EnumDisplayConverter : IValueConverter
             CueScheduleKind.TimeOfDay => "Daily at time",
             CueScheduleKind.DateTime => "Once (date + time)",
             CueScheduleKind.Recurring => "Weekly (days + time)",
+            CueScheduleKind.Timecode => "MIDI timecode (chase)",
+
+            CueTimecodeRate.Fps24 => "24 fps",
+            CueTimecodeRate.Fps25 => "25 fps",
+            CueTimecodeRate.Fps2997Drop => "29.97 fps drop-frame",
+            CueTimecodeRate.Fps30 => "30 fps",
 
             CueMIDICommandType.NRPN => "NRPN",
             CueMIDICommandType.RPN => "RPN",

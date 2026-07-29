@@ -178,9 +178,19 @@ public sealed class SharedAudioOutput : IDisposable
 
         if (_terminal is IAudioOutputLatency reporting)
         {
-            var terminalLatency = reporting.SubmitToOutputLatency; // contract: never throws
-            if (terminalLatency > TimeSpan.Zero)
-                ticks += terminalLatency.Ticks;
+            try
+            {
+                // Contract: never throws - but a terminal disposed mid-read is exactly the case the
+                // client clock's own never-throws contract has to survive, and the wall-clock fallback
+                // path reaches this call from OUTSIDE its try/catch. Degrade to the in-process depths.
+                var terminalLatency = reporting.SubmitToOutputLatency;
+                if (terminalLatency > TimeSpan.Zero)
+                    ticks += terminalLatency.Ticks;
+            }
+            catch
+            {
+                // Terminal stopped/disposed mid-read: the measurable in-process depths still stand.
+            }
         }
 
         return ticks;
@@ -213,9 +223,21 @@ public sealed class SharedAudioOutput : IDisposable
         private readonly ManualResetEventSlim _spaceAvailable = new(false);
         private readonly IPlaybackClock? _terminalClock;
         private readonly System.Diagnostics.Stopwatch _fallbackElapsed = System.Diagnostics.Stopwatch.StartNew();
+        /// <summary>Time constant of the DAC-lead low-pass, measured in the RAW clock's own domain (see
+        /// <see cref="SmoothLeadTicks"/>). Long enough to average out the pump/bus sawtooth at production
+        /// sizes (chunk 480, pump 4, client reservoir 8 - a ~40 ms pump swing on top of a ~80 ms bus one),
+        /// short enough that a genuine device re-negotiation is tracked within a fraction of a second.</summary>
+        private const double LeadSmoothingSeconds = 0.25;
+
         private readonly Lock _epochGate = new();
         private long _terminalEpochTicks;
         private long _fallbackEpochTicks;
+        /// <summary>Low-passed DAC lead in ticks - the value actually subtracted. Guarded by
+        /// <see cref="_epochGate"/> together with <see cref="_leadSampledAtRawTicks"/>.</summary>
+        private long _leadTicks;
+        /// <summary>Raw since-epoch reading the lead estimate was last integrated at; -1 = unseeded
+        /// (fresh segment), which makes the next reading adopt the measurement outright.</summary>
+        private long _leadSampledAtRawTicks = -1;
         /// <summary>High-water mark of raw since-epoch ticks since the last deliberate re-anchor - the
         /// resume point when a terminal-clock regression forces the epoch to be re-derived.</summary>
         private long _maxSinceEpochTicks;
@@ -289,19 +311,66 @@ public sealed class SharedAudioOutput : IDisposable
         /// when the estimate grows - the clock holds until the raw reading catches up - and is cleared by
         /// the same deliberate re-anchors that reset the epoch (attach, <see cref="Flush"/>).
         /// </summary>
+        /// <remarks>
+        /// The lead is <em>low-passed</em> before it is subtracted (<see cref="SmoothLeadTicks"/>). Both of
+        /// its terms are instantaneous queue depths that swing hard at production sizes - the pump
+        /// oscillates over its whole capacity every chunk and the client bus sawtooths between its refill
+        /// reservoir and empty - and feeding an instantaneous depth into the monotonic high-water below
+        /// turns the report into <c>max(raw − lead)</c> ≈ <c>raw − min(lead)</c> over a trailing window: the
+        /// pump term is effectively never subtracted and a single under-run erases the bus term for good.
+        /// Smoothing makes the steady-state subtraction the <em>mean</em> lead, which is what C1 is about,
+        /// while the high-water still guarantees the report never steps backwards.
+        /// </remarks>
         private TimeSpan ReportAudible(long rawTicks)
         {
             long audibleTicks = 0;
             if (rawTicks > 0)
             {
-                var leadTicks = SamplesToTicks(_bus.BufferedSamples, _bus.Format.SampleRate)
-                                + _owner.DownstreamLatencyTicks();
+                var measuredLeadTicks = SamplesToTicks(_bus.BufferedSamples, _bus.Format.SampleRate)
+                                        + _owner.DownstreamLatencyTicks();
+                var leadTicks = SmoothLeadTicks(rawTicks, measuredLeadTicks);
                 audibleTicks = (long)(AudioLatencyCompensation.AudibleSeconds(
                     rawTicks / (double)TimeSpan.TicksPerSecond,
                     leadTicks / (double)TimeSpan.TicksPerSecond) * TimeSpan.TicksPerSecond);
             }
 
             return new TimeSpan(RaiseHighWater(ref _maxAudibleTicks, audibleTicks));
+        }
+
+        /// <summary>
+        /// Integrates one lead measurement into the exponential low-pass and returns the value to subtract.
+        /// The filter's time base is the RAW clock itself, not wall time: raw is device time (or the
+        /// stopwatch domain in the fallback), so the response is a real <see cref="LeadSmoothingSeconds"/>
+        /// time constant in production <em>and</em> fully deterministic under a test harness that advances a
+        /// fake terminal. Two consequences follow for free: repeated reads without clock progress cannot
+        /// move the estimate (so a burst of readers cannot converge it early), and a paused device freezes
+        /// it instead of decaying it toward a queue depth nobody is draining.
+        /// <para>Serialized on the epoch gate - uncontended in the steady state (one clock reader), and
+        /// sharing it with the deliberate re-anchors is what keeps a <see cref="Flush"/> from interleaving
+        /// a half-reset estimate. Still allocation-free and exception-free on the hot path.</para>
+        /// </summary>
+        private long SmoothLeadTicks(long rawTicks, long measuredLeadTicks)
+        {
+            lock (_epochGate)
+            {
+                var sampledAt = _leadSampledAtRawTicks;
+                _leadSampledAtRawTicks = rawTicks;
+                if (sampledAt < 0)
+                {
+                    // First reading of a segment: adopt the measurement so the quadratic ease-in starts
+                    // from the real lead instead of ramping the subtraction itself up from zero.
+                    _leadTicks = measuredLeadTicks;
+                    return measuredLeadTicks;
+                }
+
+                var elapsedTicks = rawTicks - sampledAt;
+                if (elapsedTicks <= 0)
+                    return _leadTicks; // no clock progress - the filter has nothing to integrate
+
+                var alpha = 1 - Math.Exp(-elapsedTicks / (LeadSmoothingSeconds * TimeSpan.TicksPerSecond));
+                _leadTicks += (long)Math.Round((measuredLeadTicks - _leadTicks) * alpha);
+                return _leadTicks;
+            }
         }
 
         /// <summary>Lock-free CAS max; returns the resulting maximum.</summary>
@@ -366,6 +435,10 @@ public sealed class SharedAudioOutput : IDisposable
                 // A deliberate reset-to-zero clears both resume points (regression recovery, monotonic report).
                 Volatile.Write(ref _maxSinceEpochTicks, 0);
                 Volatile.Write(ref _maxAudibleTicks, 0);
+                // ...and re-seeds the lead filter: the raw domain it integrates over just restarted, and the
+                // pre-flush queue depths say nothing about the segment that is about to start.
+                _leadTicks = 0;
+                _leadSampledAtRawTicks = -1;
                 if (_terminalClock is null)
                     return;
                 try

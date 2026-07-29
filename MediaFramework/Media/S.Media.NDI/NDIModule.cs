@@ -66,6 +66,8 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
                     descriptor.LowBandwidth ? NDILib.NDIRecvBandwidth.Lowest : NDILib.NDIRecvBandwidth.Highest),
                 // The audio jitter reserve - the dominant tunable latency between the audio and the live video.
                 AudioMinBufferedDuration = descriptor.AudioMinBufferedDuration ?? audioMinBuffer,
+                // Opt-in genlock: only an `ingestClock=1` descriptor advertises the ingest clock for router pacing.
+                PaceRouterFromIngestClock = descriptor.PaceFromIngestClock,
             });
             // Warm up so the A/V formats are available before the open path reads them - the audio router needs
             // the format up front (live NDI delivers no format until the first frame arrives). Best-effort: an
@@ -184,7 +186,8 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         bool ReceiveAudio,
         bool ReceiveVideo,
         bool LowBandwidth,
-        TimeSpan? AudioMinBufferedDuration);
+        TimeSpan? AudioMinBufferedDuration,
+        bool PaceFromIngestClock = false);
 
     /// <summary>Parses an NDI source descriptor. Query options are deliberately provider-owned so a persisted
     /// HaPlay item keeps its stream-selection, bandwidth, and jitter-buffer policy when opened through the
@@ -212,9 +215,16 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
             audioBuffer = TimeSpan.FromMilliseconds(ms);
         }
 
+        // `ingestClock=1` is the D2 opt-in: pace the player's audio router from this receiver's ingest
+        // timeline instead of the wall clock. Requires audio (the ingest clock is audio-driven) - a
+        // video-only descriptor asking for it would never advance the router.
+        var paceFromIngestClock = ReadBool(values, "ingestClock", false);
+        if (paceFromIngestClock && !receiveAudio)
+            throw new ArgumentException("NDI ingestClock pacing requires the audio stream.", nameof(uri));
+
         return new SourceDescriptor(
             Uri.UnescapeDataString(encodedName), receiveAudio, receiveVideo,
-            ReadBool(values, "lowBandwidth", false), audioBuffer);
+            ReadBool(values, "lowBandwidth", false), audioBuffer, paceFromIngestClock);
     }
 
     private static Dictionary<string, string> ParseQuery(string query)

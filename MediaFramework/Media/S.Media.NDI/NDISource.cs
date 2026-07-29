@@ -11,6 +11,7 @@ using S.Media.Core.Video;
 using S.Media.NDI.Audio;
 using S.Media.NDI.Clock;
 using S.Media.NDI.Video;
+using S.Media.Routing;
 
 namespace S.Media.NDI;
 
@@ -55,6 +56,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     private bool _hasLastResolvedVideoPts;
     private bool _hasVideoFormat;
     private bool _presentVideoByAbsoluteTimecode;
+    private readonly bool _paceRouterFromIngestClock;
     private bool _disposed;
     private int _captureThreadStuck;
     private NDIConnectionState _state = NDIConnectionState.Opening;
@@ -121,6 +123,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         _receiveAudio = options.ReceiveAudio;
         _receiveVideo = options.ReceiveVideo;
         _presentVideoByAbsoluteTimecode = options.PresentVideoByAbsoluteTimecode;
+        _paceRouterFromIngestClock = options.PaceRouterFromIngestClock;
         _audioCapacityDuration = audioRingCapacityDuration;
         _audioMinBufferedDuration = resolvedMinBuffered;
         _maxQueuedVideoFrames = options.MaxQueuedVideoFrames;
@@ -184,6 +187,11 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     public IVideoSource Video { get; }
 
     public IPlaybackClock IngestClock => _ingestClock;
+
+    /// <summary>True when this receiver was opened with <see cref="NDISourceOptions.PaceRouterFromIngestClock"/>,
+    /// i.e. its <see cref="Audio"/> adapter advertises <see cref="IngestClock"/> through
+    /// <see cref="IIngestPacedSource"/> and a player will pace its audio router from ingest media time.</summary>
+    public bool PacesRouterFromIngestClock => _paceRouterFromIngestClock;
 
     private static int _liveConnectionCount;
 
@@ -754,8 +762,14 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         timing?.SetOutcome($"state={State} audioOverflowFloats={AudioOverflowFloats} videoOverflowFrames={VideoOverflowFrames}");
     }
 
-    private sealed class AudioSourceAdapter(NDISource owner) : IAudioSource, IDisposable
+    private sealed class AudioSourceAdapter(NDISource owner) : IAudioSource, IIngestPacedSource, IDisposable
     {
+        /// <summary>Non-null only when the receiver was opened with
+        /// <see cref="NDISourceOptions.PaceRouterFromIngestClock"/> - the ingest clock exists either way, but
+        /// pacing is never auto-promoted from its existence (review §6).</summary>
+        public IPlaybackClock? IngestPacingClock =>
+            owner._paceRouterFromIngestClock && owner._receiveAudio ? owner._ingestClock : null;
+
         public AudioFormat Format =>
             owner._receiveAudio
                 ? owner.AudioFormat

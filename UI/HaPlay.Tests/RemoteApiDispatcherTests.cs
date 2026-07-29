@@ -1,5 +1,7 @@
 using Avalonia.Headless;
+using Avalonia.Threading;
 using System.Diagnostics;
+using System.Reflection;
 using HaPlay.Models;
 using HaPlay.Remote;
 using HaPlay.ViewModels;
@@ -11,10 +13,18 @@ namespace HaPlay.Tests;
 /// HTTP (the listener is a thin shell over <see cref="RemoteApiDispatcher.ExecuteAsync"/>).</summary>
 public sealed class RemoteApiDispatcherTests
 {
+    /// <summary>Runs <paramref name="action"/> on the headless UI session and OBSERVES the result.
+    /// <c>Dispatch</c> hands back a Task; discarding it (the shape this helper used to have) threw
+    /// every assertion failure inside the body away, so each of these tests passed no matter what
+    /// the dispatcher answered. Blocking here is safe - the body is synchronous, and the xunit
+    /// thread is not the session's dispatcher thread (the async sibling is
+    /// <see cref="HeadlessDispatchExtensions.DispatchAsync(HeadlessUnitTestSession, Func{Task}, CancellationToken)"/>).</summary>
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly)
-            .Dispatch(action, CancellationToken.None);
+            .Dispatch(action, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
 
     private static (RemoteApiDispatcher Dispatcher, CuePlayerViewModel Cues, SoundboardWorkspaceViewModel Soundboard,
         List<MediaPlayerViewModel> Players) CreateDispatcher()
@@ -77,6 +87,69 @@ public sealed class RemoteApiDispatcherTests
 
             cues.AddEmptyMediaCue(); // selected media cue makes Go available
             Assert.Equal(200, Execute(dispatcher, "/api/v1/cues/go").Status);
+        });
+    }
+
+    [Fact]
+    public void CueByReference_ResolvesByNumberAndId_UnknownIs404()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, cues, _, _) = CreateDispatcher();
+            var opener = new MediaCueNode
+            {
+                Number = "1",
+                Label = "Opener",
+                Source = new FilePlaylistItem("/tmp/opener.wav"),
+            };
+            cues.ApplyCueLists([new CueList { Nodes = [opener] }]);
+
+            // The operator-facing cue NUMBER first (case-insensitive), then the cue's Guid id.
+            var byNumber = Execute(dispatcher, "/api/v1/cues/1/go");
+            Assert.Equal(200, byNumber.Status);
+            Assert.Contains("go 1", byNumber.Body);
+            Assert.Equal(200, Execute(dispatcher, $"/api/v1/cues/{opener.Id}/go").Status);
+
+            // Unknown reference and unknown verb.
+            var unknown = Execute(dispatcher, "/api/v1/cues/99/go");
+            Assert.Equal(404, unknown.Status);
+            Assert.Contains("99", unknown.Body);
+            Assert.Equal(404, Execute(dispatcher, "/api/v1/cues/1/eject").Status);
+
+            // /stop is per-row: 409 while the cue is not running.
+            Assert.Equal(409, Execute(dispatcher, "/api/v1/cues/1/stop").Status);
+        });
+    }
+
+    [Fact]
+    public void CueByReferenceGo_UnfireableCue_Is409_NotAMisleading200()
+    {
+        DispatchUi(static () =>
+        {
+            // A group that resolves to nothing used to be DROPPED by the fire path, which then fell
+            // through to the standby cue: the API answered 200 while a completely unrelated cue
+            // started playing. It must fail instead.
+            var (dispatcher, cues, _, _) = CreateDispatcher();
+            var empty = new CueGroupNode { Number = "1", Label = "Empty group", Children = [] };
+            var other = new MediaCueNode
+            {
+                Number = "2",
+                Label = "Not what you asked for",
+                Source = new FilePlaylistItem("/tmp/other.wav"),
+            };
+            cues.ApplyCueLists([new CueList { Nodes = [empty, other] }]);
+            var started = new List<Guid>();
+            cues.MediaCueExecutor = (m, _) => { started.Add(m.Id); return Task.FromResult<string?>(null); };
+
+            var result = Execute(dispatcher, "/api/v1/cues/1/go");
+
+            Assert.Equal(409, result.Status);
+            Assert.Contains("\"ok\":false", result.Body);
+            Assert.Contains("nothing to fire", result.Body);
+            Assert.Empty(started); // and above all: the OTHER cue did not start
+
+            // The playable sibling still fires normally.
+            Assert.Equal(200, Execute(dispatcher, "/api/v1/cues/2/go").Status);
         });
     }
 
@@ -197,7 +270,12 @@ public sealed class RemoteApiDispatcherTests
             Assert.Equal(200, Execute(dispatcher, "/api/v1/soundboards/1/3/stop").Status);
             Assert.Equal([tile.Id], stopped);
 
-            // Edit mode must not turn a remote trigger into a selection.
+            // Edit mode must not turn a remote trigger into a selection. The tile has to be back at
+            // rest first: /fade and /stop go straight to their callbacks (they are not taps), so
+            // nothing has told the VM the sound ended - and a bare tap on a tile the VM still thinks
+            // is PLAYING is a stop, not a play. (This assertion never actually ran until DispatchUi
+            // started observing its body.)
+            soundboard.OnSoundEnded(tile.Id);
             soundboard.IsEditMode = true;
             Assert.Equal(200, Execute(dispatcher, "/api/v1/soundboards/1/3").Status);
             Assert.Equal(3, played.Count);
@@ -306,9 +384,14 @@ public sealed class RemoteApiDispatcherTests
             // from that same UI thread. A synchronous handler drain waits on itself here (the old 2 s stall).
             request = http.PostAsync($"{server.BaseUrl}/api/v1/cues/stop", content: null);
             Thread.Sleep(100);
+            var acceptLoop = PrivateField<Task>(server, "_acceptLoop"); // Stop nulls it; capture first
             var started = Stopwatch.GetTimestamp();
             server.Stop();
-            return Stopwatch.GetElapsedTime(started);
+            var stopCost = Stopwatch.GetElapsedTime(started);
+
+            // Measured BEFORE this: the drain below must not count towards the regression bound.
+            DrainListenerHandlers(server, acceptLoop);
+            return stopCost;
         }, CancellationToken.None);
 
         // Regression guard: the pre-fix bug blocked the UI thread ~2 s (a synchronous handler drain waiting on
@@ -347,6 +430,61 @@ public sealed class RemoteApiDispatcherTests
         {
             RemoteApi.BaseUrl = previousBase;
         }
+    }
+
+    /// <summary>
+    /// Waits out the REST listener's still-running request handlers, on the UI thread that owns this test's
+    /// headless <c>Application</c>.
+    /// <para>WHY (a real flake, caught on <c>Status_ReportsCounts</c> in a contended full-solution run):
+    /// <see cref="RestApiServer.Stop"/> drains ASYNCHRONOUSLY on purpose - that is the very regression this
+    /// test guards - so without this the handler is still alive on a thread-pool thread when the test
+    /// returns. Its first act is <c>Dispatcher.UIThread.CheckAccess()</c> (RemoteApiDispatcher.cs:94). Test
+    /// isolation is PerTest, so the session unbinds <c>Dispatcher.UIThread</c> the moment this dispatch ends;
+    /// a handler that reaches that line afterwards REBINDS UIThread to its own pool thread, and the next
+    /// test's application init then dies in the compositor with "The calling thread cannot access this
+    /// object because a different thread owns it". Whichever test ran next took the blame.</para>
+    /// Deterministic by construction rather than by waiting: the accept loop exits on Stop's cancellation and
+    /// (production's own invariant) no handler can be tracked after that, so an empty in-flight set is proof
+    /// that nothing else will touch the dispatcher. Pumping is required because a queued
+    /// <c>Dispatcher.UIThread.InvokeAsync</c> only completes while the UI thread runs jobs.
+    /// </summary>
+    private static void DrainListenerHandlers(RestApiServer server, Task? acceptLoop)
+    {
+        var limit = TimeSpan.FromSeconds(10);
+        var elapsed = Stopwatch.StartNew();
+        while (acceptLoop is { IsCompleted: false } && elapsed.Elapsed < limit)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(5);
+        }
+
+        while (InFlightHandlerCount(server) > 0 && elapsed.Elapsed < limit)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(5);
+        }
+
+        Assert.True(acceptLoop is null or { IsCompleted: true }, "the REST accept loop did not exit after Stop");
+        Assert.Equal(0, InFlightHandlerCount(server));
+    }
+
+    private static int InFlightHandlerCount(RestApiServer server)
+    {
+        var gate = PrivateField<object>(server, "_inflightGate")!;
+        var inflight = PrivateField<HashSet<Task>>(server, "_inflight")!;
+        lock (gate)
+            return inflight.Count;
+    }
+
+    /// <summary>Reads a private <see cref="RestApiServer"/> field - the drain above needs the listener's own
+    /// bookkeeping and the type deliberately exposes no completion hook. Fails loudly if a field is renamed
+    /// rather than silently skipping the drain (that would bring the flake back).</summary>
+    private static T? PrivateField<T>(RestApiServer server, string name)
+        where T : class
+    {
+        var field = typeof(RestApiServer).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.True(field is not null, $"RestApiServer.{name} is gone - update this test's listener drain");
+        return (T?)field!.GetValue(server);
     }
 
     private static int GetFreePort()

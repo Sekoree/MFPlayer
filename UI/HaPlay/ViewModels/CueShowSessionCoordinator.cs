@@ -113,10 +113,11 @@ public sealed class CueShowSessionCoordinator
     // for the cue drawer's operator-triggered "next preset" action.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, S.Media.Visualizer.ProjectM.ProjectMVisualSource>
         _cueVisualizerSources = new();
-    // Every node collection in the selected cue tree (root + nested groups). Watching only the root missed songs
-    // inserted into a Group until a later property probe happened to dirty the graph.
+    // Every node collection in EVERY loaded cue tree (root + nested groups, all lists). Watching only the
+    // root missed songs inserted into a Group until a later property probe happened to dirty the graph;
+    // watching only the SELECTED list missed edits to the other lists the merged session also maps.
     private readonly HashSet<INotifyCollectionChanged> _subscribedCueNodeCollections = new();
-    private CueListEditorViewModel? _subscribedCueGraphList;
+    private readonly List<CueListEditorViewModel> _subscribedCueGraphLists = new();
     private readonly HashSet<CueCompositionViewModel> _subscribedCueCompositions = new();
     private readonly HashSet<CueVideoOutputBindingViewModel> _subscribedCueOutputBindings = new();
     private DispatcherTimer? _cueReloadDebounce;
@@ -233,13 +234,20 @@ public sealed class CueShowSessionCoordinator
             {
                 if (e.PropertyName == nameof(CuePlayer.SelectedCueList))
                 {
-                    SubscribeCueGraphForReload(); // re-bind model watches to the newly-selected list
-                    MarkCueShowGraphDirty(preserveMatchingCompositions: false);
-                    // A list switch is discrete → reload now, except while project restore is deliberately
-                    // sequencing output-window creation before composition-window creation.
+                    // The merged document contains EVERY list and is therefore selection-independent, so a
+                    // list switch no longer rebuilds it (which would have cut whatever the other lists'
+                    // schedules/triggers are playing in the same session). What the switch does change is
+                    // which list wins a contested output line and which list pre-rolls - reconcile the
+                    // leases. Suspended during project restore, whose own reload follows.
                     if (Volatile.Read(ref _automaticReloadSuspendCount) == 0)
-                        FireAndLog(ReloadCueShowSessionAsync(), "cue ShowSession reload (list switch)");
+                        FireAndLog(ReconcileCueOutputTopologyAsync(), "cue output reconcile (list switch)");
                 }
+            };
+            // A list added / removed / replaced (project load) changes the merged document itself.
+            CuePlayer.CueLists.CollectionChanged += (_, _) =>
+            {
+                SubscribeCueGraphForReload(); // watch the new set of lists
+                ScheduleCueShowSessionReload(preserveMatchingCompositions: false);
             };
             SubscribeCueGraphForReload();
             MarkCueShowGraphDirty(preserveMatchingCompositions: false);
@@ -316,14 +324,16 @@ public sealed class CueShowSessionCoordinator
                 // Audio-feed routing (#26): FeedAll = every clip; else the cue's selected sources plus
                 // media cues flagged "send to visualizer". The set is snapshotted HERE (UI thread) and
                 // read lock-free by the session-dispatcher filter; refire the viz cue after changing it.
-                var listModel = CuePlayer.SelectedCueList?.ToModel();
+                // All loaded lists: the visualizer cue itself may have been fired from a non-selected list,
+                // and every list's clips play into the same session (composition ids are Guids).
+                var listModels = SnapshotCueLists().ConvertAll(entry => entry.List);
                 Func<string, bool>? feedFilter = null;
                 if (!viz.FeedAll)
                 {
                     var allowed = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var id in viz.FeedCueIds)
                         allowed.Add(id.ToString());
-                    if (listModel is not null)
+                    foreach (var listModel in listModels)
                         foreach (var node in FlattenCueNodes(listModel.Nodes))
                             if (node is MediaCueNode { SendToVisualizer: true } m)
                                 allowed.Add(m.Id.ToString());
@@ -337,7 +347,9 @@ public sealed class CueShowSessionCoordinator
                 foreach (var (compGuid, places) in groups)
                 {
                     var compId = compGuid.ToString();
-                    var comp = listModel?.Compositions.FirstOrDefault(c => c.Id == compGuid);
+                    var comp = listModels
+                        .SelectMany(listModel => listModel.Compositions)
+                        .FirstOrDefault(c => c.Id == compGuid);
                     if (comp is null)
                     {
                         firstError ??= "the visualizer cue's placement points at a composition that no longer exists";
@@ -872,20 +884,23 @@ public sealed class CueShowSessionCoordinator
             state, videoSubmitted, videoLateRecent, 0, 0, audioEnqueued, audioDropped);
     }
 
-    /// <summary>Watches structural parts of the selected cue list that are compiled into a ShowDocument:
-    /// cue nodes, composition definitions, and composition/output bindings. Mapping geometry has its own live
-    /// update path and is deliberately excluded from reload-on-property-change so an editor drag cannot stop
-    /// the running composition.</summary>
+    /// <summary>Watches the structural parts of EVERY loaded cue list that are compiled into the merged
+    /// ShowDocument: cue nodes, composition definitions, and composition/output bindings. All lists, not
+    /// just the selected one - the cross-list session maps them all, so an edit in a list the operator is
+    /// not looking at must still rebuild the document that its schedules/triggers fire from. Mapping
+    /// geometry has its own live update path and is deliberately excluded from reload-on-property-change
+    /// so an editor drag cannot stop the running composition.</summary>
     private void SubscribeCueGraphForReload()
     {
         foreach (var collection in _subscribedCueNodeCollections)
             collection.CollectionChanged -= OnCueNodesChanged;
         _subscribedCueNodeCollections.Clear();
-        if (_subscribedCueGraphList is not null)
+        foreach (var list in _subscribedCueGraphLists)
         {
-            _subscribedCueGraphList.Compositions.CollectionChanged -= OnCueCompositionsChanged;
-            _subscribedCueGraphList.VideoOutputs.CollectionChanged -= OnCueOutputBindingsChanged;
+            list.Compositions.CollectionChanged -= OnCueCompositionsChanged;
+            list.VideoOutputs.CollectionChanged -= OnCueOutputBindingsChanged;
         }
+        _subscribedCueGraphLists.Clear();
         foreach (var composition in _subscribedCueCompositions)
             composition.PropertyChanged -= OnCueCompositionPropertyChanged;
         foreach (var binding in _subscribedCueOutputBindings)
@@ -893,13 +908,14 @@ public sealed class CueShowSessionCoordinator
         _subscribedCueCompositions.Clear();
         _subscribedCueOutputBindings.Clear();
 
-        _subscribedCueGraphList = CuePlayer.SelectedCueList;
-        if (_subscribedCueGraphList is null)
-            return;
-
+        _subscribedCueGraphLists.AddRange(CuePlayer.CueLists);
         RebindCueNodeCollectionSubscriptions();
-        _subscribedCueGraphList.Compositions.CollectionChanged += OnCueCompositionsChanged;
-        _subscribedCueGraphList.VideoOutputs.CollectionChanged += OnCueOutputBindingsChanged;
+        foreach (var list in _subscribedCueGraphLists)
+        {
+            list.Compositions.CollectionChanged += OnCueCompositionsChanged;
+            list.VideoOutputs.CollectionChanged += OnCueOutputBindingsChanged;
+        }
+
         RebindCueGraphItemSubscriptions();
     }
 
@@ -908,8 +924,6 @@ public sealed class CueShowSessionCoordinator
         foreach (var collection in _subscribedCueNodeCollections)
             collection.CollectionChanged -= OnCueNodesChanged;
         _subscribedCueNodeCollections.Clear();
-        if (_subscribedCueGraphList is null)
-            return;
 
         void SubscribeTree(ObservableCollection<CueNodeViewModel> nodes)
         {
@@ -919,7 +933,8 @@ public sealed class CueShowSessionCoordinator
                 SubscribeTree(node.Children);
         }
 
-        SubscribeTree(_subscribedCueGraphList.Nodes);
+        foreach (var list in _subscribedCueGraphLists)
+            SubscribeTree(list.Nodes);
     }
 
     private void OnCueNodesChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -952,17 +967,19 @@ public sealed class CueShowSessionCoordinator
         _subscribedCueCompositions.Clear();
         _subscribedCueOutputBindings.Clear();
 
-        if (_subscribedCueGraphList is null)
-            return;
-        foreach (var composition in _subscribedCueGraphList.Compositions)
+        foreach (var list in _subscribedCueGraphLists)
         {
-            _subscribedCueCompositions.Add(composition);
-            composition.PropertyChanged += OnCueCompositionPropertyChanged;
-        }
-        foreach (var binding in _subscribedCueGraphList.VideoOutputs)
-        {
-            _subscribedCueOutputBindings.Add(binding);
-            binding.PropertyChanged += OnCueOutputBindingPropertyChanged;
+            foreach (var composition in list.Compositions)
+            {
+                if (_subscribedCueCompositions.Add(composition))
+                    composition.PropertyChanged += OnCueCompositionPropertyChanged;
+            }
+
+            foreach (var binding in list.VideoOutputs)
+            {
+                if (_subscribedCueOutputBindings.Add(binding))
+                    binding.PropertyChanged += OnCueOutputBindingPropertyChanged;
+            }
         }
     }
 
@@ -1195,13 +1212,43 @@ public sealed class CueShowSessionCoordinator
         Trace.LogInformation("HaPlay: cue output detached before runtime teardown - line={Line}", lineId);
     }
 
+    /// <summary>The loaded cue lists as models, in COLLECTION order. Deliberately independent of which
+    /// list is selected: the merged document (cue numbering included) must not change when the operator
+    /// switches lists, or a switch would silently invalidate the session's per-group "last fired number"
+    /// state without a reload.</summary>
+    private List<(Guid ListId, CueList List)> SnapshotCueLists()
+    {
+        var lists = new List<(Guid ListId, CueList List)>(CuePlayer.CueLists.Count);
+        foreach (var list in CuePlayer.CueLists)
+            lists.Add((list.RuntimeId, list.ToModel()));
+        return lists;
+    }
+
+    /// <summary>Every list's video-output bindings, SELECTED LIST FIRST - the tie-break for the lease
+    /// risk this workstream had to close: a physical output line bound by two lists is driven by the
+    /// first binding here (single-holder leases), i.e. by the list the operator is looking at.</summary>
+    private IEnumerable<CueVideoOutputBinding> EnumerateVideoOutputBindings(
+        IReadOnlyList<(Guid ListId, CueList List)> lists)
+    {
+        var selectedId = CuePlayer.SelectedCueList?.RuntimeId;
+        foreach (var entry in lists)
+            if (entry.ListId == selectedId)
+                foreach (var binding in entry.List.VideoOutputs)
+                    yield return binding;
+        foreach (var entry in lists)
+            if (entry.ListId != selectedId)
+                foreach (var binding in entry.List.VideoOutputs)
+                    yield return binding;
+    }
+
     private async Task AttachCueOutputLineAsync(Guid lineId)
     {
         if (_cueShowSession is not { } session || _cueAcquiredVideoLines.Contains(lineId))
             return;
-        var model = CuePlayer.SelectedCueList?.ToModel();
-        var binding = model?.VideoOutputs.FirstOrDefault(candidate => candidate.OutputLineId == lineId);
-        if (model is null || binding is null)
+        var lists = SnapshotCueLists();
+        var binding = EnumerateVideoOutputBindings(lists)
+            .FirstOrDefault(candidate => candidate.OutputLineId == lineId);
+        if (binding is null)
             return;
 
         var output = OutputManagement.AcquireVideoOutputForLine(lineId);
@@ -1212,7 +1259,7 @@ public sealed class CueShowSessionCoordinator
         }
 
         var effectiveMappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(
-            model, OutputManagement.DefinitionsSnapshot);
+            lists.Select(entry => entry.List).ToList(), OutputManagement.DefinitionsSnapshot);
         var mapping = effectiveMappings.GetValueOrDefault(binding.Id);
         var compositionId = binding.CompositionId.ToString();
         var lease = new ClipCompositionOutputLease(
@@ -1265,9 +1312,12 @@ public sealed class CueShowSessionCoordinator
         if (_cueShowSession is null || CuePlayer.SelectedCueList is null)
             return;
 
-        var model = CuePlayer.SelectedCueList.ToModel();
+        var lists = SnapshotCueLists();
         var availableLines = OutputManagement.DefinitionsSnapshot.Select(d => d.Id).ToHashSet();
-        var desiredByLine = model.VideoOutputs
+        // Per-list lease dedupe: two lists may bind the same physical line to different compositions.
+        // GroupBy keeps first-seen order, and the snapshot leads with the selected list, so the visible
+        // list drives the line and the other binding is simply not leased (single-holder leases).
+        var desiredByLine = EnumerateVideoOutputBindings(lists)
             .Where(binding => binding.OutputLineId != Guid.Empty && availableLines.Contains(binding.OutputLineId))
             .GroupBy(binding => binding.OutputLineId)
             .ToDictionary(group => group.Key, group => group.First());
@@ -1287,7 +1337,7 @@ public sealed class CueShowSessionCoordinator
             if (!_cueAcquiredVideoLines.Contains(lineId))
                 await AttachCueOutputLineAsync(lineId).ConfigureAwait(true);
 
-        var unavailable = model.VideoOutputs
+        var unavailable = EnumerateVideoOutputBindings(lists)
             .Where(binding => binding.OutputLineId != Guid.Empty
                               && (!_cueAcquiredVideoLines.Contains(binding.OutputLineId)
                                   || !availableLines.Contains(binding.OutputLineId)))
@@ -1572,11 +1622,14 @@ public sealed class CueShowSessionCoordinator
     /// <summary>One reload pass (UI thread). Returns false on failure (logged; the graph stays dirty).</summary>
     private async Task<bool> ReloadCueShowSessionOnceAsync(bool preserveMatchingCompositions)
     {
-        if (_cueShowSession is not { } session || CuePlayer.SelectedCueList is not { } list)
+        if (_cueShowSession is not { } session || CuePlayer.SelectedCueList is null)
             return true; // nothing to load - not a failure
         try
         {
-            var model = list.ToModel();
+            // Cross-list merged session (workstream A): EVERY loaded list is mapped into the one document,
+            // in a selection-independent order. Only the runtime transport groups are list-scoped;
+            // cue/clip/composition ids are the authored Guids and stay globally unique as they are.
+            var lists = SnapshotCueLists();
 
             // Mapping=null historically meant "raw full canvas" to the runtime, but the layout editor presents
             // an unmapped output as an implicit native-sized tile (for example 1280x720 at the top-left of a
@@ -1584,7 +1637,7 @@ public sealed class CueShowSessionCoordinator
             // the first Save, at which point it appeared to resize from the full composition to the tile. Resolve
             // those same implicit tiles up front so initial playback and the editor describe one layout.
             var effectiveMappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(
-                model, OutputManagement.DefinitionsSnapshot);
+                lists.Select(entry => entry.List).ToList(), OutputManagement.DefinitionsSnapshot);
 
             // (UI thread) Line holds across the reload (NXT-20): lines still bound by the new model KEEP their
             // hold and output - no release→re-acquire churn, so the idle slate never touches a line that stays
@@ -1597,7 +1650,7 @@ public sealed class CueShowSessionCoordinator
             foreach (var outs in _cueVideoOutputs.Values)
                 foreach (var o in outs)
                     previousOutputsByLine.TryAdd(o.LineId, o.Output);
-            var neededLines = model.VideoOutputs
+            var neededLines = EnumerateVideoOutputBindings(lists)
                 .Where(b => b.OutputLineId != Guid.Empty)
                 .Select(b => b.OutputLineId)
                 .ToHashSet();
@@ -1626,12 +1679,15 @@ public sealed class CueShowSessionCoordinator
             var videoOutputs = new Dictionary<string, CueShowVideoOutput[]>(StringComparer.Ordinal);
             var usedThisPass = new HashSet<Guid>();
             var unavailableLines = new List<string>();
-            foreach (var binding in model.VideoOutputs)
+            foreach (var binding in EnumerateVideoOutputBindings(lists))
             {
                 if (binding.OutputLineId == Guid.Empty)
                     continue;
+                // One physical line drives one binding (parity: a duplicate inside a list was dropped before
+                // too). Across lists this is the merged session's lease dedupe: the selected list leads the
+                // snapshot, so it wins a contested line and no second holder is ever acquired.
                 if (!usedThisPass.Add(binding.OutputLineId))
-                    continue; // one physical line drives one binding (parity: a duplicate was dropped before too)
+                    continue;
 
                 IVideoOutput? output;
                 if (_cueAcquiredVideoLines.Contains(binding.OutputLineId))
@@ -1668,7 +1724,7 @@ public sealed class CueShowSessionCoordinator
             }
             _cueVideoOutputs = videoOutputs;
 
-            var doc = HaPlayShowMapper.ToShowDocument(model, OutputManagement.DefinitionsSnapshot);
+            var doc = HaPlayShowMapper.ToShowDocument(lists, OutputManagement.DefinitionsSnapshot);
             // NXT-21: await the load - blocking the UI thread on the session dispatcher would turn any
             // dispatcher stall into a whole-app freeze.
             await session.LoadDocumentAsync(doc, preserveMatchingCompositions).ConfigureAwait(true);
@@ -1703,9 +1759,9 @@ public sealed class CueShowSessionCoordinator
                 .Where(cueId => cueId != Guid.Empty)
                 .ToHashSet();
             Trace.LogInformation(
-                "HaPlay: cue ShowSession reloaded - {Cues} cues, {Clips} clips, {Comps} compositions, {Lines} video lines, preserveVisualizers={Preserve}",
-                doc.Cues.Count, doc.Clips.Count, doc.Compositions.Count, _cueAcquiredVideoLines.Count,
-                preserveMatchingCompositions);
+                "HaPlay: cue ShowSession reloaded - {Lists} lists, {Cues} cues, {Clips} clips, {Comps} compositions, {Lines} video lines, preserveVisualizers={Preserve}",
+                lists.Count, doc.Cues.Count, doc.Clips.Count, doc.Compositions.Count,
+                _cueAcquiredVideoLines.Count, preserveMatchingCompositions);
             return true;
         }
         catch (Exception ex)
@@ -1744,7 +1800,14 @@ public sealed class CueShowSessionCoordinator
         // current graph as-is.
         if (!CuePlayer.HasActiveCues)
             await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
-        await showSession.WarmUpcomingAsync(count: count).ConfigureAwait(false);
+        // Standby/pre-roll stays SELECTED-LIST ONLY (deliberate - warming every loaded list would open a
+        // decoder per list for cues nobody is about to press GO on). The merged document scopes each list's
+        // ungrouped cues to their own transport group, so warming the selected list's group is exactly the
+        // window the old single-list document warmed through ShowSession's default group.
+        var group = CuePlayer.SelectedCueList is { } selected
+            ? HaPlayShowMapper.RuntimeGroupId(selected.RuntimeId)
+            : ShowSession.DefaultGroup;
+        await showSession.WarmUpcomingAsync(group, count).ConfigureAwait(false);
     }
 
     /// <summary>Stops every soundboard voice (project-load teardown). No-op when the session is unavailable.</summary>

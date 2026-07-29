@@ -72,6 +72,17 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(FadeProgressPercent))]
     private long _fadeRemainingMs;
 
+    /// <summary>Armed for a quantized launch: the tap landed and the tile fires at the board's next
+    /// quantum boundary. Tapping again disarms it (the tile never started, so there is nothing to
+    /// stop). Purely transient - never persisted.</summary>
+    [ObservableProperty]
+    private bool _isPendingLaunch;
+
+    /// <summary>Milliseconds until this tile's armed launch fires; drives the countdown label/pulse
+    /// while <see cref="IsPendingLaunch"/> is set.</summary>
+    [ObservableProperty]
+    private long _pendingLaunchRemainingMs;
+
     /// <summary>Mirrors the workspace edit mode (propagated by the owning board) so the grid can
     /// show unbound tiles as drop targets without cross-template ancestor bindings.</summary>
     [ObservableProperty]
@@ -153,6 +164,8 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
         PositionMs = 0;
         IsFading = false;
         FadeRemainingMs = 0;
+        IsPendingLaunch = false;
+        PendingLaunchRemainingMs = 0;
     }
 
     public SoundboardTileConfig ToConfig() => new()

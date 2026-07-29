@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using S.Media.Session;
 
 namespace HaPlay.ViewModels;
 
@@ -46,6 +47,23 @@ public sealed partial class SoundboardViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _defaultLoop;
+
+    // ----- Launch quantization (board-global, Ableton-style) --------------------------------------
+
+    /// <summary>Tempo the board's launch quantization is measured in.</summary>
+    [ObservableProperty]
+    private double _bpm = 120;
+
+    /// <summary>Launch quantization in beats; 0 = off (tiles fire on tap, the classic behavior).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LaunchQuantum))]
+    private double _launchQuantizeBeats;
+
+    partial void OnBpmChanged(double value) => OnPropertyChanged(nameof(LaunchQuantum));
+
+    /// <summary>The board's launch quantum as a duration, or <see cref="TimeSpan.Zero"/> when
+    /// quantization is off / the tempo is unusable.</summary>
+    public TimeSpan LaunchQuantum => SoundboardQuantization.BeatsToQuantum(Bpm, LaunchQuantizeBeats);
 
     /// <summary>Workspace edit mode, pushed down so every tile (including ones created by grid
     /// resizes) renders its drop-target state without ancestor bindings.</summary>
@@ -131,6 +149,8 @@ public sealed partial class SoundboardViewModel : ObservableObject
         DefaultVolume = Math.Clamp(DefaultVolume, 0, 1),
         DefaultFadeOutMs = Math.Max(0, DefaultFadeOutMs),
         DefaultLoop = DefaultLoop,
+        Bpm = Bpm > 0 ? Bpm : 120,
+        LaunchQuantizeBeats = Math.Max(0, LaunchQuantizeBeats),
         // Only bound tiles persist - blanks are derivable from the grid size.
         Tiles = Tiles.Where(t => t.IsBound).Select(t => t.ToConfig()).ToList(),
     };
@@ -144,6 +164,8 @@ public sealed partial class SoundboardViewModel : ObservableObject
             DefaultVolume = Math.Clamp(config.DefaultVolume, 0, 1),
             DefaultFadeOutMs = Math.Max(0, config.DefaultFadeOutMs),
             DefaultLoop = config.DefaultLoop,
+            Bpm = config.Bpm > 0 ? config.Bpm : 120,
+            LaunchQuantizeBeats = Math.Max(0, config.LaunchQuantizeBeats),
             Rows = Math.Clamp(config.Rows, 1, MaxRows),
             Columns = Math.Clamp(config.Columns, 1, MaxColumns),
         };

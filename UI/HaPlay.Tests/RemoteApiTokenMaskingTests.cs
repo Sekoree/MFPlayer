@@ -10,8 +10,10 @@ public sealed class RemoteApiTokenMaskingTests
     // token as plain selectable text on the Project workspace). It is masked until the operator explicitly
     // reveals it, and clearing the token also drops the reveal state so a later token starts masked again.
     [Fact]
-    public void Token_IsMasked_UntilRevealed_AndClearingResetsReveal()
-    {
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which
+    // threw away every assertion failure raised inside the dispatched lambda (the test passed
+    // no matter what the code under test did).
+    public Task Token_IsMasked_UntilRevealed_AndClearingResetsReveal() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(RemoteApiTokenMaskingTests).Assembly)
             .Dispatch(static () =>
@@ -36,5 +38,4 @@ public sealed class RemoteApiTokenMaskingTests
                 Assert.True(string.IsNullOrEmpty(vm.RestApiAccessToken));
                 Assert.False(vm.RevealRestApiToken);
             }, CancellationToken.None);
-    }
 }

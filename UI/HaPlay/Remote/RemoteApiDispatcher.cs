@@ -177,20 +177,28 @@ public sealed class RemoteApiDispatcher
     }
 
     /// <summary>Per-cue transport: <c>{cue}</c> is the operator-facing cue NUMBER resolved in the
-    /// selected list (the labels the operator reads, like every other address here), falling back to
-    /// the cue's Guid id. <c>/go</c> fires through the exact operator-selected GO path (pre-waits,
+    /// selected list first (the labels the operator reads, like every other address here), falling
+    /// back to the cue's Guid id - and then to a number in the other loaded lists, since the
+    /// cross-list merged session makes every list's cues fireable. <c>/go</c> fires through the exact operator-selected GO path (pre-waits,
     /// group semantics, jump-chain reset, Now-Playing - identical to a manual fire); <c>/stop</c>
-    /// stops that one cue when it is running.</summary>
+    /// stops that one cue when it is running.
+    /// <para>The fire is kicked off without awaiting playback (the class contract), so <c>/go</c>
+    /// pre-checks <see cref="CuePlayerViewModel.CanFireCue"/> synchronously: a cue that resolves to
+    /// nothing (empty group, playlist group with no items) answers 409 instead of a 200 the caller
+    /// would read as "it played".</para></summary>
     private RemoteApiResult HandleCueByReference(string cueRef, string verb)
     {
         var cue = _cuePlayer.FindCueByReference(cueRef);
         if (cue is null)
             return RemoteApiResult.Fail(404,
-                $"Unknown cue '{cueRef}' - no cue number or id matches in the selected list.");
+                $"Unknown cue '{cueRef}' - no cue number or id matches in any loaded cue list.");
 
         switch (verb.ToLowerInvariant())
         {
             case "go":
+                if (!_cuePlayer.CanFireCue(cue))
+                    return RemoteApiResult.Fail(409,
+                        $"Cue '{cueRef}' has nothing to fire (an empty group, or a playlist group with no items).");
                 _ = _cuePlayer.FireTriggeredCueSafeAsync(
                     cue, nameof(Strings.CueRemoteFiredStatusFormat));
                 return RemoteApiResult.Ok($"go {DescribeCue(cue)}");

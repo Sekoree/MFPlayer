@@ -333,10 +333,22 @@ public partial class CuePlayerViewModel
     private void ToggleMidiLearnTrigger(CueTriggerBindingViewModel row) =>
         MidiLearnTarget = ReferenceEquals(MidiLearnTarget, row) ? null : row;
 
-    /// <summary>Edit-time veto for trigger hotkeys that clash with the configurable transport keys
-    /// (GO/Stop/Panic/…): the assignment is rejected and the clash surfaced on the status strip.
-    /// At dispatch time the transport keys would win anyway (the view checks them first); vetoing
-    /// here keeps the operator from authoring a binding that can never fire.</summary>
+    /// <summary>Gestures the cue view claims with HARDCODED handlers before it ever reaches the
+    /// trigger probe (<c>CuePlayerView.axaml.cs</c>): Ctrl+P toggles the preview, Ctrl+F focuses the
+    /// cue search box. Both test <c>KeyModifiers.HasFlag(Control)</c>, so every Ctrl(+…)+P / +F
+    /// combination is taken - hence the flag test rather than an equality test on the modifiers.</summary>
+    private static readonly (Avalonia.Input.Key Key, Avalonia.Input.KeyModifiers Modifier, string Display)[]
+        ReservedViewGestures =
+        [
+            (Avalonia.Input.Key.P, Avalonia.Input.KeyModifiers.Control, "Ctrl+P"),
+            (Avalonia.Input.Key.F, Avalonia.Input.KeyModifiers.Control, "Ctrl+F"),
+        ];
+
+    /// <summary>Edit-time veto for trigger hotkeys that clash with a key the cue view already
+    /// claims - the configurable transport keys (GO/Stop/Panic/…) AND the view's hardcoded
+    /// <see cref="ReservedViewGestures"/>: the assignment is rejected and the clash surfaced on the
+    /// status strip. At dispatch time those handlers would win anyway (the view checks them first);
+    /// vetoing here keeps the operator from authoring a binding that can never fire.</summary>
     internal bool ProbeTriggerHotkeyConflict(string gesture)
     {
         if (!CueHotkeyGesture.TryParse(gesture, out var key, out var modifiers))
@@ -352,6 +364,16 @@ public partial class CuePlayerViewModel
             {
                 StatusMessage = Strings.Format(
                     nameof(Strings.CueTriggerHotkeyConflictWarningFormat), transport);
+                return true;
+            }
+        }
+
+        foreach (var (reservedKey, reservedModifier, display) in ReservedViewGestures)
+        {
+            if (key == reservedKey && modifiers.HasFlag(reservedModifier))
+            {
+                StatusMessage = Strings.Format(
+                    nameof(Strings.CueTriggerHotkeyConflictWarningFormat), display);
                 return true;
             }
         }

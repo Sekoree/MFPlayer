@@ -52,6 +52,33 @@ public readonly record struct MediaPlayerOpenOptions(
     /// such as JACK commonly require their fixed device rate (typically 48 kHz).</summary>
     public int? TargetAudioSampleRate { get; init; }
 
+    /// <summary>
+    /// Opt-in (default <see langword="false"/>): for a <em>video-only</em> open (a video source and no audio
+    /// router) master the session clock from a <see cref="VideoPtsClock"/> fed by presented frame PTS instead
+    /// of leaving the free-running wall clock unmastered. Ignored when audio is wired - audio-mastered
+    /// playback is untouched - and when the open produced no video source.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Intended for <strong>ingest-paced</strong> video-only playout (NDI / capture): frames arrive at the
+    /// sender's rate, so pinning the playhead to the PTS actually presented makes the transport track the
+    /// sender's timeline instead of local wall time. Progress is guaranteed either way -
+    /// <see cref="VideoPtsClock.ElapsedSinceStart"/> keeps interpolating on wall time when frames stop, so a
+    /// stalled or sparse-PTS source cannot freeze the transport.
+    /// </para>
+    /// <para>
+    /// Off by default for two reasons that only bite file playback. (1) In
+    /// <see cref="VideoPresentationMode.Scheduled"/> mode presentation is gated on the playhead with
+    /// <see cref="VideoPlayer.EarlyTolerance"/> slack, so a frame presented slightly early pins the clock
+    /// forward and shortens the wall interval until the next frame - with a decode-ahead file source that
+    /// feedback compounds into measurably fast playback. (2) <see cref="MediaClock"/> is deliberately
+    /// monotonic: a master that steps backwards is folded into a new epoch rather than rewinding the
+    /// playhead, so PTS corrections can only ever ratchet the position <em>forward</em>. A caller that wants
+    /// PTS mastering for a file clip must accept both.
+    /// </para>
+    /// </remarks>
+    public bool MasterVideoOnlyClockFromPts { get; init; }
+
     public MediaPlayerOpenOptions()
         : this(
             TryHardwareAcceleration: true,

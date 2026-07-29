@@ -8,8 +8,10 @@ namespace HaPlay.Tests;
 public sealed class CueEmptyStateTests
 {
     [Fact]
-    public void HasNoCues_TogglesWhenCuesAreAdded()
-    {
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which
+    // threw away every assertion failure raised inside the dispatched lambda (the test passed
+    // no matter what the code under test did).
+    public Task HasNoCues_TogglesWhenCuesAreAdded() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CueEmptyStateTests).Assembly)
             .Dispatch(static () =>
@@ -29,5 +31,4 @@ public sealed class CueEmptyStateTests
                 Assert.False(vm.HasNoCues); // a cue now exists
                 Assert.True(raised);        // and the UI was notified to hide the CTA
             }, CancellationToken.None);
-    }
 }

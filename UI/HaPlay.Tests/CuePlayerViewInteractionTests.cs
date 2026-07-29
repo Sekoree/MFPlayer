@@ -1,8 +1,10 @@
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using HaPlay.Models;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 using HaPlay.Views;
@@ -12,18 +14,33 @@ namespace HaPlay.Tests;
 
 public sealed class CuePlayerViewInteractionTests
 {
+    // "Add group" is no longer a standalone Button: the authoring row collapsed every add-a-cue affordance
+    // into the "Add cue…" button's MenuFlyout (CuePlayerView.axaml, AddCueMenuButton). The old
+    // FindButtonByContent(Strings.AddGroupButton) could not match a MenuItem and threw "Sequence contains no
+    // matching element" - unnoticed for as long as DispatchUi discarded its Task. Open the flyout for real
+    // and raise the item's Click exactly as MenuItem.RaiseClick does, so the flyout's Command binding (which
+    // only resolves once the item is in the popup's tree) is still what's under test.
     [Fact]
-    public void AddGroupButton_Click_AddsGroupCue()
+    public void AddGroupMenuItem_Click_AddsGroupCue()
     {
         DispatchUi(() =>
         {
             var vm = new CuePlayerViewModel();
-            var view = new CuePlayerView { DataContext = vm };
-            var window = HostInWindow(view);
+            // Simple, not the Classic default: opening a flyout headless needs the overlay layer that only
+            // the PART_VisualLayerManager-naming Window templates enable. See HeadlessAppTheme.
+            var window = HostInWindow(new CuePlayerView { DataContext = vm }, AppBaseTheme.Simple);
             try
             {
-                var addGroup = FindButtonByContent(window, Strings.AddGroupButton);
-                ClickButton(window, addGroup);
+                var addCue = FindButtonByContent(window, Strings.AddCueMenuButton);
+                var flyout = Assert.IsType<MenuFlyout>(addCue.Flyout);
+                flyout.ShowAt(addCue);
+                Dispatcher.UIThread.RunJobs();
+
+                var addGroup = flyout.Items.OfType<MenuItem>()
+                    .First(m => string.Equals(m.Header?.ToString(), Strings.AddGroupButton, StringComparison.Ordinal));
+                Assert.NotNull(addGroup.Command); // the flyout's binding really resolved
+                addGroup.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Dispatcher.UIThread.RunJobs();
 
                 var selected = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
                 Assert.Equal(CueNodeKind.Group, selected.Kind);
@@ -66,8 +83,17 @@ public sealed class CuePlayerViewInteractionTests
             var window = HostInWindow(view);
             try
             {
+                // The button lives in the drawer's Audio tab, and a TabControl only realises the SELECTED
+                // tab's content - without this the lookup finds nothing (it threw "Sequence contains no
+                // matching element", unnoticed while DispatchUi discarded its Task).
+                var tabs = view.FindControl<TabControl>("CueDrawerTabs")!;
+                tabs.SelectedItem = tabs.Items.OfType<TabItem>()
+                    .First(t => string.Equals(t.Header?.ToString(), Strings.AudioTabLabel, StringComparison.Ordinal));
+                Dispatcher.UIThread.RunJobs();
+
                 var addRoute = FindButtonByContent(window, Strings.AddAudioRouteButton);
                 ClickButton(window, addRoute);
+                Dispatcher.UIThread.RunJobs();
 
                 Assert.Single(media.AudioRoutes);
                 Assert.Single(vm.VisibleAudioRoutes);
@@ -260,10 +286,17 @@ public sealed class CuePlayerViewInteractionTests
         });
     }
 
+    /// <summary>Runs <paramref name="action"/> on the headless UI session and OBSERVES the result.
+    /// <c>Dispatch</c> hands back a Task; discarding it (the shape this helper used to have) threw every
+    /// assertion failure inside the body away, so these tests passed no matter what the code under test
+    /// did. Blocking here is safe - the body is synchronous and the xunit thread is not the session's
+    /// dispatcher thread (the async sibling is <see cref="HeadlessDispatchExtensions.DispatchAsync"/>).</summary>
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CuePlayerViewInteractionTests).Assembly)
-            .Dispatch(action, CancellationToken.None);
+            .Dispatch(action, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
 
     private static void PumpUntil(Func<bool> condition, TimeSpan timeout)
     {
@@ -271,13 +304,19 @@ public sealed class CuePlayerViewInteractionTests
         var deadline = DateTime.UtcNow + timeout;
         while (!condition() && DateTime.UtcNow < deadline)
         {
-            session.Dispatch(static () => Dispatcher.UIThread.RunJobs(), CancellationToken.None);
+            // Wait for the pump to actually finish before re-testing the condition: discarding this Task
+            // let the loop spin ahead of the dispatcher and burn the timeout without pumping.
+            session.Dispatch(static () => Dispatcher.UIThread.RunJobs(), CancellationToken.None)
+                .GetAwaiter().GetResult();
             Thread.Sleep(10);
         }
     }
 
-    private static Window HostInWindow(Control view)
+    private static Window HostInWindow(Control view, AppBaseTheme baseTheme = AppBaseTheme.Classic)
     {
+        // CuePlayerView hosts a ToggleSwitch, which needs a real control theme to template - see
+        // HeadlessAppTheme. Without it Window.Show() throws instead of laying the view out.
+        HeadlessAppTheme.ApplyBaseTheme(baseTheme);
         var window = new Window
         {
             Width = 1280,
@@ -286,6 +325,7 @@ public sealed class CuePlayerViewInteractionTests
         };
 
         window.Show();
+        Dispatcher.UIThread.RunJobs(); // finish the initial layout: templates applied, layers realised
         return window;
     }
 

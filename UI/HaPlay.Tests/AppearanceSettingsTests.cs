@@ -10,9 +10,10 @@ public sealed class AppearanceSettingsTests
     // §8.6 / UI-01 follow-up: the Display-preferences section is now live because Simple/Fluent ship the
     // real dark + density resources the Classic-only limitation was waiting on. The base-theme selector is
     // always meaningful; the variant/density controls gate themselves per base theme.
+    // Returns the Dispatch Task so xunit awaits it: the earlier `void` body DISCARDED it, which threw
+    // away every assertion failure raised inside the dispatched lambda (the test passed regardless).
     [Fact]
-    public void AppearanceSettings_AreShown_WithAllThreeBaseThemes()
-    {
+    public Task AppearanceSettings_AreShown_WithAllThreeBaseThemes() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(AppearanceSettingsTests).Assembly)
             .Dispatch(static () =>
@@ -23,5 +24,4 @@ public sealed class AppearanceSettingsTests
                     new[] { AppBaseTheme.Classic, AppBaseTheme.Simple, AppBaseTheme.Fluent },
                     vm.BaseThemeChoices);
             }, CancellationToken.None);
-    }
 }

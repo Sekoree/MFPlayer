@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using S.Media.Core;
+using S.Media.Routing;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -119,6 +120,106 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
         }
     }
 
+    [Fact]
+    public void VideoOnlyPlayback_WithoutOptIn_KeepsTheFreerunClockUnmastered()
+    {
+        // D3 default: no VideoPtsClock is created or attached, so video-only playback paces exactly as before.
+        var registry = MediaRegistry.Build(b => b.AddDecoder(new CapturingDecoderProvider()));
+        var options = MediaPlayerOpenOptions.Default with { IncludeAudioRouter = false };
+
+        Assert.True(MediaPlayer.TryOpen(registry, "file:///clip.mp4", options, null, out var player, out var error), error);
+        using (player)
+        {
+            player.Play();
+            var clock = Assert.IsType<MediaClock>(player.PlayClock);
+            Assert.Null(clock.Master);
+            player.Pause();
+        }
+    }
+
+    [Fact]
+    public void VideoOnlyPlayback_WithOptIn_MastersTheClockOnPresentedVideoPts()
+    {
+        var registry = MediaRegistry.Build(b => b.AddDecoder(new CapturingDecoderProvider()));
+        var options = MediaPlayerOpenOptions.Default with
+        {
+            IncludeAudioRouter = false,
+            MasterVideoOnlyClockFromPts = true,
+        };
+
+        Assert.True(MediaPlayer.TryOpen(registry, "file:///clip.mp4", options, null, out var player, out var error), error);
+        using (player)
+        {
+            player.Play();
+            var clock = Assert.IsType<MediaClock>(player.PlayClock);
+            var master = Assert.IsType<VideoPtsClock>(clock.Master);
+            Assert.True(master.IsAdvancing);
+
+            // Frozen with the transport: nothing may accrue while paused (otherwise MediaClock would fold
+            // the pause duration into the position on the next Start).
+            player.Pause();
+            Assert.False(master.IsAdvancing);
+            var frozen = master.ElapsedSinceStart;
+            Thread.Sleep(30);
+            Assert.Equal(frozen, master.ElapsedSinceStart);
+
+            // A seek re-anchors the PTS origin on the target, so the next presented frame maps onto the
+            // seeked media timeline instead of the pre-seek origin.
+            player.Seek(TimeSpan.FromSeconds(4));
+            Assert.Equal(TimeSpan.FromSeconds(4), player.Position);
+        }
+    }
+
+    [Fact]
+    public void AudioMasteredPlayback_IgnoresTheVideoOnlyPtsOptIn()
+    {
+        // The opt-in is video-only by construction: with an audio router wired the clock keeps its audio
+        // master (none here - no clocked output), and no VideoPtsClock is ever attached.
+        var registry = MediaRegistry.Build(b => b.AddDecoder(new CapturingDecoderProvider()));
+        var options = MediaPlayerOpenOptions.Default with { MasterVideoOnlyClockFromPts = true };
+
+        Assert.True(MediaPlayer.TryOpen(registry, "file:///clip.mp4", options, null, out var player, out var error), error);
+        using (player)
+        {
+            Assert.NotNull(player.AudioRouter);
+            player.Play();
+            var clock = Assert.IsType<MediaClock>(player.PlayClock);
+            Assert.False(clock.Master is VideoPtsClock);
+            player.Pause();
+        }
+    }
+
+    [Fact]
+    public void Open_SourceWithoutIngestPacingOptIn_KeepsTheRouterOnItsWallClock()
+    {
+        // D2 default: a live source that HAS an ingest clock (every NDI receiver does) but was not configured
+        // for ingest pacing must not promote it - the router keeps producing on wall time as before.
+        var source = new IngestPacedToneSource(sampleRate: 48_000, channels: 2, chunks: 8, ingestClock: null);
+        var registry = MediaRegistry.Build(b => b.AddDecoder(new FixedDecoderProvider(source)));
+
+        Assert.True(MediaPlayer.TryOpen(
+            registry, "file:///live.tone", MediaPlayerOpenOptions.Default, null, out var player, out var error), error);
+        using (player)
+        {
+            Assert.Null(player.AudioRouter!.IngestPaceMaster);
+        }
+    }
+
+    [Fact]
+    public void Open_SourceOptedIntoIngestPacing_SlavesTheRouterToThatClock()
+    {
+        var ingest = new FakeIngestClock();
+        var source = new IngestPacedToneSource(sampleRate: 48_000, channels: 2, chunks: 8, ingestClock: ingest);
+        var registry = MediaRegistry.Build(b => b.AddDecoder(new FixedDecoderProvider(source)));
+
+        Assert.True(MediaPlayer.TryOpen(
+            registry, "file:///live.tone", MediaPlayerOpenOptions.Default, null, out var player, out var error), error);
+        using (player)
+        {
+            Assert.Same(ingest, player.AudioRouter!.IngestPaceMaster);
+        }
+    }
+
     [TimingFact] // per-clip-thread scheduling soak - hangs the testhost on an oversubscribed CI VM regardless
                  // of thread count; opt-in via MFP_TIMING_TESTS=1 (players still scale with core count below).
     public void ManySimultaneousPlayers_AllStayScheduled_ThreadCostMeasured()
@@ -209,7 +310,17 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
         var target = TimeSpan.FromMilliseconds(300);
         player.Seek(target);
 
-        Assert.Equal(target, player.Position);
+        // The seek bumps the timebase generation, so Position must drop the Duration clamp and read the
+        // LIVE clock. That clock object is still advancing at this point (only IsRunning is synthesised
+        // false at EOF - see MediaPlayer.IsRunning), so the reading is the seek target PLUS however long
+        // this thread took to get here: an exact Equal made the outcome a wall-clock race and failed under
+        // CPU contention with 0.35 s / 0.38 s against the 0.30 s target. Assert what the regression is
+        // about instead - anchored on the seek target, no longer stale-clamped to the 2 s Duration.
+        var afterSeek = player.Position;
+        Assert.True(afterSeek >= target, $"position {afterSeek} rewound behind the seek target {target}");
+        Assert.True(
+            afterSeek < target + TimeSpan.FromMilliseconds(500),
+            $"position {afterSeek} is not anchored on the seek target {target} (Duration is {player.Duration})");
         Assert.False(player.IsRunning);
     }
 
@@ -292,6 +403,32 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
             Position = position;
             Volatile.Write(ref _remainingChunks, _chunks);
         }
+    }
+
+    /// <summary>A tone source that advertises the D2 ingest-pacing opt-in - <c>ingestClock: null</c> models a
+    /// live source that owns an ingest clock but was not configured to pace from it.</summary>
+    private sealed class IngestPacedToneSource(int sampleRate, int channels, int chunks, IPlaybackClock? ingestClock)
+        : IAudioSource, IIngestPacedSource
+    {
+        private int _remainingChunks = chunks;
+
+        public IPlaybackClock? IngestPacingClock => ingestClock;
+        public AudioFormat Format { get; } = new(sampleRate, channels);
+        public bool IsExhausted => Volatile.Read(ref _remainingChunks) <= 0;
+
+        public int ReadInto(Span<float> destination)
+        {
+            if (Interlocked.Decrement(ref _remainingChunks) < 0)
+                return 0;
+            destination.Clear();
+            return destination.Length;
+        }
+    }
+
+    private sealed class FakeIngestClock : IPlaybackClock
+    {
+        public TimeSpan ElapsedSinceStart => TimeSpan.Zero;
+        public bool IsAdvancing => false;
     }
 
     /// <summary>Format-only test resampler. The test verifies graph negotiation and never starts playback.</summary>

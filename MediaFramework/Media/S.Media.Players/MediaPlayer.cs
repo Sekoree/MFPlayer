@@ -49,6 +49,12 @@ public sealed class MediaPlayer : IDisposable
     private IAudioOutputPlaybackStats? _portAudioPlaybackStats;
     private bool _disposed;
 
+    // D3: video-only PTS mastering (opt-in via MediaPlayerOpenOptions.MasterVideoOnlyClockFromPts).
+    // Owned by the player: created at open for a video-only graph, fed from the video player's
+    // presentation event, re-anchored at every Play/Seek and frozen at Pause, released on Dispose.
+    private VideoPtsClock? _videoPtsMaster;
+    private Action<TimeSpan>? _videoPtsFrameHandler;
+
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Playback.MediaPlayer");
 
     // Set when the video source is live (NDI/capture): the player re-anchors it to the master at Play so it
@@ -335,7 +341,13 @@ public sealed class MediaPlayer : IDisposable
         // Live video: re-anchor the source's synthesized PTS to the master so prebuffered + subsequent frames
         // present Scheduled against the session clock (Doc 03 §2), not master-less. No-op for file sources.
         _liveVideoSource?.RebaseToLatest(_liveClock?.CurrentPosition ?? TimeSpan.Zero);
-        _liveSession!.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+        // An explicit caller-supplied master always wins; otherwise supply the owned PTS master when the
+        // video-only opt-in is on (null for every other open, so the coordinator's else-branch is unchanged).
+        _liveSession!.Play(
+            prefillBeforeHardware,
+            startHardware,
+            videoOnlyMaster ?? PrepareVideoPtsMasterForPlay(),
+            verifyPrebufferAfterPrefill);
         // Record the timebase generation this run plays under - the natural-EOF Duration clamp in
         // Position is only valid while the generation is unchanged (i.e. no seek since this Play).
         Volatile.Write(ref _playTimebaseGeneration, _liveAudioClock?.TimebaseGeneration ?? 0);
@@ -344,21 +356,82 @@ public sealed class MediaPlayer : IDisposable
     public void Pause(CancellationToken cancellationToken = default)
     {
         _liveSession!.Pause(cancellationToken);
+        FreezeVideoPtsMaster();
     }
 
     public void PauseWithFlushAction(Action flushAction, CancellationToken cancellationToken = default)
     {
         _liveSession!.Pause(cancellationToken, flushAction);
+        FreezeVideoPtsMaster();
     }
 
     public void Seek(TimeSpan position)
     {
+        RebaseVideoPtsMaster(position);
         _liveSession!.Seek(position);
     }
 
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default)
     {
+        RebaseVideoPtsMaster(position);
         _liveSession!.SeekCoordinated(position, cancellationToken);
+        // SeekCoordinated leaves the transport paused - keep the PTS master frozen with it.
+        FreezeVideoPtsMaster();
+    }
+
+    // --- D3: video-only PTS mastering --------------------------------------
+
+    /// <summary>
+    /// Arms the owned <see cref="VideoPtsClock"/> for a video-only graph: the presented-frame PTS event
+    /// feeds it, and <see cref="Play"/> hands it to the coordinator as the video-only master. Called at
+    /// open only when <see cref="MediaPlayerOpenOptions.MasterVideoOnlyClockFromPts"/> is set AND the graph
+    /// has video with no audio router; every other open leaves the field null and the transport untouched.
+    /// </summary>
+    private void EnableVideoOnlyPtsMastering()
+    {
+        var clock = new VideoPtsClock();
+        // Runs on the clock driver thread right after a successful Submit (see VideoPlayer.RaisePresented);
+        // NotifyFramePts only takes the clock's own lock, so it is safe to call from there.
+        Action<TimeSpan> handler = clock.NotifyFramePts;
+        _liveVideo!.FramePresentationTimePresented += handler;
+        _videoPtsFrameHandler = handler;
+        _videoPtsMaster = clock;
+        Trace.LogDebug("EnableVideoOnlyPtsMastering: video-only session will master on presented video PTS");
+    }
+
+    /// <summary>
+    /// Anchors the PTS timeline at the position this run starts from and returns the master (null when the
+    /// opt-in is off). Elapsed then reads <c>(presentedPts - startPosition) + wall interpolation</c>, which
+    /// <see cref="MediaClock.SetMaster"/> maps straight back onto the media timeline. Re-anchoring on every
+    /// Play also makes <see cref="MediaClock"/>'s "master drained while paused" fold a no-op: elapsed
+    /// restarts near zero, so the drift it would fold in is negative and deliberately ignored.
+    /// </summary>
+    private IPlaybackClock? PrepareVideoPtsMasterForPlay()
+    {
+        if (_videoPtsMaster is not { } pts)
+            return null;
+        pts.BeginSession(_liveClock?.CurrentPosition ?? TimeSpan.Zero);
+        return pts;
+    }
+
+    /// <summary>Freezes the PTS master with the transport so no media time accrues while paused.</summary>
+    private void FreezeVideoPtsMaster() => _videoPtsMaster?.Pause();
+
+    /// <summary>
+    /// Re-anchors the PTS origin on the seek target BEFORE the transport seek. Post-seek frames carry PTS
+    /// around <paramref name="position"/>, which the pre-seek origin would map to a wildly different elapsed;
+    /// doing it first also means <see cref="MediaClock.Seek"/>'s own re-anchor reads the already-rebased
+    /// master, so a frame presented in the gap cannot ratchet the playhead.
+    /// </summary>
+    private void RebaseVideoPtsMaster(TimeSpan position)
+    {
+        if (_videoPtsMaster is not { } pts)
+            return;
+        pts.BeginSession(position < TimeSpan.Zero ? TimeSpan.Zero : position);
+        // BeginSession starts the clock advancing; a seek on a stopped transport must stay frozen (the next
+        // Play re-anchors it anyway).
+        if (_liveClock is not { IsRunning: true })
+            pts.Pause();
     }
 
     /// <summary>
@@ -373,6 +446,13 @@ public sealed class MediaPlayer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (_videoPtsFrameHandler is { } ptsHandler)
+        {
+            _videoPtsFrameHandler = null;
+            _videoPtsMaster = null;
+            if (_liveVideo is not null)
+                _liveVideo.FramePresentationTimePresented -= ptsHandler;
+        }
         TryDispose(() => _liveVideo?.Dispose(), "MediaPlayer.Dispose: VideoPlayer");
         TryDispose(() => _liveAudioRouter?.Dispose(), "MediaPlayer.Dispose: AudioRouter");
         TryDispose(() => _liveAudioClock?.Dispose(), "MediaPlayer.Dispose: AudioClock");
@@ -796,6 +876,17 @@ public sealed class MediaPlayer : IDisposable
                 var routerFormat = new AudioFormat(targetAudioRate, audioSource.Format.Channels);
                 var audioDiscardId = audioRouter.AddOutput(new DiscardingAudioOutput(routerFormat), "_audio_discard");
                 audioRouter.Connect(audioSourceId, audioDiscardId);
+                // D2: genlock-to-ingest, opt-in and source-declared. Only a source that was explicitly
+                // configured for ingest pacing (e.g. an `ndi://…?ingestClock=1` descriptor) advertises a
+                // clock here; everything else returns null and the router keeps its wall clock byte-for-byte.
+                // Safe at this point by the SlaveToIngest contract - the router has not started yet.
+                if (audioSource is IIngestPacedSource { IngestPacingClock: { } ingestClock })
+                {
+                    audioRouter.SlaveToIngest(ingestClock);
+                    Trace.LogInformation(
+                        "TryOpenLive: pacing the audio router from the source's ingest clock ({ClockType}) - production follows ingest media time, not wall time",
+                        ingestClock.GetType().Name);
+                }
                 playClock = audioClock;
             }
             else
@@ -862,6 +953,12 @@ public sealed class MediaPlayer : IDisposable
                 liveVideo,
                 audioSource,
                 videoSource);
+
+            // D3: video-only playback can master the session clock on presented video PTS instead of wall
+            // time. Opt-in and video-only by construction (a wired audio router keeps its own master), so
+            // audio-mastered playback is byte-for-byte unchanged.
+            if (options.MasterVideoOnlyClockFromPts && videoSource is not null && audioRouter is null)
+                player.EnableVideoOnlyPtsMastering();
 
             // Surface the media's duration (file clips) so transport queries - and the outbound C ABI
             // (mfp_session_duration_ticks) - can report it. Live sources carry no duration, so it stays zero.

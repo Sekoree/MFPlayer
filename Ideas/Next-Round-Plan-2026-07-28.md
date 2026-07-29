@@ -4,6 +4,34 @@ Decisions taken with the owner on 2026-07-28. Everything earlier in the Ideas do
 implemented; this doc plans the leftover pool. Workstreams A–F below are IN SCOPE; the
 "parked" list at the end is the explicit out-of-scope record.
 
+## Status (2026-07-29)
+
+| Item | State |
+|---|---|
+| **B** always-on MIDI/OSC input | Done (`ControlInputSession`) — review found lifetime/signature defects, fixed in the follow-up round |
+| **C1** SharedAudioOutput DAC-lead compensation | Done — review found the estimator collapsed to the *minimum* observed lead; reworked in the follow-up round |
+| **C2** HaViz NDI audio submit ring | Done (`NdiAudioSubmitRing`) — review found the ring stayed pinned full after one overflow; fixed |
+| **D1** MTC chase → scheduler | Done — pure `MidiTimecodeDecoder` + `MidiTimecodeChaseClock` in S.Control (quarter-frame assembly, full-frame locates, wall-time interpolation, stall freeze, jump/relocate generations); `CueTimecodeChaseService` decodes on the MIDI I/O thread off B's `ControlMonitorRecord` seam (never a dispatcher post per quarter-frame) and stays OFF until some loaded list carries a `CueScheduleKind.Timecode` schedule; `CueSchedulerService` fires on chase crossings with the wall path's exact semantics. LTC stays parked |
+| **D2** NDI ingest clock | Done — opt-in via `NDISourceOptions.PaceRouterFromIngestClock` / `ndi://…?ingestClock=1` + dialog checkbox; default off (a slaved router produces *nothing* while ingest stalls — that is genlock, hence opt-in) |
+| **D3** VideoPtsClock | Done — opt-in via `MediaPlayerOpenOptions.MasterVideoOnlyClockFromPts`, default **off** deliberately: pinning the clock to an early-presented PTS shortens the wall interval to the next frame and compounds on decode-ahead file sources (~1.32× speed at 30 fps, ~1.9× at 60 fps). Recommended for live/ingest-paced video-only sources, which cannot run away |
+| **E** soundboard quantized launch | Done — see the premise correction below |
+| **F1** fire blip at lowered trim | Done |
+| **F2** HaViz line-in device persistence | Done |
+| **F3** NullClockedAudioOutput consumer | Done — HaViz desktop attaches it as the router's pacing primary + MediaClock master (sample-accurate, drift-free, no hardware). Attached whether or not local monitoring is on, so toggling the monitor never changes the show-critical feed's pacing source |
+| **A** cross-list merged session | Done — `HaPlayShowMapper.ToShowDocument(lists)` concatenates every loaded list into the one `ShowSession` document with list-scoped runtime transport groups; schedules/triggers/remote fire any list through a headless per-list run that never moves the visible GO/standby transport. Standby/pre-roll stays selected-list-only; contested output lines dedupe selected-list-first through `ReconcileCueOutputTopologyAsync` |
+
+**E premise correction:** the plan assumed HaPlay's soundboard runs on the framework
+`SoundboardGrid`. It does not — HaPlay has its own `SoundboardWorkspaceViewModel` tile grid and
+fires through `VoicePlayer`, so "dispatch `SoundboardGrid.TryCreateScheduledFire`" was not
+implementable as written. Instead the boundary math moved into a shared, pure
+`SoundboardQuantization` (`NextBoundary` / `BeatsToQuantum`) that BOTH the framework primitive
+and HaPlay now call, and the feature landed in the workspace VM: board-global BPM +
+`LaunchQuantizeBeats` (Ableton-style, one setting per board rather than per tile), tap arms and
+the workspace's single pump fires on the next boundary, a second tap disarms, Stop-all drops
+armed launches, and stopping a *playing* tile stays immediate (quantization is a launch grid).
+Boundaries are multiples of the quantum from the workspace's own transport origin — there is no
+external tempo sync (Ableton Link / MTC chase remain parked / D1).
+
 ## A. Cross-list scheduling — ONE MERGED SESSION (decision)
 
 Today `CueShowSessionCoordinator` maps only the SELECTED cue list into the single
@@ -64,6 +92,23 @@ are configured, independent of the mapping engine's arm state.
   `Kind.Timecode` with an `hh:mm:ss:ff` target + frame-rate; `CueSchedulerService` fires on
   chase-clock crossing (same grace/once semantics). LTC (audio timecode) stays parked — it
   needs an audio-input decode path; the enum value exists for later.
+
+  **D1 implementation notes.** The B seam carried MTC as-is, so no new framework event was
+  needed: `ControlMIDIMessagePayload.FromMIDIMessage` already maps a quarter-frame to
+  `ControlMIDIMessageType.MIDITimeCode` with the DATA byte in `MIDIValue`, and a full-frame
+  locate to `SysEx` whose bytes ride `RawBytes`. One caveat: `RawBytes` is gated by
+  `ControlMonitorOptions.IncludeRawBytes` (default on), so with raw bytes switched off in the
+  monitor settings quarter-frame chase still works and only full-frame LOCATES go undetected.
+  Decoding happens on the PortMIDI poll thread inside `MainViewModel.OnControlInputObserved`
+  (before the trigger path's dispatcher post — 100 msg/s at 25 fps must never become 100
+  dispatcher work items/s), and MTC records are swallowed there so they never reach the trigger
+  sweep. The decoder anchors each assembled timecode on the timestamp of *piece 0* rather than
+  adding the customary "+2 frames" fudge: the value is inherently 2 frames stale when it can
+  first be read, and anchoring on the instant it actually describes lets the clock interpolate
+  that lag away. Stall (100 ms of silence) freezes the clock instead of free-wheeling, and every
+  discontinuity — first lock, relocate, full-frame locate, resume after a stall — opens a new
+  chase *generation* whose start position becomes the scheduler's baseline, which is what makes
+  "no burst after a locate" and "a rewind re-arms the pass" fall out for free.
 2. **NDI ingest clock wiring**: `NDISource` playback opts into `SlaveToIngest(source.IngestClock)`
   (router pacing from sender timecode) behind an opt-in flag on the NDI input cue/deck options
   (default off — wallclock behavior unchanged). The monotonicity fix from the review round is

@@ -131,4 +131,39 @@ public sealed class NullClockedAudioOutputTests
         output.Submit(new float[480 * Stereo.Channels]);
         Assert.Equal(480, output.QueuedSamples); // nothing drains before Start
     }
+
+    [Fact]
+    public void AudioRouter_PromotesIt_ToPrimaryAndMasterClock()
+    {
+        // The device-free pacing contract HaViz's desktop player is built on
+        // (Ideas/Next-Round-Plan-2026-07-28.md F3): attached to a STOPPED router it must be
+        // auto-promoted, so the router paces from its consumed-sample deadlines and the MediaClock
+        // masters from it - instead of both falling back to wall time with no hardware present.
+        using var output = new NullClockedAudioOutput(Stereo);
+        using var mediaClock = new MediaClock();
+        using var router = new AudioRouter(SampleRate, chunkSamples: 480);
+        router.AttachMasterClock(mediaClock);
+        router.AddOutput(output, "pacer");
+
+        Assert.Equal("pacer", router.PrimaryOutputId);
+        Assert.Same(output, mediaClock.Master);
+    }
+
+    [Fact]
+    public void AudioRouter_KeepsItPrimary_WhenAClockedDeviceAttachesAfterAutoWireIsOff()
+    {
+        // HaViz attaches the pacer first, then turns AutoWirePrimary off so a monitor device
+        // attached later (even while the router is stopped) can never displace the pacing clock.
+        using var pacer = new NullClockedAudioOutput(Stereo);
+        using var monitor = new NullClockedAudioOutput(Stereo); // stands in for a device output
+        using var mediaClock = new MediaClock();
+        using var router = new AudioRouter(SampleRate, chunkSamples: 480);
+        router.AttachMasterClock(mediaClock);
+        router.AddOutput(pacer, "pacer");
+        router.AutoWirePrimary = false;
+        router.AddOutput(monitor, "monitor");
+
+        Assert.Equal("pacer", router.PrimaryOutputId);
+        Assert.Same(pacer, mediaClock.Master);
+    }
 }

@@ -22,6 +22,11 @@ public sealed unsafe class MiniAudioOutput :
     /// <summary>Fallback period estimate before the first callback reveals the real one (miniaudio's low-latency default is 10 ms).</summary>
     private const double DefaultPeriodSeconds = 0.010;
 
+    /// <summary>Device-side buffering in periods, used by <see cref="SubmitToOutputLatency"/>. The
+    /// <c>periods</c> count is chosen natively and never surfaced to the managed side, so this is
+    /// miniaudio's default (<c>MA_DEFAULT_PERIODS</c>).</summary>
+    private const int EstimatedDevicePeriods = 3;
+
     private readonly AudioFormat _format;
     private readonly string? _deviceId;
     private readonly uint _periodSizeFrames;
@@ -185,14 +190,18 @@ public sealed unsafe class MiniAudioOutput :
     }
 
     /// <summary>
-    /// <see cref="IAudioOutputLatency.SubmitToOutputLatency"/>: the managed ring backlog plus
-    /// miniaudio's internal buffering. The managed side only knows the period size (the device's
-    /// <c>periods</c> count is chosen natively), so the internal part is estimated at two periods -
-    /// the same figure <see cref="ElapsedSinceStart"/> documents as its residual lead. Estimate, not
-    /// a measurement; no native calls on this path.
+    /// <see cref="IAudioOutputLatency.SubmitToOutputLatency"/>: the managed ring backlog plus the WHOLE
+    /// device-side buffering behind it - the contract is submit→speaker, so it must not net out anything
+    /// <see cref="ElapsedSinceStart"/> already removed. (It cannot: consumers read that clock relative to
+    /// an epoch, and its constant one-period subtraction cancels in the difference.) The managed side only
+    /// knows the period size, so the device side is estimated at <see cref="EstimatedDevicePeriods"/> ×
+    /// period - miniaudio's default <c>periods</c> count, and the figure <see cref="ElapsedSinceStart"/>
+    /// accounts for as one subtracted period plus a documented residual lead of up to two more. Estimate,
+    /// not a measurement; no native calls on this path.
     /// </summary>
     public TimeSpan SubmitToOutputLatency =>
-        TimeSpan.FromSeconds(QueuedSamples / (double)_format.SampleRate + 2 * PeriodSeconds());
+        TimeSpan.FromSeconds(QueuedSamples / (double)_format.SampleRate
+                             + EstimatedDevicePeriods * PeriodSeconds());
 
     /// <summary>One device period in seconds: observed callback size, else the configured period, else miniaudio's 10 ms default.</summary>
     private double PeriodSeconds()

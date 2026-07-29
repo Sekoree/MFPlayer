@@ -913,6 +913,12 @@
   <data name="VideoOnlyCheckbox" xml:space="preserve">
     <value>Video only (ignore sender's audio)</value>
   </data>
+  <data name="NDIPaceFromIngestClockCheckbox" xml:space="preserve">
+    <value>Genlock to sender (pace from NDI ingest clock)</value>
+  </data>
+  <data name="NDIPaceFromIngestClockTooltip" xml:space="preserve">
+    <value>Pace playback from the sender's ingest timeline instead of this machine's clock. Needs the audio stream; while the sender is away the line produces nothing instead of silence.</value>
+  </data>
   <data name="ReconnectIntervalSecondsLabel" xml:space="preserve">
     <value>Reconnect interval (s)</value>
   </data>
@@ -3151,6 +3157,21 @@
   <data name="SoundboardTileLoopLabel" xml:space="preserve">
     <value>Loop</value>
   </data>
+  <data name="SoundboardLaunchQuantizeHeader" xml:space="preserve">
+    <value>Launch quantize</value>
+  </data>
+  <data name="SoundboardLaunchQuantizeHint" xml:space="preserve">
+    <value>Tapped tiles wait for the next beat boundary instead of firing instantly. Applies to the whole board; stopping a playing tile stays immediate.</value>
+  </data>
+  <data name="SoundboardBpmLabel" xml:space="preserve">
+    <value>Tempo (BPM)</value>
+  </data>
+  <data name="SoundboardQuantizeBeatsLabel" xml:space="preserve">
+    <value>Quantize (beats)</value>
+  </data>
+  <data name="SoundboardQuantizeBeatsTooltip" xml:space="preserve">
+    <value>0 = off (fire on tap). 1 = next beat, 4 = next bar at 4/4. Tap an armed tile again to cancel it.</value>
+  </data>
   <data name="SoundboardClearTileButton" xml:space="preserve">
     <value>Clear tile</value>
   </data>
@@ -3983,10 +4004,10 @@
     <value>Schedules</value>
   </data>
   <data name="SchedulesArmedToggleTooltip" xml:space="preserve">
-    <value>Arm timed cue schedules for this session. Scheduled cues fire only while this is ON and cue edit mode is OFF, and only from the SELECTED cue list. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
+    <value>Arm timed cue schedules for this session. Scheduled cues fire only while this is ON and cue edit mode is OFF. Every loaded cue list is armed - a cue in a list you are not looking at plays into the same show without moving the visible GO/standby transport. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
   </data>
-  <data name="SchedulesArmedOtherListsWarningFormat" xml:space="preserve">
-    <value>Schedules armed for the selected list only - {0} scheduled cue(s) in other lists will NOT fire.</value>
+  <data name="SchedulesArmedScopeCountFormat" xml:space="preserve">
+    <value>Armed now: {0} scheduled cue(s) across {1} cue list(s).</value>
   </data>
   <data name="CueScheduleSectionHeader" xml:space="preserve">
     <value>Schedule</value>
@@ -4042,6 +4063,30 @@
   <data name="CueScheduleMissedStatusFormat" xml:space="preserve">
     <value>Missed schedule for {0} (due {1:HH:mm:ss}) - beyond grace, skipped</value>
   </data>
+  <data name="CueScheduleTimecodeLabel" xml:space="preserve">
+    <value>Timecode</value>
+  </data>
+  <data name="CueScheduleTimecodeRateLabel" xml:space="preserve">
+    <value>Frame rate</value>
+  </data>
+  <data name="CueScheduleTimecodeHint" xml:space="preserve">
+    <value>Fires when the incoming MIDI Time Code passes this target, while Schedules are armed and edit mode is off. The chase reads the always-on MIDI input - the Control workspace does not have to be armed. Set the frame rate to match the sender. A locate or rewind starts a new pass: targets behind the new position are retired silently (never a burst), targets ahead of it are armed again. Nothing fires while the sender is stopped.</value>
+  </data>
+  <data name="CueTimecodeFiredStatusFormat" xml:space="preserve">
+    <value>Timecode fire: {0} at {1}</value>
+  </data>
+  <data name="CueTimecodeMissedStatusFormat" xml:space="preserve">
+    <value>Missed timecode for {0} (target {1}) - beyond grace, skipped</value>
+  </data>
+  <data name="CueTimecodeChaseRunningFormat" xml:space="preserve">
+    <value>Timecode {0} @ {1} fps</value>
+  </data>
+  <data name="CueTimecodeChaseParkedFormat" xml:space="preserve">
+    <value>Timecode {0} @ {1} fps (stopped)</value>
+  </data>
+  <data name="CueTimecodeChaseNoSignalStatus" xml:space="preserve">
+    <value>Timecode - no signal</value>
+  </data>
   <data name="CueTriggersSectionHeader" xml:space="preserve">
     <value>Triggers</value>
   </data>
@@ -4070,10 +4115,13 @@
     <value>Triggers</value>
   </data>
   <data name="TriggersArmedToggleTooltip" xml:space="preserve">
-    <value>Arm per-cue MIDI/OSC/hotkey triggers for this session. Trigger bindings fire only while this is ON and cue edit mode is OFF, and only from the SELECTED cue list. MIDI/OSC input runs whenever the Control workspace has the device or listener configured and enabled - arming Control is not required. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
+    <value>Arm per-cue MIDI/OSC/hotkey triggers for this session. Trigger bindings fire only while this is ON and cue edit mode is OFF. Every loaded cue list is armed - a cue in a list you are not looking at plays into the same show without moving the visible GO/standby transport. MIDI/OSC input runs whenever the Control workspace has the device or listener configured and enabled - arming Control is not required. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
   </data>
-  <data name="TriggersArmedOtherListsWarningFormat" xml:space="preserve">
-    <value>Triggers armed for the selected list only - {0} cue(s) with enabled triggers in other lists will NOT fire.</value>
+  <data name="TriggersArmedScopeCountFormat" xml:space="preserve">
+    <value>Armed now: {0} cue(s) with enabled triggers across {1} cue list(s).</value>
+  </data>
+  <data name="CueListQualifiedNameFormat" xml:space="preserve">
+    <value>{0} · {1}</value>
   </data>
   <data name="CueTriggerAddButton" xml:space="preserve">
     <value>Add trigger</value>
@@ -4103,7 +4151,7 @@
     <value>Min</value>
   </data>
   <data name="CueTriggerMidiValueMinTooltip" xml:space="preserve">
-    <value>Minimum velocity / CC value to fire; 0 = any. Repeats within 250 ms are ignored either way, so a pot sweep fires once. Program changes ignore this.</value>
+    <value>Minimum velocity / CC value to fire; 0 = any (a control change still needs at least 1). Control changes are rising-edge: they fire when the value crosses UP through this level and only re-arm once it falls back below, so a held button fires once on press and a pot sweep fires once. Program changes ignore this.</value>
   </data>
   <data name="CueTriggerLearnButton" xml:space="preserve">
     <value>Learn</value>
@@ -4127,7 +4175,10 @@
     <value>Optional first-argument match (e.g. 1 for a touch panel's button-down). Empty = fire on any arguments.</value>
   </data>
   <data name="CueTriggerHint" xml:space="preserve">
-    <value>Each binding fires this cue exactly like a GO on it, but only while the transport row's Triggers toggle is armed AND cue edit mode is OFF, and only from the selected list. MIDI/OSC input arrives via the Control workspace's armed devices/listeners. Repeats of one binding within 250 ms are ignored (controller chatter).</value>
+    <value>Each binding fires this cue exactly like a GO on it, but only while the transport row's Triggers toggle is armed AND cue edit mode is OFF, and only from the selected list. MIDI/OSC input arrives from every configured, enabled device and listener - the Control workspace does not have to be armed. Repeats of one binding within 250 ms are ignored (controller chatter).</value>
+  </data>
+  <data name="CueNotFireableStatusFormat" xml:space="preserve">
+    <value>Cannot fire {0}: nothing to play (empty group, or a playlist with no next item).</value>
   </data>
   <data name="CueMidiTriggerFiredStatusFormat" xml:space="preserve">
     <value>MIDI trigger fire: {0}</value>

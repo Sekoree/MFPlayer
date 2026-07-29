@@ -24,7 +24,9 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
     private readonly InputDispatcherRouter _router;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private int _openRefs;
-    private bool _disposed;
+    /// <summary>Written only under <see cref="_gate"/>; volatile so the cheap pre-gate checks (and
+    /// <see cref="AttachDispatcher"/>/<see cref="AttachMonitor"/>) observe a disposal from another thread.</summary>
+    private volatile bool _disposed;
 
     /// <param name="midiSessionFactory">Builds the MIDI device-session runner over this session's monitor
     /// sink. Null means no MIDI port I/O (OSC-only hosts, and tests that must not touch PortMIDI).</param>
@@ -79,6 +81,11 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Re-check under the gate: a DisposeAsync that landed between the check above and here has
+            // already zeroed the ref count, and taking a reference now would leave IsOpen true on a
+            // closed session (the workspace's "retry only when !IsOpen" sync would then never retry).
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
             if (_openRefs > 0)
             {
                 Volatile.Write(ref _openRefs, _openRefs + 1);
@@ -116,7 +123,7 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
         await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            if (_openRefs == 0)
+            if (_disposed || _openRefs == 0)
                 return;
 
             Volatile.Write(ref _openRefs, _openRefs - 1);
@@ -142,7 +149,7 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
         _gate.Wait();
         try
         {
-            if (_openRefs == 0)
+            if (_disposed || _openRefs == 0)
                 return;
 
             Volatile.Write(ref _openRefs, _openRefs - 1);
@@ -176,6 +183,12 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
         return _sink.Attach(sink);
     }
 
+    /// <summary>Tears the devices down. Serialized with <see cref="StartAsync"/>/<see cref="StopAsync"/>/
+    /// <see cref="Release"/> through the same gate: a project switch disposes this session on the UI thread
+    /// while an armed session's <see cref="StopAsync"/> may still be inside
+    /// <c>ControlOSCListenerManager.StopAsync</c>, and both paths write the same per-listener
+    /// <c>OSCServer</c> field (a concurrent pair produced an NRE / double Dispose / half-torn-down listener
+    /// with both exceptions swallowed).</summary>
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -183,23 +196,46 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
 
         // _gate is deliberately left undisposed: a consumer whose teardown races this disposal (project
         // switch while an armed session is still stopping) must not fault on a disposed semaphore.
-        _disposed = true;
-        Volatile.Write(ref _openRefs, 0);
-        MIDISessions?.Stop();
-        await OSCListeners.DisposeAsync().ConfigureAwait(false);
-        DisposeMIDISessions();
+        await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            Volatile.Write(ref _openRefs, 0);
+            MIDISessions?.Stop();
+            await OSCListeners.DisposeAsync().ConfigureAwait(false);
+            DisposeMIDISessions();
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
+    /// <inheritdoc cref="DisposeAsync"/>
     public void Dispose()
     {
         if (_disposed)
             return;
 
-        _disposed = true;
-        Volatile.Write(ref _openRefs, 0);
-        MIDISessions?.Stop();
-        OSCListeners.Dispose();
-        DisposeMIDISessions();
+        _gate.Wait();
+        try
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            Volatile.Write(ref _openRefs, 0);
+            MIDISessions?.Stop();
+            OSCListeners.Dispose();
+            DisposeMIDISessions();
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private void DisposeMIDISessions()

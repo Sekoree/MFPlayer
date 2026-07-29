@@ -1,5 +1,7 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Video;
+using S.Media.Routing;
+using S.Media.Time;
 
 namespace S.Media.NDI;
 
@@ -129,10 +131,14 @@ internal sealed class SharedNDISourceCache(Func<string, NDISource> open)
     }
 
     /// <summary>A leased view of the shared source's audio adapter (see <see cref="VideoLease"/>).</summary>
-    private sealed class AudioLease(Entry entry) : IAudioSource, IDisposable
+    private sealed class AudioLease(Entry entry) : IAudioSource, IIngestPacedSource, IDisposable
     {
         private int _disposed;
         private IAudioSource Inner => entry.Source.Audio;
+
+        /// <summary>Forwards the shared receiver's ingest-pacing opt-in (null unless the descriptor asked
+        /// for it) so the player sees it through the lease.</summary>
+        public IPlaybackClock? IngestPacingClock => (Inner as IIngestPacedSource)?.IngestPacingClock;
 
         public AudioFormat Format => Inner.Format;
         public bool IsExhausted => Inner.IsExhausted;

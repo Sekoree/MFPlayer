@@ -22,6 +22,12 @@ public sealed partial class CueListEditorViewModel : ObservableObject
         Name = name;
     }
 
+    /// <summary>Session-only identity for this loaded list. The cross-list merged session scopes its
+    /// runtime transport groups with it (<c>HaPlayShowMapper.RuntimeGroupId</c>) so two lists cannot land
+    /// their ungrouped cues on the same session group. Deliberately NOT part of <see cref="CueList"/>:
+    /// nothing about it is authored, so persistence, undo and the project dirty-hash stay untouched.</summary>
+    public Guid RuntimeId { get; } = Guid.NewGuid();
+
     [ObservableProperty]
     private string _name;
 

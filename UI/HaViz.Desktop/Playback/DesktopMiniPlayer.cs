@@ -2,6 +2,7 @@ using HaViz.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Registry;
 using S.Media.Players;
+using S.Media.Routing;
 
 namespace HaViz.Desktop.Playback;
 
@@ -24,10 +25,12 @@ internal sealed class VizTapAudioOutput(AudioFormat format, PcmSubmit sink) : IA
 
 /// <summary>
 /// The desktop counterpart of the Android head's IMiniPlayer: one framework MediaPlayer per track
-/// (FFmpeg decode -> AudioRouter -> viz tap, optional local monitor output). Clockless by design:
-/// no audio device is opened or required - the router keeps its default wall-clock pacing and the
-/// MediaClock free-runs, so a headless box (no output devices, or no PortAudio at all) still
-/// decodes on schedule and feeds the viz/NDI tap. MediaPlayer has no end-of-track event - natural
+/// (FFmpeg decode -> AudioRouter -> null pacer + viz tap, optional local monitor output).
+/// Device-free by design: no audio hardware is opened or required, so a headless box (no output
+/// devices, or no PortAudio at all) still decodes on schedule and feeds the viz/NDI tap. Pacing
+/// comes from a <see cref="NullClockedAudioOutput"/> that consumes at exactly chunk/rate on
+/// absolute deadlines and masters the MediaClock, so decode/NDI cadence is sample-accurate and
+/// drift-free rather than wall-clock approximated. MediaPlayer has no end-of-track event - natural
 /// end is IsRunning flipping false - so the owner must call <see cref="Poll"/> from a UI timer to
 /// get <see cref="PlaybackEnded"/>. All members are UI-thread only; only the tap's Submit runs on
 /// the audio thread.
@@ -35,9 +38,16 @@ internal sealed class VizTapAudioOutput(AudioFormat format, PcmSubmit sink) : IA
 public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend? backend, PcmSubmit sink)
     : IDisposable
 {
-    // The optional local-monitor device output. Never the clock: AutoWirePrimary is off, so the
-    // router stays wall-clock paced and the monitor is an ordinary drop-on-overflow slave - it can
-    // be attached/detached mid-track without touching decode pacing or the visible playhead.
+    // The device-free pacing output (Ideas/Next-Round-Plan-2026-07-28.md F3). Attached FIRST, while
+    // AutoWirePrimary is still on, so the router slaves its pacing to it and the MediaClock masters
+    // from its consumed-sample clock; AutoWirePrimary then goes off so no later output can displace
+    // it. Deliberately attached whether or not local monitoring is on: the show-critical NDI feed
+    // must not change its pacing source when the operator toggles a monitor mid-track.
+    private const string PacerOutputId = "pacer";
+
+    // The optional local-monitor device output. Never the clock: AutoWirePrimary is off by the time
+    // it attaches, so it is an ordinary drop-on-overflow slave - it can be attached/detached
+    // mid-track without touching decode pacing or the visible playhead.
     private const string MonitorOutputId = "monitor";
 
     // Detaching cuts the route hard (RemoveOutput abandons queued chunks), so "off" first fades
@@ -53,6 +63,7 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend? ba
     private string? _monitorOutputId;
     private IDisposable? _monitorOutput;
     private long? _monitorDetachDueMs;
+    private NullClockedAudioOutput? _pacer;
 
     public event Action<TrackInfo>? TrackStarted;
     public event Action? PlaybackEnded;
@@ -182,19 +193,32 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend? ba
         MediaPlayer? player = null;
         try
         {
-            // No device output: the router keeps its default WallClockRouterClock pacing and the
-            // MediaClock free-runs (no master), so Position/IsRunning advance and the source is
-            // consumed (Open wires a discarding sink) with zero audio hardware. AutoWirePrimary
-            // off guarantees a monitor attached later can never be promoted to pacing primary /
-            // MediaClock master - even when attached while the router is stopped (paused).
+            // No device output: the source is consumed (Open wires a discarding sink) with zero
+            // audio hardware. The null pacer below supplies the sample clock the device would have.
             player = MediaPlayer.Open(registry, track.Uri);
+            var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
+            var pacerFormat = new AudioFormat(rate, 2);
+
+            // Attach the pacer FIRST (AutoWirePrimary still on): the router's auto-promotion slaves
+            // its pacing clock to this output and masters the MediaClock from it - both only legal
+            // while the router is stopped, hence before Play(). Then AutoWirePrimary goes off so the
+            // optional monitor device can never displace it as primary / MediaClock master, even
+            // when attached later while the router is stopped (paused).
+            if (player.AudioRouter is not null)
+            {
+                _pacer = new NullClockedAudioOutput(pacerFormat);
+                player.AttachAudioOutput(_pacer, PacerOutputId);
+            }
             if (player.AudioRouter is { } router)
                 router.AutoWirePrimary = false;
-            var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-            player.AttachAudioOutput(new VizTapAudioOutput(new AudioFormat(rate, 2), sink), "viz-tap");
+
+            player.AttachAudioOutput(new VizTapAudioOutput(pacerFormat, sink), "viz-tap");
             _player = player;
             if (_localOutputEnabled)
                 AttachMonitorOutput();
+            // Nothing else starts a device-free output: without this the pacer reports "always
+            // ready" and the router would free-run instead of pacing (see its WaitForCapacity).
+            _pacer?.Start();
             player.Play();
             _paused = false;
             _endedRaised = false;
@@ -206,8 +230,24 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend? ba
             _player = null;
             _monitorOutputId = null;
             DetachMonitorOutput();
+            DisposePacer();
             PlaybackError?.Invoke(ex.Message);
         }
+    }
+
+    /// <summary>Releases the pacing output. Always AFTER the player is disposed - the router's pump
+    /// must have stopped submitting to it first.</summary>
+    private void DisposePacer()
+    {
+        try
+        {
+            _pacer?.Dispose();
+        }
+        catch (Exception)
+        {
+            // A device-free output cannot really fail here, but teardown must never take the UI down.
+        }
+        _pacer = null;
     }
 
     public void Pause()
@@ -242,11 +282,12 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend? ba
 
     public void Stop()
     {
-        // Player first (stops the router and its pumps), then the monitor device stream.
+        // Player first (stops the router and its pumps), then the outputs it was submitting to.
         _player?.Dispose();
         _player = null;
         _monitorOutputId = null; // router (and its outputs' routes) died with the player
         DetachMonitorOutput();
+        DisposePacer();
         _paused = false;
     }
 
@@ -258,8 +299,8 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend? ba
             DetachMonitorOutput();
         if (_player is not { } player || _paused || _endedRaised)
             return;
-        // No start grace needed: the wall-clock MediaClock starts synchronously inside Play(),
-        // so IsRunning can't read false while hardware warms up (there is none to warm up).
+        // No start grace needed: the pacer is started before Play() and reports advancing from
+        // that moment, so IsRunning can't read false while hardware warms up (there is none).
         if (player.IsRunning)
             return;
         _endedRaised = true;
