@@ -56,14 +56,37 @@ public sealed class TimelineEnvelopeMathTests
     }
 
     [Fact]
-    public void EnvelopePointCenter_ClampsToBlockRightEdge()
+    public void ProjectEnvelopePoint_IsUnclamped_AndFlagsOutOfRange()
     {
-        var inside = TimelineMath.EnvelopePointCenter(Block, Pt(15_000, 0), PxPerMs);
-        Assert.Equal(Block.X + 1500, inside.X, 3);
-        Assert.Equal(TimelineMath.EnvelopeYForDb(Block, 0), inside.Y, 6);
+        // REPLACES EnvelopePointCenter_ClampsToBlockRightEdge, which pinned the defect this projection
+        // exists to fix: the old center clamped x to block.Right, so every keyframe authored past a
+        // trimmed-in right edge stacked on that one pixel column and only the last was ever pickable.
+        // The projection is now UNCLAMPED and reports where the point landed; the canvas decides what
+        // to draw from that flag (dots in range, one counted chevron badge per edge outside it).
+        var inside = TimelineMath.ProjectEnvelopePoint(Block, Pt(15_000, 0), 0, PxPerMs);
+        Assert.Equal(Block.X + 1500, inside.Center.X, 3);
+        Assert.Equal(TimelineMath.EnvelopeYForDb(Block, 0), inside.Center.Y, 6);
+        Assert.Equal(TimelineEnvelopeRange.InRange, inside.Range);
+        Assert.True(inside.IsInRange);
 
-        // A point authored past the trimmed range (e.g. after a re-trim) parks on the right edge.
-        Assert.Equal(Block.Right, TimelineMath.EnvelopePointCenter(Block, Pt(99_000, 0), PxPerMs).X, 3);
+        // Past the trimmed range (e.g. after a re-trim): the real x, and BeyondEnd.
+        var beyond = TimelineMath.ProjectEnvelopePoint(Block, Pt(99_000, 0), 3, PxPerMs);
+        Assert.Equal(Block.X + 9900, beyond.Center.X, 3);
+        Assert.Equal(TimelineEnvelopeRange.BeyondEnd, beyond.Range);
+        Assert.Equal(3, beyond.Index);
+
+        // Negative clip time (only reachable from an externally edited file - see the mapping note in
+        // TimelineMath) projects left of the block and reports BeforeStart.
+        var before = TimelineMath.ProjectEnvelopePoint(Block, Pt(-2000, 0), 0, PxPerMs);
+        Assert.Equal(Block.X - 200, before.Center.X, 3);
+        Assert.Equal(TimelineEnvelopeRange.BeforeStart, before.Range);
+
+        // The block's own edges stay IN range - the last keyframe of a full-length envelope is a dot.
+        Assert.Equal(
+            TimelineEnvelopeRange.InRange,
+            TimelineMath.ProjectEnvelopePoint(Block, Pt(30_000, 0), 0, PxPerMs).Range);
+        Assert.Equal(
+            TimelineEnvelopeRange.InRange, TimelineMath.ProjectEnvelopePoint(Block, Pt(0, 0), 0, PxPerMs).Range);
     }
 
     // ---- level sampling (mirror of VolumeEnvelopes.Sample) ----
@@ -100,16 +123,21 @@ public sealed class TimelineEnvelopeMathTests
     // ---- hit-testing ----
 
     [Fact]
-    public void EnvelopePointHit_PicksNearestWithinRadius()
+    public void HitTestEnvelope_PicksNearestWithinRadius()
     {
         var envelope = new[] { Pt(0, 0), Pt(10_000, -6), Pt(10_060, -6) };
-        var second = TimelineMath.EnvelopePointCenter(Block, envelope[1], PxPerMs);
+        var second = TimelineMath.ProjectEnvelopePoint(Block, envelope[1], 1, PxPerMs).Center;
 
-        Assert.Equal(1, TimelineMath.EnvelopePointHit(Block, envelope, PxPerMs, new Point(second.X - 3, second.Y + 2)));
+        Assert.Equal(
+            1, TimelineMath.HitTestEnvelope(Block, envelope, PxPerMs, new Point(second.X - 3, second.Y + 2)).PointIndex);
         // 6 px apart at this zoom - the nearer of the two wins.
-        Assert.Equal(2, TimelineMath.EnvelopePointHit(Block, envelope, PxPerMs, new Point(second.X + 5, second.Y)));
-        Assert.Equal(-1, TimelineMath.EnvelopePointHit(Block, envelope, PxPerMs, new Point(second.X, second.Y + 20)));
-        Assert.Equal(-1, TimelineMath.EnvelopePointHit(Block, [], PxPerMs, second));
+        Assert.Equal(
+            2, TimelineMath.HitTestEnvelope(Block, envelope, PxPerMs, new Point(second.X + 5, second.Y)).PointIndex);
+        Assert.False(TimelineMath.HitTestEnvelope(Block, envelope, PxPerMs, new Point(second.X, second.Y + 20)).IsHit);
+        Assert.False(TimelineMath.HitTestEnvelope(Block, [], PxPerMs, second).IsHit);
+
+        // A dot hit is never "via the edge indicator" - that flag drives the badge readout only.
+        Assert.False(TimelineMath.HitTestEnvelope(Block, envelope, PxPerMs, second).ViaEdgeIndicator);
     }
 
     [Fact]

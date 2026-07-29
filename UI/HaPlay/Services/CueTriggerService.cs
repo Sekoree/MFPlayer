@@ -113,6 +113,33 @@ public sealed class CueTriggerService : IDisposable
 
     private bool GateOpen => !_disposed && _cuePlayer.TriggersArmed && !_cuePlayer.IsCueEditMode;
 
+    /// <summary>
+    /// Cheap "could this record possibly do anything?" predicate, safe to call from a device I/O
+    /// thread BEFORE marshalling to the UI thread. Device input is always-on, so an idle rig with a
+    /// meter subscription or an MTC source pushes hundreds of records a second; posting each one to
+    /// the dispatcher just to have <see cref="OnControlInput"/> drop it is pure UI-thread load.
+    /// <para>This exists so the host does not have to RESTATE the gate: the arm/edit-mode rule and
+    /// the "MIDI learn is deliberately ungated" exception live here, next to the code that enforces
+    /// them, instead of being mirrored in the view model where the two copies would drift.</para>
+    /// <para>Thread-safety: reads a bool, a bool and a reference off the cue player - individually
+    /// atomic, and a stale read only costs one extra posted record (which
+    /// <see cref="OnControlInput"/> then drops) or one missed record on the very edge of arming.
+    /// It is a filter, never the authority: <see cref="OnControlInput"/> re-checks everything.</para>
+    /// </summary>
+    public bool WouldAccept(ControlMonitorRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (_disposed)
+            return false;
+        if (record.Direction is not (ControlMonitorDirection.Input or ControlMonitorDirection.Dropped))
+            return false;
+        if (record.Protocol is not (ControlMonitorProtocol.MIDI or ControlMonitorProtocol.OSC))
+            return false;
+        // MIDI learn captures the next message whether or not triggers are armed (it is an
+        // edit-mode affordance), so it has to open the gate on its own.
+        return GateOpen || _cuePlayer.MidiLearnTarget is not null;
+    }
+
     /// <summary>Entry point for the always-on device input event. Accepts Input AND Dropped
     /// records: "dropped" only means no Control-workspace DEVICE mapping matched - the message
     /// still physically arrived on a configured port/listener, which is all a cue trigger needs.

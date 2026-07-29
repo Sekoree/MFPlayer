@@ -214,10 +214,6 @@ public partial class MainViewModel : ViewModelBase
     /// </remarks>
     private void OnControlInputObserved(ControlMonitorRecord record)
     {
-        if (record.Direction is not (ControlMonitorDirection.Input or ControlMonitorDirection.Dropped))
-            return;
-        if (record.Protocol is not (ControlMonitorProtocol.MIDI or ControlMonitorProtocol.OSC))
-            return;
         // MTC chase (D1) is decoded HERE, on the I/O thread, and never posted: a 25 fps sender is 100
         // quarter-frames per second, which as dispatcher work items would dwarf everything else the UI
         // thread does. The chase service swallows timecode records whether or not it is decoding them
@@ -225,7 +221,10 @@ public partial class MainViewModel : ViewModelBase
         // Timecode schedule this costs one enum compare.
         if (_timecodeChase.OnControlInput(record))
             return;
-        if (!((CuePlayer.TriggersArmed && !CuePlayer.IsCueEditMode) || CuePlayer.MidiLearnTarget is not null))
+        // The gate is asked for, never restated here: CueTriggerService owns the arm/edit-mode rule
+        // and the MIDI-learn exception, so the cheap I/O-thread filter and the authoritative check
+        // cannot drift apart.
+        if (!_cueTriggers.WouldAccept(record))
             return;
 
         Dispatcher.UIThread.Post(() => _cueTriggers.OnControlInput(record));

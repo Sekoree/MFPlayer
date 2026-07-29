@@ -18,13 +18,22 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
     // Dialogs/, and the ControlPanes/ dock panes). RATCHET ONLY DOWNWARD - never raise this to accommodate a
     // new literal. (Jumped from 166 to 264 when the scan went recursive: the previous top-level-only glob was
     // blind to Dialogs/ and to the ControlPanes/ views the Control workspace tabs were extracted into.)
-    // Ratcheted 264 -> 260 on 2026-07-29: this round's cue-player work (triggers, timecode chase,
-    // master fader, layout rebuild) routed all of its text through Strings.resx and migrated a few
-    // existing literals on the way, so the floor drops with it.
-    private const int Baseline = 260;
+    // 264 -> 260 on 2026-07-29: the cue-player round (triggers, timecode chase, master fader, layout
+    // rebuild) routed all of its text through Strings.resx and migrated a few existing literals.
+    // 260 -> 317 the same day when the attribute regex was CORRECTED (see below): compound names like
+    // PlaceholderText were never being scanned, so 57 literals had been invisible since the lint was
+    // written. Like the 166 -> 264 jump when the scan went recursive, this is the scan getting more
+    // accurate, NOT permission to add literals - the ratchet rule below still stands.
+    private const int Baseline = 317;
 
+    // The old `\b(Text|Content|…)` made the scan blind to any attribute ENDING in one of these
+    // names, because `\b` cannot match between two word characters: `PlaceholderText="…"` - the one
+    // actually in use - slipped past it entirely, so placeholder copy was never linted. Now the
+    // attribute name is matched WHOLE (any prefix, ending in one of the tokens), which also covers
+    // attached forms like `ToolTip.Tip`. Group 1 stays the attribute name, group 2 the value.
     private static readonly Regex Attr = new(
-        @"\b(Text|Content|Header|Title|ToolTip\.Tip|Watermark)\s*=\s*""([^""]*)""", RegexOptions.Compiled);
+        @"(?<![\w.])([\w.]*(?:Text|Content|Header|Title|Tip|Watermark))\s*=\s*""([^""]*)""",
+        RegexOptions.Compiled);
     private static readonly Regex GlyphEntity = new(@"^\s*(&#x?[0-9A-Fa-f]+;\s*)+$", RegexOptions.Compiled);
 
     [Fact]

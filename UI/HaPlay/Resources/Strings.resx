@@ -4000,6 +4000,12 @@
   <data name="TimelineEnvelopeTooltip" xml:space="preserve">
     <value>Show volume envelopes on media lanes. In edit mode: click the line to add a point, drag a point to move it, Delete removes it, right-click a segment to change its curve</value>
   </data>
+  <data name="TimelineEnvelopePointsBeyondEndFormat" xml:space="preserve">
+    <value>{0} keyframe(s) past the trimmed end - drag to bring one back, Delete to remove it</value>
+  </data>
+  <data name="TimelineEnvelopePointsBeforeStartFormat" xml:space="preserve">
+    <value>{0} keyframe(s) before the trimmed start - drag to bring one back, Delete to remove it</value>
+  </data>
   <data name="SchedulesArmedToggleLabel" xml:space="preserve">
     <value>Schedules</value>
   </data>

@@ -18,6 +18,69 @@ internal enum TimelineHitKind
     EnvelopePoint,
 }
 
+/// <summary>Where a projected envelope keyframe sits relative to the block that owns it. Out-of-range
+/// points are not a rendering accident to be hidden: the runtime sampler interpolates toward them and
+/// flat-extrapolates the outermost one, so they still shape the AUDIBLE curve.</summary>
+internal enum TimelineEnvelopeRange
+{
+    InRange,
+
+    /// <summary>Negative clip time - left of the block's left edge.</summary>
+    BeforeStart,
+
+    /// <summary>Clip time past the trimmed length - right of the block's right edge.</summary>
+    BeyondEnd,
+}
+
+/// <summary>
+/// One envelope keyframe projected onto the canvas: its index in the envelope, its centre in canvas
+/// coordinates, and where that centre fell relative to the block. The centre is NEVER clamped - this
+/// is the single source of truth the renderer AND the hit-test consume, so a presentation decision
+/// (what to do about an out-of-range point) can no longer desync drawing from picking.
+/// </summary>
+internal readonly record struct EnvelopePointProjection(int Index, Point Center, TimelineEnvelopeRange Range)
+{
+    public bool IsInRange => Range == TimelineEnvelopeRange.InRange;
+}
+
+/// <summary>
+/// The single stand-in the canvas draws - and picks - for ALL the out-of-range keyframes at one block
+/// edge: a chevron badge carrying their <see cref="Count"/>. <see cref="PointIndex"/> is the
+/// INNERMOST of them (the one adjacent to the in-range run), so dragging it pulls it back into range
+/// without fighting <see cref="TimelineMath.EnvelopeClampDragTime"/>'s neighbour clamp, and repeated
+/// select+Delete peels the run off from the inside out.
+/// </summary>
+internal readonly record struct EnvelopeEdgeIndicator(
+    TimelineEnvelopeRange Edge, int Count, int PointIndex, Rect Bounds);
+
+/// <summary>
+/// One block's envelope in view terms: every keyframe projected (unclamped) plus the edge indicators
+/// standing in for the out-of-range ones. Produced by <see cref="TimelineMath.ProjectEnvelope"/> and
+/// consumed by both <c>TimelineCanvas.RenderEnvelope</c> and
+/// <see cref="TimelineMath.HitTestEnvelope(in EnvelopeOverlay, Point)"/>.
+/// </summary>
+internal readonly record struct EnvelopeOverlay(
+    IReadOnlyList<EnvelopePointProjection> Points,
+    EnvelopeEdgeIndicator? BeforeStart,
+    EnvelopeEdgeIndicator? BeyondEnd)
+{
+    public static readonly EnvelopeOverlay Empty = new([], null, null);
+
+    /// <summary>Where keyframe <paramref name="index"/> landed (in-range for anything out of list
+    /// bounds - callers use it to decide whether a SELECTED point draws as a dot or as a lit badge).</summary>
+    public TimelineEnvelopeRange RangeOf(int index) =>
+        index >= 0 && index < Points.Count ? Points[index].Range : TimelineEnvelopeRange.InRange;
+}
+
+/// <summary>What a pointer landed on in an envelope overlay: a keyframe index (−1 = nothing) and
+/// whether it was reached through an edge indicator rather than its own dot.</summary>
+internal readonly record struct EnvelopeHit(int PointIndex, bool ViaEdgeIndicator)
+{
+    public static readonly EnvelopeHit None = new(-1, false);
+
+    public bool IsHit => PointIndex >= 0;
+}
+
 /// <summary>
 /// Pure geometry, hit-test and snap math for <see cref="TimelineCanvas"/>. Kept free of control
 /// state so block/handle/marker picking and snapping are directly unit-testable.
@@ -191,6 +254,15 @@ internal static class TimelineMath
     // at a FIXED reference 12/72 = ⅙ of the block height below the top (not mid-lane): the top sixth
     // is boost headroom, everything below the line is attenuation - the renderer draws the line so
     // points are easy to park at unity.
+    //
+    // OUT-OF-RANGE keyframes: every EDITOR path clamps authored times into [0, EffectiveDurationMs]
+    // (EnvelopeTimeForX, EnvelopeClampDragTime, TimelineDuckMath.ApplyDucks), but a RIGHT-edge trim
+    // shrinks that range without rewriting the stored times - so BeyondEnd is the case the editor
+    // itself produces. A LEFT-edge trim only raises StartOffsetMs and rebases nothing, so BeforeStart
+    // cannot arise from trimming; it is still projected (and indicated) symmetrically because
+    // CueAutomationPoint.TimeMs is a plain int that an externally authored/edited project file can
+    // carry negative, and the runtime honours such a point (VolumeEnvelopes.Sample interpolates from
+    // the first point forwards and flat-extrapolates it backwards).
 
     public const double EnvelopePointHitPx = 6;
     public const double EnvelopeLineHitPx = 5;
@@ -221,12 +293,92 @@ internal static class TimelineMath
     public static int EnvelopeTimeForX(Rect block, double x, double pxPerMs, int maxTimeMs) =>
         pxPerMs <= 0 ? 0 : (int)Math.Clamp(Math.Round((x - block.X) / pxPerMs), 0, Math.Max(0, maxTimeMs));
 
-    /// <summary>Canvas position of one envelope keyframe. X clamps to the block's right edge so a
-    /// point authored past the trimmed range (e.g. after a re-trim) stays visible and grabbable -
-    /// dragging it pulls its time back into range.</summary>
-    public static Point EnvelopePointCenter(Rect block, CueAutomationPoint point, double pxPerMs) =>
-        new(Math.Min(block.X + Math.Max(0, point.TimeMs) * pxPerMs, block.Right),
-            EnvelopeYForDb(block, point.LevelDb));
+    /// <summary>Chevron-badge size (px) for the out-of-range keyframe indicator: the DRAWN box and its
+    /// HIT box are one and the same rectangle (<see cref="EnvelopeEdgeIndicator.Bounds"/>), so the two
+    /// cannot drift apart.</summary>
+    public const double EnvelopeEdgeIndicatorWidthPx = 20;
+
+    /// <inheritdoc cref="EnvelopeEdgeIndicatorWidthPx"/>
+    public const double EnvelopeEdgeIndicatorHeightPx = 14;
+
+    /// <summary>
+    /// Project one keyframe onto the canvas: x = block.X + timeMs·pxPerMs, y from the dB mapping.
+    /// UNCLAMPED on x by design - a point authored past the trimmed end (or, from an externally
+    /// edited file, before the trimmed start) projects OUTSIDE the block and says so through
+    /// <see cref="EnvelopePointProjection.Range"/>. Clamping here is what let several such points
+    /// stack invisibly on one pixel column where only the last was pickable; the presentation
+    /// decision now belongs to the view adapter (<c>TimelineCanvas.RenderEnvelope</c>), which is why
+    /// hit-testing consumes this same projection.
+    /// </summary>
+    public static EnvelopePointProjection ProjectEnvelopePoint(
+        Rect block, CueAutomationPoint point, int index, double pxPerMs)
+    {
+        var x = block.X + point.TimeMs * pxPerMs;
+        var range = x < block.X
+            ? TimelineEnvelopeRange.BeforeStart
+            : x > block.Right
+                ? TimelineEnvelopeRange.BeyondEnd
+                : TimelineEnvelopeRange.InRange;
+        return new EnvelopePointProjection(index, new Point(x, EnvelopeYForDb(block, point.LevelDb)), range);
+    }
+
+    /// <summary>
+    /// Project a whole envelope and fold the out-of-range points into (at most) one edge indicator per
+    /// side. The indicator is inset by <see cref="EdgeGripPx"/> so it does not swallow the block's trim
+    /// grip, and is suppressed on a block too narrow to hold two of them - a case where the renderer
+    /// draws nothing and the hit-test therefore finds nothing, which keeps the two in agreement.
+    /// </summary>
+    public static EnvelopeOverlay ProjectEnvelope(
+        Rect block, IReadOnlyList<CueAutomationPoint> envelope, double pxPerMs)
+    {
+        if (envelope.Count == 0)
+            return EnvelopeOverlay.Empty;
+
+        var points = new List<EnvelopePointProjection>(envelope.Count);
+        int beforeCount = 0, beyondCount = 0, beforeIndex = -1, beyondIndex = -1;
+        for (var i = 0; i < envelope.Count; i++)
+        {
+            var projection = ProjectEnvelopePoint(block, envelope[i], i, pxPerMs);
+            points.Add(projection);
+            switch (projection.Range)
+            {
+                case TimelineEnvelopeRange.BeforeStart:
+                    beforeCount++;
+                    beforeIndex = i; // innermost = the LAST one before the in-range run
+                    break;
+                case TimelineEnvelopeRange.BeyondEnd:
+                    beyondCount++;
+                    if (beyondIndex < 0)
+                        beyondIndex = i; // innermost = the FIRST one after the in-range run
+                    break;
+            }
+        }
+
+        return new EnvelopeOverlay(
+            points,
+            EdgeIndicator(block, TimelineEnvelopeRange.BeforeStart, beforeCount, beforeIndex),
+            EdgeIndicator(block, TimelineEnvelopeRange.BeyondEnd, beyondCount, beyondIndex));
+    }
+
+    private static EnvelopeEdgeIndicator? EdgeIndicator(
+        Rect block, TimelineEnvelopeRange edge, int count, int pointIndex)
+    {
+        // Two badges must fit side by side without overlapping, whichever edges are actually in play.
+        if (count <= 0 || block.Width < EnvelopeEdgeIndicatorWidthPx * 2
+            || block.Height < EnvelopeEdgeIndicatorHeightPx)
+            return null;
+
+        var halfW = EnvelopeEdgeIndicatorWidthPx / 2;
+        var halfH = EnvelopeEdgeIndicatorHeightPx / 2;
+        var cx = edge == TimelineEnvelopeRange.BeforeStart
+            ? block.X + EdgeGripPx + halfW
+            : block.Right - EdgeGripPx - halfW;
+        cx = Math.Clamp(cx, block.X + halfW, block.Right - halfW);
+        return new EnvelopeEdgeIndicator(
+            edge, count, pointIndex,
+            new Rect(cx - halfW, block.Center.Y - halfH,
+                EnvelopeEdgeIndicatorWidthPx, EnvelopeEdgeIndicatorHeightPx));
+    }
 
     /// <summary>
     /// The envelope level (dB) at a clip time - the editor-side mirror of the runtime's
@@ -270,21 +422,49 @@ internal static class TimelineMath
         return i;
     }
 
-    /// <summary>Nearest keyframe within <see cref="EnvelopePointHitPx"/> of <paramref name="p"/>, else −1.</summary>
-    public static int EnvelopePointHit(Rect block, IReadOnlyList<CueAutomationPoint> envelope, double pxPerMs, Point p)
+    /// <summary>
+    /// Pick a keyframe out of a projected overlay: the nearest IN-RANGE dot within
+    /// <see cref="EnvelopePointHitPx"/>, else the edge indicator under <paramref name="p"/> (which
+    /// resolves to the innermost out-of-range point it stands for). Only ever returns points the
+    /// renderer actually drew - dots are the unambiguous in-range ones, and everything else is
+    /// reachable exactly through the badge that represents it.
+    /// </summary>
+    public static EnvelopeHit HitTestEnvelope(in EnvelopeOverlay overlay, Point p)
     {
         var best = -1;
         var bestDistance = EnvelopePointHitPx;
-        for (var i = 0; i < envelope.Count; i++)
+        foreach (var projection in overlay.Points)
         {
-            var distance = Distance(EnvelopePointCenter(block, envelope[i], pxPerMs), p);
+            if (!projection.IsInRange)
+                continue;
+            var distance = Distance(projection.Center, p);
             if (distance <= bestDistance)
             {
-                best = i;
+                best = projection.Index;
                 bestDistance = distance;
             }
         }
-        return best;
+        if (best >= 0)
+            return new EnvelopeHit(best, false);
+
+        // Dots beat badges (they are the precise targets); between two badges the nearer centre wins.
+        var indicator = NearerIndicatorAt(overlay.BeforeStart, overlay.BeyondEnd, p);
+        return indicator is { } hit ? new EnvelopeHit(hit.PointIndex, true) : EnvelopeHit.None;
+    }
+
+    /// <summary>Convenience overload: project <paramref name="envelope"/> and pick in one step.</summary>
+    public static EnvelopeHit HitTestEnvelope(
+        Rect block, IReadOnlyList<CueAutomationPoint> envelope, double pxPerMs, Point p) =>
+        HitTestEnvelope(ProjectEnvelope(block, envelope, pxPerMs), p);
+
+    private static EnvelopeEdgeIndicator? NearerIndicatorAt(
+        EnvelopeEdgeIndicator? a, EnvelopeEdgeIndicator? b, Point p)
+    {
+        var hitA = a is { } ia && ia.Bounds.Contains(p) ? a : null;
+        var hitB = b is { } ib && ib.Bounds.Contains(p) ? b : null;
+        if (hitA is null || hitB is null)
+            return hitA ?? hitB;
+        return Distance(hitA.Value.Bounds.Center, p) <= Distance(hitB.Value.Bounds.Center, p) ? hitA : hitB;
     }
 
     /// <summary>True when <paramref name="p"/> sits on the envelope line: within the block's x range

@@ -1343,6 +1343,8 @@ public static class Strings
     public static string TimelineEmptyGroupHint => Get(nameof(TimelineEmptyGroupHint));
     public static string TimelineEnvelopeLabel => Get(nameof(TimelineEnvelopeLabel));
     public static string TimelineEnvelopeTooltip => Get(nameof(TimelineEnvelopeTooltip));
+    public static string TimelineEnvelopePointsBeyondEndFormat => Get(nameof(TimelineEnvelopePointsBeyondEndFormat));
+    public static string TimelineEnvelopePointsBeforeStartFormat => Get(nameof(TimelineEnvelopePointsBeforeStartFormat));
     public static string SchedulesArmedToggleLabel => Get(nameof(SchedulesArmedToggleLabel));
     public static string SchedulesArmedToggleTooltip => Get(nameof(SchedulesArmedToggleTooltip));
     public static string CueScheduleSectionHeader => Get(nameof(CueScheduleSectionHeader));

@@ -24,7 +24,10 @@ namespace HaPlay.Views.Controls;
 /// <c>FadeIn/FadeOutMs</c>, zero-length cues are draggable diamond markers. Media lanes overlay the
 /// volume envelope (Phase B): click the line to add a point, drag a point to move it (dB/time
 /// readout), Delete removes the selected point, right-click a segment cycles its curve - every edit
-/// writes a NEW list to <see cref="CueNodeViewModel.VolumeEnvelope"/>. All edits write through the
+/// writes a NEW list to <see cref="CueNodeViewModel.VolumeEnvelope"/>. Keyframes that fall outside the
+/// trimmed clip (typically after a right-edge trim) still bend the audible curve, so they are not
+/// hidden: each edge collapses them into ONE counted chevron badge that selects, drags and deletes
+/// them like a dot would. All edits write through the
 /// bound <see cref="CueNodeViewModel"/> properties; geometry/snap math lives in
 /// <see cref="TimelineMath"/> (the <see cref="CompositionPlacementCanvas"/> manual hit-test pattern).
 /// </summary>
@@ -69,6 +72,10 @@ public sealed class TimelineCanvas : Control
     private int _dragBlockDurationMs;
     private int _dragLaneIndex;
     private int _dragEnvelopeIndex = -1;
+
+    /// <summary>True once an envelope drag actually moved the point - a plain CLICK must leave the
+    /// transient readout (e.g. the edge-badge message) alone instead of clearing it on release.</summary>
+    private bool _envelopeDragMoved;
 
     // Envelope selection (Delete target) + the transient drag/right-click readout.
     private CueNodeViewModel? _selectedEnvelopeNode;
@@ -482,6 +489,12 @@ public sealed class TimelineCanvas : Control
     /// non-linear segments draw the same gain-domain shape playback applies. In edit mode it adds the
     /// dotted 0 dB reference line and the keyframe dots (selected = ringed); an EMPTY envelope shows
     /// only a dashed unity line while editing, as the click target for the first point.
+    /// <para>This is the VIEW ADAPTER over <see cref="TimelineMath.ProjectEnvelope"/>: the projection
+    /// is unclamped, and the presentation policy lives here - the CURVE spans the whole block (points
+    /// outside it still bend the audible curve, so they are never silently dropped), DOTS are drawn
+    /// only for in-range points, and each edge's out-of-range points collapse into ONE chevron badge
+    /// carrying their count. <see cref="TimelineMath.HitTestEnvelope(in EnvelopeOverlay, Point)"/>
+    /// consumes the same projection, so what is drawn and what is pickable cannot diverge.</para>
     /// </summary>
     private void RenderEnvelope(DrawingContext ctx, CueNodeViewModel node, Rect block, double pxPerMs)
     {
@@ -509,15 +522,18 @@ public sealed class TimelineCanvas : Control
             ctx.DrawLine(refPen, new Point(block.X, refY), new Point(block.Right, refY));
         }
 
+        var overlay = TimelineMath.ProjectEnvelope(block, envelope, pxPerMs);
+
         var xs = new List<double>();
         for (var x = block.X; x < block.Right; x += 4)
             xs.Add(x);
         xs.Add(block.Right);
-        foreach (var point in envelope)
+        foreach (var projection in overlay.Points)
         {
-            var px = block.X + Math.Max(0, point.TimeMs) * pxPerMs;
-            if (px <= block.Right)
-                xs.Add(px);
+            // Vertex xs for the in-range points only; the curve outside them is already covered by the
+            // 4 px sampling (EnvelopeLevelDbAt extrapolates/interpolates toward the outside points).
+            if (projection.IsInRange)
+                xs.Add(projection.Center.X);
         }
         xs.Sort();
 
@@ -532,25 +548,63 @@ public sealed class TimelineCanvas : Control
         if (!editable)
             return;
 
-        // KNOWN LIMITATION (not fixable from here): TimelineMath.EnvelopePointCenter deliberately
-        // clamps a keyframe authored past the trimmed-in right edge onto that edge - a contract
-        // TimelineEnvelopeMathTests.EnvelopePointCenter_ClampsToBlockRightEdge pins - so after a
-        // right-edge trim SEVERAL out-of-range keyframes can land on the same pixel column. They then
-        // draw as one dot, and TimelineMath.EnvelopePointHit's nearest-point search resolves the tie to
-        // the LAST of them, so only that one can be dragged back into range (repeated Delete does peel
-        // them off one at a time, since each removal exposes the next). Fixing it means fanning the
-        // clamped points apart in BOTH EnvelopePointCenter and EnvelopePointHit so drawing and hit
-        // testing stay in agreement - i.e. in TimelineMath, alongside its tests, not here: duplicating
-        // the geometry canvas-side would put the renderer and the shared math permanently out of sync.
         var dotBrush = new SolidColorBrush(lineColor);
         var selectedPen = new Pen(Brushes.White, 1.5);
-        for (var i = 0; i < envelope.Count; i++)
+        var selectedIndex = ReferenceEquals(node, _selectedEnvelopeNode) ? _selectedEnvelopeIndex : -1;
+        foreach (var projection in overlay.Points)
         {
-            var center = TimelineMath.EnvelopePointCenter(block, envelope[i], pxPerMs);
-            var selected = ReferenceEquals(node, _selectedEnvelopeNode) && i == _selectedEnvelopeIndex;
+            // Dots for the in-range points ONLY - a keyframe past the trimmed end used to be clamped
+            // onto the edge, where several of them stacked into one dot and only the last was pickable.
+            if (!projection.IsInRange)
+                continue;
+            var selected = projection.Index == selectedIndex;
             var radius = TimelineMath.EnvelopePointRadiusPx + (selected ? 1.5 : 0);
-            ctx.DrawEllipse(dotBrush, selected ? selectedPen : null, center, radius, radius);
+            ctx.DrawEllipse(dotBrush, selected ? selectedPen : null, projection.Center, radius, radius);
         }
+
+        var selectedRange = overlay.RangeOf(selectedIndex);
+        RenderEnvelopeEdgeIndicator(ctx, overlay.BeforeStart, lineColor, selectedRange);
+        RenderEnvelopeEdgeIndicator(ctx, overlay.BeyondEnd, lineColor, selectedRange);
+    }
+
+    /// <summary>The out-of-range keyframe badge: a chevron pointing off the affected edge plus the
+    /// number of keyframes it stands for ("«3" / "3»"), lit white while one of them is the selected
+    /// point. It is a hit target in its own right (see
+    /// <see cref="TimelineMath.HitTestEnvelope(in EnvelopeOverlay, Point)"/>) so those keyframes can
+    /// still be selected, dragged back into range and deleted - they are inset clear of the block's
+    /// trim grip so grabbing the right edge keeps working.</summary>
+    private static void RenderEnvelopeEdgeIndicator(
+        DrawingContext ctx, EnvelopeEdgeIndicator? indicator, Color lineColor, TimelineEnvelopeRange selectedRange)
+    {
+        if (indicator is not { } badge)
+            return;
+
+        var pointsLeft = badge.Edge == TimelineEnvelopeRange.BeforeStart;
+        var lit = selectedRange == badge.Edge;
+        var bounds = badge.Bounds;
+        ctx.DrawRectangle(
+            new SolidColorBrush(Color.FromArgb(0xC0, 0x1A, 0x1A, 0x1A)),
+            new Pen(new SolidColorBrush(lit ? Colors.White : lineColor), lit ? 1.5 : 1),
+            new RoundedRect(bounds, 3));
+
+        // Chevron on the OUTWARD side, count text beside it.
+        const double chevronHalf = 3;
+        var chevronX = pointsLeft ? bounds.X + 5 : bounds.Right - 5;
+        var tipX = pointsLeft ? chevronX - chevronHalf : chevronX + chevronHalf;
+        var midY = bounds.Center.Y;
+        var chevronPen = new Pen(new SolidColorBrush(lit ? Colors.White : lineColor), 1.5);
+        ctx.DrawGeometry(null, chevronPen, new PolylineGeometry(
+            [new Point(chevronX, midY - chevronHalf), new Point(tipX, midY), new Point(chevronX, midY + chevronHalf)],
+            false));
+
+        var text = new FormattedText(
+            badge.Count.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight, Typeface.Default, 9,
+            new SolidColorBrush(lit ? Colors.White : lineColor));
+        var textX = pointsLeft
+            ? Math.Min(chevronX + 4, bounds.Right - text.Width - 1)
+            : Math.Max(chevronX - 4 - text.Width, bounds.X + 1);
+        ctx.DrawText(text, new Point(textX, midY - text.Height / 2));
     }
 
     private void RenderFades(DrawingContext ctx, CueNodeViewModel node, Rect block, double pxPerMs)
@@ -662,7 +716,11 @@ public sealed class TimelineCanvas : Control
                     && kind is not (TimelineHitKind.FadeInHandle or TimelineHitKind.FadeOutHandle))
                 {
                     var envelope = node.VolumeEnvelope;
-                    var pointIndex = TimelineMath.EnvelopePointHit(block, envelope, pxPerMs, p);
+                    // One projection feeds the pick, exactly as it fed the draw: an in-range dot, or
+                    // the edge badge standing in for the out-of-range keyframes at that edge.
+                    var overlay = TimelineMath.ProjectEnvelope(block, envelope, pxPerMs);
+                    var hit = TimelineMath.HitTestEnvelope(overlay, p);
+                    var pointIndex = hit.PointIndex;
                     if (pointIndex < 0 && kind == TimelineHitKind.Block
                         && TimelineMath.EnvelopeLineHit(block, envelope, pxPerMs, p))
                     {
@@ -680,7 +738,10 @@ public sealed class TimelineCanvas : Control
                     {
                         kind = TimelineHitKind.EnvelopePoint;
                         _dragEnvelopeIndex = pointIndex;
+                        _envelopeDragMoved = false;
                         SelectEnvelopePoint(node, pointIndex);
+                        if (hit.ViaEdgeIndicator)
+                            ShowEdgeIndicatorReadout(overlay, pointIndex, p);
                     }
                 }
             }
@@ -763,6 +824,24 @@ public sealed class TimelineCanvas : Control
             return true;
         }
         return false;
+    }
+
+    /// <summary>Flash what an edge-badge click just selected ("3 keyframes past the trimmed end"):
+    /// the picked keyframe has no dot of its own, so without the readout nothing on screen would
+    /// acknowledge the click. Dragging from here pulls it back into range; Delete removes it and the
+    /// badge's count drops by one.</summary>
+    private void ShowEdgeIndicatorReadout(in EnvelopeOverlay overlay, int pointIndex, Point p)
+    {
+        var beforeStart = overlay.RangeOf(pointIndex) == TimelineEnvelopeRange.BeforeStart;
+        if ((beforeStart ? overlay.BeforeStart : overlay.BeyondEnd) is not { } badge)
+            return;
+        ShowReadout(
+            HaPlay.Resources.Strings.Format(
+                beforeStart
+                    ? nameof(HaPlay.Resources.Strings.TimelineEnvelopePointsBeforeStartFormat)
+                    : nameof(HaPlay.Resources.Strings.TimelineEnvelopePointsBeyondEndFormat),
+                badge.Count),
+            new Point(p.X + 10, p.Y - 22), transient: true);
     }
 
     private void SelectEnvelopePoint(CueNodeViewModel node, int index)
@@ -885,7 +964,9 @@ public sealed class TimelineCanvas : Control
                 updated[_dragEnvelopeIndex] = envelope[_dragEnvelopeIndex] with { TimeMs = timeMs, LevelDb = levelDb };
                 _drag.VolumeEnvelope = updated;
 
-                var center = TimelineMath.EnvelopePointCenter(block, updated[_dragEnvelopeIndex], pxPerMs);
+                _envelopeDragMoved = true;
+                var center = TimelineMath
+                    .ProjectEnvelopePoint(block, updated[_dragEnvelopeIndex], _dragEnvelopeIndex, pxPerMs).Center;
                 ShowReadout(
                     $"{TimelineMath.FormatDbLabel(levelDb)} · {TimelineMath.FormatRulerLabel(timeMs)}",
                     new Point(center.X + 10, center.Y - 22), transient: false);
@@ -901,11 +982,12 @@ public sealed class TimelineCanvas : Control
         base.OnPointerReleased(e);
         if (_drag is not null)
         {
-            if (_dragKind == TimelineHitKind.EnvelopePoint)
+            if (_dragKind == TimelineHitKind.EnvelopePoint && _envelopeDragMoved)
                 ClearReadout(); // the drag readout; the point stays selected for Delete
             _drag = null;
             _dragKind = TimelineHitKind.None;
             _dragEnvelopeIndex = -1;
+            _envelopeDragMoved = false;
             e.Pointer.Capture(null);
             e.Handled = true;
         }
@@ -960,7 +1042,7 @@ public sealed class TimelineCanvas : Control
                 if (CanEditEnvelope(node)
                     && kind is not (TimelineHitKind.FadeInHandle or TimelineHitKind.FadeOutHandle))
                 {
-                    if (TimelineMath.EnvelopePointHit(block, node.VolumeEnvelope, pxPerMs, p) >= 0)
+                    if (TimelineMath.HitTestEnvelope(block, node.VolumeEnvelope, pxPerMs, p).IsHit)
                         kind = TimelineHitKind.EnvelopePoint;
                     else if (kind == TimelineHitKind.Block
                              && TimelineMath.EnvelopeLineHit(block, node.VolumeEnvelope, pxPerMs, p))
