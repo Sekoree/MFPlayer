@@ -278,11 +278,11 @@ internal static class AvPlaybackCoordinator
     /// pause/flush the output, rewinding the hardware clock's segment epoch) and the
     /// <see cref="MediaClock.Seek"/> re-anchor runs SECOND, so the anchor is normally taken in the
     /// post-flush epoch. A flush that lands AFTER the clock-seek (a racing pause, or the run loop's
-    /// natural-EOF flush) leaves the anchor stale for at most one position read: <see cref="MediaClock"/>
-    /// detects the master's regression below its epoch high-water and folds into the new epoch, resuming
-    /// from the seek target instead of freezing until the device clock re-passes the stale anchor. The
-    /// clock-seek also bumps <see cref="MediaClock.TimebaseGeneration"/>, which invalidates
-    /// generation-scoped consumers (e.g. <c>MediaPlayer.Position</c>'s natural-EOF Duration clamp).
+    /// natural-EOF flush) leaves the anchor stale for at most one position read: the output REPORTS the new
+    /// <see cref="ClockReading.EpochId"/> and <see cref="MediaClock"/> folds into it, resuming from the seek
+    /// target instead of freezing until the device clock re-passes the stale anchor. The clock-seek also
+    /// takes a new <see cref="MediaClock.PositionEpoch"/>, which invalidates epoch-scoped consumers
+    /// (e.g. <c>MediaPlayer.Position</c>'s natural-EOF Duration clamp).
     /// </summary>
     public static void Seek(
         VideoPlayer video,

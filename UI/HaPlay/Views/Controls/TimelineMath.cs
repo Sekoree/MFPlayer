@@ -301,6 +301,14 @@ internal static class TimelineMath
     /// <inheritdoc cref="EnvelopeEdgeIndicatorWidthPx"/>
     public const double EnvelopeEdgeIndicatorHeightPx = 14;
 
+    /// <summary>How far the pointer must travel before a drag STARTED ON AN EDGE BADGE begins editing.
+    /// A badge sits at the block's edge, nowhere near the keyframe it stands for, so the ordinary
+    /// absolute-position drag would teleport that keyframe to the badge's own x on the first pixel of
+    /// hand jitter - turning a click (the way the badge is selected for Delete) into a silent,
+    /// destructive edit. Dot drags need no threshold: the dot IS under the pointer, so one pixel of
+    /// jitter is one pixel of edit.</summary>
+    public const double EnvelopeBadgeDragThresholdPx = 5;
+
     /// <summary>
     /// Project one keyframe onto the canvas: x = block.X + timeMs·pxPerMs, y from the dB mapping.
     /// UNCLAMPED on x by design - a point authored past the trimmed end (or, from an externally

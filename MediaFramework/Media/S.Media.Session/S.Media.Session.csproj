@@ -5,6 +5,12 @@
          from Directory.Build.props; versions from Directory.Packages.props. -->
 
     <ItemGroup>
+        <!-- The §A voice-list regressions need a narrow internal fault seam on the commit path
+             (ShowSession.PostCommitFault); nothing else in the tests reaches internals. -->
+        <InternalsVisibleTo Include="S.Media.Session.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../S.Media.Time/S.Media.Time.csproj" />
         <ProjectReference Include="../S.Media.Routing/S.Media.Routing.csproj" />

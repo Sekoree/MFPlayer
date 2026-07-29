@@ -160,6 +160,12 @@ public class AudioEffectOutput : IAudioOutput, IAudioOutputChannelCapabilities, 
         public TimeSpan ElapsedSinceStart => playback.ElapsedSinceStart;
 
         public bool IsAdvancing => playback.IsAdvancing;
+
+        // Forwarded, not defaulted: the default would report PlaybackEpoch.Single over a device that
+        // re-anchors, and every consumer downstream would stop seeing its epoch boundaries.
+        public long EpochId => playback.EpochId;
+
+        public ClockReading Read() => playback.Read();
     }
 
     private sealed class ClockedPlaybackStatsAudioEffectOutput(

@@ -294,4 +294,100 @@ public sealed class TimelineEnvelopeProjectionTests
             window.Close();
         });
     }
+
+    /// <summary>
+    /// A badge CLICK must not relocate the keyframe it stands for. The badge sits at the block's edge,
+    /// nowhere near the represented keyframe's true position, so the ordinary absolute-position drag
+    /// would teleport a 45 s keyframe to ~29 s on the first pixel of hand jitter between press and
+    /// release - a silent, destructive edit from what the operator experienced as a click. Badge-started
+    /// drags therefore only begin editing once the pointer has moved past
+    /// <see cref="TimelineMath.EnvelopeBadgeDragThresholdPx"/>; a dot drag stays pixel-exact from the
+    /// first move (its dot IS under the pointer, so a 1 px jitter is a 1 px edit).
+    /// </summary>
+    [Fact]
+    public void Canvas_ClickingAnEdgeIndicator_DoesNotTeleportTheKeyframeOnPointerJitter()
+    {
+        DispatchUi(() =>
+        {
+            HeadlessAppTheme.ApplyProductionBaseTheme();
+            var (window, canvas, media) = ShowEnvelopeCanvas([Pt(0, 0), Pt(10_000, -6), Pt(45_000, -3)]);
+            try
+            {
+                var block = TimelineMath.BlockRect(0, 0, ClipMs, PxPerMs);
+                var badge = TimelineMath.ProjectEnvelope(block, media.VolumeEnvelope, PxPerMs).BeyondEnd!.Value;
+                var offset = canvas.TranslatePoint(default, window) ?? default;
+                var press = badge.Bounds.Center + offset;
+
+                window.MouseDown(press, MouseButton.Left);
+                window.MouseMove(press + new Point(2, 1)); // hand jitter, well under the threshold
+                window.MouseUp(press + new Point(2, 1), MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.Equal([0, 10_000, 45_000], media.VolumeEnvelope.Select(p => p.TimeMs));
+
+                // A deliberate drag past the threshold still pulls the keyframe back into range.
+                window.MouseDown(press, MouseButton.Left);
+                window.MouseMove(press + new Point(-40, 0));
+                window.MouseUp(press + new Point(-40, 0), MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+
+                var moved = media.VolumeEnvelope[2].TimeMs;
+                Assert.True(moved is > 10_000 and <= ClipMs, $"keyframe landed at {moved} ms");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>The threshold must not blunt an ordinary dot drag: its dot is under the pointer, so the
+    /// very first pixel of movement is a legitimate (and tiny) edit.</summary>
+    [Fact]
+    public void Canvas_DraggingAnInRangeDot_MovesItOnTheFirstPixel()
+    {
+        DispatchUi(() =>
+        {
+            HeadlessAppTheme.ApplyProductionBaseTheme();
+            var (window, canvas, media) = ShowEnvelopeCanvas([Pt(0, 0), Pt(10_000, -6), Pt(20_000, -3)]);
+            try
+            {
+                var block = TimelineMath.BlockRect(0, 0, ClipMs, PxPerMs);
+                var dot = TimelineMath.ProjectEnvelopePoint(block, media.VolumeEnvelope[1], 1, PxPerMs).Center;
+                var offset = canvas.TranslatePoint(default, window) ?? default;
+
+                window.MouseDown(dot + offset, MouseButton.Left);
+                window.MouseMove(dot + offset + new Point(2, 0));
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.Equal(10_100, media.VolumeEnvelope[1].TimeMs); // 2 px at 0.02 px/ms
+                window.MouseUp(dot + offset + new Point(2, 0), MouseButton.Left);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    private static (Window Window, TimelineCanvas Canvas, CueNodeViewModel Media) ShowEnvelopeCanvas(
+        List<CueAutomationPoint> envelope)
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddEmptyMediaCue();
+        var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        media.DurationMs = ClipMs;
+        media.VolumeEnvelope = envelope;
+
+        var canvas = new TimelineCanvas
+        {
+            Lanes = new ObservableCollection<CueNodeViewModel> { media },
+            PixelsPerMs = PxPerMs,
+            IsEditable = true,
+        };
+        var window = new Window { Content = canvas, Width = 800, Height = 200 };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        return (window, canvas, media);
+    }
 }

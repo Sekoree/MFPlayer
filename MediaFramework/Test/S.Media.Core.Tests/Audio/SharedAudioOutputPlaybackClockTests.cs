@@ -239,12 +239,67 @@ public sealed class SharedAudioOutputPlaybackClockTests
         var beforeReanchor = clock.ElapsedSinceStart;
         AssertMillisecondsNear(1950, beforeReanchor);
 
-        // Device stop/start (or an external flush) restarts the terminal clock at zero.
+        // Device stop/start (or an external flush): the terminal announces a NEW EPOCH and restarts at zero.
+        // The client re-derives its epoch from that id, not from the size of the regression.
         terminal.Reanchor();
         Assert.True(clock.ElapsedSinceStart >= beforeReanchor, "client clock stepped back across a terminal re-anchor");
 
+        // Recovery is a resume, not a freeze: the new epoch's progress counts from the high-water mark.
         terminal.Advance(TimeSpan.FromMilliseconds(400));
-        Assert.True(clock.ElapsedSinceStart >= beforeReanchor);
+        var afterProgress = clock.ElapsedSinceStart;
+        Assert.True(afterProgress >= beforeReanchor + TimeSpan.FromMilliseconds(300),
+            $"client clock froze after the terminal re-anchor: {beforeReanchor} -> {afterProgress}");
+    }
+
+    [Fact]
+    public void TerminalReanchor_DoesNotChangeTheClientsOwnEpoch_ButFlushDoes()
+    {
+        // The client clock stays continuous across a terminal re-anchor (that is what the recovery is FOR),
+        // so its own epoch must not change there. Only its own re-anchors - attach and Flush - take a new id.
+        var terminal = new FakeClockedTerminal(Stereo48k);
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 2);
+        using var lease = shared.Acquire();
+        var clock = Assert.IsAssignableFrom<IPlaybackClock>(lease.Output);
+
+        terminal.Advance(TimeSpan.FromMilliseconds(500));
+        var attached = clock.Read();
+        Assert.Equal(attached.EpochId, clock.EpochId);
+
+        terminal.Reanchor();
+        terminal.Advance(TimeSpan.FromMilliseconds(100));
+        Assert.Equal(attached.EpochId, clock.Read().EpochId);
+
+        ((IFlushableOutput)lease.Output).Flush();
+        var flushed = clock.Read();
+        Assert.NotEqual(attached.EpochId, flushed.EpochId);
+        Assert.Equal(TimeSpan.Zero, flushed.Elapsed);
+    }
+
+    [Fact]
+    public void TerminalRegressingWithoutANewEpoch_HoldsInsteadOfReanchoring()
+    {
+        // Plan D's equality rule from the consumer side: a regression is only a re-anchor when the terminal
+        // SAYS it is. A dip inside one epoch (a broken terminal, or a torn read of one mid-re-anchor) is
+        // held at the high-water - the old heuristic re-derived the epoch here and the client clock then
+        // gained the whole dip back as spurious forward progress when the terminal recovered.
+        var terminal = new FakeClockedTerminal(Stereo48k);
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 2);
+        using var lease = shared.Acquire();
+        var clock = Assert.IsAssignableFrom<IPlaybackClock>(lease.Output);
+
+        terminal.Advance(TimeSpan.FromSeconds(2));
+        var peak = clock.ElapsedSinceStart;
+        AssertMillisecondsNear(2000, peak);
+
+        terminal.RegressWithoutAnnouncingAnEpoch(TimeSpan.FromSeconds(1));
+        Assert.Equal(peak, clock.ElapsedSinceStart); // held at the high-water
+
+        // The terminal returns to where it was; nothing new was played, so nothing new is reported.
+        terminal.RegressWithoutAnnouncingAnEpoch(TimeSpan.FromSeconds(2));
+        Assert.Equal(peak, clock.ElapsedSinceStart);
+
+        terminal.Advance(TimeSpan.FromMilliseconds(500));
+        AssertMillisecondsNear(2500, clock.ElapsedSinceStart);
     }
 
     [Fact]
@@ -286,16 +341,29 @@ public sealed class SharedAudioOutputPlaybackClockTests
     // --- fakes -------------------------------------------------------------
 
     /// <summary>Terminal whose device clock advances only when the test says so, with a settable
-    /// submit-to-speaker latency (the surface the hardware backends report).</summary>
+    /// submit-to-speaker latency (the surface the hardware backends report). Like a real backend it
+    /// ANNOUNCES its re-anchors through <see cref="ClockReading.EpochId"/> and reads atomically.</summary>
     private sealed class FakeClockedTerminal(AudioFormat format) : IAudioOutput, IPlaybackClock, IAudioOutputLatency
     {
+        private readonly Lock _gate = new();
         private long _elapsedTicks;
         private long _latencyTicks;
+        private long _epochId = PlaybackEpoch.Next();
         private volatile bool _advancing = true;
 
         public AudioFormat Format { get; } = format;
         public TimeSpan ElapsedSinceStart => new(Interlocked.Read(ref _elapsedTicks));
         public bool IsAdvancing => _advancing;
+
+        public long EpochId
+        {
+            get { lock (_gate) return _epochId; }
+        }
+
+        public ClockReading Read()
+        {
+            lock (_gate) return new ClockReading(_epochId, new TimeSpan(Interlocked.Read(ref _elapsedTicks)), _advancing);
+        }
 
         public TimeSpan SubmitToOutputLatency
         {
@@ -304,8 +372,20 @@ public sealed class SharedAudioOutputPlaybackClockTests
         }
 
         public void Advance(TimeSpan delta) => Interlocked.Add(ref _elapsedTicks, delta.Ticks);
-        /// <summary>Device stop/start: the terminal clock restarts at zero under the client's epoch.</summary>
-        public void Reanchor() => Interlocked.Exchange(ref _elapsedTicks, 0);
+
+        /// <summary>Device stop/start: a new epoch whose clock restarts at zero.</summary>
+        public void Reanchor()
+        {
+            lock (_gate)
+            {
+                Interlocked.Exchange(ref _elapsedTicks, 0);
+                _epochId = PlaybackEpoch.Next();
+            }
+        }
+
+        /// <summary>A terminal that breaks its per-epoch monotonic contract: elapsed rewinds with no new id.</summary>
+        public void RegressWithoutAnnouncingAnEpoch(TimeSpan to) => Interlocked.Exchange(ref _elapsedTicks, to.Ticks);
+
         public void SetAdvancing(bool advancing) => _advancing = advancing;
 
         public void Submit(ReadOnlySpan<float> packedSamples) { }

@@ -48,6 +48,15 @@ public sealed class CompositePlaybackClock : IPlaybackClock
     // Wall tick of last co-advance EMA sample; -1 = prime next co read (0 is a valid Stopwatch tick).
     private long _coAdvanceLastSampleTicks = -1;
 
+    private readonly Lock _epochGate = new();
+    private long _epochId = PlaybackEpoch.Next();
+    /// <summary>The (winner index, winner epoch) the current <see cref="_epochId"/> stands for. Either half
+    /// changing is a discontinuity in what this clock emits - a handoff swaps to a leaf at an unrelated
+    /// elapsed, a leaf re-anchoring rewinds it, and the neutral idle state (index -1) reports zero - so the
+    /// composite takes a fresh id for all three rather than letting a consumer infer them.</summary>
+    private int _epochWinnerIdx = -2;
+    private long _epochWinnerEpochId;
+
     /// <param name="candidates">Registration list (tie-break: earlier entry wins at equal priority).</param>
     public CompositePlaybackClock(params PlaybackClockCandidate[] candidates)
         : this(CompositePlaybackClockBlend.Disabled, candidates, null) { }
@@ -102,97 +111,118 @@ public sealed class CompositePlaybackClock : IPlaybackClock
         }
     }
 
-    public TimeSpan ElapsedSinceStart
+    public TimeSpan ElapsedSinceStart => Read().Elapsed;
+
+    /// <inheritdoc />
+    public long EpochId => Read().EpochId;
+
+    /// <inheritdoc />
+    public ClockReading Read()
     {
-        get
+        var advCount = 0;
+        var winnerIdx = -1;
+        for (var i = 0; i < _candidates.Length; i++)
         {
-            var advCount = 0;
-            var winnerIdx = -1;
-            for (var i = 0; i < _candidates.Length; i++)
-            {
-                if (!_candidates[i].Clock.IsAdvancing) continue;
-                advCount++;
-                if (winnerIdx < 0) winnerIdx = i;
-            }
+            if (!_candidates[i].Clock.IsAdvancing) continue;
+            advCount++;
+            if (winnerIdx < 0) winnerIdx = i;
+        }
 
-            if (winnerIdx < 0)
-            {
-                lock (_blendGate)
-                {
-                    _blendWinnerIdx = -1;
-                    _hasEmitted = false;
-                    _coAdvanceLastSampleTicks = -1;
-                }
-
-                return TimeSpan.Zero;
-            }
-
-            var targetNow = _candidates[winnerIdx].Clock.ElapsedSinceStart;
-            var hasHandoff = _blend.HasHandoffCrossFade && _blend.HandoffCrossFade.TotalSeconds > 0;
-            var hasCo = _blend.HasCoAdvanceSmoothing && _blend.CoAdvanceSmoothingTau.TotalSeconds > 0;
-
-            if (!hasHandoff && !hasCo)
-                return targetNow;
-
-            var nowTicks = _nowTicks();
+        if (winnerIdx < 0)
+        {
             lock (_blendGate)
             {
-                if (!_hasEmitted)
+                _blendWinnerIdx = -1;
+                _hasEmitted = false;
+                _coAdvanceLastSampleTicks = -1;
+            }
+
+            return new ClockReading(EpochFor(-1, PlaybackEpoch.Single), TimeSpan.Zero, false);
+        }
+
+        var winner = _candidates[winnerIdx].Clock.Read();
+        var epochId = EpochFor(winnerIdx, winner.EpochId);
+        var targetNow = winner.Elapsed;
+        var hasHandoff = _blend.HasHandoffCrossFade && _blend.HandoffCrossFade.TotalSeconds > 0;
+        var hasCo = _blend.HasCoAdvanceSmoothing && _blend.CoAdvanceSmoothingTau.TotalSeconds > 0;
+
+        if (!hasHandoff && !hasCo)
+            return new ClockReading(epochId, targetNow, true);
+
+        var nowTicks = _nowTicks();
+        lock (_blendGate)
+        {
+            if (!_hasEmitted)
+            {
+                _lastEmitted = targetNow;
+                _blendFromEmitted = targetNow;
+                _blendWinnerIdx = winnerIdx;
+                _transitionStartTicks = nowTicks;
+                _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
+                _hasEmitted = true;
+                return new ClockReading(epochId, targetNow, true);
+            }
+
+            if (winnerIdx != _blendWinnerIdx)
+            {
+                _blendFromEmitted = _lastEmitted;
+                _blendWinnerIdx = winnerIdx;
+                _transitionStartTicks = nowTicks;
+                _coAdvanceLastSampleTicks = -1;
+            }
+
+            if (hasHandoff)
+            {
+                var elapsedSec = (nowTicks - _transitionStartTicks) / (double)Stopwatch.Frequency;
+                var t = elapsedSec / _blend.HandoffCrossFade.TotalSeconds;
+                if (t < 1.0)
+                {
+                    var w = SmoothStep01(t);
+                    var lerped = LerpTimeSpan(_blendFromEmitted, targetNow, w);
+                    _lastEmitted = lerped;
+                    return new ClockReading(epochId, lerped, true);
+                }
+            }
+
+            if (hasCo && advCount >= 2)
+            {
+                if (_coAdvanceLastSampleTicks < 0)
                 {
                     _lastEmitted = targetNow;
-                    _blendFromEmitted = targetNow;
-                    _blendWinnerIdx = winnerIdx;
-                    _transitionStartTicks = nowTicks;
-                    _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
-                    _hasEmitted = true;
-                    return targetNow;
-                }
-
-                if (winnerIdx != _blendWinnerIdx)
-                {
-                    _blendFromEmitted = _lastEmitted;
-                    _blendWinnerIdx = winnerIdx;
-                    _transitionStartTicks = nowTicks;
-                    _coAdvanceLastSampleTicks = -1;
-                }
-
-                if (hasHandoff)
-                {
-                    var elapsedSec = (nowTicks - _transitionStartTicks) / (double)Stopwatch.Frequency;
-                    var t = elapsedSec / _blend.HandoffCrossFade.TotalSeconds;
-                    if (t < 1.0)
-                    {
-                        var w = SmoothStep01(t);
-                        var lerped = LerpTimeSpan(_blendFromEmitted, targetNow, w);
-                        _lastEmitted = lerped;
-                        return lerped;
-                    }
-                }
-
-                if (hasCo && advCount >= 2)
-                {
-                    if (_coAdvanceLastSampleTicks < 0)
-                    {
-                        _lastEmitted = targetNow;
-                        _coAdvanceLastSampleTicks = nowTicks;
-                        return targetNow;
-                    }
-
-                    var dt = (nowTicks - _coAdvanceLastSampleTicks) / (double)Stopwatch.Frequency;
                     _coAdvanceLastSampleTicks = nowTicks;
-                    if (dt <= 0) dt = 1e-9;
-                    var tau = _blend.CoAdvanceSmoothingTau.TotalSeconds;
-                    var alpha = 1.0 - Math.Exp(-dt / tau);
-                    if (alpha > 0.95) alpha = 0.95;
-                    var smoothed = LerpTimeSpan(_lastEmitted, targetNow, alpha);
-                    _lastEmitted = smoothed;
-                    return smoothed;
+                    return new ClockReading(epochId, targetNow, true);
                 }
 
-                _coAdvanceLastSampleTicks = -1;
-                _lastEmitted = targetNow;
-                return targetNow;
+                var dt = (nowTicks - _coAdvanceLastSampleTicks) / (double)Stopwatch.Frequency;
+                _coAdvanceLastSampleTicks = nowTicks;
+                if (dt <= 0) dt = 1e-9;
+                var tau = _blend.CoAdvanceSmoothingTau.TotalSeconds;
+                var alpha = 1.0 - Math.Exp(-dt / tau);
+                if (alpha > 0.95) alpha = 0.95;
+                var smoothed = LerpTimeSpan(_lastEmitted, targetNow, alpha);
+                _lastEmitted = smoothed;
+                return new ClockReading(epochId, smoothed, true);
             }
+
+            _coAdvanceLastSampleTicks = -1;
+            _lastEmitted = targetNow;
+            return new ClockReading(epochId, targetNow, true);
+        }
+    }
+
+    /// <summary>Current epoch for a (winner, winner epoch) pair, taking a fresh id whenever it changes.</summary>
+    private long EpochFor(int winnerIdx, long winnerEpochId)
+    {
+        lock (_epochGate)
+        {
+            if (winnerIdx != _epochWinnerIdx || winnerEpochId != _epochWinnerEpochId)
+            {
+                _epochWinnerIdx = winnerIdx;
+                _epochWinnerEpochId = winnerEpochId;
+                _epochId = PlaybackEpoch.Next();
+            }
+
+            return _epochId;
         }
     }
 

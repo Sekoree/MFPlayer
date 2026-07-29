@@ -157,3 +157,90 @@ primitive, add BPM + quantum to the soundboard settings UI.
 - **Doc hygiene note**: CuePlayer-Enhancements' "Still open" line predates the continuation
   round — panic slider, loop-with-crossfade, duck presets, and the TimelineStartMs field are
   DONE; corrected alongside this plan.
+
+## Cross-list + MTC follow-up (2026-07-29)
+
+A second adversarial review of **A** (cross-list merged session) and **D1** (MTC chase) recorded
+seven defects as too large / needing a semantics call for that pass. All are fixed; each carries a
+regression test that fails on the unfixed code.
+
+**A — cross-list merged session**
+
+1. `EnsureCueShowSessionCurrentAsync` (the fire-path flush of pending edits) had no `HasActiveCues`
+   guard, unlike the debounce tick and `WarmUpcomingForPreRollAsync`. Since the flush is a full
+   `LoadDocumentAsync` over the ONE merged document, an edit in list C tore down list A's playing
+   cue at the next fire — impossible pre-merge, where only the selected list could dirty the graph.
+   Now deferred with the same shape: the graph stays dirty, the debounce is re-armed, and the fire
+   runs against the loaded document.
+2. A `_cueGroupByCueId` miss fell back to `ShowSession.DefaultGroup` ("main"), a group **no** cue is
+   on in the merged document (every cue is list-scoped). The per-group end monitor then declared the
+   cue ended after the ~3 s warmup grace while it was still audible. A miss is now an error: logged,
+   surfaced on the status strip (`CueTransportGroupUnknownFormat`), no group substituted, and no
+   end-monitor entry created — the row still appears so the operator can stop it. Seek/seek-many skip
+   an unresolvable cue rather than addressing "main".
+3. `AdvanceAutoFollowAfterInstantCueAsync` and `ResolveFadeCueTargetsOnUi` were selected-list-scoped:
+   a foreign Action/Visualizer/Fade cue dropped its Auto-Follow chain, and a foreign Fade resolved no
+   explicit targets. Both now resolve in the OWNING list (`EnumerateFireableCueOrderFor` /
+   `EnumerateAllCueNodesFor`) and a foreign chain continues through `GoForeignListAsync`, mirroring
+   the media natural-end path — never through `GoCore`, which would move the visible standby.
+4. Foreign pre-waits gated on `IsTransportPaused` (the VISIBLE list's pause), so pausing the list the
+   operator happened to be looking at froze every other list's scheduled pre-rolls. **Semantics
+   decided:** a pre-wait is a scheduling delay, not playback, and Pause is a visible-transport
+   affordance (it needs `CurrentCueNode`). `RunTriggerPlanAsync`/`WaitUntilDelayAsync` now take the
+   run's own pause probe; a headless cross-list run passes its own state (alive until its list fires
+   again or Stop/Panic cancels it). Session-wide clip pause (`SetAllPausedAsync`) is unchanged.
+5. A list rename never re-stamped live Now-Playing rows. `CuePlayerViewModel` now watches every
+   loaded list's `Name` and re-runs `RefreshNowPlayingListNames`.
+
+**D1 — MTC**
+
+6. `MidiTimecodeDecoder` produced corrupt labels after a dropout of exactly a whole multiple of 8
+   quarter-frames: the stream resumes on the piece index the assembler expects, splicing pieces 0..3
+   (frame + second nibbles) of one window onto pieces 4..7 (minute + hour nibbles) of a later one.
+   Inside a minute that is harmless — the low half already IS the label the window started on, and
+   the update is stamped with that window's piece 0 — but across a minute/hour rollover the merged
+   label is a full minute wrong, and it was reported as a relocate.
+   **Rule chosen** (a time bound cannot separate an 8-message dropout from a poll thread starved
+   mid-window, so the check is arithmetic, not temporal): because a splice keeps the low half of the
+   window it started on, the corrupt label always matches the wall-time prediction's `ss:ff` exactly
+   (±1 frame of arrival jitter) while its `hh:mm` sits somewhere ahead. An assembled label with that
+   fingerprint is never reported and never moves the anchor; it is held and believed only if the NEXT
+   independent assembly lands where it predicts — which a genuine relocate does within one timecode
+   (~83 ms of added latency in the rare case a relocate trips the fingerprint) and a splice never
+   does. The test is on the label FIELDS, so 29.97 drop-frame (a labelled minute is 1798 or 1800
+   frames) needs no special case. Residual, accepted and documented: a splice in the very first
+   assembly after a reset has no anchor to be inconsistent with; it self-corrects on the next
+   assembly with a new generation, so it costs one 2-frame window rather than a persistent error.
+7. `CueSchedulerService` chase-path mirror gaps:
+   - (a) The pre-baseline retire used a strict `targetSeconds < _chaseBaselineSeconds`, so a target
+     exactly ON the generation start stayed live and a locate landing exactly on a cue fired it. Now
+     `<=`, mirroring the wall path's `due <= _armedBaselineWall`. (The review stated this one
+     inverted — the strict `<` was on the chase side, the inclusive `<=` on the wall side; the
+     mismatch itself reproduced.)
+   - (b) `_handledTimecode` was cleared WHOLESALE on any generation change, weakening "fires exactly
+     once" to "fires once per run" — and generations bump on every dropout. Since the chase position
+     is a wall-time extrapolation leading the last decoded label by up to ~4 frames, a dropout right
+     after a crossing re-baselined just BEHIND the target that had already fired and fired it again.
+     It is now pruned like the wall path's `_handled`: a target re-arms only when the new baseline is
+     further behind it than the chase's own re-anchor slack (4 frames), so a real rewind still
+     replays the pass while a re-anchor cannot. The set also keys the target's seconds (targets from
+     cues at different frame rates are not comparable by frame number) and is bounded by dropping
+     entries whose cue no longer carries a timecode schedule.
+   - (c) Chase lateness is measured in the chase's domain against a real-millisecond grace floor.
+     **Kept, documented, with evidence**: the chase clock is wall-time interpolation anchored on
+     labels, and the decoder classifies any label more than 2 frames off the wall prediction as a
+     JUMP — which opens a new generation and re-baselines the sweep. A run therefore cannot
+     accumulate more than ~2 frames of skew between the two domains, far inside the 500 ms floor.
+     Pinned by `ChaseClock_SenderRunningFasterThanRealTime_OpensANewGenerationEveryAssembly`.
+
+**Harness note (not caused by this round).** `HaPlay.Tests` carries a pre-existing intermittent
+failure of `RemoteApiDispatcherTests.UnknownEndpoint_Returns404_AndBadMethod405`: the session's
+per-test isolated `Application` setup throws *"The calling thread cannot access this object because a
+different thread owns it"* out of `AvaloniaHeadlessPlatform.Initialize` → `DefaultRenderLoop.Add` →
+`Dispatcher.VerifyAccess`, i.e. `Dispatcher.UIThread` got bound to a stray pool thread between two
+session dispatches — the same class `HeadlessSessionBootstrap` documents and warms against. It is
+timing/order driven, not content driven: adding **six no-op `[Fact]`s** to the *unmodified*
+`CrossListSessionTests` reproduces it (1 failure in 5 runs) exactly as this round's real tests do
+(~2 in 5), while the untouched set passed 6/6. Disabling the 5 s status-message auto-clear
+continuation (one obvious source of stray `Dispatcher.UIThread` touches) does **not** fix it, so
+there is more than one straggler. Left as-is: it needs a harness fix, not a product one.

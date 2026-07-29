@@ -29,6 +29,10 @@ internal sealed class VoicePlayer
     private IReadOnlyList<IAudioOutput> _previewOutputs = [];
     private CancellationTokenSource? _previewCts;
     private PreviewMonitor? _previewMonitor;
+    // The preview's entry on the session's level/stop bus. MONITORING, by the owner's 2026-07-29 decision:
+    // the audition path is how the operator hears what they are about to fire, so the master fader must not
+    // duck it and stop-all/Panic must not kill it. Empty when no preview is up.
+    private Guid _previewSoundingId;
     // Soundboard voices (task #10): polyphonic one-shots, each a fresh MediaPlayer on an output, keyed by a
     // host id (the GUI's soundboard tile). Owned by the dispatcher.
     private readonly Dictionary<string, VoiceHandle> _voices = new(StringComparer.Ordinal);
@@ -37,8 +41,34 @@ internal sealed class VoicePlayer
     // the open flow that created the CTS is the one that disposes it (the blocked open still holds its token).
     private readonly Dictionary<string, CancellationTokenSource> _pendingVoiceOpens = new(StringComparer.Ordinal);
 
-    private sealed record VoiceHandle(
-        IArmedClip Clip, IReadOnlyList<IAudioOutput> Outputs, string OutputId, CancellationTokenSource Cts);
+    /// <summary>One running soundboard voice. <see cref="Level"/> is its slice of the session's ONE level
+    /// composition - the tile volume (Source), any fade ramp (Fade) and the session master trim - so the
+    /// three can no longer overwrite each other on the route.</summary>
+    private sealed class VoiceHandle(
+        IArmedClip clip,
+        IReadOnlyList<IAudioOutput> outputs,
+        string outputId,
+        CancellationTokenSource cts,
+        SoundingLevel level)
+    {
+        private int _stopClaimed;
+
+        public IArmedClip Clip { get; } = clip;
+        public IReadOnlyList<IAudioOutput> Outputs { get; } = outputs;
+        public string OutputId { get; } = outputId;
+        public CancellationTokenSource Cts { get; } = cts;
+        public SoundingLevel Level { get; } = level;
+
+        /// <summary>This voice's entry on the session's level/stop bus - dropped when the voice releases.</summary>
+        public Guid SoundingId { get; set; }
+
+        /// <summary>True once stop-all/Panic claimed this voice. A soundboard fade-out ramp checks it every
+        /// step so the bus stop preempts it - the voice analogue of <c>TransportGroup.IsFadeOutClaimed</c>.</summary>
+        public bool IsStopClaimed => Volatile.Read(ref _stopClaimed) != 0;
+
+        /// <summary>Claims the voice for a bus stop, at most once.</summary>
+        public bool TryBeginStop() => Interlocked.Exchange(ref _stopClaimed, 1) == 0;
+    }
 
     private sealed record PreviewMonitor(
         string CueId, S.Media.Players.MediaPlayer Player, CancellationToken CancellationToken);
@@ -143,6 +173,8 @@ internal sealed class VoicePlayer
                 _previewClip = armed;
                 _previewOutputs = outputs;
                 _previewMonitor = new PreviewMonitor(cueId, player, s.Cts.Token);
+                _previewSoundingId = _session.SoundingSources.RegisterMonitoring(
+                    $"preview:{cueId}", () => _previewClip is not null, () => 1f);
                 _session.NotifyCompletionWorkAvailable();
                 return true;
             }
@@ -167,6 +199,8 @@ internal sealed class VoicePlayer
         _previewCts?.Cancel();
         _previewCts = null;
         _previewMonitor = null;
+        _session.SoundingSources.Unregister(_previewSoundingId);
+        _previewSoundingId = Guid.Empty;
         var clip = _previewClip;
         var outputs = _previewOutputs;
         _previewClip = null;
@@ -249,19 +283,38 @@ internal sealed class VoicePlayer
 
             var player = armed.Player;
             var outputs = new List<IAudioOutput>();
+            // A soundboard voice is PROGRAM audio: it inherits the live master trim at fire time exactly as
+            // a transport clip does, and it attaches at the composed level so no untrimmed buffer can reach
+            // the device before the first level write.
+            var level = new SoundingLevel { Source = volume, Master = _session.MasterTrim };
             try
             {
                 if (_audioBackend is not null && player.AudioRouter is not null)
                 {
                     var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
                     var output = _audioBackend.CreateOutput(deviceId ?? _resolveFallbackDeviceId(), new AudioFormat(rate, 2));
-                    player.AttachAudioOutput(output, outputId, gain: volume);
+                    player.AttachAudioOutput(output, outputId, gain: level.Effective);
                     outputs.Add(output);
                 }
 
                 armed.Start();
                 // The claim CTS becomes the running voice's CTS (cancels the end monitor on release).
-                _voices[voiceId] = new VoiceHandle(armed, outputs, outputId, cts);
+                var handle = new VoiceHandle(armed, outputs, outputId, cts, level);
+                _voices[voiceId] = handle;
+                handle.SoundingId = _session.SoundingSources.RegisterProgram(
+                    $"voice:{voiceId}",
+                    isSounding: () => IsCurrent(voiceId, handle),
+                    level: () => level.Effective,
+                    applyMasterTrim: master =>
+                    {
+                        // Identity-guarded like every other level write: a registration that outlived its
+                        // voice (it cannot - release unregisters - must never touch a released player).
+                        if (!IsCurrent(voiceId, handle))
+                            return;
+                        level.Master = master;
+                        ApplyVoiceLevel(handle);
+                    },
+                    stop: request => StopVoiceForBusAsync(voiceId, handle, request));
                 PublishVoiceViews();
                 _session.NotifyCompletionWorkAvailable();
             }
@@ -282,16 +335,48 @@ internal sealed class VoicePlayer
     /// <summary>Stops every soundboard voice - including any still opening (NXT-19).</summary>
     public Task StopAllVoicesAsync() => _session.InvokeAsync(() => ReleaseAllVoicesAsync().AsTask());
 
-    /// <summary>Live-sets a voice's output gain (linear). No-op when the voice isn't playing.</summary>
+    /// <summary>Preempts every soundboard voice whose media is still OPENING (NXT-19) - stop-all/Panic's
+    /// "and nothing new starts" half, the voice analogue of the in-flight cue-fire cancellation. A pending
+    /// open is not on the level/stop bus yet (nothing sounds), so the bus enumeration alone would let a
+    /// stinger that was loading when Panic was hit start playing straight afterwards. Cancel only - the open
+    /// flow that created the claim owns disposing it. Dispatcher-confined.</summary>
+    public void CancelPendingVoiceOpens()
+    {
+        foreach (var claim in _pendingVoiceOpens.Values)
+            claim.Cancel();
+    }
+
+    /// <summary>Live-sets a voice's authored (tile) gain. No-op when the voice isn't playing. The write goes
+    /// through the voice's level composition, so a volume nudge multiplies the master trim and any running
+    /// fade instead of replacing them (it used to write the raw volume straight onto the route, silently
+    /// un-trimming the voice for the rest of its life).</summary>
     public Task SetVoiceVolumeAsync(string voiceId, float volume) =>
         _session.InvokeAsync(() =>
         {
-            if (_voices.TryGetValue(voiceId, out var v)
-                && v.Clip.Player.AudioRouter is { } router
-                && v.Clip.Player.AudioSourceId is { } sourceId)
-                router.SetRouteGain(sourceId, v.OutputId, volume);
+            if (_voices.TryGetValue(voiceId, out var v))
+            {
+                v.Level.Source = volume;
+                ApplyVoiceLevel(v);
+            }
+
             return Task.CompletedTask;
         });
+
+    /// <summary>Writes one voice's composed level (<c>master × volume × fade</c>) to its route - the ONE
+    /// place a voice's routed gain is set, the soundboard analogue of
+    /// <c>TransportGroup.ApplyAudioScale</c>. Dispatcher-confined.</summary>
+    private static void ApplyVoiceLevel(VoiceHandle voice)
+    {
+        var player = voice.Clip.Player;
+        if (player.AudioRouter is { } router && player.AudioSourceId is { } sourceId)
+            router.SetRouteGain(sourceId, voice.OutputId, voice.Level.Effective);
+    }
+
+    /// <summary>Whether <paramref name="voice"/> is still the voice registered under
+    /// <paramref name="voiceId"/> - the identity guard every deferred level/stop write uses so a re-fired
+    /// tile's new voice is never touched by the previous one's ramp. Dispatcher-confined.</summary>
+    private bool IsCurrent(string voiceId, VoiceHandle voice) =>
+        _voices.TryGetValue(voiceId, out var current) && ReferenceEquals(current, voice);
 
     /// <summary>Fades a voice's gain to silence over <paramref name="duration"/>, then stops it. No
     /// <see cref="VoiceEnded"/>. A zero/negative duration stops immediately.</summary>
@@ -302,7 +387,7 @@ internal sealed class VoicePlayer
                 return Task.CompletedTask;
             if (duration <= TimeSpan.Zero)
                 return ReleaseVoiceAsync(voiceId).AsTask();
-            StartVoiceFadeOut(voiceId, v.Clip.Player, duration, v.Cts.Token);
+            StartVoiceFadeOut(voiceId, v, duration, v.Cts.Token);
             return Task.CompletedTask;
         });
 
@@ -350,8 +435,14 @@ internal sealed class VoicePlayer
             await ReleaseVoiceAsync(id).ConfigureAwait(false);
     }
 
-    private async ValueTask ReleaseVoiceAsync(string voiceId)
+    /// <summary>Releases the voice under <paramref name="voiceId"/>, or - with <paramref name="expected"/> -
+    /// only when that exact voice is still the one registered: a fade/stop ramp that reaches its release
+    /// after the tile was re-fired must not tear down the NEW voice.</summary>
+    private async ValueTask ReleaseVoiceAsync(string voiceId, VoiceHandle? expected = null)
     {
+        if (expected is not null && !IsCurrent(voiceId, expected))
+            return;
+
         // Preempt a still-opening voice (NXT-19): cancel its claim so the off-dispatcher open aborts and its
         // commit is refused. Only Cancel here - the open flow that created the CTS disposes it (it still holds
         // the token inside the blocked open).
@@ -360,6 +451,9 @@ internal sealed class VoicePlayer
 
         if (!_voices.Remove(voiceId, out var v))
             return;
+        // Off the level/stop bus BEFORE the player goes away: a released voice must never be enumerated by a
+        // trim or a stop again.
+        _session.SoundingSources.Unregister(v.SoundingId);
         PublishVoiceViews();
         v.Cts.Cancel();
         v.Cts.Dispose();
@@ -402,25 +496,54 @@ internal sealed class VoicePlayer
         return _previewMonitor is not null || _voices.Count > 0;
     }
 
-    /// <summary>Ramps a voice's gain to 0 over <paramref name="duration"/> then releases it (fade-out) - a
-    /// <see cref="FadeRamp"/> at the same step rate as every other fade.</summary>
-    private void StartVoiceFadeOut(string voiceId, S.Media.Players.MediaPlayer player, TimeSpan duration, CancellationToken ct)
+    /// <summary>Ramps a voice's FADE factor to 0 over <paramref name="duration"/> then releases it - a
+    /// <see cref="FadeRamp"/> at the same step rate as every other fade. The ramp rides the voice's level
+    /// composition, so it scales the tile's own volume and the master trim rather than replacing them (the
+    /// raw route write it replaces jumped a half-volume tile up to full level on its first step).</summary>
+    private void StartVoiceFadeOut(string voiceId, VoiceHandle voice, TimeSpan duration, CancellationToken ct)
     {
-        if (player.AudioSourceId is not { } sourceId)
-            return;
-        var outputId = $"voice:{voiceId}";
+        var start = voice.Level.Fade;
         FadeRamp.Start(
             FadeRamp.DefaultStepInterval, ct,
             step: elapsed => _session.InvokeAsync<bool>(() =>
             {
-                if (ct.IsCancellationRequested
-                    || !_voices.TryGetValue(voiceId, out var cur) || !ReferenceEquals(cur.Clip.Player, player)
-                    || player.AudioRouter is not { } router)
+                // A stop-all/Panic claim preempts this ramp: the bus stop owns the voice's levels and its
+                // release from the claim on (the Active slot's TryBeginFadeOut rule, for voices).
+                if (ct.IsCancellationRequested || !IsCurrent(voiceId, voice) || voice.IsStopClaimed)
                     return Task.FromResult(true);
-                var level = FadeRamp.LevelDown(elapsed, duration);
-                router.SetRouteGain(sourceId, outputId, level);
-                return Task.FromResult(level <= 0f);
+                voice.Level.Fade = start * FadeRamp.LevelDown(elapsed, duration);
+                ApplyVoiceLevel(voice);
+                return Task.FromResult(voice.Level.Fade <= 0f);
             }),
-            onCompleted: () => _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId).AsTask()));
+            onCompleted: () => _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()));
+    }
+
+    /// <summary>The level/stop bus's stop hook for one voice (stop-all and Panic alike): claims the voice,
+    /// rides <paramref name="request"/>'s clock down from the level the voice has NOW - so a stop mid
+    /// fade-out never pops it back up - and releases it. The returned task completes only once the voice is
+    /// released ("stopped means stopped", matching the transport stop path); a hard-cut request releases
+    /// without a ramp. The ramp itself runs OFF the dispatcher, one short marshaled write per step.</summary>
+    private async Task StopVoiceForBusAsync(string voiceId, VoiceHandle voice, SoundingStopRequest request)
+    {
+        var start = await _session.InvokeAsync(() => Task.FromResult(
+            IsCurrent(voiceId, voice) && voice.TryBeginStop() ? voice.Level.Fade : -1f)).ConfigureAwait(false);
+        if (start < 0f)
+            return; // released, replaced, or already claimed by another stop
+
+        if (request.Fade)
+        {
+            await FadeRamp.RunAsync(
+                FadeRamp.DefaultStepInterval, CancellationToken.None,
+                elapsed => _session.InvokeAsync(() =>
+                {
+                    if (!IsCurrent(voiceId, voice))
+                        return Task.FromResult(true); // ended on its own mid-ramp
+                    voice.Level.Fade = start * FadeRamp.LevelDown(elapsed, request.FadeDuration, request.Curve);
+                    ApplyVoiceLevel(voice);
+                    return Task.FromResult(elapsed >= request.FadeDuration);
+                })).ConfigureAwait(false);
+        }
+
+        await _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()).ConfigureAwait(false);
     }
 }

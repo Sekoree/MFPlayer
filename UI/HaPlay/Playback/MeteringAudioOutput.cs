@@ -91,5 +91,11 @@ internal class MeteringAudioOutput : IAudioOutput, IAudioOutputChannelCapabiliti
         public TimeSpan ElapsedSinceStart => playbackClock.ElapsedSinceStart;
 
         public bool IsAdvancing => playbackClock.IsAdvancing;
+
+        // Forwarded, not defaulted: the default would report PlaybackEpoch.Single over a device that
+        // re-anchors, and every consumer downstream would stop seeing its epoch boundaries.
+        public long EpochId => playbackClock.EpochId;
+
+        public ClockReading Read() => playbackClock.Read();
     }
 }

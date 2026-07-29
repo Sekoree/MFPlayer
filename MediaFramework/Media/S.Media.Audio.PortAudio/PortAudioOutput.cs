@@ -71,6 +71,13 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// not lifetime output counters that keep advancing on underrun silence.
     /// </summary>
     private long _playbackEpochSamples;
+    /// <summary>
+    /// <see cref="IPlaybackClock.EpochId"/> paired with <see cref="_playbackEpochSamples"/>: a fresh
+    /// <see cref="PlaybackEpoch.Next"/> id at every re-anchor of this clock (<see cref="Start"/>,
+    /// <see cref="Flush"/>, device loss). Written under <see cref="_streamLifecycleGate"/> together with the
+    /// sample epoch, so <see cref="Read"/> cannot hand out an id from one segment with elapsed from another.
+    /// </summary>
+    private long _playbackEpochId = PlaybackEpoch.Next();
     /// <summary>1 after <see cref="Flush"/> stops the PA stream until the next producer call restarts it.</summary>
     private int _streamStoppedAfterFlush;
 
@@ -159,6 +166,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     {
         if (Interlocked.Exchange(ref _deviceLost, 1) != 0)
             return;
+        // The segment this clock was reporting is over; whatever a restart produces belongs to a new one.
+        Volatile.Write(ref _playbackEpochId, PlaybackEpoch.Next());
         Trace.LogError(
             "PortAudio stream on device {Device} went inactive while it should be running (device lost/removed); failing Submit/WaitForCapacity so the router surfaces OutputErrored",
             _deviceIndex);
@@ -264,6 +273,22 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         }
     }
 
+    /// <inheritdoc />
+    public long EpochId => Volatile.Read(ref _playbackEpochId);
+
+    /// <summary>
+    /// <see cref="IPlaybackClock.Read"/>: taken under <see cref="_streamLifecycleGate"/>, which is also
+    /// where every re-anchor writes the epoch pair, so the id and the elapsed always come from the same
+    /// segment. <see cref="LatchDeviceLost"/> can still bump the id from the native side outside the gate;
+    /// that direction is benign because a lost device's elapsed does not rewind, and the consumer's rule for
+    /// a same-epoch regression is to hold rather than fold.
+    /// </summary>
+    public ClockReading Read()
+    {
+        lock (_streamLifecycleGate)
+            return new ClockReading(Volatile.Read(ref _playbackEpochId), ElapsedSinceStart, IsAdvancing);
+    }
+
     /// <summary>
     /// <see cref="IFlushableOutput.Flush"/>: aborts the PortAudio stream
     /// (discards anything in the OS buffer), zeroes the ring counters, re-anchors
@@ -288,6 +313,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             _ring.Clear();
             Interlocked.Exchange(ref _underrunSamples, 0);
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
+            Volatile.Write(ref _playbackEpochId, PlaybackEpoch.Next());
             Volatile.Write(ref _streamSmoothCalibrated, 0);
             // Abort stops the stream; do not restart until the next producer call so
             // underrun silence during pause cannot advance ElapsedSinceStart.
@@ -409,6 +435,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             Volatile.Write(ref _outputLatencyTicks, latencySec > 0 ? (long)(latencySec * TimeSpan.TicksPerSecond) : 0);
 
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
+            Volatile.Write(ref _playbackEpochId, PlaybackEpoch.Next());
             Volatile.Write(ref _streamSmoothCalibrated, 0);
             Volatile.Write(ref _streamStoppedAfterFlush, 0);
             Volatile.Write(ref _isRunning, true);

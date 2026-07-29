@@ -38,6 +38,65 @@ scoping decision, not an architectural one.
 loop / master-trim suites built during the 2026-07 rounds — that is the safety net that makes it
 tractable. Do it LAST, after B has already centralised level composition.
 
+**DONE 2026-07-29.** `TransportGroup` owns a `List<TransportVoice>`; `ActiveVoice` is nothing more than "the
+voice transport commands target". A `TransportVoice` carries its clip, everything that clip owns (outputs,
+route targets, layers, timeline claims, subtitles), its own `SoundingLevel`, its own claims (fade-out,
+clip-fade slot, clip-work, release ramp) and a four-state machine **Arming → Active → Releasing → Retired**.
+`Outgoing`, `TryClaimOutgoingForStop`, `ApplyOutgoingFadeLevel`, `ReleaseOutgoingAsync`, `BeginOutgoingRamp`,
+`OutgoingCurrentScale`, `IsOutgoingStopClaimed`, `TryBeginFadeOut`, `ReplaceAsync(clip, …)` and the
+`GroupFade`/`OutgoingStopFade` pair are all **gone**; `StopGroupsCoreAsync` became `StopVoicesCoreAsync` and
+every stop, fade, trim and teardown path claims and ramps VOICES.
+
+All five symptoms are fixed, and each has a regression test in `S.Media.Session.Tests/TransportVoiceTests` —
+all six were **verified failing on the pre-refactor tree** before the refactor started:
+1. the release ramp is armed **inside** the handoff (`TransportGroup.StartReleaseRamp`, wired at group
+   creation), so the window in which a voice sits Releasing with no ramp does not exist. Reaching the old
+   state needs a fault exactly there, so there is one narrow internal seam, `ShowSession.PostCommitFault`,
+   raised on the dispatcher immediately after a commit;
+2. `StopCueAsync` selects the cue's VOICES across groups, so cue X stops whether it is the active clip or the
+   tail — and stopping one leaves the other playing;
+3. `ReleaseActiveVoiceAsync` releases the active voice ONLY. The natural end, the EOF-stall end, the natural
+   fade-out's completion and a fade cue's `stopWhenSilent` all funnel through it, so none of them hard-cuts a
+   still-fading tail;
+4. tail-only groups are covered by construction — every voice is its own program source, so Panic reaches one
+   with no group-level filter at all (B's `Active is not null || Outgoing is not null` self-filter went with
+   the group registration; the per-voice stop hook self-filters on `State != Retired`);
+5. the tail is addressable: it registers as `cue:<group>:<cue>`, shows up in `GetSoundingSourcesAsync` with
+   its own role and composed level, is reachable by `StopCueAsync`, and rides the fader through its own hook.
+
+**The tricky part was the tail's frozen level.** The slot design froze `BeforeMaster` at handoff and had a
+second ramp (`ApplyOutgoingFadeLevel`) multiply the live trim back in — correct, but only because a comment
+said so. Under the voice model the tail simply *keeps its own `SoundingLevel`*: nothing writes its `Fade` or
+`Envelope` again except the release ramp, which multiplies the **fade** component, and the trim keeps riding
+through `Effective`. So the trim cannot be captured into a ramp start any more, `ApplyOutgoingFadeLevel`
+collapses into the ordinary `ApplyFadeLevel`, and `SoundingLevel.BeforeMaster` was deleted as dead — its rule
+now lives on `Fade` ("the ONLY component a ramp may capture as its start"), where every ramp in the session
+already reads it. The stop path collapsed the same way: claiming a tail mid-ramp is just capturing the level
+and opacities it has NOW, exactly like claiming an active clip mid fade cue.
+
+Per-voice bus registration replaced B's per-group one. That removed the idle-group problem rather than
+re-solving it: a voice stamps the live master trim when it is constructed, so there is no idle registration to
+keep in sync and no stale level on the next fire. It also answers B's warning about two concurrent
+`StopGroupsCoreAsync` calls racing a group's fade claim — the claim is now `TransportVoice.TryClaimFadeOut`,
+one interlocked claim per voice: one stop wins the ramp, the other still releases, and release is idempotent
+(`State == Retired` short-circuits), so they cannot fight. Three assertions in `SoundingBusTests` changed
+(`group:main` → `cue:main:c`, and "the group is not sounding" → "the voice left the bus", matching the line
+above it for soundboard voices): they encoded the group-shaped registration, not a rule.
+
+N-way overlap is structural — the list holds N and every path iterates it. `MaxReleasingVoices = 1` is a named
+policy constant with the scoping rationale on it, enforced by hard-releasing the OLDEST tails beyond the cap,
+so raising it is a one-line change rather than a redesign.
+
+**Do not loosen:** (1) the release ramp must stay armed inside the handoff — the moment it becomes a separate
+statement, symptom 1 is back and `PostCommitFault` is the only thing that would notice; (2) a ramp start is
+`Fade`, never `Effective` — the master-trim crossfade tests are what catch it; (3) `Retired` is the identity
+guard for every deferred write, and `ReleaseAsync` sets it BEFORE any teardown so a racing ramp step is
+already a no-op; (4) a voice leaves the bus before its player goes away (`VoiceRetired` in
+`ReleaseVoiceCoreAsync`); (5) releasing the active voice must never reach a tail — that is symptom 3, and its
+test is the only thing standing between a clean handoff and an audible click; (6) transport commands (seek,
+pause, end monitor, fade cues, the live route/placement edits) target `ActiveVoice` only — a tail is
+fire-and-forget by design, and `StopCueAsync` is the one path that addresses it.
+
 ---
 
 ## B. Three independent audio-level and stop domains
@@ -69,6 +128,51 @@ skipped by all three. That classification is the single thing the whole design h
 the registration API from the start rather than bolting a bool on later.
 
 **Cost/risk.** Medium, well-bounded if done additively. Do it BEFORE A.
+
+**DONE 2026-07-29.** `SoundingSourceRegistry` is the bus: every sounding source registers with a
+classification and `SetMasterTrimAsync` / `StopAllAsync` both drive its ONE `ProgramSources()`
+enumeration. The classification is **not a bool** - it is which method you call. `RegisterProgram`
+demands the trim hook and the stop hook at the call site; `RegisterMonitoring` takes neither, so a
+monitoring source physically *cannot* be levelled or stopped by the bus. Preview and audio taps
+register monitoring (a tap is an analysis feed - the fader must not duck a visualizer's reaction),
+transport groups and soundboard voices register program. `SoundingLevel` is the single composition -
+`master × source × fade × envelope` - and `ShowSession.GetSoundingSourcesAsync()` makes the whole bus
+observable (label, role, is-sounding, composed level), which is what lets a test prove monitoring is
+registered *and* excluded rather than merely absent.
+
+Migration was additive in the order the plan asked: register all four paths → move trim onto the
+enumeration → move stop-all onto it → delete the per-domain writes. Deleted: `VoicePlayer`'s three
+independent gain writes (attach gain, `SetVoiceVolumeAsync`, the fade-ramp step) now all go through
+one `ApplyVoiceLevel`. That alone fixed a live defect nobody had filed - the fade ramp wrote its 1→0
+level straight onto the route, so fading a tile playing at 0.4 first **snapped it up to full**. Kept:
+`TransportGroup.ApplyAudioScale` stays THE transport composition point (it already was one), only
+re-expressed over `SoundingLevel`; `StopCueAsync` deliberately still walks the groups only - it
+targets a cue id, and voices are keyed by tile, not cue.
+
+Two tricky parts. First, **trim and stop want different filters**: trim must reach an idle group (or a
+trim set while it is idle is lost and its next fire starts stale), stop must not claim/ramp a group
+with nothing in it. Splitting the enumeration would have recreated the very thing this removes, so the
+*stop hook* self-filters on the dispatcher instead (`Active is not null || Outgoing is not null`) and
+one unfiltered list serves both. That `Outgoing` term is also what closes the tail-only-group hole
+Panic used to leave sounding. Second, the freeze: `SoundingLevel.BeforeMaster` now *names* the
+constraint the earlier review found the hard way - a crossfade handoff must freeze `fade × envelope`,
+never `Effective`, because the outgoing ramp multiplies the live trim on every step. Also closed:
+Panic's other half, `CancelPendingVoiceOpens` - a stinger still *loading* when Panic is hit is not on
+the bus yet and would otherwise start playing immediately afterwards (the voice analogue of
+`CancelActiveFire`).
+
+Nine new `SoundingBusTests` plus a new crossfade case in `MasterTrimTests`. The suite was validated as
+a **negative control**: neutering the voice trim and stop hooks fails 6 of the 9, and the 3 that keep
+passing are the ones testing other mechanisms. HaPlay needed no change - its fader and Panic already
+funnel through `SetMasterTrimAsync` / `StopAllAsync`, and the soundboard's 200 ms progress poll already
+reconciles tiles whose voice disappeared, so a Panic-stopped tile resets itself.
+
+**Do not loosen:** (1) preview and taps stay `Monitoring` - giving them hooks is how the fader starts
+deafening the operator; (2) a handoff freezes `BeforeMaster`, never `Effective`; (3) the "is anything
+sounding" test belongs in the stop hook, never in the trim enumeration; (4) `ReleaseVoiceAsync`
+unregisters BEFORE the player goes away - a lingering registration is a write to a dead player, and
+`SoundingBusTests` asserts exactly one entry per label so a duplicate fails loudly; (5) stop-all and
+Panic must keep sharing `StopAllAsync` - the moment Panic gets its own path the two reaches drift.
 
 ---
 
@@ -140,6 +244,48 @@ regression, hold otherwise).
 **Cost/risk.** Small interface change, medium mechanical ripple, low risk — and it retires a class
 of bug rather than one instance. Do it after C, before B.
 
+**DONE 2026-07-29.** `IPlaybackClock` now offers `long EpochId` plus `ClockReading Read()` — one atomic
+`(EpochId, Elapsed, IsAdvancing)` struct — both as **default** members, so the ~30 implementers and test
+doubles compiled untouched and only the clocks that actually re-anchor override them. Ids come from
+`PlaybackEpoch.Next()` and are process-wide unique (`0` = `PlaybackEpoch.Single`, "never re-anchors"), so
+two clocks can never compare equal by accident and a composite can forward a leaf id safely. The
+monotonic contract is now **stated**: monotonic *within* an epoch, free to restart across a bump. The
+default `Read()` composes the members, which is correct only while the epoch is constant — anything that
+bumps MUST override it, and wrappers MUST forward it or they silently report `Single` over a device that
+re-anchors (`ResamplingAudioOutput`, `AudioEffects`, `MeteringAudioOutput` all forward).
+
+The tricky part was **where the fold triggers**. `MediaClock`'s old branch folded on any advancing
+regression, and the doc's suspected symptom is real: a master reading 12 s, dipping to 11 s, then
+recovering to 12 s reported **3 s** of position where only 2 s had ever played — the dip re-anchored at the
+floor and the recovery was counted twice. That is pinned as
+`MasterDipsAndRecoversWithinOneEpoch_DoesNotDoubleCountTheRecovery` (written first: **failed 3 s vs 2 s**,
+passes after). The fold now consults **only** the id, never `IsAdvancing`, so it also re-anchors on the
+first observation of a new epoch instead of waiting for the master to advance — which is why
+`FlushLandingAfterClockSeek` now reads `target + 50 ms` instead of `target`: those 50 ms are real playback
+of the new segment that the old timing threw away. `AdvancingRegression_FoldsContinuouslyIntoNewEpoch`
+became `MasterReportsNewEpoch_FoldsContinuouslyIntoIt` — both were the only tests changed, and both
+encoded the retired inference rather than a contract. Within one id a regression is now **held** at the
+high-water (which is why a torn read is benign: the next read fixes it, and holding never invents time).
+
+`TimebaseGeneration` is gone: `MediaClock.PositionEpoch` (+ `IPlayhead.PositionEpoch` / `ReadPosition()`,
+also defaults) is the same concept in the same vocabulary, and `MediaPlayer`'s EOF clamp compares epochs.
+`MediaPlayer.Position` now reads the position BEFORE the epoch, so a seek landing mid-read drops the clamp
+instead of applying it to a position the seek already invalidated. `SharedAudioOutput.ClientInput` recovers
+on `terminal.EpochId != captured`, not on "elapsed went backwards"; a regression *without* an announced
+epoch is a broken terminal and is clamped to the high-water. DAC-lead smoothing and its monotonic
+guarantee are untouched. Bump points wired: PortAudio/miniaudio Start + Flush + device-loss latch,
+`NullClockedAudioOutput` Start/Flush, `VideoPtsClock` BeginSession/Seek, `NDIIngestPlaybackClock`
+AttachReceiver/Seek, `CompositePlaybackClock` on `(winner, winner epoch)` change *including* the neutral
+idle state, client Flush/attach. `MonotonicWallClock` and `TransportTimeline` keep the default: they are
+continuous by construction.
+
+**Do not loosen:** (1) the fold must never consult `IsAdvancing` again — that is the inference, and the
+dip test is what catches its return; (2) any clock that bumps must override `Read()` — a bumping clock
+with the default composition hands out torn pairs, and a wrapper that forwards `ElapsedSinceStart` but not
+`Read()` erases its device's epochs silently; (3) the client clock's own epoch must NOT change on a
+terminal re-anchor — staying continuous across it is the whole point of the recovery. Both backends'
+Start/Flush/device-loss bumps ran against real hardware on this box (no skips).
+
 ---
 
 ## E. Hygiene that stops recurrence (not refactors, but do them with C)
@@ -199,6 +345,6 @@ requirement adds maintained surface area for no benefit:
 | Step | Work | Why here |
 |---|---|---|
 | 1 ✅ | **C** geometry projection split + **E** hygiene | Cheap, low risk, immediate payoff; E stops the vacuous-test shape recurring |
-| 2 | **D** epoch identity on clocks | Small change, removes an inference class, simplifies B and A |
-| 3 | **B** level / stop bus | Fixes an operator-visible gap (panic fader misses soundboard); centralises what A needs |
-| 4 | **A** voices as a list | Biggest and riskiest — lands on B, behind the crossfade suites |
+| 2 ✅ | **D** epoch identity on clocks | Small change, removes an inference class, simplifies B and A |
+| 3 ✅ | **B** level / stop bus | Fixes an operator-visible gap (panic fader misses soundboard); centralises what A needs |
+| 4 ✅ | **A** voices as a list | Biggest and riskiest — lands on B, behind the crossfade suites |

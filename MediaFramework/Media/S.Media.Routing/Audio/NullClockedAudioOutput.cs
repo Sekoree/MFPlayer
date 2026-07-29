@@ -38,6 +38,9 @@ public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlus
     private long _segmentConsumedBase;
     /// <summary><see cref="_consumedSamples"/> baseline for <see cref="IPlaybackClock"/> - reset on Start/Flush.</summary>
     private long _playbackEpochSamples;
+    /// <summary><see cref="IPlaybackClock.EpochId"/> paired with <see cref="_playbackEpochSamples"/>; both
+    /// are written under <see cref="_gate"/>, which is also where <see cref="Read"/> samples them.</summary>
+    private long _playbackEpochId = PlaybackEpoch.Next();
     private bool _isRunning;
     private bool _disposed;
 
@@ -118,6 +121,24 @@ public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlus
         get { lock (_gate) return _isRunning && !_disposed; }
     }
 
+    /// <inheritdoc />
+    public long EpochId
+    {
+        get { lock (_gate) return _playbackEpochId; }
+    }
+
+    /// <inheritdoc />
+    public ClockReading Read()
+    {
+        lock (_gate)
+        {
+            AdvanceConsumptionLocked(Stopwatch.GetTimestamp());
+            var samples = _consumedSamples - _playbackEpochSamples;
+            var elapsed = samples > 0 ? TimeSpan.FromSeconds(samples / (double)_format.SampleRate) : TimeSpan.Zero;
+            return new ClockReading(_playbackEpochId, elapsed, _isRunning && !_disposed);
+        }
+    }
+
     public void Start()
     {
         lock (_gate)
@@ -129,6 +150,7 @@ public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlus
             _segmentAnchorTimestamp = Stopwatch.GetTimestamp();
             _segmentConsumedBase = _consumedSamples;
             _playbackEpochSamples = _consumedSamples;
+            _playbackEpochId = PlaybackEpoch.Next();
             _isRunning = true;
         }
     }
@@ -178,6 +200,7 @@ public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlus
             AdvanceConsumptionLocked(now);
             _submittedSamples = _consumedSamples;
             _playbackEpochSamples = _consumedSamples;
+            _playbackEpochId = PlaybackEpoch.Next();
             _segmentConsumedBase = _consumedSamples;
             _segmentAnchorTimestamp = now;
         }

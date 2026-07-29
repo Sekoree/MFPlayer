@@ -60,6 +60,36 @@ public sealed class MasterTrimTests
         Assert.Equal(0.25f, levels.EffectiveLevel, 3);
     }
 
+    /// <summary>A two-tone-cue session, each cue on its own peak-reading device - the crossfade tests read
+    /// the outgoing tail's gain on <c>dev-c1</c> while <c>c2</c> fades in on <c>dev-c2</c>.</summary>
+    private static (ShowSession Session, ConcurrentDictionary<string, PeakAudioOutput> Outputs)
+        BuildCrossfadeToneSession()
+    {
+        var outputs = new ConcurrentDictionary<string, PeakAudioOutput>(StringComparer.Ordinal);
+        var session = new ShowSession(
+            ToneAudioDecoderProvider.Registry(),
+            new RecordingAudioBackend(),
+            audioOutputFactory: (deviceId, format) => new ClipAudioOutputLease(
+                outputs.GetOrAdd(deviceId, _ => new PeakAudioOutput(format))));
+        return (session, outputs);
+    }
+
+    private static ShowDocument TwoToneCues() => new(
+        Version: 1,
+        Cues: [new CueDefinition("c1", 1, "One"), new CueDefinition("c2", 2, "Two")],
+        Clips:
+        [
+            new ShowClipBinding("c1", "tone://1")
+            {
+                AudioRoutes = [new ShowClipAudioRoute(DeviceId: "dev-c1")],
+            },
+            new ShowClipBinding("c2", "tone://2")
+            {
+                AudioRoutes = [new ShowClipAudioRoute(DeviceId: "dev-c2")],
+            },
+        ],
+        Compositions: [], Routes: []);
+
     [Fact]
     public async Task MasterTrim_AppliesExactlyOnce_ToTheOutgoingCrossfadeTail()
     {
@@ -68,27 +98,9 @@ public sealed class MasterTrimTests
         // and the outgoing ramp then multiplied the live trim again, so a 0.5 fader halved the tail
         // twice (0.25 instead of 0.5). Measured at the output: a constant-amplitude tone clip's peak
         // must sit at tone × trim both while ACTIVE and as the outgoing tail of a long crossfade.
-        var outputs = new ConcurrentDictionary<string, PeakAudioOutput>(StringComparer.Ordinal);
-        await using var session = new ShowSession(
-            ToneAudioDecoderProvider.Registry(),
-            new RecordingAudioBackend(),
-            audioOutputFactory: (deviceId, format) => new ClipAudioOutputLease(
-                outputs.GetOrAdd(deviceId, _ => new PeakAudioOutput(format))));
-        await session.LoadDocumentAsync(new ShowDocument(
-            Version: 1,
-            Cues: [new CueDefinition("c1", 1, "One"), new CueDefinition("c2", 2, "Two")],
-            Clips:
-            [
-                new ShowClipBinding("c1", "tone://1")
-                {
-                    AudioRoutes = [new ShowClipAudioRoute(DeviceId: "dev-c1")],
-                },
-                new ShowClipBinding("c2", "tone://2")
-                {
-                    AudioRoutes = [new ShowClipAudioRoute(DeviceId: "dev-c2")],
-                },
-            ],
-            Compositions: [], Routes: []));
+        var (session, outputs) = BuildCrossfadeToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(TwoToneCues());
 
         var expected = ToneAudioDecoderProvider.Amplitude * 0.5f; // tone × trim
         await session.SetMasterTrimAsync(0.5f);
@@ -107,6 +119,34 @@ public sealed class MasterTrimTests
             await session.FireCueAsync("c2", TimeSpan.FromSeconds(30)));
         await Task.Delay(250); // several 25 ms ramp steps have rewritten the tail's route gains
         await AssertSettledPeakAsync(outputs["dev-c1"], expected - 0.1f, expected + 0.05f, "TAIL");
+    }
+
+    [Fact]
+    public async Task MasterTrim_MovedDuringACrossfade_RidesTheTail_WithoutFightingItsRamp()
+    {
+        // The companion case to the freeze test above: there the fader was already down when the crossfade
+        // started; here it MOVES mid-crossfade. The tail's frozen handoff level (fade × envelope, NEVER the
+        // trimmed product) must pick the new trim up exactly once while its own ramp keeps advancing - the
+        // fader and the ramp compose rather than one overwriting the other.
+        var (session, outputs) = BuildCrossfadeToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(TwoToneCues());
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+        _ = await WaitForPeakAsync(outputs, "dev-c1");
+        await AssertSettledPeakAsync(
+            outputs["dev-c1"], ToneAudioDecoderProvider.Amplitude - 0.1f, 1f, "ACTIVE at unity");
+
+        // A 30 s window keeps the tail's ramp scalar ≈1 across the measurement, so the peak isolates the
+        // trim factor: ≈0.4 correct, ≈0.8 if the fader never reached an already-handed-off tail (the
+        // pre-bus behaviour of any source the trim enumeration missed).
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c2", TimeSpan.FromSeconds(30)));
+        await Task.Delay(250); // the tail is provably ON its ramp before the fader moves
+        await session.SetMasterTrimAsync(0.5f);
+
+        var expected = ToneAudioDecoderProvider.Amplitude * 0.5f;
+        await AssertSettledPeakAsync(
+            outputs["dev-c1"], expected - 0.1f, expected + 0.05f, "TAIL under a fader moved mid-crossfade");
     }
 
     private static async Task<float> WaitForPeakAsync(

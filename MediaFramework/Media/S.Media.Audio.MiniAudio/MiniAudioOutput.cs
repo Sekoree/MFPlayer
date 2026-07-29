@@ -38,6 +38,13 @@ public sealed unsafe class MiniAudioOutput :
     private long _underrunSamples;
     private long _callbackCount;
     private long _playbackEpochSamples;
+    /// <summary>
+    /// <see cref="IPlaybackClock.EpochId"/> paired with <see cref="_playbackEpochSamples"/>: a fresh
+    /// <see cref="PlaybackEpoch.Next"/> id at every re-anchor of this clock (<see cref="Start"/>,
+    /// <see cref="Flush"/>, device loss). Written under <see cref="_deviceLifecycleGate"/> with the sample
+    /// epoch, so <see cref="Read"/> cannot pair an id from one segment with elapsed from another.
+    /// </summary>
+    private long _playbackEpochId = PlaybackEpoch.Next();
     private long _lastSubmitDropLogTicks;
     private int _deviceStoppedAfterFlush;
     private int _callbackFaulted;
@@ -173,6 +180,22 @@ public sealed unsafe class MiniAudioOutput :
         }
     }
 
+    /// <inheritdoc />
+    public long EpochId => Volatile.Read(ref _playbackEpochId);
+
+    /// <summary>
+    /// <see cref="IPlaybackClock.Read"/>: taken under <see cref="_deviceLifecycleGate"/>, where every
+    /// re-anchor writes the epoch pair, so the id and the elapsed always describe the same segment.
+    /// <see cref="LatchDeviceLost"/> can bump the id from the native stop notification outside the gate;
+    /// that direction is benign - a lost device's elapsed does not rewind, and a consumer's rule for a
+    /// same-epoch regression is to hold rather than fold.
+    /// </summary>
+    public ClockReading Read()
+    {
+        lock (_deviceLifecycleGate)
+            return new ClockReading(Volatile.Read(ref _playbackEpochId), ElapsedSinceStart, IsAdvancing);
+    }
+
     /// <summary>
     /// Wall time to add on top of the consumed-sample count: elapsed Stopwatch time since the last data
     /// callback, clamped to one period (the most the next callback can add), never negative. Pure so the
@@ -277,6 +300,7 @@ public sealed unsafe class MiniAudioOutput :
             }
 
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
+            Volatile.Write(ref _playbackEpochId, PlaybackEpoch.Next());
             Volatile.Write(ref _deviceStoppedAfterFlush, 0);
             Volatile.Write(ref _isRunning, true);
             Trace.LogDebug(
@@ -454,6 +478,7 @@ public sealed unsafe class MiniAudioOutput :
             _ring.Clear();
             Interlocked.Exchange(ref _underrunSamples, 0);
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
+            Volatile.Write(ref _playbackEpochId, PlaybackEpoch.Next());
             // Re-anchor the clock's interpolation state with the epoch (segment-local, like the epoch itself).
             Volatile.Write(ref _lastCallbackTimestamp, 0);
             Volatile.Write(ref _elapsedHighWaterTicks, 0);
@@ -585,6 +610,8 @@ public sealed unsafe class MiniAudioOutput :
     {
         if (Interlocked.Exchange(ref _deviceLost, 1) != 0)
             return;
+        // The segment this clock was reporting is over; whatever a restart produces belongs to a new one.
+        Volatile.Write(ref _playbackEpochId, PlaybackEpoch.Next());
         Trace.LogError(
             "miniaudio playback device stopped unexpectedly (lost/removed); failing Submit/WaitForCapacity so the router surfaces OutputErrored");
     }

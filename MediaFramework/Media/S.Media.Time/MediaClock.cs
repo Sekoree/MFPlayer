@@ -56,21 +56,24 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private IPlaybackClock? _master;
     private TimeSpan _masterAnchor;
     /// <summary>
-    /// Highest <see cref="IPlaybackClock.ElapsedSinceStart"/> observed from the current master since the last
-    /// explicit re-anchor (<see cref="Start"/>/<see cref="Seek"/>/<see cref="Reset"/>/<see cref="SetMaster"/>).
-    /// Invariant: <c>_masterAnchor &lt;= _masterElapsedHighWater</c> - both are set to the same value at every
-    /// re-anchor and the high-water is only ever raised by position reads. Masters are monotonic within one
-    /// hardware segment ("master epoch"), so an observed regression below the high-water is by definition an
-    /// epoch boundary (an output <c>Flush</c> re-anchored the device clock to zero for a new segment, or a
-    /// composite master handed off to a lower leaf). <see cref="ComputePositionUnlocked"/> uses that to fold
-    /// the old epoch's accrued time into <see cref="_basePosition"/> instead of freezing or rewinding - the
-    /// one deliberate epoch mechanism replacing the old local clamp patches (review §2.14).
+    /// <see cref="ClockReading.EpochId"/> that <see cref="_masterAnchor"/> was taken in. The master REPORTS
+    /// its own epoch boundaries (plan D), so <see cref="ComputePositionUnlocked"/> compares ids rather than
+    /// inferring a boundary from an observed regression - the old inference folded a master that merely
+    /// DIPPED and then double-counted its recovery.
+    /// </summary>
+    private long _masterEpochId;
+    /// <summary>
+    /// Highest <see cref="IPlaybackClock.ElapsedSinceStart"/> observed in the CURRENT master epoch.
+    /// Invariant: <c>_masterAnchor &lt;= _masterElapsedHighWater</c> - both are set to the same value at
+    /// every re-anchor and the high-water is only ever raised by position reads. It is no longer an epoch
+    /// DETECTOR, only enforcement of the per-epoch monotonic contract: a regression with an unchanged epoch
+    /// id is a contract violation (or a torn read of a clock mid-re-anchor) and is HELD, never folded.
     /// </summary>
     private TimeSpan _masterElapsedHighWater;
-    /// <summary>Master elapsed at last <see cref="Pause"/> - used to fold in audio that played during pause.</summary>
-    private TimeSpan? _masterElapsedWhenPaused;
-    /// <summary>Backing store for <see cref="TimebaseGeneration"/>; mutated only under <see cref="_gate"/>.</summary>
-    private long _timebaseGeneration;
+    /// <summary>Master reading at last <see cref="Pause"/> - used to fold in audio that played during pause.</summary>
+    private ClockReading? _masterReadingWhenPaused;
+    /// <summary>Backing store for <see cref="PositionEpoch"/>; mutated only under <see cref="_gate"/>.</summary>
+    private long _positionEpoch;
 
     private bool _isRunning;
     private bool _disposed;
@@ -123,19 +126,27 @@ public sealed class MediaClock : IMediaClock, IDisposable
     public double PlaybackRate => 1.0;
 
     /// <summary>
-    /// Monotonically-increasing generation of this clock's media timebase. It increments exactly when the
-    /// reported position is <em>explicitly re-established</em> - <see cref="Seek"/>, <see cref="Reset"/>,
-    /// <see cref="SetMaster"/> - i.e. whenever a cached position-derived decision made under an earlier
-    /// generation may be stale. Consumers capture the generation they started under and treat a mismatch as
-    /// "a re-anchor happened since; my cached view no longer applies" (e.g. <c>MediaPlayer.Position</c>'s
-    /// natural-EOF Duration clamp is only valid while the generation still equals the one recorded at Play).
-    /// Internal master-epoch folds (a flushed device clock detected via the high-water, see
-    /// <see cref="_masterElapsedHighWater"/>) do <em>not</em> increment it: position is continuous across
-    /// them, so earlier position-derived state remains valid.
+    /// <see cref="IPlayhead.PositionEpoch"/>. It takes a fresh <see cref="PlaybackEpoch.Next"/> id exactly
+    /// when the reported position is <em>explicitly re-established</em> - <see cref="Seek"/>,
+    /// <see cref="Reset"/>, <see cref="SetMaster"/> - i.e. whenever a cached position-derived decision made
+    /// under an earlier epoch may be stale. Consumers capture the epoch they started under and treat a
+    /// mismatch as "a re-anchor happened since; my cached view no longer applies" (e.g.
+    /// <c>MediaPlayer.Position</c>'s natural-EOF Duration clamp is only valid while the epoch still equals
+    /// the one recorded at Play). Folding a MASTER's epoch change does <em>not</em> take a new id: position
+    /// is continuous across those, so earlier position-derived state remains valid.
     /// </summary>
-    public long TimebaseGeneration
+    public long PositionEpoch
     {
-        get { lock (_gate) return _timebaseGeneration; }
+        get { lock (_gate) return _positionEpoch; }
+    }
+
+    /// <summary>
+    /// <see cref="IPlayhead.ReadPosition"/>: epoch, position and running state from one pass under the gate,
+    /// so a consumer can never pair a position with an epoch a racing <see cref="Seek"/> already invalidated.
+    /// </summary>
+    public ClockReading ReadPosition()
+    {
+        lock (_gate) return new ClockReading(_positionEpoch, ComputePositionUnlocked(), _isRunning);
     }
 
     /// <summary>
@@ -174,30 +185,37 @@ public sealed class MediaClock : IMediaClock, IDisposable
             _isRunning = true;
             if (_master is not null)
             {
-                if (_masterElapsedWhenPaused is { } pausedAt)
+                var reading = _master.Read();
+                if (_masterReadingWhenPaused is { } paused)
                 {
-                    var now = _master.ElapsedSinceStart;
-                    var drift = now - pausedAt;
-                    if (drift > TimeSpan.Zero)
+                    var drift = reading.Elapsed - paused.Elapsed;
+                    if (reading.EpochId != paused.EpochId)
+                    {
+                        // The master re-anchored during the pause (an output Flush rewound the device clock).
+                        // Audio that drained between Pause and the flush is unknowable, so fold nothing - the
+                        // anchor below starts the new epoch cleanly.
+                        TraceLog.LogDebug(
+                            "Start: master epoch changed during pause (flush/segment reset) {PausedEpoch}->{Epoch} - not folding",
+                            paused.EpochId, reading.EpochId);
+                    }
+                    else if (drift > TimeSpan.Zero)
                     {
                         _basePosition += drift;
                         TraceLog.LogDebug(
                             "Start: folded master drift while paused pausedAt={PausedAt} now={Now} driftMs={DriftMs} position={Position}",
-                            pausedAt, now, drift.TotalMilliseconds, _basePosition);
+                            paused.Elapsed, reading.Elapsed, drift.TotalMilliseconds, _basePosition);
                     }
                     else if (drift < TimeSpan.Zero)
                     {
-                        // Master epoch reset during pause (an output Flush rewound the device clock): audio
-                        // that drained between Pause and the flush is unknowable, so fold nothing - the
-                        // re-anchor below starts the new epoch cleanly (same epoch rule as ComputePositionUnlocked).
+                        // Same epoch and yet regressed: the master broke its monotonic contract. Fold
+                        // nothing rather than rewinding the playhead.
                         TraceLog.LogDebug(
-                            "Start: master elapsed regressed during pause (flush/segment reset?) pausedAt={PausedAt} now={Now} driftMs={DriftMs} - not folding",
-                            pausedAt, now, drift.TotalMilliseconds);
+                            "Start: master elapsed regressed inside epoch {Epoch} pausedAt={PausedAt} now={Now} driftMs={DriftMs} - not folding",
+                            reading.EpochId, paused.Elapsed, reading.Elapsed, drift.TotalMilliseconds);
                     }
-                    _masterElapsedWhenPaused = null;
+                    _masterReadingWhenPaused = null;
                 }
-                _masterAnchor = _master.ElapsedSinceStart;
-                _masterElapsedHighWater = _masterAnchor;
+                AnchorMasterUnlocked(reading);
                 TraceLog.LogDebug("Start: master anchor={Anchor} position={Position}",
                     _masterAnchor, ComputePositionUnlocked());
             }
@@ -224,7 +242,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
             TraceLog.LogDebug("Pause: position={Position} master={Master}",
                 _basePosition, _master?.GetType().Name ?? "(stopwatch)");
             if (_master is not null)
-                _masterElapsedWhenPaused = _master.ElapsedSinceStart;
+                _masterReadingWhenPaused = _master.Read();
             else
                 _stopwatch.Reset();
             _isRunning = false;
@@ -244,13 +262,10 @@ public sealed class MediaClock : IMediaClock, IDisposable
         {
             ThrowIfDisposed();
             _basePosition = TimeSpan.Zero;
-            _masterElapsedWhenPaused = null;
-            _timebaseGeneration++;
+            _masterReadingWhenPaused = null;
+            _positionEpoch = PlaybackEpoch.Next();
             if (_master is not null)
-            {
-                _masterAnchor = _master.ElapsedSinceStart;
-                _masterElapsedHighWater = _masterAnchor;
-            }
+                AnchorMasterUnlocked(_master.Read());
             else if (_isRunning) _stopwatch.Restart();
             else _stopwatch.Reset();
         }
@@ -266,16 +281,15 @@ public sealed class MediaClock : IMediaClock, IDisposable
             ThrowIfDisposed();
             TraceLog.LogDebug("Seek: from={From} to={To}", _basePosition, position);
             _basePosition = position;
-            _masterElapsedWhenPaused = null;
-            _timebaseGeneration++;
+            _masterReadingWhenPaused = null;
+            _positionEpoch = PlaybackEpoch.Next();
             if (_master is not null)
             {
-                // Re-anchor at whatever the master reports right now. If a racing output Flush lands
-                // AFTER this read (rewinding the master's segment clock to zero), the anchor is stale for
-                // at most one position read: ComputePositionUnlocked observes the regression below the
-                // high-water captured here and folds into the new master epoch, resuming from `position`.
-                _masterAnchor = _master.ElapsedSinceStart;
-                _masterElapsedHighWater = _masterAnchor;
+                // Anchor on whatever the master reports right now, epoch included. If a racing output Flush
+                // lands AFTER this read (rewinding the master's segment clock to zero), the anchor is stale
+                // for at most one position read: ComputePositionUnlocked sees the master's NEW epoch id and
+                // folds into it, resuming from `position`.
+                AnchorMasterUnlocked(_master.Read());
             }
             else if (_isRunning) _stopwatch.Restart();
             else _stopwatch.Reset();
@@ -293,12 +307,11 @@ public sealed class MediaClock : IMediaClock, IDisposable
                 _master?.GetType().Name ?? "(stopwatch)", master?.GetType().Name ?? "(stopwatch)", current);
             _master = master;
             _basePosition = current;
-            _masterElapsedWhenPaused = null;
-            _timebaseGeneration++;
+            _masterReadingWhenPaused = null;
+            _positionEpoch = PlaybackEpoch.Next();
             if (master is not null)
             {
-                _masterAnchor = master.ElapsedSinceStart;
-                _masterElapsedHighWater = _masterAnchor;
+                AnchorMasterUnlocked(master.Read());
                 _stopwatch.Reset();
             }
             else if (_isRunning)
@@ -470,41 +483,47 @@ public sealed class MediaClock : IMediaClock, IDisposable
     }
 
     /// <summary>
+    /// Binds the master anchor to one <see cref="ClockReading"/>; must be called under <see cref="_gate"/>.
+    /// Anchor, high-water and epoch id always move together - taking them from a single reading is what
+    /// keeps the trio coherent when the master re-anchors concurrently.
+    /// </summary>
+    private void AnchorMasterUnlocked(ClockReading reading)
+    {
+        _masterEpochId = reading.EpochId;
+        _masterAnchor = reading.Elapsed;
+        _masterElapsedHighWater = reading.Elapsed;
+    }
+
+    /// <summary>
     /// Computes the running position; must be called under <see cref="_gate"/>. Master-epoch handling
-    /// (review §2.14): the master's elapsed is compared against the epoch high-water
-    /// (<see cref="_masterElapsedHighWater"/>). At/above it is the normal path. Below it the master's
-    /// segment clock was rewound by a Flush (seek/pause/natural-EOF) or a composite handed off downward:
-    /// if the master is advancing again the old epoch's accrued time is folded into
-    /// <see cref="_basePosition"/> and the anchor moves to the new epoch (position stays continuous and
-    /// keeps advancing); if it is idle (flushed but not restarted, or a composite's neutral zero) the last
-    /// in-epoch position is held without re-anchoring, so a master that resumes its old segment continues
-    /// without a jump. This replaces the old clamp-negative-delta-to-zero patch, which froze the playhead
-    /// at the base position (the "deck stuck at 0:00 after EOF" / stale-anchor-after-seek class).
+    /// (plan D): the master reports its epoch, so the boundary is an ID COMPARISON, not an inference from a
+    /// regression. On a new id the old epoch's accrued time is folded into <see cref="_basePosition"/> and
+    /// the anchor moves to the new epoch, so position stays continuous and immediately counts the new
+    /// segment (an output Flush at seek/pause/natural-EOF, a device restart, a composite handing off).
+    /// Within one id the master is monotonic by contract: a regression is a violation or a torn read, and is
+    /// held at the epoch high-water. Holding is what makes a transient DIP that later recovers cost nothing
+    /// - the previous "advancing regression ⇒ new epoch" fold re-anchored at the dip floor and then
+    /// double-counted the recovery as forward progress.
     /// </summary>
     private TimeSpan ComputePositionUnlocked()
     {
         if (!_isRunning) return _basePosition;
         if (_master is not null)
         {
-            var elapsed = _master.ElapsedSinceStart;
-            if (elapsed >= _masterElapsedHighWater)
-            {
-                _masterElapsedHighWater = elapsed;
-                return _basePosition + (elapsed - _masterAnchor);
-            }
-
-            if (_master.IsAdvancing)
+            var reading = _master.Read();
+            if (reading.EpochId != _masterEpochId)
             {
                 var folded = _masterElapsedHighWater - _masterAnchor;
                 TraceLog.LogDebug(
-                    "Position: master epoch reset detected (elapsed={Elapsed} highWater={HighWater}) - folding {FoldedMs}ms and re-anchoring",
-                    elapsed, _masterElapsedHighWater, folded.TotalMilliseconds);
+                    "Position: master epoch {From}->{To} (elapsed={Elapsed}) - folding {FoldedMs}ms and re-anchoring",
+                    _masterEpochId, reading.EpochId, reading.Elapsed, folded.TotalMilliseconds);
                 _basePosition += folded;
-                _masterAnchor = elapsed;
-                _masterElapsedHighWater = elapsed;
+                AnchorMasterUnlocked(reading);
                 return _basePosition;
             }
 
+            if (reading.Elapsed > _masterElapsedHighWater)
+                _masterElapsedHighWater = reading.Elapsed;
             return _basePosition + (_masterElapsedHighWater - _masterAnchor);
         }
         return _basePosition + _stopwatch.Elapsed;

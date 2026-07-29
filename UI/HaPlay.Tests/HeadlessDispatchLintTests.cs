@@ -26,8 +26,10 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
 {
     private const string ThisFileName = "HeadlessDispatchLintTests.cs";
 
-    /// <summary>Consumed AFTER the call - the returned Task is blocked on or unwrapped.</summary>
-    private static readonly string[] TrailingConsumption = ["GetAwaiter()", ".Wait(", ".Result"];
+    /// <summary>Consumed AFTER the call - the returned Task is blocked on or unwrapped. Matched
+    /// against the text immediately following the call's OWN closing paren (see
+    /// <see cref="CallEnd"/>), never a fixed-width window.</summary>
+    private static readonly string[] TrailingConsumption = [".GetAwaiter(", ".Wait(", ".Result"];
 
     /// <summary>Keywords that can precede an expression but are never part of a member-access chain,
     /// so the backward walk must stop at them rather than eat them as identifiers.</summary>
@@ -89,10 +91,22 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
     /// negative costs a test that silently asserts nothing.</summary>
     private static string? ClassifyDispatch(string text, int call)
     {
-        // Everything after the call: `.GetAwaiter()`, `.Wait(…)` or `.Result` all consume it.
-        var tail = text[call..Math.Min(text.Length, call + 200)];
-        if (TrailingConsumption.Any(m => tail.Contains(m, StringComparison.Ordinal)))
-            return null;
+        // Consumption must sit at the END of THIS call - `.GetAwaiter()`, `.Wait(…)` or `.Result`
+        // immediately after its own closing paren. The original fixed 200-character window scanned
+        // straight INTO the dispatched body, where a perfectly ordinary
+        // `Dispatch(() => { svc.DoAsync().GetAwaiter().GetResult(); Assert…; })` exempted the whole
+        // discarded call - the exact vacuous shape this lint exists to catch. Re-probe before
+        // loosening: a body containing `.Result` was silently passed by the windowed form.
+        var callEnd = CallEnd(text, call);
+        if (callEnd > 0)
+        {
+            var after = text.AsSpan(callEnd).TrimStart();
+            foreach (var marker in TrailingConsumption)
+            {
+                if (after.StartsWith(marker, StringComparison.Ordinal))
+                    return null;
+            }
+        }
 
         var exprStart = ExpressionStart(text, call);
         var lead = text[..exprStart].TrimEnd();
@@ -108,10 +122,47 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
             return DeclaresTaskReturn(lead)
                 ? null
                 : "expression-bodied member does not return the Task - assertions are discarded";
-        // `var t = …` / `Task t = …`, but not `==`/`!=`/`<=`/`>=`.
+        // `var t = …` / `Task t = …`, but not `==`/`!=`/`<=`/`>=`. Storing the Task is only
+        // consumption if something later actually touches it: `var t = session.Dispatch(…);` with no
+        // later `await t` throws the assertions away exactly like a bare statement does, just spelled
+        // with a variable.
         if (lead.EndsWith('=') && lead.Length >= 2 && !"=!<>+-*/&|^".Contains(lead[^2]))
-            return null;
+            return AssignedTargetIsUsedLater(text, lead, call)
+                ? null
+                : "assigned to a variable that is never awaited - assertions are discarded";
         return "result never consumed";
+    }
+
+    /// <summary>True when the identifier an assignment writes to is mentioned again AFTER the call -
+    /// enough to clear `await t` / `tasks.Add(t)` / `Task.WhenAll(t)` without modelling any of them,
+    /// while still catching the dead store. Anything that is not a plain `name =` target (a member
+    /// path, an indexer, a deconstruction) is left alone rather than guessed at.</summary>
+    private static bool AssignedTargetIsUsedLater(string text, string lead, int call)
+    {
+        var target = lead[..^1].TrimEnd();
+        var start = target.Length;
+        while (start > 0 && (char.IsLetterOrDigit(target[start - 1]) || target[start - 1] == '_'))
+            start--;
+        var name = target[start..];
+        if (name.Length == 0 || (start > 0 && target[start - 1] is '.' or ']' or ')'))
+            return true;
+        return Regex.IsMatch(text[call..], $@"(?<![\w.]){Regex.Escape(name)}\b");
+    }
+
+    /// <summary>Index just past the matching <c>)</c> of the <c>.Dispatch(</c> at
+    /// <paramref name="call"/>, or −1 when unbalanced. Literals are already blanked, so a paren
+    /// inside a string cannot skew the count.</summary>
+    private static int CallEnd(string text, int call)
+    {
+        var depth = 0;
+        for (var i = call + ".Dispatch".Length; i < text.Length; i++)
+        {
+            if (text[i] == '(')
+                depth++;
+            else if (text[i] == ')' && --depth == 0)
+                return i + 1;
+        }
+        return -1;
     }
 
     /// <summary>Start of the expression whose tail is the <c>.Dispatch(</c> at <paramref name="call"/>:

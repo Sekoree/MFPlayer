@@ -111,8 +111,19 @@ public partial class CuePlayerViewModel
     public Task FireScheduledCueAsync(CueNodeViewModel cue)
     {
         ArgumentNullException.ThrowIfNull(cue);
-        _selectedCuePendingForGo = false;
-        _immediateJumpChain.Clear();
+
+        // Both resets are VISIBLE-transport state: the one-shot row-click override the operator armed
+        // for their next GO, and the selected list's in-flight immediate-Jump chain. They belong to a
+        // fire in the SELECTED list, where this really is "an operator GO by other means". Applying
+        // them to a cross-list fire let a schedule in a list nobody is looking at silently disarm the
+        // row the operator had just clicked - the same invariant GoForeignListAsync keeps for
+        // standby/current.
+        if (!IsForeignListNode(cue))
+        {
+            _selectedCuePendingForGo = false;
+            _immediateJumpChain.Clear();
+        }
+
         return FireOperatorSelectedCueAsync(cue);
     }
 
@@ -320,7 +331,13 @@ public partial class CuePlayerViewModel
 
         try
         {
-            await RunTriggerPlanAsync(plan, cts.Token, advanceCrossfade, trackCurrentCue: false);
+            // A headless cross-list run has no pause control of its own - Pause is a VISIBLE-transport
+            // affordance (it needs CurrentCueNode, which describes the selected list). Its pre-waits
+            // therefore follow ITS run state: alive until its own list fires again or Stop/Panic
+            // cancels the token, and never frozen by whichever list the operator happens to be
+            // looking at. See WaitUntilDelayAsync.
+            await RunTriggerPlanAsync(
+                plan, cts.Token, advanceCrossfade, trackCurrentCue: false, isPaused: static () => false);
         }
         catch (OperationCanceledException)
         {

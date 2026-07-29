@@ -271,21 +271,21 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
     }
 
     [Theory]
-    // Natural EOF, unchanged timebase generation since Play → report exact Duration.
+    // Natural EOF, unchanged timebase epoch since Play → report exact Duration.
     [InlineData(true, 2.0, 5, 5, true)]
-    // A seek (or reset/master swap) after EOF bumped the generation → the clamp is stale; read the
-    // live clock (the seek target) instead of lying with Duration until the next Play (§2.14).
+    // A seek (or reset/master swap) after EOF took a new epoch → the clamp is stale; read the
+    // live clock (the seek target) instead of lying with Duration until the next Play.
     [InlineData(true, 2.0, 6, 5, false)]
-    // Not completed → never clamp, regardless of generation.
+    // Not completed → never clamp, regardless of epoch.
     [InlineData(false, 2.0, 5, 5, false)]
     [InlineData(false, 2.0, 6, 5, false)]
     // Live/unknown duration → nothing meaningful to clamp to.
     [InlineData(true, 0.0, 5, 5, false)]
     public void ShouldReportDurationAtNaturalEof_TruthTable(
-        bool completedNaturally, double durationSeconds, long currentGeneration, long playGeneration, bool expected)
+        bool completedNaturally, double durationSeconds, long currentEpoch, long playEpoch, bool expected)
     {
         Assert.Equal(expected, MediaPlayer.ShouldReportDurationAtNaturalEof(
-            completedNaturally, TimeSpan.FromSeconds(durationSeconds), currentGeneration, playGeneration));
+            completedNaturally, TimeSpan.FromSeconds(durationSeconds), currentEpoch, playEpoch));
     }
 
     [Fact]
@@ -310,7 +310,7 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
         var target = TimeSpan.FromMilliseconds(300);
         player.Seek(target);
 
-        // The seek bumps the timebase generation, so Position must drop the Duration clamp and read the
+        // The seek takes a new timebase epoch, so Position must drop the Duration clamp and read the
         // LIVE clock. That clock object is still advancing at this point (only IsRunning is synthesised
         // false at EOF - see MediaPlayer.IsRunning), so the reading is the seek target PLUS however long
         // this thread took to get here: an exact Equal made the outcome a wall-clock race and failed under

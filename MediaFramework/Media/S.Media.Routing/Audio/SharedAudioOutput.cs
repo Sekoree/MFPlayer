@@ -231,6 +231,14 @@ public sealed class SharedAudioOutput : IDisposable
 
         private readonly Lock _epochGate = new();
         private long _terminalEpochTicks;
+        /// <summary><see cref="ClockReading.EpochId"/> of the terminal that <see cref="_terminalEpochTicks"/>
+        /// was captured in. The terminal REPORTS its re-anchors, so recovery is an equality check rather than
+        /// the old "a regression below the epoch must mean it re-anchored" guess.</summary>
+        private long _terminalEpochId;
+        /// <summary>This client's own <see cref="IPlaybackClock.EpochId"/>: a fresh id at attach and at every
+        /// <see cref="Flush"/> - the two places <see cref="ElapsedSinceStart"/> restarts at zero. A terminal
+        /// re-anchor does NOT take one: the client clock stays continuous across it by design.</summary>
+        private long _epochId = PlaybackEpoch.Next();
         private long _fallbackEpochTicks;
         /// <summary>Low-passed DAC lead in ticks - the value actually subtracted. Guarded by
         /// <see cref="_epochGate"/> together with <see cref="_leadSampledAtRawTicks"/>.</summary>
@@ -267,36 +275,60 @@ public sealed class SharedAudioOutput : IDisposable
         /// <summary>
         /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: terminal device time minus this client's
         /// epoch, minus the client's DAC lead (see <see cref="ReportAudible"/>), clamped at zero. A
-        /// terminal whose own clock re-anchored (device stop/start, an external flush) is detected as
-        /// a regression below our epoch and the epoch is re-derived so this clock resumes from its
-        /// high-water mark instead of freezing at zero until the terminal re-passes the stale epoch.
-        /// Terminal reads go through its thread-safe properties only and never throw out of here -
-        /// any failure degrades to the stopwatch domain.
+        /// terminal whose own clock re-anchored (device stop/start, an external flush) SAYS SO by handing
+        /// back a different <see cref="ClockReading.EpochId"/>; the client epoch is then re-derived so this
+        /// clock resumes from its high-water mark instead of freezing at zero until the terminal re-passes
+        /// the stale epoch. Terminal reads go through its thread-safe surface only and never throw out of
+        /// here - any failure degrades to the stopwatch domain.
         /// </summary>
-        public TimeSpan ElapsedSinceStart
-        {
-            get
-            {
-                if (_terminalClock is not null)
-                {
-                    try
-                    {
-                        var terminalTicks = _terminalClock.ElapsedSinceStart.Ticks;
-                        var ticks = terminalTicks - Volatile.Read(ref _terminalEpochTicks);
-                        if (ticks < 0)
-                            ticks = RecoverFromTerminalRegression(terminalTicks);
-                        // High-water mark: the resume point for a later regression recovery.
-                        RaiseHighWater(ref _maxSinceEpochTicks, ticks);
-                        return ReportAudible(ticks);
-                    }
-                    catch
-                    {
-                        // Terminal stopped/disposed mid-read - fall through to the wall-clock domain.
-                    }
-                }
+        public TimeSpan ElapsedSinceStart => ReadRaw().elapsed;
 
-                return ReportAudible(_fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _fallbackEpochTicks));
+        /// <inheritdoc />
+        public long EpochId => Volatile.Read(ref _epochId);
+
+        /// <inheritdoc />
+        /// <remarks>Composed under <see cref="_epochGate"/>, the same gate every re-anchor writes
+        /// <see cref="_epochId"/> under, so the id can never be paired with elapsed from the other side of a
+        /// <see cref="Flush"/>.</remarks>
+        public ClockReading Read()
+        {
+            lock (_epochGate)
+            {
+                var (elapsed, advancing) = ReadRaw();
+                return new ClockReading(_epochId, elapsed, advancing);
             }
+        }
+
+        /// <summary>
+        /// The client clock proper. The terminal's epoch id is compared, never inferred: an id change means
+        /// the terminal restarted its segment, and only then is our epoch re-derived from the high-water so
+        /// this clock continues monotonically. A regression WITHOUT an id change is a broken terminal (or a
+        /// torn read of one mid-re-anchor) - clamped to the high-water, which keeps the report monotonic
+        /// without inventing an epoch that was never announced.
+        /// </summary>
+        private (TimeSpan elapsed, bool advancing) ReadRaw()
+        {
+            if (_terminalClock is not null)
+            {
+                try
+                {
+                    var terminal = _terminalClock.Read();
+                    var ticks = terminal.EpochId != Volatile.Read(ref _terminalEpochId)
+                        ? RecoverFromTerminalReanchor(terminal)
+                        : terminal.Elapsed.Ticks - Volatile.Read(ref _terminalEpochTicks);
+                    // High-water mark: the resume point for a later re-anchor recovery, and the clamp that
+                    // holds the report steady if the terminal breaks its per-epoch monotonic contract.
+                    ticks = RaiseHighWater(ref _maxSinceEpochTicks, ticks);
+                    return (ReportAudible(ticks), Volatile.Read(ref _disposed) == 0 && terminal.IsAdvancing);
+                }
+                catch
+                {
+                    // Terminal stopped/disposed mid-read - fall through to the wall-clock domain.
+                }
+            }
+
+            return (ReportAudible(_fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _fallbackEpochTicks)),
+                Volatile.Read(ref _disposed) == 0);
         }
 
         /// <summary>
@@ -388,20 +420,20 @@ public sealed class SharedAudioOutput : IDisposable
             return seen;
         }
 
-        /// <summary>Re-derives the epoch after the terminal clock regressed below it (it re-anchored):
-        /// epoch = terminal-now − high-water mark, so the client clock continues monotonically from the
-        /// furthest position it ever reported rather than freezing. Returns the recovered elapsed ticks.
-        /// Serialized so concurrent readers re-derive once; a deliberate re-anchor (attach/Flush) that
-        /// raced in first wins - its fresh epoch shows no regression on the re-check.</summary>
-        private long RecoverFromTerminalRegression(long terminalTicks)
+        /// <summary>Re-derives the epoch after the terminal announced a new one: epoch = terminal-now −
+        /// high-water mark, so the client clock continues monotonically from the furthest position it ever
+        /// reported rather than freezing. Returns the recovered elapsed ticks. Serialized so concurrent
+        /// readers re-derive once; a deliberate re-anchor (attach/Flush) that raced in first wins - its
+        /// captured terminal epoch already matches on the re-check.</summary>
+        private long RecoverFromTerminalReanchor(ClockReading terminal)
         {
             lock (_epochGate)
             {
-                var ticks = terminalTicks - Volatile.Read(ref _terminalEpochTicks);
-                if (ticks >= 0)
-                    return ticks; // another reader (or a Flush) already fixed the epoch
+                if (terminal.EpochId == Volatile.Read(ref _terminalEpochId))
+                    return terminal.Elapsed.Ticks - Volatile.Read(ref _terminalEpochTicks); // already fixed
                 var resume = Volatile.Read(ref _maxSinceEpochTicks);
-                Volatile.Write(ref _terminalEpochTicks, terminalTicks - resume);
+                Volatile.Write(ref _terminalEpochTicks, terminal.Elapsed.Ticks - resume);
+                Volatile.Write(ref _terminalEpochId, terminal.EpochId);
                 return resume;
             }
         }
@@ -426,15 +458,17 @@ public sealed class SharedAudioOutput : IDisposable
             }
         }
 
-        /// <summary>Re-captures both epoch baselines so <see cref="ElapsedSinceStart"/> restarts at zero.</summary>
+        /// <summary>Re-captures both epoch baselines so <see cref="ElapsedSinceStart"/> restarts at zero, and
+        /// takes a fresh <see cref="EpochId"/> - this IS the client clock's epoch boundary.</summary>
         private void ReanchorPlaybackEpoch()
         {
             lock (_epochGate)
             {
                 Volatile.Write(ref _fallbackEpochTicks, _fallbackElapsed.Elapsed.Ticks);
-                // A deliberate reset-to-zero clears both resume points (regression recovery, monotonic report).
+                // A deliberate reset-to-zero clears both resume points (re-anchor recovery, monotonic report).
                 Volatile.Write(ref _maxSinceEpochTicks, 0);
                 Volatile.Write(ref _maxAudibleTicks, 0);
+                Volatile.Write(ref _epochId, PlaybackEpoch.Next());
                 // ...and re-seeds the lead filter: the raw domain it integrates over just restarted, and the
                 // pre-flush queue depths say nothing about the segment that is about to start.
                 _leadTicks = 0;
@@ -443,7 +477,11 @@ public sealed class SharedAudioOutput : IDisposable
                     return;
                 try
                 {
-                    Volatile.Write(ref _terminalEpochTicks, _terminalClock.ElapsedSinceStart.Ticks);
+                    // Both halves from one reading: an epoch captured apart from its elapsed would make the
+                    // very next read look like an unannounced re-anchor.
+                    var terminal = _terminalClock.Read();
+                    Volatile.Write(ref _terminalEpochTicks, terminal.Elapsed.Ticks);
+                    Volatile.Write(ref _terminalEpochId, terminal.EpochId);
                 }
                 catch
                 {

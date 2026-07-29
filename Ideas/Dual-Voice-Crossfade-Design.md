@@ -89,6 +89,15 @@ what `TransportGroup.ReplaceAsync` owns today).
 
 ## Model: an `Outgoing` slot that exists only during the fade window
 
+> **SUPERSEDED 2026-07-29** by workstream A of `Structural-Refactor-Plan-2026-07-29.md`: a group now owns a
+> LIST of voices, each with its own state machine (`Arming → Active → Releasing → Retired`), its own level
+> state and its own level/stop-bus registration. `Outgoing` is gone; the "one outgoing max" rule below is
+> now the named policy constant `TransportGroup.MaxReleasingVoices = 1`. Everything the sections below
+> specify about BEHAVIOUR still holds (window, implied fade-in, video opacity crossing, transport targeting
+> the incoming clip, open failure = no fade, loop-with-crossfade); only the slot shape changed. Two rules
+> got STRONGER: a stop now claims each voice individually rather than the group's two slots, and releasing
+> the active clip no longer touches a tail.
+
 ```
 TransportGroup
   Active   : IArmedClip?      // unchanged - THE clip; all transport targets it

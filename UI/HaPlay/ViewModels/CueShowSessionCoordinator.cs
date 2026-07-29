@@ -425,13 +425,20 @@ public sealed class CueShowSessionCoordinator
             // Pause must hit EVERY active group, not just the default one - a multi-group cue show would otherwise
             // keep the other groups running on pause (parity with StopAllAsync).
             CuePlayer.SetPlaybackPausedCallback = paused => GuardedCueShowOp("pause", () => _cueShowSession!.SetAllPausedAsync(paused));
-            CuePlayer.SeekCueCallback = (cueId, pos) => GuardedCueShowOp(
-                "seek", () => _cueShowSession!.SeekAsync(pos, ResolveCueShowRuntimeGroup(cueId)));
+            // An unresolvable group is an ERROR, not the default group: seeking "main" would move a
+            // clip that has nothing to do with this cue (see ResolveAuthoredCueShowGroup).
+            CuePlayer.SeekCueCallback = (cueId, pos) => ResolveCueShowRuntimeGroup(cueId) is { } seekGroup
+                ? GuardedCueShowOp("seek", () => _cueShowSession!.SeekAsync(pos, seekGroup))
+                : Task.CompletedTask;
             // Multi-cue seek goes through the group-seek barrier so every targeted group lands atomically behind one
             // shared epoch (a group runs one active clip, so a cue's seek lands on whatever is active in its group).
             CuePlayer.SeekCuesCallback = positions => GuardedCueShowOp("seek-cues", () =>
                 _cueShowSession!.SeekManyAsync(
-                    positions.Select(p => (ResolveCueShowRuntimeGroup(p.CueId), p.Position)).ToList()));
+                    positions
+                        .Select(p => (Group: ResolveCueShowRuntimeGroup(p.CueId), p.Position))
+                        .Where(p => p.Group is not null)
+                        .Select(p => (p.Group!, p.Position))
+                        .ToList()));
             CuePlayer.CancelCueCallback = id => GuardedCueShowOp("cancel", () => _cueShowSession!.StopCueAsync(id.ToString()));
             // Master fader (Ideas §6): a live session-wide trim over every playing clip; clips fired
             // while reduced inherit it. Slider drags stream through here - each step is only a few
@@ -1056,7 +1063,15 @@ public sealed class CueShowSessionCoordinator
 
     /// <summary>Flushes a pending debounced cue-model edit before firing. Media execution runs on a worker
     /// thread, while output acquisition and document mapping must run on Avalonia's UI thread - the load
-    /// itself is awaited (never sync-blocked, NXT-21).</summary>
+    /// itself is awaited (never sync-blocked, NXT-21).
+    /// <para>Deferred while ANY cue is playing, exactly like <see cref="OnCueReloadDebounceTick"/> and
+    /// <see cref="WarmUpcomingForPreRollAsync"/>: the flush is a full <c>LoadDocumentAsync</c>, which
+    /// rebuilds the whole merged document and tears down every running clip in it. Before the cross-list
+    /// merge only edits to the SELECTED list could dirty the graph, so this flush could never interrupt
+    /// anything the operator had not just been editing; with every loaded list mapped into the one
+    /// document, an edit in list C would otherwise stop list A's playing cue on the next fire. Deferring
+    /// leaves the graph dirty (the debounce re-checks and rebuilds once playback stops) and fires against
+    /// the document that is actually loaded - the same trade the other two call sites already make.</para></summary>
     private async Task EnsureCueShowSessionCurrentAsync()
     {
         if (!_cueShowGraphDirty)
@@ -1064,17 +1079,56 @@ public sealed class CueShowSessionCoordinator
         if (Volatile.Read(ref _automaticReloadSuspendCount) > 0)
             return; // the restore owner performs one explicit reload after output runtimes are ready
 
+        var deferred = false;
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (!_cueShowGraphDirty)
                 return Task.CompletedTask;
+            // HasActiveCues is the VM's authoritative "something is playing" (see the debounce tick for
+            // why the session clock's IsRunning is not usable here).
+            if (CuePlayer.HasActiveCues)
+            {
+                deferred = true;
+                // Keep the pending edit armed: the flag alone has no timer behind it (an idle-cue
+                // placement edit only calls MarkCueShowGraphDirty), so without this a deferral could
+                // leave the rebuild waiting for the next unrelated edit.
+                ScheduleCueShowSessionReload(_cueReloadMayPreserveMatchingCompositions);
+                return Task.CompletedTask;
+            }
+
             _cueReloadDebounce?.Stop();
             return ReloadCueShowSessionAsync();
         });
 
-        if (_cueShowGraphDirty)
+        if (!deferred && _cueShowGraphDirty)
             throw new InvalidOperationException("The ShowSession cue graph could not be refreshed before firing.");
     }
+
+    // Test seam (cross-list regression coverage): the fire-path flush's deferral rule has no other
+    // observable surface - the coordinator owns a real ShowSession in production and none in tests.
+    private int _cueDocumentRebuildAttempts;
+
+    /// <summary>How many times the coordinator has entered a full document rebuild. Tests use it to pin
+    /// that a pending edit does NOT rebuild (and so cannot tear down playback) while a cue is active.</summary>
+    internal int CueDocumentRebuildAttempts => _cueDocumentRebuildAttempts;
+
+    /// <summary>Test seam: marks the merged cue graph dirty exactly as an edit to any loaded list does.</summary>
+    internal void MarkCueShowGraphDirtyForTests() => MarkCueShowGraphDirty(preserveMatchingCompositions: false);
+
+    /// <summary>Test seam: true while an edit is still waiting to be committed into the document.</summary>
+    internal bool IsCueShowGraphDirtyForTests => _cueShowGraphDirty;
+
+    /// <summary>Test seam: the fire path's pending-edit flush.</summary>
+    internal Task EnsureCueShowSessionCurrentForTestsAsync() => EnsureCueShowSessionCurrentAsync();
+
+    /// <summary>Test seam: reports a cue started exactly as a successful fire does.</summary>
+    internal void MarkCueShowCueStartedForTests(Guid cueId, string? runtimeGroup = null) =>
+        MarkCueShowCueStarted(cueId, runtimeGroup);
+
+    /// <summary>Test seam: how many transport groups the end/progress monitor is tracking. A cue whose
+    /// group could not be resolved must add NONE - the substituted default group is idle by construction
+    /// and would declare the cue ended inside the warmup grace.</summary>
+    internal int TrackedCueShowGroupCountForTests => _cueShowActiveByGroup.Count;
 
     /// <summary>Maps the session standby's clip-preparation state to the cue-list's badge state. The two enums are
     /// value-identical today, but a switch keeps them decoupled.</summary>
@@ -1435,7 +1489,16 @@ public sealed class CueShowSessionCoordinator
     /// advances and rows clear.</summary>
     private void MarkCueShowCueStarted(Guid cueId, string? runtimeGroup = null)
     {
-        var group = runtimeGroup ?? _cueGroupByCueId.GetValueOrDefault(cueId, ShowSession.DefaultGroup);
+        var group = runtimeGroup ?? ResolveAuthoredCueShowGroup(cueId);
+        if (group is null)
+        {
+            // No group tracking for this cue: report it started (so the operator sees the row and can
+            // stop it) but do NOT invent one. See ResolveAuthoredCueShowGroup for why substituting
+            // ShowSession.DefaultGroup silently truncated playback.
+            CuePlayer.OnCueStarted(cueId);
+            return;
+        }
+
         // A new cue replacing a still-active one on the same group → end the prior so its row doesn't orphan.
         if (_cueShowActiveByGroup.TryGetValue(group, out var prior) && prior.CueId != cueId)
             CuePlayer.OnCueEnded(prior.CueId);
@@ -1453,14 +1516,38 @@ public sealed class CueShowSessionCoordinator
     /// the same cue replaces its own prior run, while distinct siblings never displace each other.</summary>
     internal static string BuildSimultaneousRuntimeGroup(Guid cueId) => $"simultaneous:{cueId:N}";
 
-    /// <summary>Returns the group the cue is active on, falling back to its authored group while idle. Runtime group
-    /// resolution keeps per-cue and aggregate seeks targeting independently-fired simultaneous children.</summary>
-    private string ResolveCueShowRuntimeGroup(Guid cueId)
+    /// <summary>The transport group the loaded document put <paramref name="cueId"/> on, or null when the
+    /// document has no such cue.
+    /// <para>NULL IS AN ERROR, never a cue to guess at. The cross-list merged document scopes EVERY cue to
+    /// a list-scoped runtime group (<c>HaPlayShowMapper.RuntimeGroupId</c>), so
+    /// <see cref="ShowSession.DefaultGroup"/> ("main") is a group NO cue is on - the old fallback pointed
+    /// the per-group end monitor at a permanently idle group, which declared the cue ended after the ~3 s
+    /// warmup grace while it was still audible: the Now-Playing row cleared, the cue left
+    /// <c>HasActiveCues</c>, and the next debounced edit was let through and tore the clip down. Reported
+    /// and logged instead.</para></summary>
+    private string? ResolveAuthoredCueShowGroup(Guid cueId)
+    {
+        if (_cueGroupByCueId.TryGetValue(cueId, out var group))
+            return group;
+
+        Trace.LogError(
+            "HaPlay: cue {Cue} has no transport group in the loaded show document ({Count} mapped cues) - "
+            + "its playback cannot be tracked", cueId, _cueGroupByCueId.Count);
+        var label = CuePlayer.DescribeCue(cueId) ?? cueId.ToString();
+        CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueTransportGroupUnknownFormat), label);
+        return null;
+    }
+
+    /// <summary>Returns the group the cue is active on, falling back to its authored group while idle, or
+    /// null when neither exists (see <see cref="ResolveAuthoredCueShowGroup"/> - callers must skip rather
+    /// than address a substituted group). Runtime group resolution keeps per-cue and aggregate seeks
+    /// targeting independently-fired simultaneous children.</summary>
+    private string? ResolveCueShowRuntimeGroup(Guid cueId)
     {
         foreach (var (group, state) in _cueShowActiveByGroup)
             if (state.CueId == cueId)
                 return group;
-        return _cueGroupByCueId.GetValueOrDefault(cueId, ShowSession.DefaultGroup);
+        return ResolveAuthoredCueShowGroup(cueId);
     }
 
     /// <summary>Polls the per-group session snapshot to drive <see cref="CuePlayerViewModel.OnCueProgress"/> (the
@@ -1579,6 +1666,8 @@ public sealed class CueShowSessionCoordinator
     {
         if (_cueReloadTask is { } inFlight)
             return inFlight;
+
+        _cueDocumentRebuildAttempts++;
 
         // Defensive default for direct callers: an unmarked reload is a full rebuild. Normal edit/list/restore
         // paths mark the graph first with the appropriate preservation policy.

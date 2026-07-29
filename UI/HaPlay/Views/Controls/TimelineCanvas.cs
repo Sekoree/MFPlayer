@@ -77,6 +77,17 @@ public sealed class TimelineCanvas : Control
     /// transient readout (e.g. the edge-badge message) alone instead of clearing it on release.</summary>
     private bool _envelopeDragMoved;
 
+    /// <summary>Set when the envelope drag was started by clicking an EDGE BADGE rather than a dot.
+    /// The badge sits at the block's edge, nowhere near the keyframe it represents, so the ordinary
+    /// absolute-position drag would teleport that keyframe to the badge's own x on the first pixel of
+    /// hand jitter - and a click IS how the badge is selected for Delete. Such a drag therefore waits
+    /// for <see cref="TimelineMath.EnvelopeBadgeDragThresholdPx"/> of travel before it edits anything;
+    /// dot drags stay pixel-exact, because their dot really is under the pointer.</summary>
+    private bool _envelopeDragViaBadge;
+
+    /// <summary>Press position the badge-drag threshold measures against.</summary>
+    private Point _envelopeDragOrigin;
+
     // Envelope selection (Delete target) + the transient drag/right-click readout.
     private CueNodeViewModel? _selectedEnvelopeNode;
     private int _selectedEnvelopeIndex = -1;
@@ -739,6 +750,8 @@ public sealed class TimelineCanvas : Control
                         kind = TimelineHitKind.EnvelopePoint;
                         _dragEnvelopeIndex = pointIndex;
                         _envelopeDragMoved = false;
+                        _envelopeDragViaBadge = hit.ViaEdgeIndicator;
+                        _envelopeDragOrigin = p;
                         SelectEnvelopePoint(node, pointIndex);
                         if (hit.ViaEdgeIndicator)
                             ShowEdgeIndicatorReadout(overlay, pointIndex, p);
@@ -953,6 +966,15 @@ public sealed class TimelineCanvas : Control
                 if (_dragEnvelopeIndex < 0 || _dragEnvelopeIndex >= envelope.Count)
                     break;
 
+                // A drag started on an EDGE BADGE only begins editing once the pointer has really
+                // travelled: the badge is not where its keyframe is, so the first pixel of jitter after
+                // a click (the way the badge is selected for Delete) would otherwise yank a 45 s
+                // keyframe onto the badge's own x. Once moving, it drags normally.
+                if (_envelopeDragViaBadge && !_envelopeDragMoved
+                    && Math.Abs(pointer.X - _envelopeDragOrigin.X) < TimelineMath.EnvelopeBadgeDragThresholdPx
+                    && Math.Abs(pointer.Y - _envelopeDragOrigin.Y) < TimelineMath.EnvelopeBadgeDragThresholdPx)
+                    break;
+
                 // Time clamps between the neighbors and the trimmed clip; level clamps −60..+12.
                 // The record is immutable - every step writes a NEW list through the VM.
                 var block = TimelineMath.BlockRect(
@@ -988,6 +1010,7 @@ public sealed class TimelineCanvas : Control
             _dragKind = TimelineHitKind.None;
             _dragEnvelopeIndex = -1;
             _envelopeDragMoved = false;
+            _envelopeDragViaBadge = false;
             e.Pointer.Capture(null);
             e.Handled = true;
         }

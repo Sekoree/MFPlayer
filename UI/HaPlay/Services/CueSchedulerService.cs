@@ -58,11 +58,17 @@ public sealed class CueSchedulerService : IDisposable
     /// occurrence is only logged once.</summary>
     private readonly HashSet<(Guid CueId, long OccurrenceTicks)> _handled = new();
 
-    /// <summary>The same fire-once state for timecode targets, keyed by (cue id, target frame). Its
-    /// own set because its key space is chase frames, not wall ticks - and because a generation change
-    /// clears it wholesale (a new run re-arms everything ahead of its baseline), which is a cleaner
-    /// bound than the wall path's age-based prune.</summary>
-    private readonly HashSet<(Guid CueId, long TargetFrame)> _handledTimecode = new();
+    /// <summary>The same fire-once state for timecode targets, keyed by (cue id, target frame) with the
+    /// target's position in seconds as the value (targets from cues authored at different frame rates
+    /// share this set, so the frame number alone is not comparable). Its own set because its key space
+    /// is chase positions, not wall ticks.
+    /// <para>Like the wall path's <see cref="_handled"/> it is never dropped wholesale on a clock event -
+    /// only on re-arm, and otherwise PRUNED (see <see cref="SyncChaseGeneration"/>). A wholesale clear on
+    /// every generation change weakened "fires exactly once" to "fires once per run", and generations
+    /// bump on every dropout: the interpolated position leads the last decoded label by up to ~4 frames,
+    /// so a dropout right after a crossing could re-baseline just BEHIND the target that had already
+    /// fired and fire it a second time.</para></summary>
+    private readonly Dictionary<(Guid CueId, long TargetFrame), double> _handledTimecode = new();
 
     private DispatcherTimer? _timer;
     private DateTime _armedBaselineWall;
@@ -204,9 +210,15 @@ public sealed class CueSchedulerService : IDisposable
 
     // ----- Timecode chase (Ideas/Next-Round-Plan-2026-07-28.md D1) --------------------------------
 
-    /// <summary>Adopts a new chase run: its start position becomes the baseline and the fired set is
-    /// dropped, so targets behind the new position are retired unfired (no burst after a locate) and
-    /// targets ahead of it are armed again (rewind-and-replay re-fires, as an operator expects).</summary>
+    /// <summary>Adopts a new chase run: its start position becomes the baseline, so targets behind the
+    /// new position are retired unfired (no burst after a locate) and targets the run will genuinely
+    /// pass again are armed again (rewind-and-replay re-fires, as an operator expects).
+    /// <para>Re-arming is a PRUNE, not a clear (the wall path never drops a handled occurrence either).
+    /// A target only re-arms when the new baseline sits CLEARLY behind it - clearly meaning further than
+    /// the chase's own re-anchor slack, since a new run's start position can legitimately land a few
+    /// frames behind the interpolated position that was read a moment earlier without the sender having
+    /// rewound anything. Everything else keeps its handled stamp, so a dropout right after a crossing
+    /// can no longer re-fire the target it just fired, nor re-log a beyond-grace skip.</para></summary>
     private void SyncChaseGeneration(in MidiTimecodeChaseState chase)
     {
         if (_haveChaseBaseline && chase.Generation == _chaseGeneration)
@@ -214,8 +226,23 @@ public sealed class CueSchedulerService : IDisposable
         _chaseGeneration = chase.Generation;
         _chaseBaselineSeconds = chase.GenerationStartSeconds;
         _haveChaseBaseline = true;
-        _handledTimecode.Clear();
+
+        var reArmAbove = _chaseBaselineSeconds + ReanchorSlackSeconds(chase.Rate);
+        foreach (var key in _handledTimecode
+                     .Where(entry => entry.Value > reArmAbove)
+                     .Select(entry => entry.Key)
+                     .ToList())
+        {
+            _handledTimecode.Remove(key);
+        }
     }
+
+    /// <summary>How far a new run's baseline may sit behind the position the previous sweep read without
+    /// that counting as a rewind. The chase position is a wall-time extrapolation from the last decoded
+    /// label's piece-0 anchor, so it leads that label by up to one assembly (2 frames) plus the decoder's
+    /// own re-anchor tolerance (2 frames). Any real operator rewind is orders of magnitude larger.</summary>
+    private static double ReanchorSlackSeconds(MidiTimecodeRate rate) =>
+        4.0 * MidiTimecodeRates.SecondsPerFrame(rate);
 
     /// <summary>One timecode row, with the wall path's misfire policy applied along the chase clock.</summary>
     private void TickTimecode(CueNodeViewModel node, in MidiTimecodeChaseState chase)
@@ -229,15 +256,22 @@ public sealed class CueSchedulerService : IDisposable
         var targetSeconds = target.TotalSeconds;
         if (chase.PositionSeconds < targetSeconds)
             return; // not reached yet
-        if (targetSeconds < _chaseBaselineSeconds)
+        if (targetSeconds <= _chaseBaselineSeconds)
         {
-            // Behind where this run started: dead by definition (the wall path's pre-arm rule).
-            _handledTimecode.Add((node.Id, target.FrameNumber));
+            // At or behind where this run started: dead by definition. Inclusive, exactly like the wall
+            // path's `due <= _armedBaselineWall` - locating ONTO a target is not crossing it, just as
+            // arming at the instant of an occurrence is not passing it.
+            _handledTimecode.TryAdd((node.Id, target.FrameNumber), targetSeconds);
             return;
         }
-        if (!_handledTimecode.Add((node.Id, target.FrameNumber)))
-            return; // already fired (or skipped) in this run
+        if (!_handledTimecode.TryAdd((node.Id, target.FrameNumber), targetSeconds))
+            return; // already fired (or skipped) - fire-once, like the wall path's occurrence set
 
+        // Lateness is measured in the CHASE's domain against a real-millisecond grace. That is not a
+        // domain mix-up in practice: the chase position is wall-time extrapolation anchored on labels,
+        // and the decoder classifies any label more than 2 frames off the wall prediction as a JUMP -
+        // which opens a new generation and re-baselines this sweep. A run therefore cannot accumulate
+        // more than ~2 frames of skew between the two domains, well inside the 500 ms grace floor.
         var lateMs = (chase.PositionSeconds - targetSeconds) * 1000.0;
         if (lateMs > Math.Max(MinimumGraceMs, node.ScheduleGraceMs))
         {
@@ -405,6 +439,19 @@ public sealed class CueSchedulerService : IDisposable
         _lastPruneWall = nowWall;
         var cutoff = (nowWall - HandledRetention).Ticks;
         _handled.RemoveWhere(entry => entry.OccurrenceTicks < cutoff);
+
+        // The chase set has no wall age to prune by (its keys are chase positions), so its bound is
+        // "the cue still exists and still asks for a timecode". Retargeting or deleting a cue would
+        // otherwise leave its old entry behind for the session - the same long-session memory guard
+        // the wall path gets from the age cutoff, and equally never a semantic mechanism.
+        if (_handledTimecode.Count == 0)
+            return;
+        var live = _cuePlayer.EnumerateScheduledCueNodes()
+            .Where(node => node.ScheduleKind == CueScheduleKind.Timecode)
+            .Select(node => node.Id)
+            .ToHashSet();
+        foreach (var key in _handledTimecode.Keys.Where(key => !live.Contains(key.CueId)).ToList())
+            _handledTimecode.Remove(key);
     }
 
     public void Dispose()

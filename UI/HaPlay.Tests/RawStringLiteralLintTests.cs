@@ -21,10 +21,17 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
     // 264 -> 260 on 2026-07-29: the cue-player round (triggers, timecode chase, master fader, layout
     // rebuild) routed all of its text through Strings.resx and migrated a few existing literals.
     // 260 -> 317 the same day when the attribute regex was CORRECTED (see below): compound names like
-    // PlaceholderText were never being scanned, so 57 literals had been invisible since the lint was
+    // PlaceholderText were never being scanned, so literals had been invisible since the lint was
     // written. Like the 166 -> 264 jump when the scan went recursive, this is the scan getting more
     // accurate, NOT permission to add literals - the ratchet rule below still stands.
-    private const int Baseline = 317;
+    // 317 -> 304 on review of that re-baseline, which had absorbed two entries that were NOT
+    // pre-existing debt: 12 of the 57 were `SizeToContent="Height"` (a layout enum the widened regex
+    // dragged in - now excluded by name, see NotUserFacingAttributes; the true pre-existing count was
+    // 55), and one was a literal ADDED by the same round, `PlaceholderText="/haplay/cue/5"` in
+    // CuePlayerView, now routed through Strings.CueTriggerOscAddressPlaceholder like its neighbours.
+    // Re-baselining a corrected scan is fine; re-baselining over a new literal is what the ratchet is
+    // there to stop, so verify the delta against the pre-round tree before ever raising this.
+    private const int Baseline = 304;
 
     // The old `\b(Text|Content|…)` made the scan blind to any attribute ENDING in one of these
     // names, because `\b` cannot match between two word characters: `PlaceholderText="…"` - the one
@@ -36,6 +43,14 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
         RegexOptions.Compiled);
     private static readonly Regex GlyphEntity = new(@"^\s*(&#x?[0-9A-Fa-f]+;\s*)+$", RegexOptions.Compiled);
 
+    // Attribute names that merely END in one of the scanned tokens but never carry user-facing copy.
+    // Matching the name WHOLE (the correction that finally exposed PlaceholderText) also dragged
+    // `SizeToContent="Height"` in - a Window layout enum. Those 12 hits inflated the tracked debt with
+    // entries that can never be migrated to Strings.resx, so the ratchet could never reach them. Add
+    // to this set rather than raising Baseline when a non-text attribute starts matching.
+    private static readonly HashSet<string> NotUserFacingAttributes =
+        new(StringComparer.Ordinal) { "SizeToContent" };
+
     [Fact]
     public void Views_DoNotAddRawUserFacingStringLiterals()
     {
@@ -45,7 +60,7 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
         {
             var text = File.ReadAllText(file);
             foreach (Match m in Attr.Matches(text))
-                if (IsUserFacing(m.Groups[2].Value))
+                if (!NotUserFacingAttributes.Contains(m.Groups[1].Value) && IsUserFacing(m.Groups[2].Value))
                     offenders.Add($"{Path.GetFileName(file)}: {m.Groups[1].Value}=\"{m.Groups[2].Value}\"");
         }
 

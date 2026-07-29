@@ -286,9 +286,43 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public CuePlayerViewModel()
     {
+        CueLists.CollectionChanged += OnCueListsCollectionChanged;
         var initial = new CueListEditorViewModel(Strings.DefaultCueListName);
         CueLists.Add(initial);
         SelectedCueList = initial;
+    }
+
+    // Lists whose Name we watch (see OnCueListNameChanged). A HashSet, not a list: ApplyCueLists
+    // clears and refills the collection, and CollectionChanged fires per operation.
+    private readonly HashSet<CueListEditorViewModel> _watchedCueListNames = new();
+
+    private void OnCueListsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        foreach (var gone in _watchedCueListNames.Where(list => !CueLists.Contains(list)).ToList())
+        {
+            gone.PropertyChanged -= OnCueListNameChanged;
+            _watchedCueListNames.Remove(gone);
+        }
+
+        foreach (var list in CueLists)
+            if (_watchedCueListNames.Add(list))
+                list.PropertyChanged += OnCueListNameChanged;
+
+        RefreshNowPlayingListNames();
+        RefreshArmedScopeTooltips();
+    }
+
+    /// <summary>A rename has to re-stamp the LIVE Now-Playing rows: rows fired from a non-selected list
+    /// carry that list's name (<see cref="ForeignListNameOf"/>), and nothing else observed the name, so
+    /// a renamed list kept its old prefix on every row already on screen until it ended.</summary>
+    private void OnCueListNameChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        _ = sender;
+        if (e.PropertyName != nameof(CueListEditorViewModel.Name))
+            return;
+        RefreshNowPlayingListNames();
     }
 
     /// <summary>Wire the cue player to the shared output registry. Audio routes and video output
@@ -1753,13 +1787,18 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>Resolves the cue ids a Fade cue actually ramps (UI thread - reads transport state):
     /// every active cue for TargetAllPlaying, else the explicit targets with groups expanded to their
-    /// descendant media cues.</summary>
+    /// descendant media cues.
+    /// <para>Explicit targets resolve inside the fade cue's OWN list, exactly like a Jump cue's targets
+    /// (<see cref="ExecuteJumpCueOnUi"/>): fade target ids are authored links WITHIN one list, and the
+    /// cross-list merged session fires a foreign list's cues headlessly. Resolving against the SELECTED
+    /// list instead found none of them, so a scheduled/triggered Fade in another list silently ramped
+    /// nothing (or, worse, matched an unrelated id).</para></summary>
     internal IReadOnlyList<Guid> ResolveFadeCueTargetsOnUi(CueNodeViewModel fade)
     {
         if (fade.FadeTargetAllPlaying)
             return _activeCueIds.ToList();
 
-        var byId = EnumerateAllCueNodes().ToDictionary(c => c.Id, c => c);
+        var byId = EnumerateAllCueNodesFor(fade).ToDictionary(c => c.Id, c => c);
         var resolved = new List<Guid>();
         foreach (var id in fade.FadeTargetIds)
         {
@@ -3672,10 +3711,13 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <param name="trackCurrentCue">False for a headless cross-list run: the plan executes normally but
     /// leaves the VISIBLE transport's playing pointer alone (that pointer describes the selected list).</param>
+    /// <param name="isPaused">The run's own pause state, which its pre-waits follow. Null = the VISIBLE
+    /// transport's <see cref="IsTransportPaused"/> (the operator GO path).</param>
     private async Task RunTriggerPlanAsync(
         IReadOnlyList<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan, CancellationToken ct,
         (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null,
-        bool trackCurrentCue = true)
+        bool trackCurrentCue = true,
+        Func<bool>? isPaused = null)
     {
         var startedAt = DateTime.UtcNow;
 
@@ -3684,7 +3726,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         foreach (var group in groups)
         {
             await WaitUntilDelayAsync(
-                startedAt, group.Key, ct, countdownCues: group.Select(s => s.Cue).ToList());
+                startedAt, group.Key, ct, countdownCues: group.Select(s => s.Cue).ToList(),
+                isPaused: isPaused);
             ct.ThrowIfCancellationRequested();
 
             var steps = group.ToList();
@@ -3844,9 +3887,11 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
         }
 
+        // Qualified: this runs for cross-list fires too, and it lands AFTER GoForeignListAsync's own
+        // qualified GO line, so an unprefixed label here overwrote the qualifier milliseconds later.
         StatusMessage = string.IsNullOrWhiteSpace(detail)
-            ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplay(cue))
-            : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), detail);
+            ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplayQualified(cue))
+            : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplayQualified(cue), detail);
 
         // Visualizer rows in Now Playing: a fired Start cue appears with a ticking position (count-up
         // when indefinite, progress toward the set duration otherwise); a Stop cue (or the row's X, or
@@ -3990,10 +4035,17 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     /// <summary>Fires the next Auto-Follow cue after an instant cue (optionally after its timeline
-    /// duration). Cancels itself when the operator moved on (another GO changed the standby).</summary>
+    /// duration). Cancels itself when the operator moved on (another GO changed the standby).
+    /// <para>Cross-list merged session: the chain is resolved and continued inside the list that OWNS
+    /// <paramref name="fired"/>, mirroring the media natural-end path
+    /// (<see cref="OnMediaCueNaturallyEndedAsync(Guid)"/>). Resolving against the SELECTED list found no
+    /// index for a foreign Action/Visualizer/Fade cue, so its Auto-Follow chain silently stopped dead
+    /// after the first cue; continuing through <c>GoCore</c> would have been worse still - it would have
+    /// armed the VISIBLE standby with another list's cue.</para></summary>
     private async Task AdvanceAutoFollowAfterInstantCueAsync(CueNodeViewModel fired, int delayMs)
     {
-        var ordered = EnumerateFireableCueOrder().ToList();
+        var foreign = IsForeignListNode(fired);
+        var ordered = EnumerateFireableCueOrderFor(fired).ToList();
         var idx = ordered.FindIndex(c => ReferenceEquals(c, fired));
         if (idx < 0 || idx + 1 >= ordered.Count)
             return;
@@ -4004,13 +4056,21 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (delayMs > 0)
         {
             await Task.Delay(delayMs);
-            // Stale? The operator fired something else while the visualizer slide ran.
-            if (!ReferenceEquals(CurrentCueNode, fired) && CurrentCueNode is not null)
+            // Stale? The operator fired something else while the visualizer slide ran. Only meaningful
+            // for the visible transport - CurrentCueNode describes the SELECTED list, and a headless
+            // cross-list run is superseded by its own list's next fire (which cancels its run scope).
+            if (!foreign && !ReferenceEquals(CurrentCueNode, fired) && CurrentCueNode is not null)
                 return;
         }
 
+        StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplayQualified(next));
+        if (foreign)
+        {
+            await GoForeignListAsync(next);
+            return;
+        }
+
         StandbyCueNode = next;
-        StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(next));
         _immediateJumpChain.Clear();
         await GoCore();
     }
@@ -4019,11 +4079,26 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         if (ReferenceEquals(CurrentCueNode, cue))
             CurrentCueNode = null;
-        StandbyCueNode = cue;
-        IsTransportPaused = false;
+
+        // Parking the failed cue in standby is the OPERATOR's affordance ("it didn't go - press GO to
+        // retry"), and it only makes sense for a cue the operator can see. A failed cross-list fire
+        // must not reach it: writing a foreign node into StandbyCueNode dropped the visible list's own
+        // standby (RefreshRowStatuses walks the SELECTED list only, so its dot simply vanished) and
+        // armed the next GO to fire that foreign cue through the VISIBLE transport - the one thing
+        // cross-list firing is defined not to do. Un-pausing the visible transport on another list's
+        // failure is the same category of mistake.
+        if (!IsForeignListNode(cue))
+        {
+            StandbyCueNode = cue;
+            IsTransportPaused = false;
+        }
+
+        // Qualified like every other cross-list status line: an unprefixed "1 Station ID" reads as the
+        // visible list's cue 1.
         StatusMessage = string.IsNullOrWhiteSpace(detail)
-            ? Strings.Format(nameof(Strings.CueExecutionFailedStatusFormat), CueDisplay(cue))
-            : Strings.Format(nameof(Strings.CueExecutionFailedWithDetailStatusFormat), CueDisplay(cue), detail);
+            ? Strings.Format(nameof(Strings.CueExecutionFailedStatusFormat), CueDisplayQualified(cue))
+            : Strings.Format(
+                nameof(Strings.CueExecutionFailedWithDetailStatusFormat), CueDisplayQualified(cue), detail);
     }
 
     private async Task SetStatusMessageOnUiAsync(string? message)
@@ -4186,20 +4261,28 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// would only flicker.</summary>
     private static readonly TimeSpan PreWaitCountdownThreshold = TimeSpan.FromMilliseconds(1500);
 
+    /// <param name="isPaused">Which run's pause state freezes this pre-wait. Null = the VISIBLE
+    /// transport (the operator GO path). A headless cross-list run passes its OWN state: gating a
+    /// foreign list's pre-waits on <see cref="IsTransportPaused"/> meant that pausing the list the
+    /// operator happened to be LOOKING at froze every other list's scheduled pre-rolls too - a
+    /// half-hour station-ID pre-wait in an automation list simply never came due. A pre-wait is a
+    /// scheduling delay, not playback; the visible Pause has no claim on a cue that has not started.</param>
     private async Task WaitUntilDelayAsync(
         DateTime startedAtUtc, int delayMs, CancellationToken ct,
-        IReadOnlyList<CueNodeViewModel>? countdownCues = null)
+        IReadOnlyList<CueNodeViewModel>? countdownCues = null,
+        Func<bool>? isPaused = null)
     {
         if (delayMs <= 0)
             return;
 
+        isPaused ??= () => IsTransportPaused;
         var showingCountdown = false;
         try
         {
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
-                while (IsTransportPaused)
+                while (isPaused())
                 {
                     ct.ThrowIfCancellationRequested();
                     await Task.Delay(40, ct);

@@ -152,6 +152,60 @@ public sealed class MidiTimecodeTests
         Assert.Equal(new MidiTimecodeValue(2, 0, 0, 2, MidiTimecodeRate.Fps25), update!.Value.Timecode);
     }
 
+    /// <summary>
+    /// THE 8-MESSAGE DROPOUT. Sequence discipline alone does not protect the assembly: losing exactly a
+    /// whole multiple of 8 quarter-frames resumes on the very piece index the assembler is waiting for,
+    /// so pieces 0..3 of one window (the FRAME and SECOND nibbles) merge with pieces 4..7 of a later one
+    /// (the MINUTE and HOUR nibbles). Inside a minute that is harmless - the low half already is the
+    /// label the window started on. Across a minute ROLLOVER the merged label is a full minute wrong,
+    /// and it used to be reported: the chase clock then read it as a relocate and re-baselined every
+    /// consumer a minute ahead of a sender that had not moved.
+    /// </summary>
+    [Fact]
+    public void QuarterFrames_DropoutOfAWholeWindow_NeverReportsTheSplicedLabel()
+    {
+        var decoder = new MidiTimecodeDecoder(TicksPerSecond);
+        var locked = Feed(decoder, 0, 0, 59, 21, MidiTimecodeRate.Fps25, startTicks: 0);
+        Assert.Equal(new MidiTimecodeValue(0, 0, 59, 21, MidiTimecodeRate.Fps25), locked.Timecode);
+
+        // The next window describes 00:00:59:23. Its pieces 0..3 arrive; then 8 messages are lost
+        // (pieces 4..7 of this window plus 0..3 of the next); then pieces 4..7 of the window describing
+        // 00:01:00:00 land on exactly the index the assembler expects. The assembly that completes says
+        // 00:01:59:23 - a place the sender was never at.
+        var current = QuarterFrames(0, 0, 59, 23, MidiTimecodeRate.Fps25);
+        var next = QuarterFrames(0, 1, 0, 0, MidiTimecodeRate.Fps25);
+        for (var i = 0; i < 4; i++)
+            Assert.Null(decoder.FeedQuarterFrame(current[i], Ms(80 + (i * 10))));
+        for (var i = 4; i < 8; i++)
+            Assert.Null(decoder.FeedQuarterFrame(next[i], Ms(200 + ((i - 4) * 10))));
+
+        // The sender simply rolled on, so the next clean window is exactly where wall time says it is -
+        // and because the splice never moved the anchor, it reads as an ordinary continuation.
+        var resumed = Feed(decoder, 0, 1, 0, 2, MidiTimecodeRate.Fps25, startTicks: Ms(240));
+        Assert.Equal(new MidiTimecodeValue(0, 1, 0, 2, MidiTimecodeRate.Fps25), resumed.Timecode);
+        Assert.Equal(MidiTimecodeUpdateKind.Continued, resumed.Kind);
+    }
+
+    /// <summary>The corroboration rule must not swallow a REAL relocate that happens to carry the splice
+    /// fingerprint (same <c>ss:ff</c> as the prediction, a whole minute away). It costs one timecode of
+    /// latency and is then reported normally, because a rolling sender confirms it.</summary>
+    [Fact]
+    public void QuarterFrames_ARelocateShapedLikeASplice_IsReportedOnceCorroborated()
+    {
+        var decoder = new MidiTimecodeDecoder(TicksPerSecond);
+        Feed(decoder, 0, 0, 10, 0, MidiTimecodeRate.Fps25, startTicks: 0);
+
+        var bytes = QuarterFrames(0, 1, 10, 2, MidiTimecodeRate.Fps25);
+        MidiTimecodeUpdate? held = null;
+        for (var i = 0; i < 8; i++)
+            held = decoder.FeedQuarterFrame(bytes[i], Ms(80 + (i * 10))) ?? held;
+        Assert.Null(held); // unconfirmed - arithmetically indistinguishable from a splice on its own
+
+        var confirmed = Feed(decoder, 0, 1, 10, 4, MidiTimecodeRate.Fps25, startTicks: Ms(160));
+        Assert.Equal(MidiTimecodeUpdateKind.Jumped, confirmed.Kind);
+        Assert.Equal(new MidiTimecodeValue(0, 1, 10, 4, MidiTimecodeRate.Fps25), confirmed.Timecode);
+    }
+
     [Fact]
     public void FreeRunningSender_IsContinued_ARelocateIsJumped()
     {
@@ -313,6 +367,159 @@ public sealed class MidiTimecodeTests
         var state = clock.Read();
         Assert.False(state.HasSignal);
         Assert.False(state.IsChasing);
+    }
+
+    /// <summary>
+    /// A stream that keeps ARRIVING but never assembles must freeze, not free-run. A reverse/shuttle
+    /// chase emits quarter-frames descending (7,6,…,0), so the sequence discipline never completes an
+    /// assembly - and the class contract says that "is a stall from the scheduler's point of view".
+    /// It was not: liveness was stamped by every message, so <c>IsChasing</c> stayed true and the
+    /// position extrapolated FORWARD at real-time rate for the whole rewind, sweeping the scheduler
+    /// through every target it "crossed" while the deck ran backwards.
+    /// </summary>
+    [Fact]
+    public void ChaseClock_StreamThatNeverAssembles_FreezesInsteadOfRunningForward()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        FeedClock(clock, ref now, 1, 0, 0, 0, MidiTimecodeRate.Fps25);
+        var locked = clock.Read();
+        Assert.True(locked.IsChasing);
+
+        // Two seconds of DESCENDING quarter-frames: the sender is plainly talking (10 ms apart, far
+        // inside the silence timeout) but nothing ever assembles.
+        var descending = QuarterFrames(1, 0, 0, 0, MidiTimecodeRate.Fps25);
+        for (var i = 0; i < 200; i++)
+        {
+            now += Ms(10);
+            clock.FeedQuarterFrame(descending[7 - (i % 8)]);
+        }
+
+        var state = clock.Read();
+        Assert.False(state.IsChasing);
+        // Bounded by the assembly-stall window, NOT dragged along by the 2 s of message traffic.
+        Assert.True(
+            state.PositionSeconds <= locked.PositionSeconds + 0.51,
+            $"position ran forward to {state.PositionSeconds} from {locked.PositionSeconds}");
+        Assert.True(state.PositionSeconds >= locked.PositionSeconds - 0.001);
+        Assert.True(state.HasSignal);
+    }
+
+    /// <summary>
+    /// A dropout the sender ROLLED STRAIGHT THROUGH must open a new generation. The resumed label still
+    /// matches wall-clock prediction, so it reads as <c>Continued</c> and the Jumped path never fires;
+    /// the dedicated stall test was measuring the gap against the last MESSAGE tick, which on the
+    /// quarter-frame path is piece 6 of the very same window (~60 ms AFTER the update's own piece-0
+    /// stamp) and so could never be positive. Without the generation bump the scheduler keeps its old
+    /// baseline and bursts through every target the freeze hid.
+    /// </summary>
+    [Fact]
+    public void ChaseClock_DropoutTheSenderRolledThrough_StartsANewGeneration()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        FeedClock(clock, ref now, 1, 0, 0, 0, MidiTimecodeRate.Fps25);
+        var before = clock.Read().Generation;
+
+        // 2 s of lost transmission; the deck never stopped, so it resumes exactly where wall time says
+        // it should be - 2 s later = 50 frames at 25 fps, i.e. 01:00:02:00.
+        now += Ms(2000);
+        FeedClock(clock, ref now, 1, 0, 2, 0, MidiTimecodeRate.Fps25);
+
+        var state = clock.Read();
+        Assert.NotEqual(before, state.Generation);
+        Assert.Equal(
+            new MidiTimecodeValue(1, 0, 2, 0, MidiTimecodeRate.Fps25).TotalSeconds,
+            state.GenerationStartSeconds, 3);
+    }
+
+    /// <summary>The new assembly bound must not make an ordinary run churn generations: a healthy 25 fps
+    /// stream assembles every 80 ms, and a single dropped message only stretches that to 160 ms.</summary>
+    [Fact]
+    public void ChaseClock_RunWithADroppedMessage_KeepsOneGeneration()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        FeedClock(clock, ref now, 1, 0, 0, 0, MidiTimecodeRate.Fps25);
+        var generation = clock.Read().Generation;
+
+        // Drop piece 3 of the next timecode: that whole assembly is abandoned (2 frames lost), and the
+        // one after it lands 160 ms behind the first.
+        var dropped = QuarterFrames(1, 0, 0, 2, MidiTimecodeRate.Fps25);
+        for (var i = 0; i < 8; i++)
+        {
+            now += Ms(10);
+            if (i != 3)
+                clock.FeedQuarterFrame(dropped[i]);
+        }
+
+        now += Ms(10);
+        FeedClock(clock, ref now, 1, 0, 0, 4, MidiTimecodeRate.Fps25);
+        var state = clock.Read();
+        Assert.Equal(generation, state.Generation);
+        Assert.True(state.IsChasing);
+    }
+
+    /// <summary>The same 8-message dropout seen through the chase clock: the position must stay in the
+    /// 59th second and the run must not churn a generation. Unfixed it reported the spliced label, so the
+    /// clock relocated a minute ahead and every crossing consumer re-baselined there.</summary>
+    [Fact]
+    public void ChaseClock_EightMessageDropoutAcrossAMinute_DoesNotJumpAMinuteAhead()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        FeedClock(clock, ref now, 0, 0, 59, 21, MidiTimecodeRate.Fps25);
+        var generation = clock.Read().Generation;
+
+        var current = QuarterFrames(0, 0, 59, 23, MidiTimecodeRate.Fps25);
+        var next = QuarterFrames(0, 1, 0, 0, MidiTimecodeRate.Fps25);
+        for (var i = 0; i < 4; i++)
+        {
+            now += Ms(10);
+            clock.FeedQuarterFrame(current[i]);
+        }
+
+        now += Ms(80); // the 8 lost messages
+        for (var i = 4; i < 8; i++)
+        {
+            now += Ms(10);
+            clock.FeedQuarterFrame(next[i]);
+        }
+
+        var state = clock.Read();
+        Assert.Equal(generation, state.Generation);
+        Assert.InRange(state.PositionSeconds, 59.8, 60.3);
+    }
+
+    /// <summary>
+    /// Evidence for the scheduler's chase-lateness rule (Next-Round-Plan D1 follow-up 7c): chase-domain
+    /// milliseconds cannot silently drift away from real ones INSIDE a run, so measuring lateness along
+    /// the chase against a real-millisecond grace floor is sound. The clock is wall-time interpolation
+    /// anchored on labels, and the decoder only reports Continued while the label tracks the wall
+    /// prediction to within 2 frames; a sender whose labels run measurably faster than real time is a
+    /// JUMP on every assembly, which opens a new generation and re-baselines the consumer rather than
+    /// letting the two domains diverge.
+    /// </summary>
+    [Fact]
+    public void ChaseClock_SenderRunningFasterThanRealTime_OpensANewGenerationEveryAssembly()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        FeedClock(clock, ref now, 1, 0, 0, 0, MidiTimecodeRate.Fps25);
+        var generation = clock.Read().Generation;
+
+        // 3x speed: 6 frames of label per 2 frames (80 ms) of wall time.
+        var frame = new MidiTimecodeValue(1, 0, 0, 0, MidiTimecodeRate.Fps25).FrameNumber;
+        for (var i = 0; i < 3; i++)
+        {
+            frame += 6;
+            var tc = MidiTimecodeValue.FromFrameNumber(frame, MidiTimecodeRate.Fps25);
+            now += Ms(10);
+            FeedClock(clock, ref now, tc.Hours, tc.Minutes, tc.Seconds, tc.Frames, MidiTimecodeRate.Fps25);
+            var next = clock.Read().Generation;
+            Assert.NotEqual(generation, next);
+            generation = next;
+        }
     }
 
     private static MidiTimecodeUpdate Feed(

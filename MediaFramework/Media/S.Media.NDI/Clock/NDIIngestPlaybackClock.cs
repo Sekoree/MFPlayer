@@ -41,11 +41,14 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     private bool _paused;
     private bool _captureStopped;
     private TimeSpan _frozenElapsed;
-    // High-water mark enforcing IPlaybackClock's monotonic contract: _lastStreamEndTicks already
+    // High-water mark enforcing IPlaybackClock's per-epoch monotonic contract: _lastStreamEndTicks already
     // includes the full duration of the last frame, so a frame arriving LATER than its duration
     // would otherwise step the computed elapsed backwards (pre-arrival = prevEnd + wall, post =
     // prevEnd + duration). Reset only by Seek (a deliberate reposition) and AttachReceiver.
     private TimeSpan _maxReportedElapsed;
+    // Both of those reset the reported timeline discontinuously, which is legal only across an epoch
+    // boundary - so both take a fresh id and consumers compare instead of inferring one.
+    private long _epochId = PlaybackEpoch.Next();
 
     public NDIIngestPlaybackClock()
         : this(Stopwatch.GetTimestamp)
@@ -71,15 +74,30 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     {
         get
         {
-            lock (_gate)
-            {
-                if (!_sessionStarted)
-                    return TimeSpan.Zero;
-                if (!_advancing)
-                    return _frozenElapsed;
-                return ComputeElapsedUnlocked();
-            }
+            lock (_gate) return ComputeReportedElapsedUnlocked();
         }
+    }
+
+    /// <inheritdoc />
+    public long EpochId
+    {
+        get
+        {
+            lock (_gate) return _epochId;
+        }
+    }
+
+    /// <inheritdoc />
+    public ClockReading Read()
+    {
+        lock (_gate) return new ClockReading(_epochId, ComputeReportedElapsedUnlocked(), _advancing);
+    }
+
+    private TimeSpan ComputeReportedElapsedUnlocked()
+    {
+        if (!_sessionStarted)
+            return TimeSpan.Zero;
+        return _advancing ? ComputeElapsedUnlocked() : _frozenElapsed;
     }
 
     /// <summary>
@@ -98,6 +116,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
             _lastStreamEndTicks = 0;
             _maxReportedElapsed = TimeSpan.Zero;
             _advancing = false;
+            _epochId = PlaybackEpoch.Next(); // ingest relocate: the timeline restarts at zero
         }
     }
 
@@ -265,6 +284,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
             var shiftTicks = mediaPosition.Ticks - current.Ticks;
             _sessionOriginTicks -= shiftTicks;
             _maxReportedElapsed = mediaPosition; // deliberate reposition may go backwards
+            _epochId = PlaybackEpoch.Next();     // ...which is only legal across an epoch boundary
             if (!_advancing)
                 _frozenElapsed = mediaPosition;
         }

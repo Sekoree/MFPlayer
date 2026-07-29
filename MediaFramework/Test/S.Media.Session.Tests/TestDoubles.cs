@@ -248,6 +248,32 @@ internal sealed class PeakAudioOutput(AudioFormat format) : IAudioOutput
     }
 }
 
+/// <summary>A backend whose outputs are peak-reading, kept per device id. Soundboard voices and the cue
+/// preview create their sinks straight off the <see cref="IAudioBackend"/> (not through the host audio-output
+/// factory a transport clip's routes use), so this is the only way a headless test can measure the gain
+/// ACTUALLY written for them - e.g. that the master fader reached a voice and did not reach the preview.</summary>
+internal sealed class PeakAudioBackend : IAudioBackend
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, PeakAudioOutput> _outputs =
+        new(StringComparer.Ordinal);
+
+    public string Name => "peak";
+
+    /// <summary>The output serving <paramref name="deviceId"/>, or null when nothing opened that device.</summary>
+    public PeakAudioOutput? Device(string deviceId) => _outputs.GetValueOrDefault(deviceId);
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices() =>
+        [new AudioDeviceInfo("dev0", "Peak Output", MaxChannels: 8, DefaultSampleRate: 48_000, IsDefault: true)];
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices() => [];
+
+    public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
+        _outputs.GetOrAdd(deviceId ?? "(default)", _ => new PeakAudioOutput(format));
+
+    public IAudioSource CreateInput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
+        throw new NotSupportedException();
+}
+
 /// <summary>A backend whose device list can be swapped mid-test (hot-plug) - proves the session's fallback
 /// output device is resolved at the point of use through the device cache, not frozen at construction.</summary>
 internal sealed class HotPlugAudioBackend : IAudioBackend

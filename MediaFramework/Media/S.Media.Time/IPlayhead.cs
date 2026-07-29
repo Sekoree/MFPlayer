@@ -33,5 +33,18 @@ public interface IPlayhead
     /// <summary>Effective speed relative to real time (1.0 = normal).</summary>
     double PlaybackRate { get; }
 
+    /// <summary>
+    /// Identity of the timebase <see cref="CurrentPosition"/> is measured in - the playhead-side twin of
+    /// <see cref="IPlaybackClock.EpochId"/>. It takes a fresh <see cref="PlaybackEpoch.Next"/> id whenever the
+    /// position is explicitly re-established (seek, reset, master swap) and never for position-continuous
+    /// changes, so <see cref="CurrentPosition"/> is monotonic within one id. Defaults to
+    /// <see cref="PlaybackEpoch.Single"/> for playheads that never reposition.
+    /// </summary>
+    long PositionEpoch => PlaybackEpoch.Single;
+
+    /// <summary>One atomic (epoch, position, running) sample - see <see cref="IPlaybackClock.Read"/> for why
+    /// the pair must come from a single read. Override wherever the three can change together.</summary>
+    ClockReading ReadPosition() => new(PositionEpoch, CurrentPosition, IsRunning);
+
     void Seek(TimeSpan position);
 }

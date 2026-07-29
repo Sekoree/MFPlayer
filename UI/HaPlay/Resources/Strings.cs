@@ -769,6 +769,7 @@ public static class Strings
     public static string PlayerNameFormat => Get(nameof(PlayerNameFormat));
     public static string CueAutoFollowFailedFormat => Get(nameof(CueAutoFollowFailedFormat));
     public static string CuePlaybackAlertFormat => Get(nameof(CuePlaybackAlertFormat));
+    public static string CueTransportGroupUnknownFormat => Get(nameof(CueTransportGroupUnknownFormat));
     public static string NDIPumpPressureStatusFormat => Get(nameof(NDIPumpPressureStatusFormat));
     public static string ColorTagLabel => Get(nameof(ColorTagLabel));
     public static string CueListSettingsButton => Get(nameof(CueListSettingsButton));
@@ -1395,6 +1396,7 @@ public static class Strings
     public static string CueTriggerLearnTooltip => Get(nameof(CueTriggerLearnTooltip));
     public static string CueTriggerLearnCapturedStatusFormat => Get(nameof(CueTriggerLearnCapturedStatusFormat));
     public static string CueTriggerOscAddressLabel => Get(nameof(CueTriggerOscAddressLabel));
+    public static string CueTriggerOscAddressPlaceholder => Get(nameof(CueTriggerOscAddressPlaceholder));
     public static string CueTriggerOscArgumentLabel => Get(nameof(CueTriggerOscArgumentLabel));
     public static string CueTriggerOscArgumentWatermark => Get(nameof(CueTriggerOscArgumentWatermark));
     public static string CueTriggerOscArgumentTooltip => Get(nameof(CueTriggerOscArgumentTooltip));

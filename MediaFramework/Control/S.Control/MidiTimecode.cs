@@ -238,6 +238,26 @@ public readonly record struct MidiTimecodeUpdate(
 /// partial assembly and waits for the next piece 0, so dropped or duplicated messages cost one timecode
 /// (2 frames) rather than producing a corrupt label. Reverse (descending) chase is deliberately NOT
 /// decoded - it resyncs on each piece 0 instead, which is a stall from the scheduler's point of view.</para>
+/// <para><strong>Nibble splices, and why sequence discipline alone is not enough.</strong> A dropout of
+/// exactly a WHOLE MULTIPLE OF 8 quarter-frames resumes on the piece index the assembler is waiting for,
+/// so the ordering check passes and pieces 0..3 of one window (frame + second nibbles) get merged with
+/// pieces 4..7 of a later one (minute + hour nibbles). Within a minute that splice is harmless - the
+/// low half already IS the label the window started on, and the update is stamped with that window's
+/// piece 0 - but across a minute (or hour) rollover the merged label is a whole minute wrong.
+/// <br/>A time bound on the window cannot separate the two cases: an 8-message dropout (~83 ms) and a
+/// poll thread starved mid-window look identical on arrival timestamps. What DOES separate them is the
+/// splice's arithmetic fingerprint. Because the low half is the true label at the window start, the
+/// merged label is exactly the wall-time PREDICTION shifted by a whole number of minutes - never by an
+/// arbitrary amount, and never backwards. So an assembled label that is discontinuous with the previous
+/// anchor by (within tolerance) a positive whole number of minutes is treated as UNCONFIRMED: it is not
+/// reported at all, it does not move the anchor, and it is only believed if the NEXT independent
+/// assembly lands where it predicts (which a genuine relocate does within one timecode, and a spliced
+/// label never does). A relocate that happens to trip the fingerprint therefore costs 2 frames of
+/// reporting latency; a splice costs nothing and never escapes.
+/// <br/>Residual case, deliberately accepted: a splice in the very FIRST assembly after a reset has no
+/// anchor to be inconsistent with, so it is reported. It self-corrects on the next assembly (which
+/// fails the prediction and re-anchors with a new generation), i.e. it costs one 2-frame window rather
+/// than a persistently wrong label.</para>
 /// <para><strong>Full frames (SysEx).</strong> <c>F0 7F &lt;dev&gt; 01 01 hh mm ss ff F7</c> - the locate
 /// message, whose hour byte packs the rate as <c>0rrhhhhh</c>. Always reported as
 /// <see cref="MidiTimecodeUpdateKind.Located"/> with <c>IsRunning=false</c>.</para>
@@ -269,6 +289,13 @@ public sealed class MidiTimecodeDecoder
     private double _anchorSeconds;
     private MidiTimecodeRate _anchorRate;
 
+    // An assembled label that carried the nibble-splice fingerprint: held unreported until a second,
+    // independent assembly corroborates it (see the splice note in the class remarks).
+    private bool _havePendingJump;
+    private long _pendingJumpTicks;
+    private double _pendingJumpSeconds;
+    private MidiTimecodeRate _pendingJumpRate;
+
     /// <param name="ticksPerSecond">Frequency of the tick domain the caller timestamps with.
     /// Defaults to <see cref="Stopwatch.Frequency"/>.</param>
     public MidiTimecodeDecoder(long ticksPerSecond = 0) =>
@@ -292,6 +319,7 @@ public sealed class MidiTimecodeDecoder
         _anchorSeconds = 0;
         _anchorTicks = 0;
         _anchorRate = default;
+        _havePendingJump = false;
     }
 
     /// <summary>Feeds one quarter-frame DATA byte (the byte after the 0xF1 status). Returns an update
@@ -334,7 +362,7 @@ public sealed class MidiTimecodeDecoder
             return null;
 
         // The assembled label describes the instant piece 0 arrived, NOT now: see the 2-frame lag note.
-        return Commit(candidate, _windowStartTicks, running: true, forcedKind: null);
+        return CommitQuarterFrame(candidate, _windowStartTicks);
     }
 
     /// <summary>Feeds a complete full-frame SysEx (<c>F0 7F dev 01 01 hh mm ss ff F7</c>). Returns null
@@ -354,9 +382,13 @@ public sealed class MidiTimecodeDecoder
         if (!candidate.IsValid)
             return null;
 
-        // A locate invalidates any partial quarter-frame window in flight.
+        // A locate invalidates any partial quarter-frame window in flight - and any splice candidate
+        // waiting for corroboration, since the locate re-anchors everything by itself.
         _expectedPiece = 0;
-        return Commit(candidate, timestampTicks, running: false, forcedKind: MidiTimecodeUpdateKind.Located);
+        _havePendingJump = false;
+        return Anchor(
+            candidate, candidate.TotalSeconds, timestampTicks,
+            running: false, MidiTimecodeUpdateKind.Located);
     }
 
     /// <summary>Convenience entry for callers holding raw wire bytes: dispatches on the status byte
@@ -370,36 +402,102 @@ public sealed class MidiTimecodeDecoder
         return null;
     }
 
-    /// <summary>Classifies the new label against the previous anchor's wall-time prediction and
-    /// re-anchors on it.</summary>
-    private MidiTimecodeUpdate Commit(
-        MidiTimecodeValue timecode,
-        long timestampTicks,
-        bool running,
-        MidiTimecodeUpdateKind? forcedKind)
+    /// <summary>Classifies a freshly assembled quarter-frame label against the previous anchor's
+    /// wall-time prediction and re-anchors on it - EXCEPT when the label carries the nibble-splice
+    /// fingerprint, in which case it is held for corroboration and nothing is reported (see the splice
+    /// note in the class remarks).</summary>
+    private MidiTimecodeUpdate? CommitQuarterFrame(MidiTimecodeValue timecode, long timestampTicks)
     {
         var seconds = timecode.TotalSeconds;
-        MidiTimecodeUpdateKind kind;
-        if (forcedKind is { } forced)
+        var tolerance = Tolerance(timecode.Rate);
+
+        // A held candidate is believed only once an INDEPENDENT assembly lands where it predicts. A
+        // genuine relocate rolls on from its new position and corroborates within one timecode; a
+        // spliced label - which describes a position the sender was never at - never does.
+        if (_havePendingJump)
         {
-            kind = forced;
-        }
-        else if (!_haveAnchor || _anchorRate != timecode.Rate)
-        {
-            kind = MidiTimecodeUpdateKind.Resynced;
-        }
-        else
-        {
-            // A free-running sender lands within a frame or two of where wall time says it should be.
-            // Anything further is a relocate - or a resume after a stop, which for a scheduler means
-            // the same thing: the run before it is over.
-            var predicted = _anchorSeconds + ((timestampTicks - _anchorTicks) / (double)_ticksPerSecond);
-            var tolerance = Math.Max(0.020, 2.0 * MidiTimecodeRates.SecondsPerFrame(timecode.Rate));
-            kind = Math.Abs(seconds - predicted) <= tolerance
-                ? MidiTimecodeUpdateKind.Continued
-                : MidiTimecodeUpdateKind.Jumped;
+            var corroborated =
+                _pendingJumpRate == timecode.Rate
+                && Math.Abs(seconds - PredictFrom(_pendingJumpSeconds, _pendingJumpTicks, timestampTicks))
+                   <= tolerance;
+            _havePendingJump = false;
+            if (corroborated)
+                return Anchor(timecode, seconds, timestampTicks, running: true, MidiTimecodeUpdateKind.Jumped);
+            // Not corroborated: the candidate was noise. Fall through and classify THIS label against
+            // the still-valid anchor - after a splice the sender has simply rolled on, so it normally
+            // lands exactly on the wall prediction and reads as Continued.
         }
 
+        if (!_haveAnchor || _anchorRate != timecode.Rate)
+            return Anchor(timecode, seconds, timestampTicks, running: true, MidiTimecodeUpdateKind.Resynced);
+
+        // A free-running sender lands within a frame or two of where wall time says it should be.
+        // Anything further is a relocate - or a resume after a stop, which for a scheduler means
+        // the same thing: the run before it is over.
+        var predicted = PredictFrom(_anchorSeconds, _anchorTicks, timestampTicks);
+        var delta = seconds - predicted;
+        if (Math.Abs(delta) <= tolerance)
+            return Anchor(timecode, seconds, timestampTicks, running: true, MidiTimecodeUpdateKind.Continued);
+
+        if (IsNibbleSpliceFingerprint(timecode, predicted))
+        {
+            _havePendingJump = true;
+            _pendingJumpTicks = timestampTicks;
+            _pendingJumpSeconds = seconds;
+            _pendingJumpRate = timecode.Rate;
+            return null; // unconfirmed - never reported, and the anchor stays where it was
+        }
+
+        return Anchor(timecode, seconds, timestampTicks, running: true, MidiTimecodeUpdateKind.Jumped);
+    }
+
+    private double PredictFrom(double fromSeconds, long fromTicks, long atTicks) =>
+        fromSeconds + ((atTicks - fromTicks) / (double)_ticksPerSecond);
+
+    /// <summary>A free-running sender lands within a frame or two of the wall-time prediction.</summary>
+    private static double Tolerance(MidiTimecodeRate rate) =>
+        Math.Max(0.020, 2.0 * MidiTimecodeRates.SecondsPerFrame(rate));
+
+    /// <summary>The arithmetic signature of a merged assembly. Pieces 0..3 carry the FRAME and SECOND
+    /// nibbles, pieces 4..7 the MINUTE and HOUR ones, and the update is stamped with the window's piece 0
+    /// - so a splice keeps the low half of the window it started on, which is precisely the label the
+    /// wall-time prediction describes, and takes only the high half from a later window. The corrupt
+    /// label therefore matches the predicted label's <c>ss:ff</c> exactly while its <c>hh:mm</c> is
+    /// somewhere ahead. Nothing else produces that shape: a relocate moves the whole label.
+    /// <para>±1 frame of slack on the predicted position absorbs ordinary arrival jitter (half a frame is
+    /// 20 ms at 25 fps). The test is on the LABEL FIELDS rather than on a seconds difference so that
+    /// 29.97 drop-frame - whose labelled minute is 1798 frames, or 1800 across a ten-minute boundary -
+    /// needs no special case. A genuine relocate that happens to land on the predicted <c>ss:ff</c> a
+    /// whole number of minutes away is not misread: it is merely held one extra timecode (~83 ms) until
+    /// the next assembly corroborates it.</para></summary>
+    private static bool IsNibbleSpliceFingerprint(MidiTimecodeValue candidate, double predictedSeconds)
+    {
+        if (candidate.TotalSeconds <= predictedSeconds)
+            return false; // the minute/hour half always comes from a LATER window, never an earlier one
+
+        var predictedFrames = (long)Math.Round(
+            predictedSeconds / MidiTimecodeRates.SecondsPerFrame(candidate.Rate));
+        for (var slack = -1L; slack <= 1L; slack++)
+        {
+            var predictedLabel = MidiTimecodeValue.FromFrameNumber(predictedFrames + slack, candidate.Rate);
+            if (predictedLabel.Seconds == candidate.Seconds
+                && predictedLabel.Frames == candidate.Frames
+                && (predictedLabel.Minutes != candidate.Minutes || predictedLabel.Hours != candidate.Hours))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private MidiTimecodeUpdate Anchor(
+        MidiTimecodeValue timecode,
+        double seconds,
+        long timestampTicks,
+        bool running,
+        MidiTimecodeUpdateKind kind)
+    {
         _haveAnchor = true;
         _anchorTicks = timestampTicks;
         _anchorSeconds = seconds;
@@ -455,11 +553,21 @@ public sealed class MidiTimecodeChaseClock
     /// long enough to ride out poll jitter, short enough that a freeze is felt as "signal lost".</summary>
     public static readonly TimeSpan StallTimeout = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>How long the clock keeps extrapolating without a COMPLETED assembly. Messages arriving
+    /// only prove the sender is talking; only an assembly says where it is. A stream that keeps arriving
+    /// and never assembles - a reverse/shuttle chase emits pieces 7..0, so nothing ever completes - was
+    /// otherwise held "chasing" by the message stamp alone and free-ran the position FORWARD at
+    /// real-time rate while the deck ran backwards, firing every scheduler target it "crossed". One
+    /// timecode spans 2 frames (~83 ms at 24 fps) and the read window peaks at twice that, so 500 ms
+    /// rides out two consecutive lost assemblies without flickering.</summary>
+    public static readonly TimeSpan AssemblyStallTimeout = TimeSpan.FromMilliseconds(500);
+
     private readonly Lock _gate = new();
     private readonly MidiTimecodeDecoder _decoder;
     private readonly Func<long> _ticks;
     private readonly long _ticksPerSecond;
     private readonly double _stallSeconds = StallTimeout.TotalSeconds;
+    private readonly double _assemblyStallSeconds = AssemblyStallTimeout.TotalSeconds;
 
     private bool _haveSignal;
     private bool _running;
@@ -539,9 +647,15 @@ public sealed class MidiTimecodeChaseClock
                 return new MidiTimecodeChaseState(false, false, _rate, 0, default, _generation, 0);
 
             var idleSeconds = (now - _lastMessageTicks) / (double)_ticksPerSecond;
-            var chasing = _running && idleSeconds <= _stallSeconds;
-            // Chasing: extrapolate to now. Stalled or parked: freeze where the last message left us.
-            var reference = chasing ? now : _lastMessageTicks;
+            // Liveness (any message) and decodability (a completed assembly) are separate conditions:
+            // see AssemblyStallTimeout. Extrapolation needs BOTH, so an undecodable-but-live stream
+            // freezes instead of free-running forward.
+            var maxReference = _anchorTicks + (long)(_assemblyStallSeconds * _ticksPerSecond);
+            var chasing = _running && idleSeconds <= _stallSeconds && now <= maxReference;
+            // Chasing: extrapolate to now. Stalled or parked: freeze where the last message left us -
+            // but never further from the last decoded label than the assembly-stall bound, or a stream
+            // that keeps talking without assembling would drag the frozen position along with it.
+            var reference = Math.Min(chasing ? now : _lastMessageTicks, maxReference);
             var seconds = _anchorSeconds + ((reference - _anchorTicks) / (double)_ticksPerSecond);
             if (seconds < 0)
                 seconds = 0;
@@ -559,9 +673,19 @@ public sealed class MidiTimecodeChaseClock
     private void Apply(in MidiTimecodeUpdate update)
     {
         var seconds = update.Timecode.TotalSeconds;
+        // Gap since the last DECODED label, not since the last message. Measured against
+        // _lastMessageTicks this test could never be true on the quarter-frame path: the update is
+        // stamped with piece 0's tick while _lastMessageTicks already holds piece 6's, ~60 ms LATER, so
+        // the difference was always negative and "resume after a stall" only ever fired through the
+        // Jumped path - which misses the case the whole rule exists for, a dropout the sender rolled
+        // straight through (the resumed label still matches wall prediction, so it reads as Continued
+        // and the scheduler bursts through every target the freeze hid). Anchor-to-anchor is ~83 ms on
+        // a healthy stream and ~167 ms after a dropped message, hence the assembly bound rather than
+        // the 100 ms silence bound.
         var wasStalled = _haveSignal
                          && _running
-                         && (update.TimestampTicks - _lastMessageTicks) / (double)_ticksPerSecond > _stallSeconds;
+                         && (update.TimestampTicks - _anchorTicks) / (double)_ticksPerSecond
+                            > _assemblyStallSeconds;
         if (!_haveSignal || wasStalled || update.Kind != MidiTimecodeUpdateKind.Continued)
         {
             _generation++;

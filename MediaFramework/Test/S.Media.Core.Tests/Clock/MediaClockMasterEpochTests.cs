@@ -3,11 +3,13 @@ using Xunit;
 namespace S.Media.Core.Tests.Clock;
 
 /// <summary>
-/// Review §2.14: MediaClock's master-epoch mechanism. A master <see cref="IPlaybackClock"/> is monotonic
-/// within one hardware segment; an output Flush (seek/pause/natural EOF) rewinds its ElapsedSinceStart to
-/// zero for a new segment ("epoch"). MediaClock detects the epoch boundary as a regression below the
-/// per-epoch high-water and either folds (master advancing again - new epoch live) or holds (master idle),
-/// instead of the old clamp-to-zero-delta that froze the playhead at the base position.
+/// Plan D: MediaClock's master-epoch mechanism. A master <see cref="IPlaybackClock"/> is monotonic within
+/// one epoch and REPORTS its own boundaries via <see cref="ClockReading.EpochId"/>; an output Flush
+/// (seek/pause/natural EOF), a device restart or a composite handoff starts a new one. MediaClock compares
+/// ids - on a new id it folds the old epoch's accrued time into the base and re-anchors (position stays
+/// continuous and immediately counts the new segment); within one id it holds at the epoch high-water,
+/// which is what makes a transient dip cost nothing. It no longer INFERS a boundary from a regression:
+/// that inference double-counted the recovery of any master that dipped and came back.
 /// </summary>
 public class MediaClockMasterEpochTests
 {
@@ -27,18 +29,18 @@ public class MediaClockMasterEpochTests
         var target = TimeSpan.FromSeconds(10);
         clock.Seek(target); // anchors at the stale, pre-flush 42.2s
 
-        // The flush lands AFTER the clock-seek: stream stopped, segment clock rewound to zero.
-        master.IsAdvancing = false;
-        master.ElapsedSinceStart = TimeSpan.Zero;
+        // The flush lands AFTER the clock-seek: stream stopped, new epoch, segment clock rewound to zero.
+        master.Reanchor();
         Assert.Equal(target, clock.CurrentPosition); // held at the seek target, not frozen forever
 
-        // The stream restarts and the new segment starts playing.
+        // The stream restarts and the new segment starts playing. The 50 ms it has played are real audible
+        // progress in the new epoch, and the id told us where that epoch began, so they are counted.
         master.ElapsedSinceStart = TimeSpan.FromMilliseconds(50);
         master.IsAdvancing = true;
-        Assert.Equal(target, clock.CurrentPosition); // fold is continuous - still the seek target
+        Assert.Equal(target + TimeSpan.FromMilliseconds(50), clock.CurrentPosition);
 
         master.ElapsedSinceStart = TimeSpan.FromMilliseconds(550);
-        Assert.Equal(target + TimeSpan.FromMilliseconds(500), clock.CurrentPosition);
+        Assert.Equal(target + TimeSpan.FromMilliseconds(550), clock.CurrentPosition);
     }
 
     [Fact]
@@ -54,9 +56,8 @@ public class MediaClockMasterEpochTests
         master.ElapsedSinceStart = TimeSpan.FromSeconds(5);
         Assert.Equal(TimeSpan.FromSeconds(5), clock.CurrentPosition); // raises the epoch high-water
 
-        // Natural EOF: run loop flushes the output; stream stops; segment clock rewinds to zero.
-        master.IsAdvancing = false;
-        master.ElapsedSinceStart = TimeSpan.Zero;
+        // Natural EOF: run loop flushes the output; stream stops; new epoch, segment clock at zero.
+        master.Reanchor();
 
         Assert.Equal(TimeSpan.FromSeconds(5), clock.CurrentPosition); // held at EOF, not 0:00
         Assert.Equal(TimeSpan.FromSeconds(5), clock.CurrentPosition); // stable across repeated reads
@@ -65,9 +66,9 @@ public class MediaClockMasterEpochTests
     [Fact]
     public void MasterDipToZeroAndReturn_HoldsThenResumesWithoutJump()
     {
-        // A composite master reports its neutral zero while no candidate advances, then the SAME
-        // segment resumes. Holding (not folding) while idle means the return is jump-free; the old
-        // clamp snapped the position to the base during the dip.
+        // A master reports a neutral zero while idle and then the SAME epoch resumes (no id change, so no
+        // re-anchor was announced). Holding is what keeps the return jump-free; folding would have made the
+        // resumed reading look like 10.5 s of fresh progress.
         var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
         using var clock = new MediaClock();
         clock.SetMaster(master);
@@ -80,7 +81,7 @@ public class MediaClockMasterEpochTests
         master.ElapsedSinceStart = TimeSpan.Zero; // neutral idle report
         Assert.Equal(TimeSpan.FromSeconds(0.5), clock.CurrentPosition); // held
 
-        master.ElapsedSinceStart = TimeSpan.FromSeconds(10.5); // same segment resumes
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(10.5); // same epoch resumes
         master.IsAdvancing = true;
         Assert.Equal(TimeSpan.FromSeconds(0.5), clock.CurrentPosition); // no +10.5s jump
 
@@ -89,11 +90,10 @@ public class MediaClockMasterEpochTests
     }
 
     [Fact]
-    public void AdvancingRegression_FoldsContinuouslyIntoNewEpoch()
+    public void MasterReportsNewEpoch_FoldsContinuouslyIntoIt()
     {
-        // A composite master hands off to a lower (but advancing) leaf clock: position must stay
-        // continuous and keep advancing at the new leaf's rate - the documented "re-anchor on handoff"
-        // now happens automatically at the epoch boundary.
+        // A composite master hands off to a lower (but advancing) leaf clock - the composite takes a new
+        // epoch id for the handoff. Position must stay continuous and keep advancing at the new leaf's rate.
         var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
         using var clock = new MediaClock();
         clock.SetMaster(master);
@@ -102,10 +102,36 @@ public class MediaClockMasterEpochTests
         master.ElapsedSinceStart = TimeSpan.FromSeconds(12);
         Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
 
-        master.ElapsedSinceStart = TimeSpan.FromSeconds(3); // handoff, still advancing
+        master.Reanchor(TimeSpan.FromSeconds(3), advancing: true); // handoff to a leaf sitting at 3 s
         Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition); // continuous fold
 
         master.ElapsedSinceStart = TimeSpan.FromSeconds(3.5);
+        Assert.Equal(TimeSpan.FromSeconds(2.5), clock.CurrentPosition);
+    }
+
+    [Fact]
+    public void MasterDipsAndRecoversWithinOneEpoch_DoesNotDoubleCountTheRecovery()
+    {
+        // Plan D's unresolved symptom, pinned. The retired "advancing regression ⇒ new epoch" inference
+        // folded the pre-dip accrual into the base AND re-anchored at the dip floor, so the recovery back
+        // to a reading the master had already reported was counted a SECOND time (this read 3 s).
+        var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
+        using var clock = new MediaClock();
+        clock.SetMaster(master);
+        clock.Start();
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(12);
+        Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
+
+        // The dip: same epoch id (no re-anchor was announced), master briefly reports less than it had.
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(11);
+        Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition); // held, not folded
+
+        // The recovery: the master returns to where it was. It has still only ever played 2 s.
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(12);
+        Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(12.5);
         Assert.Equal(TimeSpan.FromSeconds(2.5), clock.CurrentPosition);
     }
 
@@ -122,10 +148,9 @@ public class MediaClockMasterEpochTests
         clock.Pause();
         Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
 
-        // The flush lands while paused (master elapsed regresses below the pause snapshot):
-        // Start must not fold negative drift, and the new epoch anchors cleanly.
-        master.IsAdvancing = false;
-        master.ElapsedSinceStart = TimeSpan.Zero;
+        // The flush lands while paused (new master epoch): Start must fold no drift across it, and the
+        // new epoch anchors cleanly.
+        master.Reanchor();
         clock.Start();
         Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
 
@@ -135,51 +160,119 @@ public class MediaClockMasterEpochTests
     }
 
     [Fact]
-    public void TimebaseGeneration_BumpsOnExplicitReanchorsOnly()
+    public void PauseThenMasterRegressesWithinOneEpoch_FoldsNothing()
+    {
+        // A master that breaks its per-epoch monotonic contract while we are paused must not drag the
+        // playhead backwards on resume.
+        var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(1), IsAdvancing = true };
+        using var clock = new MediaClock();
+        clock.SetMaster(master);
+        clock.Start();
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(3);
+        Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
+        clock.Pause();
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(1); // same epoch, illegal regression
+        clock.Start();
+        Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
+    }
+
+    [Fact]
+    public void PositionEpoch_ChangesOnExplicitReanchorsOnly()
     {
         var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
         using var clock = new MediaClock();
-        Assert.Equal(0, clock.TimebaseGeneration);
+        var fresh = clock.PositionEpoch;
 
         clock.SetMaster(master);
-        Assert.Equal(1, clock.TimebaseGeneration);
+        var afterSetMaster = clock.PositionEpoch;
+        Assert.NotEqual(fresh, afterSetMaster);
 
         clock.Start();
-        Assert.Equal(1, clock.TimebaseGeneration); // Start re-anchors for continuity, no reposition
+        Assert.Equal(afterSetMaster, clock.PositionEpoch); // Start re-anchors for continuity, no reposition
 
         clock.Seek(TimeSpan.FromSeconds(7));
-        Assert.Equal(2, clock.TimebaseGeneration);
+        var afterSeek = clock.PositionEpoch;
+        Assert.NotEqual(afterSetMaster, afterSeek);
 
-        // A master epoch fold is position-continuous - it must NOT look like a reposition to
-        // generation-scoped consumers (e.g. MediaPlayer's natural-EOF Duration clamp).
+        // Folding a MASTER epoch change is position-continuous - it must NOT look like a reposition to
+        // epoch-scoped consumers (e.g. MediaPlayer's natural-EOF Duration clamp).
         master.ElapsedSinceStart = TimeSpan.FromSeconds(12);
         _ = clock.CurrentPosition;
-        master.ElapsedSinceStart = TimeSpan.FromSeconds(1); // regression while advancing → fold
+        master.Reanchor(TimeSpan.FromSeconds(1), advancing: true);
         _ = clock.CurrentPosition;
-        Assert.Equal(2, clock.TimebaseGeneration);
+        Assert.Equal(afterSeek, clock.PositionEpoch);
 
         clock.Pause();
-        Assert.Equal(2, clock.TimebaseGeneration);
+        Assert.Equal(afterSeek, clock.PositionEpoch);
 
         clock.Reset();
-        Assert.Equal(3, clock.TimebaseGeneration);
+        Assert.NotEqual(afterSeek, clock.PositionEpoch);
     }
 
+    [Fact]
+    public void ReadPosition_ReportsTheEpochThePositionWasComputedIn()
+    {
+        var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(4), IsAdvancing = true };
+        using var clock = new MediaClock();
+        clock.SetMaster(master);
+        clock.Start();
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(5);
+
+        var before = clock.ReadPosition();
+        Assert.Equal(clock.PositionEpoch, before.EpochId);
+        Assert.Equal(TimeSpan.FromSeconds(1), before.Elapsed);
+        Assert.True(before.IsAdvancing);
+
+        clock.Seek(TimeSpan.FromSeconds(30));
+        var after = clock.ReadPosition();
+        Assert.NotEqual(before.EpochId, after.EpochId);
+        Assert.Equal(TimeSpan.FromSeconds(30), after.Elapsed);
+    }
+
+    /// <summary>A master under test control. <see cref="Read"/> is atomic (the interface requires it of any
+    /// clock that ever re-anchors) so the fake cannot hand out a torn pair the production code would then
+    /// be judged on.</summary>
     private sealed class FakeClock : IPlaybackClock
     {
-        private long _elapsedTicks;
-        private volatile bool _isAdvancing = true;
+        private readonly Lock _gate = new();
+        private TimeSpan _elapsed;
+        private bool _advancing = true;
+        private long _epochId = PlaybackEpoch.Next();
 
         public TimeSpan ElapsedSinceStart
         {
-            get => TimeSpan.FromTicks(Volatile.Read(ref _elapsedTicks));
-            set => Volatile.Write(ref _elapsedTicks, value.Ticks);
+            get { lock (_gate) return _elapsed; }
+            set { lock (_gate) _elapsed = value; }
         }
 
         public bool IsAdvancing
         {
-            get => _isAdvancing;
-            set => _isAdvancing = value;
+            get { lock (_gate) return _advancing; }
+            set { lock (_gate) _advancing = value; }
+        }
+
+        public long EpochId
+        {
+            get { lock (_gate) return _epochId; }
+        }
+
+        public ClockReading Read()
+        {
+            lock (_gate) return new ClockReading(_epochId, _elapsed, _advancing);
+        }
+
+        /// <summary>What a real output does on Flush/Start/device restart: a new epoch whose elapsed
+        /// restarts (idle by default, as the stream is stopped until the next producer call).</summary>
+        public void Reanchor(TimeSpan elapsed = default, bool advancing = false)
+        {
+            lock (_gate)
+            {
+                _epochId = PlaybackEpoch.Next();
+                _elapsed = elapsed;
+                _advancing = advancing;
+            }
         }
     }
 }

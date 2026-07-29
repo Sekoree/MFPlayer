@@ -348,9 +348,9 @@ public sealed class MediaPlayer : IDisposable
             startHardware,
             videoOnlyMaster ?? PrepareVideoPtsMasterForPlay(),
             verifyPrebufferAfterPrefill);
-        // Record the timebase generation this run plays under - the natural-EOF Duration clamp in
-        // Position is only valid while the generation is unchanged (i.e. no seek since this Play).
-        Volatile.Write(ref _playTimebaseGeneration, _liveAudioClock?.TimebaseGeneration ?? 0);
+        // Record the timebase epoch this run plays under - the natural-EOF Duration clamp in Position is
+        // only valid while the epoch is unchanged (i.e. no seek since this Play).
+        Volatile.Write(ref _playPositionEpoch, _liveAudioClock?.PositionEpoch ?? PlaybackEpoch.Single);
     }
 
     public void Pause(CancellationToken cancellationToken = default)
@@ -495,39 +495,49 @@ public sealed class MediaPlayer : IDisposable
     /// (the raw clock can sit at <c>Duration - ε</c>: the natural-EOF output flush rewinds the hardware
     /// clock's segment epoch, and <see cref="MediaClock"/>'s epoch fold can only preserve position up to
     /// the last read before the flush), and it guards hosts whose position polls are sparser than the
-    /// clock's own 30 Hz driver reads. The clamp is generation-scoped (review §2.14): it only applies
-    /// while <see cref="MediaClock.TimebaseGeneration"/> still equals the generation recorded at
-    /// <see cref="Play"/> - a Seek after EOF bumps the generation, so this reads the live clock (the seek
-    /// target) instead of stale-clamping to Duration until the next Play. A restart (seek + play) clears
-    /// the completion and reads live again.</summary>
-    public TimeSpan Position =>
-        ShouldReportDurationAtNaturalEof(
-            _liveAudioRouter is { CompletedNaturally: true },
-            Duration,
-            _liveAudioClock?.TimebaseGeneration ?? 0,
-            Volatile.Read(ref _playTimebaseGeneration))
-            ? Duration
-            : PlayClock.CurrentPosition;
+    /// clock's own 30 Hz driver reads. The clamp is epoch-scoped: it only applies while
+    /// <see cref="MediaClock.PositionEpoch"/> still equals the epoch recorded at <see cref="Play"/> - a Seek
+    /// after EOF takes a new epoch, so this reads the live clock (the seek target) instead of
+    /// stale-clamping to Duration until the next Play. A restart (seek + play) clears the completion and
+    /// reads live again.</summary>
+    /// <remarks>The live position is read BEFORE the epoch: a re-anchor landing between the two then reads
+    /// as "the epoch moved since Play", which drops the clamp instead of applying it to a position the seek
+    /// already invalidated.</remarks>
+    public TimeSpan Position
+    {
+        get
+        {
+            var live = PlayClock.CurrentPosition;
+            return ShouldReportDurationAtNaturalEof(
+                _liveAudioRouter is { CompletedNaturally: true },
+                Duration,
+                _liveAudioClock?.PositionEpoch ?? PlaybackEpoch.Single,
+                Volatile.Read(ref _playPositionEpoch))
+                ? Duration
+                : live;
+        }
+    }
 
     /// <summary>
     /// The natural-EOF Duration clamp decision for <see cref="Position"/>, factored pure so the racing
     /// orders (position read vs. EOF latch vs. seek) are truth-table testable. The clamp is valid only
     /// while no timebase re-anchor (seek/reset/master swap) happened since the Play that ran to
-    /// completion - <paramref name="currentTimebaseGeneration"/> must still equal
-    /// <paramref name="playTimebaseGeneration"/>.
+    /// completion - <paramref name="currentPositionEpoch"/> must still equal
+    /// <paramref name="playPositionEpoch"/>.
     /// </summary>
     internal static bool ShouldReportDurationAtNaturalEof(
         bool completedNaturally,
         TimeSpan duration,
-        long currentTimebaseGeneration,
-        long playTimebaseGeneration) =>
+        long currentPositionEpoch,
+        long playPositionEpoch) =>
         completedNaturally
         && duration > TimeSpan.Zero
-        && currentTimebaseGeneration == playTimebaseGeneration;
+        && currentPositionEpoch == playPositionEpoch;
 
-    /// <summary><see cref="MediaClock.TimebaseGeneration"/> of the audio clock captured at the most recent
-    /// <see cref="Play"/> (0 before the first Play, matching a fresh clock). See <see cref="Position"/>.</summary>
-    private long _playTimebaseGeneration;
+    /// <summary><see cref="MediaClock.PositionEpoch"/> of the audio clock captured at the most recent
+    /// <see cref="Play"/> (<see cref="PlaybackEpoch.Single"/> before the first Play, which no real clock
+    /// ever reports - so the clamp cannot fire before a Play). See <see cref="Position"/>.</summary>
+    private long _playPositionEpoch;
 
     /// <summary>True while the active playback clock is advancing. Reports false once the audio router
     /// completed naturally - the clock OBJECT keeps its running flag at EOF, so without this every

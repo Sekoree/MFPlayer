@@ -150,6 +150,57 @@ public sealed class NullClockedAudioOutputTests
     }
 
     [Fact]
+    public void EpochId_TakesANewIdOnStartAndFlush_AndReadIsCoherentWithIt()
+    {
+        // Start and Flush both re-anchor ElapsedSinceStart to zero, which is legal only across an epoch
+        // boundary - so both must announce one, and Read must pair the id with the elapsed it belongs to.
+        using var output = new NullClockedAudioOutput(Stereo, capacityFrames: SampleRate);
+        var fresh = output.EpochId;
+        Assert.NotEqual(PlaybackEpoch.Single, fresh);
+
+        output.Submit(new float[SampleRate * Stereo.Channels]);
+        output.Start();
+        var started = output.EpochId;
+        Assert.NotEqual(fresh, started);
+
+        Thread.Sleep(60);
+        var beforeFlush = output.Read();
+        Assert.Equal(started, beforeFlush.EpochId);
+        Assert.True(beforeFlush.Elapsed > TimeSpan.Zero, "clock did not advance before the flush");
+        Assert.True(beforeFlush.IsAdvancing);
+
+        output.Flush();
+        var afterFlush = output.Read();
+        Assert.NotEqual(started, afterFlush.EpochId);
+        Assert.Equal(TimeSpan.Zero, afterFlush.Elapsed);
+    }
+
+    [Fact]
+    public void MasteredClock_StaysContinuousAcrossAFlushEpoch()
+    {
+        // What the epoch id buys the consumer: MediaClock folds the pre-flush accrual instead of freezing
+        // at the base position or replaying it.
+        using var output = new NullClockedAudioOutput(Stereo, capacityFrames: SampleRate);
+        using var clock = new MediaClock();
+        output.Submit(new float[SampleRate * Stereo.Channels]);
+        output.Start();
+        clock.SetMaster(output);
+        clock.Start();
+
+        Thread.Sleep(80);
+        var beforeFlush = clock.CurrentPosition;
+        Assert.True(beforeFlush > TimeSpan.Zero);
+
+        output.Flush();
+        Assert.True(clock.CurrentPosition >= beforeFlush,
+            $"position rewound across the output's flush epoch: {beforeFlush} -> {clock.CurrentPosition}");
+
+        output.Submit(new float[SampleRate * Stereo.Channels]);
+        Thread.Sleep(80);
+        Assert.True(clock.CurrentPosition > beforeFlush, "position did not resume advancing in the new epoch");
+    }
+
+    [Fact]
     public void AudioRouter_KeepsItPrimary_WhenAClockedDeviceAttachesAfterAutoWireIsOff()
     {
         // HaViz attaches the pacer first, then turns AutoWirePrimary off so a monitor device

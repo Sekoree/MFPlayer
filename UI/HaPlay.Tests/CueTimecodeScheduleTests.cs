@@ -354,6 +354,56 @@ public sealed class CueTimecodeScheduleTests
         Assert.Equal(h.CueId, await NextFiredAsync(h));
     }
 
+    /// <summary>Mirror of the wall path's <c>due &lt;= _armedBaselineWall</c>: an occurrence exactly ON
+    /// the baseline is dead by definition. Along the chase the baseline is the run's START POSITION, so
+    /// locating ONTO a target is not crossing it - the chase test used a strict <c>&lt;</c> and fired
+    /// it, which is also how a locate that lands exactly on a cue produced a fire the wall path would
+    /// never have made.</summary>
+    [Fact]
+    public async Task Scheduler_TargetExactlyOnTheGenerationStart_IsRetiredLikeTheWallBaseline()
+    {
+        var h = BuildHarness(TimecodeSchedule("01:00:00:00"));
+        h.Scheduler.Tick();
+        FeedTimecode(h, 0, 59, 59, 23);
+        h.Scheduler.Tick();
+
+        // The operator locates EXACTLY onto the target and rolls from there.
+        Locate(h, 1, 0, 0, 0);
+        h.Scheduler.Tick();
+        Roll(h, new MidiTimecodeValue(1, 0, 0, 0, MidiTimecodeRate.Fps25), 4);
+        h.Scheduler.Tick();
+
+        await AssertNoFiresAsync(h);
+    }
+
+    /// <summary>
+    /// Fire-once has to survive a generation change, exactly as the wall path's handled set survives
+    /// every clock event (it is age-pruned, never dropped wholesale). The chase position is a wall-time
+    /// extrapolation that leads the last decoded label by a few frames, so a dropout right after a
+    /// crossing re-baselines the run just BEHIND the target that already fired - nothing rewound, yet
+    /// the wholesale clear re-armed it and it fired a second time.
+    /// </summary>
+    [Fact]
+    public async Task Scheduler_GenerationBumpJustBehindAFiredTarget_DoesNotFireItTwice()
+    {
+        var h = BuildHarness(TimecodeSchedule("01:00:00:03"));
+        h.Scheduler.Tick();
+        FeedTimecode(h, 0, 59, 59, 24);
+        FeedTimecode(h, 1, 0, 0, 0);
+        h.Ticks.Now += Ms(90); // interpolation carries the position past the target between assemblies
+        h.Scheduler.Tick();
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+
+        // A dropout long enough to open a new run; the sender resumes 2 frames behind where the
+        // interpolated position had already got to.
+        h.Ticks.Now += Ms(600);
+        FeedTimecode(h, 1, 0, 0, 2);
+        Roll(h, new MidiTimecodeValue(1, 0, 0, 4, MidiTimecodeRate.Fps25), 3);
+        h.Scheduler.Tick();
+
+        await AssertNoFiresAsync(h);
+    }
+
     [Fact]
     public async Task Scheduler_StoppedSender_FiresNothing_AndClearsTheCountdown()
     {

@@ -693,7 +693,7 @@
                                 <TextBlock Text="{x:Static res:Strings.CueTriggerOscAddressLabel}" VerticalAlignment="Center" />
                                 <TextBox Width="220"
                                          Text="{Binding OscAddress, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                         PlaceholderText="/haplay/cue/5" />
+                                         PlaceholderText="{x:Static res:Strings.CueTriggerOscAddressPlaceholder}" />
                                 <TextBlock Text="{x:Static res:Strings.CueTriggerOscArgumentLabel}" VerticalAlignment="Center" />
                                 <TextBox Width="120"
                                          Text="{Binding OscArgument, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"

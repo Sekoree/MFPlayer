@@ -23,6 +23,9 @@ public sealed class VideoPtsClock : IPlaybackClock
     private long _lastWallTicks;
     private bool _advancing;
     private TimeSpan _frozenElapsed;
+    /// <summary>Current epoch; a new id at each re-anchor of the PTS origin (<see cref="BeginSession"/>,
+    /// <see cref="Seek"/>) - both make elapsed jump discontinuously.</summary>
+    private long _epochId = PlaybackEpoch.Next();
 
     /// <inheritdoc />
     public bool IsAdvancing
@@ -34,18 +37,26 @@ public sealed class VideoPtsClock : IPlaybackClock
     }
 
     /// <inheritdoc />
+    public long EpochId
+    {
+        get
+        {
+            lock (_gate) return _epochId;
+        }
+    }
+
+    /// <inheritdoc />
+    public ClockReading Read()
+    {
+        lock (_gate) return new ClockReading(_epochId, ComputeElapsedUnlocked(), _advancing);
+    }
+
+    /// <inheritdoc />
     public TimeSpan ElapsedSinceStart
     {
         get
         {
-            lock (_gate)
-            {
-                if (!_advancing)
-                    return _frozenElapsed;
-                var wallNow = Stopwatch.GetTimestamp();
-                var delta = _lastPts - _sessionOriginPts + Stopwatch.GetElapsedTime(_lastWallTicks, wallNow);
-                return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;
-            }
+            lock (_gate) return ComputeElapsedUnlocked();
         }
     }
 
@@ -59,6 +70,7 @@ public sealed class VideoPtsClock : IPlaybackClock
             _lastWallTicks = Stopwatch.GetTimestamp();
             _advancing = true;
             _frozenElapsed = TimeSpan.Zero;
+            _epochId = PlaybackEpoch.Next();
         }
     }
 
@@ -113,11 +125,15 @@ public sealed class VideoPtsClock : IPlaybackClock
             _sessionOriginPts -= shift;
             if (!_advancing)
                 _frozenElapsed = mediaPosition;
+            // A deliberate reposition: elapsed may move backwards, which is only legal across an epoch.
+            _epochId = PlaybackEpoch.Next();
         }
     }
 
     private TimeSpan ComputeElapsedUnlocked()
     {
+        if (!_advancing)
+            return _frozenElapsed;
         var wallNow = Stopwatch.GetTimestamp();
         var delta = _lastPts - _sessionOriginPts + Stopwatch.GetElapsedTime(_lastWallTicks, wallNow);
         return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;

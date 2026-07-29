@@ -1516,6 +1516,9 @@
   <data name="CuePlaybackAlertFormat" xml:space="preserve">
     <value>Audio fault on cue {0}: {1}</value>
   </data>
+  <data name="CueTransportGroupUnknownFormat" xml:space="preserve">
+    <value>Cue {0} is playing outside the loaded show document - progress, end detection and seek are unavailable for it. Stop it from the Now Playing row.</value>
+  </data>
   <data name="NDIPumpPressureStatusFormat" xml:space="preserve">
     <value>NDI output '{0}' dropped {1} frames in the last 5 s (total {2}) - receiver may be slow.</value>
   </data>
@@ -4170,6 +4173,9 @@
   </data>
   <data name="CueTriggerOscAddressLabel" xml:space="preserve">
     <value>Address</value>
+  </data>
+  <data name="CueTriggerOscAddressPlaceholder" xml:space="preserve">
+    <value>/haplay/cue/5</value>
   </data>
   <data name="CueTriggerOscArgumentLabel" xml:space="preserve">
     <value>Arg</value>

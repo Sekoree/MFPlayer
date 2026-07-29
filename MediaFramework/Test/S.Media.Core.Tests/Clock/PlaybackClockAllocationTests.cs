@@ -45,6 +45,26 @@ public sealed class PlaybackClockAllocationTests
         });
     }
 
+    [Fact]
+    public void Read_does_not_allocate_per_call_on_any_shipped_clock()
+    {
+        // Read is the sanctioned hot-path accessor now (one atomic (epoch, elapsed, advancing) sample), so
+        // it inherits the phase-13 contract - ClockReading must stay a struct and stay unboxed.
+        var pts = new VideoPtsClock();
+        pts.NotifyFramePts(TimeSpan.FromMilliseconds(40));
+        pts.Resume();
+        var composite = new CompositePlaybackClock(
+            new PlaybackClockCandidate(new StubPlaybackClock(advancing: true, TimeSpan.FromSeconds(4)), 1));
+        IPlaybackClock stub = new StubPlaybackClock(advancing: true, TimeSpan.FromSeconds(2));
+
+        AssertNoAllocationOnHotPath(() =>
+        {
+            _ = pts.Read();
+            _ = composite.Read();
+            _ = stub.Read(); // the interface's default composition
+        });
+    }
+
     private static void AssertNoAllocationOnHotPath(Action read)
     {
         GC.Collect(2, GCCollectionMode.Forced, blocking: true);
