@@ -7,13 +7,19 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
     private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly ControlSystemConfig _config;
-    private readonly IControlMIDIDeviceSessionRunner? _midiSessions;
+    private readonly ControlInputSession _input;
+    private readonly bool _ownsInput;
+    private readonly IDisposable _dispatcherLease;
+    private readonly IDisposable? _monitorLease;
     private readonly IControlOSCReceiver? _oscReceiver;
     private readonly TimeSpan _tickInterval;
     private CancellationTokenSource? _tickCts;
     private Task? _tickTask;
+    private bool _inputStarted;
     private bool _disposed;
 
+    /// <param name="inputSession">Shared device-input session to map while armed. Null makes this session
+    /// own its devices for its own lifetime (the standalone/mapping-only case).</param>
     public ControlSystemRuntimeSession(
         ControlSystemConfig config,
         IControlScriptSourceProvider sourceProvider,
@@ -24,14 +30,14 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         TimeSpan? tickInterval = null,
         IControlMIDIDeviceSessionRunner? midiSessions = null,
         ControlMeterBlobDecoderRegistry? meterBlobDecoders = null,
-        IControlShowActions? showActions = null)
+        IControlShowActions? showActions = null,
+        ControlInputSession? inputSession = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(sourceProvider);
         ArgumentNullException.ThrowIfNull(oscSender);
 
         _config = config;
-        _midiSessions = midiSessions;
         _tickInterval = tickInterval is { } interval && interval > TimeSpan.Zero ? interval : DefaultTickInterval;
         Monitor = monitor ?? NullControlMonitorSink.Instance;
         ScriptSession = new ControlScriptRuntimeSession(
@@ -44,8 +50,17 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             meterBlobDecoders,
             showActions);
         EventQueue = new ControlEventQueue(ScriptSession, Monitor);
-        OSCListeners = new ControlOSCListenerManager(config, EventQueue, Monitor);
-        MIDIDevices = new ControlMIDIDeviceManager(config, EventQueue, Monitor);
+        // Devices are owned by an input session whose lifetime is "configured + enabled", not "armed".
+        // A shared one keeps its ports open across arm/disarm; an owned one behaves exactly like the
+        // pre-split session (opens on Start, closes on Stop/Dispose).
+        _ownsInput = inputSession is null;
+        _input = inputSession
+                 ?? new ControlInputSession(
+                     config,
+                     Monitor,
+                     midiSessions is null ? null : _ => midiSessions);
+        _dispatcherLease = _input.AttachDispatcher(EventQueue);
+        _monitorLease = _ownsInput ? null : _input.AttachMonitor(Monitor);
         PeriodicOSCSends = new ControlPeriodicOSCSendManager(config, oscSender, Monitor);
 
         // The X32 (OSC server) replies to the source port of our requests - i.e. the OSC client's own
@@ -64,9 +79,12 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
 
     public ControlEventQueue EventQueue { get; }
 
-    public ControlOSCListenerManager OSCListeners { get; }
+    /// <summary>The device-input session this run maps: shared with the always-on owner, or created here.</summary>
+    public ControlInputSession Input => _input;
 
-    public ControlMIDIDeviceManager MIDIDevices { get; }
+    public ControlOSCListenerManager OSCListeners => _input.OSCListeners;
+
+    public ControlMIDIDeviceManager MIDIDevices => _input.MIDIDevices;
 
     public ControlPeriodicOSCSendManager PeriodicOSCSends { get; }
 
@@ -78,8 +96,9 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         try
         {
-            await OSCListeners.StartAsync(cancellationToken).ConfigureAwait(false);
-            _midiSessions?.Start(MIDIDevices, cancellationToken);
+            // Ref-counted: a shared session's ports are already open (and stay open when we stop).
+            await _input.StartAsync(cancellationToken).ConfigureAwait(false);
+            _inputStarted = true;
             StartTickLoop(cancellationToken);
 
             // Fire LayerEnabled for the initially-active layer so layer-scoped scripts' LayerEnabled
@@ -101,8 +120,18 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         await StopTickLoopAsync(cancellationToken).ConfigureAwait(false);
-        _midiSessions?.Stop();
-        await OSCListeners.StopAsync(cancellationToken).ConfigureAwait(false);
+        await ReleaseInputAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Drops this session's device reference exactly once - an unbalanced stop must never close
+    /// ports a shared session's other consumers still hold.</summary>
+    private async Task ReleaseInputAsync(CancellationToken cancellationToken)
+    {
+        if (!_inputStarted)
+            return;
+
+        _inputStarted = false;
+        await _input.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ControlSystemRuntimeTickResult> TickAsync(
@@ -229,12 +258,11 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         if (_oscReceiver is not null)
             _oscReceiver.MessageReceived -= OnOSCReplyReceived;
         await StopTickLoopAsync(CancellationToken.None).ConfigureAwait(false);
-        _midiSessions?.Stop();
-        if (_midiSessions is IAsyncDisposable asyncDisposable)
-            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-        else if (_midiSessions is IDisposable disposable)
-            disposable.Dispose();
-        await OSCListeners.DisposeAsync().ConfigureAwait(false);
+        await ReleaseInputAsync(CancellationToken.None).ConfigureAwait(false);
+        _dispatcherLease.Dispose();
+        _monitorLease?.Dispose();
+        if (_ownsInput)
+            await _input.DisposeAsync().ConfigureAwait(false);
         await EventQueue.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -250,10 +278,13 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         _tickCts?.Dispose();
         _tickCts = null;
         _tickTask = null;
-        _midiSessions?.Stop();
-        if (_midiSessions is IDisposable disposable)
-            disposable.Dispose();
-        OSCListeners.Dispose();
+        if (_inputStarted && !_ownsInput)
+            _input.Release();
+        _inputStarted = false;
+        _dispatcherLease.Dispose();
+        _monitorLease?.Dispose();
+        if (_ownsInput)
+            _input.Dispose();
         EventQueue.Dispose();
     }
 }

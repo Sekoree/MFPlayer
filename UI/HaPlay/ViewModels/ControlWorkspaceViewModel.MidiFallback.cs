@@ -154,6 +154,129 @@ public partial class ControlWorkspaceViewModel
         await Dispatcher.UIThread.InvokeAsync(action);
     }
 
+    // ----- Always-on device input --------------------------------------------------------------
+    // MIDI ports and OSC listeners belong to a ControlInputSession whose lifetime is "configured and
+    // enabled", NOT "armed": per-cue triggers and MIDI learn consume InputObserved with the mapping
+    // engine disarmed. Arming attaches the mapping engine to the SAME session (ref-counted open), so
+    // disarming can never close a port a trigger binding still needs, and arming never double-opens one.
+
+    /// <summary>Test seam (like <see cref="MIDICatalogProvider"/>): the real session opens MIDI ports and
+    /// binds UDP sockets, so it only auto-starts under a desktop lifetime; headless tests inject their own.</summary>
+    internal Func<ControlSystemConfig, ControlInputSession>? DeviceInputSessionFactory { get; set; }
+
+    private bool CanRunDeviceInput =>
+        DeviceInputSessionFactory is not null
+        || Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime;
+
+    /// <summary>Brings the always-on input session in line with the current config. Fire-and-forget from
+    /// the config-change path; a no-op while armed, where the running session holds leases on it and edits
+    /// already carry "re-arm to apply".</summary>
+    private void SyncDeviceInputSession()
+    {
+        if (_inputShutdown || IsArmed || !CanRunDeviceInput)
+            return;
+
+        _ = SyncDeviceInputSessionAsync(rethrowOpenFailure: false);
+    }
+
+    private async Task SyncDeviceInputSessionAsync(bool rethrowOpenFailure)
+    {
+        var config = _config;
+        var signature = DeviceInputSignature(config);
+        await _inputSyncGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (!string.Equals(signature, _inputSignature, StringComparison.Ordinal)
+                || (_inputSession is null && signature.Length > 0))
+            {
+                await TearDownDeviceInputSessionAsync().ConfigureAwait(true);
+                _inputSignature = signature;
+                if (signature.Length > 0)
+                {
+                    var created = DeviceInputSessionFactory?.Invoke(config) ?? CreateDeviceInputSession(config);
+                    created.InputObserved += OnDeviceInputObserved;
+                    _inputSession = created;
+                }
+            }
+
+            // A previous open may have failed (port in use, device unplugged); retry rather than
+            // leaving the operator with silently dead triggers.
+            var session = _inputSession;
+            if (session is null || session.IsOpen)
+                return;
+
+            try
+            {
+                await session.StartAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                var message = Strings.Format(nameof(Strings.ControlDeviceInputFailedStatusFormat), ex.Message);
+                StatusMessage = message;
+                ToastCenter.Warn(message);
+                if (rethrowOpenFailure)
+                    throw;
+            }
+        }
+        finally
+        {
+            _inputSyncGate.Release();
+        }
+    }
+
+    private ControlInputSession CreateDeviceInputSession(ControlSystemConfig config) =>
+        new(
+            config,
+            monitor: null, // the monitor pane attaches its buffer while armed; disarmed input is event-only
+            midiSessionFactory: IsMIDIAvailable
+                ? sink => new ControlSystemMIDIDeviceSessionManager(config, sink)
+                : null);
+
+    private void OnDeviceInputObserved(ControlMonitorRecord record) => InputObserved?.Invoke(record);
+
+    private async Task TearDownDeviceInputSessionAsync()
+    {
+        var session = _inputSession;
+        _inputSession = null;
+        if (session is null)
+            return;
+
+        session.InputObserved -= OnDeviceInputObserved;
+        try
+        {
+            await session.DisposeAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            // Teardown must never throw; the devices are going away regardless.
+        }
+    }
+
+    /// <summary>Identity of everything the input session owns - enabled MIDI device bindings and enabled
+    /// OSC listeners. Unchanged signature = keep the live ports open across unrelated config edits.</summary>
+    private static string DeviceInputSignature(ControlSystemConfig config)
+    {
+        if (!ControlInputSession.HasConfiguredDevices(config))
+            return string.Empty;
+
+        var midi = config.Devices
+            .Where(d => d.Protocol == ControlDeviceProtocol.MIDI && d.IsEnabled)
+            .OrderBy(d => d.Id)
+            .Select(d => string.Join(
+                '|',
+                d.Id,
+                d.ProfileId,
+                d.Binding.MIDIInputDeviceId,
+                d.Binding.MIDIInputDeviceName,
+                d.Binding.MIDIOutputDeviceId,
+                d.Binding.MIDIOutputDeviceName));
+        var listeners = config.OSCListeners
+            .Where(l => l.IsEnabled)
+            .OrderBy(l => l.Id)
+            .Select(l => $"{l.Id}|{l.LocalPort}");
+        return string.Join(';', midi.Concat(listeners));
+    }
+
     private async Task ArmInternalAsync()
     {
         // Give the user a chance to bind ambiguous/missing MIDI devices to live ports before opening
@@ -164,20 +287,29 @@ public partial class ControlWorkspaceViewModel
         UdpControlOSCSender? pendingOSC = null;
         try
         {
+            // Arm maps the SHARED input session when device input runs here; a failed open surfaces as a
+            // failed arm. Without one (headless/no factory) the runtime session owns its devices as before.
+            if (CanRunDeviceInput)
+                await SyncDeviceInputSessionAsync(rethrowOpenFailure: true).ConfigureAwait(true);
+
             var armedConfig = _config with { IsArmed = true };
             var monitor = new ControlMonitorBuffer(Math.Max(1, _config.Monitor.MaxVisibleMessages));
-            // Tap decorator: the buffer records first (monitor pane), then every input-direction
-            // record fans out through InputObserved (the cue player's per-cue trigger seam).
-            var tappedMonitor = new InputTapMonitorSink(this, monitor);
             var osc = new UdpControlOSCSender(armedConfig);
-            var midi = new ControlSystemMIDIDeviceSessionManager(armedConfig, tappedMonitor);
+            var input = _inputSession;
+            // Owned fallback only when no shared session runs here; otherwise the input session owns
+            // the MIDI ports (input AND output) and this run just borrows its sender.
+            var ownedMIDI = input is null
+                ? new ControlSystemMIDIDeviceSessionManager(armedConfig, monitor)
+                : null;
+            var midi = input?.MIDISender ?? ownedMIDI;
             var session = new ControlSystemRuntimeSession(
                 armedConfig,
                 CreateSourceProvider(),
                 osc,
                 midi,
-                monitor: tappedMonitor,
-                midiSessions: midi);
+                monitor: monitor,
+                midiSessions: ownedMIDI,
+                inputSession: input);
             pendingSession = session;
             pendingOSC = osc;
             await session.StartAsync().ConfigureAwait(true);
@@ -235,6 +367,9 @@ public partial class ControlWorkspaceViewModel
         }
 
         osc?.Dispose();
+        // Device input outlives the mapping engine: pick up any config edits made while armed (the
+        // shared session's ports stayed open across the disarm - the workspace still holds a reference).
+        SyncDeviceInputSession();
     }
 
     private void StopSessionFireAndForget()

@@ -24,7 +24,7 @@ namespace S.Media.Routing;
 /// and late submissions after an underrun are consumed from "now", not backfilled into the gap.
 /// </para>
 /// </remarks>
-public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlushableOutput, IPlaybackClock, IDisposable
+public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlushableOutput, IPlaybackClock, IAudioOutputLatency, IDisposable
 {
     private readonly AudioFormat _format;
     private readonly int _capacitySamples;
@@ -92,6 +92,11 @@ public sealed class NullClockedAudioOutput : IAudioOutput, IClockedOutput, IFlus
     }
 
     public int CapacitySamples => _capacitySamples;
+
+    /// <summary><see cref="IAudioOutputLatency.SubmitToOutputLatency"/>: the virtual queue depth. There is
+    /// no device behind it, so consumption is the audible instant and nothing else is in flight.</summary>
+    public TimeSpan SubmitToOutputLatency =>
+        TimeSpan.FromSeconds(QueuedSamples / (double)_format.SampleRate);
 
     /// <summary><see cref="IPlaybackClock.ElapsedSinceStart"/>: consumed samples since the last Start/Flush epoch, over rate.</summary>
     public TimeSpan ElapsedSinceStart

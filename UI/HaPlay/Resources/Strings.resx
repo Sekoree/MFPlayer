@@ -2608,6 +2608,9 @@
   <data name="ControlConfigFileNameFallback" xml:space="preserve">
     <value>control-system</value>
   </data>
+  <data name="ControlDeviceInputFailedStatusFormat" xml:space="preserve">
+    <value>Control device input could not be opened: {0}</value>
+  </data>
   <data name="VirtualChannelsMigratedToast" xml:space="preserve">
     <value>This project used virtual audio channels (VOut); that model was replaced by output aliases and routing matrix presets. Review your player routing.</value>
   </data>
@@ -4067,7 +4070,7 @@
     <value>Triggers</value>
   </data>
   <data name="TriggersArmedToggleTooltip" xml:space="preserve">
-    <value>Arm per-cue MIDI/OSC/hotkey triggers for this session. Trigger bindings fire only while this is ON and cue edit mode is OFF, and only from the SELECTED cue list. MIDI/OSC input rides the Control workspace's devices and listeners - configure and arm them there. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
+    <value>Arm per-cue MIDI/OSC/hotkey triggers for this session. Trigger bindings fire only while this is ON and cue edit mode is OFF, and only from the SELECTED cue list. MIDI/OSC input runs whenever the Control workspace has the device or listener configured and enabled - arming Control is not required. Arming is a per-show act - it always starts OFF and is never saved with the project.</value>
   </data>
   <data name="TriggersArmedOtherListsWarningFormat" xml:space="preserve">
     <value>Triggers armed for the selected list only - {0} cue(s) with enabled triggers in other lists will NOT fire.</value>
@@ -4106,7 +4109,7 @@
     <value>Learn</value>
   </data>
   <data name="CueTriggerLearnTooltip" xml:space="preserve">
-    <value>Capture the next incoming MIDI message (note / CC / program change) into this binding. Needs the Control workspace armed with the device configured; works regardless of the Triggers arm.</value>
+    <value>Capture the next incoming MIDI message (note / CC / program change) into this binding. Needs the device configured and enabled in the Control workspace; works regardless of the Triggers arm and of whether Control is armed.</value>
   </data>
   <data name="CueTriggerLearnCapturedStatusFormat" xml:space="preserve">
     <value>MIDI learn captured: {0}</value>

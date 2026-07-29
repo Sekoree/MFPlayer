@@ -175,9 +175,13 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
         var droppedAudio = engine.DroppedMismatchedRateFrames > 0
             ? $" · NDI audio muted (rate mismatch, {engine.DroppedMismatchedRateFrames} frames)"
             : "";
+        // Ring overflow = the SDK sender stalled past the ring depth; receivers hear a gap.
+        var audioBacklog = engine.DroppedNdiAudioFrames > 0
+            ? $" · audio drop {engine.DroppedNdiAudioFrames}"
+            : "";
         PresetText = engine.VisualizerFailed
             ? "visualizer unavailable (GL/projectM failed)"
-            : $"{engine.ConnectionCount} rx · f{engine.FramesSent} miss{engine.PollsWithoutFrame} tx{engine.AverageSubmitMs}ms y{engine.LastFrameLuma} · {preset ?? "(loading)"}{droppedAudio}";
+            : $"{engine.ConnectionCount} rx · f{engine.FramesSent} miss{engine.PollsWithoutFrame} tx{engine.AverageSubmitMs}ms y{engine.LastFrameLuma} · {preset ?? "(loading)"}{audioBacklog}{droppedAudio}";
     }
 
     [RelayCommand]

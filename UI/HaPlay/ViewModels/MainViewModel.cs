@@ -47,8 +47,8 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>Wall-clock cue scheduler (timed triggers §4) - owns the single 250 ms sweep timer.</summary>
     private readonly CueSchedulerService _cueScheduler;
 
-    /// <summary>Per-cue MIDI/OSC/hotkey trigger runtime (§6) - fed by the Control workspace's
-    /// input tap and the cue view's key handler.</summary>
+    /// <summary>Per-cue MIDI/OSC/hotkey trigger runtime (§6) - fed by the always-on control device
+    /// input session and the cue view's key handler.</summary>
     private readonly CueTriggerService _cueTriggers;
 
     /// <summary>Crash-recovery autosave (§ session restore): captures the full project to the cache on a cadence
@@ -92,10 +92,11 @@ public partial class MainViewModel : ViewModelBase
         // scheduled cue. Fires are gated on the session-scoped "Schedules armed" toggle + edit mode.
         _cueScheduler = new CueSchedulerService(CuePlayer);
         _cueScheduler.Start();
-        // Per-cue MIDI/OSC/hotkey triggers (§6): incoming control I/O reaches the service through
-        // the Control workspace's monitor tap. The tap raises on the PortMIDI poll / UDP receive
-        // threads; FireTriggeredCueSafeAsync is UI-thread-only, so marshal here. Hotkey bindings
-        // are dispatched by the cue view's key handler through TriggerHotkeyProbe.
+        // Per-cue MIDI/OSC/hotkey triggers (§6): incoming control I/O reaches the service from the
+        // always-on device input session (runs whenever devices are configured - Control does not have
+        // to be armed). It raises on the PortMIDI poll / UDP receive threads; FireTriggeredCueSafeAsync
+        // is UI-thread-only, so marshal here. Hotkey bindings are dispatched by the cue view's key
+        // handler through TriggerHotkeyProbe.
         _cueTriggers = new CueTriggerService(CuePlayer);
         Control.InputObserved += record =>
             Dispatcher.UIThread.Post(() => _cueTriggers.OnControlInput(record));

@@ -732,6 +732,31 @@ public sealed partial class AudioRouter : IDisposable
     }
 
     /// <summary>
+    /// Non-throwing <see cref="GetPumpStats"/> for hot paths (clock reads): an output removed with its
+    /// source or gone with a disposed router reports false instead of costing an exception per read.
+    /// </summary>
+    public bool TryGetPumpStats(string outputId, out OutputPumpStats stats)
+    {
+        if (string.IsNullOrEmpty(outputId))
+        {
+            stats = default;
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (!_state.Outputs.TryGetValue(outputId, out var entry))
+            {
+                stats = default;
+                return false;
+            }
+
+            stats = entry.Pump.Stats;
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Sums <see cref="OutputPumpStats"/> for every registered output under one lock. For operator HUD / logging - not a
     /// multi-output master clock or automatic PPM policy (see class <see cref="AudioRouter"/> remarks).
     /// </summary>
@@ -1756,6 +1781,18 @@ public sealed partial class AudioRouter : IDisposable
         /// <see cref="AudioRouter.PumpPressure"/> and are excluded from <see cref="Dropped"/>.
         /// </summary>
         public long Abandoned { get; init; }
+
+        /// <summary>
+        /// Enqueued chunks evicted from the ready queue in <c>Commit</c> (pool exhaustion). They are counted
+        /// in <see cref="Dropped"/> as well; subtract them alongside <see cref="Processed"/> - and not
+        /// <see cref="Dropped"/>, which also counts chunks that never entered the queue - to get the chunks
+        /// still in flight.
+        /// </summary>
+        public long ReadyEvictions { get; init; }
+
+        /// <summary>Chunks published to the pump but not yet handed to the sink - the pump's share of the
+        /// producer-to-speaker latency. Clamped to the queue bound: the counters are read independently.</summary>
+        public long InFlight => Math.Clamp(Enqueued - Processed - ReadyEvictions, 0, PumpCapacityChunks);
     }
 
     /// <summary>

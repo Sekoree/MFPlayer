@@ -12,6 +12,7 @@ public sealed unsafe class MiniAudioOutput :
     IFlushableOutput,
     IPlaybackClock,
     IAudioOutputPlaybackStats,
+    IAudioOutputLatency,
     IDisposable
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.MiniAudio.MiniAudioOutput");
@@ -182,6 +183,16 @@ public sealed unsafe class MiniAudioOutput :
             return 0;
         return Math.Min(wallSeconds, periodSeconds);
     }
+
+    /// <summary>
+    /// <see cref="IAudioOutputLatency.SubmitToOutputLatency"/>: the managed ring backlog plus
+    /// miniaudio's internal buffering. The managed side only knows the period size (the device's
+    /// <c>periods</c> count is chosen natively), so the internal part is estimated at two periods -
+    /// the same figure <see cref="ElapsedSinceStart"/> documents as its residual lead. Estimate, not
+    /// a measurement; no native calls on this path.
+    /// </summary>
+    public TimeSpan SubmitToOutputLatency =>
+        TimeSpan.FromSeconds(QueuedSamples / (double)_format.SampleRate + 2 * PeriodSeconds());
 
     /// <summary>One device period in seconds: observed callback size, else the configured period, else miniaudio's 10 ms default.</summary>
     private double PeriodSeconds()

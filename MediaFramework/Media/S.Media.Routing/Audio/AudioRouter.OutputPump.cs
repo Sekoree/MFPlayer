@@ -70,6 +70,7 @@ public sealed partial class AudioRouter
         {
             IsStuck = Volatile.Read(ref _stuck) != 0,
             Abandoned = Volatile.Read(ref _abandoned),
+            ReadyEvictions = Volatile.Read(ref _readyEvictions),
         };
 
         /// <summary>

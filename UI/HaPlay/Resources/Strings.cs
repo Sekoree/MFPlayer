@@ -1130,6 +1130,7 @@ public static class Strings
     public static string ControlConfigSaveFailedStatusFormat => Get(nameof(ControlConfigSaveFailedStatusFormat));
     public static string ControlConfigDefaultFileNameFormat => Get(nameof(ControlConfigDefaultFileNameFormat));
     public static string ControlConfigFileNameFallback => Get(nameof(ControlConfigFileNameFallback));
+    public static string ControlDeviceInputFailedStatusFormat => Get(nameof(ControlDeviceInputFailedStatusFormat));
 
     public static string PlaylistContextProperties => Get(nameof(PlaylistContextProperties));
     public static string PlaylistRemoveButtonLabel => Get(nameof(PlaylistRemoveButtonLabel));

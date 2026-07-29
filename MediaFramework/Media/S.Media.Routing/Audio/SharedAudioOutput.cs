@@ -19,6 +19,7 @@ public sealed class SharedAudioOutput : IDisposable
     private readonly IAudioOutput _terminal;
     private readonly AudioRouter _mixer;
     private readonly TimeSpan _clientBufferDuration;
+    private readonly int _chunkSamples;
     private readonly int _clientTargetQueueSamples;
     private readonly bool _disposeTerminalOutput;
     private readonly Dictionary<long, ClientInput> _clients = [];
@@ -54,6 +55,7 @@ public sealed class SharedAudioOutput : IDisposable
             throw new ArgumentOutOfRangeException(nameof(clientBufferDuration), "must be > 0");
         if (clientTargetQueueChunks < 2)
             throw new ArgumentOutOfRangeException(nameof(clientTargetQueueChunks), "must be >= 2");
+        _chunkSamples = chunkSamples;
         _clientTargetQueueSamples = checked(chunkSamples * clientTargetQueueChunks);
 
         _mixer = new AudioRouter(terminalOutput.Format.SampleRate, chunkSamples, pumpCapacityChunks)
@@ -104,7 +106,7 @@ public sealed class SharedAudioOutput : IDisposable
 
             var clientId = ++_nextClientId;
             var sourceId = $"client_{clientId}";
-            var input = new ClientInput(Format, _clientBufferDuration, _clientTargetQueueSamples,
+            var input = new ClientInput(this, _clientBufferDuration, _clientTargetQueueSamples,
                 _terminal as IPlaybackClock);
             _mixer.AddSource(input, sourceId, autoResample: false);
             try
@@ -161,12 +163,40 @@ public sealed class SharedAudioOutput : IDisposable
     }
 
     /// <summary>
+    /// Audio between the mixer and the speaker, in ticks: chunks committed to the terminal's pump but
+    /// not yet submitted, plus the terminal's own submit-to-speaker latency where it reports one
+    /// (<see cref="IAudioOutputLatency"/>; hardware backends fold their ring depth into it). Together
+    /// with a client's un-consumed bus backlog this is the lead a client clock must subtract - see
+    /// <see cref="ClientInput.ElapsedSinceStart"/>. Read from the clock hot path: no exceptions, no
+    /// allocations, one router-registry lock.
+    /// </summary>
+    private long DownstreamLatencyTicks()
+    {
+        var ticks = _mixer.TryGetPumpStats(TerminalId, out var pump)
+            ? SamplesToTicks(pump.InFlight * _chunkSamples, Format.SampleRate)
+            : 0;
+
+        if (_terminal is IAudioOutputLatency reporting)
+        {
+            var terminalLatency = reporting.SubmitToOutputLatency; // contract: never throws
+            if (terminalLatency > TimeSpan.Zero)
+                ticks += terminalLatency.Ticks;
+        }
+
+        return ticks;
+    }
+
+    private static long SamplesToTicks(long samples, int sampleRate) =>
+        samples > 0 && sampleRate > 0 ? samples * TimeSpan.TicksPerSecond / sampleRate : 0;
+
+    /// <summary>
     /// One SPSC client endpoint. It is clocked from the mixer's consumption of its private bus so
     /// an upstream router applies backpressure instead of slowly overflowing the buffer. Its
     /// <see cref="IPlaybackClock"/> is the terminal device clock minus a per-client epoch captured
-    /// at attach and on <see cref="Flush"/>, so each client sees its own transport starting at
-    /// zero while still advancing with actually-played samples. Falls back to a wall-clock
-    /// stopwatch when the terminal exposes no playback clock (or its reads fail).
+    /// at attach and on <see cref="Flush"/> and minus the latency still between this client's
+    /// submissions and the speaker, so each client sees its own transport starting at zero while
+    /// still advancing with actually-played samples. Falls back to a wall-clock stopwatch when the
+    /// terminal exposes no playback clock (or its reads fail).
     /// </summary>
     private sealed class ClientInput :
         IAudioOutput,
@@ -177,6 +207,7 @@ public sealed class SharedAudioOutput : IDisposable
         IPlaybackClock,
         IDisposable
     {
+        private readonly SharedAudioOutput _owner;
         private readonly AudioBus _bus;
         private readonly int _targetQueueSamples;
         private readonly ManualResetEventSlim _spaceAvailable = new(false);
@@ -185,19 +216,23 @@ public sealed class SharedAudioOutput : IDisposable
         private readonly Lock _epochGate = new();
         private long _terminalEpochTicks;
         private long _fallbackEpochTicks;
-        /// <summary>High-water mark of reported elapsed since the last deliberate re-anchor - the
+        /// <summary>High-water mark of raw since-epoch ticks since the last deliberate re-anchor - the
         /// resume point when a terminal-clock regression forces the epoch to be re-derived.</summary>
         private long _maxSinceEpochTicks;
+        /// <summary>High-water mark of the latency-compensated value actually reported - the clock holds
+        /// here instead of stepping backwards when the lead estimate grows.</summary>
+        private long _maxAudibleTicks;
         private int _disposed;
         // A timed Wait can inflate the event to a kernel-backed handle, so it IS disposed - but only
         // once the last waiter drained (review P3-1); disposing under a live Wait would race it.
         private int _activeWaiters;
         private int _eventDisposed;
 
-        public ClientInput(AudioFormat format, TimeSpan bufferDuration, int targetQueueSamples,
+        public ClientInput(SharedAudioOutput owner, TimeSpan bufferDuration, int targetQueueSamples,
             IPlaybackClock? terminalClock)
         {
-            _bus = new AudioBus(format, bufferDuration);
+            _owner = owner;
+            _bus = new AudioBus(owner.Format, bufferDuration);
             _targetQueueSamples = Math.Min(_bus.CapacitySamples, targetQueueSamples);
             _terminalClock = terminalClock;
             ReanchorPlaybackEpoch();
@@ -209,11 +244,12 @@ public sealed class SharedAudioOutput : IDisposable
 
         /// <summary>
         /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: terminal device time minus this client's
-        /// epoch, clamped at zero. A terminal whose own clock re-anchored (device stop/start, an
-        /// external flush) is detected as a regression below our epoch and the epoch is re-derived
-        /// so this clock resumes from its high-water mark instead of freezing at zero until the
-        /// terminal re-passes the stale epoch. Terminal reads go through its thread-safe properties
-        /// only and never throw out of here - any failure degrades to the stopwatch domain.
+        /// epoch, minus the client's DAC lead (see <see cref="ReportAudible"/>), clamped at zero. A
+        /// terminal whose own clock re-anchored (device stop/start, an external flush) is detected as
+        /// a regression below our epoch and the epoch is re-derived so this clock resumes from its
+        /// high-water mark instead of freezing at zero until the terminal re-passes the stale epoch.
+        /// Terminal reads go through its thread-safe properties only and never throw out of here -
+        /// any failure degrades to the stopwatch domain.
         /// </summary>
         public TimeSpan ElapsedSinceStart
         {
@@ -228,13 +264,8 @@ public sealed class SharedAudioOutput : IDisposable
                         if (ticks < 0)
                             ticks = RecoverFromTerminalRegression(terminalTicks);
                         // High-water mark: the resume point for a later regression recovery.
-                        for (var seen = Volatile.Read(ref _maxSinceEpochTicks); ticks > seen;)
-                        {
-                            var previous = Interlocked.CompareExchange(ref _maxSinceEpochTicks, ticks, seen);
-                            if (previous == seen) break;
-                            seen = previous;
-                        }
-                        return ticks > 0 ? new TimeSpan(ticks) : TimeSpan.Zero;
+                        RaiseHighWater(ref _maxSinceEpochTicks, ticks);
+                        return ReportAudible(ticks);
                     }
                     catch
                     {
@@ -242,9 +273,50 @@ public sealed class SharedAudioOutput : IDisposable
                     }
                 }
 
-                var fallbackTicks = _fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _fallbackEpochTicks);
-                return fallbackTicks > 0 ? new TimeSpan(fallbackTicks) : TimeSpan.Zero;
+                return ReportAudible(_fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _fallbackEpochTicks));
             }
+        }
+
+        /// <summary>
+        /// Maps raw since-epoch ticks to this client's <em>audible</em> position. The raw reading leads the
+        /// speaker by everything still in flight - this client's un-consumed bus backlog plus
+        /// <see cref="DownstreamLatencyTicks"/> - because the terminal clock advances with the device
+        /// whether or not this client's samples got there yet; without the subtraction every client leads
+        /// the DAC by the full pipeline depth (~100 ms at the defaults) and video scheduled against it runs
+        /// early. The subtraction eases in quadratically over the first <c>2×lead</c> of a segment
+        /// (<see cref="AudioLatencyCompensation.AudibleSeconds"/>, C¹-continuous) so a fresh client leaves
+        /// zero smoothly instead of holding zero and jumping. A CAS high-water keeps the report monotonic
+        /// when the estimate grows - the clock holds until the raw reading catches up - and is cleared by
+        /// the same deliberate re-anchors that reset the epoch (attach, <see cref="Flush"/>).
+        /// </summary>
+        private TimeSpan ReportAudible(long rawTicks)
+        {
+            long audibleTicks = 0;
+            if (rawTicks > 0)
+            {
+                var leadTicks = SamplesToTicks(_bus.BufferedSamples, _bus.Format.SampleRate)
+                                + _owner.DownstreamLatencyTicks();
+                audibleTicks = (long)(AudioLatencyCompensation.AudibleSeconds(
+                    rawTicks / (double)TimeSpan.TicksPerSecond,
+                    leadTicks / (double)TimeSpan.TicksPerSecond) * TimeSpan.TicksPerSecond);
+            }
+
+            return new TimeSpan(RaiseHighWater(ref _maxAudibleTicks, audibleTicks));
+        }
+
+        /// <summary>Lock-free CAS max; returns the resulting maximum.</summary>
+        private static long RaiseHighWater(ref long field, long value)
+        {
+            var seen = Volatile.Read(ref field);
+            while (value > seen)
+            {
+                var previous = Interlocked.CompareExchange(ref field, value, seen);
+                if (previous == seen)
+                    return value;
+                seen = previous;
+            }
+
+            return seen;
         }
 
         /// <summary>Re-derives the epoch after the terminal clock regressed below it (it re-anchored):
@@ -291,7 +363,9 @@ public sealed class SharedAudioOutput : IDisposable
             lock (_epochGate)
             {
                 Volatile.Write(ref _fallbackEpochTicks, _fallbackElapsed.Elapsed.Ticks);
-                Volatile.Write(ref _maxSinceEpochTicks, 0); // a deliberate reset-to-zero clears the resume point
+                // A deliberate reset-to-zero clears both resume points (regression recovery, monotonic report).
+                Volatile.Write(ref _maxSinceEpochTicks, 0);
+                Volatile.Write(ref _maxAudibleTicks, 0);
                 if (_terminalClock is null)
                     return;
                 try

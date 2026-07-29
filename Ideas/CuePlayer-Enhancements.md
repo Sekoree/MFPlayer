@@ -324,6 +324,7 @@ change) — MIDI/OSC triggers therefore flow while the Control workspace is arme
 device/listener configured; hotkey bindings ride the cue view's key handler (transport keys and
 the legacy per-cue hotkey win clashes).
 
-**Still open:** panic slider, loop-with-crossfade (ambient
-beds), timeline duck presets (Phase D), `TimelineStartMs` numeric
-drawer field, true cross-list scheduling (needs multi-list sessions).
+**Still open:** nothing — the continuation round (2026-07-28) delivered the panic/master
+fader (dB), loop-with-crossfade, timeline duck presets (Phase D), and the `TimelineStartMs`
+drawer time-code field. Cross-list scheduling is planned in `Next-Round-Plan-2026-07-28.md`
+(workstream A, merged-session decision).

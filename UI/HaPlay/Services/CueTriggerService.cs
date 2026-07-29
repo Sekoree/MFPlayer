@@ -25,10 +25,11 @@ public readonly record struct CueOscTriggerInput(string Address, string? FirstAr
 
 /// <summary>
 /// Per-cue MIDI/OSC/hotkey trigger runtime (Ideas/CuePlayer-Enhancements.md §6) - the
-/// <see cref="CueSchedulerService"/> sibling. Incoming control I/O reaches it through the Control
-/// workspace's monitor tap (<c>ControlWorkspaceViewModel.InputObserved</c> → MainViewModel
-/// marshals to the UI thread → <see cref="OnControlInput"/>), so MIDI/OSC triggers flow exactly
-/// while the control system is ARMED with the device/listener configured there. Hotkey bindings
+/// <see cref="CueSchedulerService"/> sibling. Incoming control I/O reaches it from S.Control's
+/// always-on device input session (<c>ControlInputSession.InputObserved</c> →
+/// <c>ControlWorkspaceViewModel.InputObserved</c> → MainViewModel marshals to the UI thread →
+/// <see cref="OnControlInput"/>), so MIDI/OSC triggers flow whenever the device/listener is
+/// configured and enabled - the Control mapping engine does NOT have to be armed. Hotkey bindings
 /// arrive via <see cref="TryHandleHotkey"/> from the cue view's transport-key handler (which
 /// checks the configurable transport keys and the legacy per-cue hotkey first - they win any
 /// clash).
@@ -68,7 +69,7 @@ public sealed class CueTriggerService : IDisposable
 
     private bool GateOpen => !_disposed && _cuePlayer.TriggersArmed && !_cuePlayer.IsCueEditMode;
 
-    /// <summary>Entry point for the Control workspace's monitor tap. Accepts Input AND Dropped
+    /// <summary>Entry point for the always-on device input event. Accepts Input AND Dropped
     /// records: "dropped" only means no Control-workspace DEVICE mapping matched - the message
     /// still physically arrived on a configured port/listener, which is all a cue trigger needs.</summary>
     public void OnControlInput(ControlMonitorRecord record)

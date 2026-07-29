@@ -33,6 +33,7 @@ public sealed class VizNdiEngine : IDisposable
     private ProjectMVisualSource? _source;
     private NDIOutput? _ndi;
     private IAudioOutput? _ndiAudio;
+    private NdiAudioSubmitRing? _ndiAudioRing;
     private AudioFormat _ndiAudioFormat;
     private float[] _stereoScratch = [];
     private Thread? _pumpThread;
@@ -71,6 +72,11 @@ public sealed class VizNdiEngine : IDisposable
     /// match the first-submit format the stream was created with (they still drive the visuals).
     /// Non-zero = a receiver hears silence for one of the sources - surface it.</summary>
     public long DroppedMismatchedRateFrames => Volatile.Read(ref _droppedMismatchedRateFrames);
+
+    /// <summary>Stereo frames dropped from the NDI audio ring because the SDK sender stalled longer
+    /// than the ring is deep (drop-oldest). Visuals are unaffected - the visualizer tap stays on the
+    /// caller thread - but receivers hear a gap, so it belongs in the status line.</summary>
+    public long DroppedNdiAudioFrames => _ndiAudioRing?.DroppedFrames ?? 0;
 
     private int _faulted;
     private long _droppedMismatchedRateFrames;
@@ -149,6 +155,10 @@ public sealed class VizNdiEngine : IDisposable
     /// rate/channel count; the engine downmixes to stereo for the visualizer tap and the NDI audio
     /// stream. The NDI audio stream is created lazily from the FIRST submit's format; a mid-run
     /// format change is submitted as-is only when it matches (NDI sources carry one audio format).
+    ///
+    /// <para>Only the visualizer tap runs on the caller's thread (a copy into the renderer's PCM
+    /// ring); the NDI submission goes through <see cref="NdiAudioSubmitRing"/> because the SDK's
+    /// audio clock blocks its caller - which here is a decoder or capture thread.</para>
     /// </summary>
     public void SubmitPcm(ReadOnlySpan<float> interleaved, int sampleRate, int channels)
     {
@@ -180,11 +190,12 @@ public sealed class VizNdiEngine : IDisposable
             {
                 _ndiAudioFormat = new AudioFormat(sampleRate, 2);
                 _ndiAudio = ndi.EnableAudio(_ndiAudioFormat);
+                _ndiAudioRing = new NdiAudioSubmitRing(_ndiAudio, _ndiAudioFormat, log: _log);
             }
 
             if (_ndiAudioFormat.SampleRate == sampleRate)
             {
-                _ndiAudio.Submit(span);
+                _ndiAudioRing!.Submit(span);
             }
             else
             {
@@ -348,10 +359,19 @@ public sealed class VizNdiEngine : IDisposable
 
         // Barrier: _disposed is already set, so no NEW SubmitPcm passes its in-gate re-check;
         // taking the gate here waits out any submit currently inside it before natives go away.
+        NdiAudioSubmitRing? audioRing;
         lock (_audioGate)
+        {
+            audioRing = _ndiAudioRing;
+            _ndiAudioRing = null;
             _ndiAudio = null;
+        }
 
-        if (pumpStopped)
+        // The sender thread calls into the NDI sender, so the same rule as the pump applies: a thread
+        // still inside a blocked SDK submit means the natives are leaked rather than freed under it.
+        var audioStopped = audioRing?.StopAndJoin(TimeSpan.FromSeconds(5)) ?? true;
+
+        if (pumpStopped && audioStopped)
         {
             _source?.Dispose();
             _ndi?.Dispose();

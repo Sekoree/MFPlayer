@@ -478,12 +478,15 @@ public partial class ControlWorkspaceViewModel
         return list;
     }
 
+    /// <summary>Called after every structural config change (devices, listeners, layers, scripts) and on
+    /// project load - also the single point where the always-on device input follows the configuration.</summary>
     private void NotifySummary()
     {
         OnPropertyChanged(nameof(DeviceCount));
         OnPropertyChanged(nameof(ScriptCount));
         OnPropertyChanged(nameof(ListenerCount));
         OnPropertyChanged(nameof(LayerCount));
+        SyncDeviceInputSession();
     }
 
     private void NotifyArmState()

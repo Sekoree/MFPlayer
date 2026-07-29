@@ -41,6 +41,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private string? _configFilePath;
     private ControlMonitorBuffer? _monitorBuffer;
     private ControlSystemRuntimeSession? _session;
+    private ControlInputSession? _inputSession;
+    private string _inputSignature = string.Empty;
+    private bool _inputShutdown;
+    private readonly SemaphoreSlim _inputSyncGate = new(1, 1);
     private UdpControlOSCSender? _oscSender;
     private IControlMIDISender? _midiSender;
     private long _lastRenderedVersion = -1;
@@ -61,35 +65,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     internal Func<Task<string?>> ProfileExportDirectoryPrompt { get; set; } = DefaultProfileExportDirectoryPromptAsync;
 
     /// <summary>Every incoming MIDI/OSC control record (Direction Input, plus Dropped - "no matching
-    /// device" still means the message physically arrived), observed synchronously as the armed
-    /// session records it to the monitor buffer. Raised on the I/O threads (PortMIDI poll / UDP
-    /// receive) - subscribers must marshal themselves. The cue player's per-cue trigger service
-    /// (<see cref="Services.CueTriggerService"/>) is the consumer; the event only carries data while
-    /// the control system is armed, by construction.</summary>
+    /// device" still means the message physically arrived), forwarded from the always-on device input
+    /// session: it carries data whenever devices/listeners are configured and enabled, independent of
+    /// the mapping engine's arm state. Raised on the I/O threads (PortMIDI poll / UDP receive) -
+    /// subscribers must marshal themselves. The cue player's per-cue trigger service
+    /// (<see cref="Services.CueTriggerService"/>) is the consumer.</summary>
     public event Action<ControlMonitorRecord>? InputObserved;
-
-    /// <summary>Monitor-sink decorator installed at arm time: records to the real buffer first
-    /// (the monitor pane must never miss what a subscriber sees), then forwards input-direction
-    /// records to <see cref="InputObserved"/>. A subscriber exception must never poison the
-    /// control I/O threads.</summary>
-    private sealed class InputTapMonitorSink(ControlWorkspaceViewModel owner, IControlMonitorSink inner)
-        : IControlMonitorSink
-    {
-        public void Record(ControlMonitorRecord record)
-        {
-            inner.Record(record);
-            if (record.Direction is not (ControlMonitorDirection.Input or ControlMonitorDirection.Dropped))
-                return;
-            try
-            {
-                owner.InputObserved?.Invoke(record);
-            }
-            catch
-            {
-                // Observation is best-effort; the mapping/monitor path already handled the record.
-            }
-        }
-    }
 
     public ControlWorkspaceViewModel()
     {
@@ -882,6 +863,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _refreshTimer.Stop();
+        _inputShutdown = true; // no config-change sync may re-open devices behind the teardown
         await DisarmInternalAsync().ConfigureAwait(false);
+        await _inputSyncGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await TearDownDeviceInputSessionAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _inputSyncGate.Release();
+        }
     }
 }

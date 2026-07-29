@@ -20,7 +20,7 @@ namespace S.Media.Audio.PortAudio;
 /// <see cref="Dispose"/> calls <see cref="Stop"/> then <see cref="PortAudioRuntime.Release"/>; each step is wrapped so <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
 /// </para>
 /// </remarks>
-public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IFlushableOutput, IPlaybackClock, IAudioOutputPlaybackStats, IDisposable
+public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IFlushableOutput, IPlaybackClock, IAudioOutputPlaybackStats, IAudioOutputLatency, IDisposable
 {
     private readonly AudioFormat _format;
     private readonly int _deviceIndex;
@@ -239,25 +239,19 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         }
     }
 
+    /// <inheritdoc cref="AudioLatencyCompensation.AudibleSeconds"/>
+    internal static double ComputeAudibleSeconds(double elapsedSeconds, double outputLatencySeconds) =>
+        AudioLatencyCompensation.AudibleSeconds(elapsedSeconds, outputLatencySeconds);
+
     /// <summary>
-    /// Maps the consumed/stream elapsed time of a segment to the reported audible time. Steady state is
-    /// <c>elapsed − latency</c>. During the startup window (<c>elapsed &lt; 2×latency</c>, while the device
-    /// buffer is still filling) it reports the quadratic ease-in <c>elapsed²∕(4×latency)</c>: starts at 0,
-    /// strictly monotonic in <paramref name="elapsedSeconds"/>, meets <c>elapsed − latency</c> at the window
-    /// edge with matching value <em>and</em> slope (both are <c>latency</c> resp. 1 at <c>elapsed = 2×latency</c>),
-    /// and always lies between the true audible position and the consumed position. Replaces the old
-    /// clamp-at-zero, which reported 0 for the whole first <c>outputLatency</c> and then jumped.
+    /// <see cref="IAudioOutputLatency.SubmitToOutputLatency"/>: the managed ring backlog plus the
+    /// negotiated device latency - what a fan-in owner clocking off <see cref="ElapsedSinceStart"/>
+    /// must subtract for its own clients (this output's clock already reports its audible position,
+    /// but a sample submitted now is that far from the speaker). No native calls on this path.
     /// </summary>
-    internal static double ComputeAudibleSeconds(double elapsedSeconds, double outputLatencySeconds)
-    {
-        if (elapsedSeconds <= 0)
-            return 0;
-        if (outputLatencySeconds <= 0)
-            return elapsedSeconds;
-        if (elapsedSeconds < 2 * outputLatencySeconds)
-            return elapsedSeconds * elapsedSeconds / (4 * outputLatencySeconds);
-        return elapsedSeconds - outputLatencySeconds;
-    }
+    public TimeSpan SubmitToOutputLatency =>
+        new(QueuedSamples * (long)TimeSpan.TicksPerSecond / _format.SampleRate
+            + Volatile.Read(ref _outputLatencyTicks));
 
     /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: true when the PA stream is open, reporting active, and the device has not been lost.</summary>
     public bool IsAdvancing
