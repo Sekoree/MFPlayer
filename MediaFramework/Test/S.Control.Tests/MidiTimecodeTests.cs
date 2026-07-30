@@ -65,9 +65,20 @@ public sealed class MidiTimecodeTests
         Assert.Equal(new MidiTimecodeValue(0, 9, 59, 29, df).FrameNumber + 1, tenth.FrameNumber);
         Assert.Equal(tenth, MidiTimecodeValue.FromFrameNumber(tenth.FrameNumber, df));
 
-        // Drop-frame exists so labels track real time: an hour of labels is an hour of wall clock
-        // to within a couple of frames (non-drop 30 would be 3.6 s adrift).
-        Assert.Equal(3600.0, new MidiTimecodeValue(1, 0, 0, 0, df).TotalSeconds, 1);
+        // ABSOLUTE spec values, not a tolerance. The only pin here used to be
+        // `Assert.Equal(3600.0, …TotalSeconds, 1)`, which passes for the correct 3599.9964 AND for a
+        // SecondsPerFrame(DF) of 1/30 - i.e. for drop-frame arithmetic that had been broken outright.
+        // These are the published SMPTE frame counts, so both halves of the conversion are nailed down:
+        Assert.Equal(1800, new MidiTimecodeValue(0, 1, 0, 2, df).FrameNumber); // first label of minute 1
+        Assert.Equal(17982, new MidiTimecodeValue(0, 10, 0, 0, df).FrameNumber); // 10 min = 17982 frames
+        Assert.Equal(107892, new MidiTimecodeValue(1, 0, 0, 0, df).FrameNumber); // 1 h = 6 × 17982
+        Assert.Equal(2589407, new MidiTimecodeValue(23, 59, 59, 29, df).FrameNumber); // last of the day
+        Assert.Equal(2589408, MidiTimecodeRates.FramesPerDay(df));
+
+        // …and the real-time length of an hour of drop-frame labels: 107892 × 1001/30000 s. Non-drop 30
+        // would read exactly 3596.4 here, plain 3600.0 if SecondsPerFrame(DF) were 1/30.
+        Assert.Equal(3599.9964, new MidiTimecodeValue(1, 0, 0, 0, df).TotalSeconds, 4);
+        Assert.Equal(1001.0 / 30000.0, MidiTimecodeRates.SecondsPerFrame(df), 10);
     }
 
     [Theory]
@@ -252,13 +263,38 @@ public sealed class MidiTimecodeTests
         Assert.False(update.Value.IsRunning); // a full frame is what a PARKED/locating deck emits
     }
 
+    /// <summary>
+    /// A sloppy sender's locate at a drop-frame label that does not exist (<c>:00</c>/<c>:01</c> at the top
+    /// of a non-tenth minute) is SNAPPED onto the first label that does, not dropped. This reverses an
+    /// earlier assertion, deliberately: authoring-side rejection (<see cref="MidiTimecodeValue.IsValid"/>,
+    /// which a typed schedule target still goes through) and decoder-side acceptance are different jobs.
+    /// Dropping the message discarded the whole locate - no park, no generation bump - so every consumer
+    /// kept a baseline the sender had already left, which for a crossing consumer is a burst on the next
+    /// roll. Quarter-frames self-heal within 2 frames; a locate is a one-shot.
+    /// </summary>
     [Fact]
-    public void FullFrame_RejectsANonexistentDropFrameLabel()
+    public void FullFrame_SnapsANonexistentDropFrameLabel_RatherThanDroppingTheLocate()
     {
         var decoder = new MidiTimecodeDecoder(TicksPerSecond);
 
+        var update = decoder.FeedFullFrame(
+            FullFrame(0, 1, 0, 0, MidiTimecodeRate.Fps2997Drop), Ms(5));
+        Assert.NotNull(update);
+        Assert.Equal(
+            new MidiTimecodeValue(0, 1, 0, 2, MidiTimecodeRate.Fps2997Drop),
+            update!.Value.Timecode);
+        Assert.Equal(MidiTimecodeUpdateKind.Located, update.Value.Kind);
+
+        // Only those two labels are snapped: the tenth minute keeps its own :00, and a frame field that is
+        // out of range for the rate is still garbage and still rejected.
+        var tenth = decoder.FeedFullFrame(
+            FullFrame(0, 10, 0, 0, MidiTimecodeRate.Fps2997Drop), Ms(10));
+        Assert.Equal(new MidiTimecodeValue(0, 10, 0, 0, MidiTimecodeRate.Fps2997Drop), tenth!.Value.Timecode);
         Assert.Null(decoder.FeedFullFrame(
-            FullFrame(0, 1, 0, 0, MidiTimecodeRate.Fps2997Drop), Ms(5)));
+            FullFrame(0, 1, 0, 31, MidiTimecodeRate.Fps2997Drop), Ms(15)));
+
+        // The authoring side is unchanged - a typed target must fire where the operator typed it.
+        Assert.False(MidiTimecodeValue.TryParse("00:01:00:00", MidiTimecodeRate.Fps2997Drop, out _));
     }
 
     [Fact]
@@ -398,9 +434,15 @@ public sealed class MidiTimecodeTests
     /// A stream that keeps ARRIVING but never assembles must freeze, not free-run. A reverse/shuttle
     /// chase emits quarter-frames descending (7,6,…,0), so the sequence discipline never completes an
     /// assembly - and the class contract says that "is a stall from the scheduler's point of view".
-    /// It was not: liveness was stamped by every message, so <c>IsChasing</c> stayed true and the
-    /// position extrapolated FORWARD at real-time rate for the whole rewind, sweeping the scheduler
-    /// through every target it "crossed" while the deck ran backwards.
+    /// <para><strong>Assertion tightened, on purpose.</strong> This test used to allow the position to
+    /// run 500 ms forward (<c>&lt;= locked + 0.51</c>), codifying the assembly-stall window as the bound
+    /// on the reported POSITION. That is not a defensible bound for a consumer that fires on crossings: a
+    /// review reproduced a rewind in which 400 ms of descending quarter-frames pushed the position 470 ms
+    /// past the last real label, fired a cue the sender never reached, and then fired it AGAIN on the real
+    /// forward pass. Liveness now counts only quarter-frames that EXTEND an in-order assembly, and the
+    /// extrapolation is capped at <see cref="MidiTimecodeChaseClock.MaxPositionLeadSeconds"/>, so a stream
+    /// that proves nothing about forward motion moves the position by exactly nothing. <c>IsChasing</c>
+    /// still goes false, which is what the operator's chip needs to show.</para>
     /// </summary>
     [Fact]
     public void ChaseClock_StreamThatNeverAssembles_FreezesInsteadOfRunningForward()
@@ -422,12 +464,176 @@ public sealed class MidiTimecodeTests
 
         var state = clock.Read();
         Assert.False(state.IsChasing);
-        // Bounded by the assembly-stall window, NOT dragged along by the 2 s of message traffic.
-        Assert.True(
-            state.PositionSeconds <= locked.PositionSeconds + 0.51,
-            $"position ran forward to {state.PositionSeconds} from {locked.PositionSeconds}");
-        Assert.True(state.PositionSeconds >= locked.PositionSeconds - 0.001);
         Assert.True(state.HasSignal);
+        // Not one millisecond of forward run on 2 s of traffic that never extended an assembly.
+        Assert.Equal(locked.PositionSeconds, state.PositionSeconds, 6);
+        // …and the diagnostic that makes "arriving but not decoding" visible instead of looking like an
+        // unplugged cable.
+        Assert.Equal(200, state.UndecodedQuarterFrames);
+    }
+
+    /// <summary>
+    /// The hard ceiling on prediction. Extrapolation exists to cancel the decoder's 2-frame read lag, so
+    /// the position may lead the last DECODED label by one assembly window plus the decoder's own 2-frame
+    /// jump tolerance - 4 frames - and not one frame more, whatever traffic keeps arriving. The number is
+    /// published because <c>CueSchedulerService</c> has to re-arm a fired target against exactly it: with
+    /// a smaller slack a sender whose labels advance slower than wall time (classified as a relocate on
+    /// every assembly, so the baseline churns per assembly) re-armed and re-fired the same cue.
+    /// </summary>
+    [Fact]
+    public void ChaseClock_PositionNeverLeadsTheDecodedLabel_ByMoreThanThePublishedBound()
+    {
+        Assert.Equal(4.0 / 25.0, MidiTimecodeChaseClock.MaxPositionLeadSeconds(MidiTimecodeRate.Fps25), 9);
+        Assert.Equal(4.0 / 24.0, MidiTimecodeChaseClock.MaxPositionLeadSeconds(MidiTimecodeRate.Fps24), 9);
+        Assert.Equal(
+            4.0 * 1001.0 / 30000.0,
+            MidiTimecodeChaseClock.MaxPositionLeadSeconds(MidiTimecodeRate.Fps2997Drop), 9);
+        // An order of magnitude tighter than the liveness bound - the two are NOT the same knob.
+        Assert.True(
+            MidiTimecodeChaseClock.MaxPositionLeadSeconds(MidiTimecodeRate.Fps25)
+            < MidiTimecodeChaseClock.AssemblyStallTimeout.TotalSeconds / 2.0);
+
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        FeedClock(clock, ref now, 1, 0, 0, 0, MidiTimecodeRate.Fps25);
+        var label = new MidiTimecodeValue(1, 0, 0, 0, MidiTimecodeRate.Fps25).TotalSeconds;
+        var ceiling = label + MidiTimecodeChaseClock.MaxPositionLeadSeconds(MidiTimecodeRate.Fps25);
+
+        // A LOSSY link: pieces 0..3 of every window arrive in order (so liveness keeps being stamped and
+        // the sender is genuinely rolling forward) and 4..7 never do. Nothing assembles for 2 s.
+        var bytes = QuarterFrames(1, 0, 0, 2, MidiTimecodeRate.Fps25);
+        for (var window = 0; window < 25; window++)
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                now += Ms(20);
+                clock.FeedQuarterFrame(bytes[i]);
+            }
+
+            var position = clock.Read().PositionSeconds;
+            Assert.True(position <= ceiling + 1e-9, $"position {position} passed the {ceiling} ceiling");
+        }
+
+        var final = clock.Read();
+        Assert.False(final.IsChasing); // past the assembly-stall bound as well
+        Assert.Equal(ceiling, final.PositionSeconds, 3);
+    }
+
+    /// <summary>
+    /// The 8-message splice AT THE 24-HOUR WRAP. The fingerprint's directional guard ("the minute/hour half
+    /// always comes from a LATER window") was a raw <c>candidate.TotalSeconds &lt;= predictedSeconds</c>,
+    /// which is false exactly once a day: locked at 23:59:59:21, a splice straddling midnight assembles
+    /// 00:00:59:23 - one labelled minute ahead in the label space, ~24 h BEHIND on a seconds comparison.
+    /// The guard let it through as a relocate, re-baselining every consumer a day backwards and retiring
+    /// every armed target with it. The distance is now measured wrapped.
+    /// </summary>
+    [Fact]
+    public void QuarterFrames_SpliceAcrossTheTwentyFourHourWrap_IsStillNeverReported()
+    {
+        var decoder = new MidiTimecodeDecoder(TicksPerSecond);
+        var locked = Feed(decoder, 23, 59, 59, 21, MidiTimecodeRate.Fps25, startTicks: 0);
+        Assert.Equal(new MidiTimecodeValue(23, 59, 59, 21, MidiTimecodeRate.Fps25), locked.Timecode);
+
+        // Pieces 0..3 of the 23:59:59:23 window (frame + second nibbles), then 8 lost messages, then
+        // pieces 4..7 of the 00:00:00:00 window (minute + hour nibbles). The merged label is 00:00:59:23 -
+        // a place the sender was never at, and one the unfixed guard reported as a relocate.
+        var current = QuarterFrames(23, 59, 59, 23, MidiTimecodeRate.Fps25);
+        var next = QuarterFrames(0, 0, 0, 0, MidiTimecodeRate.Fps25);
+        for (var i = 0; i < 4; i++)
+            Assert.Null(decoder.FeedQuarterFrame(current[i], Ms(80 + (i * 10))));
+        for (var i = 4; i < 8; i++)
+            Assert.Null(decoder.FeedQuarterFrame(next[i], Ms(200 + ((i - 4) * 10))));
+
+        // The sender rolled straight through midnight, so the next clean window is the REAL 00:00:00:02.
+        // It reads as a relocate, and that is deliberate rather than a leftover: the label space wraps at
+        // 24 h but a consumer's baseline is linear seconds, so the day rollover has to open a new run -
+        // treating it as a continuation would leave a scheduler comparing a 00:00:xx target against an
+        // 86 000-second baseline and retiring it unfired. What must never happen is the SPLICED label
+        // being reported, which is what re-baselined everything ~24 h backwards.
+        var resumed = Feed(decoder, 0, 0, 0, 2, MidiTimecodeRate.Fps25, startTicks: Ms(240));
+        Assert.Equal(new MidiTimecodeValue(0, 0, 0, 2, MidiTimecodeRate.Fps25), resumed.Timecode);
+        Assert.Equal(MidiTimecodeUpdateKind.Jumped, resumed.Kind);
+    }
+
+    /// <summary>The same midnight splice through the chase clock: the phantom 00:00:59:23 must never
+    /// become the clock's position or open a generation. Unfixed, the clock relocated to 59.9 s - a whole
+    /// day backwards - and every consumer re-baselined there mid-splice.</summary>
+    [Fact]
+    public void ChaseClock_SpliceAcrossTheTwentyFourHourWrap_NeitherMovesNorReBaselinesTheRun()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        FeedClock(clock, ref now, 23, 59, 59, 21, MidiTimecodeRate.Fps25);
+        var locked = clock.Read();
+
+        var current = QuarterFrames(23, 59, 59, 23, MidiTimecodeRate.Fps25);
+        var next = QuarterFrames(0, 0, 0, 0, MidiTimecodeRate.Fps25);
+        for (var i = 0; i < 4; i++)
+        {
+            now += Ms(10);
+            clock.FeedQuarterFrame(current[i]);
+        }
+
+        now += Ms(80); // the 8 lost messages
+        for (var i = 4; i < 8; i++)
+        {
+            now += Ms(10);
+            clock.FeedQuarterFrame(next[i]);
+        }
+
+        var state = clock.Read();
+        Assert.Equal(locked.Generation, state.Generation);
+        Assert.InRange(state.PositionSeconds, 86399.8, 86400.1); // still in the last second of the day
+        Assert.Equal(locked.GenerationStartSeconds, state.GenerationStartSeconds, 6);
+    }
+
+    /// <summary>Two sources feeding one decoder (a mis-latched duplicate) duplicates every piece, so
+    /// nothing ever assembles and the chip reads "no signal" forever. The counter is the only way that is
+    /// distinguishable from an unplugged cable.</summary>
+    [Fact]
+    public void ChaseClock_DuplicatedPieces_NeverLock_ButTheUndecodedCountMakesItVisible()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        var bytes = QuarterFrames(1, 0, 0, 0, MidiTimecodeRate.Fps25);
+        for (var window = 0; window < 5; window++)
+        {
+            foreach (var b in bytes)
+            {
+                for (var copy = 0; copy < 2; copy++)
+                {
+                    now += Ms(5);
+                    clock.FeedQuarterFrame(b);
+                }
+            }
+        }
+
+        var state = clock.Read();
+        Assert.False(state.HasSignal);
+        Assert.Equal(80, state.UndecodedQuarterFrames); // 5 windows × 8 pieces × 2 copies
+    }
+
+    /// <summary>A parked sender sits exactly ON the located label. Traffic that keeps arriving without
+    /// assembling used to drag the frozen position up to 500 ms past it, so the operator's chip read a
+    /// dozen frames off a deck that had not moved.</summary>
+    [Fact]
+    public void ChaseClock_ParkedOnALocate_DoesNotCreepWhileUndecodableTrafficArrives()
+    {
+        var now = 0L;
+        var clock = new MidiTimecodeChaseClock(() => now, TicksPerSecond);
+        Assert.NotNull(clock.FeedFullFrame(FullFrame(0, 30, 0, 0, MidiTimecodeRate.Fps25)));
+
+        var descending = QuarterFrames(0, 30, 0, 0, MidiTimecodeRate.Fps25);
+        for (var i = 0; i < 100; i++)
+        {
+            now += Ms(10);
+            clock.FeedQuarterFrame(descending[7 - (i % 8)]);
+        }
+
+        var state = clock.Read();
+        Assert.False(state.IsChasing);
+        Assert.Equal(1800.0, state.PositionSeconds, 6);
+        Assert.Equal(new MidiTimecodeValue(0, 30, 0, 0, MidiTimecodeRate.Fps25), state.Position);
     }
 
     /// <summary>

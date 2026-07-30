@@ -149,17 +149,20 @@ level straight onto the route, so fading a tile playing at 0.4 first **snapped i
 re-expressed over `SoundingLevel`; `StopCueAsync` deliberately still walks the groups only - it
 targets a cue id, and voices are keyed by tile, not cue.
 
-Two tricky parts. First, **trim and stop want different filters**: trim must reach an idle group (or a
-trim set while it is idle is lost and its next fire starts stale), stop must not claim/ramp a group
-with nothing in it. Splitting the enumeration would have recreated the very thing this removes, so the
-*stop hook* self-filters on the dispatcher instead (`Active is not null || Outgoing is not null`) and
-one unfiltered list serves both. That `Outgoing` term is also what closes the tail-only-group hole
-Panic used to leave sounding. Second, the freeze: `SoundingLevel.BeforeMaster` now *names* the
-constraint the earlier review found the hard way - a crossfade handoff must freeze `fade × envelope`,
-never `Effective`, because the outgoing ramp multiplies the live trim on every step. Also closed:
-Panic's other half, `CancelPendingVoiceOpens` - a stinger still *loading* when Panic is hit is not on
-the bus yet and would otherwise start playing immediately afterwards (the voice analogue of
-`CancelActiveFire`).
+Two tricky parts. First, **trim and stop want different filters**: trim must never miss a source that is
+about to sound (or a trim set while nothing plays is lost and the next fire starts stale), stop must not
+claim/ramp something with nothing in it. Splitting the enumeration would have recreated the very thing this
+removes, so one unfiltered list serves both and each hook self-filters on the dispatcher. Registration is
+per **VOICE** (`CommitVoiceAsync`), not per group, so the stop hook's filter is simply
+`voice.State != Retired` - which is also what closes the tail-only-group hole Panic used to leave sounding,
+since a tail is an entry in its own right. Trim inheritance is then not the enumeration's problem at all: a
+voice **stamps the live trim when it is constructed** (`new TransportVoice(armed, binding, MasterTrim)`) and
+a soundboard voice does the same at fire time, so there is no idle registration to keep in sync and nothing
+starts at a stale level. Second, the freeze: `SoundingLevel` now *names* the constraint the earlier review
+found the hard way - a crossfade handoff must freeze `fade × envelope`, never `Effective`, because the
+outgoing ramp multiplies the live trim on every step. Also closed: Panic's other half,
+`CancelPendingVoiceOpens` - a stinger still *loading* when Panic is hit is not on the bus yet and would
+otherwise start playing immediately afterwards (the voice analogue of `CancelActiveFire`).
 
 Nine new `SoundingBusTests` plus a new crossfade case in `MasterTrimTests`. The suite was validated as
 a **negative control**: neutering the voice trim and stop hooks fails 6 of the 9, and the 3 that keep
@@ -167,12 +170,35 @@ passing are the ones testing other mechanisms. HaPlay needed no change - its fad
 funnel through `SetMasterTrimAsync` / `StopAllAsync`, and the soundboard's 200 ms progress poll already
 reconciles tiles whose voice disappeared, so a Panic-stopped tile resets itself.
 
+**Post-review fixes 2026-07-30** (each with a regression test that was verified failing first):
+1. a voice's stop claim was a permanent one-shot, so **Panic after a Stop-with-fade was a silent no-op for
+   soundboard voices** - the cue cut, the stinger played on for the rest of the show fade, and
+   `StopAllAsync` returned anyway. `VoiceHandle.TryClaimStop(deadline)` now lets a stop that lands EARLIER
+   supersede an in-flight one (cancelling its ramp and taking over levels + release), while one that lands
+   later awaits `VoiceHandle.Released` - so *every* caller returns only once the voice is genuinely gone;
+2. the fire path was the last route-gain write outside the composition: it attached at the authored gain
+   and folded the trim in only *after* the commit (which awaits the displaced clip's teardown), so a GO
+   under a lowered fader put **full-level program audio on the device** for that window. Routes now attach
+   at `voice.EffectiveAudioLevel` (0 for a fade-in) and the post-commit pass is value-identical;
+3. `StartVoiceFadeOut`'s completion released the voice even when a bus stop had claimed it mid-ramp - a
+   click at the tile fade's level *and* a dead stop ramp. It now repeats the claim check exactly as
+   `StartVoiceReleaseRamp` does;
+4. `ApplyActiveAudioMatrixAsync` wrote the caller's cells raw and left `RouteTargets` describing the old
+   route; it now installs them as that output's matrix **route target** through `ApplyAudioScale`;
+5. bus labels are unique **per voice** (`cue:<group>:<cue>#<n>`): a loop crossfade overlaps a cue with
+   itself, so a cue-shaped label put two identical entries on the bus and silently disabled the
+   duplicate-label check;
+6. a failed stop's `ShowPlaybackAlert.CueId` carries the registration's `SubjectId` (the cue id / tile id)
+   instead of the bus label, so the host can resolve a name; the label still names the entry in the message.
+
 **Do not loosen:** (1) preview and taps stay `Monitoring` - giving them hooks is how the fader starts
-deafening the operator; (2) a handoff freezes `BeforeMaster`, never `Effective`; (3) the "is anything
+deafening the operator; (2) a handoff freezes `fade × envelope`, never `Effective`; (3) the "is anything
 sounding" test belongs in the stop hook, never in the trim enumeration; (4) `ReleaseVoiceAsync`
-unregisters BEFORE the player goes away - a lingering registration is a write to a dead player, and
-`SoundingBusTests` asserts exactly one entry per label so a duplicate fails loudly; (5) stop-all and
-Panic must keep sharing `StopAllAsync` - the moment Panic gets its own path the two reaches drift.
+unregisters BEFORE the player goes away - a lingering registration is a write to a dead player, and the
+tests assert exactly one entry per label, where a label identifies a **voice** (a cue may legitimately have
+two, so per-cue labels would defeat the check); (5) stop-all and Panic must keep sharing `StopAllAsync` -
+the moment Panic gets its own path the two reaches drift; (6) a stop hook's returned task must complete
+only when its source is actually released - "stopped means stopped" is what makes Panic trustworthy.
 
 ---
 
@@ -285,6 +311,51 @@ with the default composition hands out torn pairs, and a wrapper that forwards `
 `Read()` erases its device's epochs silently; (3) the client clock's own epoch must NOT change on a
 terminal re-anchor — staying continuous across it is the whole point of the recovery. Both backends'
 Start/Flush/device-loss bumps ran against real hardware on this box (no skips).
+
+**Post-review fixes 2026-07-30** (each with a regression test verified failing first):
+
+1. **`MediaClock` handed out the reserved `PlaybackEpoch.Single`.** `_positionEpoch` was a plain `long`, so
+   it defaulted to 0 — the id §D reserves for "never re-anchors" and promises never to hand out. Every
+   never-yet-seeked playhead therefore compared *equal* to every other one. Now seeded from
+   `PlaybackEpoch.Next()`. `MediaPlayer`'s EOF-clamp doc claim was false *because of* this and is now true.
+2. **`CompositePlaybackClock.Read()` was not atomic.** Candidate sweep, epoch resolution and blend each took
+   a different lock (or none), so two concurrent readers each paired a fresh id with the other's winner —
+   and a mastered `MediaClock` re-anchors per new id, discarding inter-read accrual. One gate now.
+3. **`EpochId` was a side-effecting read.** Reading a member ran all of `Read()`, mutating blend state:
+   *looking* at the epoch started the hand-off cross-fade at the instant of the observation. (The live
+   example was `AvPlaybackCoordinator`'s debug log — enabling `LogLevel.Debug` changed playback.) Blend
+   state now commits only for `Read()`; members are projections of one coherent snapshot.
+4. **`IsAdvancing` diverged from `Read().IsAdvancing`** when a terminal threw. Also fixed rather than
+   documented: a device paused 30 s and *then* lost jumped to wall-time-since-attach, because the high-water
+   only clamps regressions. The fallback is now spliced onto the raw high-water once per outage.
+5. **The composite did not enforce its own monotonic contract** (S6) and **`VideoPtsClock.Resume()` could
+   rewind within one epoch** (S2). Both now carry an epoch high-water.
+6. **`SessionClock` now infers the re-anchor** (S1 — the unrealised payoff of this section). The epoch
+   plumbing had been added to `PlayheadPlaybackClock` and `SessionClock` called *neither* `EpochId` nor
+   `Read()`, so it was dead code and group master time stayed monotonic only via four manual
+   `MarkDiscontinuity` calls — the "three local patches instead of one mechanism" shape this section exists
+   to retire, still present after the round that claimed to retire it. `Now` reads through `Read()` and
+   rebases on an id change, preserving the group time already reported (published by CAS so concurrent
+   readers converge on one anchor). **The `ShowSession` calls are no longer load-bearing for monotonicity**
+   — a missed one can no longer rewind group time — but they are not redundant: they still bump the
+   timeline generation and re-anchor the source correlation, and they pin `Now` to the exact instant the
+   caller captured *before* the jump, which the automatic path can only approximate from the last value a
+   reader happened to observe. They degrade from "the mechanism" to "a precision refinement".
+
+**Test-quality fixes from the same review:** the Start-path epoch branch had *no* discriminating test —
+both candidates passed under the retired drift-sign heuristic. The new one (paused at 3 s, master
+re-anchors, new segment plays past the paused reading) fails under it while both originals still pass.
+Three device-gated cases in `AudioOutputClockEpochTests` early-`return`ed and reported **Passed** with no
+hardware; they are now `[SkippableFact]` (`Assert.Skip` does not exist in xunit 2.9.3 — it silently
+resolves to `AsyncEnumerable.Skip`), verified to report `[SKIP]`.
+
+**Known residual epoch gaps** (none load-bearing today, all named so they are not rediscovered):
+`ClockedNativeAudioOutput` cannot express an epoch — the native ABI has no channel for one, so a plugin
+backend's re-anchor is invisible; that is a contract hole to close when the ABI next changes.
+`TransportTimeline` reports `Single` and is currently *truthful* (monotonic in production), so it is naming
+debt, not a bug. `OutputSyncGroup` reads `IsAdvancing` and `ElapsedSinceStart` as two separate calls — a
+torn pair across an epoch boundary would compute a bogus phase error and apply a wrong ppm correction; it
+has no production call sites yet, so fix it before wiring genlock, not after.
 
 ---
 

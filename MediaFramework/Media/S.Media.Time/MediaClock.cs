@@ -72,8 +72,16 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private TimeSpan _masterElapsedHighWater;
     /// <summary>Master reading at last <see cref="Pause"/> - used to fold in audio that played during pause.</summary>
     private ClockReading? _masterReadingWhenPaused;
-    /// <summary>Backing store for <see cref="PositionEpoch"/>; mutated only under <see cref="_gate"/>.</summary>
-    private long _positionEpoch;
+    /// <summary>
+    /// Backing store for <see cref="PositionEpoch"/>; mutated only under <see cref="_gate"/>. Seeded from
+    /// <see cref="PlaybackEpoch.Next"/>, never left at the default 0: 0 is <see cref="PlaybackEpoch.Single"/>,
+    /// which <see cref="IPlaybackClock"/> RESERVES for "this clock has exactly one epoch and never
+    /// re-anchors" and never hands out - precisely so ids from two different clocks can never compare equal
+    /// by accident. A MediaClock does re-anchor (<see cref="Seek"/>/<see cref="Reset"/>/<see cref="SetMaster"/>),
+    /// and wrappers republish this id as their <see cref="IPlaybackClock.EpochId"/>, so leaving it at 0 made
+    /// two never-yet-seeked playheads compare EQUAL to each other and to every genuinely single-epoch clock.
+    /// </summary>
+    private long _positionEpoch = PlaybackEpoch.Next();
 
     private bool _isRunning;
     private bool _disposed;

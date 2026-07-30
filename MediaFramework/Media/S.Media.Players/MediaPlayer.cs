@@ -535,8 +535,12 @@ public sealed class MediaPlayer : IDisposable
         && currentPositionEpoch == playPositionEpoch;
 
     /// <summary><see cref="MediaClock.PositionEpoch"/> of the audio clock captured at the most recent
-    /// <see cref="Play"/> (<see cref="PlaybackEpoch.Single"/> before the first Play, which no real clock
-    /// ever reports - so the clamp cannot fire before a Play). See <see cref="Position"/>.</summary>
+    /// <see cref="Play"/>. It is <see cref="PlaybackEpoch.Single"/> (0) before the first Play, and
+    /// <see cref="MediaClock"/> seeds its position epoch from <see cref="PlaybackEpoch.Next"/> - which never
+    /// returns 0 - so a real playhead cannot match the pre-Play sentinel and the clamp cannot fire before a
+    /// Play. The two <c>?? PlaybackEpoch.Single</c> fallbacks pair up rather than colliding: a player with no
+    /// audio clock has no audio router either, so <c>CompletedNaturally</c> is never true and the comparison
+    /// is unreachable. See <see cref="Position"/>.</summary>
     private long _playPositionEpoch;
 
     /// <summary>True while the active playback clock is advancing. Reports false once the audio router

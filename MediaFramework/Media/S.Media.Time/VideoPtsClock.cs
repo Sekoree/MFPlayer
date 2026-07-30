@@ -26,6 +26,12 @@ public sealed class VideoPtsClock : IPlaybackClock
     /// <summary>Current epoch; a new id at each re-anchor of the PTS origin (<see cref="BeginSession"/>,
     /// <see cref="Seek"/>) - both make elapsed jump discontinuously.</summary>
     private long _epochId = PlaybackEpoch.Next();
+    /// <summary>Highest elapsed reported in the current epoch - enforcement of
+    /// <see cref="IPlaybackClock"/>'s per-epoch monotonic contract (same role as
+    /// <c>NDIIngestPlaybackClock._maxReportedElapsed</c>). A late PTS, or a
+    /// <see cref="Pause"/>/<see cref="Resume"/> pair, must not move the report backwards inside one epoch;
+    /// only the deliberate re-anchors that bump <see cref="_epochId"/> may reset it.</summary>
+    private TimeSpan _maxReportedElapsed;
 
     /// <inheritdoc />
     public bool IsAdvancing
@@ -70,6 +76,7 @@ public sealed class VideoPtsClock : IPlaybackClock
             _lastWallTicks = Stopwatch.GetTimestamp();
             _advancing = true;
             _frozenElapsed = TimeSpan.Zero;
+            _maxReportedElapsed = TimeSpan.Zero;
             _epochId = PlaybackEpoch.Next();
         }
     }
@@ -96,12 +103,24 @@ public sealed class VideoPtsClock : IPlaybackClock
         }
     }
 
-    /// <summary>Resume wall-clock interpolation from the last notified PTS.</summary>
+    /// <summary>
+    /// Resume wall-clock interpolation from the position <see cref="Pause"/> froze at.
+    /// </summary>
+    /// <remarks>
+    /// A resume is position-CONTINUOUS, so it takes no new epoch - which makes it bound by the per-epoch
+    /// monotonic contract. <see cref="Pause"/> froze at <c>(lastPts - origin) + wallDelta</c>, so simply
+    /// flipping <see cref="_advancing"/> back on made the next read return <c>(lastPts - origin)</c>: LOWER
+    /// than the value already reported, by however much wall time had accrued past the last frame. The PTS
+    /// origin is re-derived from the frozen value instead, so the resumed reading starts exactly where the
+    /// pause left off and advances from there.
+    /// </remarks>
     public void Resume()
     {
         lock (_gate)
         {
             if (_advancing) return;
+            // (lastPts - origin) == frozenElapsed ⇒ the first resumed read equals the frozen value.
+            _sessionOriginPts = _lastPts - _frozenElapsed;
             _lastWallTicks = Stopwatch.GetTimestamp();
             _advancing = true;
         }
@@ -125,7 +144,9 @@ public sealed class VideoPtsClock : IPlaybackClock
             _sessionOriginPts -= shift;
             if (!_advancing)
                 _frozenElapsed = mediaPosition;
-            // A deliberate reposition: elapsed may move backwards, which is only legal across an epoch.
+            // A deliberate reposition: elapsed may move backwards, which is only legal across an epoch - so
+            // the monotonic high-water is reset with the id rather than pinning the new position up.
+            _maxReportedElapsed = mediaPosition;
             _epochId = PlaybackEpoch.Next();
         }
     }
@@ -136,6 +157,11 @@ public sealed class VideoPtsClock : IPlaybackClock
             return _frozenElapsed;
         var wallNow = Stopwatch.GetTimestamp();
         var delta = _lastPts - _sessionOriginPts + Stopwatch.GetElapsedTime(_lastWallTicks, wallNow);
-        return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;
+        if (delta < TimeSpan.Zero)
+            delta = TimeSpan.Zero;
+        if (delta < _maxReportedElapsed)
+            return _maxReportedElapsed;
+        _maxReportedElapsed = delta;
+        return delta;
     }
 }

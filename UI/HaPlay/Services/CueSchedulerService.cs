@@ -64,10 +64,18 @@ public sealed class CueSchedulerService : IDisposable
     /// is chase positions, not wall ticks.
     /// <para>Like the wall path's <see cref="_handled"/> it is never dropped wholesale on a clock event -
     /// only on re-arm, and otherwise PRUNED (see <see cref="SyncChaseGeneration"/>). A wholesale clear on
-    /// every generation change weakened "fires exactly once" to "fires once per run", and generations
-    /// bump on every dropout: the interpolated position leads the last decoded label by up to ~4 frames,
-    /// so a dropout right after a crossing could re-baseline just BEHIND the target that had already
-    /// fired and fire it a second time.</para></summary>
+    /// every generation change weakened "fires exactly once" to "fires once per run", and a run ends far
+    /// more readily than "the sender relocated": a generation bumps on any <c>Jumped</c>/<c>Resynced</c>/
+    /// <c>Located</c> update or on 500 ms
+    /// (<see cref="MidiTimecodeChaseClock.AssemblyStallTimeout"/>) without a completed assembly. A single
+    /// dropped MESSAGE is not one of those - it keeps one generation, pinned by
+    /// <c>ChaseClock_RunWithADroppedMessage_KeepsOneGeneration</c> - but a varispeed or jog-shuttle pass
+    /// IS, on every assembly, since labels advancing slower than wall time miss the decoder's 2-frame
+    /// prediction tolerance every time. Because the new baseline is a decoded LABEL while the position
+    /// already read was extrapolated up to
+    /// <see cref="MidiTimecodeChaseClock.MaxPositionLeadSeconds"/> past it, each of those bumps
+    /// re-baselines just BEHIND a target that had already fired - and the wholesale clear fired it
+    /// again, two or three times over a few hundred ms.</para></summary>
     private readonly Dictionary<(Guid CueId, long TargetFrame), double> _handledTimecode = new();
 
     private DispatcherTimer? _timer;
@@ -236,6 +244,12 @@ public sealed class CueSchedulerService : IDisposable
     /// can no longer re-fire the target it just fired, nor re-log a beyond-grace skip.</para></summary>
     private void SyncChaseGeneration(in MidiTimecodeChaseState chase)
     {
+        // No signal means no baseline to adopt. The clock still advances its generation when the lock is
+        // DROPPED (device closed, chase disabled) and publishes GenerationStartSeconds = 0 with it - which
+        // would re-arm every handled target through the back door, the wholesale clear this prune exists
+        // to replace. Re-arming belongs to the next real lock, whose generation differs from this one too.
+        if (!chase.HasSignal)
+            return;
         if (_haveChaseBaseline && chase.Generation == _chaseGeneration)
             return;
         _chaseGeneration = chase.Generation;
@@ -252,12 +266,18 @@ public sealed class CueSchedulerService : IDisposable
         }
     }
 
-    /// <summary>How far a new run's baseline may sit behind the position the previous sweep read without
-    /// that counting as a rewind. The chase position is a wall-time extrapolation from the last decoded
-    /// label's piece-0 anchor, so it leads that label by up to one assembly (2 frames) plus the decoder's
-    /// own re-anchor tolerance (2 frames). Any real operator rewind is orders of magnitude larger.</summary>
+    /// <summary>How far a new run's baseline may sit behind the position a previous sweep read without that
+    /// counting as a rewind - which is precisely the chase clock's own bound on how far it will predict a
+    /// position past the last decoded label, so it is TAKEN FROM THE CLOCK rather than restated here.
+    /// <para>The two must be the same number and are not independently choosable. A baseline is a decoded
+    /// label; the position a sweep acted on was that label plus up to the clock's prediction lead. Any
+    /// slack SMALLER than the lead re-arms a target that has already fired the moment a new run opens
+    /// behind it - which a slow/varispeed sender does on every single assembly, so the same cue fired
+    /// two or three times over a few hundred ms. Any slack LARGER swallows a genuine short rewind. The
+    /// review that found this had a rate-derived 4 frames here against a 500 ms bound in the clock: two
+    /// magic numbers that had to agree, in two files, with only one of them documented.</para></summary>
     private static double ReanchorSlackSeconds(MidiTimecodeRate rate) =>
-        4.0 * MidiTimecodeRates.SecondsPerFrame(rate);
+        MidiTimecodeChaseClock.MaxPositionLeadSeconds(rate);
 
     /// <summary>One timecode row, with the wall path's misfire policy applied along the chase clock.</summary>
     private void TickTimecode(CueNodeViewModel node, in MidiTimecodeChaseState chase)
@@ -286,7 +306,8 @@ public sealed class CueSchedulerService : IDisposable
         // domain mix-up in practice: the chase position is wall-time extrapolation anchored on labels,
         // and the decoder classifies any label more than 2 frames off the wall prediction as a JUMP -
         // which opens a new generation and re-baselines this sweep. A run therefore cannot accumulate
-        // more than ~2 frames of skew between the two domains, well inside the 500 ms grace floor.
+        // more than ~2 frames of skew between the two domains, well inside the 500 ms grace floor, and
+        // the clock caps the extrapolation itself at MaxPositionLeadSeconds past the last decoded label.
         var lateMs = (chase.PositionSeconds - targetSeconds) * 1000.0;
         if (lateMs > Math.Max(MinimumGraceMs, node.ScheduleGraceMs))
         {

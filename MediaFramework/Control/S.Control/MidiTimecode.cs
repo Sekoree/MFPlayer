@@ -47,6 +47,17 @@ public static class MidiTimecodeRates
         _ => 1.0 / 30.0,
     };
 
+    /// <summary>Frame numbers in one full 24-hour wrap of the label space (the wire's 5-bit hour field).
+    /// 29.97 drop-frame is 2 589 408 - 107 892 per hour, not 108 000 - so it needs the same
+    /// drop-aware arithmetic <see cref="MidiTimecodeValue.FrameNumber"/> uses.</summary>
+    public static long FramesPerDay(MidiTimecodeRate rate) => rate switch
+    {
+        MidiTimecodeRate.Fps24 => 24L * 86_400,
+        MidiTimecodeRate.Fps25 => 25L * 86_400,
+        MidiTimecodeRate.Fps2997Drop => 2_589_408,
+        _ => 30L * 86_400,
+    };
+
     /// <summary>Short numeric label for operator display ("25", "29.97 DF"). Not translatable prose -
     /// frame rates are numbers everywhere in the industry.</summary>
     public static string Label(MidiTimecodeRate rate) => rate switch
@@ -309,6 +320,17 @@ public sealed class MidiTimecodeDecoder
     public MidiTimecodeDecoder(long ticksPerSecond = 0) =>
         _ticksPerSecond = ticksPerSecond > 0 ? ticksPerSecond : Stopwatch.Frequency;
 
+    /// <summary>True when the last quarter-frame fed EXTENDED an in-order assembly - it landed on the
+    /// piece index the assembler was waiting for (1..7) - rather than merely (re)starting a window on a
+    /// piece 0 or being discarded as out of order.
+    /// <para>This is the only evidence a receiver has that the sender is moving FORWARD at real time
+    /// between assemblies, and <see cref="MidiTimecodeChaseClock"/> uses it as its liveness signal. Mere
+    /// arrival proves nothing: a reverse/shuttle chase emits pieces 7..0, and every one of its piece 0s
+    /// is "accepted" (a fresh window always restarts cleanly) while nothing after it ever fits - so a
+    /// liveness stamp on arrival kept the clock "chasing" and let it extrapolate the position forward
+    /// while the deck ran backwards.</para></summary>
+    public bool LastQuarterFrameExtendedAssembly { get; private set; }
+
     /// <summary>True when <paramref name="message"/> is a MIDI Time Code full-frame SysEx. Cheap enough
     /// to run on the I/O thread as a filter before deciding to decode.</summary>
     public static bool IsFullFrame(ReadOnlySpan<byte> message) =>
@@ -328,6 +350,7 @@ public sealed class MidiTimecodeDecoder
         _anchorTicks = 0;
         _anchorRate = default;
         _havePendingJump = false;
+        LastQuarterFrameExtendedAssembly = false;
     }
 
     /// <summary>Feeds one quarter-frame DATA byte (the byte after the 0xF1 status). Returns an update
@@ -336,6 +359,7 @@ public sealed class MidiTimecodeDecoder
     {
         var piece = (dataByte >> 4) & 0x07;
         var nibble = dataByte & 0x0F;
+        LastQuarterFrameExtendedAssembly = false;
 
         if (piece == 0)
         {
@@ -353,6 +377,7 @@ public sealed class MidiTimecodeDecoder
             return null;
         }
 
+        LastQuarterFrameExtendedAssembly = true;
         _nibbles[piece] = nibble;
         _expectedPiece = piece + 1;
         if (piece != QuarterFramesPerTimecode - 1)
@@ -381,12 +406,12 @@ public sealed class MidiTimecodeDecoder
             return null;
 
         var hourByte = message[5];
-        var candidate = new MidiTimecodeValue(
+        var candidate = SnapDropFrame(new MidiTimecodeValue(
             Hours: hourByte & 0x1F,
             Minutes: message[6] & 0x7F,
             Seconds: message[7] & 0x7F,
             Frames: message[8] & 0x7F,
-            Rate: (MidiTimecodeRate)((hourByte >> 5) & 0x03));
+            Rate: (MidiTimecodeRate)((hourByte >> 5) & 0x03)));
         if (!candidate.IsValid)
             return null;
 
@@ -462,6 +487,24 @@ public sealed class MidiTimecodeDecoder
     private double PredictFrom(double fromSeconds, long fromTicks, long atTicks) =>
         fromSeconds + ((atTicks - fromTicks) / (double)_ticksPerSecond);
 
+    /// <summary>Snaps the two 29.97 drop-frame labels that do not exist - <c>:00</c> and <c>:01</c> at the
+    /// top of every minute except each tenth - onto the first one that does, <c>:02</c>.
+    /// <para><see cref="MidiTimecodeValue.IsValid"/> rejects them on purpose: an AUTHORED target must fire
+    /// where the operator typed it, and mapping <c>00:01:00:00</c> onto a frame whose real label sits in
+    /// the previous second would fire early. A DECODER cannot afford the same strictness. Plenty of senders
+    /// emit the nonexistent label on a full-frame LOCATE, and dropping the message discards the whole
+    /// event - no park, no generation bump - leaving every consumer on a baseline the sender has left,
+    /// which for a crossing consumer means a burst on the next roll. A quarter-frame stream self-heals in
+    /// 2 frames; a locate is a one-shot. Both offending labels unambiguously mean "the top of this
+    /// minute", so accepting them one frame late beats not accepting them at all.</para></summary>
+    private static MidiTimecodeValue SnapDropFrame(MidiTimecodeValue value) =>
+        value.Rate == MidiTimecodeRate.Fps2997Drop
+        && value.Seconds == 0
+        && value.Minutes % 10 != 0
+        && value.Frames is >= 0 and < 2
+            ? value with { Frames = 2 }
+            : value;
+
     /// <summary>A free-running sender lands within a frame or two of the wall-time prediction.</summary>
     private static double Tolerance(MidiTimecodeRate rate) =>
         Math.Max(0.020, 2.0 * MidiTimecodeRates.SecondsPerFrame(rate));
@@ -477,14 +520,24 @@ public sealed class MidiTimecodeDecoder
     /// 29.97 drop-frame - whose labelled minute is 1798 frames, or 1800 across a ten-minute boundary -
     /// needs no special case. A genuine relocate that happens to land on the predicted <c>ss:ff</c> a
     /// whole number of minutes away is not misread: it is merely held one extra timecode (~83 ms) until
-    /// the next assembly corroborates it.</para></summary>
+    /// the next assembly corroborates it.</para>
+    /// <para>"A later window" is a statement about the LABEL SPACE, which wraps at 24 h - so the
+    /// directional guard compares wrapped frame distance, not raw seconds. Locked at <c>23:59:59:21</c>,
+    /// the splice that straddles midnight assembles <c>00:00:59:23</c>: one labelled minute AHEAD of the
+    /// prediction, but ~24 h behind it on a plain <c>&lt;=</c> - which let the corrupt label straight
+    /// through as a relocate and re-baselined every consumer a day backwards.</para></summary>
     private static bool IsNibbleSpliceFingerprint(MidiTimecodeValue candidate, double predictedSeconds)
     {
-        if (candidate.TotalSeconds <= predictedSeconds)
-            return false; // the minute/hour half always comes from a LATER window, never an earlier one
-
+        var framesPerDay = MidiTimecodeRates.FramesPerDay(candidate.Rate);
         var predictedFrames = (long)Math.Round(
             predictedSeconds / MidiTimecodeRates.SecondsPerFrame(candidate.Rate));
+        // Wrapped distance from the prediction to the candidate. The high half can only come from a LATER
+        // window, so anything at or behind the prediction (a wrapped distance of zero, or one that is
+        // shorter measured backwards) is not a splice.
+        var forward = ((candidate.FrameNumber - predictedFrames) % framesPerDay + framesPerDay) % framesPerDay;
+        if (forward == 0 || forward > framesPerDay / 2)
+            return false;
+
         for (var slack = -1L; slack <= 1L; slack++)
         {
             var predictedLabel = MidiTimecodeValue.FromFrameNumber(predictedFrames + slack, candidate.Rate);
@@ -525,7 +578,14 @@ public sealed class MidiTimecodeDecoder
 /// <param name="Generation">Incremented on every discontinuity (first lock, relocate, full-frame locate,
 /// resume after a stall). Consumers use it as the identity of "this continuous run".</param>
 /// <param name="GenerationStartSeconds">Position at the instant this generation began - the baseline
-/// that keeps a locate from firing everything it skipped over.</param>
+/// that keeps a locate from firing everything it skipped over. It is a DECODED LABEL, so it can sit up to
+/// <see cref="MidiTimecodeChaseClock.MaxPositionLeadSeconds"/> behind a <paramref name="PositionSeconds"/>
+/// a consumer has already acted on without the sender having moved backwards.</param>
+/// <param name="UndecodedQuarterFrames">Quarter-frames fed since the last COMPLETED assembly. Eight is
+/// one healthy timecode and a dropped message costs one window (16); a number that keeps climbing while
+/// <paramref name="HasSignal"/> stays false is the signature of timecode that ARRIVES and never decodes -
+/// two sources feeding the same decoder (every piece duplicated), a mangled stream, or a permanent
+/// reverse/shuttle chase. Without it that failure looks exactly like "no cable plugged in".</param>
 public readonly record struct MidiTimecodeChaseState(
     bool HasSignal,
     bool IsChasing,
@@ -533,7 +593,8 @@ public readonly record struct MidiTimecodeChaseState(
     double PositionSeconds,
     MidiTimecodeValue Position,
     int Generation,
-    double GenerationStartSeconds);
+    double GenerationStartSeconds,
+    int UndecodedQuarterFrames = 0);
 
 /// <summary>
 /// Thread-safe MTC chase clock: fed on the MIDI I/O thread, read from anywhere. Wraps a
@@ -541,14 +602,18 @@ public readonly record struct MidiTimecodeChaseState(
 /// interpolation between quarter-frames, and stall detection.
 /// </summary>
 /// <remarks>
-/// <para><strong>Interpolation.</strong> Each assembled timecode anchors (tick, seconds); a read reports
-/// <c>anchor + elapsed</c>. Between the 2-frame assemblies that is pure wall-clock extrapolation, which
-/// is exactly what cancels the decoder's inherent 2-frame read lag.</para>
+/// <para><strong>Interpolation, and its ceiling.</strong> Each assembled timecode anchors (tick, seconds);
+/// a read reports <c>anchor + elapsed</c>. Between the 2-frame assemblies that is pure wall-clock
+/// extrapolation, which is exactly what cancels the decoder's inherent 2-frame read lag - and that is also
+/// the whole of its mandate, so the elapsed part is capped at <see cref="MaxPositionLeadSeconds"/>
+/// (4 frames). Everything past that would be a position asserted on no evidence.</para>
 /// <para><strong>Stall.</strong> Quarter-frames arrive 4× per frame (10 ms at 25 fps). After
-/// <see cref="StallTimeout"/> of silence the clock stops extrapolating and FREEZES at the last message's
-/// position: a consumer that fires on crossings must never free-wheel through a pile of targets because
-/// the sender was switched off. A full-frame locate parks the clock the same way (a locate is not a
-/// roll), so the position sits exactly on the located label until quarter-frames resume.</para>
+/// <see cref="StallTimeout"/> without one that EXTENDED an in-order assembly - arrival alone is not
+/// evidence of forward motion, a reverse chase emits pieces 7..0 - the clock stops extrapolating and
+/// FREEZES at that last in-sequence message: a consumer that fires on crossings must never free-wheel
+/// through a pile of targets because the sender was switched off, put in reverse, or garbled. A
+/// full-frame locate parks the clock (a locate is not a roll), so the position sits exactly on the
+/// located label until quarter-frames resume.</para>
 /// <para><strong>Jump/relocate.</strong> Any discontinuity bumps <see cref="MidiTimecodeChaseState.Generation"/>
 /// and republishes <see cref="MidiTimecodeChaseState.GenerationStartSeconds"/>, which is the whole
 /// mechanism a scheduler needs to retire everything behind a locate instead of firing a burst.</para>
@@ -561,13 +626,15 @@ public sealed class MidiTimecodeChaseClock
     /// long enough to ride out poll jitter, short enough that a freeze is felt as "signal lost".</summary>
     public static readonly TimeSpan StallTimeout = TimeSpan.FromMilliseconds(100);
 
-    /// <summary>How long the clock keeps extrapolating without a COMPLETED assembly. Messages arriving
-    /// only prove the sender is talking; only an assembly says where it is. A stream that keeps arriving
-    /// and never assembles - a reverse/shuttle chase emits pieces 7..0, so nothing ever completes - was
-    /// otherwise held "chasing" by the message stamp alone and free-ran the position FORWARD at
-    /// real-time rate while the deck ran backwards, firing every scheduler target it "crossed". One
-    /// timecode spans 2 frames (~83 ms at 24 fps) and the read window peaks at twice that, so 500 ms
-    /// rides out two consecutive lost assemblies without flickering.</summary>
+    /// <summary>How long <see cref="MidiTimecodeChaseState.IsChasing"/> survives without a COMPLETED
+    /// assembly. Messages arriving only prove the sender is talking; only an assembly says where it is.
+    /// One timecode spans 2 frames (~83 ms at 24 fps) and the window peaks at twice that, so 500 ms rides
+    /// out two consecutive lost assemblies without the operator's "receiving" chip flickering.
+    /// <para>This is a LIVENESS bound only. It is deliberately NOT the bound on how far the reported
+    /// position may be predicted past the last decoded label - see
+    /// <see cref="MaxPositionLeadSeconds"/>, which is an order of magnitude tighter. Using this one for
+    /// both let the position free-run half a second forward on a stream that arrives and never assembles,
+    /// and a crossing consumer fired every target inside it.</para></summary>
     public static readonly TimeSpan AssemblyStallTimeout = TimeSpan.FromMilliseconds(500);
 
     private readonly Lock _gate = new();
@@ -585,6 +652,28 @@ public sealed class MidiTimecodeChaseClock
     private MidiTimecodeRate _rate;
     private int _generation;
     private double _generationStartSeconds;
+    private int _undecodedQuarterFrames;
+
+    /// <summary>The most a position reported by <see cref="Read"/> may lead the last DECODED label, for a
+    /// sender at <paramref name="rate"/>: 4 frames (133-167 ms).
+    /// <para><strong>Why 4 and not the liveness bound.</strong> Extrapolation exists for exactly one
+    /// reason - to cancel the decoder's inherent 2-frame read lag (see <see cref="MidiTimecodeDecoder"/>).
+    /// The honest bound is therefore that lag (2 frames, one assembly window) plus the tolerance the
+    /// decoder itself allows a label to miss the wall prediction by before calling it a relocate (another
+    /// 2 frames). Past that the reported position stops being a prediction and becomes an invention, and
+    /// a consumer that fires on crossings fires on positions the sender never reached: a reverse/shuttle
+    /// chase (pieces 7..0, nothing ever assembles) or a link that breaks every window keeps quarter-frames
+    /// ARRIVING, and the position used to run forward at real-time rate for the whole
+    /// <see cref="AssemblyStallTimeout"/> - half a second, 12 frames - on no evidence at all.</para>
+    /// <para><strong>Why it is public.</strong> A crossing consumer needs the SAME number, and cannot
+    /// derive it. <see cref="MidiTimecodeChaseState.GenerationStartSeconds"/> is a decoded label, so a new
+    /// run's baseline can legitimately sit this far behind a position the consumer already acted on -
+    /// which is not a rewind. A consumer that re-arms a fired target below this slack double-fires it on
+    /// any sender whose labels advance slower than wall time (a varispeed/jog pass is classified as a
+    /// relocate on every single assembly, so the baseline churns per assembly). Guessing a second,
+    /// unrelated constant on the consumer side is exactly how that bug happened.</para></summary>
+    public static double MaxPositionLeadSeconds(MidiTimecodeRate rate) =>
+        4.0 * MidiTimecodeRates.SecondsPerFrame(rate);
 
     /// <param name="ticks">Monotonic tick source; defaults to <see cref="Stopwatch.GetTimestamp"/>.
     /// Tests inject a hand-advanced counter so nothing in the chase path needs a timer.</param>
@@ -604,11 +693,18 @@ public sealed class MidiTimecodeChaseClock
         lock (_gate)
         {
             var update = _decoder.FeedQuarterFrame(dataByte, now);
+            _undecodedQuarterFrames = update is null ? _undecodedQuarterFrames + 1 : 0;
             if (update is { } assembled)
-                Apply(assembled); // BEFORE the liveness stamp - Apply's stall test reads the PREVIOUS one
-            // Every quarter-frame counts as liveness, not just the one that completes a timecode -
-            // otherwise a sender whose assembly keeps breaking would look stalled while it is talking.
-            _lastMessageTicks = now;
+                Apply(assembled);
+            // Liveness counts a quarter-frame only when it EXTENDED an in-order assembly, not merely
+            // because it arrived: that is the one thing that says the sender is moving forward at real
+            // time between assemblies. A reverse/shuttle chase emits pieces 7..0, and while every one of
+            // its piece 0s is accepted (a fresh window always restarts cleanly), nothing after it ever
+            // fits - so stamping on arrival held the clock "chasing" and ran the position FORWARD while
+            // the deck ran backwards. A window that completes counts too, whatever the decoder made of
+            // the label (an unconfirmed splice reports nothing yet is plainly in-sequence traffic).
+            if (update is not null || _decoder.LastQuarterFrameExtendedAssembly)
+                _lastMessageTicks = now;
             return update;
         }
     }
@@ -623,6 +719,7 @@ public sealed class MidiTimecodeChaseClock
             if (update is not { } located)
                 return null;
             Apply(located);
+            _undecodedQuarterFrames = 0;
             _lastMessageTicks = now;
             return update;
         }
@@ -635,6 +732,7 @@ public sealed class MidiTimecodeChaseClock
         lock (_gate)
         {
             _decoder.Reset();
+            _undecodedQuarterFrames = 0;
             if (!_haveSignal)
                 return;
             _haveSignal = false;
@@ -652,18 +750,30 @@ public sealed class MidiTimecodeChaseClock
         lock (_gate)
         {
             if (!_haveSignal)
-                return new MidiTimecodeChaseState(false, false, _rate, 0, default, _generation, 0);
+                return new MidiTimecodeChaseState(
+                    false, false, _rate, 0, default, _generation, 0, _undecodedQuarterFrames);
 
+            // THREE separate facts, deliberately not conflated:
+            //  - liveness: a quarter-frame that EXTENDED an in-order assembly arrived recently;
+            //  - decodability: an assembly COMPLETED recently (AssemblyStallTimeout);
+            //  - lead: how far the position may be PREDICTED past the label that assembly produced
+            //    (MaxPositionLeadSeconds - one assembly window plus the decoder's own jump tolerance).
+            // The first two gate IsChasing, which the UI shows as "receiving". Only the third bounds the
+            // POSITION, and it has to be the tight one: a crossing consumer acts on the position, so
+            // anything it reports past that bound is a target the sender never reached.
             var idleSeconds = (now - _lastMessageTicks) / (double)_ticksPerSecond;
-            // Liveness (any message) and decodability (a completed assembly) are separate conditions:
-            // see AssemblyStallTimeout. Extrapolation needs BOTH, so an undecodable-but-live stream
-            // freezes instead of free-running forward.
-            var maxReference = _anchorTicks + (long)(_assemblyStallSeconds * _ticksPerSecond);
-            var chasing = _running && idleSeconds <= _stallSeconds && now <= maxReference;
-            // Chasing: extrapolate to now. Stalled or parked: freeze where the last message left us -
-            // but never further from the last decoded label than the assembly-stall bound, or a stream
-            // that keeps talking without assembling would drag the frozen position along with it.
-            var reference = Math.Min(chasing ? now : _lastMessageTicks, maxReference);
+            var assemblyAgeSeconds = (now - _anchorTicks) / (double)_ticksPerSecond;
+            var chasing = _running
+                          && idleSeconds <= _stallSeconds
+                          && assemblyAgeSeconds <= _assemblyStallSeconds;
+            var maxReference = _anchorTicks + (long)(MaxPositionLeadSeconds(_rate) * _ticksPerSecond);
+            // Parked (a full-frame locate is not a roll): sit exactly ON the located label, so traffic
+            // that keeps arriving without assembling cannot creep the parked chip off the target.
+            // Chasing: extrapolate to now. Stalled: freeze where the last in-sequence message left us.
+            // Either way never further from the last decoded label than the prediction bound allows.
+            var reference = _running
+                ? Math.Min(chasing ? now : _lastMessageTicks, maxReference)
+                : _anchorTicks;
             var seconds = _anchorSeconds + ((reference - _anchorTicks) / (double)_ticksPerSecond);
             if (seconds < 0)
                 seconds = 0;
@@ -674,7 +784,8 @@ public sealed class MidiTimecodeChaseClock
                 PositionSeconds: seconds,
                 Position: MidiTimecodeValue.FromSeconds(seconds, _rate),
                 Generation: _generation,
-                GenerationStartSeconds: _generationStartSeconds);
+                GenerationStartSeconds: _generationStartSeconds,
+                UndecodedQuarterFrames: _undecodedQuarterFrames);
         }
     }
 

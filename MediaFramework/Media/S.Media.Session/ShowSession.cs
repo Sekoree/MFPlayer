@@ -115,6 +115,9 @@ public sealed class ShowSession : IAsyncDisposable
     // The level/stop bus: every sounding source registers with its program/monitoring classification, and
     // master trim, stop-all and Panic all drive its ONE enumeration. Dispatcher-confined like _groups.
     private readonly SoundingSourceRegistry _sounding = new();
+    // Uniquifier for transport-voice bus labels (a cue can have two voices on the bus at once - a loop
+    // crossfade overlaps a cue with itself). Dispatcher-confined, like the registry it labels.
+    private int _soundingSequence;
     private volatile bool _disposed;
 
     /// <summary>The session's level/stop bus, for the components that own their own sounding sources
@@ -1026,6 +1029,15 @@ public sealed class ShowSession : IAsyncDisposable
             if (_audioBackend is not null && player.AudioRouter is not null)
             {
                 var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
+                // The level every route attaches at, so the FIRST buffer the device sees is already at the
+                // composed level: 0 for a fade-in (the ramp lifts it), else the voice's own composition -
+                // which at this point is exactly the master trim it stamped at construction. Attaching at the
+                // authored gain instead used to let a GO under a lowered fader push FULL-LEVEL program audio
+                // to the device for the whole window between Start() below and the reconciling pass after the
+                // commit (which awaits the displaced clip's teardown). Every other route write in the session
+                // - the voice attach, the hot rebuild, every ramp - already goes through the composition; this
+                // was the one outlier.
+                var attachLevel = fadeIn ? 0f : voice.EffectiveAudioLevel;
                 if (binding.AudioRoutes is { } clipRoutes)
                 {
                     // Per-clip routing (GUI per-cue audio): the clip plays on exactly its routed outputs/devices,
@@ -1038,7 +1050,7 @@ public sealed class ShowSession : IAsyncDisposable
                         var outputId = $"clip{i}";
                         if (!TryAttachRouteOutput(
                                 player, outputId, route.DeviceId, route.ToChannelMap(), rate,
-                                gain: fadeIn ? 0f : route.Gain, outputs, route))
+                                gain: route.Gain * attachLevel, outputs, route))
                             continue; // one un-openable device must not fault the whole cue - play the rest
                         routeTargets.Add(new AudioRouteTarget(outputId, route.Gain, route));
                         if (route.DeviceId is { } clipDevice)
@@ -1056,7 +1068,7 @@ public sealed class ShowSession : IAsyncDisposable
                         // Fade-in: attach silent (gain 0) and ramp the route gain up to unity over FadeIn after Start.
                         if (!TryAttachRouteOutput(
                                 player, outDef.Id, outDef.DeviceId, ResolveOutputChannelMap(binding, outDef.Id), rate,
-                                gain: fadeIn ? 0f : 1f, outputs))
+                                gain: attachLevel, outputs))
                             continue;
                         routeTargets.Add(new AudioRouteTarget(outDef.Id, 1f));
                         if (outDef.DeviceId is { } groupDevice)
@@ -1098,11 +1110,10 @@ public sealed class ShowSession : IAsyncDisposable
             await CommitVoiceAsync(groupId, group, voice, crossfade).ConfigureAwait(false);
             PostCommitFault?.Invoke(groupId);
             voice.SetFadeMetadata(routeTargets, fadeIn ? 0f : 1f, authoredLayerOpacities);
-            // Master trim: routes attach at the full authored gain, so a clip fired while the
-            // session-wide trim is below unity needs one ApplyAudioScale pass to fold the trim in
-            // (with a fade-in the ramp writes through the same path every step anyway).
-            if (voice.Level.Master != 1f)
-                voice.ApplyAudioScale(voice.RouteTargets, voice.ClipLevel);
+            // One composition pass over the committed targets. The routes already attached AT this level, so
+            // it is value-identical by construction - it is here so the level composition, not the attach
+            // site, stays the authority (the same reason the live re-apply and the hot rebuild end with it).
+            voice.ApplyAudioScale(voice.RouteTargets, voice.ClipLevel);
             // Publish the device-tagged audio outputs for the line-health poll (CommitVoiceAsync republished
             // the group views before these were set, so refresh once more now they're known).
             voice.SetAudioPumps(audioPumps);
@@ -1240,18 +1251,64 @@ public sealed class ShowSession : IAsyncDisposable
 
     /// <summary>Live-edit the active cue's audio routing matrix (source channels → <paramref name="outputId"/>'s
     /// channels) while it plays (the GUI's <c>UpdateActiveCueAudioRoutes</c>). Returns false when the cue isn't
-    /// the active clip on any group (or has no audio router). Applies on the clip's source→output route.</summary>
-    public Task<bool> ApplyActiveAudioMatrixAsync(string cueId, string outputId, float[,] gains) =>
-        InvokeAsync(() =>
+    /// the active clip on any group (or has no audio router). Applies on the clip's source→output route.
+    /// <para>The edited matrix becomes that output's route TARGET and is installed by the voice's one level
+    /// composition (<c>master × fade × envelope</c>), never written raw: writing the caller's cells straight
+    /// onto the router un-trimmed and un-faded the output for the rest of the clip's life, and left
+    /// <c>RouteTargets</c> describing the OLD route so no later trim/fade/envelope step could reconcile it -
+    /// the same defect class as the live re-apply and the hot rebuild, which both route through here now.</para></summary>
+    public Task<bool> ApplyActiveAudioMatrixAsync(string cueId, string outputId, float[,] gains)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
+        ArgumentNullException.ThrowIfNull(gains);
+        return InvokeAsync(() =>
         {
-            if (ActiveVoiceOf(cueId) is { Player: { AudioRouter: { } router, AudioSourceId: { } sourceId } })
-            {
-                router.ApplyMatrix(sourceId, outputId, gains);
-                return Task.FromResult(true);
-            }
+            if (ActiveVoiceOf(cueId) is not { Player: { AudioRouter: { } router, AudioSourceId: { } sourceId } } voice)
+                return Task.FromResult(false);
 
-            return Task.FromResult(false);
+            // Validate the dimensions BEFORE touching the router (the same rule ApplyMatrix enforces): the
+            // switch below removes the output's current route, so a matrix the router would reject has to
+            // fail while the live routing is still intact rather than leaving the line silent.
+            var dstChannels = router.TryGetOutput(outputId, out var sink) && sink is { } live
+                ? live.Format.Channels
+                : 0;
+            var srcChannels = voice.Player.AudioSource?.Format.Channels ?? 0;
+            if (gains.GetLength(0) > srcChannels || gains.GetLength(1) > dstChannels)
+                throw new ArgumentException(
+                    $"matrix is {gains.GetLength(0)}x{gains.GetLength(1)} but cue '{cueId}' has {srcChannels} " +
+                    $"source channels and output '{outputId}' has {dstChannels}",
+                    nameof(gains));
+
+            // The cells become this output's route TARGET so every later level write (fade, envelope, master
+            // trim, a stop ramp) re-derives them; every cell is carried, zeros included, and the output width
+            // is declared, so the installed matrix keeps the caller's exact dimensions.
+            var old = voice.RouteTargets.FirstOrDefault(t => t.OutputId == outputId);
+            var cells = new List<ShowAudioMatrixCell>(gains.Length);
+            for (var i = 0; i < gains.GetLength(0); i++)
+                for (var o = 0; o < gains.GetLength(1); o++)
+                    cells.Add(new ShowAudioMatrixCell(i, o, gains[i, o]));
+            var route = (old?.Route ?? new ShowClipAudioRoute()) with
+            {
+                MatrixCells = cells,
+                MatrixOutputChannels = gains.GetLength(1),
+                Gain = 1f, // the per-cell gains ARE the authored level here; the route envelope stays unity
+            };
+
+            // A matrix coexists with a legacy route for the same pair (by the router's design), so switching
+            // kinds has to drop the old one - otherwise the line would play the sum of both, and only the
+            // matrix half would follow the trim. Same rule as ApplyActiveAudioRoutesAsync's kind switch.
+            if (old?.Route is not { HasGainMatrix: true })
+                router.RemoveRoute(sourceId, outputId);
+
+            var targets = voice.RouteTargets.Where(t => t.OutputId != outputId).ToList();
+            targets.Add(new AudioRouteTarget(outputId, route.Gain, route));
+            voice.SetRouteTargets(targets);
+            // ONE pass through the single place a route gain is computed - it installs the edited matrix at
+            // the clip's current composed level and leaves every other route value-identical.
+            voice.ApplyAudioScale(voice.RouteTargets, voice.ClipLevel);
+            return Task.FromResult(true);
         });
+    }
 
     /// <summary>Live-edit the active cue's audio routing by re-applying its per-output-line routes (each line's
     /// channel map/full gain matrix + gain) while it plays - the GUI's <c>UpdateActiveCueAudioRoutes</c> under the
@@ -2403,8 +2460,12 @@ public sealed class ShowSession : IAsyncDisposable
         catch (Exception ex)
         {
             MediaDiagnostics.LogError(ex, $"ShowSession: stop-all/panic failed for sounding source '{source.Label}'");
+            // The alert's CueId is the SUBJECT (the cue id / soundboard tile id), never the bus label: the host
+            // resolves it to a name for the operator and falls back to the raw string, so a label like
+            // "voice:5c1e…" surfaced as gibberish where a cue name belongs. The label still names the exact bus
+            // entry in the message and the log.
             RaisePlaybackAlert(new ShowPlaybackAlert(
-                source.Label, OutputId: null,
+                source.SubjectId, OutputId: null,
                 $"stop-all/panic could not stop '{source.Label}': {ex.Message}", ex));
         }
     }
@@ -3175,7 +3236,15 @@ public sealed class ShowSession : IAsyncDisposable
     {
         await group.ActivateAsync(voice, crossfade).ConfigureAwait(false);
         voice.SoundingId = _sounding.RegisterProgram(
-            $"cue:{groupId}:{voice.Clip.Spec.Id}",
+            // Per-VOICE label, not per cue: a loop crossfade (and any same-cue re-fire with a window) has TWO
+            // voices of one cue on the bus for the overlap, so "cue:<group>:<cue>" alone put two identical
+            // labels on it - which silently broke the duplicate-label check that is how a registration
+            // lingering past its player is meant to fail loudly. The counter keeps it readable for the status
+            // surface (cue:main:c#7) while making it unique for the lifetime of the session.
+            $"cue:{groupId}:{voice.Clip.Spec.Id}#{++_soundingSequence}",
+            // Operator-facing subject: the CUE, so a failed stop can be named ("Cue 3 - Walk-in music")
+            // instead of showing a bus label the operator has never seen.
+            subjectId: voice.Clip.Spec.Id,
             // A registered voice is sounding by definition - it leaves the bus as it retires, so there is no
             // idle transport entry left to filter (and no idle group to keep a stale trim in sync for).
             isSounding: () => voice.State != VoiceState.Retired,

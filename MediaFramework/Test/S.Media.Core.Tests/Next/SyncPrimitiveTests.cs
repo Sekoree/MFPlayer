@@ -104,6 +104,88 @@ public class SessionClockTests
         Assert.True(sc.IsAdvancing);
         Assert.True(sc.Now >= TimeSpan.Zero);
     }
+
+    [Fact]
+    public void Now_autoRebases_when_the_reference_reanchors_with_no_caller_announcement()
+    {
+        // S1, the point of plan D for this class. The reference (a MediaClock playhead in production) reports
+        // its own re-anchors, and Now compares that id. Before this, group master time stayed monotonic ONLY
+        // because ShowSession remembered to call MarkDiscontinuity(preserved) at each of its four seek/loop
+        // sites: one missed call on a future seek path silently rewound the whole transport group.
+        var reference = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(30) };
+        var sc = new SessionClock(reference);
+        Assert.Equal(TimeSpan.FromSeconds(30), sc.Now);
+
+        reference.ElapsedSinceStart = TimeSpan.FromSeconds(35);
+        Assert.Equal(TimeSpan.FromSeconds(35), sc.Now);
+
+        // A seek / loop wrap: the source coordinate lands at 2 s in a NEW epoch. Nobody calls RebaseReference.
+        reference.Reanchor(TimeSpan.FromSeconds(2));
+        Assert.Equal(TimeSpan.FromSeconds(35), sc.Now);  // was 2 s: a 33 s rewind of group master time
+
+        reference.ElapsedSinceStart = TimeSpan.FromSeconds(3);
+        Assert.Equal(TimeSpan.FromSeconds(36), sc.Now);  // and advances at the new epoch's rate
+
+        // Idempotent: the rebase is published once, not re-derived (and re-shifted) on every read.
+        Assert.Equal(TimeSpan.FromSeconds(36), sc.Now);
+    }
+
+    [Fact]
+    public void Now_holds_when_the_reference_regresses_inside_one_epoch()
+    {
+        // The other side of the same contract: within one epoch the reference is monotonic BY contract, so a
+        // regression is a violation or a torn read. Holding never invents time; following it would rewind
+        // every source scheduled against this master.
+        var reference = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(12) };
+        var sc = new SessionClock(reference);
+        Assert.Equal(TimeSpan.FromSeconds(12), sc.Now);
+
+        reference.ElapsedSinceStart = TimeSpan.FromSeconds(11); // same epoch, illegal
+        Assert.Equal(TimeSpan.FromSeconds(12), sc.Now);
+
+        reference.ElapsedSinceStart = TimeSpan.FromSeconds(13);
+        Assert.Equal(TimeSpan.FromSeconds(13), sc.Now);
+    }
+
+    [Fact]
+    public void RebaseReference_still_wins_over_the_automatic_rebase()
+    {
+        // The explicit call is not redundant: it pins group time to an instant the CALLER captured before the
+        // jump, which the automatic path can only approximate with the last value it happened to observe.
+        var reference = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(20) };
+        var sc = new SessionClock(reference);
+        var beforeSeek = sc.Now;
+
+        reference.Reanchor(TimeSpan.FromSeconds(90)); // the seek lands far ahead in a new epoch
+        _ = sc.Now;                                   // a reader auto-rebases first...
+        sc.RebaseReference(beforeSeek);               // ...and the explicit announcement still governs
+
+        Assert.Equal(beforeSeek, sc.Now);
+        reference.ElapsedSinceStart = TimeSpan.FromSeconds(91);
+        Assert.Equal(beforeSeek + TimeSpan.FromSeconds(1), sc.Now);
+    }
+
+    [Fact]
+    public void SetReference_onto_a_reanchoring_clock_adopts_its_epoch()
+    {
+        // SetReference read reference.ElapsedSinceStart separately from anything about its epoch, so it could
+        // tear across a re-anchor. It takes one atomic reading now: the swap must not itself look like an
+        // unannounced re-anchor on the very next read.
+        var a = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(5) };
+        var sc = new SessionClock(a);
+        Assert.Equal(TimeSpan.FromSeconds(5), sc.Now);
+
+        var b = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(200) };
+        sc.SetReference(b);
+        Assert.Equal(TimeSpan.FromSeconds(5), sc.Now);
+        Assert.Equal(b.EpochId, sc.Reference.Read().EpochId);
+
+        b.ElapsedSinceStart = TimeSpan.FromSeconds(201);
+        Assert.Equal(TimeSpan.FromSeconds(6), sc.Now);
+
+        b.Reanchor(TimeSpan.FromSeconds(1)); // and the new reference's re-anchors are absorbed too
+        Assert.Equal(TimeSpan.FromSeconds(6), sc.Now);
+    }
 }
 
 public class TransportTimelineTests

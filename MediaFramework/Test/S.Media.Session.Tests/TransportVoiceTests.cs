@@ -76,6 +76,15 @@ public sealed class TransportVoiceTests
     private static IReadOnlyList<SoundingSourceInfo> CueSources(IReadOnlyList<SoundingSourceInfo> bus) =>
         [.. bus.Where(s => s.Label.StartsWith(CueSourcePrefix, StringComparison.Ordinal))];
 
+    /// <summary>The bus entries belonging to cue <paramref name="cueId"/>'s voices. A transport label carries
+    /// a per-VOICE uniquifier ("cue:main:c1#3"): a cue can legitimately have two voices on the bus at once (a
+    /// loop crossfade overlaps a cue with itself), and two identical labels would defeat the duplicate check
+    /// that makes a lingering registration fail loudly - so a cue is matched by prefix, never by exact
+    /// label.</summary>
+    private static IReadOnlyList<SoundingSourceInfo> VoicesOfCue(
+        IReadOnlyList<SoundingSourceInfo> bus, string cueId) =>
+        [.. bus.Where(s => s.Label.StartsWith(CueSourcePrefix + cueId, StringComparison.Ordinal))];
+
     // ---- Symptom 1: a commit-path fault between the handoff and the ramp orphaned the tail -----------
 
     [Fact]
@@ -120,7 +129,9 @@ public sealed class TransportVoiceTests
         Assert.True(releases.IsReleased("dev-c1"), "the cue could not be stopped while it was the tail");
         Assert.False(releases.IsReleased("dev-c2"), "stopping the tail took the incoming clip with it");
         Assert.True(Assert.Single(session.Snapshot()).IsActive);
-        Assert.Equal(CueSourcePrefix + "c2", Assert.Single(CueSources(await session.GetSoundingSourcesAsync())).Label);
+        var remaining = CueSources(await session.GetSoundingSourcesAsync());
+        Assert.Single(remaining); // one voice left on the bus…
+        Assert.Single(VoicesOfCue(remaining, "c2")); // …and it is the incoming cue's
     }
 
     [Fact]
@@ -155,7 +166,9 @@ public sealed class TransportVoiceTests
         // The group is now TAIL-ONLY: nothing is Active, and one voice is still sounding. Panic must
         // reach it (the hole the old StopAllAsync group filter left open by construction).
         Assert.All(session.Snapshot(), s => Assert.False(s.IsActive));
-        Assert.Equal(CueSourcePrefix + "c1", Assert.Single(CueSources(await session.GetSoundingSourcesAsync())).Label);
+        var tailOnly = CueSources(await session.GetSoundingSourcesAsync());
+        Assert.Single(tailOnly);
+        Assert.Single(VoicesOfCue(tailOnly, "c1"));
 
         await session.StopAllAsync(TimeSpan.Zero);
 
@@ -171,20 +184,19 @@ public sealed class TransportVoiceTests
         var releases = new ReleaseLog();
         await using var session = await BuildMidCrossfadeAsync(releases);
 
-        // One program source PER VOICE, labelled by group + cue: the whole point is that the tail is a
-        // first-class entry the fader, the stops and a host status panel can all see.
+        // One program source PER VOICE, labelled by group + cue + a per-voice uniquifier: the whole point is
+        // that the tail is a first-class entry the fader, the stops and a host status panel can all see.
         var sources = CueSources(await session.GetSoundingSourcesAsync());
         Assert.Equal(2, sources.Count);
         Assert.All(sources, s => Assert.Equal(SoundingSourceRole.Program, s.Role));
         Assert.All(sources, s => Assert.True(s.IsSounding));
-        Assert.Contains(sources, s => s.Label == CueSourcePrefix + "c1");
-        Assert.Contains(sources, s => s.Label == CueSourcePrefix + "c2");
+        Assert.Single(VoicesOfCue(sources, "c1"));
+        Assert.Single(VoicesOfCue(sources, "c2"));
 
         // The tail rides the fader through its own registration - exactly once (its ramp scalar is still
         // ≈1 this early in a 30 s window, so the reading isolates the trim factor).
         await session.SetMasterTrimAsync(0.5f);
-        var tail = Assert.Single(
-            CueSources(await session.GetSoundingSourcesAsync()), s => s.Label == CueSourcePrefix + "c1");
+        var tail = Assert.Single(VoicesOfCue(await session.GetSoundingSourcesAsync(), "c1"));
         Assert.InRange(tail.Level, 0.4f, 0.5f);
     }
 
@@ -201,6 +213,7 @@ public sealed class TransportVoiceTests
 
         // A registration that outlived its voice is a write to a dead player; the count is the assertion.
         var sources = CueSources(await session.GetSoundingSourcesAsync());
-        Assert.Equal(CueSourcePrefix + "c2", Assert.Single(sources).Label);
+        Assert.Single(sources);
+        Assert.Single(VoicesOfCue(sources, "c2"));
     }
 }

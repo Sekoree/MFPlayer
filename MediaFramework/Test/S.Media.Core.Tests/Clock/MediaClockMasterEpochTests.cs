@@ -160,6 +160,34 @@ public class MediaClockMasterEpochTests
     }
 
     [Fact]
+    public void PauseThenMasterReanchorsAndTheNewSegmentPlaysPastThePausedReading_Start_FoldsNothing()
+    {
+        // The case that DISCRIMINATES Start's epoch check from the drift-SIGN heuristic it replaced.
+        // PauseAcrossMasterEpochReset / PauseThenMasterRegressesWithinOneEpoch both pass under the old code
+        // too: in the first the new epoch reads 0 (drift negative ⇒ not folded either way) and in the second
+        // the regression is what the old code also refused. Here the new segment has genuinely played PAST
+        // the reading captured at Pause, so the drift heuristic sees +2 s of "audio that drained while
+        // paused" and folds it - two seconds of a DIFFERENT segment this playhead never played. Only the
+        // epoch comparison can tell those apart.
+        var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(1), IsAdvancing = true };
+        using var clock = new MediaClock();
+        clock.SetMaster(master);
+        clock.Start();
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(3);
+        Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition);
+        clock.Pause(); // master reading captured at 3 s
+
+        // Flush + restart while paused, and the new segment is already 5 s in when Start arrives.
+        master.Reanchor(TimeSpan.FromSeconds(5), advancing: true);
+        clock.Start();
+        Assert.Equal(TimeSpan.FromSeconds(2), clock.CurrentPosition); // drift-sign heuristic: 4 s
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(5.5);
+        Assert.Equal(TimeSpan.FromSeconds(2.5), clock.CurrentPosition);
+    }
+
+    [Fact]
     public void PauseThenMasterRegressesWithinOneEpoch_FoldsNothing()
     {
         // A master that breaks its per-epoch monotonic contract while we are paused must not drag the
@@ -184,6 +212,13 @@ public class MediaClockMasterEpochTests
         var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
         using var clock = new MediaClock();
         var fresh = clock.PositionEpoch;
+        // Never the RESERVED id: PlaybackEpoch.Single means "one epoch, never re-anchors" and is never handed
+        // out, which is what lets consumers compare ids from different clocks. A MediaClock DOES re-anchor,
+        // and its wrapper (ShowSession.PlayheadPlaybackClock) republishes this value as its EpochId - left at
+        // the field default 0, two never-yet-seeked playheads compared equal to each other.
+        Assert.NotEqual(PlaybackEpoch.Single, fresh);
+        using (var second = new MediaClock())
+            Assert.NotEqual(fresh, second.PositionEpoch);
 
         clock.SetMaster(master);
         var afterSetMaster = clock.PositionEpoch;

@@ -106,15 +106,16 @@ public sealed class MasterTrimTests
         await session.SetMasterTrimAsync(0.5f);
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
         _ = await WaitForPeakAsync(outputs, "dev-c1");
-        // The session-side state settles with the fire (routes attach at authored gain and
-        // CommitClipAsync folds the trim in one ApplyAudioScale pass); assert that directly, then let
-        // the OUTPUT catch up - the buffers already handed to the device at attach gain still have to
-        // drain, which is why a single fixed-offset window flaked at the full untrimmed amplitude.
         Assert.Equal(0.5f, (await session.GetClipAudioLevelsAsync("c1"))!.EffectiveLevel, 3);
-        await AssertSettledPeakAsync(outputs["dev-c1"], expected - 0.1f, expected + 0.05f, "ACTIVE");
+        // The routes ATTACH at the composed level, so there is no untrimmed buffer to drain and no need to
+        // wait for a window to settle: the max-EVER peak (never reset) is both simpler and stricter - it
+        // covers every buffer the device has received since it was created.
+        await AssertPeakRisesToAsync(outputs["dev-c1"], expected - 0.1f, expected + 0.05f, "ACTIVE");
 
         // A 30 s window keeps the outgoing ramp scalar ≈1 for the whole measurement, so the tail's
-        // peak isolates the trim factor: ≈0.4 correct, ≈0.2 with the trim applied twice.
+        // peak isolates the trim factor: ≈0.4 correct, ≈0.2 with the trim applied twice. The tail's ramp
+        // only ever LOWERS the level from here, so a fresh window is what shows it is still at the trim
+        // (the max-ever ceiling above already covers the "never louder" half).
         Assert.Equal(CueExecutionStatus.Fired,
             await session.FireCueAsync("c2", TimeSpan.FromSeconds(30)));
         await Task.Delay(250); // several 25 ms ramp steps have rewritten the tail's route gains
@@ -196,6 +197,27 @@ public sealed class MasterTrimTests
             held >= min && held <= max,
             $"{what} peak left {min}..{max} again (settled at {settled}, then {held})");
         return held;
+    }
+
+    /// <summary>Waits for the output's max-EVER peak (never reset) to reach <paramref name="min"/> while
+    /// asserting it never passes <paramref name="max"/> - i.e. everything the device has received SINCE IT WAS
+    /// CREATED, so no over-level burst can hide between two reset windows.
+    /// <para>This is the right assertion wherever the level was composed BEFORE the source attached (a GO
+    /// under a lowered fader). <see cref="AssertSettledPeakAsync"/> stays for levels changed on an
+    /// ALREADY-PLAYING source, where buffers queued at the old gain legitimately drain through afterwards.</para></summary>
+    private static async Task AssertPeakRisesToAsync(
+        PeakAudioOutput output, float min, float max, string what)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        float peak;
+        while ((peak = output.Peak) < min)
+        {
+            Assert.True(peak <= max, $"{what} peaked at {peak} - above the {max} ceiling");
+            Assert.True(DateTime.UtcNow < deadline, $"{what} peak never reached {min} (last {peak})");
+            await Task.Delay(25);
+        }
+
+        Assert.True(peak <= max, $"{what} peaked at {peak} - above the {max} ceiling");
     }
 
     // ---- The trim must survive every path that REWRITES a live clip's route gains -----------------
@@ -282,6 +304,61 @@ public sealed class MasterTrimTests
         var peak = await SamplePeakAsync(outputs[TrimDevice]);
         Assert.InRange(peak, expected * 0.6f, expected * 1.4f);
         Assert.InRange(await SamplePeakAsync(outputs["dev-extra"]), expected * 0.6f, expected * 1.4f);
+    }
+
+    [Fact]
+    public async Task GoUnderALoweredFader_NeverPutsAFullLevelBufferOnTheDevice()
+    {
+        // Regression: the fire path was the ONE route-gain write that skipped the level composition - it
+        // attached each route at the AUTHORED gain and folded the trim in only after the commit, which awaits
+        // the displaced clip's teardown. A GO with no fade-in under a 0.25 fader therefore pushed FULL-LEVEL
+        // program audio to the device for that whole window. The max-ever peak is what catches it: a settled
+        // window read (what the older assertions did) cannot see a burst that has already drained.
+        var (session, outputs) = BuildToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(OneToneCue(new ShowClipAudioRoute(TrimDevice, [0, 1])));
+        await session.SetMasterTrimAsync(0.25f);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+
+        var expected = ToneAudioDecoderProvider.Amplitude * 0.25f; // tone × trim
+        await AssertPeakRisesToAsync(outputs[TrimDevice], expected - 0.06f, expected + 0.03f, "GO under a 0.25 fader");
+        Assert.Equal(0.25f, (await session.GetClipAudioLevelsAsync("c"))!.EffectiveLevel, 3);
+
+        // …and it stays there: the reconciling pass after the commit writes the same value it attached at.
+        await Task.Delay(300);
+        Assert.True(
+            outputs[TrimDevice].Peak <= expected + 0.03f,
+            $"the clip rose above tone × trim after the commit (peak {outputs[TrimDevice].Peak})");
+    }
+
+    [Fact]
+    public async Task MasterTrim_SurvivesALiveAudioMatrixEdit()
+    {
+        // Regression: ApplyActiveAudioMatrixAsync wrote the caller's cells straight onto the router - no trim,
+        // no fade, no envelope - and left RouteTargets describing the OLD route, so no later level write could
+        // reconcile it either. Under a 0.25 fader a matrix edit jumped the cue up and left it there.
+        var (session, outputs) = BuildToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(OneToneCue(new ShowClipAudioRoute(TrimDevice, [0, 1])));
+        await session.SetMasterTrimAsync(0.25f);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        _ = await WaitForPeakAsync(outputs, TrimDevice);
+
+        // The operator edits the cue's channel matrix (identity, unity cells) while the fader sits at 0.25.
+        Assert.True(await session.ApplyActiveAudioMatrixAsync(
+            "c", "clip0", new[,] { { 1f, 0f }, { 0f, 1f } }));
+
+        var expected = ToneAudioDecoderProvider.Amplitude * 0.25f; // tone × cells × trim
+        await AssertSettledPeakAsync(
+            outputs[TrimDevice], expected - 0.06f, expected + 0.05f, "matrix edit under a 0.25 fader");
+
+        // …and the edited matrix is now the tracked route TARGET, so a later fader move reconciles it - before,
+        // the installed cells were invisible to every level path in the session.
+        await session.SetMasterTrimAsync(0.5f);
+        var doubled = ToneAudioDecoderProvider.Amplitude * 0.5f;
+        await AssertSettledPeakAsync(
+            outputs[TrimDevice], doubled - 0.06f, doubled + 0.05f, "matrix edit after the fader moved");
     }
 
     [Fact]

@@ -28,6 +28,11 @@ namespace S.Media.Time;
 /// (first registered wins ties - the constructor sorts by priority descending, then by registration index ascending).
 /// </para>
 /// <para>
+/// <see cref="Read"/> is the authority: one atomic sample of every candidate, and the only member that
+/// advances the blend. The three <see cref="IPlaybackClock"/> members project the same snapshot without
+/// advancing it, so observing this clock cannot alter what it reports next.
+/// </para>
+/// <para>
 /// Priority merge affects <see cref="IPlaybackClock.ElapsedSinceStart"/> / <see cref="IPlaybackClock.IsAdvancing"/> only;
 /// graph-wide coordinated master PPM and synchronized multi-output drop/repeat remain host-owned - see
 /// <see cref="MediaClock"/> and <see cref="S.Media.Core.Audio.AudioRouter"/>.
@@ -39,17 +44,31 @@ public sealed class CompositePlaybackClock : IPlaybackClock
     private readonly CompositePlaybackClockBlend _blend;
     private readonly Func<long> _nowTicks;
 
-    private readonly Lock _blendGate = new();
-    private long _transitionStartTicks;
-    private int _blendWinnerIdx = -1;
-    private TimeSpan _blendFromEmitted;
-    private TimeSpan _lastEmitted;
-    private bool _hasEmitted;
-    private long _blendEpochId;
-    // Wall tick of last co-advance EMA sample; -1 = prime next co read (0 is a valid Stopwatch tick).
-    private long _coAdvanceLastSampleTicks = -1;
+    /// <summary>
+    /// The ONE gate a reading is taken under: the candidate sweep, the epoch resolution and the blend all
+    /// live inside it. They used to sit behind two separate locks with the sweep outside both, so two
+    /// concurrent readers interleaved - each pairing a freshly allocated epoch id with the other's winner -
+    /// and the id then churned on EVERY read. A <see cref="MediaClock"/> mastered on this clock re-anchors at
+    /// each new id, so that churn silently discarded the accrual between reads.
+    /// </summary>
+    private readonly Lock _gate = new();
 
-    private readonly Lock _epochGate = new();
+    /// <summary>Blend-filter state. Advanced ONLY by <see cref="Read"/>; a member read takes a copy and
+    /// throws it away (see <see cref="Sample"/>).</summary>
+    private struct BlendState
+    {
+        public long TransitionStartTicks;
+        public int WinnerIdx;
+        public TimeSpan FromEmitted;
+        public TimeSpan LastEmitted;
+        public bool HasEmitted;
+        public long EpochId;
+        // Wall tick of last co-advance EMA sample; -1 = prime next co read (0 is a valid Stopwatch tick).
+        public long CoAdvanceLastSampleTicks;
+    }
+
+    private BlendState _blendState = new() { WinnerIdx = -1, CoAdvanceLastSampleTicks = -1 };
+
     private long _epochId = PlaybackEpoch.Next();
     /// <summary>The (winner index, winner epoch) the current <see cref="_epochId"/> stands for. Either half
     /// changing is a discontinuity in what this clock emits - a handoff swaps to a leaf at an unrelated
@@ -57,6 +76,12 @@ public sealed class CompositePlaybackClock : IPlaybackClock
     /// composite takes a fresh id for all three rather than letting a consumer infer them.</summary>
     private int _epochWinnerIdx = -2;
     private long _epochWinnerEpochId;
+    /// <summary>Highest elapsed emitted in the current <see cref="_epochId"/>. This clock owes its consumers
+    /// the same per-epoch monotonic contract it demands of its leaves (<see cref="IPlaybackClock"/> remarks),
+    /// and forwarding a winner's elapsed verbatim did not honour it: a leaf regressing inside its own epoch
+    /// passed straight through as a same-epoch regression of the COMPOSITE. Reset with the id, because a new
+    /// epoch may legitimately start at any coordinate.</summary>
+    private TimeSpan _epochHighWater;
 
     /// <param name="candidates">Registration list (tie-break: earlier entry wins at equal priority).</param>
     public CompositePlaybackClock(params PlaybackClockCandidate[] candidates)
@@ -99,170 +124,215 @@ public sealed class CompositePlaybackClock : IPlaybackClock
         return sorted;
     }
 
-    public bool IsAdvancing
+    /// <inheritdoc />
+    /// <remarks>Decided by the same atomic candidate sweep <see cref="Read"/> uses, not by the candidates'
+    /// individual <see cref="IPlaybackClock.IsAdvancing"/> members: selecting through the members and then
+    /// sampling again lets a clock that stops in between be reported as advancing here while
+    /// <see cref="Read"/> deselects it from the same instant.</remarks>
+    public bool IsAdvancing => Sample(commit: false).IsAdvancing;
+
+    /// <inheritdoc />
+    /// <remarks>A projection - see <see cref="Read"/> for why the members do not advance the blend.</remarks>
+    public TimeSpan ElapsedSinceStart => Sample(commit: false).Elapsed;
+
+    /// <inheritdoc />
+    /// <remarks>A projection - see <see cref="Read"/> for why the members do not advance the blend.</remarks>
+    public long EpochId => Sample(commit: false).EpochId;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para><strong>Read is the authority.</strong> It is the only member that advances the blend filters
+    /// (cross-fade start, co-advance EMA, last-emitted). The three member reads take the same coherent
+    /// snapshot but discard the state update, so merely OBSERVING this clock cannot change what it goes on to
+    /// report: reading <see cref="EpochId"/> used to run all of Read, which started the hand-off cross-fade
+    /// at the moment of the observation and sampled the co-advance EMA an extra time per poll.</para>
+    /// <para>Epoch identity and the monotonic high-water are NOT part of that state: they record a
+    /// discontinuity that genuinely happened and are idempotent for a given sample, so a member read
+    /// resolves them exactly as Read would - never allocating a second id for the same
+    /// (winner, winner epoch) pair.</para>
+    /// </remarks>
+    public ClockReading Read() => Sample(commit: true);
+
+    private ClockReading Sample(bool commit)
     {
-        get
+        var nowTicks = _nowTicks();
+        lock (_gate)
         {
-            foreach (var c in _candidates)
+            var advCount = 0;
+            var winnerIdx = -1;
+            var winner = default(ClockReading);
+            for (var i = 0; i < _candidates.Length; i++)
             {
-                if (c.Clock.IsAdvancing) return true;
+                // Read the advancing flag and elapsed/epoch as one sample. Selecting through IsAdvancing and
+                // then reading the winner again lets a stop/re-anchor between those calls return a stale
+                // winner as advancing with an unrelated elapsed value.
+                var reading = _candidates[i].Clock.Read();
+                if (!reading.IsAdvancing) continue;
+                advCount++;
+                if (winnerIdx < 0)
+                {
+                    winnerIdx = i;
+                    winner = reading;
+                }
             }
 
-            return false;
-        }
-    }
-
-    public TimeSpan ElapsedSinceStart => Read().Elapsed;
-
-    /// <inheritdoc />
-    public long EpochId => Read().EpochId;
-
-    /// <inheritdoc />
-    public ClockReading Read()
-    {
-        var advCount = 0;
-        var winnerIdx = -1;
-        var winner = default(ClockReading);
-        for (var i = 0; i < _candidates.Length; i++)
-        {
-            // Read the advancing flag and elapsed/epoch as one sample. Selecting through IsAdvancing and
-            // then reading the winner again lets a stop/re-anchor between those calls return a stale winner
-            // as advancing with an unrelated elapsed value.
-            var reading = _candidates[i].Clock.Read();
-            if (!reading.IsAdvancing) continue;
-            advCount++;
+            var epochId = EpochForUnlocked(winnerIdx, winnerIdx < 0 ? PlaybackEpoch.Single : winner.EpochId);
             if (winnerIdx < 0)
             {
-                winnerIdx = i;
-                winner = reading;
-            }
-        }
-
-        if (winnerIdx < 0)
-        {
-            lock (_blendGate)
-            {
-                _blendWinnerIdx = -1;
-                _hasEmitted = false;
-                _coAdvanceLastSampleTicks = -1;
-            }
-
-            return new ClockReading(EpochFor(-1, PlaybackEpoch.Single), TimeSpan.Zero, false);
-        }
-
-        var epochId = EpochFor(winnerIdx, winner.EpochId);
-        var targetNow = winner.Elapsed;
-        var hasHandoff = _blend.HasHandoffCrossFade && _blend.HandoffCrossFade.TotalSeconds > 0;
-        var hasCo = _blend.HasCoAdvanceSmoothing && _blend.CoAdvanceSmoothingTau.TotalSeconds > 0;
-
-        if (!hasHandoff && !hasCo)
-            return new ClockReading(epochId, targetNow, true);
-
-        var nowTicks = _nowTicks();
-        lock (_blendGate)
-        {
-            if (!_hasEmitted)
-            {
-                _lastEmitted = targetNow;
-                _blendFromEmitted = targetNow;
-                _blendWinnerIdx = winnerIdx;
-                _transitionStartTicks = nowTicks;
-                _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
-                _blendEpochId = epochId;
-                _hasEmitted = true;
-                return new ClockReading(epochId, targetNow, true);
-            }
-
-            if (winnerIdx != _blendWinnerIdx)
-            {
-                _blendFromEmitted = _lastEmitted;
-                _blendWinnerIdx = winnerIdx;
-                _transitionStartTicks = nowTicks;
-                _coAdvanceLastSampleTicks = -1;
-                _blendEpochId = epochId;
-                if (targetNow < _lastEmitted)
+                if (commit)
                 {
-                    // A handoff already starts a fresh composite epoch, so this is the one safe point at
-                    // which the elapsed coordinate may move backwards. A downward cross-fade cannot be
-                    // represented by a monotonic clock: holding until the fade ends and then snapping
-                    // would merely defer the same-epoch regression. Snap on the first reading instead.
-                    _lastEmitted = targetNow;
-                    _blendFromEmitted = targetNow;
-                    _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
-                    return new ClockReading(epochId, targetNow, true);
-                }
-            }
-            else if (epochId != _blendEpochId)
-            {
-                // The same leaf explicitly re-anchored. A new epoch may restart at any coordinate, so do
-                // not blend it against the prior epoch's high-water.
-                _lastEmitted = targetNow;
-                _blendFromEmitted = targetNow;
-                _transitionStartTicks = nowTicks;
-                _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
-                _blendEpochId = epochId;
-                return new ClockReading(epochId, targetNow, true);
-            }
-
-            if (hasHandoff)
-            {
-                var elapsedSec = (nowTicks - _transitionStartTicks) / (double)Stopwatch.Frequency;
-                var t = elapsedSec / _blend.HandoffCrossFade.TotalSeconds;
-                if (t < 1.0)
-                {
-                    var w = SmoothStep01(t);
-                    var lerped = LerpTimeSpan(_blendFromEmitted, targetNow, w);
-                    // Leaf clocks are monotonic within an epoch, but rounding should not make this wrapper
-                    // regress by a tick.
-                    if (lerped < _lastEmitted)
-                        lerped = _lastEmitted;
-                    _lastEmitted = lerped;
-                    return new ClockReading(epochId, lerped, true);
-                }
-            }
-
-            if (hasCo && advCount >= 2)
-            {
-                if (_coAdvanceLastSampleTicks < 0)
-                {
-                    _lastEmitted = targetNow;
-                    _coAdvanceLastSampleTicks = nowTicks;
-                    return new ClockReading(epochId, targetNow, true);
+                    _blendState.WinnerIdx = -1;
+                    _blendState.HasEmitted = false;
+                    _blendState.CoAdvanceLastSampleTicks = -1;
                 }
 
-                var dt = (nowTicks - _coAdvanceLastSampleTicks) / (double)Stopwatch.Frequency;
-                _coAdvanceLastSampleTicks = nowTicks;
-                if (dt <= 0) dt = 1e-9;
-                var tau = _blend.CoAdvanceSmoothingTau.TotalSeconds;
-                var alpha = 1.0 - Math.Exp(-dt / tau);
-                if (alpha > 0.95) alpha = 0.95;
-                var smoothed = LerpTimeSpan(_lastEmitted, targetNow, alpha);
-                if (smoothed < _lastEmitted)
-                    smoothed = _lastEmitted;
-                _lastEmitted = smoothed;
-                return new ClockReading(epochId, smoothed, true);
+                return new ClockReading(epochId, TimeSpan.Zero, false);
             }
 
-            _coAdvanceLastSampleTicks = -1;
-            _lastEmitted = targetNow;
-            return new ClockReading(epochId, targetNow, true);
+            var emitted = BlendUnlocked(commit, nowTicks, winnerIdx, winner.Elapsed, epochId, advCount);
+            return new ClockReading(epochId, RaiseEpochHighWaterUnlocked(emitted), true);
         }
     }
 
-    /// <summary>Current epoch for a (winner, winner epoch) pair, taking a fresh id whenever it changes.</summary>
-    private long EpochFor(int winnerIdx, long winnerEpochId)
+    /// <summary>The blended coordinate for one sample. Operates on a COPY of <see cref="_blendState"/> and
+    /// publishes it only when <paramref name="commit"/> - the logic is otherwise unchanged.</summary>
+    private TimeSpan BlendUnlocked(
+        bool commit, long nowTicks, int winnerIdx, TimeSpan targetNow, long epochId, int advCount)
     {
-        lock (_epochGate)
+        var hasHandoff = _blend.HasHandoffCrossFade && _blend.HandoffCrossFade.TotalSeconds > 0;
+        var hasCo = _blend.HasCoAdvanceSmoothing && _blend.CoAdvanceSmoothingTau.TotalSeconds > 0;
+        if (!hasHandoff && !hasCo)
+            return targetNow;
+
+        var s = _blendState;
+        TimeSpan emitted;
+        if (!s.HasEmitted)
         {
-            if (winnerIdx != _epochWinnerIdx || winnerEpochId != _epochWinnerEpochId)
+            s.LastEmitted = targetNow;
+            s.FromEmitted = targetNow;
+            s.WinnerIdx = winnerIdx;
+            s.TransitionStartTicks = nowTicks;
+            s.CoAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
+            s.EpochId = epochId;
+            s.HasEmitted = true;
+            emitted = targetNow;
+        }
+        else if (winnerIdx != s.WinnerIdx && targetNow < s.LastEmitted)
+        {
+            // A handoff already starts a fresh composite epoch, so this is the one safe point at which the
+            // elapsed coordinate may move backwards. A downward cross-fade cannot be represented by a
+            // monotonic clock: holding until the fade ends and then snapping would merely defer the
+            // same-epoch regression. Snap on the first reading instead.
+            s.LastEmitted = targetNow;
+            s.FromEmitted = targetNow;
+            s.WinnerIdx = winnerIdx;
+            s.TransitionStartTicks = nowTicks;
+            s.CoAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
+            s.EpochId = epochId;
+            emitted = targetNow;
+        }
+        else if (winnerIdx == s.WinnerIdx && epochId != s.EpochId)
+        {
+            // The same leaf explicitly re-anchored. A new epoch may restart at any coordinate, so do not
+            // blend it against the prior epoch's high-water.
+            s.LastEmitted = targetNow;
+            s.FromEmitted = targetNow;
+            s.TransitionStartTicks = nowTicks;
+            s.CoAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
+            s.EpochId = epochId;
+            emitted = targetNow;
+        }
+        else
+        {
+            if (winnerIdx != s.WinnerIdx)
             {
-                _epochWinnerIdx = winnerIdx;
-                _epochWinnerEpochId = winnerEpochId;
-                _epochId = PlaybackEpoch.Next();
+                // Upward handoff: cross-fade from what this clock last emitted to the new winner.
+                s.FromEmitted = s.LastEmitted;
+                s.WinnerIdx = winnerIdx;
+                s.TransitionStartTicks = nowTicks;
+                s.CoAdvanceLastSampleTicks = -1;
+                s.EpochId = epochId;
             }
 
-            return _epochId;
+            emitted = BlendCore(ref s, nowTicks, targetNow, advCount, hasHandoff, hasCo);
         }
+
+        if (commit)
+            _blendState = s;
+        return emitted;
+    }
+
+    private TimeSpan BlendCore(
+        ref BlendState s, long nowTicks, TimeSpan targetNow, int advCount, bool hasHandoff, bool hasCo)
+    {
+        if (hasHandoff)
+        {
+            var elapsedSec = (nowTicks - s.TransitionStartTicks) / (double)Stopwatch.Frequency;
+            var t = elapsedSec / _blend.HandoffCrossFade.TotalSeconds;
+            if (t < 1.0)
+            {
+                var w = SmoothStep01(t);
+                var lerped = LerpTimeSpan(s.FromEmitted, targetNow, w);
+                // Leaf clocks are monotonic within an epoch, but rounding should not make this wrapper
+                // regress by a tick.
+                if (lerped < s.LastEmitted)
+                    lerped = s.LastEmitted;
+                s.LastEmitted = lerped;
+                return lerped;
+            }
+        }
+
+        if (hasCo && advCount >= 2)
+        {
+            if (s.CoAdvanceLastSampleTicks < 0)
+            {
+                s.LastEmitted = targetNow;
+                s.CoAdvanceLastSampleTicks = nowTicks;
+                return targetNow;
+            }
+
+            var dt = (nowTicks - s.CoAdvanceLastSampleTicks) / (double)Stopwatch.Frequency;
+            s.CoAdvanceLastSampleTicks = nowTicks;
+            if (dt <= 0) dt = 1e-9;
+            var tau = _blend.CoAdvanceSmoothingTau.TotalSeconds;
+            var alpha = 1.0 - Math.Exp(-dt / tau);
+            if (alpha > 0.95) alpha = 0.95;
+            var smoothed = LerpTimeSpan(s.LastEmitted, targetNow, alpha);
+            if (smoothed < s.LastEmitted)
+                smoothed = s.LastEmitted;
+            s.LastEmitted = smoothed;
+            return smoothed;
+        }
+
+        s.CoAdvanceLastSampleTicks = -1;
+        s.LastEmitted = targetNow;
+        return targetNow;
+    }
+
+    /// <summary>Current epoch for a (winner, winner epoch) pair, taking a fresh id whenever it changes and
+    /// restarting the monotonic high-water with it. Must be called under <see cref="_gate"/>.</summary>
+    private long EpochForUnlocked(int winnerIdx, long winnerEpochId)
+    {
+        if (winnerIdx != _epochWinnerIdx || winnerEpochId != _epochWinnerEpochId)
+        {
+            _epochWinnerIdx = winnerIdx;
+            _epochWinnerEpochId = winnerEpochId;
+            _epochId = PlaybackEpoch.Next();
+            _epochHighWater = TimeSpan.Zero;
+        }
+
+        return _epochId;
+    }
+
+    /// <summary>Enforces this clock's own per-epoch monotonic contract. Must be called under
+    /// <see cref="_gate"/>. Applied to member reads as well as <see cref="Read"/>: it is the guarantee the
+    /// interface makes to consumers, not part of the blend state a member read must leave alone.</summary>
+    private TimeSpan RaiseEpochHighWaterUnlocked(TimeSpan emitted)
+    {
+        if (emitted < _epochHighWater)
+            return _epochHighWater;
+        _epochHighWater = emitted;
+        return emitted;
     }
 
     private static double SmoothStep01(double t)

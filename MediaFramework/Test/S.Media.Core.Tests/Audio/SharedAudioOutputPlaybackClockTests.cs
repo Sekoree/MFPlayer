@@ -335,6 +335,57 @@ public sealed class SharedAudioOutputPlaybackClockTests
         AssertMillisecondsNear(750, clock.ElapsedSinceStart);
     }
 
+    [Fact]
+    public void TerminalThrowsMidRead_IsAdvancingAgreesWithTheAtomicRead()
+    {
+        // C4: the property caught the failure and answered FALSE while ReadRaw caught the same failure and
+        // fell through to the wall-clock domain, which answers TRUE. A fan-in owner reading the member and a
+        // composite reading Read() then disagreed about the same instant. A terminal that throws is not a
+        // stopped clock, it is one this client can no longer see - and the domain it degrades to advances.
+        var terminal = new FakeClockedTerminal(Stereo48k);
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 2);
+        using var lease = shared.Acquire();
+        var clock = Assert.IsAssignableFrom<IPlaybackClock>(lease.Output);
+
+        terminal.Advance(TimeSpan.FromMilliseconds(50));
+        Assert.True(clock.IsAdvancing);
+        Assert.True(clock.Read().IsAdvancing);
+
+        terminal.ThrowWhenRead = true; // disposed underneath us
+        Assert.Equal(clock.Read().IsAdvancing, clock.IsAdvancing);
+        Assert.True(clock.IsAdvancing);
+
+        // Still false once this client itself is gone - that branch was never in dispute.
+        lease.Dispose();
+        Assert.False(clock.IsAdvancing);
+        Assert.False(clock.Read().IsAdvancing);
+    }
+
+    [Fact]
+    public void TerminalLostAfterAMostlyIdleDevice_FallbackResumesFromTheHighWater_NotWallTimeSinceAttach()
+    {
+        // C4 (second half): the fallback stopwatch runs from ATTACH and counts every second the device spent
+        // paused, in the SAME epoch, so switching domains outright handed the consumer a monotonic forward
+        // jump - which the high-water cannot catch, because it only clamps regressions. The fallback is
+        // spliced onto the raw high-water instead.
+        var terminal = new FakeClockedTerminal(Stereo48k);
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 2);
+        using var lease = shared.Acquire();
+        var clock = Assert.IsAssignableFrom<IPlaybackClock>(lease.Output);
+
+        terminal.Advance(TimeSpan.FromMilliseconds(5)); // the device played 5 ms...
+        AssertMillisecondsNear(5, clock.ElapsedSinceStart);
+        Thread.Sleep(120);                              // ...then sat paused for a lot longer
+        AssertMillisecondsNear(5, clock.ElapsedSinceStart);
+
+        terminal.ThrowWhenRead = true;
+        var afterLoss = clock.ElapsedSinceStart;
+        Assert.InRange(afterLoss.TotalMilliseconds, 5 - PumpToleranceMs, 40); // was ~125 ms: +120 ms of nothing
+
+        Thread.Sleep(30);
+        Assert.True(clock.ElapsedSinceStart > afterLoss, "the fallback domain stopped advancing altogether.");
+    }
+
     private static void AssertMillisecondsNear(double expectedMs, TimeSpan actual, double toleranceMs = PumpToleranceMs) =>
         Assert.InRange(actual.TotalMilliseconds, expectedMs - toleranceMs, expectedMs + toleranceMs);
 
@@ -351,24 +402,59 @@ public sealed class SharedAudioOutputPlaybackClockTests
         private long _epochId = PlaybackEpoch.Next();
         private volatile bool _advancing = true;
 
+        /// <summary>A terminal disposed/stopped underneath the client: every surface it exposes throws, which
+        /// is what pushes the client clock into its wall-clock fallback domain.</summary>
+        public volatile bool ThrowWhenRead;
+
         public AudioFormat Format { get; } = format;
-        public TimeSpan ElapsedSinceStart => new(Interlocked.Read(ref _elapsedTicks));
-        public bool IsAdvancing => _advancing;
+
+        public TimeSpan ElapsedSinceStart
+        {
+            get
+            {
+                ThrowIfLost();
+                return new TimeSpan(Interlocked.Read(ref _elapsedTicks));
+            }
+        }
+
+        public bool IsAdvancing
+        {
+            get
+            {
+                ThrowIfLost();
+                return _advancing;
+            }
+        }
 
         public long EpochId
         {
-            get { lock (_gate) return _epochId; }
+            get
+            {
+                ThrowIfLost();
+                lock (_gate) return _epochId;
+            }
         }
 
         public ClockReading Read()
         {
+            ThrowIfLost();
             lock (_gate) return new ClockReading(_epochId, new TimeSpan(Interlocked.Read(ref _elapsedTicks)), _advancing);
         }
 
         public TimeSpan SubmitToOutputLatency
         {
-            get => new(Interlocked.Read(ref _latencyTicks));
+            get
+            {
+                ThrowIfLost();
+                return new TimeSpan(Interlocked.Read(ref _latencyTicks));
+            }
             set => Interlocked.Exchange(ref _latencyTicks, value.Ticks);
+        }
+
+        private void ThrowIfLost()
+        {
+            if (ThrowWhenRead)
+                throw new ObjectDisposedException(nameof(FakeClockedTerminal));
         }
 
         public void Advance(TimeSpan delta) => Interlocked.Add(ref _elapsedTicks, delta.Ticks);

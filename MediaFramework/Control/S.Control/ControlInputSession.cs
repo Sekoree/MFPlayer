@@ -114,16 +114,26 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
         }
     }
 
-    /// <summary>Releases one reference; closes the devices only when the last one goes.</summary>
+    /// <summary>Releases one reference; closes the devices only when the last one goes.
+    /// <para><paramref name="cancellationToken"/> is accepted for call-site uniformity and deliberately
+    /// NOT honored - see the body. Releasing a reference is not an operation that can be abandoned
+    /// half-way.</para></summary>
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        _ = cancellationToken;
         if (_disposed)
             return;
 
-        // Cancellation is honored only while waiting to claim the reference. Once the 1→0 transition is
-        // committed, teardown must run to completion; cancelling OSCServer.StopAsync after _openRefs reached
-        // zero leaves a live socket behind a session that claims it is closed.
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // NOTHING here is cancellable, gate wait included. Honoring the token while waiting to claim the
+        // reference sounds harmless - "a cancelled stop simply didn't happen" - but a consumer only gets
+        // one chance to give its reference back: ControlSystemRuntimeSession clears its own _inputStarted
+        // flag around this call and DisposeAsync early-returns on it, so an OperationCanceledException
+        // thrown BEFORE the decrement stranded the reference for the process lifetime, with the MIDI ports
+        // and UDP sockets open, IsOpen true, and no consumer left to close them. The wait is bounded by one
+        // teardown, and past the 1→0 transition teardown must run to completion anyway: cancelling
+        // OSCServer.StopAsync after _openRefs reached zero leaves a live socket behind a session that
+        // claims it is closed.
+        await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             if (_disposed || _openRefs == 0)

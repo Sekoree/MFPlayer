@@ -3,7 +3,6 @@ using S.Media.Audio.PortAudio;
 using S.Media.Core.Audio;
 using S.Media.Time;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace S.Media.Audio.Backends.Tests;
 
@@ -12,10 +11,12 @@ namespace S.Media.Audio.Backends.Tests;
 /// Start and Flush, and end the segment they were reporting on device loss. Each of those is an epoch
 /// boundary, and the whole point of the workstream is that the OUTPUT announces it rather than leaving the
 /// consumer to infer it from a regression. The device-loss cases need no hardware (the latch has an
-/// internal test hook); the Start/Flush cases open the default device where one exists and report a skip
-/// reason otherwise, matching <c>AudioBackendConformanceTests</c>.
+/// internal test hook); the Start/Flush cases open the default device where one exists and SKIP with a
+/// reason otherwise (<c>Xunit.SkippableFact</c>) - a device-gated case that merely <c>return</c>ed
+/// reported "Passed" with zero assertions, which is indistinguishable from a case that actually verified the
+/// contract. On this box all of them run against real hardware.
 /// </summary>
-public sealed class AudioOutputClockEpochTests(ITestOutputHelper output)
+public sealed class AudioOutputClockEpochTests
 {
     private static readonly AudioFormat StandardFormat = new(48_000, 2);
 
@@ -35,11 +36,10 @@ public sealed class AudioOutputClockEpochTests(ITestOutputHelper output)
         Assert.False(after.IsAdvancing);
     }
 
-    [Fact]
+    [SkippableFact]
     public void PortAudio_DeviceLoss_TakesANewEpoch()
     {
-        if (TryCreatePortAudioOutput() is not { } outputDevice)
-            return;
+        var outputDevice = CreatePortAudioOutputOrSkip();
 
         using (outputDevice)
         {
@@ -56,7 +56,7 @@ public sealed class AudioOutputClockEpochTests(ITestOutputHelper output)
 
     // ---- Start / Flush (device-dependent) -------------------------------------------------------
 
-    [Fact]
+    [SkippableFact]
     public void MiniAudio_StartAndFlush_EachTakeANewEpoch()
     {
         MiniAudioOutput outputDevice;
@@ -67,19 +67,18 @@ public sealed class AudioOutputClockEpochTests(ITestOutputHelper output)
         }
         catch (Exception ex)
         {
-            output.WriteLine($"skipped: no usable default miniaudio output device: {ex.GetType().Name}: {ex.Message}");
-            return;
+            Skip.If(true, $"no usable default miniaudio output device: {ex.GetType().Name}: {ex.Message}");
+            throw; // unreachable - Skip.If(true, ...) throws SkipException
         }
 
         using (outputDevice)
             AssertStartAndFlushEpochs(outputDevice, outputDevice.Flush, outputDevice.Start, outputDevice.Stop);
     }
 
-    [Fact]
+    [SkippableFact]
     public void PortAudio_StartAndFlush_EachTakeANewEpoch()
     {
-        if (TryCreatePortAudioOutput() is not { } outputDevice)
-            return;
+        var outputDevice = CreatePortAudioOutputOrSkip();
 
         using (outputDevice)
         {
@@ -89,8 +88,8 @@ public sealed class AudioOutputClockEpochTests(ITestOutputHelper output)
             }
             catch (Exception ex)
             {
-                output.WriteLine($"skipped: default PortAudio output device would not start: {ex.GetType().Name}: {ex.Message}");
-                return;
+                Skip.If(true, $"default PortAudio output device would not start: {ex.GetType().Name}: {ex.Message}");
+                throw; // unreachable - Skip.If(true, ...) throws SkipException
             }
 
             AssertStartAndFlushEpochs(outputDevice, outputDevice.Flush, outputDevice.Start, outputDevice.Stop);
@@ -118,7 +117,9 @@ public sealed class AudioOutputClockEpochTests(ITestOutputHelper output)
         Assert.NotEqual(started.EpochId, restarted.EpochId);
     }
 
-    private PortAudioOutput? TryCreatePortAudioOutput()
+    /// <summary>Opens the default PortAudio output, or SKIPS the calling test. Never returns null: a headless
+    /// runner with no device must show up as a skip, not as a green case that asserted nothing.</summary>
+    private static PortAudioOutput CreatePortAudioOutputOrSkip()
     {
         try
         {
@@ -127,8 +128,8 @@ public sealed class AudioOutputClockEpochTests(ITestOutputHelper output)
         catch (Exception ex)
         {
             // No usable default output device on this runner (common headless): device-dependent → skip.
-            output.WriteLine($"skipped: no usable default PortAudio output device: {ex.GetType().Name}: {ex.Message}");
-            return null;
+            Skip.If(true, $"no usable default PortAudio output device: {ex.GetType().Name}: {ex.Message}");
+            throw; // unreachable - Skip.If(true, ...) throws SkipException
         }
     }
 }

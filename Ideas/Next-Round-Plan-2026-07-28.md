@@ -244,3 +244,106 @@ timing/order driven, not content driven: adding **six no-op `[Fact]`s** to the *
 (~2 in 5), while the untouched set passed 6/6. Disabling the 5 s status-message auto-clear
 continuation (one obvious source of stray `Dispatcher.UIThread` touches) does **not** fix it, so
 there is more than one straggler. Left as-is: it needs a harness fix, not a product one.
+
+## MTC chase — third review pass (2026-07-30)
+
+A third adversarial review of D1 reproduced five defects plus a latent regression from the previous
+round's own fix. All are fixed, each with a regression test that fails on the unfixed code. The
+headline is a **single root cause behind the two HIGH ones**: two bounds that had to agree lived in
+two files as independent magic numbers — `MidiTimecodeChaseClock.AssemblyStallTimeout` (500 ms) was
+the real ceiling on how far the reported position could run past the last DECODED label, while
+`CueSchedulerService.ReanchorSlackSeconds` was a hand-derived 4 frames (133–167 ms).
+
+1. **Two bounds, one number** (root cause of 2 and 3 below). The clock now publishes
+  `MidiTimecodeChaseClock.MaxPositionLeadSeconds(rate)` = **4 frames** — one assembly window (the
+  2-frame read lag extrapolation exists to cancel) plus the decoder's own 2-frame jump tolerance — and
+  that single value both *caps the extrapolation inside `Read`* and *is* the scheduler's re-arm slack.
+  `AssemblyStallTimeout` is now a **liveness** bound only (it gates `IsChasing`, i.e. the operator's
+  "receiving" chip), never a position bound. A consumer can no longer guess the number wrong because
+  there is nothing left to guess.
+2. **Same target fired 2–3× on a varispeed / slow sender.** Labels advancing slower than wall time miss
+  the decoder's 2-frame prediction tolerance on *every* assembly, so the run is classified `Jumped`
+  per assembly and the generation churns. Each new baseline is a decoded LABEL, up to 500 ms behind the
+  extrapolated position the sweep had already fired on, and the 4-frame slack then pruned the handled
+  stamp as if the operator had rewound. With both bounds equal, `baseline_new + lead ≥ label_old + lead
+  ≥ position_fired`, so a monotone-forward sender can never re-arm a fired target — at any speed.
+  Pinned by `Scheduler_SenderRollingSlowerThanRealTime_FiresTheTargetExactlyOnce` (0.4×, 0.25×, 0.2×
+  all fired twice unfixed; 1.0× is the control).
+3. **Phantom fires during a rewind/shuttle, then a second real fire.** A reverse chase emits pieces
+  7…0, so nothing assembles — but messages keep arriving, and liveness was stamped by *arrival*. Two
+  changes: `MidiTimecodeDecoder.LastQuarterFrameExtendedAssembly` (true only for a piece landing on the
+  index the assembler awaited, so a descending stream's accepted piece 0s no longer count as evidence
+  of forward motion) now gates the liveness stamp, and the position cap above bounds what is left.
+  Result: 2 s of descending traffic moves the position by **exactly nothing**. Pinned by
+  `Scheduler_ReverseShuttleTraffic_FiresNothing_ThenFiresOnceOnTheRealPass` and
+  `ChaseClock_PositionNeverLeadsTheDecodedLabel_ByMoreThanThePublishedBound`.
+  `ChaseClock_StreamThatNeverAssembles_FreezesInsteadOfRunningForward` **codified the 500 ms free-run**
+  (`position <= locked + 0.51`) and is now an exact-equality assertion; the reversal is argued in the
+  test's own doc comment. `IsChasing` still goes false, so nothing about the UI's stall display changed.
+4. **24-hour wrap bypassed the nibble-splice fingerprint.** The directional guard was a raw
+  `candidate.TotalSeconds <= predictedSeconds`, false exactly once a day: locked at `23:59:59:21`, an
+  8-quarter-frame dropout straddling midnight assembles `00:00:59:23` — one labelled minute *ahead* in
+  the label space, ~24 h *behind* in seconds — so the corrupt label was reported as a relocate and
+  re-baselined every consumer a day backwards. The distance is now measured wrapped, via a new
+  `MidiTimecodeRates.FramesPerDay(rate)` (2 589 408 for 29.97 DF). The genuine day rollover still reads
+  as `Jumped`, deliberately: the label space wraps but a consumer's baseline is linear seconds, so
+  midnight *has* to open a new run.
+5. **Stale/incorrect comments corrected.** The chase clock's "Apply must run before the liveness stamp
+  because Apply's stall test reads the PREVIOUS one" was false (`Apply` measures anchor-to-anchor);
+  `CueSchedulerService`'s "generations bump on every dropout" was false as of the previous round (a
+  single dropped message keeps one generation — `ChaseClock_RunWithADroppedMessage_KeepsOneGeneration`).
+  Both now state the real trigger: any `Jumped`/`Resynced`/`Located`, or 500 ms without an assembly.
+
+**Also fixed in the same pass**
+
+- **Full-frame locate at a nonexistent drop-frame label is snapped, not dropped.** `00:01:00:00`
+  @29.97DF used to fail `IsValid` and take the whole locate with it — no park, no generation bump, so
+  the consumer kept a baseline the sender had left. Authoring-side rejection stays (a typed target must
+  fire where it was typed); the *decoder* now snaps `:00`/`:01` at a non-tenth minute onto `:02`.
+  `FullFrame_RejectsANonexistentDropFrameLabel` is replaced by
+  `FullFrame_SnapsANonexistentDropFrameLabel_RatherThanDroppingTheLocate`.
+- **A parked clock sits exactly on the located label.** `Read` no longer advances the reference at all
+  while `IsRunning` is false, so non-assembling traffic cannot creep the parked position (it used to
+  reach 500 ms / 12 frames off a deck that had not moved).
+- **"Timecode arriving but not decoding" is now visible.**
+  `MidiTimecodeChaseState.UndecodedQuarterFrames` counts quarter-frames fed since the last completed
+  assembly. Two accepted sources duplicate every piece, nothing assembles, and the chip reads "no
+  signal" forever; the counter separates that from an unplugged cable. **Left open:** surfacing it as
+  operator text needs a new `Strings` resource + chip wording, noted in `CueTimecodeChaseService`.
+- **`SyncChaseGeneration` now returns early on `!chase.HasSignal`.** `MidiTimecodeChaseClock.Reset()`
+  bumps the generation and publishes `GenerationStartSeconds = 0`, which would have re-armed every
+  handled target through the back door — the wholesale clear the prune exists to replace. Unobservable
+  today (nothing can fire while `IsChasing` is false, and the next real lock re-baselines properly), so
+  it is a guard rather than a fixed bug, and carries no test of its own.
+
+**S1 — permanent device-reference leak (regression introduced by `1d245bc6`).** That commit changed
+`ControlInputSession.StopAsync`'s gate wait from `CancellationToken.None` to the caller's token, so the
+stop could throw *before* decrementing `_openRefs`. `ControlSystemRuntimeSession` clears its own
+`_inputStarted` flag around the call and `DisposeAsync` early-returns on it, so a cancelled disarm
+stranded the reference for the process lifetime — MIDI ports and UDP sockets open, `IsOpen` true, no
+consumer. Unreachable from HaPlay (every disarm calls `StopAsync()` tokenless) but real. **Both sides
+fixed**: the release is uncancellable end to end (`ControlInputSession.StopAsync` waits on
+`CancellationToken.None` and documents the token as accepted-but-ignored;
+`ControlSystemRuntimeSession.ReleaseInputAsync` takes no token at all). Releasing a ref-count has no
+meaningful "abandoned" state, and the wait it would abandon is bounded by one teardown.
+`StopAsync_PreCanceled_DoesNotDropTheReferenceOrLeakAListener` pinned the *old* contract (throw +
+intact count) and is replaced by `StopAsync_PreCanceled_StillReleasesTheReference_AndLeaksNoListener`
+plus the end-to-end `ArmedSession_StopWithACanceledToken_StillGivesTheDeviceReferenceBack`, which
+reproduced the leak as a reference count of 2 surviving both stop and dispose.
+
+**Test-quality fixes from the same review**
+
+- **Drop-frame arithmetic is pinned by absolute spec values.** The only assertion had been
+  `Assert.Equal(3600.0, …TotalSeconds, 1)`, which passes for the correct 3599.9964 *and* for a broken
+  `SecondsPerFrame(DF) = 1/30`. Now: frame numbers 1800 / 17982 / 107892 / 2589407, `FramesPerDay` =
+  2589408, `3599.9964` to 4 places, and `SecondsPerFrame(DF)` itself. Verified by breaking
+  `SecondsPerFrame(DF)` to `1/30` — the new pin fails, the old one would not have.
+- **`_handledTimecode`'s prune had never executed in any test** (every timecode harness pinned the wall
+  clock, and the prune is gated on ~10 minutes of it). The harness clock is now mutable and
+  `Scheduler_HandledTimecodeEntries_ArePrunedWhenTheirCueStopsBeingATimecodeCue` drives it — with a
+  second timecode cue present, since the sweep switches the decoder off (dropping the lock) when no
+  loaded list wants timecode.
+- **The re-arm slack's upper bound is pinned.** A slack of 4 *seconds* passed every previous test. A
+  400 ms rewind — a jog nudge — must re-fire:
+  `Scheduler_ShortRewindOverAFiredTarget_ReArmsIt_PinningTheReArmSlackCeiling`. Together with defect 2's
+  test the slack is now bracketed from both sides.

@@ -65,8 +65,20 @@ public sealed class ControlInputSessionTests
         Assert.Equal(1, runner.StopCount);
     }
 
+    /// <summary>
+    /// A pre-canceled <c>StopAsync</c> still releases the reference and still closes the listener.
+    /// <para><strong>This reverses the earlier contract, deliberately.</strong> The token used to be
+    /// honored on the gate wait, on the reading that "a cancelled stop simply didn't happen" - and the old
+    /// version of this test pinned the throw plus an intact reference count. But a consumer gets exactly
+    /// ONE chance to hand its reference back: <c>ControlSystemRuntimeSession</c> clears its own
+    /// <c>_inputStarted</c> flag around the call and its <c>DisposeAsync</c> early-returns on that flag, so
+    /// an <c>OperationCanceledException</c> thrown before the decrement stranded the reference for the
+    /// process lifetime - MIDI ports and UDP sockets open, <c>IsOpen</c> true, no consumer left that would
+    /// ever close them. Releasing a reference is not an operation with a meaningful "abandoned" state, and
+    /// the wait it would abandon is bounded by one teardown.</para>
+    /// </summary>
     [Fact]
-    public async Task StopAsync_PreCanceled_DoesNotDropTheReferenceOrLeakAListener()
+    public async Task StopAsync_PreCanceled_StillReleasesTheReference_AndLeaksNoListener()
     {
         var port = FreeUdpPort();
         await using var session = new ControlInputSession(ListenerConfig(Guid.NewGuid(), port));
@@ -74,13 +86,59 @@ public sealed class ControlInputSessionTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.StopAsync(cts.Token));
+        await session.StopAsync(cts.Token);
 
-        Assert.True(session.IsOpen);
-        Assert.Equal(1, session.OpenReferenceCount);
-        await session.StopAsync();
         Assert.False(session.IsOpen);
-        Assert.True(CanBindUdpPort(port));
+        Assert.Equal(0, session.OpenReferenceCount);
+        Assert.True(CanBindUdpPort(port), "the listener socket was leaked by a cancelled stop");
+
+        // Still exactly-once: the unbalanced second release must not underflow into another close.
+        await session.StopAsync();
+        Assert.Equal(0, session.OpenReferenceCount);
+    }
+
+    /// <summary>
+    /// The caller-side half of the same hole, end to end: an armed mapping session whose disarm passes a
+    /// cancelled token must not leave the shared devices held. It flipped <c>_inputStarted</c> to false
+    /// before awaiting the release and <c>DisposeAsync</c> then declined to retry, so the borrowed
+    /// reference survived both the stop AND the dispose.
+    /// </summary>
+    [Fact]
+    public async Task ArmedSession_StopWithACanceledToken_StillGivesTheDeviceReferenceBack()
+    {
+        var config = MidiOnlyConfig();
+        var runner = new RecordingMIDISessionRunner();
+        await using var session = new ControlInputSession(config, midiSessionFactory: _ => runner);
+        await session.StartAsync(); // the always-on owner
+
+        var runtime = new ControlSystemRuntimeSession(
+            config with { IsArmed = true },
+            new InMemoryControlScriptSourceProvider(new Dictionary<string, string>()),
+            new NullOSCSender(),
+            inputSession: session);
+        await runtime.StartAsync();
+        Assert.Equal(2, session.OpenReferenceCount);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Exception? thrown = null;
+        try
+        {
+            await runtime.StopAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            thrown = ex; // asserted last: the leak below is the more informative failure
+        }
+
+        // The reference is back after the stop AND still not double-released by the dispose. Both are
+        // asserted before the throw itself, because THIS is the hole: unfixed, the stop threw out of
+        // ControlInputSession.StopAsync's gate wait having already cleared _inputStarted, and DisposeAsync
+        // then early-returned on that flag - so the count stayed at 2 for the process lifetime.
+        await runtime.DisposeAsync();
+        Assert.Equal(1, session.OpenReferenceCount);
+        Assert.Equal(0, runner.StopCount); // and the owner's ports were never touched
+        Assert.Null(thrown);
     }
 
     [Fact]

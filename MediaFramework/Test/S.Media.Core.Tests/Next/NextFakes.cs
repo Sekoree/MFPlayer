@@ -1,10 +1,48 @@
 namespace S.Media.Core.Tests.Next;
 
 /// <summary>Minimal fakes for the Phase 1 new-primitive tests (registry, clocks).</summary>
+/// <remarks>It carries a REAL epoch id (never <see cref="PlaybackEpoch.Single"/>) and an atomic
+/// <see cref="Read"/>, as <see cref="IPlaybackClock"/> requires of anything that re-anchors - otherwise a
+/// consumer under test would be judged on a torn pair the fake invented.</remarks>
 internal sealed class FakePlaybackClock : IPlaybackClock
 {
-    public TimeSpan ElapsedSinceStart { get; set; }
-    public bool IsAdvancing { get; set; } = true;
+    private readonly Lock _gate = new();
+    private TimeSpan _elapsed;
+    private bool _advancing = true;
+    private long _epochId = PlaybackEpoch.Next();
+
+    public TimeSpan ElapsedSinceStart
+    {
+        get { lock (_gate) return _elapsed; }
+        set { lock (_gate) _elapsed = value; }
+    }
+
+    public bool IsAdvancing
+    {
+        get { lock (_gate) return _advancing; }
+        set { lock (_gate) _advancing = value; }
+    }
+
+    public long EpochId
+    {
+        get { lock (_gate) return _epochId; }
+    }
+
+    public ClockReading Read()
+    {
+        lock (_gate) return new ClockReading(_epochId, _elapsed, _advancing);
+    }
+
+    /// <summary>What a seek, loop wrap or output flush does: a new epoch whose elapsed restarts at
+    /// <paramref name="elapsed"/> - a jump that is only legal because the id moved with it.</summary>
+    public void Reanchor(TimeSpan elapsed)
+    {
+        lock (_gate)
+        {
+            _epochId = PlaybackEpoch.Next();
+            _elapsed = elapsed;
+        }
+    }
 }
 
 internal sealed class FakeReadOnlyPlayhead : IReadOnlyPlayhead

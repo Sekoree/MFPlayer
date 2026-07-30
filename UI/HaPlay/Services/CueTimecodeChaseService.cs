@@ -28,7 +28,13 @@ namespace HaPlay.Services;
 /// <para><strong>One source at a time.</strong> Two Control devices bound to the same physical MIDI
 /// input produce TWO monitor records per message, which would break quarter-frame sequencing. The first
 /// source seen latches; records from any other are ignored until the latched one goes quiet for
-/// <see cref="MidiTimecodeChaseClock.StallTimeout"/>, at which point the next one to speak takes over.</para>
+/// <see cref="MidiTimecodeChaseClock.StallTimeout"/>, at which point the next one to speak takes over.
+/// <br/>If that latch is ever defeated (two records that agree on device instance AND endpoint), every
+/// piece duplicates, nothing assembles, and the operator sees "no signal" forever - indistinguishable from
+/// an unplugged cable. <see cref="MidiTimecodeChaseState.UndecodedQuarterFrames"/> is the diagnostic that
+/// separates the two: it climbs without bound while <c>HasSignal</c> stays false. It is carried on every
+/// snapshot <see cref="Read"/> returns; surfacing it as operator-visible text needs a new
+/// <c>Strings</c> resource and so belongs with the chase-status chip in <c>CueSchedulerService</c>.</para>
 /// </remarks>
 public sealed class CueTimecodeChaseService
 {

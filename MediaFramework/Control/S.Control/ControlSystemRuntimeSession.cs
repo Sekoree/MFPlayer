@@ -120,18 +120,24 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         await StopTickLoopAsync(cancellationToken).ConfigureAwait(false);
-        await ReleaseInputAsync(cancellationToken).ConfigureAwait(false);
+        await ReleaseInputAsync().ConfigureAwait(false);
     }
 
     /// <summary>Drops this session's device reference exactly once - an unbalanced stop must never close
-    /// ports a shared session's other consumers still hold.</summary>
-    private async Task ReleaseInputAsync(CancellationToken cancellationToken)
+    /// ports a shared session's other consumers still hold, and a stop that gives up before releasing must
+    /// never strand one either.
+    /// <para>Takes no cancellation token BY DESIGN. <see cref="_inputStarted"/> is cleared around this
+    /// call and <see cref="DisposeAsync"/> early-returns on it, so this is the session's only chance to
+    /// hand the reference back; a token that could abandon the release (it used to be the caller's) left
+    /// MIDI ports and UDP sockets open for the process lifetime with no consumer.
+    /// <see cref="ControlInputSession.StopAsync"/> is uncancellable for the same reason.</para></summary>
+    private async Task ReleaseInputAsync()
     {
         if (!_inputStarted)
             return;
 
         _inputStarted = false;
-        await _input.StopAsync(cancellationToken).ConfigureAwait(false);
+        await _input.StopAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     public async ValueTask<ControlSystemRuntimeTickResult> TickAsync(
@@ -258,7 +264,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         if (_oscReceiver is not null)
             _oscReceiver.MessageReceived -= OnOSCReplyReceived;
         await StopTickLoopAsync(CancellationToken.None).ConfigureAwait(false);
-        await ReleaseInputAsync(CancellationToken.None).ConfigureAwait(false);
+        await ReleaseInputAsync().ConfigureAwait(false);
         _dispatcherLease.Dispose();
         _monitorLease?.Dispose();
         if (_ownsInput)

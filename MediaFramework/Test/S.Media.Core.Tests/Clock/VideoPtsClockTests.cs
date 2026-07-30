@@ -40,6 +40,32 @@ public class VideoPtsClockTests
     }
 
     [Fact]
+    public void Resume_DoesNotRewindElapsedWithinTheEpoch()
+    {
+        // S2. Pause froze at (lastPts - origin) + the wall time accrued past that frame; Resume only flipped
+        // the advancing flag, so the next read returned (lastPts - origin) - LOWER than a value already
+        // reported, with no epoch bump to make that legal and no high-water to catch it. A resume is
+        // position-continuous, so the id must NOT move and the coordinate must not either.
+        var c = new VideoPtsClock();
+        c.BeginSession(TimeSpan.Zero);
+        c.NotifyFramePts(TimeSpan.FromSeconds(1));
+        Thread.Sleep(60); // wall accrual beyond the last PTS - the amount Resume used to discard
+        var beforePause = c.Read();
+        c.Pause();
+        var frozen = c.ElapsedSinceStart;
+        Assert.True(frozen >= beforePause.Elapsed);
+
+        c.Resume();
+        var resumed = c.Read();
+        Assert.Equal(beforePause.EpochId, resumed.EpochId);
+        Assert.True(resumed.Elapsed >= frozen,
+            $"Resume rewound elapsed inside one epoch ({frozen} → {resumed.Elapsed}).");
+
+        Thread.Sleep(15);
+        Assert.True(c.ElapsedSinceStart > resumed.Elapsed);
+    }
+
+    [Fact]
     public void Seek_RepositionsElapsed()
     {
         var c = new VideoPtsClock();

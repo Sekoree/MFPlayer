@@ -120,13 +120,23 @@ public sealed class CueTimecodeScheduleTests
         public long Now;
     }
 
+    /// <summary>The sweep's WALL clock, separate from the chase tick source. Held mutable so the one
+    /// wall-driven branch of the timecode path - <c>PruneHandled</c>'s ~10-minute periodic bound - can be
+    /// reached at all; every timecode harness before this pinned it, so that branch never ran in a test.</summary>
+    private sealed class WallClock
+    {
+        public DateTimeOffset Now = new(2026, 7, 29, 12, 0, 0, TimeSpan.Zero);
+    }
+
     private sealed record Harness(
         CuePlayerViewModel Vm,
         CueSchedulerService Scheduler,
         CueTimecodeChaseService Chase,
         TickSource Ticks,
+        WallClock Wall,
         CueNodeViewModel CueVm,
         Guid CueId,
+        CueNodeViewModel? SecondCueVm,
         ConcurrentQueue<Guid> Fired,
         SemaphoreSlim FireSignal);
 
@@ -135,7 +145,10 @@ public sealed class CueTimecodeScheduleTests
 
     private static long Ms(double milliseconds) => (long)(milliseconds * 1000.0);
 
-    private static Harness BuildHarness(CueSchedule schedule, bool arm = true)
+    /// <param name="second">Optional second cue. Only used by the prune test, which has to keep SOME cue
+    /// carrying a timecode schedule: the sweep switches the whole decoder off when none does, and that
+    /// drops the chase lock the test is still rolling.</param>
+    private static Harness BuildHarness(CueSchedule schedule, bool arm = true, CueSchedule? second = null)
     {
         var cue = new MediaCueNode
         {
@@ -144,8 +157,17 @@ public sealed class CueTimecodeScheduleTests
             Source = new FilePlaylistItem("/tmp/song.wav"),
             Schedule = schedule,
         };
+        var extra = second is null
+            ? null
+            : new MediaCueNode
+            {
+                Number = "2",
+                Label = "Second chased cue",
+                Source = new FilePlaylistItem("/tmp/other.wav"),
+                Schedule = second,
+            };
         var vm = new CuePlayerViewModel();
-        vm.ApplyCueLists([new CueList { Nodes = [cue] }]);
+        vm.ApplyCueLists([new CueList { Nodes = extra is null ? [cue] : [cue, extra] }]);
         vm.IsCueEditMode = false;
 
         var fired = new ConcurrentQueue<Guid>();
@@ -159,15 +181,19 @@ public sealed class CueTimecodeScheduleTests
         };
 
         var ticks = new TickSource();
+        var wall = new WallClock();
         var chase = new CueTimecodeChaseService(ticks: () => ticks.Now, ticksPerSecond: TicksPerSecond);
-        // The wall clock is pinned: nothing here should depend on it, and a moving one would make the
-        // wall-path branches of the sweep non-deterministic.
-        var scheduler = new CueSchedulerService(
-            vm, () => new DateTimeOffset(2026, 7, 29, 12, 0, 0, TimeSpan.Zero), chase);
+        // The wall clock only moves when a test moves it: nothing in the chase path should depend on it,
+        // and a freely running one would make the wall-path branches of the sweep non-deterministic.
+        var scheduler = new CueSchedulerService(vm, () => wall.Now, chase);
         if (arm)
             vm.SchedulesArmed = true;
 
-        return new Harness(vm, scheduler, chase, ticks, vm.SelectedCueList!.Nodes[0], cue.Id, fired, signal);
+        return new Harness(
+            vm, scheduler, chase, ticks, wall,
+            vm.SelectedCueList!.Nodes[0], cue.Id,
+            extra is null ? null : vm.SelectedCueList!.Nodes[1],
+            fired, signal);
     }
 
     private static CueSchedule TimecodeSchedule(string target, int graceMs = 5000, bool enabled = true) =>
@@ -217,25 +243,30 @@ public sealed class CueTimecodeScheduleTests
         RawBytes = sysEx,
     };
 
+    /// <summary>The 8 quarter-frame DATA bytes a sender emits for one timecode, in wire order.</summary>
+    private static byte[] QuarterFrameBytes(int hours, int minutes, int seconds, int frames) =>
+    [
+        (byte)(0x00 | (frames & 0x0F)),
+        (byte)(0x10 | ((frames >> 4) & 0x01)),
+        (byte)(0x20 | (seconds & 0x0F)),
+        (byte)(0x30 | ((seconds >> 4) & 0x03)),
+        (byte)(0x40 | (minutes & 0x0F)),
+        (byte)(0x50 | ((minutes >> 4) & 0x03)),
+        (byte)(0x60 | (hours & 0x0F)),
+        (byte)(0x70 | ((hours >> 4) & 0x01) | ((int)MidiTimecodeRate.Fps25 << 1)),
+    ];
+
     /// <summary>Pushes one complete 8-message quarter-frame sequence through the chase service,
-    /// advancing the tick source by one quarter-frame period (10 ms at 25 fps) per message - so
-    /// consecutive calls advance the timecode by exactly 2 frames of real time.</summary>
-    private static void FeedTimecode(Harness h, int hours, int minutes, int seconds, int frames)
+    /// advancing the tick source by <paramref name="stepMs"/> (one quarter-frame period, 10 ms at 25 fps)
+    /// per message - so consecutive calls advance the timecode by exactly 2 frames of real time. A LARGER
+    /// step is a sender rolling slower than real time (varispeed/jog): the labels still step 2 frames per
+    /// window, the wall clock steps further.</summary>
+    private static void FeedTimecode(
+        Harness h, int hours, int minutes, int seconds, int frames, double stepMs = 10)
     {
-        Span<byte> bytes =
-        [
-            (byte)(0x00 | (frames & 0x0F)),
-            (byte)(0x10 | ((frames >> 4) & 0x01)),
-            (byte)(0x20 | (seconds & 0x0F)),
-            (byte)(0x30 | ((seconds >> 4) & 0x03)),
-            (byte)(0x40 | (minutes & 0x0F)),
-            (byte)(0x50 | ((minutes >> 4) & 0x03)),
-            (byte)(0x60 | (hours & 0x0F)),
-            (byte)(0x70 | ((hours >> 4) & 0x01) | ((int)MidiTimecodeRate.Fps25 << 1)),
-        ];
-        foreach (var b in bytes)
+        foreach (var b in QuarterFrameBytes(hours, minutes, seconds, frames))
         {
-            h.Ticks.Now += Ms(10);
+            h.Ticks.Now += Ms(stepMs);
             Assert.True(h.Chase.OnControlInput(QuarterFrameRecord(b)));
         }
     }
@@ -402,6 +433,155 @@ public sealed class CueTimecodeScheduleTests
         h.Scheduler.Tick();
 
         await AssertNoFiresAsync(h);
+    }
+
+    /// <summary>
+    /// A sender rolling SLOWER than real time - a deck chasing at 0.25× for a slow-mo rehearsal, a
+    /// jog-shuttle wheel - fires its target exactly once, at every speed.
+    /// <para>It did not. A varispeed sender's labels advance 2 frames per window while wall time advances
+    /// 2/speed frames, so below ~0.5× every single assembly misses the decoder's 2-frame prediction
+    /// tolerance and is classified as a relocate: the chase generation churns per assembly, and each new
+    /// run's baseline is the freshly decoded LABEL. The position the sweep had already fired on was that
+    /// label plus the clock's extrapolation, which was bounded by the 500 ms assembly-stall window while
+    /// the scheduler's re-arm slack was an unrelated, hand-derived 4 frames (133-167 ms). So the new
+    /// baseline landed BEHIND a target that had just fired, the handled stamp was pruned as if the operator
+    /// had rewound, and the cue fired again - twice at 0.4×, three times at 0.25× and 0.2× in the review's
+    /// reproduction, all inside ~700 ms. The two bounds are now one number, published by the clock.</para>
+    /// <para>1.0× is the control (labels track wall time, so the run keeps ONE generation and there is
+    /// nothing to re-baseline); 0.4×, 0.25× and 0.2× all fire twice on the unfixed code.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(0.4)]
+    [InlineData(0.25)]
+    [InlineData(0.2)]
+    public async Task Scheduler_SenderRollingSlowerThanRealTime_FiresTheTargetExactlyOnce(double speed)
+    {
+        var h = BuildHarness(TimecodeSchedule("01:00:00:09"));
+        h.Scheduler.Tick();
+
+        var stepMs = 10.0 / speed;
+        // Start 4 frames short of 01:00:00:00 and roll 80 frames of label past the target. The sweep runs
+        // after EVERY message, not just every assembly: that covers every phase the real 250 ms sweep can
+        // land on relative to an assembly, and it is the most adversarial choice for "fires once".
+        var frame = new MidiTimecodeValue(0, 59, 59, 21, MidiTimecodeRate.Fps25).FrameNumber;
+        for (var window = 0; window < 40; window++)
+        {
+            var tc = MidiTimecodeValue.FromFrameNumber(frame, MidiTimecodeRate.Fps25);
+            foreach (var b in QuarterFrameBytes(tc.Hours, tc.Minutes, tc.Seconds, tc.Frames))
+            {
+                h.Ticks.Now += Ms(stepMs);
+                Assert.True(h.Chase.OnControlInput(QuarterFrameRecord(b)));
+                h.Scheduler.Tick();
+            }
+
+            frame += 2;
+        }
+
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+        await AssertNoFiresAsync(h);
+    }
+
+    /// <summary>
+    /// A reverse/shuttle pass fires NOTHING while it runs, and the real forward pass afterwards fires the
+    /// target exactly once.
+    /// <para>A rewinding deck emits quarter-frames descending (7,6,…,0), so the assembler never completes
+    /// anything - but the messages keep arriving 10 ms apart, far inside the silence timeout. Liveness was
+    /// stamped by arrival alone, so <c>IsChasing</c> stayed true and the reported position free-ran FORWARD
+    /// at real-time rate for up to <c>AssemblyStallTimeout</c> (500 ms, 12 frames) past the last real
+    /// label. 400 ms of shuttle put the position 470 ms ahead of a deck running the other way, fired the
+    /// cue the sender never reached, and then fired it AGAIN on the genuine forward pass - two fires for
+    /// one crossing. Liveness now requires a quarter-frame that EXTENDED an in-order assembly, and the
+    /// extrapolation itself is capped at 4 frames.</para>
+    /// </summary>
+    [Fact]
+    public async Task Scheduler_ReverseShuttleTraffic_FiresNothing_ThenFiresOnceOnTheRealPass()
+    {
+        var h = BuildHarness(TimecodeSchedule("01:00:00:09"));
+        h.Scheduler.Tick();
+
+        // Locked and rolling, 8 frames (320 ms) short of the target.
+        FeedTimecode(h, 0, 59, 59, 24);
+        FeedTimecode(h, 1, 0, 0, 1);
+        h.Scheduler.Tick();
+        await AssertNoFiresAsync(h);
+
+        // 400 ms of DESCENDING quarter-frames, swept after every one of them.
+        var descending = QuarterFrameBytes(1, 0, 0, 0);
+        for (var i = 0; i < 40; i++)
+        {
+            h.Ticks.Now += Ms(10);
+            Assert.True(h.Chase.OnControlInput(QuarterFrameRecord(descending[7 - (i % 8)])));
+            h.Scheduler.Tick();
+        }
+
+        await AssertNoFiresAsync(h);
+        Assert.False(h.Chase.Read().IsChasing); // "arriving" is not "we know where it is"
+
+        // The deck lands back before the target and rolls forward for real: ONE fire.
+        Roll(h, new MidiTimecodeValue(0, 59, 59, 20, MidiTimecodeRate.Fps25), 12);
+        h.Scheduler.Tick();
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+        Roll(h, new MidiTimecodeValue(1, 0, 0, 20, MidiTimecodeRate.Fps25), 4);
+        h.Scheduler.Tick();
+        await AssertNoFiresAsync(h);
+    }
+
+    /// <summary>
+    /// A SHORT rewind over an already-fired target still re-arms it - the ceiling on the re-arm slack.
+    /// <para>The floor is pinned by the varispeed test above (too little slack and a slow sender
+    /// double-fires). Nothing pinned the other end: a slack of 4 SECONDS passed every test in this file,
+    /// and it would silently swallow every jog nudge and short back-up an operator makes in a rehearsal.
+    /// 400 ms of rewind is unambiguously a second pass.</para>
+    /// </summary>
+    [Fact]
+    public async Task Scheduler_ShortRewindOverAFiredTarget_ReArmsIt_PinningTheReArmSlackCeiling()
+    {
+        var h = BuildHarness(TimecodeSchedule("01:00:00:00"));
+        h.Scheduler.Tick();
+        FeedTimecode(h, 0, 59, 59, 23);
+        FeedTimecode(h, 1, 0, 0, 0);
+        h.Scheduler.Tick();
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+
+        Locate(h, 0, 59, 59, 15); // 10 frames = 400 ms behind the target
+        h.Scheduler.Tick();
+        Roll(h, new MidiTimecodeValue(0, 59, 59, 15, MidiTimecodeRate.Fps25), 6);
+        h.Scheduler.Tick();
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+    }
+
+    /// <summary>
+    /// The chase handled-set's memory bound actually runs. <c>PruneHandled</c> drops entries whose cue no
+    /// longer carries a timecode schedule, but it is gated on ~10 minutes of WALL time - and every timecode
+    /// harness pinned the wall clock, so that branch had never executed in any test. A second cue keeps a
+    /// timecode schedule alive so the sweep does not switch the decoder off (which would drop the lock and
+    /// prove nothing).
+    /// </summary>
+    [Fact]
+    public async Task Scheduler_HandledTimecodeEntries_ArePrunedWhenTheirCueStopsBeingATimecodeCue()
+    {
+        var h = BuildHarness(
+            TimecodeSchedule("01:00:00:00"),
+            second: TimecodeSchedule("02:00:00:00"));
+        h.Scheduler.Tick();
+        FeedTimecode(h, 0, 59, 59, 23);
+        FeedTimecode(h, 1, 0, 0, 0);
+        h.Scheduler.Tick();
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+
+        // Retargeted cue: its handled stamp is unreachable by any semantic path from here.
+        h.CueVm.ScheduleKind = CueScheduleKind.TimeOfDay;
+        h.Wall.Now = h.Wall.Now.AddMinutes(11);
+        h.Scheduler.Tick();
+        Assert.True(h.Chase.Enabled); // the second cue kept the decoder on
+
+        // Proof the entry is gone rather than merely unread: put the kind back and let the SAME run, still
+        // standing at the same position with no generation change, fire the target again. With the stamp
+        // still in the dictionary this stays silent.
+        h.CueVm.ScheduleKind = CueScheduleKind.Timecode;
+        h.Scheduler.Tick();
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
     }
 
     [Fact]

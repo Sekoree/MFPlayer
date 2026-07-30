@@ -240,6 +240,10 @@ public sealed class SharedAudioOutput : IDisposable
         /// re-anchor does NOT take one: the client clock stays continuous across it by design.</summary>
         private long _epochId = PlaybackEpoch.Next();
         private long _fallbackEpochTicks;
+        /// <summary>1 once <see cref="RebaseFallbackToHighWater"/> spliced the stopwatch domain onto the
+        /// terminal's high-water for the current outage; cleared by the next successful terminal read and by
+        /// every deliberate re-anchor, so a later outage re-splices instead of inheriting a stale baseline.</summary>
+        private int _fallbackRebased;
         /// <summary>Low-passed DAC lead in ticks - the value actually subtracted. Guarded by
         /// <see cref="_epochGate"/> together with <see cref="_leadSampledAtRawTicks"/>.</summary>
         private long _leadTicks;
@@ -319,16 +323,40 @@ public sealed class SharedAudioOutput : IDisposable
                     // High-water mark: the resume point for a later re-anchor recovery, and the clamp that
                     // holds the report steady if the terminal breaks its per-epoch monotonic contract.
                     ticks = RaiseHighWater(ref _maxSinceEpochTicks, ticks);
+                    if (Volatile.Read(ref _fallbackRebased) != 0)
+                        Volatile.Write(ref _fallbackRebased, 0); // terminal is authoritative again
                     return (ReportAudible(ticks), Volatile.Read(ref _disposed) == 0 && terminal.IsAdvancing);
                 }
                 catch
                 {
-                    // Terminal stopped/disposed mid-read - fall through to the wall-clock domain.
+                    // Terminal stopped/disposed mid-read - fall through to the wall-clock domain, CONTINUING
+                    // from the high-water rather than adopting the fallback stopwatch raw (see below).
+                    RebaseFallbackToHighWater();
                 }
             }
 
             return (ReportAudible(_fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _fallbackEpochTicks)),
                 Volatile.Read(ref _disposed) == 0);
+        }
+
+        /// <summary>
+        /// Splices the wall-clock fallback onto the raw high-water the terminal domain had reached, once per
+        /// outage. <see cref="_fallbackElapsed"/> runs from attach and counts every second the DEVICE spent
+        /// paused, so switching domains outright reported wall-time-since-attach in the SAME epoch: a device
+        /// paused 30 s and then lost handed the consumer a monotonic +30 s jump that the high-water cannot
+        /// catch (it only clamps regressions). Re-baselining makes the fallback resume where the device left
+        /// off and advance at wall rate from there. If the terminal recovers, its (lower) reading is held at
+        /// the high-water until it catches up - bounded by the outage, not by the whole session.
+        /// </summary>
+        private void RebaseFallbackToHighWater()
+        {
+            if (Interlocked.Exchange(ref _fallbackRebased, 1) != 0)
+                return;
+            lock (_epochGate)
+            {
+                Volatile.Write(ref _fallbackEpochTicks,
+                    _fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _maxSinceEpochTicks));
+            }
         }
 
         /// <summary>
@@ -438,7 +466,14 @@ public sealed class SharedAudioOutput : IDisposable
             }
         }
 
-        /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: mirrors the terminal's; wall-clock fallback always advances.</summary>
+        /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: mirrors the terminal's; wall-clock fallback
+        /// always advances. Every branch matches <see cref="ReadRaw"/>'s advancing flag exactly - including
+        /// the throwing one. A terminal that throws mid-read is not a stopped clock, it is a clock this
+        /// client can no longer see, and <see cref="ReadRaw"/> answers that by degrading to the stopwatch
+        /// domain (which advances). Reporting <c>false</c> here while <see cref="Read"/> reported
+        /// <c>true</c> let a fan-in owner select this client and a composite deselect it from the same
+        /// instant. This member stays free of <see cref="ReadRaw"/>'s side effects (high-waters, the DAC-lead
+        /// filter) - it decides advancing only.</summary>
         public bool IsAdvancing
         {
             get
@@ -453,7 +488,7 @@ public sealed class SharedAudioOutput : IDisposable
                 }
                 catch
                 {
-                    return false;
+                    return true; // == ReadRaw's fallback branch: the stopwatch domain always advances
                 }
             }
         }
@@ -465,6 +500,7 @@ public sealed class SharedAudioOutput : IDisposable
             lock (_epochGate)
             {
                 Volatile.Write(ref _fallbackEpochTicks, _fallbackElapsed.Elapsed.Ticks);
+                Volatile.Write(ref _fallbackRebased, 0);
                 // A deliberate reset-to-zero clears both resume points (re-anchor recovery, monotonic report).
                 Volatile.Write(ref _maxSinceEpochTicks, 0);
                 Volatile.Write(ref _maxAudibleTicks, 0);

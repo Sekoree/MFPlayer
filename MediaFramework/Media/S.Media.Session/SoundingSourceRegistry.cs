@@ -73,9 +73,17 @@ internal sealed class SoundingLevel
 /// <summary>One registered sounding source. <see cref="SoundingSourceRole.Program"/> sources MUST supply the
 /// trim and stop hooks - the registration API states the owner's rule rather than leaving it to a bool a
 /// caller can forget: whatever the fader reaches, both stops reach.</summary>
+/// <param name="Label">Human-readable and UNIQUE per source (per voice, not per cue - a loop crossfade puts
+/// two voices of the same cue on the bus at once, and two identical labels would defeat the duplicate check
+/// that is how a lingering registration is meant to fail loudly).</param>
+/// <param name="SubjectId">The show-level id this source IS - a cue id for a transport voice, the tile id for
+/// a soundboard voice. Distinct from <paramref name="Label"/> on purpose: the label identifies a bus ENTRY
+/// (and so carries the group and a uniquifier), while an operator-facing alert has to name the thing the
+/// operator knows, which the host resolves from this id.</param>
 internal sealed record SoundingSourceRegistration(
     Guid Id,
     string Label,
+    string SubjectId,
     SoundingSourceRole Role,
     Func<bool> IsSounding,
     Func<float> Level,
@@ -100,6 +108,7 @@ internal sealed class SoundingSourceRegistry
     /// exists to close.</summary>
     public Guid RegisterProgram(
         string label,
+        string subjectId,
         Func<bool> isSounding,
         Func<float> level,
         Action<float> applyMasterTrim,
@@ -109,7 +118,7 @@ internal sealed class SoundingSourceRegistry
         ArgumentNullException.ThrowIfNull(stop);
         var id = Guid.NewGuid();
         _sources.Add(new SoundingSourceRegistration(
-            id, label, SoundingSourceRole.Program, isSounding, level, applyMasterTrim, stop));
+            id, label, subjectId, SoundingSourceRole.Program, isSounding, level, applyMasterTrim, stop));
         return id;
     }
 
@@ -119,8 +128,10 @@ internal sealed class SoundingSourceRegistry
     public Guid RegisterMonitoring(string label, Func<bool> isSounding, Func<float> level)
     {
         var id = Guid.NewGuid();
+        // No stop hook ⇒ no stop can fail ⇒ nothing ever needs a monitoring source's subject id; the label
+        // stands in so the record has no meaningless second name to keep in sync.
         _sources.Add(new SoundingSourceRegistration(
-            id, label, SoundingSourceRole.Monitoring, isSounding, level));
+            id, label, label, SoundingSourceRole.Monitoring, isSounding, level));
         return id;
     }
 
