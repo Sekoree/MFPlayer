@@ -386,16 +386,22 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     [RelayCommand]
     private void SetChromaKeyBlue() => ChromaKeyColorHex = "#0000FF";
 
-    /// <summary>Sets the destination rectangle, clamped to the canvas with a sane minimum size.</summary>
+    /// <summary>Sets the destination rectangle, kept to a usable size and to the reachable range.
+    /// <para>It used to clamp the position to <c>[0, 1-size]</c>, i.e. wholly inside the composition. That
+    /// forbade things operators legitimately author: a lower third or logo sliding in from off-canvas, or a
+    /// source deliberately oversized so it fills and crops. A placement may now be moved until it is exactly
+    /// fully outside - and no further, so it can always be dragged back - and sized past the canvas up to
+    /// <see cref="NormalizedRectRange.MaxSize"/>. Edge alignment is the editor's job now (snapping), not a
+    /// clamp's: <c>HaPlay.Views.Controls.PlacementSnapMath</c>.</para></summary>
     public void SetDestRect(double x, double y, double width, double height)
     {
-        width = Math.Clamp(width, 0.02, 1.0);
-        height = Math.Clamp(height, 0.02, 1.0);
+        width = Math.Clamp(width, NormalizedRectRange.MinSize, NormalizedRectRange.MaxSize);
+        height = Math.Clamp(height, NormalizedRectRange.MinSize, NormalizedRectRange.MaxSize);
         _normalizingDestinationRect = true;
         try
         {
-            DestX = Math.Clamp(x, 0.0, 1.0 - width);
-            DestY = Math.Clamp(y, 0.0, 1.0 - height);
+            DestX = NormalizedRectRange.ClampPosition(x, width);
+            DestY = NormalizedRectRange.ClampPosition(y, height);
             DestWidth = width;
             DestHeight = height;
         }
@@ -415,10 +421,12 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         if (_normalizingDestinationRect)
             return;
 
-        var width = Math.Clamp(DestWidth, 0.02, 1.0);
-        var height = Math.Clamp(DestHeight, 0.02, 1.0);
-        var x = Math.Clamp(DestX, 0.0, 1.0 - width);
-        var y = Math.Clamp(DestY, 0.0, 1.0 - height);
+        // Same range as SetDestRect - a typed-in or deserialized value gets the identical treatment to a
+        // dragged one, so an off-canvas placement authored by dragging survives a save/load round trip.
+        var width = Math.Clamp(DestWidth, NormalizedRectRange.MinSize, NormalizedRectRange.MaxSize);
+        var height = Math.Clamp(DestHeight, NormalizedRectRange.MinSize, NormalizedRectRange.MaxSize);
+        var x = NormalizedRectRange.ClampPosition(DestX, width);
+        var y = NormalizedRectRange.ClampPosition(DestY, height);
 
         if (NearlyEqual(DestX, x)
             && NearlyEqual(DestY, y)
@@ -451,10 +459,16 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         LayerIndex = LayerIndex,
         Position = Position,
         Opacity = Math.Clamp(Opacity, 0.0, 1.0),
-        DestX = Math.Clamp(DestX, 0.0, 1.0),
-        DestY = Math.Clamp(DestY, 0.0, 1.0),
-        DestWidth = Math.Clamp(DestWidth, 0.0, 1.0),
-        DestHeight = Math.Clamp(DestHeight, 0.0, 1.0),
+        // The SAME range as SetDestRect / NormalizeDestinationRect - never [0,1]. This conversion is what the
+        // compositor actually receives, so a narrower clamp here silently discarded the authoring: a layer
+        // dragged off the left or top edge arrived as if it sat at 0 and its frame simply stopped at the
+        // canvas edge, while a positive offset passed through untouched - which is why dragging right and
+        // down looked fixed and left and up did not. Clipping an off-canvas layer is the compositor's job
+        // (PlacementResolver), and it cannot do it if the offset never reaches it.
+        DestX = NormalizedRectRange.ClampPosition(DestX, DestWidth),
+        DestY = NormalizedRectRange.ClampPosition(DestY, DestHeight),
+        DestWidth = NormalizedRectRange.ClampSize(DestWidth),
+        DestHeight = NormalizedRectRange.ClampSize(DestHeight),
         CropLeft = Math.Clamp(CropLeft, 0.0, 0.99),
         CropTop = Math.Clamp(CropTop, 0.0, 0.99),
         CropRight = Math.Clamp(CropRight, 0.0, 0.99),

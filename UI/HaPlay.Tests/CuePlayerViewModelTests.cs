@@ -570,23 +570,86 @@ public sealed class CuePlayerViewModelTests
         Assert.Equal(0.0, p.CropLeft + p.CropTop + p.CropRight + p.CropBottom);
     }
 
+    /// <summary>A placement may be positioned partly or fully OUTSIDE its composition - a lower third that
+    /// slides in, a source oversized to fill and crop. This used to assert the opposite ("stay inside
+    /// canvas"): position was clamped to [0, 1-size], which silently rewrote an operator's off-canvas
+    /// authoring, and made it impossible to author at all. The range is still finite, so nothing can be
+    /// pushed somewhere it cannot be dragged back from - see <see cref="NormalizedRectRange"/>. Typed edits
+    /// and dragging go through the same rule; that is what this test is really pinning.</summary>
+    /// <summary>
+    /// The MODEL conversion must carry an out-of-bounds placement through unchanged. This is the last link in
+    /// the chain: <c>ToModel</c> clamped DestX/DestY/DestWidth/DestHeight to [0,1], so a placement dragged off
+    /// the left or top edge arrived at the compositor as if it sat at 0 - "on the actual output the video frame
+    /// just stops at the top or left edge". A positive offset survived the clamp untouched, which is exactly
+    /// why dragging right and down appeared to work while left and up did nothing.
+    /// <para>Round-trips through <c>FromModel</c> too: a saved-and-reloaded project must show the placement
+    /// where the operator left it, not snapped back inside.</para>
+    /// </summary>
     [Fact]
-    public void PlacementDestinationNumericEdits_StayInsideCanvas()
+    public void PlacementToModel_KeepsAnOutOfBoundsRectangle_ItIsTheCompositorsInput()
+    {
+        var vm = new CueVideoPlacementViewModel { CompositionId = Guid.NewGuid() };
+        vm.SetDestRect(-0.25, -0.4, 1.0, 1.0);
+
+        var model = vm.ToModel();
+        Assert.Equal(-0.25, model.DestX, 5);
+        Assert.Equal(-0.4, model.DestY, 5);
+        Assert.Equal(1.0, model.DestWidth, 5);
+        Assert.Equal(1.0, model.DestHeight, 5);
+
+        // Oversize (fill-and-crop) survives as well - the old Maximum of 1 silently shrank it.
+        var oversized = new CueVideoPlacementViewModel { CompositionId = Guid.NewGuid() };
+        oversized.SetDestRect(-0.5, -0.5, 1.8, 1.8);
+        var oversizedModel = oversized.ToModel();
+        Assert.Equal(1.8, oversizedModel.DestWidth, 5);
+        Assert.Equal(1.8, oversizedModel.DestHeight, 5);
+
+        // …and it comes back the same way, so a save/load leaves the layer where it was placed.
+        var reloaded = CueVideoPlacementViewModel.FromModel(model);
+        Assert.Equal(-0.25, reloaded.DestX, 5);
+        Assert.Equal(-0.4, reloaded.DestY, 5);
+
+        // ONE HOP FURTHER, deliberately: the framework-facing value the compositor is handed. Checking each
+        // layer in isolation is what let this survive several rounds - the canvas, the snap math, the view
+        // model and the drawer editors were each verified correct while the value was still being flattened
+        // one hop later. HaPlay authors top-left-origin; the compositor's Y axis is bottom-left, so the
+        // mapper flips it: a layer pushed UP by 0.4 (DestY -0.4, full height) sits at bottom-left Y +0.4.
+        var spec = HaPlayShowMapper.ToShowVideoPlacement(model);
+        Assert.Equal(-0.25, spec.DestX, 5);
+        Assert.Equal(0.4, spec.DestY, 5);
+        Assert.Equal(1.0, spec.DestWidth, 5);
+        Assert.Equal(1.0, spec.DestHeight, 5);
+    }
+
+    [Fact]
+    public void PlacementDestination_MayLeaveTheCanvas_ButStaysReachable()
     {
         var p = new CueVideoPlacementViewModel();
-        p.SetDestRect(0.9, 0.8, 0.5, 0.4);
 
-        Assert.Equal(0.5, p.DestX, 5);
-        Assert.Equal(0.6, p.DestY, 5);
+        // Partly off the right/bottom edge is preserved exactly, no longer pulled back inside.
+        p.SetDestRect(0.9, 0.8, 0.5, 0.4);
+        Assert.Equal(0.9, p.DestX, 5);
+        Assert.Equal(0.8, p.DestY, 5);
         Assert.Equal(0.5, p.DestWidth, 5);
         Assert.Equal(0.4, p.DestHeight, 5);
 
-        p.DestWidth = 0.001;
-        p.DestHeight = 2.0;
+        // Fully off the leading edge (x = -width) is the far limit, and it is honoured…
+        p.SetDestRect(-0.5, -0.4, 0.5, 0.4);
+        Assert.Equal(-0.5, p.DestX, 5);
+        Assert.Equal(-0.4, p.DestY, 5);
 
-        Assert.Equal(0.02, p.DestWidth, 5);
-        Assert.Equal(1.0, p.DestHeight, 5);
-        Assert.Equal(0.0, p.DestY, 5);
+        // …and pushing beyond it stops there rather than vanishing off to an unreachable coordinate.
+        p.SetDestRect(-99, 99, 0.5, 0.4);
+        Assert.Equal(-0.5, p.DestX, 5);
+        Assert.Equal(1.0, p.DestY, 5);
+
+        // Sizes: a collapse is still refused (an ungrabbable rect), oversize is now allowed up to the cap.
+        p.DestWidth = 0.001;
+        Assert.Equal(NormalizedRectRange.MinSize, p.DestWidth, 5);
+        p.DestHeight = 2.0;
+        Assert.Equal(2.0, p.DestHeight, 5);
+        p.DestHeight = 99;
+        Assert.Equal(NormalizedRectRange.MaxSize, p.DestHeight, 5);
     }
 
     [Fact]

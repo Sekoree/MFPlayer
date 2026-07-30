@@ -61,8 +61,11 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     [ObservableProperty]
     private CueTriggerMode _defaultTriggerMode = CueTriggerMode.Manual;
 
+    /// <summary>Mirrors <see cref="CueList.AutoRenumberOnInsert"/>, including its default ON - a list created
+    /// in the app must start in the same state as a freshly constructed model, or the two disagree about what
+    /// "new" means and the answer depends on whether the list was saved first.</summary>
     [ObservableProperty]
-    private bool _autoRenumberOnInsert;
+    private bool _autoRenumberOnInsert = true;
 
     /// <summary>Null = fall back to the app-settings stop fade (<c>AppSettings.StopFadeMs</c>).</summary>
     [ObservableProperty]

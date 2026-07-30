@@ -118,13 +118,18 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
     /// items are intentionally allowed (a video wall may blend or leave bezels).</summary>
     public void SetSrcRect(double x, double y, double width, double height)
     {
-        width = Math.Clamp(width, 1.0 / CanvasWidth, 1.0);
-        height = Math.Clamp(height, 1.0 / CanvasHeight, 1.0);
+        // Out-of-bounds is allowed on purpose (HaPlay.Models.NormalizedRectRange): a composition
+        // letterboxed inside a mismatched output has to be placeable off-centre and even partly outside,
+        // which the old clamp to [0, 1-size] forbade. Still finite, so it can always be dragged back.
+        width = Math.Clamp(width, Math.Max(NormalizedRectRange.MinSize, 1.0 / CanvasWidth),
+            NormalizedRectRange.MaxSize);
+        height = Math.Clamp(height, Math.Max(NormalizedRectRange.MinSize, 1.0 / CanvasHeight),
+            NormalizedRectRange.MaxSize);
         _normalizingSourceRect = true;
         try
         {
-            SrcX = Math.Clamp(x, 0.0, 1.0 - width);
-            SrcY = Math.Clamp(y, 0.0, 1.0 - height);
+            SrcX = NormalizedRectRange.ClampPosition(x, width);
+            SrcY = NormalizedRectRange.ClampPosition(y, height);
             SrcWidth = width;
             SrcHeight = height;
         }
@@ -147,10 +152,13 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
     {
         if (!_normalizingSourceRect)
         {
-            var width = Math.Clamp(SrcWidth, 1.0 / CanvasWidth, 1.0);
-            var height = Math.Clamp(SrcHeight, 1.0 / CanvasHeight, 1.0);
-            var x = Math.Clamp(SrcX, 0.0, 1.0 - width);
-            var y = Math.Clamp(SrcY, 0.0, 1.0 - height);
+            // Same range as SetSrcRect - a pixel value typed into the boxes, or one loaded from a project,
+            // must be treated exactly like a dragged one, or an off-centre/letterboxed layout would be
+            // snapped back inside the canvas the moment anything re-normalized it.
+            var width = NormalizedRectRange.ClampSize(SrcWidth, 1.0 / CanvasWidth);
+            var height = NormalizedRectRange.ClampSize(SrcHeight, 1.0 / CanvasHeight);
+            var x = NormalizedRectRange.ClampPosition(SrcX, width);
+            var y = NormalizedRectRange.ClampPosition(SrcY, height);
             if (!NearlyEqual(SrcX, x)
                 || !NearlyEqual(SrcY, y)
                 || !NearlyEqual(SrcWidth, width)
@@ -191,6 +199,13 @@ public sealed partial class CompositionOutputLayoutViewModel : ViewModelBase
         CanvasWidth = Math.Max(1, canvasWidth);
         CanvasHeight = Math.Max(1, canvasHeight);
     }
+
+    /// <summary>Whether dragging pulls an output's edges/centre onto the canvas edges/centre. Editor
+    /// preference, not layout data. Centring is the reason it exists: letterboxing a composition inside an
+    /// output of a different aspect ratio means landing exactly on the centre guide, which is one exact
+    /// value out of a continuum.</summary>
+    [ObservableProperty]
+    private bool _snapToEdges = true;
 
     public int CanvasWidth { get; }
 

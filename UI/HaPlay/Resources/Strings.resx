@@ -3737,7 +3737,16 @@
     <value>Bottom right</value>
   </data>
   <data name="PlacementCanvasDragHint" xml:space="preserve">
-    <value>Drag a layer to move it. Drag the bottom-right handle to resize; hold Shift to resize without locking the aspect ratio.</value>
+    <value>Drag a layer to move it. Drag the bottom-right handle to resize; hold Shift to resize without locking the aspect ratio. A layer may be dragged partly or fully outside the composition - the part outside the outline is ghosted, and will not be rendered. Hold Ctrl while dragging to ignore snapping.</value>
+  </data>
+  <data name="PlacementSnapToEdgesLabel" xml:space="preserve">
+    <value>Snap to edges</value>
+  </data>
+  <data name="PlacementSnapToEdgesTooltip" xml:space="preserve">
+    <value>Pull edges and centre onto the composition's edges and centre while dragging. Hold Ctrl to override for one drag.</value>
+  </data>
+  <data name="OutputLayoutSnapToEdgesTooltip" xml:space="preserve">
+    <value>Pull edges and centre onto the output's edges and centre while dragging - how a composition is centred (letterboxed) in an output of a different aspect ratio. Hold Ctrl to override for one drag.</value>
   </data>
   <data name="PlacementPositionLabel" xml:space="preserve">
     <value>Position</value>

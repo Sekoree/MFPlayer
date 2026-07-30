@@ -296,7 +296,11 @@
                    Opacity="0.65"
                    IsVisible="{Binding !HasSelectedCue}" />
         <!-- MaxHeight caps the bottom drawer so a tall tab (e.g. several video placements) can't push it
-             out of the window; each tab's content is in a ScrollViewer, which then scrolls within the cap. -->
+             out of the window; each tab's content is in a ScrollViewer, which then scrolls within the cap.
+             EVERY tab, without exception - the cap and the splitter's 88 px MinHeight mean any tab can end
+             up shorter than its content, and a tab whose root is a bare panel then clips instead of
+             scrolling (the Group tab in Playlist mode is ~250 px of options, and Action/Comment/Preview
+             have fixed-height content of their own). A new tab must be wrapped too. -->
         <TabControl Grid.Row="1" x:Name="CueDrawerTabs" Classes="Segmented" Margin="0,4,0,0" MaxHeight="440"
                     IsVisible="{Binding HasSelectedCue}"
                     HorizontalAlignment="Stretch"
@@ -747,40 +751,42 @@
 
           <TabItem Header="{x:Static res:Strings.CuePreviewTabLabel}"
                    IsVisible="{Binding HasSelectedMediaCue}">
-            <DockPanel Margin="6">
-              <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,*" ColumnSpacing="8" Margin="0,0,0,8">
-                <Button Grid.Column="0" Content="{Binding PreviewButtonLabel}"
-                        Command="{Binding TogglePreviewCommand}" />
-                <TextBlock Grid.Column="1" Text="{x:Static res:Strings.PreviewOutputLabel}"
-                           VerticalAlignment="Center" Opacity="0.7" />
-                <ComboBox Grid.Column="2" MinWidth="200"
-                          ItemsSource="{Binding PreviewAudioDevices}"
-                          SelectedItem="{Binding SelectedPreviewAudioDevice}" />
-                <TextBlock Grid.Column="3" Opacity="0.5" FontSize="12" VerticalAlignment="Center"
-                           Text="{x:Static res:Strings.CuePreviewWaveformHint}" />
-              </Grid>
-              <!-- The single preview/scrub surface: waveform when the cue has audio, the no-audio
-                   hint in the same box otherwise - the scrubber stays available either way (it
-                   used to vanish with the waveform, leaving video-only cues unseekable here). -->
-              <Border DockPanel.Dock="Top" Height="80" Margin="0,0,0,8">
-                <Grid>
-                  <controls:WaveformControl
-                      IsVisible="{Binding HasSelectedCueWaveform}"
-                      Peaks="{Binding SelectedCueWaveform}"
-                      Revision="{Binding SelectedCueWaveformRevision}" />
-                  <TextBlock Opacity="0.55" FontSize="12"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"
-                             IsVisible="{Binding !HasSelectedCueWaveform}"
-                             Text="{x:Static res:Strings.CuePreviewNoAudioHint}" />
-                  <Slider Name="CuePreviewScrubber"
-                          Minimum="0" Maximum="1000"
-                          Value="{Binding CueScrubberValue, Mode=TwoWay}"
-                          IsVisible="{Binding IsCueScrubberVisible}"
-                          ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}"
-                          Opacity="0.6" />
+            <ScrollViewer>
+              <DockPanel Margin="6">
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,*" ColumnSpacing="8" Margin="0,0,0,8">
+                  <Button Grid.Column="0" Content="{Binding PreviewButtonLabel}"
+                          Command="{Binding TogglePreviewCommand}" />
+                  <TextBlock Grid.Column="1" Text="{x:Static res:Strings.PreviewOutputLabel}"
+                             VerticalAlignment="Center" Opacity="0.7" />
+                  <ComboBox Grid.Column="2" MinWidth="200"
+                            ItemsSource="{Binding PreviewAudioDevices}"
+                            SelectedItem="{Binding SelectedPreviewAudioDevice}" />
+                  <TextBlock Grid.Column="3" Opacity="0.5" FontSize="12" VerticalAlignment="Center"
+                             Text="{x:Static res:Strings.CuePreviewWaveformHint}" />
                 </Grid>
-              </Border>
-            </DockPanel>
+                <!-- The single preview/scrub surface: waveform when the cue has audio, the no-audio
+                     hint in the same box otherwise - the scrubber stays available either way (it
+                     used to vanish with the waveform, leaving video-only cues unseekable here). -->
+                <Border DockPanel.Dock="Top" Height="80" Margin="0,0,0,8">
+                  <Grid>
+                    <controls:WaveformControl
+                        IsVisible="{Binding HasSelectedCueWaveform}"
+                        Peaks="{Binding SelectedCueWaveform}"
+                        Revision="{Binding SelectedCueWaveformRevision}" />
+                    <TextBlock Opacity="0.55" FontSize="12"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding !HasSelectedCueWaveform}"
+                               Text="{x:Static res:Strings.CuePreviewNoAudioHint}" />
+                    <Slider Name="CuePreviewScrubber"
+                            Minimum="0" Maximum="1000"
+                            Value="{Binding CueScrubberValue, Mode=TwoWay}"
+                            IsVisible="{Binding IsCueScrubberVisible}"
+                            ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}"
+                            Opacity="0.6" />
+                  </Grid>
+                </Border>
+              </DockPanel>
+            </ScrollViewer>
           </TabItem>
 
           <TabItem Header="{x:Static res:Strings.AudioTabLabel}"
@@ -1003,8 +1009,12 @@
                       Placements="{Binding VisibleVideoPlacements}"
                       SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
                       AspectRatio="{Binding PlacementCanvasAspect}"
+                      SnapToEdges="{Binding SnapPlacementsToEdges}"
                       TextBounds="{Binding SelectedVideoCue.TextBounds}" />
                 </Border>
+                <CheckBox Content="{x:Static res:Strings.PlacementSnapToEdgesLabel}"
+                          ToolTip.Tip="{x:Static res:Strings.PlacementSnapToEdgesTooltip}"
+                          IsChecked="{Binding SnapPlacementsToEdges, Mode=TwoWay}" />
                 <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap"
                            Text="{x:Static res:Strings.PlacementCanvasDragHint}" />
 
@@ -1012,16 +1022,22 @@
                            IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
                   <TextBlock Text="{x:Static res:Strings.PlacementPositionLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <TextBlock Text="{x:Static res:Strings.PlacementXLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <!-- The range MUST match Models.NormalizedRectRange, because these editors are two-way: a
+                       narrower Minimum/Maximum here does not merely restrict typing, it COERCES the value the
+                       drag just wrote and pushes it back, so dragging a placement out of the composition
+                       snapped straight back to the edge and looked like nothing happened. -2 is -MaxSize (a
+                       full-size layer dragged entirely off the left); the view model clamps to the exact
+                       per-size bound. -->
+                  <NumericUpDown Width="125" Minimum="-2" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestX, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementYLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="-2" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestY, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementWidthLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="125" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0.02" Maximum="2" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestWidth, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementHeightLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="125" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0.02" Maximum="2" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestHeight, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementRotationLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <NumericUpDown Width="125" Minimum="-180" Maximum="180" Increment="1" FormatString="0"
@@ -1356,104 +1372,21 @@
 
           <TabItem Header="{x:Static res:Strings.ActionTabLabel}"
                    IsVisible="{Binding HasSelectedActionCue}">
-            <StackPanel Spacing="8" Margin="6">
-              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionTargetLabel}" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1"
-                           Text="{Binding SelectedActionEndpointSummary}"
-                           VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis"
-                           Opacity="0.8" />
-              </Grid>
-              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionKindLabel}" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="1"
-                          ItemsSource="{Binding ActionKinds}"
-                          SelectedItem="{Binding SelectedActionCue.ActionKind, Mode=TwoWay}">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
-                    </DataTemplate>
-                  </ComboBox.ItemTemplate>
-                </ComboBox>
-              </Grid>
-              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionCommandLabel}" VerticalAlignment="Center" />
-                <TextBox Grid.Column="1" Text="{Binding SelectedActionCue.SourceOrAction, Mode=TwoWay}" />
-              </Grid>
-              <Button Content="{x:Static res:Strings.EditActionButton}"
-                      Command="{Binding EditActionCueCommand}"
-                      HorizontalAlignment="Left" />
-            </StackPanel>
-          </TabItem>
-
-          <TabItem Header="{x:Static res:Strings.CommentTabLabel}"
-                   IsVisible="{Binding HasSelectedCommentCue}">
-            <StackPanel Spacing="6" Margin="6">
-              <TextBlock Text="{x:Static res:Strings.CommentTextLabel}" />
-              <TextBox AcceptsReturn="True"
-                       MinHeight="120"
-                       TextWrapping="Wrap"
-                       Text="{Binding SelectedCommentCue.SourceOrAction, Mode=TwoWay}" />
-            </StackPanel>
-          </TabItem>
-
-          <TabItem Header="{x:Static res:Strings.GroupTabLabel}"
-                   IsVisible="{Binding HasSelectedGroupCue}">
-            <StackPanel Spacing="8" Margin="6">
-              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.GroupFireModeLabel}" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="1"
-                          ItemsSource="{Binding GroupFireModes}"
-                          SelectedItem="{Binding SelectedGroupCue.GroupFireMode, Mode=TwoWay}">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
-                    </DataTemplate>
-                  </ComboBox.ItemTemplate>
-                </ComboBox>
-              </Grid>
-              <Button Content="{x:Static res:Strings.GroupTimelineButton}"
-                      ToolTip.Tip="{x:Static res:Strings.GroupTimelineButtonTooltip}"
-                      HorizontalAlignment="Left"
-                      IsVisible="{Binding SelectedGroupCue.IsTimelineFireMode, FallbackValue=False}"
-                      Click="OnOpenTimelineEditorClick" />
-              <!-- Playlist options (Playlist auto-advances; Armed list is the same runtime with
-                   GO-only advance, so both share this panel). -->
-              <StackPanel Spacing="8"
-                          IsVisible="{Binding SelectedGroupCue.IsPlaylistFireMode, FallbackValue=False}">
-                <CheckBox Content="{x:Static res:Strings.PlaylistShuffleLabel}"
-                          IsChecked="{Binding SelectedGroupCue.PlaylistShuffle, Mode=TwoWay}" />
-                <CheckBox Content="{x:Static res:Strings.PlaylistAvoidImmediateRepeatLabel}"
-                          IsChecked="{Binding SelectedGroupCue.PlaylistAvoidImmediateRepeat, Mode=TwoWay}" />
-                <CheckBox Content="{x:Static res:Strings.PlaylistReshuffleEachPassLabel}"
-                          IsChecked="{Binding SelectedGroupCue.PlaylistReshuffleEachPass, Mode=TwoWay}"
-                          IsEnabled="{Binding SelectedGroupCue.PlaylistShuffle, FallbackValue=False}" />
-                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
-                  <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"
-                             Text="{x:Static res:Strings.PlaylistLoopCountLabel}" />
-                  <NumericUpDown FormatString="0" Grid.Row="0" Grid.Column="1"
-                                 Minimum="0" Maximum="9999"
-                                 Value="{Binding SelectedGroupCue.PlaylistLoopCount, Mode=TwoWay}" />
-                  <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center"
-                             Text="{x:Static res:Strings.PlaylistPlayCountLabel}" />
-                  <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="1"
-                                 Minimum="1" Maximum="9999"
-                                 Value="{Binding SelectedGroupCue.PlaylistPlayCountValue, Mode=TwoWay}" />
-                  <!-- Dual-voice crossfade between consecutive playlist items (Playlist mode; an armed
-                       list advances on GO and ignores it). -->
-                  <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"
-                             Text="{x:Static res:Strings.PlaylistCrossfadeMsLabel}"
-                             ToolTip.Tip="{x:Static res:Strings.PlaylistCrossfadeMsTooltip}" />
-                  <NumericUpDown FormatString="0" Grid.Row="2" Grid.Column="1"
-                                 Minimum="0" Maximum="60000" Increment="100"
-                                 ToolTip.Tip="{x:Static res:Strings.PlaylistCrossfadeMsTooltip}"
-                                 Value="{Binding SelectedGroupCue.PlaylistCrossfadeMs, Mode=TwoWay}" />
-                  <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center"
-                             Text="{x:Static res:Strings.PlaylistEndBehaviorLabel}" />
-                  <ComboBox Grid.Row="3" Grid.Column="1"
-                            ItemsSource="{Binding PlaylistEndBehaviors}"
-                            SelectedItem="{Binding SelectedGroupCue.PlaylistEndBehavior, Mode=TwoWay}">
+            <ScrollViewer>
+              <StackPanel Spacing="8" Margin="6">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionTargetLabel}" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1"
+                             Text="{Binding SelectedActionEndpointSummary}"
+                             VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"
+                             Opacity="0.8" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionKindLabel}" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding ActionKinds}"
+                            SelectedItem="{Binding SelectedActionCue.ActionKind, Mode=TwoWay}">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -1461,8 +1394,97 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
                 </Grid>
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionCommandLabel}" VerticalAlignment="Center" />
+                  <TextBox Grid.Column="1" Text="{Binding SelectedActionCue.SourceOrAction, Mode=TwoWay}" />
+                </Grid>
+                <Button Content="{x:Static res:Strings.EditActionButton}"
+                        Command="{Binding EditActionCueCommand}"
+                        HorizontalAlignment="Left" />
               </StackPanel>
-            </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="{x:Static res:Strings.CommentTabLabel}"
+                   IsVisible="{Binding HasSelectedCommentCue}">
+            <ScrollViewer>
+              <StackPanel Spacing="6" Margin="6">
+                <TextBlock Text="{x:Static res:Strings.CommentTextLabel}" />
+                <TextBox AcceptsReturn="True"
+                         MinHeight="120"
+                         TextWrapping="Wrap"
+                         Text="{Binding SelectedCommentCue.SourceOrAction, Mode=TwoWay}" />
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="{x:Static res:Strings.GroupTabLabel}"
+                   IsVisible="{Binding HasSelectedGroupCue}">
+            <ScrollViewer>
+              <StackPanel Spacing="8" Margin="6">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.GroupFireModeLabel}" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding GroupFireModes}"
+                            SelectedItem="{Binding SelectedGroupCue.GroupFireMode, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </Grid>
+                <Button Content="{x:Static res:Strings.GroupTimelineButton}"
+                        ToolTip.Tip="{x:Static res:Strings.GroupTimelineButtonTooltip}"
+                        HorizontalAlignment="Left"
+                        IsVisible="{Binding SelectedGroupCue.IsTimelineFireMode, FallbackValue=False}"
+                        Click="OnOpenTimelineEditorClick" />
+                <!-- Playlist options (Playlist auto-advances; Armed list is the same runtime with
+                     GO-only advance, so both share this panel). -->
+                <StackPanel Spacing="8"
+                            IsVisible="{Binding SelectedGroupCue.IsPlaylistFireMode, FallbackValue=False}">
+                  <CheckBox Content="{x:Static res:Strings.PlaylistShuffleLabel}"
+                            IsChecked="{Binding SelectedGroupCue.PlaylistShuffle, Mode=TwoWay}" />
+                  <CheckBox Content="{x:Static res:Strings.PlaylistAvoidImmediateRepeatLabel}"
+                            IsChecked="{Binding SelectedGroupCue.PlaylistAvoidImmediateRepeat, Mode=TwoWay}" />
+                  <CheckBox Content="{x:Static res:Strings.PlaylistReshuffleEachPassLabel}"
+                            IsChecked="{Binding SelectedGroupCue.PlaylistReshuffleEachPass, Mode=TwoWay}"
+                            IsEnabled="{Binding SelectedGroupCue.PlaylistShuffle, FallbackValue=False}" />
+                  <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                    <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"
+                               Text="{x:Static res:Strings.PlaylistLoopCountLabel}" />
+                    <NumericUpDown FormatString="0" Grid.Row="0" Grid.Column="1"
+                                   Minimum="0" Maximum="9999"
+                                   Value="{Binding SelectedGroupCue.PlaylistLoopCount, Mode=TwoWay}" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center"
+                               Text="{x:Static res:Strings.PlaylistPlayCountLabel}" />
+                    <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="1"
+                                   Minimum="1" Maximum="9999"
+                                   Value="{Binding SelectedGroupCue.PlaylistPlayCountValue, Mode=TwoWay}" />
+                    <!-- Dual-voice crossfade between consecutive playlist items (Playlist mode; an armed
+                         list advances on GO and ignores it). -->
+                    <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"
+                               Text="{x:Static res:Strings.PlaylistCrossfadeMsLabel}"
+                               ToolTip.Tip="{x:Static res:Strings.PlaylistCrossfadeMsTooltip}" />
+                    <NumericUpDown FormatString="0" Grid.Row="2" Grid.Column="1"
+                                   Minimum="0" Maximum="60000" Increment="100"
+                                   ToolTip.Tip="{x:Static res:Strings.PlaylistCrossfadeMsTooltip}"
+                                   Value="{Binding SelectedGroupCue.PlaylistCrossfadeMs, Mode=TwoWay}" />
+                    <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center"
+                               Text="{x:Static res:Strings.PlaylistEndBehaviorLabel}" />
+                    <ComboBox Grid.Row="3" Grid.Column="1"
+                              ItemsSource="{Binding PlaylistEndBehaviors}"
+                              SelectedItem="{Binding SelectedGroupCue.PlaylistEndBehavior, Mode=TwoWay}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                          <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </Grid>
+                </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
           </TabItem>
         </TabControl>
         </Grid>

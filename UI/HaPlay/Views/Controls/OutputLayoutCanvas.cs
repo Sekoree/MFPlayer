@@ -52,6 +52,19 @@ public sealed class OutputLayoutCanvas : Control
     public static readonly StyledProperty<int> CanvasHeightProperty =
         AvaloniaProperty.Register<OutputLayoutCanvas, int>(nameof(CanvasHeight));
 
+    /// <summary>Pull a dragged section's edges and centre onto the output's edges and centre (see
+    /// <see cref="PlacementSnapMath"/>). On by default - centring is how a composition gets letterboxed
+    /// inside an output of a different aspect, and "dead centre" is a single exact value that is
+    /// impractical to hit by hand. Hold Ctrl to override a guide for one drag.</summary>
+    public static readonly StyledProperty<bool> SnapToEdgesProperty =
+        AvaloniaProperty.Register<OutputLayoutCanvas, bool>(nameof(SnapToEdges), true);
+
+    public bool SnapToEdges
+    {
+        get => GetValue(SnapToEdgesProperty);
+        set => SetValue(SnapToEdgesProperty, value);
+    }
+
     private readonly List<OutputLayoutItemViewModel> _watched = new();
     private OutputLayoutItemViewModel? _drag;
     private bool _resizing;
@@ -60,7 +73,7 @@ public sealed class OutputLayoutCanvas : Control
 
     static OutputLayoutCanvas()
     {
-        AffectsRender<OutputLayoutCanvas>(SelectedItemProperty, AspectRatioProperty);
+        AffectsRender<OutputLayoutCanvas>(SelectedItemProperty, AspectRatioProperty, SnapToEdgesProperty);
     }
 
     public OutputLayoutCanvas()
@@ -135,11 +148,18 @@ public sealed class OutputLayoutCanvas : Control
 
     private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e) => InvalidateVisual();
 
+    /// <summary>Fraction of the control reserved AROUND the canvas on each side, so a section dragged out of
+    /// bounds is visible instead of being clipped at the control edge (which reads as a resize, and leaves
+    /// nothing to grab). Same rationale as CompositionPlacementCanvas.WorkAreaMargin.</summary>
+    private const double WorkAreaMargin = 0.13;
+
     private Rect CanvasRect()
     {
         var aspect = AspectRatio <= 0 ? 16.0 / 9.0 : AspectRatio;
-        var availW = Math.Max(1, Bounds.Width - Pad * 2);
-        var availH = Math.Max(1, Bounds.Height - Pad * 2);
+        var marginX = Bounds.Width * WorkAreaMargin;
+        var marginY = Bounds.Height * WorkAreaMargin;
+        var availW = Math.Max(1, Bounds.Width - Math.Max(Pad, marginX) * 2);
+        var availH = Math.Max(1, Bounds.Height - Math.Max(Pad, marginY) * 2);
         var cw = Math.Min(availW, availH * aspect);
         var ch = cw / aspect;
         if (ch > availH) { ch = availH; cw = ch * aspect; }
@@ -164,14 +184,33 @@ public sealed class OutputLayoutCanvas : Control
         ctx.DrawRectangle(null, new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0x80, 0x80, 0x80))), canvas);
 
         if (Items is null) return;
+
+        // A section may now overhang the canvas, so boxes are clipped to this CONTROL - visible in the work
+        // area margin, never painting over the surrounding dialog.
+        using var clip = ctx.PushClip(new Rect(Bounds.Size));
         foreach (var i in Items.OfType<OutputLayoutItemViewModel>())
         {
             var box = BoxRect(canvas, i);
             var selected = ReferenceEquals(i, SelectedItem);
             var hue = ColorFor(i);
             // Translucent fill so overlapping outputs visibly blend; opaque-ish border for the edge.
-            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(selected ? (byte)0x66 : (byte)0x3A, hue.R, hue.G, hue.B)), box);
-            ctx.DrawRectangle(null, new Pen(new SolidColorBrush(hue), selected ? 2 : 1), box);
+            // Two passes so "outside the canvas" is unmistakable: ghosted where it overhangs, full strength
+            // inside. The overhang is authored but never rendered, so it must not look identical to the rest.
+            var boxFill = new SolidColorBrush(
+                Color.FromArgb(selected ? (byte)0x66 : (byte)0x3A, hue.R, hue.G, hue.B));
+            var boxPen = new Pen(new SolidColorBrush(hue), selected ? 2 : 1);
+            if (!canvas.Contains(box))
+            {
+                using var ghost = ctx.PushOpacity(0.35);
+                ctx.FillRectangle(boxFill, box);
+                ctx.DrawRectangle(null, boxPen, box);
+            }
+
+            using (ctx.PushClip(canvas))
+            {
+                ctx.FillRectangle(boxFill, box);
+                ctx.DrawRectangle(null, boxPen, box);
+            }
 
             var label = i.DisplayName;
             if (!string.IsNullOrEmpty(label))
@@ -188,6 +227,10 @@ public sealed class OutputLayoutCanvas : Control
                 ctx.FillRectangle(new SolidColorBrush(hue), handle);
             }
         }
+
+        // The canvas outline goes on TOP: it is what a section is being placed against (and what letterbox
+        // bars are measured from), so an overhanging section must not hide it.
+        ctx.DrawRectangle(null, new Pen(new SolidColorBrush(Color.FromArgb(0xAA, 0xA0, 0xA0, 0xA0)), 1), canvas);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -219,39 +262,80 @@ public sealed class OutputLayoutCanvas : Control
         }
     }
 
+    /// <summary>Cursor feedback before the press - see CompositionPlacementCanvas.UpdateHoverCursor for why
+    /// (a full-canvas section's resize handle sits exactly where you reach to push it out to the right).</summary>
+    private void UpdateHoverCursor(Point pt)
+    {
+        var canvas = CanvasRect();
+        if (canvas.Width <= 0 || Items is null)
+        {
+            Cursor = Cursor.Default;
+            return;
+        }
+
+        foreach (var i in Items.OfType<OutputLayoutItemViewModel>().Reverse())
+        {
+            var box = BoxRect(canvas, i);
+            if (ReferenceEquals(i, SelectedItem)
+                && new Rect(box.Right - HandleSize, box.Bottom - HandleSize, HandleSize, HandleSize).Contains(pt))
+            {
+                Cursor = new Cursor(StandardCursorType.BottomRightCorner);
+                return;
+            }
+
+            if (box.Contains(pt))
+            {
+                Cursor = new Cursor(StandardCursorType.SizeAll);
+                return;
+            }
+        }
+
+        Cursor = Cursor.Default;
+    }
+
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (_drag is null) return;
+        if (_drag is null)
+        {
+            UpdateHoverCursor(e.GetPosition(this));
+            return;
+        }
+
         var canvas = CanvasRect();
         if (canvas.Width <= 0 || canvas.Height <= 0) return;
         var pt = e.GetPosition(this);
         var nx = (pt.X - canvas.X) / canvas.Width;
         var ny = (pt.Y - canvas.Y) / canvas.Height;
 
+        // Ctrl suppresses snapping for one drag - place it exactly here without toggling the option off.
+        var snap = SnapToEdges && !e.KeyModifiers.HasFlag(KeyModifiers.Control);
+
         if (_resizing)
         {
-            var minW = CanvasWidth > 0 ? 1.0 / CanvasWidth : 0.002;
-            var minH = CanvasHeight > 0 ? 1.0 / CanvasHeight : 0.002;
-            var w = Math.Clamp(nx - _drag.SrcX, minW, 1.0 - _drag.SrcX);
-            var h = Math.Clamp(ny - _drag.SrcY, minH, 1.0 - _drag.SrcY);
+            var w = PlacementSnapMath.SnapResizeAxis(
+                _drag.SrcX, nx - _drag.SrcX, PlacementSnapMath.Threshold(canvas.Width), snap);
+            var h = PlacementSnapMath.SnapResizeAxis(
+                _drag.SrcY, ny - _drag.SrcY, PlacementSnapMath.Threshold(canvas.Height), snap);
 
             // Aspect-locked by default - keep the output's proportions so the output isn't distorted while
             // fine-tuning. Uncheck the item's aspect lock, or hold Shift, to resize width/height freely.
             if (_drag.AspectLocked && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _dragAspect > 0)
             {
-                h = w / _dragAspect;
-                if (_drag.SrcY + h > 1.0) { h = 1.0 - _drag.SrcY; w = h * _dragAspect; }
-                if (w < minW) { w = minW; h = w / _dragAspect; }
-                if (h < minH) { h = minH; w = h * _dragAspect; }
-                w = Math.Min(w, 1.0 - _drag.SrcX);
+                h = Math.Clamp(w / _dragAspect, PlacementSnapMath.MinSize, PlacementSnapMath.MaxSize);
+                w = Math.Clamp(h * _dragAspect, PlacementSnapMath.MinSize, PlacementSnapMath.MaxSize);
             }
+
             _drag.SetSrcRect(_drag.SrcX, _drag.SrcY, w, h);
         }
         else
         {
-            _drag.SetSrcRect(nx - _grabNorm.X, ny - _grabNorm.Y, _drag.SrcWidth, _drag.SrcHeight);
+            var moved = PlacementSnapMath.SnapAndClampMove(
+                nx - _grabNorm.X, ny - _grabNorm.Y, _drag.SrcWidth, _drag.SrcHeight, canvas, snap);
+            _drag.SetSrcRect(moved.X, moved.Y, _drag.SrcWidth, _drag.SrcHeight);
         }
+
+        InvalidateVisual(); // guide lines follow the drag
         e.Handled = true;
     }
 

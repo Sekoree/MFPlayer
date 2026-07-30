@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Avalonia.Headless;
 using HaPlay.Models;
 using HaPlay.ViewModels;
 using Xunit;
@@ -517,6 +518,183 @@ public sealed class PlaylistGroupTests
         Assert.Empty(fired);
         Assert.Null(vm.BuildPlaylistStatus(outerVm));
         Assert.False(vm.HasActivePlaylistRun(nested.Id));
+    }
+
+    // ---- A playlist group nested under an OVERLAP parent (fire-all / timeline) ----
+
+    /// <summary>Builds "fire all together" ⊃ [visualizer, playlist ⊃ [A, B]] - the shape from
+    /// testproject.haplayproj.</summary>
+    private static (CuePlayerViewModel Vm, CueNodeViewModel TopVm, Guid VisualizerId, Guid AId, Guid BId,
+        Guid PlaylistId, ConcurrentQueue<Guid> Fired, SemaphoreSlim Signal) BuildSimOverPlaylistVm(
+            CueGroupFireMode topMode = CueGroupFireMode.FireAllSimultaneously)
+    {
+        var visualizer = new VisualizerCueNode { Number = "2", Label = "Visualizer" };
+        var a = new MediaCueNode { Number = "3", Label = "A", Source = new FilePlaylistItem("/tmp/a.wav") };
+        var b = new MediaCueNode { Number = "4", Label = "B", Source = new FilePlaylistItem("/tmp/b.wav") };
+        var playlist = new CueGroupNode
+        {
+            Number = "5",
+            Label = "Playlist",
+            FireMode = CueGroupFireMode.Playlist,
+            Playlist = new CuePlaylistOptions { LoopCount = 1 },
+            Children = [a, b],
+        };
+        var top = new CueGroupNode
+        {
+            Number = "1",
+            Label = "Top",
+            FireMode = topMode,
+            Children = [visualizer, playlist],
+        };
+
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([new CueList { Nodes = [top] }]);
+        var fired = new ConcurrentQueue<Guid>();
+        var signal = new SemaphoreSlim(0);
+        vm.MediaCueExecutor = (cue, _) =>
+        {
+            vm.OnCueStarted(cue.Id);
+            fired.Enqueue(cue.Id);
+            signal.Release();
+            return Task.FromResult<string?>(null);
+        };
+        return (vm, vm.SelectedCueList!.Nodes[0], visualizer.Id, a.Id, b.Id, playlist.Id, fired, signal);
+    }
+
+    [Theory]
+    [InlineData(CueGroupFireMode.FireAllSimultaneously)]
+    [InlineData(CueGroupFireMode.Timeline)]
+    public void BuildTriggerPlan_OverlapGroup_FiresANestedPlaylistsARMEDPICK_NotAllOfItsItems(
+        CueGroupFireMode topMode)
+    {
+        // The reported bug (testproject.haplayproj): a top-level "fire all together" group holding a
+        // visualizer plus a PLAYLIST group started BOTH playlist items at once. Both overlap branches
+        // expanded a nested group through EnumerateFireableCueOrder, which recursively flattens groups to
+        // their leaf cues and so discards the nested group's own fire mode. For Playlist/ArmedList that is
+        // not just "extra cues": those modes own a RUN (armed pick, pass counters, natural-end advance), so
+        // flattening fires items the run never armed AND leaves the run unarmed, which is why the playlist
+        // could then never advance. A nested plain group has no such state - its flattening is a scoping
+        // choice, is pinned by TimelineGroupTests, and is deliberately left alone here.
+        var t = BuildSimOverPlaylistVm(topMode);
+
+        var plan = t.Vm.BuildTriggerPlan(t.TopVm);
+
+        Assert.Equal(2, plan.Count);
+        Assert.Contains(plan, p => p.Cue.Id == t.VisualizerId);
+        Assert.Contains(plan, p => p.Cue.Id == t.AId);
+        Assert.DoesNotContain(plan, p => p.Cue.Id == t.BId);
+    }
+
+    [Fact]
+    public async Task Go_OnAnOverlapGroup_AlsoFiresTheNonMediaLanes_WithTheHostsGroupExecutorWired()
+    {
+        // Reported against testproject.haplayproj: firing "OutGroup" (fire-all over [Visualizer, PLGroup])
+        // played the playlist item but never started the visualizer. The plan is right - what differs is
+        // the EXECUTION branch: same-delay steps go through the host's coordinated MediaCueGroupExecutor,
+        // and only the production host wires one. Tests that set MediaCueExecutor alone take the
+        // per-step else-branch instead, so they can never see this. Wiring the group executor here is the
+        // point of the test.
+        // Runs ON the headless UI thread: the lane's Now Playing row is created by a UI-thread-marshalled
+        // continuation, and a plain test never pumps that dispatcher, so the row could never appear no matter
+        // what the code did. DispatchAsync keeps pumping until the body completes.
+        await HeadlessUnitTestSession
+            .GetOrStartForAssembly(typeof(PlaylistGroupTests).Assembly)
+            .DispatchAsync(async () =>
+        {
+        var t = BuildSimOverPlaylistVm();
+        var visualizerFires = new ConcurrentQueue<Guid>();
+        var groupExecutorCues = new ConcurrentQueue<Guid>();
+        var visualizerSignal = new SemaphoreSlim(0);
+        t.Vm.VisualizerCueExecutor = (viz, _) =>
+        {
+            visualizerFires.Enqueue(viz.Id);
+            visualizerSignal.Release();
+            return Task.FromResult<string?>(null);
+        };
+        var mediaSignal = new SemaphoreSlim(0);
+        // Deliberately does NOT call OnCueStarted: this executor is invoked on a thread-pool thread, and
+        // marking a cue started from there touches UI-thread-affine view-model state. The assertions here
+        // only need to observe WHICH executors were reached, so the test records and returns.
+        t.Vm.MediaCueGroupExecutor = (cues, _) =>
+        {
+            foreach (var c in cues)
+                groupExecutorCues.Enqueue(c.Id);
+            mediaSignal.Release();
+            return Task.FromResult<string?>(null);
+        };
+
+        t.Vm.StandbyCueFromView(t.TopVm);
+        await t.Vm.GoCommand.ExecuteAsync(null);
+
+        Assert.True(await mediaSignal.WaitAsync(TimeSpan.FromSeconds(5)), "the playlist item never fired");
+        Assert.Equal(t.AId, Assert.Single(groupExecutorCues));
+
+        // The lane that is NOT a media cue has to start too - that is the whole point of "fire all together".
+        Assert.True(
+            await visualizerSignal.WaitAsync(TimeSpan.FromSeconds(5)),
+            "the visualizer lane never fired, so the fire-all group only started its media lane");
+        Assert.Equal(t.VisualizerId, Assert.Single(visualizerFires));
+
+        // …and it has to SHOW as running. A lane that plays with no indicator is indistinguishable from one
+        // that never fired - which is exactly how this was reported. The row is created by
+        // ApplyCueExecutionResult, which a silently-succeeding lane used to skip inside a batch.
+        await WaitUntilAsync(
+            // Now Playing nests a cue that belongs to a transport group under an ActiveGroupViewModel, so the
+            // visualizer's row is a CHILD row, not a top-level one.
+            () => t.Vm.NowPlayingRows.OfType<ActiveCueViewModel>().Any(r => r.CueId == t.VisualizerId)
+                  || t.Vm.NowPlayingRows.OfType<ActiveGroupViewModel>()
+                      .SelectMany(g => g.Children).Any(r => r.CueId == t.VisualizerId),
+            () => $"the visualizer started but never appeared as running in Now Playing. "
+            + $"status='{t.Vm.StatusMessage}' rows={t.Vm.NowPlayingRows.Count} "
+            + $"extra='{t.TopVm.Children[0].Extra}' kind={t.TopVm.Children[0].Kind}");
+        });
+    }
+
+    /// <summary>Polls a UI-thread-updated condition. The lane is dispatched on a pool thread and its result
+    /// is marshalled back, so the row appears shortly AFTER the executor was called.</summary>
+    private static async Task WaitUntilAsync(Func<bool> condition, Func<string> because)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!condition())
+        {
+            // The effect we are waiting for is queued onto the UI thread by a pool-thread continuation, and
+            // the headless session only runs queued jobs while something pumps it - an awaiting test body
+            // does not. Pump explicitly (the pattern RemoteApiDispatcherTests.DrainListenerHandlers uses),
+            // or the job sits in the queue and the wait can only ever time out.
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+                Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(DateTime.UtcNow < deadline, because());
+            await Task.Delay(25);
+        }
+    }
+
+    [Fact]
+    public async Task Go_OnAnOverlapGroup_ArmsTheNestedPlaylistRun_SoItStillAutoAdvances()
+    {
+        // The other half of the same bug, and the reason fixing the plan alone is not enough: the armed
+        // pick is CONSUMED by the GO path, which only did so when GO targeted the playlist group itself.
+        // Fired as part of a parent's plan the run stayed unarmed (CurrentItemId null), so the item's
+        // natural end was swallowed by FindPlaylistRunForEndedCue and the list never advanced.
+        var t = BuildSimOverPlaylistVm();
+        async Task<Guid> NextAsync()
+        {
+            Assert.True(await t.Signal.WaitAsync(TimeSpan.FromSeconds(5)), "timed out waiting for a cue fire");
+            Assert.True(t.Fired.TryDequeue(out var id));
+            return id;
+        }
+
+        t.Vm.StandbyCueFromView(t.TopVm);
+        await t.Vm.GoCommand.ExecuteAsync(null);
+
+        // The playlist's first item plays (the visualizer is not a media cue, so it does not queue here).
+        Assert.Equal(t.AId, await NextAsync());
+        Assert.True(
+            t.Vm.HasActivePlaylistRun(t.PlaylistId),
+            "firing the parent group left the nested playlist run unarmed");
+
+        // …and its natural end advances the nested run to the second item instead of being swallowed.
+        await t.Vm.OnMediaCueNaturallyEndedAsync(t.AId);
+        Assert.Equal(t.BId, await NextAsync());
     }
 
     // ---- Trigger-plan Independent flag ----

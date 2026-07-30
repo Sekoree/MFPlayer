@@ -344,10 +344,6 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>Wire the cue player to the shared output registry. Audio routes and video output
     /// bindings pick lines from this list directly - no per-cue-list device config.</summary>
-    // Video output lines we've hooked for window-resize → PlacementCanvasAspect refresh (see
-    // WatchVideoOutputLinesForResize). Held so the handlers can be detached before a rebucket.
-    private readonly List<OutputLineViewModel> _resizeWatchedOutputLines = new();
-
     public void SetAvailableOutputs(ObservableCollection<OutputLineViewModel> outputs)
     {
         AvailableOutputs = outputs;
@@ -396,34 +392,10 @@ public partial class CuePlayerViewModel : ViewModelBase
                     AvailableVideoOutputs.Add(line);
             }
         }
-        WatchVideoOutputLinesForResize();
         ResolveAllBindingLineRefs();
         // Line-up changes re-derive the preview preselect (no-op once the operator picked a device):
         // the first configured PortAudio line's device beats the implicit "Default device".
         ApplyAutomaticPreviewDeviceSelection();
-    }
-
-    // A local output's window resize replaces the line's Definition (OutputManagementViewModel
-    // .NotifyLocalPreviewResized); watch each video line so PlacementCanvasAspect re-reads the new window
-    // size and the placement canvas re-lays-out to match. Re-subscribed whenever the bucket is rebuilt.
-    private void WatchVideoOutputLinesForResize()
-    {
-        foreach (var line in _resizeWatchedOutputLines)
-            line.PropertyChanged -= OnAvailableOutputLineChanged;
-        _resizeWatchedOutputLines.Clear();
-        foreach (var line in AvailableVideoOutputs)
-        {
-            line.PropertyChanged += OnAvailableOutputLineChanged;
-            _resizeWatchedOutputLines.Add(line);
-        }
-    }
-
-    private void OnAvailableOutputLineChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName is nameof(OutputLineViewModel.Definition)
-            or nameof(OutputLineViewModel.LiveVideoWidth)
-            or nameof(OutputLineViewModel.LiveVideoHeight))
-            OnPropertyChanged(nameof(PlacementCanvasAspect));
     }
 
     private OutputLineViewModel? ResolveOutputLine(Guid lineId) =>
@@ -763,7 +735,22 @@ public partial class CuePlayerViewModel : ViewModelBase
     public ObservableCollection<CueVideoPlacementViewModel> VisibleVideoPlacements =>
         SelectedVideoCue?.VideoPlacements ?? _emptyVideoPlacements;
 
-    /// <summary>Aspect ratio (w/h) of the composition the placement editor canvas should mirror.</summary>
+    /// <summary>Whether the placement editor pulls a dragged layer's edges/centre onto the composition's
+    /// edges/centre. Editor preference, not show data - it changes how dragging FEELS, never what is saved,
+    /// so it is deliberately not persisted with the cue list.</summary>
+    [ObservableProperty]
+    private bool _snapPlacementsToEdges = true;
+
+    /// <summary>Aspect ratio (w/h) of the composition the placement editor canvas mirrors - ALWAYS the
+    /// composition's own resolution.
+    /// <para>It used to follow the live aspect of a resizable local window the composition fed, on the
+    /// reasoning that the canvas should look like what the operator sees on that output. That was wrong: a
+    /// placement's DestX/Y/Width/Height are normalized against the COMPOSITION, so a canvas drawn at the
+    /// window's aspect draws every placement at the wrong shape and position - and resizing the output
+    /// window visibly moved rectangles that had not changed. Where the composition then lands inside a
+    /// mismatched output is a separate, later mapping step, and it has its own editor
+    /// (<c>CompositionOutputLayoutDialog</c> / <c>OutputLayoutCanvas</c>) - which is the right place to see
+    /// and author letterboxing.</para></summary>
     public double PlacementCanvasAspect
     {
         get
@@ -772,33 +759,8 @@ public partial class CuePlayerViewModel : ViewModelBase
                 ? SelectedCueList?.Compositions.FirstOrDefault(c => c.Id == p.CompositionId)
                 : null;
             comp ??= SelectedComposition ?? SelectedCueList?.Compositions.FirstOrDefault();
-            if (comp is null)
-                return 16.0 / 9.0;
-            // A composition wired to a resizable local window follows that window's live aspect, so the
-            // placement canvas matches what the operator actually sees on that output while they drag a
-            // resize handle. Re-raised from OnAvailableOutputLineChanged when the window reports a resize.
-            return TryGetBoundLocalWindowAspect(comp)
-                ?? (comp is { Width: > 0, Height: > 0 } ? (double)comp.Width / comp.Height : 16.0 / 9.0);
+            return comp is { Width: > 0, Height: > 0 } ? (double)comp.Width / comp.Height : 16.0 / 9.0;
         }
-    }
-
-    /// <summary>Live w/h of a resizable local window output the composition feeds, or null when the
-    /// composition has no bound windowed output (then the canvas uses the composition's own resolution).</summary>
-    private double? TryGetBoundLocalWindowAspect(CueCompositionViewModel comp)
-    {
-        if (SelectedCueList is null)
-            return null;
-        foreach (var binding in SelectedCueList.VideoOutputs)
-        {
-            if (binding.CompositionId != comp.Id)
-                continue;
-            if (binding.LineRef is { LiveVideoWidth: > 0, LiveVideoHeight: > 0 } live)
-                return (double)live.LiveVideoWidth.Value / live.LiveVideoHeight.Value;
-            if (binding.LineRef?.Definition is Models.LocalVideoOutputDefinition
-                { WindowWidth: > 0, WindowHeight: > 0 } lv)
-                return (double)lv.WindowWidth.Value / lv.WindowHeight.Value;
-        }
-        return null;
     }
 
     public bool HasSelectedMediaCue => SelectedMediaCue is not null;
@@ -2815,7 +2777,14 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// (<see cref="MediaCueIndependentExecutor"/>): overlap modes (Timeline, FireAllSimultaneously)
     /// need concurrent clips, and the authored shared group holds only one active clip - firing a
     /// later lane through it would REPLACE the earlier lane's still-playing clip.</summary>
-    internal List<(CueNodeViewModel Cue, int DelayMs, bool Independent)> BuildTriggerPlan(CueNodeViewModel target)
+    /// <param name="playlistRunsToArm">Collects every NESTED playlist/armed-list group this plan fires as
+    /// one of its items. Those groups own a run (armed pick, pass counters, natural-end advance) and the
+    /// caller must <see cref="ConsumePlaylistPick"/> each one, exactly as it does for a playlist group fired
+    /// directly - an unarmed run has a null <see cref="PlaylistRunState.CurrentItemId"/>, so
+    /// <see cref="FindPlaylistRunForEndedCue"/> swallows its item's end and the list never advances. Null for
+    /// read-only callers (standby pre-roll), which must not consume anything.</param>
+    internal List<(CueNodeViewModel Cue, int DelayMs, bool Independent)> BuildTriggerPlan(
+        CueNodeViewModel target, List<CueNodeViewModel>? playlistRunsToArm = null)
     {
         var plan = new List<(CueNodeViewModel Cue, int DelayMs, bool Independent)>();
         if (target.Kind != CueNodeKind.Group)
@@ -2833,8 +2802,8 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         if (mode == CueGroupFireMode.FireAllSimultaneously)
         {
-            foreach (var cue in EnumerateFireableCueOrder(children))
-                plan.Add((cue, checked(groupPreWait + Math.Max(0, cue.PreWaitMs)), true));
+            foreach (var child in children)
+                AppendOverlapLane(plan, child, groupPreWait, playlistRunsToArm);
             plan.Sort(static (a, b) => a.DelayMs.CompareTo(b.DelayMs));
             return plan;
         }
@@ -2842,24 +2811,10 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (mode == CueGroupFireMode.Timeline)
         {
             // Same delay-sorted plan as FireAllSimultaneously, with the authored lane start added on the
-            // group's plan epoch. A nested group child keeps the sim-mode flattening (its fireable
-            // descendants), all anchored at the child group's own lane start.
+            // group's plan epoch, so both overlap modes expand a lane through the SAME rules.
             foreach (var child in children)
-            {
-                if (child.Kind == CueNodeKind.Comment)
-                    continue;
-                var laneStart = checked(groupPreWait + Math.Max(0, child.TimelineStartMs));
-                if (child.Kind == CueNodeKind.Group)
-                {
-                    var nestedBase = checked(laneStart + Math.Max(0, child.PreWaitMs));
-                    foreach (var cue in EnumerateFireableCueOrder(child.Children))
-                        plan.Add((cue, checked(nestedBase + Math.Max(0, cue.PreWaitMs)), true));
-                }
-                else
-                {
-                    plan.Add((child, checked(laneStart + Math.Max(0, child.PreWaitMs)), true));
-                }
-            }
+                AppendOverlapLane(
+                    plan, child, checked(groupPreWait + Math.Max(0, child.TimelineStartMs)), playlistRunsToArm);
             plan.Sort(static (a, b) => a.DelayMs.CompareTo(b.DelayMs));
             return plan;
         }
@@ -2878,8 +2833,10 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (pick.Kind == CueNodeKind.Group)
             {
                 // A nested-group item fires through its own fire mode's plan (keeping each inner
-                // step's own independence).
-                foreach (var (cue, delayMs, independent) in BuildTriggerPlan(pick))
+                // step's own independence). The pick is NOT added to playlistRunsToArm even when it is
+                // itself a playlist group: ConsumePlaylistPick recurses into its own pick, so recording
+                // it here would consume that inner run twice and skip an item.
+                foreach (var (cue, delayMs, independent) in BuildTriggerPlan(pick, playlistRunsToArm))
                     plan.Add((cue, checked(groupPreWait + delayMs), independent));
             }
             else
@@ -2899,6 +2856,51 @@ public partial class CuePlayerViewModel : ViewModelBase
             AppendAutoContinueCues(plan, first);
         }
         return plan;
+    }
+
+    /// <summary>Expands ONE lane of an overlap-mode group (FireAllSimultaneously / Timeline) at
+    /// <paramref name="laneBase"/>. Shared by both so their nesting rules cannot drift.
+    /// <para>A nested group is expanded by WHAT IT OWNS, and there are two cases:</para>
+    /// <para><b>Playlist / ArmedList</b> fire through their own <see cref="BuildTriggerPlan"/> - one armed
+    /// pick, not every item. These modes own run STATE, so flattening them was not merely "fires extra
+    /// cues": it fired items the run never armed and left the run unarmed, so the list could never advance
+    /// (the testproject.haplayproj bug - a fire-all group over a playlist started both songs at once). The
+    /// inner step's own <c>Independent</c> flag is preserved deliberately: a playlist's picks must REPLACE
+    /// each other in one shared transport group as the list advances, which is exactly what marking them
+    /// independent would break. (Known limitation: two playlist lanes under one overlap parent therefore
+    /// share that transport group and would replace each other - it needs a runtime group per LANE, not per
+    /// cue. One playlist lane beside any number of non-playlist lanes is fine.)</para>
+    /// <para><b>Any other group</b> keeps the historical flattening to its fireable descendants: it holds no
+    /// run state, so "fire all together" reaching through it is a scoping choice rather than a correctness
+    /// bug, and <c>TimelineGroupTests</c> pins it. Its own pre-wait now offsets its descendants (it always
+    /// did in Timeline mode; sim mode used to drop it, which was the two branches disagreeing).</para></summary>
+    private void AppendOverlapLane(
+        List<(CueNodeViewModel Cue, int DelayMs, bool Independent)> plan,
+        CueNodeViewModel node,
+        int laneBase,
+        List<CueNodeViewModel>? playlistRunsToArm)
+    {
+        if (node.Kind == CueNodeKind.Comment)
+            return;
+
+        if (node.Kind != CueNodeKind.Group)
+        {
+            plan.Add((node, checked(laneBase + Math.Max(0, node.PreWaitMs)), true));
+            return;
+        }
+
+        if (IsPlaylistGroup(node))
+        {
+            playlistRunsToArm?.Add(node);
+            // BuildTriggerPlan already applies the nested group's own pre-wait, so laneBase alone here.
+            foreach (var (cue, delayMs, independent) in BuildTriggerPlan(node, playlistRunsToArm))
+                plan.Add((cue, checked(laneBase + delayMs), independent));
+            return;
+        }
+
+        var nestedBase = checked(laneBase + Math.Max(0, node.PreWaitMs));
+        foreach (var child in node.Children)
+            AppendOverlapLane(plan, child, nestedBase, playlistRunsToArm);
     }
 
     private void AppendAutoContinueCues(
@@ -3839,28 +3841,52 @@ public partial class CuePlayerViewModel : ViewModelBase
                     .OfType<MediaCueNode>()
                     .ToList();
 
+                string? groupStatus = null;
                 if (mediaCues.Count > 0 && MediaCueGroupExecutor is not null)
                 {
                     var result = await MediaCueGroupExecutor(mediaCues, ct).ConfigureAwait(false);
-                    await SetStatusMessageOnUiAsync(string.IsNullOrWhiteSpace(result)
+                    // Deliberately NOT awaited here. This used to marshal the status message to the UI thread
+                    // BEFORE dispatching the lanes below, so every non-media lane of a "fire all together"
+                    // group - a visualizer, an action, a fade - waited on a UI round-trip that lands only
+                    // when the UI thread is free. During a GO it frequently is not (decoders opening,
+                    // surfaces building), so the lanes started late; and if that marshal never completed,
+                    // the outer catch swallowed it and they never started at all. The message is a
+                    // notification, not a prerequisite - it is published after the lanes are away.
+                    groupStatus = string.IsNullOrWhiteSpace(result)
                         ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), $"{mediaCues.Count} cues")
-                        : result);
+                        : result;
                 }
 
-                // Non-media cues in the group still dispatch individually.
+                // Non-media cues in the group still dispatch individually. They run AFTER the media batch on
+                // purpose: a visualizer attaches to a composition's GL surface host, which may not exist
+                // until a clip is playing on that composition.
                 foreach (var cue in cues.Where(c => c.Kind != CueNodeKind.Media))
                 {
                     try
                     {
                         var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
-                        if (!string.IsNullOrWhiteSpace(exec))
-                            await ApplyCueExecutionResultOnUiAsync(cue, exec, mediaExecutionConfigured: false).ConfigureAwait(false);
+                        // ALWAYS applied, success included. This used to run only when the executor returned
+                        // a message, so a lane that succeeded silently - the normal case - skipped
+                        // ApplyCueExecutionResult entirely. That is where a visualizer's Now Playing row is
+                        // created and where an instant cue's Auto-Follow chain advances, so in a same-delay
+                        // batch a visualizer played with no indicator that it was running, and a cue chained
+                        // after an instant one never fired. Fired on its own the cue went through
+                        // DispatchCueExecution, which always applies - which is why this only ever showed up
+                        // inside a group.
+                        await ApplyCueExecutionResultOnUiAsync(cue, exec, mediaExecutionConfigured: false)
+                            .ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         await ApplyCueExecutionFailureOnUiAsync(cue, ex.Message).ConfigureAwait(false);
                     }
                 }
+
+                // Every lane is away; now the batch's own notification can go up. A lane that reported its
+                // own message has already overwritten this one, which is the right precedence - a
+                // per-lane failure matters more than "n cues fired".
+                if (groupStatus is not null)
+                    await SetStatusMessageOnUiAsync(groupStatus).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)

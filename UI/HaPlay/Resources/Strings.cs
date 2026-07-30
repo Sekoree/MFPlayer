@@ -1256,6 +1256,12 @@ public static class Strings
     public static string PlacementPresetBottomLeftButton => Get(nameof(PlacementPresetBottomLeftButton));
     public static string PlacementPresetBottomRightButton => Get(nameof(PlacementPresetBottomRightButton));
     public static string PlacementCanvasDragHint => Get(nameof(PlacementCanvasDragHint));
+
+    public static string PlacementSnapToEdgesLabel => Get(nameof(PlacementSnapToEdgesLabel));
+
+    public static string PlacementSnapToEdgesTooltip => Get(nameof(PlacementSnapToEdgesTooltip));
+
+    public static string OutputLayoutSnapToEdgesTooltip => Get(nameof(OutputLayoutSnapToEdgesTooltip));
     public static string PlacementPositionLabel => Get(nameof(PlacementPositionLabel));
     public static string PlacementXLabel => Get(nameof(PlacementXLabel));
     public static string PlacementYLabel => Get(nameof(PlacementYLabel));

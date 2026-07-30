@@ -37,10 +37,20 @@ public sealed record CueList
     /// <see cref="CueTriggerMode.Manual"/> so older lists load unchanged.</summary>
     public CueTriggerMode DefaultTriggerMode { get; init; } = CueTriggerMode.Manual;
 
-    /// <summary>When true, the cue player re-runs the renumber pass after every insert/reorder
-    /// so the operator's numbering stays sequential (Phase 5.8.2). Default off - preserves the
-    /// pre-5.8 behavior where operators set numbers themselves.</summary>
-    public bool AutoRenumberOnInsert { get; init; }
+    /// <summary>When true, the cue player re-runs the renumber pass after every insert/reorder so the
+    /// operator's numbering stays sequential (Phase 5.8.2).
+    /// <para><b>Default ON</b> (was off, to preserve pre-5.8 hand-numbering). Sequential numbering is what an
+    /// operator reads cues off during a show, and an insert that leaves a gap - or a reorder that leaves the
+    /// numbers out of order - is worse than a renumber, because the number on the page stops matching the
+    /// number on the screen. Turning it off is still one checkbox in the cue-list settings.</para>
+    /// <para>This must stay a property INITIALIZER rather than anything applied while loading: a list saved
+    /// with the setting off has to load off, so only the absence of the field may take the default. See
+    /// <c>AutoRenumberDefaultTests</c>, which pins both directions.</para>
+    /// <para>GOTCHA: <c>set</c>, not <c>init</c> - the same trap as <see cref="CuePlaylistOptions"/>. The
+    /// source-generated serializer assigns every <c>init</c> property through one object initializer, so as
+    /// an <c>init</c> property this would load as the CLR default (<c>false</c>) for any list that predates
+    /// the field, which is precisely the case the new default exists to serve.</para></summary>
+    public bool AutoRenumberOnInsert { get; set; } = true;
 
     /// <summary>Stop-fade length (ms) for the transport Stop on this list, applied to clips without
     /// their own <see cref="MediaCueNode.FadeOutMs"/>. Null (older files) = the app-settings default

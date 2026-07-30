@@ -461,3 +461,136 @@ Each fix below was written test-first and confirmed failing on the pre-fix tree.
    structural fix is view-model teardown in tests** — a bigger job, deliberately not started here. The guard is
    opt-in because the probe is not passive: it builds an isolated app per test, which multiplies the very
    unbind window it detects (6/6 clean without it, 4-of-8 failing with it).
+4. **An overlap group flattened a nested PLAYLIST group into all of its items** (reported from
+   `testproject.haplayproj`: a fire-all group over `[visualizer, playlist[A, B]]` started both songs at
+   once). Both overlap branches of `BuildTriggerPlan` expanded a nested group through
+   `EnumerateFireableCueOrder`, which recurses into groups and returns only leaf cues — so the nested
+   group's own fire mode was discarded. For Playlist/ArmedList that is not just "fires extra cues": those
+   modes own run state, so it fired items the run never armed **and** left the run unarmed, which is the
+   second half of the bug — `ConsumePlaylistPick` ran only when GO targeted the playlist group itself, so
+   the item's natural end was swallowed by `FindPlaylistRunForEndedCue` and the list could never advance.
+   Both overlap branches now share one `AppendOverlapLane` expander (they had drifted: sim mode dropped a
+   nested group's own pre-wait, Timeline applied it), a nested playlist/armed-list group fires through its
+   own plan, and `BuildTriggerPlan` reports the nested runs so both GO paths arm them. The inner step's
+   `Independent` flag is preserved on purpose — a playlist's picks must replace each other in one shared
+   transport group, which marking them independent would break. *Known limitation:* two playlist lanes
+   under one overlap parent therefore share that group and would replace each other; that needs a runtime
+   group per LANE rather than per cue. A nested *plain* group still flattens — it holds no run state, so
+   that is a scoping choice, and `TimelineGroupTests` pins it. Tests: `PlaylistGroupTests`
+   `BuildTriggerPlan_OverlapGroup_FiresANestedPlaylistsARMEDPICK_NotAllOfItsItems` (both overlap modes) and
+   `Go_OnAnOverlapGroup_ArmsTheNestedPlaylistRun_SoItStillAutoAdvances`.
+5. **Four drawer tabs clipped instead of scrolling.** Group, Action, Comment and Cue preview had a bare
+   panel as their tab root rather than a `ScrollViewer`, so with the drawer short (its splitter allows
+   88 px, the cap is 440 px) content simply fell outside. Measured at 1024×600 with a Playlist group
+   selected: the Group tab's ~250 px of options laid out at `(11,456 1002x161)` — bottom edge y=617 in a
+   600 px window, with the End-behavior row off-screen. All four are wrapped now, and
+   `CuePlayerLayoutBoundsTests.CueDrawer_EveryTab_KeepsItsContentInsideTheDrawerVertically` walks the tab
+   strip per cue kind at three sizes, so a newly added tab is covered without editing the test.
+
+6. **A fire-all group's non-media lanes were serialized behind the media batch's UI round-trip.** The
+   remaining half of the `testproject.haplayproj` report: with the plan fixed, `OutGroup` still did not start
+   its Visualizer lane. `DispatchCueGroupExecution` awaited `SetStatusMessageOnUiAsync` — a marshal to the UI
+   thread — *between* the coordinated media batch and the individual dispatch of every non-media cue. During
+   a GO the UI thread is often busy (decoders opening, surfaces building), so a visualizer/action/fade lane
+   started late; and if the marshal never completed, the outer `catch` swallowed it and the lane never
+   started at all. The status message is a notification, not a prerequisite, so it is now published *after*
+   the lanes are away. Media still goes first on purpose — a visualizer attaches to a composition's GL
+   surface host, which may not exist until a clip plays on it. Test:
+   `PlaylistGroupTests.Go_OnAnOverlapGroup_AlsoFiresTheNonMediaLanes_WithTheHostsGroupExecutorWired`, which
+   wires the host's `MediaCueGroupExecutor` — the branch only production reached, which is why every existing
+   test (they set `MediaCueExecutor` alone) took the per-step path and could never see this.
+7. **The placement canvas followed an output WINDOW's aspect instead of the composition's.** Placements are
+   normalized against the composition, so drawing the canvas at the window's aspect drew every rectangle at
+   the wrong shape and position — and resizing the output window visibly moved rectangles nobody had touched.
+   `PlacementCanvasAspect` is now always the composition's own resolution, and the window-resize subscription
+   that existed only to re-raise it is gone. `CuePlayerCompositionCanvasTests` asserted the old behaviour
+   deliberately; all of it is inverted, with the reasoning recorded in the class summary.
+9. **A silently-succeeding lane in a batch skipped ApplyCueExecutionResult entirely.** The last of the
+   `testproject.haplayproj` reports: with the ordering fixed the Visualizer *played*, but its indicator never
+   showed it running. `DispatchCueGroupExecution` applied a non-media lane's result **only when the executor
+   returned a message** — so the normal case, success (null), skipped the one method that creates a
+   visualizer's Now Playing row (`StartVisualizerRow` → `OnCueStarted`) *and* advances an instant cue's
+   Auto-Follow chain. Both were therefore silently dead for every lane inside a same-delay batch, while the
+   same cue fired on its own went through `DispatchCueExecution`, which always applies — which is exactly why
+   it only ever misbehaved inside a group. Now applied unconditionally. Test asserts the ROW, not the
+   executor call, since "plays but shows nothing" is indistinguishable from "never fired" to the operator.
+   Note for future UI-effect tests: the row is created by a pool-thread continuation marshalled to the UI
+   thread, and an awaiting test body does not pump the headless dispatcher — the test pumps explicitly
+   (`Dispatcher.UIThread.RunJobs()`), the same pattern `DrainListenerHandlers` uses. Without that the
+   assertion can only time out no matter what the production code does.
+13. **…and one hop further: `ToModel` flattened the rectangle on its way to the compositor.** With the
+   resolver fixed, right/bottom worked and left/top still "stopped at the canvas edge".
+   `CueVideoPlacementViewModel.ToModel` — the conversion the compositor is actually handed — clamped
+   DestX/DestY/DestWidth/DestHeight to **[0,1]**. A positive offset passed through untouched, which is
+   precisely why the two directions behaved differently and why each earlier round looked half-fixed: the
+   negative was erased one hop after every layer I had verified. Now the same `NormalizedRectRange` as the
+   rest of the chain, so oversize (fill-and-crop) survives too.
+   **The habit this cost:** five rounds, five correct layers, because each time I verified the layer I had
+   just changed instead of following the VALUE to its consumer. The test now walks the whole chain in one
+   assertion — `SetDestRect` → `ToModel` → `FromModel` → `HaPlayShowMapper.ToShowVideoPlacement` — including
+   the top-left→bottom-left Y flip, so a clamp introduced at any hop fails here. For anything with several
+   representations, test the chain, not the links.
+
+12. **THE actual out-of-bounds defect: the compositor shrank an off-canvas layer instead of clipping it.**
+   `PlacementResolver.Resolve` opened with `destRect.Clamped()`. One line, and it produced every symptom
+   reported over three rounds: a full-canvas layer dragged into the corner became a *smaller destination*
+   that the fit then scaled the whole source down into (measured: scale 0.75 where 1.5 is correct — exactly
+   halved, "the whole frame, just smaller"); dragging right trimmed the image on BOTH sides, because the
+   overflow trim is centred — correct for absorbing a fit mismatch, wrong for an edge; and a negative offset
+   was erased outright, so left/up "did nothing and filled the composition". Edges are now ordered but NOT
+   clamped, and the placed image is clipped against the canvas *after* the fit, one-sided, converting the
+   overhang into a source-crop inset on the edge that actually hangs over. The authored scale survives: the
+   layer is cut off, not squeezed. Wholly-off-canvas collapses the crop.
+   **Why this took three attempts:** every layer above the compositor was fixed and tested first — canvas
+   drag, snap math, view-model range, the drawer's two-way editors — and each fix was real, so each round
+   looked like progress while the visible behaviour barely changed. The resolver had **no tests at all**, and
+   it is the only place the authored rectangle becomes pixels. New `PlacementResolverOutOfBoundsTests` (all
+   five failed before, with the numbers above) pins per-edge clipping and keeps the two properties that were
+   already right: a wholly-inside layer is untouched, and `Cover`'s trim stays centred so split-screen layers
+   still cannot spill onto each other. All four placement paths - plain, VideoFx/mapped, media layer, surface
+   layer - share the resolver, so one fix covers them.
+
+11. **…and then it was still broken, by the DRAWER's numeric editors.** The out-of-bounds work above was
+   correct at every layer that had a test — canvas, snap math, view model — and still did not work, because
+   the drawer's `NumericUpDown` editors are `Minimum="0" Maximum="1"` and **two-way bound**. A NumericUpDown
+   coerces its Value into its own range and writes the coerced number BACK through the binding, so a drag to
+   a negative DestX was undone the instant the binding round-tripped: "moving up or left does nothing". Same
+   defect on `PixelX`/`PixelY` in the output-layout dialog. Ranges now match `NormalizedRectRange`, and
+   `PlacementEditorsInTheDrawer_MustNotClampInsideTheModelsRange` lints the markup for it (a source lint, the
+   idiom already used for raw literals and `Dispatch` — the property is a fact about the markup and holds
+   whether or not the tab is realized). Verified by restoring the old ranges: it names all four offenders.
+   **The lesson worth keeping:** three correct layers with passing tests, defeated by a fourth that nothing
+   tested. A two-way editor's range is not input validation, it is a coercion applied to whatever the model
+   reports — so it has to agree with the model's own range, and the mismatch is invisible from either side.
+   The new `CompositionPlacementCanvasDragTests` drives the control with real pointer input (`MouseDown` /
+   `MouseMove` / `MouseUp`) rather than calling the math, which is the layer that was missing all along; it
+   pins that a body drag changes position ONLY, in all four directions, and reaches negative coordinates.
+   *Not reproduced:* the "dragging right/down resizes it" half. A body drag provably does not resize (that is
+   the test above), so the likely cause is grabbing the resize HANDLE, which for a full-canvas layer sits in
+   the composition's bottom-right corner — exactly where one reaches to push it out that way. Both canvases
+   now set the cursor on hover (`SizeAll` over a body, `BottomRightCorner` over the handle) so the gesture is
+   never a guess.
+
+10. **Out-of-bounds dragging was correct but invisible, which made it read as broken.** Reported as "right and
+   down just resizes it, left and up does nothing". Nothing was ever resized: the composition filled the whole
+   editor control, so the part of a moved box outside it was clipped at the control edge and the remaining
+   visible sliver simply looked narrower; and at `x=0` an edge sits ON a snap guide, so small drags were
+   legitimately pulled back. Both editors now reserve a **work-area margin** (13% per side) so the overhang has
+   somewhere to be drawn, **ghost** the outside portion at 35% (it is authored but will never be rendered),
+   clip boxes to the control rather than the canvas, and draw the canvas outline ON TOP of every box so the
+   reference edge is never hidden. `PlacementSnapMathTests` pins the invariant the visuals were
+   misrepresenting — a move never changes size — and that a drag past the snap threshold does escape a guide
+   rather than being pinned to it.
+
+8. **Placements and output sections can now leave their canvas, and snap to its edges.** Both editors clamped
+   position to `[0, 1-size]`, which forbade a lower third sliding in from off-canvas, a source oversized to
+   fill-and-crop, and a composition letterboxed off-centre in a mismatched output. The range now runs from
+   "exactly fully before the canvas" to "exactly fully after it" — finite, so nothing can be pushed anywhere
+   it cannot be dragged back from — and lives in `Models/NormalizedRectRange` because it is a MODEL rule: a
+   typed or deserialized rectangle must land in the same range as a dragged one, which a clamp in the canvas
+   could not guarantee. Snapping (edges + centre, a 7 px *screen-space* pull so it feels identical on any
+   canvas size, Ctrl to override for one drag) is the interaction half and lives with the canvases in
+   `Views/Controls/PlacementSnapMath`, unit-tested in `PlacementSnapMathTests`. Both editors have a "Snap to
+   edges" toggle, on by default: centring is how letterboxing is authored, and dead centre is one exact value
+   in a continuum. Boxes are clipped to the editor control so an off-canvas placement is visible without
+   painting over the form.

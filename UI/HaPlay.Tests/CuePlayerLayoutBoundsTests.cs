@@ -98,6 +98,55 @@ public sealed class CuePlayerLayoutBoundsTests(ITestOutputHelper output)
         });
     }
 
+    /// <summary>EVERY drawer tab keeps its content inside the drawer VERTICALLY, at every size and for
+    /// every cue kind. Reported from a real show file: selecting a Playlist group put the Group tab's
+    /// options (fire mode + three checkboxes + a four-row grid, ~250 px) past the bottom of a drawer that
+    /// the splitter's 88 px MinHeight and the 440 px MaxHeight can make much shorter. Four tabs - Group,
+    /// Action, Comment and Cue preview - had a bare panel as their root instead of a ScrollViewer, so they
+    /// CLIPPED rather than scrolled and the controls below the fold were unreachable. Measured before the
+    /// fix, at 1024x600 with the Playlist group selected: the Group tab's panel laid out at
+    /// <c>(11,456 1002x161)</c>, i.e. its bottom edge at y=617 in a 600 px window - the End-behavior combo
+    /// row was off-screen. 1280x800 and 1920x1080 had the headroom to hide it, which is why this only
+    /// showed up on a shorter window.
+    /// <para>This walks the tab strip and measures each tab in turn, so a newly added tab is covered
+    /// without touching this test - the sibling of <see cref="CueDrawer_TriggerAndScheduleEditors_FitHorizontally"/>
+    /// on the other axis. A ScrollViewer is what makes it pass: its content may be taller than the
+    /// viewport, but the viewport itself is what has to fit.</para></summary>
+    [Theory]
+    [InlineData(1920, 1080)]
+    [InlineData(1280, 800)]
+    [InlineData(1024, 600)]
+    public void CueDrawer_EveryTab_KeepsItsContentInsideTheDrawerVertically(int width, int height)
+    {
+        DispatchUi(() =>
+        {
+            using var scene = CueScene.Realise(width, height);
+            var offenders = new StringBuilder();
+            var covered = 0;
+            foreach (var cue in scene.CuesCoveringEveryDrawerTab())
+            {
+                scene.SelectCue(cue);
+                foreach (var (index, header) in scene.VisibleDrawerTabs())
+                {
+                    scene.SelectDrawerTab(index);
+                    covered++;
+                    var escapes = LayoutProbe.FindEscapes(scene.View, scene.DrawerTabs)
+                        .Where(e => e.Axis.Contains('V'))
+                        .ToList();
+                    if (escapes.Count > 0)
+                        offenders.AppendLine($"cue '{cue.Kind}' tab '{header}':\n{Join(escapes)}");
+                }
+            }
+
+            // Guards the guard: a visibility change that hid every tab would otherwise make this vacuous.
+            Assert.True(covered >= 8, $"only {covered} drawer tabs were measured - the walk found nothing");
+
+            Assert.True(
+                offenders.Length == 0,
+                $"drawer content escapes vertically at {width}x{height}:\n{offenders}");
+        });
+    }
+
     /// <summary>The Now Playing row's interactive parts (tap-to-seek progress bar, per-cue ✕) stay in
     /// the row. It excludes TextBlocks, so it held even while the row's LABEL did not - see
     /// <see cref="DEFECT_NowPlayingRowLabels_OverflowTheirRow"/>, which now covers those too. Worth
@@ -364,6 +413,51 @@ internal sealed class CueScene(Window window, CuePlayerView view, CuePlayerViewM
         View.GetVisualDescendants().OfType<Control>().First(c => c.Name == "CueTreeGrid");
 
     public TabControl DrawerTabs => View.FindControl<TabControl>("CueDrawerTabs")!;
+
+    /// <summary>One cue per authored kind, so selecting each in turn exposes every drawer tab (the tabs
+    /// are visibility-bound to the selected cue's kind, so no single selection can reveal them all).
+    /// Prefers a PLAYLIST group for the group kind - that is the tallest Group tab, and the shape the
+    /// out-of-bounds report came from.</summary>
+    public IEnumerable<CueNodeViewModel> CuesCoveringEveryDrawerTab()
+    {
+        var all = new List<CueNodeViewModel>();
+        void Walk(IEnumerable<CueNodeViewModel> nodes)
+        {
+            foreach (var n in nodes)
+            {
+                all.Add(n);
+                Walk(n.Children);
+            }
+        }
+
+        Walk(ViewModel.SelectedCueList!.Nodes);
+        foreach (var kind in all.Select(n => n.Kind).Distinct())
+        {
+            var ofKind = all.Where(n => n.Kind == kind).ToList();
+            yield return ofKind.FirstOrDefault(n => n.IsPlaylistFireMode) ?? ofKind[0];
+        }
+    }
+
+    public void SelectCue(CueNodeViewModel cue)
+    {
+        ViewModel.SelectedCueNode = cue;
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// <summary>The drawer tabs currently selectable for the selected cue, as (index, header).</summary>
+    public IEnumerable<(int Index, string Header)> VisibleDrawerTabs()
+    {
+        var items = DrawerTabs.Items.OfType<TabItem>().ToList();
+        for (var i = 0; i < items.Count; i++)
+            if (items[i].IsVisible)
+                yield return (i, items[i].Header?.ToString() ?? $"#{i}");
+    }
+
+    public void SelectDrawerTab(int index)
+    {
+        DrawerTabs.SelectedIndex = index;
+        Dispatcher.UIThread.RunJobs();
+    }
 
     public IEnumerable<Visual> NowPlayingRows() =>
         View.GetVisualDescendants()

@@ -45,11 +45,21 @@ public static class PlacementResolver
         if (source.Width <= 0 || source.Height <= 0 || canvas.Width <= 0 || canvas.Height <= 0)
             return (LayerTransform2D.Identity, RectNormalized.Full);
 
-        var dest = destRect.Clamped();
-        var dx = dest.X0 * canvas.Width;
-        var dy = dest.Y0 * canvas.Height;
-        var dw = MathF.Max(1f, dest.Width * canvas.Width);
-        var dh = MathF.Max(1f, dest.Height * canvas.Height);
+        // Edges are ORDERED but deliberately NOT clamped to [0,1]. A layer may sit partly or wholly outside
+        // the canvas on purpose (a lower third sliding in, a source oversized to fill and crop, a layer
+        // dragged off the edge), and clamping turned that into a SMALLER destination rectangle - so the fit
+        // below scaled the source DOWN into whatever sliver still overlapped. A full-canvas layer nudged into
+        // the corner then rendered complete but shrunk instead of being cut off by the canvas edge, and a
+        // negative offset was erased altogether, which is the whole of the reported defect. Clipping against
+        // the canvas happens after the fit, below, where it can be applied to the correct edge.
+        var x0 = MathF.Min(destRect.X0, destRect.X1);
+        var x1 = MathF.Max(destRect.X0, destRect.X1);
+        var y0 = MathF.Min(destRect.Y0, destRect.Y1);
+        var y1 = MathF.Max(destRect.Y0, destRect.Y1);
+        var dx = x0 * canvas.Width;
+        var dy = y0 * canvas.Height;
+        var dw = MathF.Max(1f, (x1 - x0) * canvas.Width);
+        var dh = MathF.Max(1f, (y1 - y0) * canvas.Height);
 
         // User crop sub-rectangle (after edge insets), in source pixels.
         var sx0 = Math.Clamp(insetLeft, 0f, 0.99f) * source.Width;
@@ -96,6 +106,32 @@ public static class PlacementResolver
         // Center the (possibly smaller) image within the dest rect - letterbox/pillarbox on underflow.
         var ox = dx + (dw - imgW) * 0.5f;
         var oy = dy + (dh - imgH) * 0.5f;
+
+        // Clip the placed image against the CANVAS, discarding whatever hangs over an edge. This is ONE-SIDED
+        // by nature - what overhangs the right edge is the image's right side - and that is exactly what
+        // distinguishes it from the fit-overflow trim above, which is centred because it is absorbing a
+        // scale mismatch rather than an edge. Doing it here, on the placed image, instead of by clamping the
+        // destination rect, is what keeps the authored scale intact: the layer is cut off, not shrunk.
+        var visX0 = MathF.Max(ox, 0f);
+        var visY0 = MathF.Max(oy, 0f);
+        var visX1 = MathF.Min(ox + imgW, canvas.Width);
+        var visY1 = MathF.Min(oy + imgH, canvas.Height);
+        if (visX1 > visX0 && visY1 > visY0)
+        {
+            sx0 += (visX0 - ox) / scaleX;
+            sx1 -= (ox + imgW - visX1) / scaleX;
+            sy0 += (visY0 - oy) / scaleY;
+            sy1 -= (oy + imgH - visY1) / scaleY;
+            ox = visX0;
+            oy = visY0;
+        }
+        else
+        {
+            // Wholly off canvas - the far end of the authorable range. Collapse the crop so no stray line of
+            // pixels is sampled; the transform would place it outside the canvas in any case.
+            sx1 = sx0;
+            sy1 = sy0;
+        }
 
         // Source pixel s -> dest: scale*s + (origin - scale*cropTopLeft).
         var transform = new LayerTransform2D(

@@ -285,7 +285,8 @@ public partial class CuePlayerViewModel
         (TimeSpan Duration, S.Media.Session.FadeCurve Curve)? advanceCrossfade = null)
     {
         // Built BEFORE anything is cancelled so a request with nothing to fire leaves the run alone.
-        var plan = BuildTriggerPlan(fire);
+        var nestedPlaylistRuns = new List<CueNodeViewModel>();
+        var plan = BuildTriggerPlan(fire, nestedPlaylistRuns);
         if (plan.Count == 0)
         {
             StatusMessage = Strings.Format(
@@ -313,6 +314,10 @@ public partial class CuePlayerViewModel
 
             ConsumePlaylistPick(fire);
         }
+
+        // Same rule as GoCore: a playlist group fired as an item of this plan arms its own run too.
+        foreach (var nested in nestedPlaylistRuns)
+            ConsumePlaylistPick(nested);
 
         var owner = FindOwningCueList(fire);
         var cts = new CancellationTokenSource();
@@ -458,7 +463,8 @@ public partial class CuePlayerViewModel
             return;
 
         // Built BEFORE the cancel so a request with nothing to fire leaves the running show alone.
-        var plan = BuildTriggerPlan(fire);
+        var nestedPlaylistRuns = new List<CueNodeViewModel>();
+        var plan = BuildTriggerPlan(fire, nestedPlaylistRuns);
         if (plan.Count == 0)
         {
             if (operatorSelectedCue is not null)
@@ -505,6 +511,12 @@ public partial class CuePlayerViewModel
         {
             nextStandby = NextCueAfter(resolvedFire, ordered);
         }
+
+        // Playlist groups fired as ITEMS of this plan (an overlap parent's lane) arm the same way: without
+        // this their run has no current item, so the item's natural end is swallowed and the list never
+        // advances. Standby stays on whatever the parent chose above - a nested run is not the GO target.
+        foreach (var nested in nestedPlaylistRuns)
+            ConsumePlaylistPick(nested);
 
         CurrentCueNode = plan[0].Cue;
         IsTransportPaused = false;
