@@ -419,3 +419,45 @@ requirement adds maintained surface area for no benefit:
 | 2 ✅ | **D** epoch identity on clocks | Small change, removes an inference class, simplifies B and A |
 | 3 ✅ | **B** level / stop bus | Fixes an operator-visible gap (panic fader misses soundboard); centralises what A needs |
 | 4 ✅ | **A** voices as a list | Biggest and riskiest — lands on B, behind the crossfade suites |
+
+**All five steps are done.** What follows are the residuals the reviews named but left, worked separately.
+
+---
+
+## Follow-ups 2026-07-30 (after A–E all landed)
+
+Each fix below was written test-first and confirmed failing on the pre-fix tree.
+
+1. **Two concurrent stops on one voice: the loser cut the winner's ramp.** `TryClaimFadeOut()` was a
+   permanent one-shot with no deadline, and `StopVoicesCoreAsync` released **every** voice it selected,
+   including one whose claim it had lost — so a second Stop landing during a 5 s stop fade released the voice
+   on the spot, chopping the ramp off at whatever level it had reached (measured: **0.95**). Double-tapping
+   Stop, or Stop-on-a-group then Stop-all, is ordinary on a control surface, so this clicked in normal use.
+   Fixed by porting the discipline the soundboard voices already had (`VoicePlayer.TryClaimStop`): the claim is
+   held by whichever stop lands silent FIRST — an earlier deadline supersedes and takes over the levels and the
+   release from where the incumbent got to, a later one becomes a waiter (`AwaitVoiceReleaseAsync`, bounded by
+   its own deadline + 1 s so a fault in the owner cannot make Panic hang). The stop ramp is now cancellable
+   per-voice (it ran on `CancellationToken.None`, so nothing could supersede it), and the natural end-of-clip
+   fade honours the claim on **both** halves — its ramp stops writing, and it no longer releases the voice out
+   from under a stop, which would also have reported an operator stop as `ClipNaturallyEnded`.
+   Tests: `TransportVoiceTests.ASecondStopMidRamp_TakesOverTheFade_…` (30 s vs 1 s fades, so *taking over*
+   and *waiting for the incumbent* are ~28 s apart — both end in silence, so a level assertion alone cannot
+   tell them apart) and `PanicDuringAStopFade_StillCutsTheVoice_…` (a guard, not a discriminator: Panic already
+   worked, and must keep working — it is the case that still SHOULD cut).
+2. **A cue whose volume envelope starts below unity burst at full level.** `StartEnvelopeRunner` starts at the
+   end of the commit, so the routes attached at unity and the device saw **0.8 against a 0.19 ceiling** — a 4×
+   burst on a cue authored quiet precisely because it must not be loud. The envelope component is now seeded
+   from `VolumeEnvelopes.Sample(binding.VolumeEnvelope, binding.StartOffset)` before anything attaches. Same
+   class as the master-fader burst; the composition has to be authoritative *at* attach, not just after it.
+   Test: `MasterTrimTests.GoWithAnEnvelopeStartingBelowUnity_NeverPutsAFullLevelBufferOnTheDevice`.
+3. **The "different thread owns it" test flake — reproduced and diagnosed, not yet fixed.** See
+   `HaPlay.Tests/DispatcherOwnershipGuard.cs`. It had resisted 17 clean runs; an opt-in
+   (`HAPLAY_DISPATCHER_GUARD=1`) post-test dispatcher probe reproduces it on demand with one signature, and
+   established two things: the offending access is **asynchronous**, so blaming the test that just finished
+   cannot identify it; and listener handlers are not the whole story — two of the three listener tests never
+   drained (the earlier round fixed only the one that motivated the drain) and fixing both did not reduce
+   failures. The remaining suspect is what `HAPLAY_DISABLE_RECOVERY_TIMER` already point-fixes: tests build
+   view models and never tear them down, and there are ~47 `DispatcherTimer` sites across them. **The
+   structural fix is view-model teardown in tests** — a bigger job, deliberately not started here. The guard is
+   opt-in because the probe is not passive: it builds an isolated app per test, which multiplies the very
+   unbind window it detects (6/6 clean without it, 4-of-8 failing with it).

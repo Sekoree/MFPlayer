@@ -1029,14 +1029,20 @@ public sealed class ShowSession : IAsyncDisposable
             if (_audioBackend is not null && player.AudioRouter is not null)
             {
                 var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
+                // Seed the envelope component from the automation's value at the clip's FIRST frame, before
+                // anything attaches. StartEnvelopeRunner does not start until the end of the commit, so a clip
+                // whose automation begins below unity would otherwise attach at unity and burst until the
+                // runner's first tick - loud on a cue authored quiet. The runner then simply keeps writing the
+                // same component as the clip plays on.
+                voice.Level.Envelope = VolumeEnvelopes.Sample(binding.VolumeEnvelope, binding.StartOffset);
                 // The level every route attaches at, so the FIRST buffer the device sees is already at the
                 // composed level: 0 for a fade-in (the ramp lifts it), else the voice's own composition -
-                // which at this point is exactly the master trim it stamped at construction. Attaching at the
-                // authored gain instead used to let a GO under a lowered fader push FULL-LEVEL program audio
-                // to the device for the whole window between Start() below and the reconciling pass after the
-                // commit (which awaits the displaced clip's teardown). Every other route write in the session
-                // - the voice attach, the hot rebuild, every ramp - already goes through the composition; this
-                // was the one outlier.
+                // the master trim it stamped at construction, times the envelope seeded just above.
+                // Attaching at the authored gain instead used to let a GO under a lowered fader push
+                // FULL-LEVEL program audio to the device for the whole window between Start() below and the
+                // reconciling pass after the commit (which awaits the displaced clip's teardown). Every other
+                // route write in the session - the voice attach, the hot rebuild, every ramp - already goes
+                // through the composition; this was the one outlier.
                 var attachLevel = fadeIn ? 0f : voice.EffectiveAudioLevel;
                 if (binding.AudioRoutes is { } clipRoutes)
                 {
@@ -1811,7 +1817,9 @@ public sealed class ShowSession : IAsyncDisposable
                 : TimeSpan.Zero;
         if (!loops && !freezes && naturalFade > TimeSpan.Zero
             && remaining > TimeSpan.Zero && remaining <= naturalFade
-            && voice.TryClaimFadeOut())
+            // The clip's own tail-out is due to finish when the clip does, so that is its claim deadline: an
+            // operator stop shorter than the remaining tail takes the voice over, a longer one waits for it.
+            && voice.TryClaimFadeOut(DateTime.UtcNow + remaining) is { } naturalClaim)
         {
             StartNaturalFadeOut(
                 groupId,
@@ -1821,7 +1829,8 @@ public sealed class ShowSession : IAsyncDisposable
                 voice.CaptureLayerOpacities(),
                 remaining,
                 binding.FadeOutCurve,
-                monitor.CancellationToken);
+                monitor.CancellationToken,
+                naturalClaim);
             return true;
         }
 
@@ -1937,7 +1946,12 @@ public sealed class ShowSession : IAsyncDisposable
     }
 
     /// <summary>Runs a natural-end audio/video fade without occupying the session dispatcher between steps
-    /// (a <see cref="FadeRamp"/>), then releases the clip if it is still active.</summary>
+    /// (a <see cref="FadeRamp"/>), then releases the clip if it is still active.
+    /// <para><paramref name="claim"/> is this fade's stop claim. An operator stop shorter than the clip's own
+    /// tail-out supersedes it (<see cref="TransportVoice.TryClaimFadeOut"/>), and both halves have to honour
+    /// that: the ramp stops writing levels the stop now owns, and the release is left to the stop - otherwise
+    /// the natural fade would release the voice under a stop that is still ramping it, and the cue would be
+    /// reported as having ENDED NATURALLY when the operator stopped it.</para></summary>
     private void StartNaturalFadeOut(
         string groupId,
         TransportVoice voice,
@@ -1946,13 +1960,15 @@ public sealed class ShowSession : IAsyncDisposable
         IReadOnlyList<float> startLayerOpacities,
         TimeSpan duration,
         FadeCurve curve,
-        CancellationToken ct)
+        CancellationToken ct,
+        CancellationToken claim)
     {
         FadeRamp.Start(
             FadeStepInterval, ct,
             step: elapsed => InvokeAsync<bool>(() =>
             {
                 if (ct.IsCancellationRequested
+                    || claim.IsCancellationRequested
                     || _groups.GetValueOrDefault(groupId) is not { } group
                     || !ReferenceEquals(group.ActiveVoice, voice))
                     return Task.FromResult(true);
@@ -1962,7 +1978,8 @@ public sealed class ShowSession : IAsyncDisposable
             }),
             onCompleted: () => InvokeAsync(async () =>
             {
-                if (_groups.GetValueOrDefault(groupId) is { } group
+                if (!claim.IsCancellationRequested
+                    && _groups.GetValueOrDefault(groupId) is { } group
                     && ReferenceEquals(group.ActiveVoice, voice))
                 {
                     var endedCueId = voice.Clip.Spec.Id;
@@ -2499,10 +2516,19 @@ public sealed class ShowSession : IAsyncDisposable
     private static IReadOnlyList<(TransportGroup Group, TransportVoice Voice)> VoicesOf(TransportGroup group) =>
         [.. group.Voices.Select(voice => (group, voice))];
 
-    /// <summary>What one stop claimed, captured on the dispatcher at claim time: the voice (the ONLY voice
-    /// this stop may release) and - when the fade claim succeeded - its ramp. A voice whose fade claim lost
-    /// to an in-flight fade still gets released: a STOP preempts.</summary>
-    private sealed record VoiceStopClaim(TransportGroup Group, TransportVoice Voice, VoiceStopFade? Fade);
+    /// <summary>What one stop resolved on the dispatcher at claim time: the voice, its ramp when this stop
+    /// won the fade claim, and <see cref="Token"/> - the claim this stop holds.
+    /// <para><see cref="Token"/> null means another stop (or a natural fade-out) whose deadline is no later
+    /// owns this voice; a token that is CANCELLED by the time the ramp ends means a later, earlier-deadline
+    /// stop superseded us mid-ramp. Either way we must not release the voice: the owner does, and we wait for
+    /// it. Releasing a voice this stop does not own is what chopped the owner's ramp off mid-fade.</para></summary>
+    private sealed record VoiceStopClaim(
+        TransportGroup Group, TransportVoice Voice, VoiceStopFade? Fade, CancellationToken? Token,
+        DateTime Deadline)
+    {
+        /// <summary>True when this stop still holds the claim, so it owns the release.</summary>
+        public bool OwnsRelease => Token is { IsCancellationRequested: false };
+    }
 
     /// <summary>One claimed voice's stop ramp: it runs from the level and opacities the voice held AT CLAIM
     /// TIME, so claiming a voice mid-ramp (a fade cue, or a crossfade tail part-way down) composes on top of
@@ -2513,14 +2539,16 @@ public sealed class ShowSession : IAsyncDisposable
         FadeCurve Curve,
         float StartAudioScale,
         IReadOnlyList<float> StartLayerOpacities,
-        IReadOnlyList<AudioRouteTarget> RouteTargets);
+        IReadOnlyList<AudioRouteTarget> RouteTargets,
+        CancellationToken Token);
 
     /// <summary>The shared stop path (NXT-18): resolves the target VOICES and claims their fades ON the
     /// dispatcher, ramps OFF it (<see cref="RunStopFadeAsync"/>), then releases each claimed voice back ON the
     /// dispatcher - identity-guarded by the voice's own state, so a cue fired DURING the fade survives (a stop
     /// only releases the voices it saw at claim time). A voice whose fade claim lost to an in-flight natural
-    /// fade-out (or to a concurrent stop) skips the ramp - that fade owns the levels - but is still released
-    /// here, and the release is idempotent so the two stops cannot fight. <paramref name="selectVoices"/> runs
+    /// fade-out (or to a concurrent stop whose deadline is no later) skips the ramp AND the release - that stop
+    /// owns both - and instead waits for it to finish, so this call still returns only once the voice is gone.
+    /// A stop that is superseded mid-ramp becomes a waiter the same way. <paramref name="selectVoices"/> runs
     /// on the dispatcher.</summary>
     private async Task StopVoicesCoreAsync(
         Func<IReadOnlyList<(TransportGroup Group, TransportVoice Voice)>> selectVoices,
@@ -2532,24 +2560,31 @@ public sealed class ShowSession : IAsyncDisposable
         {
             var targets = selectVoices();
             var list = new List<VoiceStopClaim>(targets.Count);
+            var claimedAt = DateTime.UtcNow;
             foreach (var (group, voice) in targets)
             {
+                // Duration precedence: per-clip FadeOut > the caller's stop-fade override > session default.
+                // A clip fading on its OWN duration keeps its own curve too. Resolved BEFORE the claim
+                // because the deadline it implies is what decides who owns the voice: a hard cut lands now,
+                // so it supersedes every ramp, and between two ramps the shorter one wins.
+                var clipFadeWins = voice.Binding.FadeOut > TimeSpan.Zero;
+                var duration = fade
+                    ? clipFadeWins ? voice.Binding.FadeOut : fadeDuration ?? DefaultStopFade
+                    : TimeSpan.Zero;
+                var token = voice.TryClaimFadeOut(claimedAt + duration);
+
                 VoiceStopFade? stopFade = null;
-                if (fade && voice.TryClaimFadeOut())
-                {
-                    // Duration precedence: per-clip FadeOut > the caller's stop-fade override > session
-                    // default. A clip fading on its OWN duration keeps its own curve too.
-                    var clipFadeWins = voice.Binding.FadeOut > TimeSpan.Zero;
+                if (fade && token is { } claim)
                     stopFade = new VoiceStopFade(
                         voice,
-                        clipFadeWins ? voice.Binding.FadeOut : fadeDuration ?? DefaultStopFade,
+                        duration,
                         clipFadeWins ? voice.Binding.FadeOutCurve : curve,
                         voice.ClipLevel,
                         voice.CaptureLayerOpacities(),
-                        voice.RouteTargets);
-                }
+                        voice.RouteTargets,
+                        claim);
 
-                list.Add(new VoiceStopClaim(group, voice, stopFade));
+                list.Add(new VoiceStopClaim(group, voice, stopFade, token, claimedAt + duration));
             }
 
             return Task.FromResult<IReadOnlyList<VoiceStopClaim>>(list);
@@ -2562,17 +2597,60 @@ public sealed class ShowSession : IAsyncDisposable
         if (fades.Length > 0)
             await RunStopFadeAsync(fades).ConfigureAwait(false);
 
+        // Release ONLY the voices this stop still owns. A voice we never claimed - or one a Panic took off us
+        // mid-ramp - belongs to the stop that holds its claim; releasing it here is precisely what used to cut
+        // that stop's ramp off at whatever level it had reached.
+        var owned = claims.Where(c => c.OwnsRelease).ToArray();
         try
         {
-            await InvokeAsync(async () =>
-            {
-                foreach (var claim in claims)
-                    await ReleaseVoiceAsync(claim.Group, claim.Voice).ConfigureAwait(false);
-            }).ConfigureAwait(false);
+            if (owned.Length > 0)
+                await InvokeAsync(async () =>
+                {
+                    foreach (var claim in owned)
+                        await ReleaseVoiceAsync(claim.Group, claim.Voice).ConfigureAwait(false);
+                }).ConfigureAwait(false);
         }
         catch (ObjectDisposedException)
         {
             // The session was disposed mid-stop - disposal releases every voice itself.
+        }
+
+        // …and for the rest, wait until the owner has finished, so every caller of every stop returns on the
+        // same guarantee ("stopped means stopped") rather than only the one that happened to win the claim.
+        foreach (var claim in claims)
+            if (!claim.OwnsRelease)
+                await AwaitVoiceReleaseAsync(claim.Group, claim.Voice, claim.Deadline).ConfigureAwait(false);
+    }
+
+    /// <summary>Waits for the stop that OWNS <paramref name="voice"/> to finish releasing it, then returns.
+    /// Bounded, and the bound is the point: the owner's deadline is no later than ours (that is why we are the
+    /// one waiting), so it should already be done - but an unbounded wait would turn a fault inside the owning
+    /// stop into a Stop/Panic that never returns, and "stopped means stopped" has to hold even then. On expiry
+    /// we release the voice ourselves and say so. Mirrors <c>VoicePlayer.AwaitReleaseAsync</c> for soundboard
+    /// voices; the two stop domains now behave the same way under concurrent stops.</summary>
+    private async Task AwaitVoiceReleaseAsync(TransportGroup group, TransportVoice voice, DateTime deadline)
+    {
+        var grace = deadline - DateTime.UtcNow + TimeSpan.FromSeconds(1);
+        if (grace < TimeSpan.FromSeconds(1))
+            grace = TimeSpan.FromSeconds(1);
+        using var timeout = new CancellationTokenSource();
+        var expired = Task.Delay(grace, timeout.Token);
+        var finished = await Task.WhenAny(voice.Released, expired).ConfigureAwait(false);
+        await timeout.CancelAsync().ConfigureAwait(false); // drop the timer as soon as it is moot
+        if (ReferenceEquals(finished, voice.Released))
+            return;
+
+        MediaDiagnostics.LogWarning(
+            "ShowSession: the stop that claimed cue '{0}' did not release it within {1} s; " +
+            "releasing it from this stop instead.",
+            voice.Binding.CueId, Math.Round(grace.TotalSeconds, 1));
+        try
+        {
+            await InvokeAsync(() => ReleaseVoiceAsync(group, voice).AsTask()).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // disposal owns the teardown
         }
     }
 
@@ -2600,6 +2678,8 @@ public sealed class ShowSession : IAsyncDisposable
                 {
                     if (fade.Voice.State == VoiceState.Retired)
                         continue; // released during the fade - nothing left to ramp
+                    if (fade.Token.IsCancellationRequested)
+                        continue; // superseded by an earlier-deadline stop, which now owns these levels
                     fade.Voice.ApplyFadeLevel(
                         fade.RouteTargets, fade.StartAudioScale, fade.StartLayerOpacities,
                         FadeRamp.LevelDown(elapsed, fade.Duration, fade.Curve));
@@ -2808,7 +2888,10 @@ public sealed class ShowSession : IAsyncDisposable
                     // concurrent stop can't start a second (inaudible) ramp on the released voice. Only THIS
                     // voice goes: a tail still fading beside it keeps its own ramp (releasing the active
                     // voice used to hard-cut the tail with it - an audible click).
-                    if (stopWhenSilent && targetLevel <= 0f && fade.Voice.TryClaimFadeOut())
+                    // The voice is AT silence, so this claim is due now - nothing a concurrent stop could
+                    // still ramp is louder, and an immediate deadline means no later stop can take it back.
+                    if (stopWhenSilent && targetLevel <= 0f
+                        && fade.Voice.TryClaimFadeOut(DateTime.UtcNow) is not null)
                         await ReleaseVoiceAsync(fade.Group, fade.Voice).ConfigureAwait(false);
                 }
             }).ConfigureAwait(false);
@@ -3482,27 +3565,56 @@ public sealed class ShowSession : IAsyncDisposable
             TimelineClaims.Clear();
             Outputs.Clear();
             RouteTargets = [];
+            _fadeOutCts?.Dispose();
+            _fadeOutCts = null;
+            // LAST: a stop awaiting this voice may return the moment it is signalled, and its caller is
+            // entitled to treat that as "the voice is gone" - so nothing may still be pending here.
+            _released.TrySetResult();
         }
 
         // --- claims --------------------------------------------------------------------------------
 
         private int _fadeOutClaimed;
+        private CancellationTokenSource? _fadeOutCts;
+        private DateTime _fadeOutDeadline;
+        private readonly TaskCompletionSource _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>True once a stop / natural fade-out claimed this voice. A fade-cue ramp and the fade-in
-        /// check it every step, so an operator stop preempts them.</summary>
+        /// check it every step, so an operator stop preempts them. Never cleared - a superseding stop takes
+        /// the claim OVER rather than releasing it, so there is no window in which a fade cue could slip
+        /// back in between two stops.</summary>
         public bool IsFadeOutClaimed => Volatile.Read(ref _fadeOutClaimed) != 0;
 
-        /// <summary>Claims this voice's levels for a stop or natural fade-out - at most once per voice, and
-        /// never after it retires. Cancels any release ramp: from the claim on, the claiming stop owns both
-        /// the levels and the release. This ONE claim replaces the Active slot's <c>TryBeginFadeOut</c> and
-        /// the Outgoing slot's <c>TryClaimOutgoingForStop</c>, which is what makes concurrent stops safe -
-        /// one wins the ramp, and the loser's release is idempotent rather than racing it.</summary>
-        public bool TryClaimFadeOut()
+        /// <summary>Completes when this voice has actually been torn down. A stop that loses the claim awaits
+        /// this instead of releasing the voice itself, so "stopped means stopped" holds for the losing caller
+        /// too - it returns when the voice is genuinely gone, not when it discovered someone else owns it.</summary>
+        public Task Released => _released.Task;
+
+        /// <summary>Claims this voice's levels for a stop or natural fade-out and returns the claiming ramp's
+        /// token, or null when this caller does NOT own the voice.
+        /// <para>The claim is held by whichever stop lands SILENT FIRST: an in-flight claim whose deadline is
+        /// no later than <paramref name="deadline"/> keeps it (this caller must wait), and an earlier deadline
+        /// supersedes - cancelling the incumbent's ramp and taking over the levels and the release from
+        /// wherever that ramp had reached. That ordering is what makes Panic reach a voice a 30 s stop fade
+        /// already owns while a second, longer stop cannot chop a short fade off part-way down.</para>
+        /// <para>It replaces the Active slot's <c>TryBeginFadeOut</c> and the Outgoing slot's
+        /// <c>TryClaimOutgoingForStop</c>. A permanent one-shot (what this was) is not enough on its own: the
+        /// loser skipping the ramp is only safe if it also stops releasing the voice out from under the
+        /// winner - see <see cref="AwaitVoiceReleaseAsync"/>. Dispatcher-confined.</para></summary>
+        public CancellationToken? TryClaimFadeOut(DateTime deadline)
         {
-            if (State == VoiceState.Retired || Interlocked.Exchange(ref _fadeOutClaimed, 1) != 0)
-                return false;
-            _releaseRampCts?.Cancel();
-            return true;
+            if (State == VoiceState.Retired)
+                return null;
+            if (_fadeOutCts is { IsCancellationRequested: false } && _fadeOutDeadline <= deadline)
+                return null;
+            _fadeOutCts?.Cancel();
+            _fadeOutCts?.Dispose();
+            _fadeOutCts = new CancellationTokenSource();
+            _fadeOutDeadline = deadline;
+            Volatile.Write(ref _fadeOutClaimed, 1);
+            _releaseRampCts?.Cancel(); // a claimed tail's release ramp yields to the stop that claimed it
+            return _fadeOutCts.Token;
         }
 
         // The one in-flight fade-cue ramp per voice: a newer fade cue on the same clip cancels the previous

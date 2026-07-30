@@ -308,19 +308,28 @@ public sealed class RemoteApiDispatcherTests
             Assert.True(server.Start(port, dispatcher, token));
             var baseUrl = server.BaseUrl!;
 
-            using var http = new HttpClient();
-            var unauthorized = await http.GetAsync($"{baseUrl}/api/v1/status");
-            var status = await http.GetAsync($"{baseUrl}/api/v1/status?key={token}");
-            var body = await status.Content.ReadAsStringAsync();
-            using var bearer = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v1/soundboards/1/1/tap");
-            bearer.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            var tap = await http.SendAsync(bearer);
-            using var notFoundRequest = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v1/bogus?key={token}");
-            var notFound = await http.SendAsync(notFoundRequest);
-            var getMutation = await http.GetAsync($"{baseUrl}/api/v1/soundboards/1/1/tap?key={token}");
-            return ((int)unauthorized.StatusCode, (int)status.StatusCode, body, (int)tap.StatusCode,
-                (int)notFound.StatusCode, (int)getMutation.StatusCode,
-                getMutation.Content.Headers.Allow.SingleOrDefault());
+            // finally, not a trailing call: a failed assertion below must not skip the drain, or the leak comes
+            // back only on the runs where something ELSE was already wrong.
+            try
+            {
+                using var http = new HttpClient();
+                var unauthorized = await http.GetAsync($"{baseUrl}/api/v1/status");
+                var status = await http.GetAsync($"{baseUrl}/api/v1/status?key={token}");
+                var body = await status.Content.ReadAsStringAsync();
+                using var bearer = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v1/soundboards/1/1/tap");
+                bearer.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                var tap = await http.SendAsync(bearer);
+                using var notFoundRequest = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v1/bogus?key={token}");
+                var notFound = await http.SendAsync(notFoundRequest);
+                var getMutation = await http.GetAsync($"{baseUrl}/api/v1/soundboards/1/1/tap?key={token}");
+                return ((int)unauthorized.StatusCode, (int)status.StatusCode, body, (int)tap.StatusCode,
+                    (int)notFound.StatusCode, (int)getMutation.StatusCode,
+                    getMutation.Content.Headers.Allow.SingleOrDefault());
+            }
+            finally
+            {
+                StopAndDrainListener(server);
+            }
         }, CancellationToken.None);
 
         Assert.Equal(401, unauthorizedCode);
@@ -347,16 +356,30 @@ public sealed class RemoteApiDispatcherTests
             {
                 var port = GetFreePort();
                 Assert.True(open.Start(port, dispatcher, accessToken: null));
-                var r = await http.GetAsync($"{open.BaseUrl}/api/v1/status");
-                var noToken = (int)r.StatusCode;
+                try
+                {
+                    var r = await http.GetAsync($"{open.BaseUrl}/api/v1/status");
+                    var noToken = (int)r.StatusCode;
 
-                // Token configured → required: unauthenticated 401, correct key 200.
-                using var secured = new RestApiServer();
-                var port2 = GetFreePort();
-                Assert.True(secured.Start(port2, dispatcher, "secret-token"));
-                var unauth = (int)(await http.GetAsync($"{secured.BaseUrl}/api/v1/status")).StatusCode;
-                var auth = (int)(await http.GetAsync($"{secured.BaseUrl}/api/v1/status?key=secret-token")).StatusCode;
-                return (noToken, unauth, auth);
+                    // Token configured → required: unauthenticated 401, correct key 200.
+                    using var secured = new RestApiServer();
+                    var port2 = GetFreePort();
+                    Assert.True(secured.Start(port2, dispatcher, "secret-token"));
+                    try
+                    {
+                        var unauth = (int)(await http.GetAsync($"{secured.BaseUrl}/api/v1/status")).StatusCode;
+                        var auth = (int)(await http.GetAsync($"{secured.BaseUrl}/api/v1/status?key=secret-token")).StatusCode;
+                        return (noToken, unauth, auth);
+                    }
+                    finally
+                    {
+                        StopAndDrainListener(secured); // BOTH servers leak handlers, not just the last one
+                    }
+                }
+                finally
+                {
+                    StopAndDrainListener(open);
+                }
             }
         }, CancellationToken.None);
 
@@ -448,6 +471,18 @@ public sealed class RemoteApiDispatcherTests
     /// that nothing else will touch the dispatcher. Pumping is required because a queued
     /// <c>Dispatcher.UIThread.InvokeAsync</c> only completes while the UI thread runs jobs.
     /// </summary>
+    /// <summary>Stops a listener and waits out its in-flight handlers, in the ONE order that is safe: capture
+    /// the accept loop (Stop nulls the field), stop, then drain. Every listener test must end this way before
+    /// its dispatch returns - see <see cref="DrainListenerHandlers"/> for what a surviving handler does to the
+    /// next test. Only <see cref="HttpServer_Stop_DoesNotBlockUiThreadWhenDispatchIsQueued"/> spells the three
+    /// steps out inline, because it has to time the Stop call by itself.</summary>
+    private static void StopAndDrainListener(RestApiServer server)
+    {
+        var acceptLoop = PrivateField<Task>(server, "_acceptLoop"); // Stop nulls it; capture first
+        server.Stop();
+        DrainListenerHandlers(server, acceptLoop);
+    }
+
     private static void DrainListenerHandlers(RestApiServer server, Task? acceptLoop)
     {
         var limit = TimeSpan.FromSeconds(10);

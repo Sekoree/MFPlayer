@@ -248,6 +248,22 @@ public sealed class MasterTrimTests
         Clips: [new ShowClipBinding("c", "tone://1") { AudioRoutes = routes }],
         Compositions: [], Routes: []);
 
+    /// <summary>One tone cue whose volume automation sits FLAT at <paramref name="level"/> (a single keyframe
+    /// samples to the same value everywhere), so the envelope's contribution is a constant the output peak can
+    /// be compared against directly.</summary>
+    private static ShowDocument OneToneCueWithEnvelope(float level, params ShowClipAudioRoute[] routes) => new(
+        Version: 1,
+        Cues: [new CueDefinition("c", 1, "C")],
+        Clips:
+        [
+            new ShowClipBinding("c", "tone://1")
+            {
+                AudioRoutes = routes,
+                VolumeEnvelope = [new ShowEnvelopePoint(TimeSpan.Zero, level)],
+            },
+        ],
+        Compositions: [], Routes: []);
+
     /// <summary>Resets the max-ever peak, lets the output run, and returns what it saw - the gain
     /// currently installed on the route, measured at the device.</summary>
     private static async Task<float> SamplePeakAsync(PeakAudioOutput output, int settleMs = 300)
@@ -330,6 +346,30 @@ public sealed class MasterTrimTests
         Assert.True(
             outputs[TrimDevice].Peak <= expected + 0.03f,
             $"the clip rose above tone × trim after the commit (peak {outputs[TrimDevice].Peak})");
+    }
+
+    [Fact]
+    public async Task GoWithAnEnvelopeStartingBelowUnity_NeverPutsAFullLevelBufferOnTheDevice()
+    {
+        // The same defect as GoUnderALoweredFader above, one component along. The envelope runner is started
+        // at the END of the commit, so a clip whose automation begins at 0.2 attached its routes at unity and
+        // played a FULL-LEVEL burst until the runner's first tick - on a cue authored quiet precisely because
+        // it must not be loud. Sampling the envelope at the clip's start offset before the routes attach is
+        // what closes it: the level composition has to be authoritative AT attach, not just after it.
+        var (session, outputs) = BuildToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(
+            OneToneCueWithEnvelope(0.2f, new ShowClipAudioRoute(TrimDevice, [0, 1])));
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+
+        var expected = ToneAudioDecoderProvider.Amplitude * 0.2f; // tone × envelope
+        await AssertPeakRisesToAsync(
+            outputs[TrimDevice], expected - 0.05f, expected + 0.03f, "GO with an envelope starting at 0.2");
+        // The session agrees the envelope - not the fade - is what is holding it down.
+        var levels = (await session.GetClipAudioLevelsAsync("c"))!;
+        Assert.Equal(1f, levels.FadeLevel, 3);
+        Assert.Equal(0.2f, levels.EnvelopeLevel, 3);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using Xunit;
 
@@ -215,5 +216,114 @@ public sealed class TransportVoiceTests
         var sources = CueSources(await session.GetSoundingSourcesAsync());
         Assert.Single(sources);
         Assert.Single(VoicesOfCue(sources, "c2"));
+    }
+
+    // ---- Concurrent stops on ONE voice: the loser must not cut the winner's ramp --------------------
+
+    /// <summary>Traces a voice's composed bus level until it leaves the bus, so a release can be judged by
+    /// the level the voice was AT when it happened. A hard cut and a completed ramp both end with the voice
+    /// gone; only the level on the way out tells them apart.</summary>
+    private sealed class LevelTrace : IAsyncDisposable
+    {
+        private readonly CancellationTokenSource _stop = new();
+        private readonly ConcurrentQueue<float> _levels = new();
+        private readonly Task _poller;
+
+        public LevelTrace(ShowSession session, string cueId)
+        {
+            _poller = Task.Run(async () =>
+            {
+                while (!_stop.IsCancellationRequested)
+                {
+                    var voices = VoicesOfCue(await session.GetSoundingSourcesAsync().ConfigureAwait(false), cueId);
+                    if (voices.Count > 0)
+                        _levels.Enqueue(voices[0].Level);
+                    await Task.Delay(15, _stop.Token).ConfigureAwait(false);
+                }
+            }, _stop.Token);
+        }
+
+        public float LowestLevelSeen => _levels.IsEmpty ? float.NaN : _levels.Min();
+
+        public async Task WaitUntilBelowAsync(float level, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (LowestLevelSeen is var seen && (float.IsNaN(seen) || seen > level))
+            {
+                Assert.True(DateTime.UtcNow < deadline, $"the level never fell below {level} (lowest {seen})");
+                await Task.Delay(15);
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _stop.CancelAsync();
+            try { await _poller; } catch (OperationCanceledException) { }
+            _stop.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ASecondStopMidRamp_TakesOverTheFade_InsteadOfHardCuttingTheFirstStopsRamp()
+    {
+        // The fade claim used to be a permanent one-shot with no deadline, and StopVoicesCoreAsync released
+        // every voice it selected - INCLUDING one whose claim it lost. So a second stop landing during a 5 s
+        // stop fade skipped the ramp and released the voice on the spot, chopping the first stop's ramp off
+        // at whatever level it had reached: an audible click on a control surface where double-tapping Stop,
+        // or hitting Stop on a group and then Stop-all, is entirely ordinary. (Panic is the ONE case that
+        // must still cut, and it does - it claims with an earlier deadline and owns the release.)
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Cues("c1"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+
+        await using var trace = new LevelTrace(session, "c1");
+        // A 30 s fade against a 1 s one, so the two possible correct-looking outcomes are far apart in time:
+        // taking the ramp OVER finishes in ~1 s, merely waiting for the incumbent would take ~29 s. Both
+        // would end in silence, so a level assertion alone cannot tell them apart - the elapsed time can.
+        var slowStop = session.StopAsync(fadeDuration: TimeSpan.FromSeconds(30));
+
+        // Let the 30 s ramp get provably under way while the voice is still well up, so a hard cut here is
+        // unmistakably a cut and not a nearly-finished fade.
+        await trace.WaitUntilBelowAsync(0.95f, TimeSpan.FromSeconds(10));
+
+        var started = Stopwatch.StartNew();
+        await session.StopAsync(fadeDuration: TimeSpan.FromSeconds(1));
+        var quickStopTook = started.Elapsed;
+        await slowStop;
+
+        // Both stops have returned, so "stopped means stopped" still holds…
+        await releases.WaitForReleaseAsync("dev-c1", TimeSpan.FromSeconds(10));
+        Assert.Empty(CueSources(await session.GetSoundingSourcesAsync()));
+        // …the voice rode a ramp to silence on its way out rather than being cut at ~0.95…
+        Assert.InRange(trace.LowestLevelSeen, 0f, 0.05f);
+        // …and the SHORT stop was actually short: it took the ramp over from where the long one had reached
+        // instead of inheriting its remaining ~29 s.
+        Assert.True(
+            quickStopTook < TimeSpan.FromSeconds(10),
+            $"the 1 s stop took {quickStopTook.TotalSeconds:F1} s - it waited for the 30 s fade "
+            + "instead of superseding it");
+    }
+
+    [Fact]
+    public async Task PanicDuringAStopFade_StillCutsTheVoice_AndItIsGoneWhenPanicReturns()
+    {
+        // The other side of the same claim: an EARLIER deadline supersedes, so the safety button keeps its
+        // reach even though a longer stop already owns the voice. This is the transport twin of
+        // SoundingBusTests.PanicAfterAStopFade_CutsASoundboardVoiceToo_AndItIsGoneWhenPanicReturns.
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Cues("c1"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+
+        await using var trace = new LevelTrace(session, "c1");
+        var slowStop = session.StopAsync(fadeDuration: TimeSpan.FromSeconds(30));
+        await trace.WaitUntilBelowAsync(0.99f, TimeSpan.FromSeconds(10));
+
+        await session.StopAllAsync(TimeSpan.Zero); // Panic
+        // Gone the moment Panic returns - not 30 s later.
+        Assert.Empty(CueSources(await session.GetSoundingSourcesAsync()));
+        Assert.True(releases.IsReleased("dev-c1"), "Panic returned while the voice was still sounding");
+        await slowStop;
     }
 }
