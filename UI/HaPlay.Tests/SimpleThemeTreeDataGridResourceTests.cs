@@ -27,7 +27,7 @@ public sealed class SimpleThemeTreeDataGridResourceTests
     private static void RunUi(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(SimpleThemeTreeDataGridResourceTests).Assembly)
-            .Dispatch(body, CancellationToken.None)
+            .DispatchGuarded(body, CancellationToken.None)
             .GetAwaiter().GetResult();
 
     // Each TreeDataGrid brush that the Fluent TreeDataGrid theme derives from a Fluent-only System*Color; if a

@@ -18,7 +18,7 @@ public sealed class MediaPlayerProjectRestoreTests
     private static void RunUi(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerProjectRestoreTests).Assembly)
-            .Dispatch(body, CancellationToken.None)
+            .DispatchGuarded(body, CancellationToken.None)
             .GetAwaiter().GetResult();
 
     private static PortAudioOutputDefinition Speakers(Guid id) =>

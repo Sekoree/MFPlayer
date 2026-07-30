@@ -21,7 +21,7 @@ public sealed class OpenRecentCommandTests
         // thread like every other VM test, or this flakes order-dependently with VerifyAccess.
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(OpenRecentCommandTests).Assembly)
-            .Dispatch(static () =>
+            .DispatchGuarded(static () =>
             {
                 var vm = new MainViewModel();
 

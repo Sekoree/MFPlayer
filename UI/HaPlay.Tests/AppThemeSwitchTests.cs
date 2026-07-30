@@ -26,7 +26,7 @@ public sealed class AppThemeSwitchTests
     private static void Dispatch(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(AppThemeSwitchTests).Assembly)
-            .Dispatch(body, CancellationToken.None)
+            .DispatchGuarded(body, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 

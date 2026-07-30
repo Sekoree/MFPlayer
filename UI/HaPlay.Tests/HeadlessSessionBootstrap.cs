@@ -42,7 +42,7 @@ public sealed class HeadlessSessionFramework : XunitTestFramework
         Environment.SetEnvironmentVariable("HAPLAY_DISABLE_RECOVERY_TIMER", "1");
 
         HeadlessUnitTestSession.GetOrStartForAssembly(typeof(HeadlessSessionFramework).Assembly)
-            .Dispatch(static () => { }, CancellationToken.None)
+            .DispatchGuarded(static () => { }, CancellationToken.None)
             .GetAwaiter().GetResult();
     }
 }

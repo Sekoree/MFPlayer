@@ -19,7 +19,7 @@ public sealed class KeyboardShortcutsTests
     public Task ShortcutsDialog_Renders_TheDocumentedGestures() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(KeyboardShortcutsTests).Assembly)
-            .Dispatch(static () =>
+            .DispatchGuarded(static () =>
             {
                 // The headless TestApp ships no Application.Styles, so an ItemsControl gets Avalonia's
                 // bare fallback template - no ItemsPresenter, so the shortcut rows were never realized

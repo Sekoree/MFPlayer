@@ -90,7 +90,7 @@ public sealed class CompositionPlacementCanvasDragTests(ITestOutputHelper output
     {
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CompositionPlacementCanvasDragTests).Assembly)
-            .Dispatch(() =>
+            .DispatchGuarded(() =>
             {
                 // Snapping off: this test is about the move itself, and a guide could legitimately absorb
                 // part of the travel. Snapping has its own tests.
@@ -126,7 +126,7 @@ public sealed class CompositionPlacementCanvasDragTests(ITestOutputHelper output
     {
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CompositionPlacementCanvasDragTests).Assembly)
-            .Dispatch(() =>
+            .DispatchGuarded(() =>
             {
                 var rig = Build(x: 0, y: 0, w: 1, h: 1, snap: snap);
 
@@ -149,7 +149,7 @@ public sealed class CompositionPlacementCanvasDragTests(ITestOutputHelper output
     {
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CompositionPlacementCanvasDragTests).Assembly)
-            .Dispatch(() =>
+            .DispatchGuarded(() =>
             {
                 var rig = Build(x: 0.25, y: 0.25, w: 0.5, h: 0.5, snap: false);
 
@@ -237,7 +237,7 @@ public sealed class CompositionPlacementCanvasDragTests(ITestOutputHelper output
     {
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CompositionPlacementCanvasDragTests).Assembly)
-            .Dispatch(() =>
+            .DispatchGuarded(() =>
             {
                 var rig = Build(x: 0.1, y: 0.1, w: 0.4, h: 0.4, snap: false);
 

@@ -17,7 +17,7 @@ public sealed class MediaPlayerPlaylistTabTests
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerPlaylistTabTests).Assembly)
-            .Dispatch(action, CancellationToken.None)
+            .DispatchGuarded(action, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 

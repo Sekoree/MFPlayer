@@ -1,0 +1,389 @@
+using S.Media.Core.Diagnostics;
+using S.Media.Time;
+
+namespace S.Media.Session;
+
+/// <summary>
+/// The operator's transport verbs: fire a cue (on the cue graph or independently of it), GO, and seek -
+/// one group or several coordinated. All of them marshal onto the session dispatcher (D5), so this file is
+/// where "a command arrived" turns into "the dispatcher will do it, in order".
+/// <para>Split out of the root file (2026-07-30 review §3). Stops are deliberately NOT here: they have
+/// their own claim protocol and their own file, and mixing the two is what made the root file hard to read
+/// the fire path out of.</para>
+/// </summary>
+public sealed partial class ShowSession
+{
+    // --- transport commands (marshaled - D5) -------------------------------------------------------
+
+    /// <summary>Fires a specific cue by id (PreWait/PostWait/AutoContinue honoured by the cue graph). Runs OFF the
+    /// serial dispatcher (NXT-03), so its pre-wait + media open don't park the loop - STOP/seek/load/queries stay
+    /// responsive and can abort it.</summary>
+    public Task<CueExecutionStatus> FireCueAsync(string cueId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _fires.FireCueAsync(cueId);
+    }
+
+    /// <summary>Fires a cue with a dual-voice crossfade window (Ideas/Dual-Voice-Crossfade-Design.md): when
+    /// the cue's group already holds an active clip, that clip moves to the group's OUTGOING slot - keeping
+    /// its outputs/routes/layers - and ramps to silence over <paramref name="crossfade"/> while the incoming
+    /// clip fades in over the same window (an implied fade-in when the binding has none; a configured per-cue
+    /// FadeIn wins). The outgoing releases at ramp end, or earlier on stop/panic/the next replacement. A null
+    /// or non-positive <paramref name="crossfade"/> (or an idle group) is exactly
+    /// <see cref="FireCueAsync(string)"/> - the butt-splice path, byte for byte. Transport (pause/seek/
+    /// end-monitor) targets the incoming clip only; the outgoing tail is fire-and-forget. An incoming open
+    /// failure leaves the current clip untouched (fail loud via the returned status).</summary>
+    public Task<CueExecutionStatus> FireCueAsync(
+        string cueId, TimeSpan? crossfade, FadeCurve crossfadeCurve = FadeCurve.Linear)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _fires.FireCueAsync(
+            cueId, crossfade is { } duration && duration > TimeSpan.Zero ? (duration, crossfadeCurve) : null);
+    }
+
+    /// <summary>Fires one media cue on a caller-owned transport group instead of the group encoded in the
+    /// show document. This is the manual-override path used by HaPlay: different children of one authored
+    /// group can then play concurrently, while re-firing the same child replaces only its own manual slot.</summary>
+    public async Task<CueExecutionStatus> FireCueIndependentAsync(
+        string cueId,
+        string independentGroupId,
+        CancellationToken cancellationToken = default)
+        => await FireCueIndependentCoreAsync(
+                cueId, independentGroupId, waitForStartBarrier: null, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>The coordinated-batch form: identical independent-group semantics, but the armed clip waits at the
+    /// caller's barrier before it commits. Kept internal so the public batch API remains the only owner of barrier
+    /// participant accounting.</summary>
+    internal Task<CueExecutionStatus> FireCueIndependentAtBarrierAsync(
+        string cueId,
+        string independentGroupId,
+        Func<Task> waitForStartBarrier,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(waitForStartBarrier);
+        return FireCueIndependentCoreAsync(cueId, independentGroupId, waitForStartBarrier, cancellationToken);
+    }
+
+    private async Task<CueExecutionStatus> FireCueIndependentCoreAsync(
+        string cueId,
+        string independentGroupId,
+        Func<Task>? waitForStartBarrier,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cueId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(independentGroupId);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (!_cueGraph.TryGetCue(cueId, out var cue))
+            throw new ArgumentException($"cue '{cueId}' is not registered", nameof(cueId));
+        if (!cue.Enabled)
+            return CueExecutionStatus.SkippedDisabled;
+        if (!cue.Armed)
+            return CueExecutionStatus.SkippedNotArmed;
+        if (!_clipsByCue.TryGetValue(cueId, out var binding))
+            return CueExecutionStatus.NotReady;
+
+        try
+        {
+            if (cue.PreWait > TimeSpan.Zero)
+                await Task.Delay(cue.PreWait, cancellationToken).ConfigureAwait(false);
+            await PlayClipAsync(independentGroupId, binding, cancellationToken, waitForStartBarrier).ConfigureAwait(false);
+            if (cue.PostWait > TimeSpan.Zero)
+                await Task.Delay(cue.PostWait, cancellationToken).ConfigureAwait(false);
+            return CueExecutionStatus.Fired;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return CueExecutionStatus.Failed;
+        }
+    }
+
+    // The one in-flight explicit crossfade fire's window: published by FireOnGraphAsync just before the
+    // graph fire runs (the orchestrator holds the fire lock, so at most one exists) and consumed exactly
+    // once by the fired cue's clip action - the graph action closures are fixed at load time, so the
+    // window rides beside the fire rather than through the CueGraph signature. Interlocked because the
+    // set (fire worker) and consume (dispatcher, inside the fire's PlayClipAsync) are different threads.
+    private Tuple<TimeSpan, FadeCurve>? _pendingFireCrossfade;
+
+    /// <summary>Takes (and clears) the pending crossfade window for the clip action of an in-flight
+    /// explicit crossfade fire. Null for every other fire - the plain path is untouched.</summary>
+    private (TimeSpan Duration, FadeCurve Curve)? TakePendingFireCrossfade() =>
+        Interlocked.Exchange(ref _pendingFireCrossfade, null) is { } pending
+            ? (pending.Item1, pending.Item2)
+            : null;
+
+    /// <summary>Runs the current cue graph's fire - the <see cref="CueFireOrchestrator"/>'s state seam. Reads
+    /// <see cref="_cueGraph"/> off-dispatcher exactly as the fire core always has (the graph reference swaps
+    /// atomically on load; the show-generation guard makes a straddling fire discard its stale clip at commit).</summary>
+    internal async Task<CueExecutionStatus> FireOnGraphAsync(
+        string cueId, CancellationToken token, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+    {
+        if (crossfade is { } window)
+            Interlocked.Exchange(ref _pendingFireCrossfade, Tuple.Create(window.Duration, window.Curve));
+        try
+        {
+            return await _cueGraph.FireAsync(cueId, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A skipped/failed/cancelled fire may never reach its clip action - the unconsumed window
+            // must not leak into a later plain fire.
+            if (crossfade is not null)
+                Interlocked.Exchange(ref _pendingFireCrossfade, null);
+        }
+    }
+
+    /// <summary>Fires several cues together with a coordinated start - the fire-time counterpart of the seek/pause
+    /// barriers (NXT-04 start skew / old-engine <c>FireGroupAsync</c> parity). Every cue's clip opens
+    /// <em>concurrently</em> instead of each open serializing behind the previous cue's start, so a simultaneous
+    /// cue group (the UI's coordinated trigger step) starts together rather than staggered by the sum of the opens
+    /// - the cue graph is thread-safe for concurrent fires. All share ONE cancellation source, so a
+    /// STOP/LOAD/DISPOSE aborts the whole group. Returns the per-cue statuses in
+    /// input order (a cancelled cue reports <see cref="CueExecutionStatus.Failed"/>). Runs OFF the serial
+    /// dispatcher (NXT-03) and holds the fire-lock for the whole group so no GO/fire interleaves.</summary>
+    public Task<IReadOnlyList<CueExecutionStatus>> FireCuesAsync(IReadOnlyList<string> cueIds)
+    {
+        ArgumentNullException.ThrowIfNull(cueIds);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _fires.FireCuesAsync(cueIds);
+    }
+
+    /// <summary>Fires several clip-bound cues concurrently on distinct caller-owned runtime groups. Unlike
+    /// <see cref="FireCuesAsync"/>, this deliberately does not use each cue's authored <see cref="CueDefinition.GroupId"/>:
+    /// callers use it for simultaneously-fired siblings that share one authored group but must each retain an active
+    /// clip. The batch holds the normal fire lock, shares cancellation, and returns statuses in input order.</summary>
+    public Task<IReadOnlyList<CueExecutionStatus>> FireCuesIndependentAsync(
+        IReadOnlyList<(string CueId, string RuntimeGroupId)> targets,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var (cueId, runtimeGroupId) in targets)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(cueId, nameof(targets));
+            ArgumentException.ThrowIfNullOrWhiteSpace(runtimeGroupId, nameof(targets));
+        }
+
+        return _fires.FireCuesIndependentAsync(targets, cancellationToken);
+    }
+
+    /// <summary>GO - fires the next armed and enabled cue in <paramref name="groupId"/> after the cursor. A
+    /// disabled or unarmed cue is skipped (never fired); the cursor advances only when the chosen cue actually
+    /// ran or faulted, so a cue that was momentarily not fireable can still be reached by a later GO (NXT-07).</summary>
+    public Task<CueExecutionStatus> GoAsync(string groupId = DefaultGroup)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _fires.GoAsync(groupId);
+    }
+
+    /// <summary>GO's cue selection (dispatcher): the next armed+enabled cue in <paramref name="groupId"/> after
+    /// the group's cursor, plus the show generation it was read under (so the matching cursor advance can no-op
+    /// when a reload swapped the show in between).</summary>
+    internal Task<(CueDefinition? Next, int Generation)> SelectNextGoCueAsync(string groupId) =>
+        InvokeAsync(() =>
+        {
+            var group = GetOrAddGroup(groupId);
+            var next = _cueGraph.Cues
+                .Where(c => (c.GroupId ?? DefaultGroup) == groupId && c.Number > group.LastFiredNumber
+                            && c.Armed && c.Enabled)
+                .OrderBy(c => c.Number)
+                .FirstOrDefault();
+            return Task.FromResult((next, _showGeneration));
+        });
+
+    /// <summary>GO's cursor advance (dispatcher). A no-op when <paramref name="generation"/> no longer matches -
+    /// a reload swapped the show between selection and advance, and the fresh show's cursor must not inherit the
+    /// old one's progress (the pre-split code got the same outcome by writing to the orphaned group).</summary>
+    internal Task AdvanceGoCursorAsync(string groupId, int number, int generation) =>
+        InvokeAsync(() =>
+        {
+            if (_showGeneration == generation)
+                GetOrAddGroup(groupId).LastFiredNumber = number;
+            return Task.CompletedTask;
+        });
+
+    /// <summary>Seeks the active clip on <paramref name="groupId"/> (coordinated A/V seek).</summary>
+    public Task SeekAsync(TimeSpan position, string groupId = DefaultGroup) =>
+        InvokeAsync(() =>
+        {
+            var group = GetOrAddGroup(groupId);
+            if (group.ActiveVoice is { } voice)
+            {
+                // SeekCoordinated pauses+seeks but does NOT resume, so preserve the pre-seek play state: a
+                // scrub while playing must keep playing, not freeze. Without this the clip is left paused
+                // (IsRunning=false) after every seek, and the media-player deck's poll reads that as "ended"
+                // and tears the deck down - i.e. seek "stops playback" (matches SeekManyAsync's resume).
+                var wasRunning = voice.Player.IsRunning;
+                var masterBeforeSeek = group.Timeline.GetSnapshot().MasterTime;
+                SeekCoordinatedRestoringPlayState(voice.Player, position, group, masterBeforeSeek, resume: wasRunning);
+            }
+            return Task.CompletedTask;
+        });
+
+    /// <summary>
+    /// Coordinated seek that can never strand the clip paused: <c>SeekCoordinated</c> pauses BEFORE it
+    /// seeks, so a decode/demux fault thrown by the seek (observed live: <c>avcodec_send_packet</c>
+    /// EINVAL on some codecs) used to skip the resume AND the discontinuity mark - the clip sat frozen
+    /// with no error shown, the deck's poll read it as ended, and every later seek failed the same way.
+    /// On failure this restores the pre-seek play state (best effort - the demux stays wherever the
+    /// failed seek left it) and still marks the discontinuity (the source position may have partially
+    /// moved), THEN rethrows so the caller's task surfaces the fault.
+    /// </summary>
+    private static void SeekCoordinatedRestoringPlayState(
+        S.Media.Players.MediaPlayer player,
+        TimeSpan position,
+        TransportGroup group,
+        TimeSpan masterBeforeSeek,
+        bool resume)
+    {
+        try
+        {
+            player.SeekCoordinated(position);
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, $"ShowSession: coordinated seek to {position} failed; restoring play state");
+            try
+            {
+                if (resume && !player.IsRunning)
+                    player.Play();
+            }
+            catch (Exception resumeEx)
+            {
+                MediaDiagnostics.LogError(resumeEx, "ShowSession: resume after a failed seek also failed");
+            }
+            group.Timeline.MarkDiscontinuity(masterBeforeSeek);
+            throw;
+        }
+
+        if (resume)
+            player.Play();
+        group.Timeline.MarkDiscontinuity(masterBeforeSeek); // source jumps; master stays monotonic (NXT-04)
+    }
+
+    /// <summary>Seeks several groups together behind one shared epoch - the group-seek barrier (NXT-04 /
+    /// old-engine <c>group_seek_barrier</c> parity). Every target group is paused first so its clock freezes,
+    /// each is seeked (coordinated), then the ones that were running resume together - so a multi-cue seek lands
+    /// atomically instead of each group seeking (and drifting while the others keep advancing) in turn. Runs as
+    /// one dispatcher operation, so no other transport command interleaves between the seeks. Groups with no
+    /// active clip are skipped; a repeated group id just re-seeks its one active player (last position wins).</summary>
+    public Task SeekManyAsync(IReadOnlyList<(string GroupId, TimeSpan Position)> seeks)
+    {
+        ArgumentNullException.ThrowIfNull(seeks);
+        if (seeks.Count == 0)
+            return Task.CompletedTask;
+        return InvokeAsync(() =>
+        {
+            // 1) Freeze every target's clock (shared epoch) so a slow demux seek on one group can't let another
+            //    group's playhead run on past it. Remember which were running so paused cues stay paused.
+            var targets = new List<(
+                TransportGroup Group,
+                S.Media.Players.MediaPlayer Player,
+                TimeSpan Position,
+                bool Resume,
+                TimeSpan MasterBeforeSeek)>(seeks.Count);
+            List<Exception>? errors = null;
+            foreach (var (groupId, position) in seeks)
+            {
+                var group = GetOrAddGroup(groupId);
+                if (group.ActiveVoice is not { } voice)
+                    continue;
+                var wasRunning = voice.Player.IsRunning;
+                var masterBeforeSeek = group.Timeline.GetSnapshot().MasterTime;
+                if (wasRunning)
+                {
+                    try
+                    {
+                        voice.Player.Pause();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Skip this group's seek (its clock never froze) but keep the barrier for the rest.
+                        MediaDiagnostics.LogError(ex, $"ShowSession: group seek pause failed for group '{groupId}'; skipping its seek");
+                        (errors ??= []).Add(ex);
+                        continue;
+                    }
+                }
+                targets.Add((group, voice.Player, position, wasRunning, masterBeforeSeek));
+            }
+
+            // 2) Seek all with clocks frozen, then 3) release the running ones together from the shared epoch.
+            // A failing seek must not break the barrier: the other groups still seek, and EVERY paused group
+            // still resumes (a faulted one from its pre-seek position) - a fault used to leave every
+            // not-yet-seeked group stranded paused with no error surfaced.
+            foreach (var (_, player, position, _, _) in targets)
+            {
+                try
+                {
+                    player.SeekCoordinated(position);
+                }
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, $"ShowSession: group seek to {position} failed; the clip resumes from its pre-seek position");
+                    (errors ??= []).Add(ex);
+                }
+            }
+            foreach (var (group, player, _, resume, masterBeforeSeek) in targets)
+            {
+                if (resume)
+                {
+                    try
+                    {
+                        player.Play();
+                    }
+                    catch (Exception ex)
+                    {
+                        MediaDiagnostics.LogError(ex, "ShowSession: group seek resume failed");
+                        (errors ??= []).Add(ex);
+                    }
+                }
+                group.Timeline.MarkDiscontinuity(masterBeforeSeek); // all masters preserve the shared pre-seek epoch
+            }
+
+            if (errors is not null)
+            {
+                if (errors.Count == 1)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
+                throw new AggregateException("One or more group seeks failed (play state was restored).", errors);
+            }
+
+            return Task.CompletedTask;
+        });
+    }
+
+    /// <see cref="FadeClipAsync"/> calls compose from.</summary>
+    public Task<float?> GetClipFadeLevelAsync(string cueId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(cueId) is { } voice ? (float?)voice.ClipLevel : null));
+    }
+
+    /// <summary>The live audio levels of the active clip playing <paramref name="cueId"/>, or null when
+    /// that cue is not an active clip. <see cref="ClipAudioLevels.EffectiveLevel"/> is the exact product
+    /// the route gains are written with (fade × envelope × master trim), read from the same group state.</summary>
+    public Task<ClipAudioLevels?> GetClipAudioLevelsAsync(string cueId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(cueId) is { } voice
+                ? new ClipAudioLevels(voice.ClipLevel, voice.EnvelopeLevel, voice.EffectiveAudioLevel)
+                : null));
+    }
+
+    /// <summary>Everything the session is currently feeding audio to, with the classification the master
+    /// fader, stop-all and Panic key off: transport groups and soundboard voices as
+    /// <see cref="SoundingSourceRole.Program"/>, the cue preview and audio taps as
+    /// <see cref="SoundingSourceRole.Monitoring"/>. A host status panel reads it; it is also the only way
+    /// to observe that monitoring is registered on the bus yet excluded from all three.</summary>
+    public Task<IReadOnlyList<SoundingSourceInfo>> GetSoundingSourcesAsync()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return InvokeAsync(() => Task.FromResult(_sounding.Snapshot()));
+    }
+}

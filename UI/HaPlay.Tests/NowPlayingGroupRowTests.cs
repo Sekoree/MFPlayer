@@ -16,7 +16,7 @@ public sealed class NowPlayingGroupRowTests
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(NowPlayingGroupRowTests).Assembly)
-            .Dispatch(action, CancellationToken.None)
+            .DispatchGuarded(action, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 

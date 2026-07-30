@@ -16,7 +16,7 @@ public sealed class RemoteApiTokenMaskingTests
     public Task Token_IsMasked_UntilRevealed_AndClearingResetsReveal() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(RemoteApiTokenMaskingTests).Assembly)
-            .Dispatch(static () =>
+            .DispatchGuarded(static () =>
             {
                 var vm = new MainViewModel();
 

@@ -16,7 +16,7 @@ public sealed class MediaPlayerTintTests
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerTintTests).Assembly)
-            .Dispatch(action, CancellationToken.None)
+            .DispatchGuarded(action, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 

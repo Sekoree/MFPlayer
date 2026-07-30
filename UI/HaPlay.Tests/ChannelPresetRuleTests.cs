@@ -16,7 +16,7 @@ public sealed class ChannelPresetRuleTests
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ChannelPresetRuleTests).Assembly)
-            .Dispatch(action, CancellationToken.None)
+            .DispatchGuarded(action, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 

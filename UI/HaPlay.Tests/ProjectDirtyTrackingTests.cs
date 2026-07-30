@@ -18,7 +18,7 @@ public sealed class ProjectDirtyTrackingTests
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ProjectDirtyTrackingTests).Assembly)
-            .Dispatch(action, CancellationToken.None)
+            .DispatchGuarded(action, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 
@@ -114,7 +114,7 @@ public sealed class ProjectDirtyTrackingTests
         {
             await HeadlessUnitTestSession
                 .GetOrStartForAssembly(typeof(ProjectDirtyTrackingTests).Assembly)
-                .Dispatch(() =>
+                .DispatchGuarded(() =>
                 {
                     var vm = new MainViewModel();
                     vm.CurrentProjectPath = Path.Combine(root, "show.haplayproj");

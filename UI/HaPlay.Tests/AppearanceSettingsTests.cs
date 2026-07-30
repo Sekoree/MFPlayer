@@ -16,7 +16,7 @@ public sealed class AppearanceSettingsTests
     public Task AppearanceSettings_AreShown_WithAllThreeBaseThemes() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(AppearanceSettingsTests).Assembly)
-            .Dispatch(static () =>
+            .DispatchGuarded(static () =>
             {
                 var vm = new MainViewModel();
                 Assert.True(vm.ShowAppearanceSettings);

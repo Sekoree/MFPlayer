@@ -42,13 +42,24 @@ namespace HaPlay.Tests;
 /// report as "corruption occurred around here", never as a verdict.</para>
 /// <para>(2) <em>Listener handlers are not the whole story.</em> Two of the three listener tests never drained
 /// (the earlier round added <see cref="DrainListenerHandlers"/> only to the test that motivated it); fixing
-/// both was correct hygiene but did NOT reduce failures under the guard. The remaining suspect is the one the
-/// framework already point-fixes with <c>HAPLAY_DISABLE_RECOVERY_TIMER</c>: tests construct view models and
-/// never tear them down, and there are ~47 <c>DispatcherTimer</c> sites across them
-/// (<c>CuePlayerViewModel.Transport</c>, <c>MediaPlayerViewModel</c>, <c>OutputManagementViewModel</c>,
-/// <c>SoundboardWorkspaceViewModel</c> - all built per test by <c>RemoteApiDispatcherTests.CreateDispatcher</c>).
-/// Dozens accumulate over a run, each tick touching the dispatcher. The structural fix is view-model teardown
-/// in tests, not another env-var point-fix; that is a bigger job than one guard and has not been done.</para>
+/// both was correct hygiene but did NOT reduce failures under the guard.</para>
+///
+/// <para><strong>RESOLVED 2026-07-30 - and (1) was righter than it knew.</strong> There is no culprit test at
+/// all, because the corruption is a WINDOW rather than a leak:
+/// <c>EnsureIsolatedApplication</c> calls <c>Dispatcher.ResetBeforeUnitTests()</c> (nulling the process-wide
+/// <c>s_uiThread</c>) and then <c>SetupUnsafe()</c>, and Avalonia's <c>Dispatcher</c> constructor does
+/// <c>s_uiThread ??= this</c> - so ANY thread touching <c>Dispatcher.UIThread</c> between those two calls takes
+/// the binding, and the session thread then fails <c>VerifyAccess</c>. HaPlay has 128 <c>Dispatcher.UIThread</c>
+/// sites and many are legitimately reached from background threads; that is what "blame whoever just finished"
+/// was failing to converge on. Tearing down the ~47 <c>DispatcherTimer</c> sites would narrow the window's
+/// occupants but could never close it.
+/// <para>Fixed instead where it is closable: the corruption SELF-HEALS (the next dispatch resets again), and
+/// the failure happens strictly before the dispatched body runs, so
+/// <see cref="HeadlessDispatchExtensions.IsHeadlessAppInitRace"/> retries exactly that failure and nothing
+/// else. Measured across 32 full-assembly runs: 43 races absorbed, 0 failures - against 2 failures in 4 runs
+/// before. Set <c>HAPLAY_DISPATCH_RETRY_LOG=&lt;path&gt;</c> to watch it happen.</para>
+/// <para>This guard therefore has no standing failure to hunt, and stays as an instrument: if a NEW ownership
+/// symptom appears, it still answers "is the shared dispatcher wedged, or is one test lying?".</para></para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class | AttributeTargets.Method)]
 public sealed class DispatcherOwnershipGuardAttribute : BeforeAfterTestAttribute
@@ -76,7 +87,7 @@ public sealed class DispatcherOwnershipGuardAttribute : BeforeAfterTestAttribute
         Task probe;
         try
         {
-            probe = session.Dispatch(
+            probe = session.DispatchGuarded(
                 () => observedThreadId = Environment.CurrentManagedThreadId, CancellationToken.None);
         }
         catch (Exception ex)

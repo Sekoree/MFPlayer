@@ -23,7 +23,7 @@ public sealed class MediaPlayerSetTabWrapTests
     private static void RunUi(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerSetTabWrapTests).Assembly)
-            .Dispatch(body, CancellationToken.None)
+            .DispatchGuarded(body, CancellationToken.None)
             .GetAwaiter().GetResult();
 
     [Fact]

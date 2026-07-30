@@ -379,7 +379,7 @@ public sealed class CuePlayerLayoutBoundsTests(ITestOutputHelper output)
     private static T DispatchUi<T>(Func<T> body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CuePlayerLayoutBoundsTests).Assembly)
-            .Dispatch(body, CancellationToken.None)
+            .DispatchGuarded(body, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 

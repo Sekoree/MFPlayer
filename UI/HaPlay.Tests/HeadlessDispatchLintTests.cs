@@ -26,6 +26,17 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
 {
     private const string ThisFileName = "HeadlessDispatchLintTests.cs";
 
+    /// <summary>Every entry point that hands back a Task carrying a dispatched body's assertions. All three
+    /// are linted, not just the raw API: <c>DispatchGuarded</c> is the sanctioned synchronous wrapper (it
+    /// adds the app-init-race retry, see <see cref="HeadlessDispatchExtensions.IsHeadlessAppInitRace"/>) and
+    /// is exactly as droppable as <c>Dispatch</c> was, and <c>DispatchAsync</c> - which had never been
+    /// scanned at all, because `.Dispatch(` does not match `.DispatchAsync(` - is too.</summary>
+    private static readonly string[] DispatchCalls = [".Dispatch(", ".DispatchGuarded(", ".DispatchAsync("];
+
+    /// <summary>The subset that binds an <c>async () =&gt; …</c> lambda to <c>Func&lt;TResult&gt;</c> with
+    /// <c>TResult = Task</c> - the overload trap. <c>DispatchAsync</c> is the cure and so is absent.</summary>
+    private static readonly string[] AsyncLambdaTraps = [".Dispatch", ".DispatchGuarded"];
+
     /// <summary>Consumed AFTER the call - the returned Task is blocked on or unwrapped. Matched
     /// against the text immediately following the call's OWN closing paren (see
     /// <see cref="CallEnd"/>), never a fixed-width window.</summary>
@@ -52,26 +63,32 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
             // as a call site, and a comment sitting between `=>` and the expression hides the arrow
             // from the backward walk.
             var text = BlankCommentsAndStrings(File.ReadAllText(file));
-            if (!text.Contains(".Dispatch(", StringComparison.Ordinal))
+            if (!Array.Exists(DispatchCalls, m => text.Contains(m, StringComparison.Ordinal)))
                 continue;
 
-            for (var call = text.IndexOf(".Dispatch(", StringComparison.Ordinal);
-                 call >= 0;
-                 call = text.IndexOf(".Dispatch(", call + 1, StringComparison.Ordinal))
+            foreach (var marker in DispatchCalls)
             {
-                var reason = ClassifyDispatch(text, call);
-                if (reason is not null)
-                    offenders.Add($"{Path.GetFileName(file)}: {reason} -> {Squash(Context(text, call))}");
+                for (var call = text.IndexOf(marker, StringComparison.Ordinal);
+                     call >= 0;
+                     call = text.IndexOf(marker, call + 1, StringComparison.Ordinal))
+                {
+                    var reason = ClassifyDispatch(text, call, marker);
+                    if (reason is not null)
+                        offenders.Add($"{Path.GetFileName(file)}: {reason} -> {Squash(Context(text, call))}");
+                }
             }
 
             // The async-lambda overload trap. DispatchAsync is the sanctioned form and is excluded by
-            // matching `.Dispatch(` exactly (not `.DispatchAsync(`).
+            // being absent from AsyncLambdaTraps; the `(?<!Async)` lookbehind keeps its own call sites
+            // from matching at all.
             foreach (Match m in Regex.Matches(text, @"(?<!Async)\(\s*async\s"))
             {
                 var before = text[..m.Index];
-                if (before.EndsWith(".Dispatch", StringComparison.Ordinal))
+                var trap = Array.Find(AsyncLambdaTraps, t => before.EndsWith(t, StringComparison.Ordinal));
+                if (trap is not null)
                     offenders.Add(
-                        $"{Path.GetFileName(file)}: async lambda passed to Dispatch - use DispatchAsync");
+                        $"{Path.GetFileName(file)}: async lambda passed to {trap.TrimStart('.')} "
+                        + "- use DispatchAsync");
             }
         }
 
@@ -89,7 +106,7 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
     /// it, which is the shape every one of these tests has.</para>
     /// Deliberately errs toward flagging: a false positive costs one explicit <c>await</c>, a false
     /// negative costs a test that silently asserts nothing.</summary>
-    private static string? ClassifyDispatch(string text, int call)
+    private static string? ClassifyDispatch(string text, int call, string marker)
     {
         // Consumption must sit at the END of THIS call - `.GetAwaiter()`, `.Wait(…)` or `.Result`
         // immediately after its own closing paren. The original fixed 200-character window scanned
@@ -97,13 +114,13 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
         // `Dispatch(() => { svc.DoAsync().GetAwaiter().GetResult(); Assert…; })` exempted the whole
         // discarded call - the exact vacuous shape this lint exists to catch. Re-probe before
         // loosening: a body containing `.Result` was silently passed by the windowed form.
-        var callEnd = CallEnd(text, call);
+        var callEnd = CallEnd(text, call, marker);
         if (callEnd > 0)
         {
             var after = text.AsSpan(callEnd).TrimStart();
-            foreach (var marker in TrailingConsumption)
+            foreach (var consumption in TrailingConsumption)
             {
-                if (after.StartsWith(marker, StringComparison.Ordinal))
+                if (after.StartsWith(consumption, StringComparison.Ordinal))
                     return null;
             }
         }
@@ -149,13 +166,14 @@ public sealed class HeadlessDispatchLintTests(ITestOutputHelper output)
         return Regex.IsMatch(text[call..], $@"(?<![\w.]){Regex.Escape(name)}\b");
     }
 
-    /// <summary>Index just past the matching <c>)</c> of the <c>.Dispatch(</c> at
-    /// <paramref name="call"/>, or −1 when unbalanced. Literals are already blanked, so a paren
+    /// <summary>Index just past the matching <c>)</c> of the dispatch call at <paramref name="call"/>, or
+    /// −1 when unbalanced. Scanning starts on the marker's own <c>(</c> - hence <c>marker.Length - 1</c>,
+    /// which is what keeps this correct for the longer names too. Literals are already blanked, so a paren
     /// inside a string cannot skew the count.</summary>
-    private static int CallEnd(string text, int call)
+    private static int CallEnd(string text, int call, string marker)
     {
         var depth = 0;
-        for (var i = call + ".Dispatch".Length; i < text.Length; i++)
+        for (var i = call + marker.Length - 1; i < text.Length; i++)
         {
             if (text[i] == '(')
                 depth++;

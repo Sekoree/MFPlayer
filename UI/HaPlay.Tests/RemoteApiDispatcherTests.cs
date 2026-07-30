@@ -22,7 +22,7 @@ public sealed class RemoteApiDispatcherTests
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly)
-            .Dispatch(action, CancellationToken.None)
+            .DispatchGuarded(action, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 
@@ -395,7 +395,7 @@ public sealed class RemoteApiDispatcherTests
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
         Task<HttpResponseMessage>? request = null;
 
-        var elapsed = await session.Dispatch(() =>
+        var elapsed = await session.DispatchGuarded(() =>
         {
             var dispatcher = new RemoteApiDispatcher(
                 new CuePlayerViewModel(), () => [], new SoundboardWorkspaceViewModel(), null);

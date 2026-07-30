@@ -13,7 +13,10 @@ namespace S.Media.Routing;
 /// forwarding the inner sink's <see cref="IClockedOutput"/> / <see cref="IPlaybackClock"/> /
 /// <see cref="IAudioOutputPlaybackStats"/> faces - the same pattern as the metering/resampling wrappers.
 /// A plain construction would erase the hardware clock and the router would stop slaving to the device
-/// (wall-clock pacing + drift) the moment an effect is inserted.</para>
+/// (wall-clock pacing + drift) the moment an effect is inserted.
+/// <see cref="S.Media.Core.Audio.IAudioOutputLatency"/> is deliberately NOT in that matrix - it is
+/// implemented on this class unconditionally, for the reason set out on
+/// <see cref="AudioOutputLatency"/>.</para>
 ///
 /// <para><strong>Ownership (review H4):</strong> the wrapper always owns its EFFECTS;
 /// <paramref name="disposeInner"/> says whether disposing the wrapper also disposes the terminal sink
@@ -24,7 +27,8 @@ namespace S.Media.Routing;
 /// retire queue drained at the TOP of the next <see cref="Submit"/> (the single processing thread, so
 /// nothing can be inside them by then) or, if no further submit comes, in <see cref="Dispose"/>.</para>
 /// </summary>
-public class AudioEffectOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IDisposable
+public class AudioEffectOutput
+    : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IAudioOutputLatency, IDisposable
 {
     private readonly IAudioOutput _inner;
     private readonly bool _disposeInner;
@@ -100,6 +104,12 @@ public class AudioEffectOutput : IAudioOutput, IAudioOutputChannelCapabilities, 
         _inner is IAudioOutputChannelCapabilities caps
             ? caps.ChannelCapabilities
             : AudioOutputChannelCapabilities.Fixed(_inner.Format.Channels);
+
+    /// <summary>The inner sink's delay. The effect chain processes in place inside <see cref="Submit"/>
+    /// and queues nothing of its own; an effect with genuine look-ahead would need
+    /// <see cref="IAudioBusEffect"/> to declare its own latency, which none currently does. Implemented on
+    /// the BASE rather than in the capability matrix; see <see cref="AudioOutputLatency"/>.</summary>
+    public TimeSpan SubmitToOutputLatency => AudioOutputLatency.Of(_inner);
 
     public void Submit(ReadOnlySpan<float> packedSamples)
     {

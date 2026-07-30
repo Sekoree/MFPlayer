@@ -21,7 +21,7 @@ public sealed class SoundboardAccessibilityTests
     public Task SoundboardTiles_AreFocusableButtons_WithAutomationNames() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(SoundboardAccessibilityTests).Assembly)
-            .Dispatch(static () =>
+            .DispatchGuarded(static () =>
             {
                 // The headless TestApp ships no Application.Styles, so an ItemsControl gets Avalonia's
                 // bare fallback template - no ItemsPresenter, no realized tiles, and this test's

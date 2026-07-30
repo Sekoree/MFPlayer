@@ -14,7 +14,8 @@ namespace S.Media.Decode.FFmpeg.Audio;
 /// resampler state instead of bleeding across discontinuities.
 /// </para>
 /// </remarks>
-public class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IDisposable
+public class ResamplingAudioOutput
+    : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IAudioOutputLatency, IDisposable
 {
     protected readonly IAudioOutput Inner;
     protected readonly AudioFormat RouterFormat;
@@ -57,6 +58,12 @@ public class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCapabiliti
         Inner is IAudioOutputChannelCapabilities c
             ? c.ChannelCapabilities with { CurrentChannels = RouterFormat.Channels }
             : AudioOutputChannelCapabilities.Fixed(RouterFormat.Channels);
+
+    /// <summary>The inner output's delay. A TimeSpan is rate-independent, so no conversion is needed
+    /// across the rate change; the resampler's own filter delay (sub-millisecond at the rates in use) is
+    /// not modelled. Implemented on the BASE rather than in the capability matrix; see
+    /// <see cref="AudioOutputLatency"/>.</summary>
+    public TimeSpan SubmitToOutputLatency => AudioOutputLatency.Of(Inner);
 
     public void Submit(ReadOnlySpan<float> packedSamples)
     {

@@ -26,7 +26,7 @@ public sealed class CuePlayerCompositionCanvasTests
     private static void RunUi(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CuePlayerCompositionCanvasTests).Assembly)
-            .Dispatch(body, System.Threading.CancellationToken.None)
+            .DispatchGuarded(body, System.Threading.CancellationToken.None)
             .GetAwaiter().GetResult();
 
     [Fact]

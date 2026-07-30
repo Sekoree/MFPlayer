@@ -22,7 +22,7 @@ public sealed class IconButtonAccessibilityTests
     public Task MediaPlayer_IconOnlyControls_ExposeAutomationNames() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(IconButtonAccessibilityTests).Assembly)
-            .Dispatch(static () =>
+            .DispatchGuarded(static () =>
             {
                 var main = new MainViewModel();
                 var player = main.Players[0];

@@ -21,7 +21,7 @@ public sealed class LocalOutputCloseVetoTests
     private static Task DispatchUi(Func<Task<int>> action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(LocalOutputCloseVetoTests).Assembly)
-            .Dispatch(action, CancellationToken.None);
+            .DispatchGuarded(action, CancellationToken.None);
 
     [Fact]
     public Task OperatorClose_WhilePlaybackHoldsTheOutput_IsVetoed_ThenHonoredOnceReleased() =>

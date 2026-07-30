@@ -28,7 +28,7 @@ public sealed class MediaPlayerTransportLayoutTests
     public Task TransportGroups_NeverOverlapOrClip(double viewWidth) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerTransportLayoutTests).Assembly)
-            .Dispatch(() =>
+            .DispatchGuarded(() =>
             {
                 var main = new MainViewModel();
                 var player = main.Players[0];

@@ -25,7 +25,7 @@ public sealed class ThemeOverlayLayerTests
     public Task EveryBaseTheme_GivesTheWindowAnOverlayLayer(AppBaseTheme baseTheme) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ThemeOverlayLayerTests).Assembly)
-            .Dispatch(() =>
+            .DispatchGuarded(() =>
             {
                 HeadlessAppTheme.ApplyBaseTheme(baseTheme);
                 var window = new Window { Width = 400, Height = 300, Content = new TextBlock { Text = "x" } };
@@ -49,7 +49,7 @@ public sealed class ThemeOverlayLayerTests
     public Task ClassicTheme_CanOpenAFlyout_WithoutAPlatformPopup() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ThemeOverlayLayerTests).Assembly)
-            .Dispatch(() =>
+            .DispatchGuarded(() =>
             {
                 HeadlessAppTheme.ApplyBaseTheme(AppBaseTheme.Classic);
                 var button = new Button { Content = "Add cue…" };

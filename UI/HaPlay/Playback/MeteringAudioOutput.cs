@@ -10,7 +10,8 @@ namespace HaPlay.Playback;
 /// Disposal-transparent: disposing the wrapper disposes the inner output (when it is disposable), so a
 /// session-owned lease output can be wrapped without changing who releases the device.
 /// </summary>
-internal class MeteringAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IDisposable
+internal class MeteringAudioOutput
+    : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IAudioOutputLatency, IDisposable
 {
     protected readonly IAudioOutput Inner;
     private float _peakLinear;
@@ -39,6 +40,10 @@ internal class MeteringAudioOutput : IAudioOutput, IAudioOutputChannelCapabiliti
         Inner is IAudioOutputChannelCapabilities caps
             ? caps.ChannelCapabilities
             : AudioOutputChannelCapabilities.Fixed(Format.Channels);
+
+    /// <summary>Metering is a pure tap - it queues nothing - so the delay is entirely the inner output's.
+    /// Implemented on the BASE rather than in the capability matrix; see <see cref="AudioOutputLatency"/>.</summary>
+    public TimeSpan SubmitToOutputLatency => AudioOutputLatency.Of(Inner);
 
     public void Flush()
     {

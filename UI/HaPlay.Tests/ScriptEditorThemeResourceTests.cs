@@ -27,7 +27,7 @@ public sealed class ScriptEditorThemeResourceTests
     private static void RunUi(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ScriptEditorThemeResourceTests).Assembly)
-            .Dispatch(body, CancellationToken.None)
+            .DispatchGuarded(body, CancellationToken.None)
             .GetAwaiter().GetResult();
 
     [Theory]

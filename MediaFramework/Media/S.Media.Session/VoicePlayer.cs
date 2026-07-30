@@ -52,8 +52,6 @@ internal sealed class VoicePlayer
         CancellationTokenSource cts,
         SoundingLevel level)
     {
-        private int _stopClaimed;
-
         public IArmedClip Clip { get; } = clip;
         public IReadOnlyList<IAudioOutput> Outputs { get; } = outputs;
         public string OutputId { get; } = outputId;
@@ -63,48 +61,28 @@ internal sealed class VoicePlayer
         /// <summary>This voice's entry on the session's level/stop bus - dropped when the voice releases.</summary>
         public Guid SoundingId { get; set; }
 
-        // The in-flight bus stop: its ramp cancellation plus the instant that stop intends this voice to be
-        // SILENT by. Cancel only, never Dispose - a superseded ramp may still be reading the token
-        // off-dispatcher, and a cancelled CTS with no timer holds no unmanaged state (the same rule the
-        // preview claim follows). Dispatcher-confined.
-        private CancellationTokenSource? _stopCts;
-        private DateTime _stopDeadline;
+        /// <summary>The shared stop protocol - claim, release signal, and the bounded wait a losing stop
+        /// performs. Identical object to <c>TransportVoice.StopClaim</c>: the rule that Panic supersedes a
+        /// running show fade while a longer stop becomes a waiter has to be the same in both domains, which
+        /// is exactly why it stopped being written twice (2026-07-30 review §3).</summary>
+        public SoundingStopClaim StopClaim { get; } = new();
 
-        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        /// <summary>Completes once this voice has actually been released. A stop that did not win the claim
-        /// awaits it, so EVERY stop-all/Panic caller returns only when the voice is genuinely gone -
-        /// "stopped means stopped" holds for the loser as much as for the winner.</summary>
-        public Task Released => _released.Task;
+        /// <summary>Completes once this voice has actually been released.</summary>
+        public Task Released => StopClaim.Released;
 
         /// <summary>Signals <see cref="Released"/>. Called at the END of the release, so an awaiting stop
         /// resumes on a voice that is off the bus and off its device.</summary>
-        public void MarkReleased() => _released.TrySetResult();
+        public void MarkReleased() => StopClaim.MarkReleased();
 
         /// <summary>True once a bus stop claimed this voice. A soundboard fade-out ramp checks it every step
-        /// (and in its completion) so the bus stop preempts it and owns the release from the claim on - the
-        /// voice analogue of <c>TransportVoice.IsFadeOutClaimed</c>. Never cleared: a tile fade can not take
-        /// a voice back once the show stop owns it.</summary>
-        public bool IsStopClaimed => Volatile.Read(ref _stopClaimed) != 0;
+        /// (and in its completion) so the bus stop preempts it and owns the release from the claim on.</summary>
+        public bool IsStopClaimed => StopClaim.IsClaimed;
 
-        /// <summary>Claims this voice for a bus stop that wants it silent by <paramref name="deadline"/>,
-        /// returning that stop's ramp token - or null when an in-flight stop already lands no later, in which
-        /// case the caller waits for THAT stop rather than cutting its ramp short. A stop landing EARLIER
-        /// (Panic's 0 ms over a 5 s show fade) SUPERSEDES the in-flight one: its ramp token is cancelled and
-        /// the new claim owns both the levels and the release. Dispatcher-confined.</summary>
-        public CancellationToken? TryClaimStop(DateTime deadline)
-        {
-            if (_stopCts is { IsCancellationRequested: false } && _stopDeadline <= deadline)
-                return null;
-            _stopCts?.Cancel();
-            _stopCts = new CancellationTokenSource();
-            _stopDeadline = deadline;
-            Volatile.Write(ref _stopClaimed, 1);
-            return _stopCts.Token;
-        }
+        /// <summary>Claims this voice for a bus stop - see <see cref="SoundingStopClaim.TryClaim"/>.</summary>
+        public CancellationToken? TryClaimStop(DateTime deadline) => StopClaim.TryClaim(deadline);
 
         /// <summary>Ends any in-flight stop ramp - the voice is going away, so no step may write it again.</summary>
-        public void CancelStop() => _stopCts?.Cancel();
+        public void CancelStop() => StopClaim.Cancel();
     }
 
     private sealed record PreviewMonitor(
@@ -659,26 +637,11 @@ internal sealed class VoicePlayer
         await _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()).ConfigureAwait(false);
     }
 
-    /// <summary>Waits for the stop that OWNS <paramref name="voice"/>'s release to finish it - bounded by this
-    /// stop's own <paramref name="deadline"/> plus a grace margin (the owner's deadline is no later, which is
-    /// why this stop is the one waiting), after which this stop releases the voice itself. The bound is the
-    /// point: an unbounded wait would turn a fault inside the owning stop (a router write onto a route that
-    /// vanished) into a Panic that never returns, and "stopped means stopped" has to hold even then.</summary>
-    private async Task AwaitReleaseAsync(string voiceId, VoiceHandle voice, DateTime deadline)
-    {
-        var grace = deadline - DateTime.UtcNow + TimeSpan.FromSeconds(1);
-        if (grace < TimeSpan.FromSeconds(1))
-            grace = TimeSpan.FromSeconds(1);
-        using var timeout = new CancellationTokenSource();
-        var expired = Task.Delay(grace, timeout.Token);
-        var finished = await Task.WhenAny(voice.Released, expired).ConfigureAwait(false);
-        await timeout.CancelAsync().ConfigureAwait(false); // drop the timer as soon as it is moot
-        if (ReferenceEquals(finished, voice.Released))
-            return;
-
-        MediaDiagnostics.LogWarning(
-            "ShowSession: the stop that claimed voice '{0}' did not release it within {1} s; " +
-            "stopping it from this stop instead.", voiceId, Math.Round(grace.TotalSeconds, 1));
-        await _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()).ConfigureAwait(false);
-    }
+    /// <summary>Waits for the stop that OWNS <paramref name="voice"/>'s release to finish it - the losing
+    /// caller's half of "stopped means stopped". The bounded wait and its rationale live on
+    /// <see cref="SoundingStopClaim.AwaitReleaseAsync"/>, shared with the transport stop domain; all this
+    /// adds is what a SOUNDBOARD voice's fallback release actually is.</summary>
+    private Task AwaitReleaseAsync(string voiceId, VoiceHandle voice, DateTime deadline) =>
+        voice.StopClaim.AwaitReleaseAsync(deadline, "voice", voiceId, () =>
+            _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()));
 }

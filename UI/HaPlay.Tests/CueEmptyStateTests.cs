@@ -14,7 +14,7 @@ public sealed class CueEmptyStateTests
     public Task HasNoCues_TogglesWhenCuesAreAdded() =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CueEmptyStateTests).Assembly)
-            .Dispatch(static () =>
+            .DispatchGuarded(static () =>
             {
                 var vm = new CuePlayerViewModel();
                 Assert.True(vm.HasNoCues); // fresh list, no cues

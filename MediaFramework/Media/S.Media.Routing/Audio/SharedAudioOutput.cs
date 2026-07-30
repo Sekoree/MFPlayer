@@ -175,25 +175,10 @@ public sealed class SharedAudioOutput : IDisposable
         var ticks = _mixer.TryGetPumpStats(TerminalId, out var pump)
             ? SamplesToTicks(pump.InFlight * _chunkSamples, Format.SampleRate)
             : 0;
-
-        if (_terminal is IAudioOutputLatency reporting)
-        {
-            try
-            {
-                // Contract: never throws - but a terminal disposed mid-read is exactly the case the
-                // client clock's own never-throws contract has to survive, and the wall-clock fallback
-                // path reaches this call from OUTSIDE its try/catch. Degrade to the in-process depths.
-                var terminalLatency = reporting.SubmitToOutputLatency;
-                if (terminalLatency > TimeSpan.Zero)
-                    ticks += terminalLatency.Ticks;
-            }
-            catch
-            {
-                // Terminal stopped/disposed mid-read: the measurable in-process depths still stand.
-            }
-        }
-
-        return ticks;
+        // AudioOutputLatency.Of degrades a terminal disposed mid-read to Zero, which matters because the
+        // wall-clock fallback path reaches this call from OUTSIDE its own try/catch: the measurable
+        // in-process depths still stand when the device does not.
+        return ticks + AudioOutputLatency.Of(_terminal).Ticks;
     }
 
     private static long SamplesToTicks(long samples, int sampleRate) =>
@@ -215,6 +200,7 @@ public sealed class SharedAudioOutput : IDisposable
         IClockedOutput,
         IFlushableOutput,
         IPlaybackClock,
+        IAudioOutputLatency,
         IDisposable
     {
         private readonly SharedAudioOutput _owner;
@@ -275,6 +261,30 @@ public sealed class SharedAudioOutput : IDisposable
         public AudioFormat Format => _bus.Format;
         public AudioOutputChannelCapabilities ChannelCapabilities => _bus.ChannelCapabilities;
         public bool IsExhausted => false;
+
+        /// <summary><see cref="IAudioOutputLatency.SubmitToOutputLatency"/> for one client: its own
+        /// un-consumed bus backlog plus everything downstream of the mixer. That is exactly the lead
+        /// <see cref="ReportAudible"/> subtracts - a client's samples are not at the speaker until the
+        /// mixer has taken them AND the terminal has played them - so the two cannot disagree.
+        /// <para>Reported RAW, not through <see cref="SmoothLeadTicks"/>: the low-pass exists to keep the
+        /// monotonic clock steady against the pump/bus sawtooth, whereas a caller asking how far its
+        /// submissions are from the speaker wants the current answer.</para></summary>
+        public TimeSpan SubmitToOutputLatency
+        {
+            get
+            {
+                try
+                {
+                    return new TimeSpan(
+                        SamplesToTicks(_bus.BufferedSamples, _bus.Format.SampleRate)
+                        + _owner.DownstreamLatencyTicks());
+                }
+                catch
+                {
+                    return TimeSpan.Zero; // torn down mid-read - "unknown", per the interface contract
+                }
+            }
+        }
 
         /// <summary>
         /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: terminal device time minus this client's

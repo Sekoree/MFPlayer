@@ -28,7 +28,7 @@ public sealed class ControlDockSmokeTests
     private static void RunUi(Action body) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ControlDockSmokeTests).Assembly)
-            .Dispatch(body, System.Threading.CancellationToken.None)
+            .DispatchGuarded(body, System.Threading.CancellationToken.None)
             .GetAwaiter().GetResult();
 
     // App registers these at Application scope in code (App.RegisterDockPaneTemplates); the empty headless

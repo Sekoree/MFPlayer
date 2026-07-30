@@ -294,7 +294,7 @@ public sealed class CuePlayerViewInteractionTests
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CuePlayerViewInteractionTests).Assembly)
-            .Dispatch(action, CancellationToken.None)
+            .DispatchGuarded(action, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 
@@ -306,7 +306,7 @@ public sealed class CuePlayerViewInteractionTests
         {
             // Wait for the pump to actually finish before re-testing the condition: discarding this Task
             // let the loop spin ahead of the dispatcher and burn the timeout without pumping.
-            session.Dispatch(static () => Dispatcher.UIThread.RunJobs(), CancellationToken.None)
+            session.DispatchGuarded(static () => Dispatcher.UIThread.RunJobs(), CancellationToken.None)
                 .GetAwaiter().GetResult();
             Thread.Sleep(10);
         }
