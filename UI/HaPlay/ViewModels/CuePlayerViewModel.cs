@@ -248,7 +248,12 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         _waveformCts = new CancellationTokenSource();
         var ct = _waveformCts.Token;
-        _ = Task.Run(async () =>
+        _ = RunSelectedCueWaveformExtractionAsync(path, ct);
+    }
+
+    private async Task RunSelectedCueWaveformExtractionAsync(string path, CancellationToken ct)
+    {
+        try
         {
             // Progressive display: throttled partial snapshots fill the editor waveform in left-to-right.
             var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct, partial =>
@@ -268,12 +273,24 @@ public partial class CuePlayerViewModel : ViewModelBase
             {
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
+                    // Selection changed after this post was queued: the new cue owns the display.
+                    if (ct.IsCancellationRequested)
+                        return;
                     SelectedCueWaveform = peaks;
                     SelectedCueWaveformRevision++;
                     OnPropertyChanged(nameof(HasSelectedCueWaveform));
                 });
             }
-        }, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal when the selection changes or the view model is disposed.
+        }
+        catch (Exception ex)
+        {
+            S.Media.Core.Diagnostics.MediaDiagnostics.LogWarning(
+                "Cue waveform extraction failed for {0}: {1}", path, ex.Message);
+        }
     }
 
     /// <summary>Visible when the selected cue is active in the Now Playing panel (Phase 5.5.2).</summary>
@@ -4380,8 +4397,16 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public List<CueList> BuildCueListsSnapshot() => CueLists.Select(c => c.ToModel()).ToList();
 
+    /// <summary>Raised after <see cref="ApplyCueLists"/> has fully replaced the authored cue
+    /// document. Session-scoped schedulers/triggers use it to discard state tied to the old tree.</summary>
+    public event EventHandler? CueDocumentReplaced;
+
     public void ApplyCueLists(IReadOnlyList<CueList> lists, string? collectionPath = null)
     {
+        // Replacing the document invalidates every node captured by a pre-wait/auto-continue run. Without
+        // this, an old project's delayed cue can fire after the new lists (and ShowSession document) load.
+        CancelTransportRun();
+        CancelForeignListRuns();
         _lastRandomJumpTargetIds.Clear();
         _playlistRuns.Clear(); // playlist runs are session state - a (re)load starts them afresh
         _cueListsCollectionPath = collectionPath;
@@ -4403,6 +4428,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         StandbyCueNode = null;
         IsTransportPaused = false;
         RefreshCueTargetDisplays();
+        CueDocumentReplaced?.Invoke(this, EventArgs.Empty);
     }
 
     private void ClearCueListsCollectionPath()

@@ -65,11 +65,14 @@ public sealed class CueTimecodeChaseService
         get => _enabled;
         set
         {
-            if (_enabled == value)
-                return;
-            _enabled = value;
-            if (!value)
-                Reset();
+            lock (_sourceGate)
+            {
+                if (_enabled == value)
+                    return;
+                _enabled = value;
+                if (!value)
+                    ResetUnlocked();
+            }
         }
     }
 
@@ -79,13 +82,8 @@ public sealed class CueTimecodeChaseService
     /// <summary>Drops the chase lock and the latched source.</summary>
     public void Reset()
     {
-        _clock.Reset();
         lock (_sourceGate)
-        {
-            _haveSource = false;
-            _sourceDeviceId = null;
-            _sourceEndpoint = null;
-        }
+            ResetUnlocked();
     }
 
     /// <summary>
@@ -102,16 +100,31 @@ public sealed class CueTimecodeChaseService
         {
             case ControlMIDIMessageType.MIDITimeCode:
                 // Quarter-frame: the payload puts the data byte (piece << 4 | nibble) in MIDIValue.
-                if (_enabled && record.MIDIValue is { } data && AcceptSource(record))
-                    _clock.FeedQuarterFrame((byte)(data & 0xFF));
+                if (_enabled && record.MIDIValue is { } data)
+                {
+                    lock (_sourceGate)
+                    {
+                        // Serialize disable/reset with accepting and feeding. Otherwise an I/O thread can
+                        // accept just before Enabled=false, feed just after Reset, and leave a ghost signal
+                        // in a decoder that is supposed to be off.
+                        if (_enabled && AcceptSourceUnlocked(record))
+                            _clock.FeedQuarterFrame((byte)(data & 0xFF));
+                    }
+                }
                 return true;
 
             case ControlMIDIMessageType.SysEx:
                 // Only a full-frame locate is ours; every other SysEx stays available to other consumers.
                 if (record.RawBytes is not { } raw || !MidiTimecodeDecoder.IsFullFrame(raw))
                     return false;
-                if (_enabled && AcceptSource(record))
-                    _clock.FeedFullFrame(raw);
+                if (_enabled)
+                {
+                    lock (_sourceGate)
+                    {
+                        if (_enabled && AcceptSourceUnlocked(record))
+                            _clock.FeedFullFrame(raw);
+                    }
+                }
                 return true;
 
             default:
@@ -120,27 +133,35 @@ public sealed class CueTimecodeChaseService
     }
 
     /// <summary>Latches the first timecode source and rejects the rest (see the duplicate-record note),
-    /// re-latching once the incumbent has been silent past the stall timeout.</summary>
-    private bool AcceptSource(ControlMonitorRecord record)
+    /// re-latching once the incumbent has been silent past the stall timeout. Requires
+    /// <see cref="_sourceGate"/>.</summary>
+    private bool AcceptSourceUnlocked(ControlMonitorRecord record)
     {
         var now = _ticks();
-        lock (_sourceGate)
+        var isIncumbent = _haveSource
+                          && _sourceDeviceId == record.DeviceInstanceId
+                          && string.Equals(_sourceEndpoint, record.Endpoint, StringComparison.Ordinal);
+        if (!isIncumbent)
         {
-            var isIncumbent = _haveSource
-                              && _sourceDeviceId == record.DeviceInstanceId
-                              && string.Equals(_sourceEndpoint, record.Endpoint, StringComparison.Ordinal);
-            if (!isIncumbent)
-            {
-                var idleSeconds = (now - _sourceLastTicks) / (double)_ticksPerSecond;
-                if (_haveSource && idleSeconds <= MidiTimecodeChaseClock.StallTimeout.TotalSeconds)
-                    return false; // the latched source is still talking - this one is a duplicate/rival
-                _haveSource = true;
-                _sourceDeviceId = record.DeviceInstanceId;
-                _sourceEndpoint = record.Endpoint;
-            }
-
-            _sourceLastTicks = now;
-            return true;
+            var idleSeconds = (now - _sourceLastTicks) / (double)_ticksPerSecond;
+            if (_haveSource && idleSeconds <= MidiTimecodeChaseClock.StallTimeout.TotalSeconds)
+                return false; // the latched source is still talking - this one is a duplicate/rival
+            _haveSource = true;
+            _sourceDeviceId = record.DeviceInstanceId;
+            _sourceEndpoint = record.Endpoint;
         }
+
+        _sourceLastTicks = now;
+        return true;
+    }
+
+    /// <summary>Requires <see cref="_sourceGate"/>.</summary>
+    private void ResetUnlocked()
+    {
+        _clock.Reset();
+        _haveSource = false;
+        _sourceDeviceId = null;
+        _sourceEndpoint = null;
+        _sourceLastTicks = 0;
     }
 }

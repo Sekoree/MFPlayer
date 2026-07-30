@@ -113,6 +113,7 @@ public class AudioEffectOutput : IAudioOutput, IAudioOutputChannelCapabilities, 
         if (effects.Length == 0)
         {
             _inner.Submit(packedSamples);
+            _samplePosition += packedSamples.Length / Math.Max(1, _inner.Format.Channels);
             return;
         }
 
@@ -224,9 +225,18 @@ public sealed class GainAudioEffect : IAudioBusEffect
         {
             if (double.IsNaN(value) || double.IsPositiveInfinity(value))
                 return;
-            Volatile.Write(ref _targetLinear, double.IsNegativeInfinity(value)
-                ? 0f
-                : (float)Math.Pow(10.0, value / 20.0));
+            if (double.IsNegativeInfinity(value))
+            {
+                Volatile.Write(ref _targetLinear, 0f);
+                return;
+            }
+
+            var linear = Math.Pow(10.0, value / 20.0);
+            // A very large but finite dB value can overflow Pow (or the float conversion) to infinity.
+            // Reject it like an explicit +∞ input; non-finite samples must never enter the audio graph.
+            if (!double.IsFinite(linear) || linear > float.MaxValue)
+                return;
+            Volatile.Write(ref _targetLinear, (float)linear);
         }
     }
 

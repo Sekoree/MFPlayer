@@ -94,6 +94,7 @@ public sealed class CueSchedulerService : IDisposable
         _lastPruneWall = _armedBaselineWall;
         _wasArmed = cuePlayer.SchedulesArmed;
         _cuePlayer.PropertyChanged += OnCuePlayerPropertyChanged;
+        _cuePlayer.CueDocumentReplaced += OnCueDocumentReplaced;
     }
 
     /// <summary>The MTC chase source. The host feeds it from the always-on device-input event on the
@@ -131,6 +132,20 @@ public sealed class CueSchedulerService : IDisposable
             _haveChaseBaseline = chase.HasSignal;
         }
         _wasArmed = armed;
+    }
+
+    private void OnCueDocumentReplaced(object? sender, EventArgs e)
+    {
+        // Loading another document while schedules stay armed is a fresh baseline, just like arming:
+        // a cue whose occurrence passed before it was loaded must not be caught up into the new show.
+        _armedBaselineWall = WallNow();
+        _lastPruneWall = _armedBaselineWall;
+        _handled.Clear();
+        _handledTimecode.Clear();
+        TimecodeChase.Reset();
+        _chaseGeneration = 0;
+        _chaseBaselineSeconds = 0;
+        _haveChaseBaseline = false;
     }
 
     /// <summary>Local wall-clock reading of the injected clock (production: DateTimeOffset.Now).</summary>
@@ -466,5 +481,6 @@ public sealed class CueSchedulerService : IDisposable
         // while the view-model graph tears down.
         TimecodeChase.Enabled = false;
         _cuePlayer.PropertyChanged -= OnCuePlayerPropertyChanged;
+        _cuePlayer.CueDocumentReplaced -= OnCueDocumentReplaced;
     }
 }

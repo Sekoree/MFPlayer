@@ -66,6 +66,24 @@ public sealed class ControlInputSessionTests
     }
 
     [Fact]
+    public async Task StopAsync_PreCanceled_DoesNotDropTheReferenceOrLeakAListener()
+    {
+        var port = FreeUdpPort();
+        await using var session = new ControlInputSession(ListenerConfig(Guid.NewGuid(), port));
+        await session.StartAsync();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.StopAsync(cts.Token));
+
+        Assert.True(session.IsOpen);
+        Assert.Equal(1, session.OpenReferenceCount);
+        await session.StopAsync();
+        Assert.False(session.IsOpen);
+        Assert.True(CanBindUdpPort(port));
+    }
+
+    [Fact]
     public async Task DisarmingTheMappingEngine_LeavesTheSharedDevicesOpenForTriggerConsumers()
     {
         // The end-to-end form of the guard above: the workspace owns the session, an armed

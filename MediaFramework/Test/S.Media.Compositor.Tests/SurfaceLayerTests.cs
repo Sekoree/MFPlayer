@@ -32,6 +32,7 @@ public sealed class SurfaceLayerTests
         private readonly CpuVideoCompositor _inner = new(output);
         public readonly List<(int FrameLayers, CompositorSurfaceLayer[] Surfaces, TimeSpan Pts)> SurfaceComposites = [];
         public int PlainComposites;
+        public Action? BeforeSurfaceComposite;
 
         public VideoFormat OutputFormat => _inner.OutputFormat;
         public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats => _inner.AcceptedLayerPixelFormats;
@@ -48,6 +49,7 @@ public sealed class SurfaceLayerTests
             IReadOnlyList<CompositorSurfaceLayer> surfaceLayers,
             TimeSpan presentationTime)
         {
+            BeforeSurfaceComposite?.Invoke();
             SurfaceComposites.Add((frameLayers.Count, surfaceLayers.ToArray(), presentationTime));
             return _inner.Composite(frameLayers, presentationTime);
         }
@@ -139,6 +141,43 @@ public sealed class SurfaceLayerTests
         Assert.True(mixer.TryReadNextFrame(TimeSpan.Zero, out var frame));
         frame.Dispose();
         Assert.Empty(host.SurfaceComposites); // caller owns the surface; mixer never disposed it
+    }
+
+    [Fact]
+    public async Task RemoveSurfaceSlot_WaitsUntilAnInFlightCompositeReleasesTheSurface()
+    {
+        var host = new FakeSurfaceHost(Canvas);
+        using var mixer = new VideoCompositorSource(Canvas, host);
+        var slot = mixer.AddSurfaceSlot(new RecordingSurface());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.BeforeSurfaceComposite = () =>
+        {
+            entered.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+        };
+
+        var read = Task.Run(() =>
+        {
+            Assert.True(mixer.TryReadNextFrame(TimeSpan.Zero, out var frame));
+            frame.Dispose();
+        });
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var remove = Task.Run(() => mixer.RemoveSurfaceSlot(slot));
+        bool completedEarly;
+        try
+        {
+            var first = await Task.WhenAny(remove, Task.Delay(TimeSpan.FromMilliseconds(100)));
+            completedEarly = ReferenceEquals(first, remove);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await read.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(completedEarly);
+        Assert.True(await remove.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 
     [Fact]

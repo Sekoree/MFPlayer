@@ -45,6 +45,7 @@ public sealed class CompositePlaybackClock : IPlaybackClock
     private TimeSpan _blendFromEmitted;
     private TimeSpan _lastEmitted;
     private bool _hasEmitted;
+    private long _blendEpochId;
     // Wall tick of last co-advance EMA sample; -1 = prime next co read (0 is a valid Stopwatch tick).
     private long _coAdvanceLastSampleTicks = -1;
 
@@ -121,11 +122,20 @@ public sealed class CompositePlaybackClock : IPlaybackClock
     {
         var advCount = 0;
         var winnerIdx = -1;
+        var winner = default(ClockReading);
         for (var i = 0; i < _candidates.Length; i++)
         {
-            if (!_candidates[i].Clock.IsAdvancing) continue;
+            // Read the advancing flag and elapsed/epoch as one sample. Selecting through IsAdvancing and
+            // then reading the winner again lets a stop/re-anchor between those calls return a stale winner
+            // as advancing with an unrelated elapsed value.
+            var reading = _candidates[i].Clock.Read();
+            if (!reading.IsAdvancing) continue;
             advCount++;
-            if (winnerIdx < 0) winnerIdx = i;
+            if (winnerIdx < 0)
+            {
+                winnerIdx = i;
+                winner = reading;
+            }
         }
 
         if (winnerIdx < 0)
@@ -140,7 +150,6 @@ public sealed class CompositePlaybackClock : IPlaybackClock
             return new ClockReading(EpochFor(-1, PlaybackEpoch.Single), TimeSpan.Zero, false);
         }
 
-        var winner = _candidates[winnerIdx].Clock.Read();
         var epochId = EpochFor(winnerIdx, winner.EpochId);
         var targetNow = winner.Elapsed;
         var hasHandoff = _blend.HasHandoffCrossFade && _blend.HandoffCrossFade.TotalSeconds > 0;
@@ -159,6 +168,7 @@ public sealed class CompositePlaybackClock : IPlaybackClock
                 _blendWinnerIdx = winnerIdx;
                 _transitionStartTicks = nowTicks;
                 _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
+                _blendEpochId = epochId;
                 _hasEmitted = true;
                 return new ClockReading(epochId, targetNow, true);
             }
@@ -169,6 +179,29 @@ public sealed class CompositePlaybackClock : IPlaybackClock
                 _blendWinnerIdx = winnerIdx;
                 _transitionStartTicks = nowTicks;
                 _coAdvanceLastSampleTicks = -1;
+                _blendEpochId = epochId;
+                if (targetNow < _lastEmitted)
+                {
+                    // A handoff already starts a fresh composite epoch, so this is the one safe point at
+                    // which the elapsed coordinate may move backwards. A downward cross-fade cannot be
+                    // represented by a monotonic clock: holding until the fade ends and then snapping
+                    // would merely defer the same-epoch regression. Snap on the first reading instead.
+                    _lastEmitted = targetNow;
+                    _blendFromEmitted = targetNow;
+                    _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
+                    return new ClockReading(epochId, targetNow, true);
+                }
+            }
+            else if (epochId != _blendEpochId)
+            {
+                // The same leaf explicitly re-anchored. A new epoch may restart at any coordinate, so do
+                // not blend it against the prior epoch's high-water.
+                _lastEmitted = targetNow;
+                _blendFromEmitted = targetNow;
+                _transitionStartTicks = nowTicks;
+                _coAdvanceLastSampleTicks = hasCo ? nowTicks : -1;
+                _blendEpochId = epochId;
+                return new ClockReading(epochId, targetNow, true);
             }
 
             if (hasHandoff)
@@ -179,6 +212,10 @@ public sealed class CompositePlaybackClock : IPlaybackClock
                 {
                     var w = SmoothStep01(t);
                     var lerped = LerpTimeSpan(_blendFromEmitted, targetNow, w);
+                    // Leaf clocks are monotonic within an epoch, but rounding should not make this wrapper
+                    // regress by a tick.
+                    if (lerped < _lastEmitted)
+                        lerped = _lastEmitted;
                     _lastEmitted = lerped;
                     return new ClockReading(epochId, lerped, true);
                 }
@@ -200,6 +237,8 @@ public sealed class CompositePlaybackClock : IPlaybackClock
                 var alpha = 1.0 - Math.Exp(-dt / tau);
                 if (alpha > 0.95) alpha = 0.95;
                 var smoothed = LerpTimeSpan(_lastEmitted, targetNow, alpha);
+                if (smoothed < _lastEmitted)
+                    smoothed = _lastEmitted;
                 _lastEmitted = smoothed;
                 return new ClockReading(epochId, smoothed, true);
             }

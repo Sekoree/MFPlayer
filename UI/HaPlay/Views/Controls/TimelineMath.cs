@@ -508,7 +508,10 @@ internal static class TimelineMath
     public static int EnvelopeClampDragTime(
         IReadOnlyList<CueAutomationPoint> envelope, int index, double candidateMs, int maxTimeMs)
     {
-        var lower = index > 0 ? envelope[index - 1].TimeMs : 0;
+        // An externally edited file may contain negative-time points. They are projected through the
+        // before-start badge, but once the operator drags one it must enter the editor's valid [0, end]
+        // domain; a negative predecessor must not keep the drag clamp negative.
+        var lower = index > 0 ? Math.Max(0, envelope[index - 1].TimeMs) : 0;
         var upper = index < envelope.Count - 1 ? envelope[index + 1].TimeMs : Math.Max(0, maxTimeMs);
         upper = Math.Min(upper, Math.Max(0, maxTimeMs));
         if (double.IsNaN(candidateMs))

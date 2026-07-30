@@ -563,6 +563,32 @@ public sealed class CueTriggerTests
         Assert.Equal([h.FirstCueId, h.SecondCueId], h.Started.ToArray());
     }
 
+    [Fact]
+    public async Task Trigger_TwoMatchingBindingsOnOneCue_FiresThatCueOnlyOnce()
+    {
+        var h = BuildHarness([MidiNoteBinding(), MidiNoteBinding()]);
+
+        Assert.True(h.Service.OnMidiInput(NoteOn()));
+        Assert.Equal(h.CueId, await NextFiredAsync(h));
+
+        Assert.False(await h.FireSignal.WaitAsync(TimeSpan.FromMilliseconds(250)));
+        Assert.Empty(h.Fired);
+    }
+
+    [Fact]
+    public async Task Trigger_DetachedCueFromAReplacedDocument_CannotFire()
+    {
+        var h = BuildHarness([MidiNoteBinding()]);
+        var detached = h.CueVm;
+        h.Vm.ApplyCueLists([new CueList()]);
+
+        await h.Vm.FireTriggeredCueSafeAsync(
+            detached, nameof(HaPlay.Resources.Strings.CueMidiTriggerFiredStatusFormat));
+
+        Assert.Empty(h.Fired);
+        Assert.Contains("Cannot fire", h.Vm.StatusMessage);
+    }
+
     // ---- Service runtime: hotkey bindings ----
 
     [Fact]

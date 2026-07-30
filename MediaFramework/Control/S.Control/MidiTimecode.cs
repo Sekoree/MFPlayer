@@ -119,8 +119,8 @@ public readonly record struct MidiTimecodeValue(
             rate);
     }
 
-    /// <summary>Rebuilds a label from a real-time position (rounded to the nearest whole frame - the
-    /// chase clock interpolates between quarter-frames, so its position lands mid-frame).</summary>
+    /// <summary>Rebuilds a label from a real-time position by selecting the frame containing that instant
+    /// (floor, so an interpolated chase display never shows a frame the sender has not reached yet).</summary>
     public static MidiTimecodeValue FromSeconds(double seconds, MidiTimecodeRate rate)
     {
         if (double.IsNaN(seconds) || seconds < 0)
@@ -131,10 +131,18 @@ public readonly record struct MidiTimecodeValue(
 
     /// <summary>True when every field is inside the range its rate allows.</summary>
     public bool IsValid =>
-        Hours is >= 0 and < 24
+        Rate is >= MidiTimecodeRate.Fps24 and <= MidiTimecodeRate.Fps30
+        && Hours is >= 0 and < 24
         && Minutes is >= 0 and < 60
         && Seconds is >= 0 and < 60
-        && Frames >= 0 && Frames < MidiTimecodeRates.FramesPerSecond(Rate);
+        && Frames >= 0 && Frames < MidiTimecodeRates.FramesPerSecond(Rate)
+        // 29.97 DF omits labels :00 and :01 at the top of every minute except each tenth.
+        // Accepting one maps it onto a frame that already has a valid label in the prior second, so an
+        // authored schedule can fire at a different time than the operator entered.
+        && (Rate != MidiTimecodeRate.Fps2997Drop
+            || Seconds != 0
+            || Minutes % 10 == 0
+            || Frames >= 2);
 
     /// <summary>Parses <c>hh:mm:ss:ff</c> (';' and '.' are also accepted before the frame field, the
     /// usual drop-frame notations). Returns false on anything out of range for <paramref name="rate"/>,

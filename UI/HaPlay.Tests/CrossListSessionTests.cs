@@ -196,6 +196,30 @@ public sealed class CrossListSessionTests
     }
 
     [Fact]
+    public async Task ApplyCueLists_CancelsAPendingForeignListPreWait()
+    {
+        var delayed = new MediaCueNode
+        {
+            Label = "Old delayed cue",
+            Source = new FilePlaylistItem("/m/old.wav"),
+            PreWaitMs = 500,
+        };
+        var (vm, fired, _) = BuildPlayer(
+            new CueList { Name = "Main" },
+            new CueList { Name = "Old automation", Nodes = { delayed } });
+
+        var pending = vm.FireScheduledCueAsync(
+            vm.CueLists[1].Nodes.Single());
+        await Task.Delay(50);
+
+        vm.ApplyCueLists([new CueList { Name = "Replacement" }]);
+        await pending;
+        await Task.Delay(550);
+
+        Assert.Empty(fired);
+    }
+
+    [Fact]
     public void RemoteReference_ResolvesAcrossLists_ButTheSelectedListWinsANumber()
     {
         var mine = new MediaCueNode { Number = "1", Label = "Mine", Source = new FilePlaylistItem("/m/a.wav") };

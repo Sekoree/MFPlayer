@@ -71,6 +71,18 @@ public sealed class MidiTimecodeTests
     }
 
     [Theory]
+    [InlineData("00:01:00:00", false)]
+    [InlineData("00:01:00:01", false)]
+    [InlineData("00:01:00:02", true)]
+    [InlineData("00:10:00:00", true)]
+    public void DropFrame_RejectsLabelsThatDoNotExist(string text, bool expected)
+    {
+        Assert.Equal(
+            expected,
+            MidiTimecodeValue.TryParse(text, MidiTimecodeRate.Fps2997Drop, out _));
+    }
+
+    [Theory]
     [InlineData("01:02:03:04", true)]
     [InlineData("01:02:03;04", true)]
     [InlineData("1:2:3:4", true)]
@@ -90,6 +102,10 @@ public sealed class MidiTimecodeTests
     [Fact]
     public void ToString_IsTheCanonicalTwoDigitForm() =>
         Assert.Equal("01:02:03:04", new MidiTimecodeValue(1, 2, 3, 4, MidiTimecodeRate.Fps25).ToString());
+
+    [Fact]
+    public void IsValid_RejectsAnUnknownRateValue() =>
+        Assert.False(new MidiTimecodeValue(1, 2, 3, 4, (MidiTimecodeRate)99).IsValid);
 
     // ---- Quarter-frame assembly ----
 
@@ -234,6 +250,15 @@ public sealed class MidiTimecodeTests
         Assert.Equal(new MidiTimecodeValue(10, 20, 30, 12, MidiTimecodeRate.Fps30), update!.Value.Timecode);
         Assert.Equal(MidiTimecodeUpdateKind.Located, update.Value.Kind);
         Assert.False(update.Value.IsRunning); // a full frame is what a PARKED/locating deck emits
+    }
+
+    [Fact]
+    public void FullFrame_RejectsANonexistentDropFrameLabel()
+    {
+        var decoder = new MidiTimecodeDecoder(TicksPerSecond);
+
+        Assert.Null(decoder.FeedFullFrame(
+            FullFrame(0, 1, 0, 0, MidiTimecodeRate.Fps2997Drop), Ms(5)));
     }
 
     [Fact]

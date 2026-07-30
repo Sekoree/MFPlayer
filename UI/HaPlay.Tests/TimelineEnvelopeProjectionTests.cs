@@ -209,6 +209,17 @@ public sealed class TimelineEnvelopeProjectionTests
     }
 
     [Fact]
+    public void BeforeStartBadgeDrag_CannotRemainNegativeBehindANegativeNeighbor()
+    {
+        var envelope = new[] { Pt(-9000, -3), Pt(-2000, -3), Pt(5000, 0) };
+        var badge = TimelineMath.ProjectEnvelope(Block, envelope, PxPerMs).BeforeStart!.Value;
+
+        Assert.Equal(1, badge.PointIndex);
+        Assert.Equal(0, TimelineMath.EnvelopeClampDragTime(
+            envelope, badge.PointIndex, candidateMs: -5000, maxTimeMs: ClipMs));
+    }
+
+    [Fact]
     public void EdgeIndicator_IsSuppressedOnABlockTooNarrowToShowIt_AndPickingAgrees()
     {
         // Renderer and hit-test must agree even in the degenerate case: no badge drawn, nothing picked.

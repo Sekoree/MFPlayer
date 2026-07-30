@@ -172,6 +172,10 @@ public partial class CuePlayerViewModel
     public bool CanFireCue(CueNodeViewModel cue)
     {
         ArgumentNullException.ThrowIfNull(cue);
+        // A schedule/trigger sequence may still hold a row from the document that was just replaced.
+        // Never let that detached object fire into the newly loaded ShowSession.
+        if (FindOwningCueList(cue) is null)
+            return false;
         // Visualizers and media inside a group fire independently of the transport plan.
         if (cue.Kind is CueNodeKind.Visualizer or CueNodeKind.Media)
             return true;
@@ -342,6 +346,16 @@ public partial class CuePlayerViewModel
         catch (OperationCanceledException)
         {
             // A later fire in the same list (or Stop/Panic) cancelled this run.
+        }
+        finally
+        {
+            // A completed run has no future delays to cancel. Do not retain its list/tree indefinitely,
+            // and do not let this older run remove the replacement that may already occupy the slot.
+            if (owner is not null
+                && _foreignListRuns.TryGetValue(owner, out var current)
+                && ReferenceEquals(current, cts))
+                _foreignListRuns.Remove(owner);
+            try { cts.Dispose(); } catch { /* best effort */ }
         }
     }
 

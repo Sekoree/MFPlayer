@@ -363,6 +363,63 @@ public class CompositePlaybackClockTests
         Assert.True(afterJump > TimeSpan.FromSeconds(190));
     }
 
+    [Fact]
+    public void Read_CandidateStopsBetweenLegacyPropertiesAndAtomicRead_DoesNotSelectIt()
+    {
+        var stoppedDuringRead = new StopsWhenSampledClock(TimeSpan.FromSeconds(50));
+        var fallback = new MutableStubPlaybackClock
+        {
+            IsAdvancing = true,
+            ElapsedSinceStart = TimeSpan.FromSeconds(10),
+        };
+        var clock = new CompositePlaybackClock(
+            new PlaybackClockCandidate(stoppedDuringRead, 100),
+            new PlaybackClockCandidate(fallback, 1));
+
+        var reading = clock.Read();
+
+        Assert.True(reading.IsAdvancing);
+        Assert.Equal(TimeSpan.FromSeconds(10), reading.Elapsed);
+    }
+
+    [Fact]
+    public void HandoffCrossFade_DownwardWinner_RemainsMonotonicWithinCompositeEpoch()
+    {
+        long sim = 0;
+        var low = new MutableStubPlaybackClock
+        {
+            IsAdvancing = true,
+            ElapsedSinceStart = TimeSpan.FromSeconds(100),
+        };
+        var high = new MutableStubPlaybackClock
+        {
+            IsAdvancing = false,
+            ElapsedSinceStart = TimeSpan.Zero,
+        };
+        var clock = new CompositePlaybackClock(
+            new CompositePlaybackClockBlend { HandoffCrossFade = TimeSpan.FromSeconds(2) },
+            () => sim,
+            new PlaybackClockCandidate(low, 1),
+            new PlaybackClockCandidate(high, 100));
+
+        _ = clock.Read();
+        high.IsAdvancing = true;
+        var first = clock.Read();
+        Assert.Equal(TimeSpan.Zero, first.Elapsed);
+
+        high.ElapsedSinceStart = TimeSpan.FromSeconds(1);
+        sim += Stopwatch.Frequency;
+        var middle = clock.Read();
+        sim += Stopwatch.Frequency * 2;
+        high.ElapsedSinceStart = TimeSpan.FromSeconds(3);
+        var afterBlendWindow = clock.Read();
+
+        Assert.Equal(first.EpochId, middle.EpochId);
+        Assert.Equal(first.EpochId, afterBlendWindow.EpochId);
+        Assert.True(middle.Elapsed >= first.Elapsed);
+        Assert.True(afterBlendWindow.Elapsed >= middle.Elapsed);
+    }
+
     private sealed class MutableStubPlaybackClock : IPlaybackClock
     {
         public TimeSpan ElapsedSinceStart { get; set; }
@@ -382,5 +439,14 @@ public class CompositePlaybackClockTests
 
         public TimeSpan ElapsedSinceStart => _elapsed;
         public bool IsAdvancing => _adv;
+    }
+
+    private sealed class StopsWhenSampledClock(TimeSpan elapsed) : IPlaybackClock
+    {
+        // Models a valid race: the legacy property was observed while advancing, then the clock stopped
+        // before the sanctioned atomic sample was taken.
+        public TimeSpan ElapsedSinceStart => elapsed;
+        public bool IsAdvancing => true;
+        public ClockReading Read() => new(PlaybackEpoch.Single, elapsed, false);
     }
 }

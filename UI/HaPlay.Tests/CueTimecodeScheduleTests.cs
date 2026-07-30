@@ -488,6 +488,22 @@ public sealed class CueTimecodeScheduleTests
     }
 
     [Fact]
+    public void Chase_DisablingClearsTheSignal_AndInputCannotRepopulateItWhileOff()
+    {
+        var h = BuildHarness(TimecodeSchedule("01:00:00:00"));
+        h.Scheduler.Tick();
+        FeedTimecode(h, 1, 0, 0, 0);
+        Assert.True(h.Chase.Read().HasSignal);
+
+        h.Chase.Enabled = false;
+        FeedTimecode(h, 1, 0, 0, 2);
+        Assert.False(h.Chase.Read().HasSignal);
+
+        h.Chase.Enabled = true;
+        Assert.False(h.Chase.Read().HasSignal);
+    }
+
+    [Fact]
     public void Chase_SurfacesTheSenderState_OnTheRowBadgeAndTheArmTooltip()
     {
         var h = BuildHarness(TimecodeSchedule("01:00:00:00"));

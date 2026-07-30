@@ -120,7 +120,10 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
         if (_disposed)
             return;
 
-        await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        // Cancellation is honored only while waiting to claim the reference. Once the 1→0 transition is
+        // committed, teardown must run to completion; cancelling OSCServer.StopAsync after _openRefs reached
+        // zero leaves a live socket behind a session that claims it is closed.
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_disposed || _openRefs == 0)
@@ -131,7 +134,7 @@ public sealed class ControlInputSession : IAsyncDisposable, IDisposable
                 return;
 
             MIDISessions?.Stop();
-            await OSCListeners.StopAsync(cancellationToken).ConfigureAwait(false);
+            await OSCListeners.StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
         finally
         {

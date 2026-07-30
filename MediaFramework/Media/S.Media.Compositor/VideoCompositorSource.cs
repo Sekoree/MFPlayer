@@ -166,20 +166,31 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         }
     }
 
-    /// <summary>Removes a surface slot. The surface itself is NOT disposed (caller-owned).</summary>
+    /// <summary>Removes a surface slot and waits for any in-flight composite that snapshotted it. The
+    /// surface itself is NOT disposed (caller-owned), so it is safe for the caller to dispose it after
+    /// this method returns.</summary>
     public bool RemoveSurfaceSlot(SurfaceSlot slot)
     {
         ArgumentNullException.ThrowIfNull(slot);
-        lock (_slotsGate)
-            return _surfaceSlots.Remove(slot);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_readGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            lock (_slotsGate)
+                return _surfaceSlots.Remove(slot);
+        }
     }
 
     /// <summary>Reorders surface slots in-place - the compositor's on-top draw order.</summary>
     public void SortSurfaceSlots(Comparison<SurfaceSlot> comparison)
     {
         ArgumentNullException.ThrowIfNull(comparison);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_slotsGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             _surfaceSlots.Sort(comparison);
+        }
     }
 
     /// <summary>
@@ -441,6 +452,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             {
                 toClose = _slots.ToArray();
                 _slots.Clear();
+                _surfaceSlots.Clear();
             }
             foreach (var s in toClose)
                 s.Close();

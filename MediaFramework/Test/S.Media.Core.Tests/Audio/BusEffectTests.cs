@@ -25,6 +25,14 @@ public sealed class BusEffectTests
         public void Dispose() => Disposed = true;
     }
 
+    private sealed class PositionEffect : IAudioBusEffect
+    {
+        public long LastPosition { get; private set; } = -1;
+        public void Configure(AudioFormat format) { }
+        public void Process(Span<float> interleaved, long samplePosition) => LastPosition = samplePosition;
+        public void Dispose() { }
+    }
+
     [Fact]
     public void AudioEffectBus_EmptyChain_IsBitExactPassthrough()
     {
@@ -165,6 +173,20 @@ public sealed class BusEffectTests
     }
 
     [Fact]
+    public void AudioEffectOutput_EffectAddedAfterBypass_ReceivesTheRunningSamplePosition()
+    {
+        var sink = new CapturingAudioOutput(new AudioFormat(48_000, 2));
+        using var insert = AudioEffectOutput.Wrap(sink, []);
+        insert.Submit(new float[960]); // 480 stereo frames passed before the effect joined
+        var effect = new PositionEffect();
+
+        insert.SetEffects([effect]);
+        insert.Submit(new float[2]);
+
+        Assert.Equal(480, effect.LastPosition);
+    }
+
+    [Fact]
     public void GainAudioEffect_RampAdvancesPerFrame_SameGainOnAllChannels()
     {
         // Review M5 sub-item: the ramp used to advance per interleaved FLOAT - channels× too fast, and
@@ -188,6 +210,11 @@ public sealed class BusEffectTests
         var probe = new float[] { 1f, 1f };
         gain.Process(probe, 0);
         Assert.False(float.IsNaN(probe[0]));
+
+        gain.GainDb = double.MaxValue; // finite input, but its linear conversion overflows
+        probe.AsSpan().Fill(1f);
+        gain.Process(probe, 1);
+        Assert.All(probe, sample => Assert.True(float.IsFinite(sample)));
     }
 
     [Fact]

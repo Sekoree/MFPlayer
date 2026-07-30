@@ -377,6 +377,37 @@ public sealed class CueScheduleTests
     }
 
     [Fact]
+    public async Task Scheduler_ReplacingTheDocumentWhileArmed_DoesNotCatchUpItsPastOccurrence()
+    {
+        var h = BuildHarness(
+            new CueSchedule { Kind = CueScheduleKind.TimeOfDay, TimeOfDay = new TimeOnly(16, 0) },
+            start: At(new TimeSpan(14, 59, 50)));
+        h.Clock.Now = At(new TimeSpan(15, 0, 1));
+
+        h.Vm.ApplyCueLists([
+            new CueList
+            {
+                Nodes =
+                [
+                    new MediaCueNode
+                    {
+                        Label = "Just loaded",
+                        Source = new FilePlaylistItem("/tmp/new.wav"),
+                        Schedule = new CueSchedule
+                        {
+                            Kind = CueScheduleKind.TimeOfDay,
+                            TimeOfDay = new TimeOnly(15, 0),
+                        },
+                    },
+                ],
+            },
+        ]);
+        h.Scheduler.Tick();
+
+        await AssertNoFiresAsync(h);
+    }
+
+    [Fact]
     public async Task Scheduler_DisabledSchedule_NeverFires()
     {
         var h = BuildHarness(

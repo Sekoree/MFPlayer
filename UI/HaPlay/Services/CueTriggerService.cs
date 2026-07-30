@@ -109,7 +109,10 @@ public sealed class CueTriggerService : IDisposable
     {
         _cuePlayer = cuePlayer ?? throw new ArgumentNullException(nameof(cuePlayer));
         _now = now ?? (() => DateTimeOffset.Now);
+        _cuePlayer.CueDocumentReplaced += OnCueDocumentReplaced;
     }
+
+    private void OnCueDocumentReplaced(object? sender, EventArgs e) => _state.Clear();
 
     private bool GateOpen => !_disposed && _cuePlayer.TriggersArmed && !_cuePlayer.IsCueEditMode;
 
@@ -263,7 +266,10 @@ public sealed class CueTriggerService : IDisposable
                 if (now - state.LastFire < RetriggerWindow)
                     continue;
                 state.LastFire = now;
-                pending.Add(cue);
+                // Several rows on the same cue may describe the same input (aliases/imported
+                // duplicates). One physical message is still one request to fire that cue.
+                if (!pending.Contains(cue))
+                    pending.Add(cue);
             }
         }
 
@@ -416,7 +422,10 @@ public sealed class CueTriggerService : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+            return;
         _disposed = true;
+        _cuePlayer.CueDocumentReplaced -= OnCueDocumentReplaced;
         _state.Clear();
     }
 }
