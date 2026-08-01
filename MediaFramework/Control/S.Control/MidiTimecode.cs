@@ -725,6 +725,60 @@ public sealed class MidiTimecodeChaseClock
         }
     }
 
+    /// <summary>
+    /// Feeds one COMPLETE timecode frame that some other transport decoded - the entry point for
+    /// timecode that does not arrive as MIDI wire bytes.
+    /// </summary>
+    /// <param name="timecode">The decoded label.</param>
+    /// <param name="isRunning">True while the sender is rolling; false when it is parked (a decoder
+    /// that has lost bit-lock, or a deck sitting still), which starts a fresh run like a locate.</param>
+    /// <remarks>
+    /// <para>
+    /// Everything below the wire format in this class - stall timeouts, free-run extrapolation, the
+    /// jump/resync classification, generation counting - is about timecode as a concept and has nothing
+    /// to do with MIDI. Only the two ingestion methods above are MIDI-shaped. LTC (SMPTE timecode on an
+    /// audio track) is the case that makes this worth exposing: it delivers a whole frame at a time
+    /// rather than eight nibbles, so it needs none of the quarter-frame assembly and can drive the same
+    /// chase machinery directly.
+    /// </para>
+    /// <para>
+    /// Continuity is classified exactly as the quarter-frame path classifies it, so a caller cannot
+    /// accidentally get different stall/jump behaviour by choosing a different transport.
+    /// </para>
+    /// </remarks>
+    public MidiTimecodeUpdate FeedFrame(MidiTimecodeValue timecode, bool isRunning = true)
+    {
+        var now = _ticks();
+        lock (_gate)
+        {
+            var kind = ClassifyFrame(timecode, now, isRunning);
+            var update = new MidiTimecodeUpdate(kind, timecode, now, isRunning);
+            Apply(update);
+            _undecodedQuarterFrames = 0;
+            _lastMessageTicks = now;
+            return update;
+        }
+    }
+
+    /// <summary>Continuity of a whole-frame update against the current anchor. Mirrors the decoder's
+    /// own rule: matches the prediction ⇒ Continued, otherwise a relocate.</summary>
+    private MidiTimecodeUpdateKind ClassifyFrame(MidiTimecodeValue timecode, long now, bool isRunning)
+    {
+        if (!isRunning)
+            return MidiTimecodeUpdateKind.Located;
+        if (!_haveSignal || !_running || timecode.Rate != _rate)
+            return MidiTimecodeUpdateKind.Resynced;
+
+        var elapsedSeconds = (now - _anchorTicks) / (double)_ticksPerSecond;
+        var predicted = _anchorSeconds + elapsedSeconds;
+        var drift = Math.Abs(timecode.TotalSeconds - predicted);
+        // One frame of slack: a decoder's own timestamp granularity is a frame, so anything inside that
+        // is the sender running normally rather than relocating.
+        return drift <= MidiTimecodeRates.SecondsPerFrame(timecode.Rate)
+            ? MidiTimecodeUpdateKind.Continued
+            : MidiTimecodeUpdateKind.Jumped;
+    }
+
     /// <summary>Drops the lock and the signal (device closed, chase turned off). The generation still
     /// advances, so a consumer holding the previous one treats whatever comes next as a new run.</summary>
     public void Reset()

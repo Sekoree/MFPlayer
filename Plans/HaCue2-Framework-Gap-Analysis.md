@@ -1512,9 +1512,10 @@ needed nothing), the state is:
 |---|---|---|
 | Audio (framework) | 10 | **5** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at |
 | Session | 6 | **2** — the non-destructive document load, dead-code removal; plus D7 (`MaxReleasingVoices`), which predates the register |
-| Everything else (video, control, automation, fades, diagnostics, status, remote, build, app-support) | ~24 | 0 |
+| Control | 9 | **2** — the LTC decoder and the transport-neutral chase ingestion |
+| Everything else (video, automation, fades, diagnostics, status, remote, build, app-support) | ~22 | 0 |
 
-So roughly **7 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **9 of ~40 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1574,8 +1575,8 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Control | Single external-input gate | ABSENT (three differently-shaped gates) | §5.3 |
 | Control | MTC decode/chase | EXISTS | §5.4 |
 | Control | Audio input capture (LTC prerequisite) | EXISTS (`PortAudioInput`, `padev:` scheme) | §5.4a |
-| Control | LTC decoder | ABSENT — in scope, pure DSP, independently schedulable | §5.4a |
-| Control | Transport-neutral chase contract | ABSENT (chase logic exists but is MIDI-shaped) — **cheap now, churn later** | §5.4a |
+| Control | LTC decoder | ✅ **LANDED** — `LinearTimecodeDecoder`, biphase-mark, polarity/amplitude independent | §5.4a |
+| Control | Transport-neutral chase contract | ✅ **LANDED** — `MidiTimecodeChaseClock.FeedFrame(value)` ingests whole frames from any transport | §5.4a |
 | Control | LTC generation | ABSENT — depends on the bay (must derive from the master clock) | §5.4a |
 | Remote | Route table / self-documentation / counters | ABSENT (hand-written switch) | §5.5 |
 | Remote | `POST /lists/{id}/go` | Blocked on per-list standby, not on routing | §5.5 |
