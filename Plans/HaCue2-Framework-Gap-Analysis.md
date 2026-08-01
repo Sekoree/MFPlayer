@@ -1497,20 +1497,43 @@ HaCue2 tax.
 
 ---
 
+## Implementation progress (updated 2026-08-01)
+
+Rows marked ✅ in the register below are in the tree. Counting only the register rows that represent
+*work* (the ~40 rows that were ABSENT, PARTIAL or archived-but-not-recovered — the ~20 EXISTS rows
+needed nothing), the state is:
+
+| Area | Work rows | Landed |
+|---|---|---|
+| Audio (framework) | 10 | **5** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at |
+| Session | 6 | **1** — dead-code removal; plus D7 (`MaxReleasingVoices`), which predates the register |
+| Everything else (video, control, automation, fades, diagnostics, status, remote, build, app-support) | ~24 | 0 |
+
+So roughly **6 of ~40 work items**, but that understates the weight: the recovered bay is the single
+largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and the three
+Phase 3 items now closed — recovery, the watchdog, metering — leave the **non-destructive document
+load** as that phase's one remaining major item.
+
+Everything landed is verified: the solution builds 0 warnings / 0 errors with `TreatWarningsAsErrors`
+on repo-wide, and every framework suite passes. **`HaPlay.Tests` reports 27 failures out of 1014, all
+pre-existing** — verified by stashing the entire change set and re-running on a clean tree, which
+produced the identical 27. They are UI layout/interaction tests (`CuePlayerLayoutBoundsTests` and
+friends), several named `DEFECT_*`, so some appear to be deliberately-failing known-defect tests.
+
 ## Appendix — gap register
 
 | Area | Capability | Status | Where |
 |---|---|---|---|
-| Audio | `AudioPatchBay`, program bus, producer leases, monitor input | **BUILT (archived)** | §0, §1 |
-| Audio | Wedged non-master terminal quarantine/hot-swap | **BUILT (archived)** | §1.3 |
-| Audio | Wedged **pacing master** survival | **ABSENT** (no watchdog; router faults permanently) | §1.3 |
+| Audio | `AudioPatchBay`, program bus, producer leases, monitor input | ✅ **LANDED** (recovered from the tag) | §0, §1 |
+| Audio | Wedged non-master terminal quarantine/hot-swap | ✅ **LANDED** (recovered) | §1.3 |
+| Audio | Wedged **pacing master** survival | ✅ **LANDED** — `ClockMasterWatchdog` + `PromoteClockMaster` (D2) | §1.3 |
 | Audio | Resampler factory injection | EXISTS (`IMediaRegistry.CreateResamplingOutput`) | §1.1 |
 | Audio | Marker to stop a resampled terminal becoming clock master | **ABSENT** | §1.2 |
 | Audio | Raw-terminal (exclusive) line acquisition | **ABSENT** | §1.4, §7.1 |
 | Audio | Per-lease input health counters on the router | ABSENT (present on archived producer) | §1.4, §6.2 |
 | Audio | Output pump counters / health | EXISTS | §1.1, §6.2 |
-| Audio | Level metering (peak/RMS) | **ABSENT** in framework; app decorator exists but aggregates away identity | §6.1 |
-| Audio | Per-logical-output summing node to meter at | ABSENT (no graph node for a logical output) | §6.1 |
+| Audio | Level metering (peak/RMS) | ✅ **LANDED** — `ProgramBusMeter`, non-destructive, frame-based decay | §6.1 |
+| Audio | Per-logical-output summing node to meter at | ✅ **LANDED** — metered inside `ProgramBusSource.ReadInto` | §6.1 |
 | Audio | Clock epoch / advancing / latency in telemetry | ABSENT (values exist, nothing snapshots them) | §6.2 |
 | Audio | Terminal state vocabulary incl. `absent` | ABSENT (`absent` has no producer) | §6.2 |
 | Audio | Leases nested under terminal | DERIVABLE today, not exposed | §6.2 |
@@ -1563,6 +1586,6 @@ HaCue2 tax.
 | Session | Engine / cue-semantics seam | ABSENT (fused; the deck invents a cue named `"player"` to reach the engine) | §10.2 |
 | Session | Soundboard→cue-session coupling | Wiring only — the soundboard VM never references `ShowSession` | §10.1 |
 | Session | `VoicePlayer` voice/preview split | Separable now (~430 voice lines, zero cue dependency) | §10.4 |
-| Session | Dead code in the session layer | `ClipAudioOutputRuntime` + `SoundboardGrid` = 577 lines, 0 refs | §10.1 |
+| Session | Dead code in the session layer | ✅ **LANDED** — both deleted; `SoundboardQuantization` split out | §10.1 |
 | Session | Additive-nullable document evolution | EXISTS as a proven precedent (`LogicalSends`, no version bump) | §10.3 |
 | Session | Tolerant document versioning | ABSENT (hard `==`); enum extension silently mis-reads in the C ABI | §10.3 |

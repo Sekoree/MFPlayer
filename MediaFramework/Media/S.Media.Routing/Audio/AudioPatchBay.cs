@@ -207,6 +207,119 @@ public sealed class AudioPatchBay : IDisposable
     /// (quarantined). A successful <see cref="ReplaceTerminal"/> under the same id clears the id.</summary>
     public IReadOnlyList<string> QuarantinedTerminalIds => _router.StuckOutputPumpIds;
 
+    /// <summary>The terminal currently pacing the router, or null when the bay has no clock master
+    /// (producer clocks then ride the wall-clock fallback domain).</summary>
+    public string? ClockMasterTerminalId => _masterTerminalId;
+
+    /// <summary>
+    /// Moves the clock-master role to an already-attached terminal without replacing any device.
+    /// Running-safe: pacing follows the new master from its next chunk, no producer is interrupted,
+    /// and no terminal is detached.
+    /// </summary>
+    /// <remarks>
+    /// This is the cheap half of surviving a bad master. <see cref="ReplaceTerminal"/> needs the host
+    /// to supply a working replacement device, which is exactly what it cannot do when an interface has
+    /// wedged mid-show; promoting a line the bay already owns needs nothing from the host and is
+    /// inaudible, because the program mix is unchanged - only which line the mix loop paces against.
+    /// </remarks>
+    /// <exception cref="ArgumentException">No such terminal, or it is not an <see cref="IClockedOutput"/>
+    /// and so cannot pace at all.</exception>
+    /// <exception cref="InvalidOperationException">The terminal does not run natively at the mix rate.
+    /// A resampled master would skew the program clock silently (the wrapper does not report its own
+    /// delay), so promotion is refused for exactly the reason attaching one is - see
+    /// <see cref="AddTerminal"/>.</exception>
+    public void PromoteClockMaster(string terminalId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(terminalId);
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_terminals.TryGetValue(terminalId, out var promoted))
+                throw new ArgumentException($"unknown terminal '{terminalId}'", nameof(terminalId));
+            if (string.Equals(terminalId, _masterTerminalId, StringComparison.Ordinal))
+                return;
+            ValidateRate(terminalId, promoted.Terminal, isClockMaster: true);
+            if (promoted.Routed is not IClockedOutput)
+                throw new ArgumentException(
+                    $"terminal '{terminalId}' cannot pace the bay: it does not implement IClockedOutput.",
+                    nameof(terminalId));
+            PromoteClockMasterLocked(terminalId);
+        }
+    }
+
+    /// <summary>Master handoff proper; callers hold <see cref="_gate"/> and have validated the target.</summary>
+    private void PromoteClockMasterLocked(string terminalId)
+    {
+        var promoted = _terminals[terminalId];
+
+        // Retarget first: if it throws, the old master is still installed and still pacing.
+        _router.RetargetSlaveClock(terminalId);
+
+        if (_masterTerminalId is { } oldId && _terminals.TryGetValue(oldId, out var old))
+            _terminals[oldId] = old with { IsClockMaster = false };
+
+        _terminals[terminalId] = promoted with { IsClockMaster = true };
+        _masterTerminal = promoted.Routed;
+        _masterTerminalClock = promoted.Routed as IPlaybackClock;
+        _masterTerminalId = terminalId;
+    }
+
+    /// <summary>
+    /// Hands pacing to the healthiest eligible terminal, used by <see cref="ClockMasterWatchdog"/> when
+    /// the current master stalls. "Healthiest" is the eligible line with the shallowest queue - the one
+    /// most obviously still draining. Returns false when nothing else can pace, which is the honest
+    /// unrecoverable case the plan keeps as a fallback rather than papering over.
+    /// </summary>
+    public bool TryPromoteHealthiestClockMaster(out string? promotedTerminalId)
+    {
+        lock (_gate)
+        {
+            promotedTerminalId = null;
+            if (_disposed)
+                return false;
+
+            var best = default(string);
+            var bestInFlight = long.MaxValue;
+            foreach (var id in EligibleClockMastersLocked())
+            {
+                // An eligible line with no stats yet has never pumped; treat it as empty rather than
+                // skipping it, since a fresh line is a perfectly good pacer.
+                var inFlight = _router.TryGetPumpStats(id, out var stats)
+                    ? stats.Enqueued - stats.Processed - stats.Dropped - stats.Abandoned
+                    : 0;
+                if (inFlight >= bestInFlight)
+                    continue;
+                bestInFlight = inFlight;
+                best = id;
+            }
+
+            if (best is null)
+                return false;
+
+            PromoteClockMasterLocked(best);
+            promotedTerminalId = best;
+            return true;
+        }
+    }
+
+    /// <summary>Terminals eligible to take over pacing: attached, natively at the mix rate, clocked,
+    /// not the current master, and not quarantined.</summary>
+    private List<string> EligibleClockMastersLocked()
+    {
+        var quarantined = _router.StuckOutputPumpIds;
+        var eligible = new List<string>();
+        foreach (var (id, entry) in _terminals)
+        {
+            if (entry.IsClockMaster || quarantined.Contains(id))
+                continue;
+            if (entry.Terminal.Format.SampleRate != MixSampleRate || entry.Routed is not IClockedOutput)
+                continue;
+            eligible.Add(id);
+        }
+        return eligible;
+    }
+
     /// <summary>Rate half of terminal validation, shared by add and replace. Throws the named
     /// errors the plan requires; never wraps here (wrapping happens in <see cref="AttachLocked"/>).</summary>
     private void ValidateRate(string terminalId, IAudioOutput terminal, bool isClockMaster)
