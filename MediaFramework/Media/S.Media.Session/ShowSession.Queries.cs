@@ -203,6 +203,24 @@ public sealed partial class ShowSession
         PublishGroupViews();
     }
 
+    /// <summary>
+    /// Retires only the groups <paramref name="retainedGroupIds"/> does not name, keeping the rest running
+    /// with their voices and their GO cursors intact. The reload's selective counterpart to
+    /// <see cref="DisposeGroupsAsync"/>.
+    /// </summary>
+    private async ValueTask DisposeGroupsExceptAsync(IReadOnlySet<string> retainedGroupIds)
+    {
+        foreach (var (groupId, group) in _groups.ToArray())
+        {
+            if (retainedGroupIds.Contains(groupId))
+                continue;
+            await group.DisposeAsync().ConfigureAwait(false);
+            _groups.Remove(groupId);
+        }
+
+        PublishGroupViews();
+    }
+
     /// <summary>Republishes the lock-free query view (NXT-16). Called on the dispatcher after any change to the
     /// group set or a group's active clip, so <see cref="Snapshot"/> reads never round-trip the dispatcher.</summary>
     private void PublishGroupViews()

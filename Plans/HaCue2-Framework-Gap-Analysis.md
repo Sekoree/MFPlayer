@@ -1257,11 +1257,16 @@ changes and D1 makes that shared work rather than HaCue2 tax.
 
 **Phase 4/5 — four newly-visible work items to schedule:**
 
-1. **Non-destructive document load** (§2.1) — the prerequisite for multi-list transport *and* for
-   "editing never blocks playback". Biggest single item; belongs in the framework phase, not the app phase,
-   and should probably move **into Phase 3** since it is a `ShowSession` change.
-2. **Audio metering** (§6.1) — a peak/RMS tap on the program bus. Small, but three rev-3 screens depend on
-   it and nothing exists today.
+1. ✅ **Non-destructive document load** (§2.1) — **LANDED.** `LoadDocumentAsync` gained an opt-in
+   `preserveActiveGroups`. A transport group survives a reload only when **every** voice it holds (active
+   and crossfade tails alike) still maps to a clip binding equal in every field; any other group is torn
+   down exactly as before. Retained groups keep their voices *and* their `LastFiredNumber` GO cursor — the
+   per-list playhead multi-list transport needs. The strictness is the safety property: being eager would
+   leave a show playing something you just edited away, which is far worse than a restarted cue. Binding
+   comparison uses record equality for the scalars (so fields added later are covered automatically instead
+   of rotting out of a hand-written list) plus element-wise comparison of the five list members, which
+   record equality compares by reference — and two separately deserialized documents never share instances.
+2. ✅ **Audio metering** (§6.1) — **LANDED** as `ProgramBusMeter`, metered on the program sum.
 3. **The video shortfalls** (§4.3, §4.4, §4.5) — per-output test pattern/Identify, composition-owned idle
    images, and the audition video surface. Each is modest; together they are a work package.
 4. **The control shortfalls** (§5.2, §5.6) — continuous-controller→parameter bindings (with a
@@ -1506,13 +1511,14 @@ needed nothing), the state is:
 | Area | Work rows | Landed |
 |---|---|---|
 | Audio (framework) | 10 | **5** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at |
-| Session | 6 | **1** — dead-code removal; plus D7 (`MaxReleasingVoices`), which predates the register |
+| Session | 6 | **2** — the non-destructive document load, dead-code removal; plus D7 (`MaxReleasingVoices`), which predates the register |
 | Everything else (video, control, automation, fades, diagnostics, status, remote, build, app-support) | ~24 | 0 |
 
-So roughly **6 of ~40 work items**, but that understates the weight: the recovered bay is the single
-largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and the three
-Phase 3 items now closed — recovery, the watchdog, metering — leave the **non-destructive document
-load** as that phase's one remaining major item.
+So roughly **7 of ~40 work items**, but that understates the weight: the recovered bay is the single
+largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
+non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
+recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
+the register is spread across video, control, automation, diagnostics and build.
 
 Everything landed is verified: the solution builds 0 warnings / 0 errors with `TreatWarningsAsErrors`
 on repo-wide, and every framework suite passes. **`HaPlay.Tests` reports 27 failures out of 1014, all
@@ -1539,7 +1545,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Audio | Leases nested under terminal | DERIVABLE today, not exposed | §6.2 |
 | Session | N list-scoped transport groups + per-group GO cursor | EXISTS | §2.1 |
 | Session | Standby / next-cue pointer | ABSENT (app-level only) | §2.1 |
-| Session | **Non-destructive document load** | **ABSENT — blocks multi-list + edit-while-playing** | §2.1 |
+| Session | **Non-destructive document load** | ✅ **LANDED** — `preserveActiveGroups` retains unchanged groups + their GO cursors | §2.1 |
 | Session | Per-cue `Disabled` | EXISTS in framework, ABSENT in app model | §2.2 |
 | Fades | Centralised curve math | EXISTS (`FadeCurves`) | §3.1 |
 | Fades | Custom (point-list) curves as data | ABSENT — evaluator exists (`VolumeEnvelopes.Sample`) | §3.1 |

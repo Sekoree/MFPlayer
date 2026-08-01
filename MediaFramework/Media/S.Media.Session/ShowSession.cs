@@ -523,14 +523,126 @@ public sealed partial class ShowSession : IAsyncDisposable
     /// visualizer keeps running. Default false ⇒ the historical full teardown/rebuild (cue-player behaviour
     /// is unchanged unless it opts in).
     /// </param>
-    public Task LoadDocumentAsync(ShowDocument document, bool preserveMatchingCompositions = false)
+    /// <param name="preserveActiveGroups">
+    /// Opt-in: when true, a transport group whose live voices are ALL still described unchanged by the
+    /// incoming document keeps playing across the reload, with its voices and its GO cursor intact; every
+    /// other group is torn down exactly as before. A group is retained only when every one of its voices
+    /// (active and crossfade tails alike) maps to a clip binding that is equal in every field, so a reload
+    /// can never leave a voice playing content the document no longer describes.
+    /// <para>This is what makes "editing never stops unrelated playback" possible: hosts reload the whole
+    /// merged document after any structural edit, so without it an edit to one cue list tears down every
+    /// playing cue in every list - and per-list transport positions cannot survive an edit either. Default
+    /// false ⇒ the historical full teardown.</para>
+    /// </param>
+    public Task LoadDocumentAsync(
+        ShowDocument document,
+        bool preserveMatchingCompositions = false,
+        bool preserveActiveGroups = false)
     {
         ArgumentNullException.ThrowIfNull(document);
         _fires.CancelActiveFire(); // a reload must not wait behind a long in-flight fire (NXT-03)
-        return InvokeAsync(() => LoadDocumentCoreAsync(document, preserveMatchingCompositions));
+        return InvokeAsync(() =>
+            LoadDocumentCoreAsync(document, preserveMatchingCompositions, preserveActiveGroups));
     }
 
-    private async Task LoadDocumentCoreAsync(ShowDocument document, bool preserveMatchingCompositions = false)
+    /// <summary>
+    /// The groups whose live voices are all still described, unchanged, by the incoming document - the only
+    /// ones that may keep playing across a reload.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The rule is deliberately conservative: a group survives only when EVERY voice it holds (active and
+    /// tails alike) maps to a clip binding in the new document that is equal in every field. If anything at
+    /// all changed about what a voice is playing, that group is torn down exactly as it always was, so a
+    /// reload can never leave a voice playing content the document no longer describes. Being strict here is
+    /// what makes the feature safe to turn on: the failure mode of being too eager is a show that keeps
+    /// playing something you just edited away, which is far worse than a restarted cue.
+    /// </para>
+    /// <para>
+    /// This is what lets an edit to one cue list stop tearing down another. HaPlay (and HaCue2) reload the
+    /// whole merged document after any structural edit, so before this every edit stopped every playing cue
+    /// in every list - the reason "editing never blocks playback" and per-list transport positions were
+    /// mutually exclusive with the app's normal editing loop.
+    /// </para>
+    /// <para>
+    /// A retained group also keeps its <c>LastFiredNumber</c> GO cursor, which is the per-list playhead
+    /// multi-list transport needs to survive an edit.
+    /// </para>
+    /// </remarks>
+    private HashSet<string> RetainableGroupIds(
+        IReadOnlyDictionary<string, ShowClipBinding> newClipsByCue, ShowDocument document)
+    {
+        var retained = new HashSet<string>(StringComparer.Ordinal);
+        if (_groups.Count == 0)
+            return retained;
+
+        // A group only means anything if the incoming document still routes cues to it.
+        var incomingGroupIds = new HashSet<string>(
+            document.Cues.Select(c => c.GroupId ?? DefaultGroup), StringComparer.Ordinal);
+
+        foreach (var (groupId, group) in _groups)
+        {
+            if (!incomingGroupIds.Contains(groupId))
+                continue;
+
+            var voices = group.Voices;
+            if (voices.Count == 0)
+                continue; // nothing to preserve; let the normal teardown reclaim it
+
+            var allUnchanged = true;
+            foreach (var voice in voices)
+            {
+                var incoming = newClipsByCue.GetValueOrDefault(voice.Binding.CueId);
+                if (incoming is null || !SameClipBinding(voice.Binding, incoming))
+                {
+                    allUnchanged = false;
+                    break;
+                }
+            }
+
+            if (allUnchanged)
+                retained.Add(groupId);
+        }
+
+        return retained;
+    }
+
+    /// <summary>
+    /// Whether two clip bindings describe the same playback in every respect.
+    /// </summary>
+    /// <remarks>
+    /// Record equality covers the scalar fields - including any added later, which is why the comparison is
+    /// written this way rather than as a field list that would silently rot. The list-valued members need
+    /// element-wise comparison because record equality compares those by reference, and two separately
+    /// deserialized documents never share list instances.
+    /// </remarks>
+    private static bool SameClipBinding(ShowClipBinding a, ShowClipBinding b)
+    {
+        static ShowClipBinding WithoutLists(ShowClipBinding x) => x with
+        {
+            Subtitles = null,
+            ExtraPlacements = null,
+            AudioRoutes = null,
+            LogicalSends = null,
+            VolumeEnvelope = null,
+        };
+
+        static bool Same<T>(IReadOnlyList<T>? x, IReadOnlyList<T>? y) =>
+            (x is null or { Count: 0 } && y is null or { Count: 0 })
+            || (x is not null && y is not null && x.SequenceEqual(y));
+
+        return WithoutLists(a) == WithoutLists(b)
+            && Same(a.Subtitles, b.Subtitles)
+            && Same(a.ExtraPlacements, b.ExtraPlacements)
+            && Same(a.AudioRoutes, b.AudioRoutes)
+            && Same(a.LogicalSends, b.LogicalSends)
+            && Same(a.VolumeEnvelope, b.VolumeEnvelope);
+    }
+
+    private async Task LoadDocumentCoreAsync(
+        ShowDocument document,
+        bool preserveMatchingCompositions = false,
+        bool preserveActiveGroups = false)
     {
         // Normalize null collections FIRST (NXT-12): a minimal/older JSON simply omits arrays the document
         // gained later, and source-gen leaves missing positional params null. Every consumer below (and at
@@ -615,11 +727,20 @@ public sealed partial class ShowSession : IAsyncDisposable
                 binding is null ? static () => false : null);
         }
 
+        // Which running groups may survive this reload (opt-in; see RetainableGroupIds). Computed BEFORE the
+        // teardown because it reads the live voices' bindings.
+        var retainedGroupIds = preserveActiveGroups
+            ? RetainableGroupIds(newClipsByCue, document)
+            : new HashSet<string>(StringComparer.Ordinal);
+
         // Commit (atomic on the dispatcher): retire the running show, then swap in the staged graph. Nothing
         // below can fail, so the swap can't leave a half-built replacement.
         // Disposing the groups tears down the outgoing clips - this also disposes their layer slots, so a
         // PRESERVED composition is left with only its persistent surface layers (e.g. the visualizer).
-        await DisposeGroupsAsync().ConfigureAwait(false);
+        if (retainedGroupIds.Count == 0)
+            await DisposeGroupsAsync().ConfigureAwait(false);
+        else
+            await DisposeGroupsExceptAsync(retainedGroupIds).ConfigureAwait(false);
 
         // Test-pattern + visualizer slots die with their compositions - EXCEPT on preserved compositions,
         // whose slots (and, for the visualizer, its audio tap + source) are kept alive.
