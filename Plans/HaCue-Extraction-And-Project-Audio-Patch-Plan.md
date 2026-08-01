@@ -1,12 +1,18 @@
-# HaCue extraction and project audio patch plan
+# HaCue2 extraction and project audio patch plan
 
-Status: proposed plan — reviewed against the code 2026-07-30; four architecture decisions resolved,
-six new questions open (see "Still open after the 2026-07-30 review"), four enhancements added to
-first-release scope (provisional decision 11)  
-Date: 2026-07-30  
-Scope: split the Cue Player out of HaPlay into a dedicated HaCue application and replace per-cue
-direct-to-device audio routing with a persistent project-level logical-channel patch. Companion
-document: `Plans/HaCue-Feature-Ideas.md` (enhancement backlog, not first-release scope).
+Status: active plan — reviewed against the code 2026-07-30 (four architecture decisions resolved);
+updated 2026-08-01 to agree with the approved rev-3 UI design (see "Design decisions from the
+2026-08-01 UI pass", which supersedes conflicting statements elsewhere in this document)  
+Date: 2026-07-30 · updated 2026-08-01  
+Scope: split the Cue Player out of HaPlay into a dedicated **HaCue2** application and replace
+per-cue direct-to-device audio routing with a persistent project-level logical-output patch.
+Companion documents: `Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html` (the approved
+rev-3 UI spec — authoritative for every screen), `Plans/HaCue-Feature-Ideas.md` (enhancement
+backlog, not first-release scope).
+
+Naming note: the product is **HaCue2** (`UI/HaCue2/…`, `HaCue2.Core`, `.hacue2proj`,
+`hacue2 --check`). Where this document says "HaCue" below, read HaCue2; the UI word for a
+`LogicalAudioChannel` is **logical output** and the model word never appears on screen.
 
 ## Executive recommendation
 
@@ -65,14 +71,137 @@ These four were open in the first draft and are now settled. Each is expanded in
 4. **Three shared app-support libraries, not one** (see "What becomes shared app support"):
    `HaOutput`, a shared media-source model/dialog library, and a shared control-input library.
 
+## Design decisions from the 2026-08-01 UI pass (owner-approved, supersedes conflicts below)
+
+The rev-3 mockup review settled the product surface screen by screen. Every item here is an owner
+decision; where older text in this document disagrees, this register wins.
+
+**Shell and modes**
+
+1. One window with four views — **CUES · AUDIO · VIDEO · TARGETS** — plus a **Settings view**
+   (application + project scopes) and a **Diagnostics window** (remembers its screen). This
+   replaces the earlier Cues/I-O/Targets/Project surface list.
+2. **The app launches into editing mode.** Show mode survives only as an opt-in **Lock** latch
+   (one title-bar chip): read-only document, destructive commands disabled, GO untouched. It is
+   never the launch state. This supersedes "show mode as the launch state" everywhere below.
+3. **No arming gates tied to edit mode.** GO, preview and audition always work while editing. The
+   three HaPlay arms (triggers/schedules/chase) collapse into one **External input** master toggle
+   in the transport covering MIDI/OSC/hotkey triggers, wall-clock schedules and MTC chase;
+   per-source enables live in the Targets view; default off when a project opens (project
+   setting); never gates GO.
+4. **No permanent output strip.** Program meters, line chips and bay counters live in an
+   **Output info** drawer (status-bar toggle / F9, hidden by default, overlays the active panel,
+   poppable to its own window) plus a one-token status-bar summary. Diagnostics holds the deep
+   counters. One Diagnostics button, title bar only.
+5. **Multi-list transport is v1.** Every cue list keeps its own standby/playhead in model *and*
+   UI: the transport acts on the selected list, each list remembers its position, and per-list GO
+   is addressable by hotkeys, triggers and the remote API (`POST /lists/{id}/go`). This supersedes
+   the earlier single-playhead-with-model-insurance resolution.
+6. Cue-row click behaviour is a per-project setting (default: single click view-selects;
+   double-click or explicit Stby commands move standby).
+7. Right panel of the Cues view carries bottom-edge tabs **Cue properties | Lists & groups**;
+   selecting a cue never auto-flips the panel, and Cue properties reopens in the no-selection
+   state. Scoping the tree to a list/group happens only via Lists & groups; scope is machine-local
+   view state, never a transport boundary, and never hides sounding cues.
+
+**Audio model**
+
+8. UI name: **logical outputs**. `LogicalAudioChannel` stays the model type.
+9. **Named Output Groups are v1.** A group ("Main", "Fold") links its members for *editing*:
+   changing one member's patch-cell gain/mute applies the same delta to the other members'
+   corresponding cells, and cue send grids show grouped columns with the same linked-delta
+   behaviour. A stereo pair is a two-member group. Grouping affects editing and display only —
+   the mix math stays per-channel (provisional decision 3 stands).
+10. **No per-logical-output trim.** Patch-cell gains are the only project-side gain stage; the
+    gain-composition chain in "Gain composition" is unchanged.
+11. **Deleting a logical output cleans up automatically**: its sends are stripped from every cue
+    as one undoable journaled command. This supersedes the explicit
+    cancel/remove/rebind choice in the model invariants.
+12. Patch cues ship with both snapshot recall **and** the inline `PatchLevelChange` list.
+13. **Solo-to-audition is always allowed** on a patch line — it plays through the audition
+    monitoring path, never interrupts the program mix, and never appears in the Active list.
+    Patch-cell interaction: click toggles at unity, drag adjusts gain, right-click mutes.
+14. Audio lines are **project-owned** (travel with the show, go absent elsewhere, relink on
+    arrival). Mix-rate changes with a show loaded take an explicit "Apply & restart audio".
+    Per-line effect inserts are deferred (visualizer feeds tap the program bus upstream of
+    inserts, so deferral costs nothing).
+15. **Audition is one rig**: an audio device plus a video surface (window / dedicated screen /
+    none), configured in an Audition pane duplicated in the Audio and Video views. It enters the
+    bay as a monitoring input. Every cue's context menu gets "Preview on audition outputs".
+
+**Cues and editing**
+
+16. **Fade curves**: every curve picker shows drawn thumbnails; the last option is **custom** — a
+    point-drag editor with smooth/hold segments, a **dB ⇄ linear** scale toggle, and curves
+    saveable as **project presets**. Same control everywhere a curve is picked (fades,
+    crossfades, patch cues).
+17. Playlist groups get **crossfade presets** (cut / 0.5 s / 2 s / 4 s / custom) with a curve, and
+    **per-transition overrides** set on the child cue.
+18. **Effect lanes replace `VolumeEnvelope`** as the one envelope concept: volume, opacity and
+    outbound OSC/MIDI ramps are lanes *added* per cue or per group (hidden until added), edited in
+    both the inspector and the timeline against the same data. A child's effect overrides the
+    group's same-kind effect, with a warning badge on the child. The timeline is a bottom sheet by
+    default and **undockable** to its own window (mode remembered per machine); groups collapse to
+    one span-clip, drag as a whole, and accept group-level effect lanes; disabled children render
+    hatched with struck labels.
+19. **Note** (singular) replaces Notes/Script: one tab on every cue kind; a comment cue is just
+    its note. Notes stay writable under Lock.
+20. Auto-renumber on insert defaults **on**, seeded from an application-scope **New project
+    defaults** group (which also seeds Main L/R patched to the machine's default device, mix rate
+    and default fades) and overridable per project.
+
+**Video**
+
+21. **Compositions carry no visualizer flag** — the visualizer is purely a cue type and its
+    settings live on the cue; its canvas presence is an ordinary placement. A composition owns
+    exactly: size, frame rate, idle image. (`CueComposition.VisualizerEnabled`/`…PresetDirectory`
+    do not migrate into the HaCue2 model.)
+22. **Mapping (splitting + mesh warp) is per output binding**, toggleable on/clean per output —
+    the same composition renders warped to a projector and clean to a TV/NDI. Video-view tab
+    order: Compositions · Mapping · Outputs. Mesh warp first, corner-pin stays reserved. A
+    per-output test pattern ships in v1. Mapping editing supports mouse drag, numeric x/y/w/h
+    entry, and arrow-key nudging of the last-clicked point.
+23. **Idle images exist at both levels**: per output as a fallback, with the composition's idle
+    image taking precedence when set.
+
+**Targets, status, settings**
+
+24. Targets view splits into tabs: **Action endpoints · Trigger inputs · Remote API**, each with a
+    direction-filtered wire monitor; the Remote API tab lists its actual endpoints with call
+    counts. **Continuous-controller bindings to parameters** (e.g. cc → master trim) are v1, not
+    just note→cue. Endpoint test messages are configurable per endpoint.
+25. **Preflight is renamed "Project status"** — a collector of errors and warnings with a fix
+    action per row, plus relink and consolidate. Headless form: `hacue2 --check` (exit 1 while
+    errors remain). Severity: unpatched-but-fed logical output = error; patched-but-unfed and
+    absent devices = warnings — except outputs flagged **required**, whose absence is an error.
+26. Settings split hard into application scope (machine, `app-settings.json`, not journaled) and
+    project scope (journaled, undoable), with a per-project **override ledger** (overridable set
+    frozen for now: panic fade, remote API, hotkeys — a project override always wins and is always
+    visible in both scopes). Standing principle: the more user-changeable defaults, the better.
+    Media may live outside the project's media root: adding such a file warns and offers
+    move/copy, with a project setting choosing the default action (keep in place / move / copy —
+    keep is default).
+27. Diagnostics' event panel is a level-filtered live tail of the **`Microsoft.Extensions.Logging`
+    pipeline** — the same sink as the file log; no second event-collection system.
+28. **One undo journal across all views** (cues, patch, compositions, project settings); the undo
+    toast names the domain ("undid: patch — Fold L → Out 3 gain").
+29. **No built-in HaPlay importer.** HaCue2 is a clean start; `.haplayproj`/`.haplaycues`
+    migration becomes a separate companion converter later, with no priority. This supersedes
+    provisional decision 2 and the "HaPlay project import" section (kept below as the future
+    converter's reference algorithm).
+30. Recording file patterns support insert tokens (`{date} {time} {project} {list} {n}`) with an
+    insert dropdown and help popover. The launcher (recents, inline recovery, machine device
+    checks) opens projects in editing mode.
+
 ## Provisional product decisions
 
 These recommendations let implementation proceed. The questions that still need an owner decision
 are collected at the end.
 
 1. HaCue owns one open project at a time and writes a new HaCue project format.
-2. Existing `.haplayproj`, `.haplaycues`, and `.haplaycuelists` files are import formats, not files
-   jointly edited by HaPlay and HaCue.
+2. ~~Existing `.haplayproj`, `.haplaycues`, and `.haplaycuelists` files are import formats~~
+   **Superseded (register item 29):** HaCue2 has no built-in importer — clean start; a companion
+   converter may exist later. The old formats are never jointly edited either way.
 3. A logical audio channel is an atomic mono channel with a stable ID and a user-visible name.
    Stereo pairs or surround groups are optional presentation metadata, not routing primitives.
 4. The first audio implementation routes the channels of the one selected audio stream. Decoding
@@ -93,10 +222,12 @@ are collected at the end.
     feature; they should not be smuggled into the first patch implementation.
 11. Four enhancements are first-release scope because they are far cheaper to build into the new app
     than to retrofit onto it: an edit-command **undo journal** (constrains the project format),
-    **show mode** as the launch state (an app-shell decision), **patch snapshots and patch cues**
-    (only meaningful once a persistent patch exists), and **preflight/relink/consolidate** (a
-    project-level concern). Each has its own section below. The wider enhancement backlog lives in
-    `Plans/HaCue-Feature-Ideas.md` and is explicitly *not* first-release scope.
+    the **Lock latch** (register item 2 — the app launches into *editing* mode; Lock is the opt-in
+    read-only state that replaced "show mode as the launch state"), **patch snapshots and patch
+    cues** (only meaningful once a persistent patch exists), and **Project status /
+    relink / consolidate** (a project-level concern; "preflight" throughout this document reads as
+    Project status per register item 25). Each has its own section below. The wider enhancement
+    backlog lives in `Plans/HaCue-Feature-Ideas.md` and is explicitly *not* first-release scope.
 
 ## Current-state findings
 
@@ -526,8 +657,9 @@ Important invariants:
   a limiter is not silently inserted.
 - Missing physical endpoints retain their cells and report an unresolved binding; they do not
   redirect to an OS default device.
-- Deleting a referenced logical channel requires an explicit choice: cancel, remove the affected
-  sends, or rebind them.
+- Deleting a referenced logical channel strips its sends from every cue automatically as **one
+  undoable journaled command** (register item 11 — supersedes the earlier explicit
+  cancel/remove/rebind choice).
 
 ### Editing model: an undo journal, decided now
 
@@ -791,35 +923,30 @@ transactional `ShowSession.LoadDocumentAsync` rule.
 
 ## HaCue UI
 
-HaCue should have a focused shell rather than reproducing HaPlay's six-workspace sidebar.
+The shell is settled by the rev-3 mockups (authoritative:
+`Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html`): one window with **CUES · AUDIO ·
+VIDEO · TARGETS** views, a **Settings view** (application + project scope with an override
+ledger), and a **Diagnostics window**. The Audio view carries Logical outputs / Patch / Devices /
+Audition panes; the Video view carries Compositions / Mapping / Outputs / Audition. There is no
+permanent output strip — an **Output info** drawer (status-bar toggle / F9, poppable to a window)
+plus a one-token status summary replace it. The launcher (recents, inline recovery, machine device
+checks) opens projects in editing mode.
 
-Recommended top-level surfaces:
-
-- Cues: existing cue-list/editor/transport surface.
-- I/O: compositions/video outputs, logical audio channels, physical patch, output health.
-- Targets: MIDI/OSC action targets and trigger inputs.
-- Project: file/recovery/remote API/appearance settings.
-
-### Show mode is a state, not a checkbox
+### The Lock latch (supersedes "show mode is a state")
 
 Today "am I editing or running a show" is `CuePlayerViewModel.IsCueEditMode`, a flag inside a
-six-workspace shell that schedules and triggers are gated on (`CuePlayerViewModel.cs:348,448`). That
-gating logic is correct and should be kept; what should change is its status in the UI. A dedicated
-application can make **show mode the default state of the program**, which is most of the operator-facing
-value of the split and costs almost nothing structurally.
+six-workspace shell that schedules and triggers are gated on (`CuePlayerViewModel.cs:348,448`).
+The rev-3 decision inverts the earlier plan: **the app launches into editing mode**, and the old
+show mode survives as an opt-in **Lock** latch (register item 2):
 
-Show mode:
-
-- is the state the app launches into with a project loaded, and the state it returns to after a save;
-- presents the transport, the cue list with standby/next, now-playing with elapsed and remaining, the
-  logical-channel meters, and output health — and nothing that mutates the document;
-- leaves edit affordances *visible but inert* rather than hidden, so an operator can see what a cue does
-  without a mode change and without being one stray click from changing it;
-- is exited by an explicit, deliberate unlock (not a tab click), which is what makes the existing
-  schedule/trigger gate trustworthy rather than incidental;
-- cannot be left while a cue is running, or leaving it disarms nothing — pick one and state it. The
-  recommendation is that entering edit mode is allowed but disarms triggers and schedules exactly as the
-  current gate already does, with that consequence shown before the switch, not after.
+- Lock is one title-bar chip: engaging it makes the document read-only and disables destructive
+  commands. GO, transport, preview and audition are untouched.
+- **No arming is tied to edit state.** The edit-mode gate on schedules/triggers is deleted;
+  instead one **External input** master toggle in the transport covers MIDI/OSC/hotkey triggers,
+  schedules and MTC chase, with per-source enables in Targets and "off at project open" as a
+  project setting (register item 3).
+- A project may opt to open locked (Show behaviour · "Open in"), but editing is the default.
+- Notes stay writable under Lock.
 
 Two related operator-surface gaps worth closing at the same time, since they are the same screen:
 
@@ -854,7 +981,9 @@ usable as a pre-show check in a script and as a CI gate over committed fixture p
 
 ### Project audio patch editor
 
-Provide two related panes:
+The Audio view's panes are **Logical outputs · Patch · Devices · Audition** (rev-3 screens 06–08).
+Named **Output Groups** (register item 9) appear as a column in the logical-outputs table and as
+linked-delta editing in both matrices. Provide two related panes:
 
 1. Logical channels:
    add, rename, reorder, group for display, show reference count, and show live meter.
@@ -911,7 +1040,11 @@ behavior.
 Do not let both applications edit the same `.haplayproj` in place. That creates ambiguous ownership
 and makes it easy for a cue-unaware HaPlay build to erase HaCue-only fields.
 
-### HaPlay project import
+### HaPlay project import — deferred to a companion converter
+
+**Superseded as first-release scope (register item 29): HaCue2 ships without an importer.** The
+material below is retained as the reference algorithm for the later stand-alone converter, because
+the route→logical-send conversion rules were carefully worked out and should not be re-derived.
 
 Import only the relevant sections:
 
@@ -1053,11 +1186,16 @@ channels to several real fake outputs, hot-change the physical patch, quarantine
 and keep the voices running — with preview auditioning through the same bay-owned line as the
 program without double-opening the device.
 
-### Phase 4 — create HaCue project/core and migration
+### Phase 4 — create HaCue2 project/core
 
-- Add `HaCue.Core` models, validation, source-generated serialization, project hashing, atomic I/O,
-  migration, and compiler to ShowDocument.
-- Use stable logical channel IDs and the two-matrix model.
+- Add `HaCue2.Core` models, validation, source-generated serialization, project hashing, atomic
+  I/O, and compiler to ShowDocument. (Migration/import is out of scope — companion converter
+  later, register item 29.)
+- Use stable logical channel IDs and the two-matrix model, plus named Output Groups (editing-only
+  linkage, register item 9), per-list standby state for the multi-list transport (register
+  item 5), custom fade curves + project curve presets (register item 16), effect lanes replacing
+  `VolumeEnvelope` (register item 18), the required-output flag (register item 25), and the
+  composition model without visualizer fields (register item 21).
 - **Build the edit-command journal in from the start** (see "Editing model: an undo journal, decided
   now"): commands over `HaCueProject` with `Apply`/`Revert`, coalescing groups, composite multi-edits,
   and the dirty/hash/autosave commit point hanging off it. Every editing surface added later in Phase 4
@@ -1076,30 +1214,32 @@ program without double-opening the device.
 Exit: a HaCue project round-trips and old fixtures migrate to an equivalent effective
 source-to-real matrix.
 
-### Phase 5 — create and prove the HaCue application
+### Phase 5 — create and prove the HaCue2 application
 
-- Add `HaCue`, `HaCue.Desktop`, and launch-smoke wiring.
-- Move cue views/ViewModels/services/resources rather than copying them. Route every editing command
-  through the Phase 4 journal as each surface lands — a surface that mutates directly is a surface whose
-  undo silently does nothing.
-- Add the focused Cues/I/O/Targets/Project shell, with **show mode as the launch state** and edit mode
-  behind an explicit unlock (see "Show mode is a state, not a checkbox").
-- Add the operator surfaces show mode implies: standby/next, elapsed and remaining, logical-channel
-  meters, output health, per-cue disable, and the notes/script view.
+- Add `HaCue2`, `HaCue2.Desktop`, and launch-smoke wiring.
+- Move cue views/ViewModels/services/resources rather than copying them, reshaping to the rev-3
+  screens. Route every editing command through the Phase 4 journal as each surface lands — a
+  surface that mutates directly is a surface whose undo silently does nothing.
+- Add the rev-3 shell: CUES/AUDIO/VIDEO/TARGETS views, Settings view, Diagnostics window,
+  launcher, Output info drawer — **launching into editing mode**, with the Lock latch and the
+  single External-input toggle (register items 1–4).
+- Add the operator surfaces: multi-list transport with per-list standby (register item 5),
+  active-cues panel, per-cue disable, the Note tab, the curve editor, effect lanes and the
+  undockable timeline, and the Audition rig with per-cue "Preview on audition outputs".
 - Add the patch snapshots pane and the patch-cue editor.
-- Add the preflight report UI over the Phase 4 validator, plus the relink and consolidate flows, and
-  expose preflight headlessly (exit code + machine-readable report) so it can gate a fixture project in
-  CI.
+- Add the Project status UI over the Phase 4 validator, plus the relink and consolidate flows,
+  and expose it headlessly (`hacue2 --check`, exit code + machine-readable report) so it can gate
+  a fixture project in CI.
 - Wire the existing media modules required by cue sources and outputs.
-- Port project recovery, preview, schedules/triggers, remote API, composition mappings, and
-  projectM behavior.
-- Run HaPlay and HaCue side by side against the same imported fixture and compare compiled
+- Port project recovery, preview, schedules/triggers, remote API (including
+  `POST /lists/{id}/go`), composition mappings, and projectM behavior.
+- Run HaPlay and HaCue2 side by side against equivalent fixture shows and compare compiled
   documents/effective routes.
 - Add NativeAOT publish and Linux/Windows launch gates mirroring HaPlay's current policy.
 
-Exit: HaCue is independently buildable, publishable, smoke-tested, and usable for a show without
-loading HaPlay — launching into show mode, passing preflight on a transported project, and with undo
-working on every editing surface it ships.
+Exit: HaCue2 is independently buildable, publishable, smoke-tested, and usable for a show without
+loading HaPlay — launching into editing mode, passing Project status checks on a transported
+project, and with undo working on every editing surface it ships.
 
 ### Phase 6 — cut over and simplify HaPlay
 
@@ -1139,7 +1279,7 @@ These are not prerequisites for the first independent HaCue release.
 - reorder/rename stability;
 - deletion/rebind policies;
 - source-generated JSON round-trips and unknown/newer-version failure;
-- HaPlay fixture migration and dry-run report;
+- (moved to the companion converter, register item 29: HaPlay fixture migration and dry-run report);
 - no-default-output behavior for unresolved bindings;
 - every command's `Apply`/`Revert` round-trips the document to a byte-identical serialization;
 - a coalescing group (slider drag, matrix scrub) is exactly one undo step, and a multi-select edit is
@@ -1208,14 +1348,22 @@ These are not prerequisites for the first independent HaCue release.
 ### HaCue app tests
 
 - project new/open/save/save-as/recovery/dirty hash;
-- show mode is the launch state, edit mode needs an explicit unlock, and the trigger/schedule
-  consequence is shown before the switch;
-- undo/redo works from every editing surface the app ships (cue list, drawer, multi-edit, timeline,
-  both matrices, snapshots, compositions) — a per-surface test, not one generic one;
+- the app launches into editing mode; Lock makes the document read-only without touching GO,
+  transport or audition; the External-input toggle gates triggers/schedules/chase as one switch
+  and per-source enables compose with it;
+- per-list standby survives list switching, GO acts on the selected list, and
+  `POST /lists/{id}/go` fires the right list;
+- undo/redo works from every editing surface the app ships (cue list, inspector, multi-edit,
+  timeline, both matrices, snapshots, compositions, project settings) — a per-surface test, not
+  one generic one — and the undo toast names the domain;
+- Output Group linked-delta edits change every member's cells and coalesce into one undo step;
+- deleting a logical output strips its sends everywhere as one undoable command;
 - a patch cue fired mid-show changes the live patch without reloading the document or interrupting a
   playing cue;
-- preflight UI and its headless/exit-code form agree on the same project;
-- import preview, backup, migration, and unresolved-output rebind;
+- Project status UI and `hacue2 --check` agree on the same project, including the required-output
+  severity rules;
+- audition (cue preview and patch-line solo) never joins the Active list and never disturbs
+  program playback;
 - logical and physical matrix keyboard/pointer editing;
 - route inspector text;
 - output hot reconfiguration ordering;
@@ -1316,7 +1464,9 @@ The recommended answer is in parentheses.
 4. Are logical audio channels always atomic mono channels, or should stereo/surround buses be
    indivisible routing units?  
    **Recommendation:** atomic channels with optional display groups. It preserves arbitrary
-   many-to-many routing.
+   many-to-many routing.  
+   **2026-08-01 · answered:** atomic channels, with named **Output Groups** in v1 providing
+   linked-delta *editing* over members (register item 9). Routing stays per-channel.
 
 5. Which HaPlay areas belong in HaCue besides the Cue workspace: soundboard, full Control workspace,
    or only cue targets/triggers?  
@@ -1341,7 +1491,9 @@ The recommended answer is in parentheses.
 
 8. Should the operator explicitly choose the audio clock-master output, or should HaCue always pick
    the first viable output?  
-   **Recommendation:** explicit choice with a clearly displayed automatic fallback when unset.
+   **Recommendation:** explicit choice with a clearly displayed automatic fallback when unset.  
+   **2026-08-01 · answered:** explicit — the Devices pane's "Clock master" picker (rev-3
+   screen 08), with the native-rate constraint stated inline.
 
 9. May logical-channel add/remove be blocked while program cues are active in the first release?  
    **Recommendation:** yes. Patch gain/mute/attachment remains live; changing channel width waits for
@@ -1350,7 +1502,10 @@ The recommended answer is in parentheses.
 10. Do you need delay, polarity inversion, solo, or per-logical-channel effects in the first audio
     patch?  
     **Recommendation:** per-cell gain/mute only. Add delay/polarity/effects after the topology and
-    clock are stable. Solo can be a non-persisted editor audition function later.
+    clock are stable.  
+    **2026-08-01:** solo landed in v1 as **solo-to-audition** (register item 13) — a
+    non-persisted listen through the audition monitoring path, not a program mute of other
+    channels. Delay/polarity/inserts stay deferred.
 
 11. Should output-device definitions remain inside each HaCue project, or should projects bind to
     separate machine profiles?  
@@ -1360,7 +1515,9 @@ The recommended answer is in parentheses.
 
 12. When an imported old project has no direct route for a cue, should that cue remain deliberately
     silent?  
-    **Recommendation:** yes. Preserve the current HaPlay no-hidden-default behavior.
+    **Recommendation:** yes. Preserve the current HaPlay no-hidden-default behavior.  
+    **2026-08-01:** deferred with the importer itself (register item 29) — applies to the
+    companion converter when it exists.
 
 13. Should HaCue retain HaPlay's generated `ShowDocument` sidecars, and must those sidecars be
     generically runnable without the HaCue host?  
@@ -1424,10 +1581,14 @@ The redesign is complete when:
   including the preview/audition path.
 - crossfades, simultaneous groups, fades, envelopes, master trim, preview classification, NDI,
   recording, streaming, and output health retain their tested behavior.
-- Old HaPlay/cue fixtures import with an equivalent effective source-to-real matrix.
 - Every document edit is undoable and redoable, and no editing surface bypasses the journal.
-- The app launches into show mode; editing requires an explicit unlock.
-- A project passes preflight, relinks after a move, and consolidates into a transportable folder.
+- The app launches into editing mode; Lock is available and read-only; External input is one
+  master toggle that never gates GO.
+- Every cue list keeps its own standby; the transport and the remote API can drive lists
+  independently.
+- A project passes Project status checks, relinks after a move, and consolidates into a
+  transportable folder. (Fixture import parity moves to the companion converter's definition of
+  done.)
 - Patch snapshots recall partially, idempotently, and without interrupting a running cue.
 - Full solution tests, routing/clock performance gates, NativeAOT publish, and Linux/Windows launch
   smokes pass.

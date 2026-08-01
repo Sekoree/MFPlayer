@@ -1,0 +1,2586 @@
+<title>HaCue2 — UI design · all screens</title>
+
+<style>
+  /* ─── tokens (carried from the preferred HaCue rev-2 study) ───────────── */
+  :root {
+    /* gels — the booth's own vocabulary. semantic, not decorative. */
+    --gel-congo: #4557c9;   /* chrome, selection, focus */
+    --gel-amber: #a9700f;   /* standby, warning */
+    --gel-green: #2c7f57;   /* running, healthy */
+    --gel-red:   #bd3446;   /* fault, broken binding */
+    --gel-steel: #217f87;   /* monitor, preview, informational */
+
+    --ground:  #f2f5fa;
+    --panel:   #ffffff;
+    --panel-2: #e8ecf4;
+    --rule:    #d2d8e5;
+    --rule-2:  #bcc4d4;
+    --ink:     #131821;
+    --ink-2:   #525d73;
+    --ink-3:   #7f8a9f;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "IBM Plex Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    --measure: 67ch;
+    --bleed: 1240px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --gel-congo: #7d8cea; --gel-amber: #e0a85c; --gel-green: #52b788;
+      --gel-red: #e46b78;   --gel-steel: #5ec8cf;
+      --ground: #0d1015; --panel: #14181f; --panel-2: #1b2029;
+      --rule: #252b36;   --rule-2: #333b49;
+      --ink: #e6e9f0;    --ink-2: #98a2b6;  --ink-3: #6a7386;
+    }
+  }
+  :root[data-theme="dark"] {
+    --gel-congo: #7d8cea; --gel-amber: #e0a85c; --gel-green: #52b788;
+    --gel-red: #e46b78;   --gel-steel: #5ec8cf;
+    --ground: #0d1015; --panel: #14181f; --panel-2: #1b2029;
+    --rule: #252b36;   --rule-2: #333b49;
+    --ink: #e6e9f0;    --ink-2: #98a2b6;  --ink-3: #6a7386;
+  }
+  :root[data-theme="light"] {
+    --gel-congo: #4557c9; --gel-amber: #a9700f; --gel-green: #2c7f57;
+    --gel-red: #bd3446;   --gel-steel: #217f87;
+    --ground: #f2f5fa; --panel: #ffffff; --panel-2: #e8ecf4;
+    --rule: #d2d8e5;   --rule-2: #bcc4d4;
+    --ink: #131821;    --ink-2: #525d73;  --ink-3: #7f8a9f;
+  }
+
+  /* ─── page ────────────────────────────────────────────────────────────── */
+  body {
+    background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 1rem; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    display: grid;
+    grid-template-columns: 1fr min(var(--measure), calc(100% - 2.5rem)) 1fr;
+    row-gap: 1.15rem;
+    padding: 0 0 6rem;
+  }
+  .page > * { grid-column: 2; }
+  .page > .bleed {
+    grid-column: 1 / -1;
+    width: min(var(--bleed), calc(100% - 2.5rem));
+    margin-inline: auto;
+  }
+
+  /* ─── type ────────────────────────────────────────────────────────────── */
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0;
+  }
+  .masthead { padding: 4.5rem 0 0.5rem; }
+  .masthead h1 {
+    font-family: var(--mono); font-size: clamp(1.9rem, 5.2vw, 2.9rem);
+    line-height: 1.07; letter-spacing: -0.035em; font-weight: 600;
+    text-wrap: balance; margin: 0.85rem 0 0;
+  }
+  .standfirst { font-size: 1.0625rem; color: var(--ink-2); margin: 1.1rem 0 0; text-wrap: pretty; }
+
+  .colophon {
+    font-family: var(--mono); font-size: 0.75rem; color: var(--ink-3);
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    padding: 0.7rem 0; margin: 2rem 0 1rem;
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.6rem;
+  }
+  .colophon b { color: var(--ink-2); font-weight: 500; }
+
+  h2 {
+    font-family: var(--mono); font-size: 1.4rem; letter-spacing: -0.02em;
+    font-weight: 600; line-height: 1.2; text-wrap: balance; margin: 3.2rem 0 0;
+  }
+  h3 { font-family: var(--mono); font-size: 1rem; letter-spacing: -0.01em; font-weight: 600; margin: 2.1rem 0 0; }
+  p { margin: 0; }
+  .page > p + p { margin-top: -0.15rem; }
+
+  a { color: var(--gel-congo); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--gel-congo); outline-offset: 3px; border-radius: 2px; }
+
+  code, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  code {
+    font-size: 0.86em; background: var(--panel-2); border: 1px solid var(--rule);
+    padding: 0.08em 0.34em; border-radius: 3px;
+  }
+  ul { margin: 0.2rem 0 0; padding-left: 1.15rem; }
+  li { margin-top: 0.32rem; }
+  li::marker { color: var(--ink-3); }
+
+  .lede { border-left: 2px solid var(--gel-congo); padding-left: 1rem; color: var(--ink-2); margin-top: 0.4rem; }
+
+  .changed {
+    background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--gel-amber);
+    border-radius: 4px; padding: 1rem 1.15rem; margin-top: 0.5rem;
+  }
+  .changed .eyebrow { color: var(--gel-amber); }
+  .changed ul { margin-top: 0.55rem; }
+  .changed li { color: var(--ink-2); }
+  .changed b { color: var(--ink); font-weight: 600; }
+
+  .sechead {
+    display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap;
+    border-top: 2px solid var(--ink); padding-top: 0.85rem; margin-top: 3.6rem;
+  }
+  .sechead h2 { margin: 0; }
+  .sectag { font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); }
+  .sectag.n { color: var(--gel-congo); }
+
+  /* per-screen "to settle" block */
+  .settle {
+    background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--gel-steel);
+    border-radius: 4px; padding: 0.85rem 1.1rem; margin-top: 1rem;
+  }
+  .settle .eyebrow { color: var(--gel-steel); }
+  .settle ul { margin-top: 0.45rem; }
+  .settle li { color: var(--ink-2); font-size: 0.9375rem; }
+  .settle b { color: var(--ink); font-weight: 600; }
+
+  /* resolved-feedback block */
+  .resolved {
+    background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--gel-green);
+    border-radius: 4px; padding: 0.85rem 1.1rem; margin-top: 1rem;
+  }
+  .resolved .eyebrow { color: var(--gel-green); }
+  .resolved ul { margin-top: 0.45rem; }
+  .resolved li { color: var(--ink-2); font-size: 0.9375rem; }
+  .resolved b { color: var(--ink); font-weight: 600; }
+
+  /* screen index */
+  .toc { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.5rem; margin-top: 1rem; }
+  .toc a {
+    display: flex; gap: 0.55rem; align-items: baseline; text-decoration: none;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 0.5rem 0.7rem; color: var(--ink);
+  }
+  .toc a:hover { border-color: var(--gel-congo); }
+  .toc .no { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3); }
+  .toc .t { font-size: 0.875rem; }
+  .toc .s { font-family: var(--mono); font-size: 0.65rem; color: var(--ink-3); margin-left: auto; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  /* ─── mockup frame ────────────────────────────────────────────────────── */
+  figure { margin: 1.6rem 0 0; }
+  figcaption {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.05em;
+    color: var(--ink-3); margin-top: 0.65rem; display: flex; gap: 0.5rem; flex-wrap: wrap;
+  }
+  figcaption b { color: var(--ink-2); font-weight: 500; }
+  .frame {
+    border: 1px solid var(--rule-2); border-radius: 6px; padding: 6px;
+    background: var(--panel-2); overflow-x: auto;
+  }
+
+  /* ─── the app skin (fixed booth-dark) ─────────────────────────────────── */
+  .screen {
+    --s-bg: #0b0e13; --s-panel: #12161d; --s-panel2: #181d26;
+    --s-rule: #232935; --s-rule2: #303845;
+    --s-ink: #e4e8f0; --s-ink2: #939db1; --s-ink3: #626b7d;
+    --s-congo: #7d8cea; --s-amber: #e0a85c; --s-green: #52b788;
+    --s-red: #e46b78;   --s-steel: #5ec8cf;
+
+    background: var(--s-bg); color: var(--s-ink);
+    font-family: var(--sans); font-size: 12px; line-height: 1.45;
+    border-radius: 3px; min-width: 980px; overflow: hidden; user-select: none;
+  }
+  .screen * { box-sizing: border-box; }
+  .screen .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .screen .spacer { margin-left: auto; }
+  .screen .dim3 { color: var(--s-ink3); }
+  .screen .dim2 { color: var(--s-ink2); }
+
+  .titlebar {
+    display: flex; align-items: center; gap: 14px; padding: 7px 12px;
+    background: var(--s-panel); border-bottom: 1px solid var(--s-rule);
+  }
+  .appname { font-family: var(--mono); font-weight: 600; letter-spacing: 0.04em; font-size: 11px; }
+  .projname { color: var(--s-ink2); font-size: 11px; font-family: var(--mono); }
+
+  /* top-level view switcher — the HaCue2 shell */
+  .vtabs { display: flex; gap: 0; margin-left: 6px; }
+  .vtab {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    padding: 4px 12px; color: var(--s-ink3); border: 1px solid transparent; border-radius: 2px;
+  }
+  .vtab.on { color: var(--s-ink); background: var(--s-panel2); border-color: var(--s-rule2); }
+
+  .chip {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 2px; border: 1px solid var(--s-rule2); color: var(--s-ink3);
+  }
+  .chip.live  { color: var(--s-green); border-color: color-mix(in srgb, var(--s-green) 45%, transparent); background: color-mix(in srgb, var(--s-green) 11%, transparent); }
+  .chip.edit  { color: var(--s-congo); border-color: color-mix(in srgb, var(--s-congo) 45%, transparent); background: color-mix(in srgb, var(--s-congo) 11%, transparent); }
+  .chip.warn  { color: var(--s-amber); border-color: color-mix(in srgb, var(--s-amber) 45%, transparent); }
+  .chip.err   { color: var(--s-red); border-color: color-mix(in srgb, var(--s-red) 45%, transparent); }
+
+  .pnl { background: var(--s-panel); border: 1px solid var(--s-rule); border-radius: 3px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+  .pnl-hd {
+    display: flex; align-items: center; gap: 8px; padding: 5px 9px;
+    background: var(--s-panel2); border-bottom: 1px solid var(--s-rule);
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--s-ink3); flex: none;
+  }
+  .pnl-hd .hint { margin-left: auto; letter-spacing: 0.04em; text-transform: none; }
+
+  /* cue rows */
+  .cuehead, .cue {
+    display: grid;
+    grid-template-columns: 3px 50px 18px 1fr 148px 50px 50px 44px 62px;
+    align-items: center; gap: 9px; padding: 0 10px 0 0;
+  }
+  .cuehead {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--s-ink3); padding-block: 4px; border-bottom: 1px solid var(--s-rule);
+  }
+  .cue { min-height: 26px; border-bottom: 1px solid color-mix(in srgb, var(--s-rule) 55%, transparent); }
+  .cue .stripe { align-self: stretch; background: transparent; }
+  .cue .qnum { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--s-ink2); padding-left: 8px; }
+  .cue .glyph { text-align: center; font-family: var(--mono); font-size: 11px; color: var(--s-ink3); }
+  .cue .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cue .src { font-family: var(--mono); font-size: 10px; color: var(--s-ink3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cue .n { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 10px; color: var(--s-ink2); text-align: right; }
+  .cue .badges { display: flex; gap: 3px; justify-content: flex-end; }
+
+  .cue.is-go   { background: color-mix(in srgb, var(--s-green) 9%, transparent); }
+  .cue.is-go   .stripe { background: var(--s-green); }
+  .cue.is-go   .glyph { color: var(--s-green); }
+  .cue.is-go   .label { color: var(--s-ink); font-weight: 500; }
+  .cue.is-stby { background: color-mix(in srgb, var(--s-amber) 10%, transparent); }
+  .cue.is-stby .stripe { background: var(--s-amber); }
+  .cue.is-stby .glyph { color: var(--s-amber); }
+  .cue.is-stby .label { color: var(--s-ink); font-weight: 500; }
+  .cue.is-sel  { background: color-mix(in srgb, var(--s-congo) 14%, transparent); }
+  .cue.is-sel  .stripe { background: var(--s-congo); }
+  .cue.is-broke .stripe { background: var(--s-red); }
+  .cue.is-broke .src { color: var(--s-red); }
+  .cue.is-off  { opacity: 0.42; }
+  .cue.is-off  .label { text-decoration: line-through; text-decoration-color: var(--s-ink3); }
+  .cue.group   .label { font-weight: 500; }
+  .cue.child   .qnum { padding-left: 20px; }
+
+  .badge {
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.06em;
+    padding: 1px 4px; border-radius: 2px; border: 1px solid var(--s-rule2);
+    color: var(--s-ink3); white-space: nowrap;
+  }
+  .badge.midi { color: var(--s-congo); border-color: color-mix(in srgb, var(--s-congo) 40%, transparent); }
+  .badge.osc  { color: var(--s-steel); border-color: color-mix(in srgb, var(--s-steel) 40%, transparent); }
+  .badge.clock{ color: var(--s-amber); border-color: color-mix(in srgb, var(--s-amber) 40%, transparent); }
+  .badge.bad  { color: var(--s-red); border-color: color-mix(in srgb, var(--s-red) 45%, transparent); }
+  .badge.good { color: var(--s-green); border-color: color-mix(in srgb, var(--s-green) 45%, transparent); }
+
+  /* active cue rows */
+  .act {
+    display: grid; grid-template-columns: 3px 46px 1fr 96px 130px 78px 20px;
+    align-items: center; gap: 9px; padding: 0 10px 0 0; min-height: 25px;
+    border-bottom: 1px solid color-mix(in srgb, var(--s-rule) 55%, transparent);
+  }
+  .act .stripe { align-self: stretch; background: var(--s-green); }
+  .act.fading .stripe { background: var(--s-amber); }
+  .act.grp .stripe { background: var(--s-congo); }
+  .act .qnum { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--s-ink2); padding-left: 8px; }
+  .act .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act .label .list { color: var(--s-ink3); font-family: var(--mono); font-size: 9.5px; }
+  .act .clock { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 10px; color: var(--s-ink2); text-align: right; }
+  .act.near .clock { color: var(--s-red); }
+  .act .prog { height: 4px; background: var(--s-panel2); border-radius: 2px; overflow: hidden; }
+  .act .prog > i { display: block; height: 100%; background: var(--s-green); }
+  .act.fading .prog > i { background: var(--s-amber); }
+  .act .dest { font-family: var(--mono); font-size: 9.5px; color: var(--s-ink3); text-align: right; }
+  .act .x { text-align: center; color: var(--s-ink3); font-family: var(--mono); font-size: 12px; }
+  .act.grp { background: color-mix(in srgb, var(--s-congo) 8%, transparent); }
+  .act.grp .label { font-weight: 500; }
+  .act.child .qnum { padding-left: 18px; }
+
+  /* transport */
+  .transport { display: flex; align-items: center; gap: 7px; padding: 7px 10px; background: var(--s-panel); border-bottom: 1px solid var(--s-rule); }
+  .btn {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.11em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 2px; border: 1px solid var(--s-rule2);
+    background: var(--s-panel2); color: var(--s-ink2);
+  }
+  .btn.go {
+    background: color-mix(in srgb, var(--s-green) 22%, var(--s-panel));
+    border-color: color-mix(in srgb, var(--s-green) 60%, transparent);
+    color: #d9f5e6; font-weight: 600; padding: 5px 20px; letter-spacing: 0.2em;
+  }
+  .btn.panic { color: var(--s-red); border-color: color-mix(in srgb, var(--s-red) 45%, transparent); }
+  .btn.icon { padding: 5px 8px; }
+  .btn.primary { background: color-mix(in srgb, var(--s-congo) 24%, var(--s-panel)); border-color: color-mix(in srgb, var(--s-congo) 55%, transparent); color: var(--s-ink); }
+  .arm { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--s-ink3); }
+  .arm .led { width: 6px; height: 6px; border-radius: 50%; background: var(--s-green); box-shadow: 0 0 5px color-mix(in srgb, var(--s-green) 70%, transparent); }
+  .arm.off .led { background: var(--s-rule2); box-shadow: none; }
+  .listsel { font-family: var(--mono); font-size: 10px; color: var(--s-ink); background: var(--s-bg); border: 1px solid var(--s-rule2); border-radius: 2px; padding: 4px 8px; }
+
+  /* inspector tabs */
+  .itabs { display: flex; gap: 0; background: var(--s-panel2); border-bottom: 1px solid var(--s-rule); overflow-x: auto; flex: none; }
+  .itab {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 6px 9px 5px; color: var(--s-ink3); border-bottom: 2px solid transparent; white-space: nowrap;
+  }
+  .itab.on { color: var(--s-ink); border-bottom-color: var(--s-congo); background: var(--s-panel); }
+  .itab.bad { color: var(--s-red); }
+  /* bottom-edge tab bar (right panel: Cue properties / Lists & groups) */
+  .itabs.bottom { border-bottom: 0; border-top: 1px solid var(--s-rule); margin-top: auto; }
+  .itabs.bottom .itab { border-bottom: 0; border-top: 2px solid transparent; padding: 5px 9px 6px; }
+  .itabs.bottom .itab.on { border-top-color: var(--s-congo); }
+
+  .field { display: grid; grid-template-columns: 96px 1fr; gap: 9px; align-items: center; padding: 3px 10px; }
+  .field > span:first-child { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--s-ink3); }
+  .field.wide { grid-template-columns: 1fr; }
+  .inputish { background: var(--s-bg); border: 1px solid var(--s-rule2); border-radius: 2px; padding: 3px 6px; font-family: var(--mono); font-size: 10.5px; color: var(--s-ink); }
+  .inputish.ro { border-style: dashed; color: var(--s-ink2); }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg { display: flex; }
+  .seg > span { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 7px; border: 1px solid var(--s-rule2); color: var(--s-ink3); }
+  .seg > span:not(:last-child) { border-right: 0; }
+  .seg > span.on { background: color-mix(in srgb, var(--s-congo) 24%, transparent); color: var(--s-ink); border-color: color-mix(in srgb, var(--s-congo) 55%, transparent); }
+  .subhd { font-family: var(--mono); font-size: 9px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--s-ink3); padding: 9px 10px 3px; border-top: 1px solid color-mix(in srgb, var(--s-rule) 60%, transparent); margin-top: 5px; }
+  .check { display: flex; align-items: center; gap: 7px; padding: 3px 10px; font-size: 11px; color: var(--s-ink2); }
+  .check .box { width: 10px; height: 10px; border: 1px solid var(--s-rule2); border-radius: 2px; flex: none; }
+  .check.on .box { background: color-mix(in srgb, var(--s-congo) 45%, transparent); border-color: var(--s-congo); }
+  .check.on { color: var(--s-ink); }
+
+  /* fade-curve thumbnails */
+  .curves { display: flex; gap: 6px; padding: 4px 10px; flex-wrap: wrap; }
+  .curveopt { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 5px 3px; border: 1px solid var(--s-rule2); border-radius: 2px; background: var(--s-bg); }
+  .curveopt.on { border-color: var(--s-congo); background: color-mix(in srgb, var(--s-congo) 12%, var(--s-bg)); }
+  .curveopt svg { display: block; }
+  .curveopt svg polyline, .curveopt svg path { fill: none; stroke: var(--s-ink2); stroke-width: 1.4; }
+  .curveopt.on svg polyline, .curveopt.on svg path { stroke: var(--s-congo); }
+  .curveopt .cap { font-family: var(--mono); font-size: 8px; letter-spacing: 0.05em; color: var(--s-ink3); }
+  .curveopt.on .cap { color: var(--s-ink); }
+
+  /* matrices */
+  .mx { border-collapse: separate; border-spacing: 0; font-family: var(--mono); font-size: 10px; }
+  .mx th, .mx td { border-right: 1px solid var(--s-rule); border-bottom: 1px solid var(--s-rule); padding: 0; }
+  .mx thead th { background: var(--s-panel2); color: var(--s-ink3); font-weight: 400; font-size: 9px; letter-spacing: 0.06em; padding: 4px 5px; text-align: center; white-space: nowrap; }
+  .mx tbody th { background: var(--s-panel2); color: var(--s-ink2); font-weight: 400; text-align: right; padding: 3px 7px; white-space: nowrap; font-size: 10px; }
+  .mx td { text-align: center; width: 42px; height: 21px; color: var(--s-ink3); background: var(--s-panel); }
+  .mx td.on { background: color-mix(in srgb, var(--s-congo) 26%, var(--s-panel)); color: var(--s-ink); }
+  .mx td.on.unity { background: color-mix(in srgb, var(--s-congo) 40%, var(--s-panel)); }
+  .mx td.mute { background: color-mix(in srgb, var(--s-red) 20%, var(--s-panel)); color: var(--s-red); }
+  .mx td.pick { outline: 2px solid var(--s-amber); outline-offset: -2px; }
+  .mx tbody th.bad { color: var(--s-red); }
+  .mx thead th.vgrp { color: var(--s-congo); border-bottom: 1px solid color-mix(in srgb, var(--s-congo) 40%, var(--s-rule)); }
+
+  .chain { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-family: var(--mono); font-size: 10px; padding: 8px 10px; border-top: 1px solid var(--s-rule); background: var(--s-panel2); }
+  .node { background: var(--s-panel); border: 1px solid var(--s-rule2); border-radius: 2px; padding: 2px 6px; }
+  .node.src { border-color: color-mix(in srgb, var(--s-steel) 50%, transparent); color: var(--s-steel); }
+  .node.log { border-color: color-mix(in srgb, var(--s-congo) 50%, transparent); color: var(--s-congo); }
+  .node.phy { border-color: color-mix(in srgb, var(--s-green) 45%, transparent); color: var(--s-green); }
+  .arrow { color: var(--s-ink3); }
+
+  /* the Output info drawer (summoned, not permanent) */
+  .strip {
+    display: flex; align-items: stretch; gap: 0;
+    background: var(--s-panel); border-top: 1px solid var(--s-rule2);
+  }
+  .strip > section { display: flex; align-items: center; gap: 8px; padding: 6px 11px; border-right: 1px solid var(--s-rule); }
+  .strip > section:last-child { border-right: 0; }
+  .strip .slab { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--s-ink3); writing-mode: vertical-rl; transform: rotate(180deg); }
+
+  .mtr { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 22px; }
+  .mtr .bar { width: 7px; height: 34px; background: var(--s-panel2); border: 1px solid var(--s-rule); border-radius: 1px; position: relative; overflow: hidden; }
+  .mtr .bar > i { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(to top, var(--s-green) 0%, var(--s-green) 60%, var(--s-amber) 84%, var(--s-red) 100%); }
+  .mtr .bar > u { position: absolute; left: 0; right: 0; height: 1px; background: var(--s-ink2); }
+  .mtr .cap { font-family: var(--mono); font-size: 8px; letter-spacing: 0.03em; color: var(--s-ink3); }
+  .mtr.clip .cap { color: var(--s-red); }
+  .mtr.clip .bar { border-color: var(--s-red); }
+
+  .lchip {
+    display: flex; flex-direction: column; gap: 1px; padding: 3px 8px;
+    border: 1px solid var(--s-rule2); border-radius: 2px; background: var(--s-panel2); min-width: 92px;
+  }
+  .lchip .top { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10px; }
+  .lchip .led { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .lchip .bot { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 8.5px; color: var(--s-ink3); letter-spacing: 0.02em; }
+  .lchip.ok    { border-color: color-mix(in srgb, var(--s-green) 40%, transparent); }
+  .lchip.ok    .led { background: var(--s-green); box-shadow: 0 0 4px color-mix(in srgb, var(--s-green) 70%, transparent); }
+  .lchip.warn  { border-color: color-mix(in srgb, var(--s-amber) 45%, transparent); }
+  .lchip.warn  .led { background: var(--s-amber); }
+  .lchip.warn  .bot { color: var(--s-amber); }
+  .lchip.err   { border-color: color-mix(in srgb, var(--s-red) 50%, transparent); background: color-mix(in srgb, var(--s-red) 10%, transparent); }
+  .lchip.err   .led { background: var(--s-red); }
+  .lchip.err   .bot { color: var(--s-red); }
+  .lchip.idle  .led { background: var(--s-rule2); }
+
+  .statusbar {
+    display: flex; gap: 15px; align-items: center; padding: 4px 12px;
+    background: var(--s-bg); border-top: 1px solid var(--s-rule);
+    font-family: var(--mono); font-size: 9.5px; color: var(--s-ink3);
+  }
+  .statusbar .ok { color: var(--s-green); }
+  .statusbar .warn { color: var(--s-amber); }
+  .statusbar .err { color: var(--s-red); }
+  .statusbar .sbtn { border: 1px solid var(--s-rule2); border-radius: 2px; padding: 1px 7px; color: var(--s-ink2); }
+
+  /* settings nav */
+  .snav { display: flex; flex-direction: column; padding: 6px 0; gap: 1px; }
+  .snav .scope { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--s-ink3); padding: 9px 12px 4px; }
+  .snav a { display: flex; align-items: center; gap: 7px; padding: 4px 12px; color: var(--s-ink2); font-size: 11.5px; text-decoration: none; border-left: 2px solid transparent; }
+  .snav a.on { color: var(--s-ink); background: color-mix(in srgb, var(--s-congo) 15%, transparent); border-left-color: var(--s-congo); }
+  .snav a .tally { margin-left: auto; font-family: var(--mono); font-size: 9px; color: var(--s-ink3); }
+  .snav a .tally.bad { color: var(--s-red); }
+  .snav a .tally.ovr { color: var(--s-amber); }
+
+  /* diagnostics table */
+  .diag { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .diag th, .diag td { padding: 4px 8px; border-bottom: 1px solid color-mix(in srgb, var(--s-rule) 60%, transparent); text-align: right; white-space: nowrap; }
+  .diag th { background: var(--s-panel2); color: var(--s-ink3); font-weight: 400; font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid var(--s-rule); }
+  .diag td:first-child, .diag th:first-child { text-align: left; }
+  .diag td.name { color: var(--s-ink); }
+  .diag td.g { color: var(--s-green); }
+  .diag td.a { color: var(--s-amber); }
+  .diag td.r { color: var(--s-red); }
+  .diag td.dim { color: var(--s-ink3); }
+  .diag tbody tr.sub td:first-child { padding-left: 22px; color: var(--s-ink2); }
+
+  .logtail { font-family: var(--mono); font-size: 9.5px; line-height: 1.55; padding: 8px 10px; color: var(--s-ink2); display: flex; flex-direction: column; gap: 1px; }
+  .logtail .w { color: var(--s-amber); }
+  .logtail .e { color: var(--s-red); }
+  .logtail .t { color: var(--s-ink3); }
+
+  .lay { display: grid; gap: 7px; padding: 7px; }
+  .stack { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+
+  /* timeline lanes */
+  .tl { position: relative; background: var(--s-bg); }
+  .tl .ruler { display: flex; font-family: var(--mono); font-size: 8px; color: var(--s-ink3); border-bottom: 1px solid var(--s-rule); }
+  .tl .ruler span { flex: 1; padding: 2px 4px; border-left: 1px solid var(--s-rule); }
+  .tl .lane { display: grid; grid-template-columns: 168px 1fr; border-bottom: 1px solid color-mix(in srgb, var(--s-rule) 60%, transparent); min-height: 30px; }
+  .tl .lane .lname { font-family: var(--mono); font-size: 9.5px; color: var(--s-ink2); padding: 8px 8px 0; border-right: 1px solid var(--s-rule); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl .lane.grp { background: color-mix(in srgb, var(--s-congo) 6%, transparent); }
+  .tl .lane.grp .lname { color: var(--s-ink); }
+  .tl .lane.fx { min-height: 24px; }
+  .tl .lane.fx .lname { padding-left: 22px; color: var(--s-ink3); font-size: 9px; }
+  .tl .lane .ltrack { position: relative; }
+  .tl .clip { position: absolute; top: 4px; bottom: 4px; border-radius: 2px; border: 1px solid; font-family: var(--mono); font-size: 8.5px; padding: 2px 5px; overflow: hidden; white-space: nowrap; }
+  .tl .clip.au { background: color-mix(in srgb, var(--s-green) 16%, var(--s-panel)); border-color: color-mix(in srgb, var(--s-green) 45%, transparent); color: var(--s-ink2); }
+  .tl .clip.vi { background: color-mix(in srgb, var(--s-steel) 16%, var(--s-panel)); border-color: color-mix(in srgb, var(--s-steel) 45%, transparent); color: var(--s-ink2); }
+  .tl .clip.ac { background: color-mix(in srgb, var(--s-congo) 18%, var(--s-panel)); border-color: color-mix(in srgb, var(--s-congo) 50%, transparent); color: var(--s-ink2); }
+  .tl .clip.gr { background: color-mix(in srgb, var(--s-congo) 10%, var(--s-panel)); border-color: color-mix(in srgb, var(--s-congo) 35%, transparent); color: var(--s-ink3); }
+  .tl .playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--s-amber); box-shadow: 0 0 4px color-mix(in srgb, var(--s-amber) 70%, transparent); }
+  .tl .env { position: absolute; inset: 0; pointer-events: none; }
+
+  /* video placement canvas */
+  .vidcanvas { position: relative; background: #05070a; border: 1px solid var(--s-rule2); overflow: hidden; }
+  .vidcanvas .ph { position: absolute; border: 1px solid; font-family: var(--mono); font-size: 8.5px; padding: 2px 5px; }
+  .vidcanvas .ph.a { border-color: color-mix(in srgb, var(--s-steel) 70%, transparent); color: var(--s-steel); background: color-mix(in srgb, var(--s-steel) 10%, transparent); }
+  .vidcanvas .ph.b { border-color: color-mix(in srgb, var(--s-congo) 70%, transparent); color: var(--s-congo); background: color-mix(in srgb, var(--s-congo) 10%, transparent); }
+  .vidcanvas .ph.sel { outline: 1px dashed var(--s-amber); outline-offset: 2px; }
+  .vidcanvas .grid { position: absolute; inset: 0; background-image: linear-gradient(color-mix(in srgb, var(--s-rule) 55%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--s-rule) 55%, transparent) 1px, transparent 1px); background-size: 12.5% 16.66%; }
+
+  /* launcher */
+  .recentrow { display: grid; grid-template-columns: 3px 1fr 150px 110px; gap: 10px; align-items: center; min-height: 34px; padding-right: 10px; border-bottom: 1px solid color-mix(in srgb, var(--s-rule) 55%, transparent); }
+  .recentrow .stripe { align-self: stretch; }
+  .recentrow .pname { display: flex; flex-direction: column; padding-left: 9px; }
+  .recentrow .pname b { font-size: 11.5px; font-weight: 500; }
+  .recentrow .pname span { font-family: var(--mono); font-size: 9px; color: var(--s-ink3); }
+  .recentrow .meta { font-family: var(--mono); font-size: 9.5px; color: var(--s-ink3); text-align: right; }
+
+  /* comparison / decision tables */
+  .cmp-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 5px; }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.9rem; }
+  table.cmp th, table.cmp td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  table.cmp thead th {
+    font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.11em; text-transform: uppercase;
+    color: var(--ink-3); background: var(--panel-2); font-weight: 400;
+  }
+  table.cmp tbody th { font-family: var(--mono); font-weight: 500; white-space: nowrap; vertical-align: top; }
+  table.cmp td { color: var(--ink-2); }
+  table.cmp tbody tr:last-child th, table.cmp tbody tr:last-child td { border-bottom: 0; }
+
+  .decide {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 5px;
+    padding: 1rem 1.15rem; margin-top: 0.9rem;
+  }
+  .decide h3 { margin: 0; font-size: 0.9375rem; }
+  .decide p { margin-top: 0.4rem; color: var(--ink-2); font-size: 0.9375rem; }
+  .decide .rec { color: var(--ink); }
+  .decide .rec b { font-family: var(--mono); font-weight: 600; font-size: 0.8125rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--gel-congo); }
+
+  footer {
+    font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3);
+    border-top: 1px solid var(--rule); margin-top: 4rem; padding-top: 0.9rem;
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">HaCue2 · UI design · all screens · revision 3</p>
+    <h1>A cue player that owns its whole window</h1>
+    <p class="standfirst">
+      HaCue2 is the cue player leaving HaPlay and becoming its own application. Revision 2 applies your
+      screen-by-screen notes: the app opens in <b>editing mode</b>, the permanent output strip is gone
+      (its information moves to a summonable <b>Output info</b> drawer and Diagnostics), the right panel
+      tabs between <b>Cue properties</b> and <b>Lists &amp; groups</b> at its bottom edge, and the
+      project-owned audio channels are now called <b>logical outputs</b> everywhere.
+    </p>
+  </header>
+
+  <div class="colophon">
+    <span><b>Status</b> revision 3 · rounds 1–2 applied · per-screen decisions settled</span>
+    <span><b>Date</b> 2026-08-01</span>
+    <span><b>Basis</b> rev-2 study (preferred) + extraction plan + your notes on r1</span>
+    <span><b>Companion</b> HaCue-Extraction-And-Project-Audio-Patch-Plan.md</span>
+  </div>
+
+  <div class="changed">
+    <p class="eyebrow">What changed from revision 1 — your notes, applied</p>
+    <ul>
+      <li><b>Opens in editing mode.</b> Show lock still exists as an optional latch in the title bar, but
+        it is never the launch state and it never gates GO.</li>
+      <li><b>The always-on strip is gone.</b> Program meters, line chips and bay counters live in an
+        <b>Output info</b> drawer toggled from the status bar (hidden by default), with the deep numbers
+        staying in Diagnostics. One Diagnostics button, in the title bar — the duplicate is deleted.</li>
+      <li><b>Right panel gets bottom-edge tabs</b>: <code>Cue properties | Lists &amp; groups</code>. The
+        active-cues panel keeps its own space below the tree and no longer carries the scope picker.</li>
+      <li><b>“Logical outputs”</b> is the UI name (your call on cross-cutting #1). Cue sends go to
+        logical outputs; the patch maps logical → device.</li>
+      <li><b>No arming gates on playback</b> — GO, preview and audition always work in edit mode. What
+        remains is one question about external inputs (MIDI/OSC/schedules/timecode), moved to the
+        open-questions section with a concrete proposal.</li>
+      <li><b>Custom fade curves</b> — every curve picker gains drawn thumbnails plus a
+        <i>custom</i> option backed by a curve editor (screen 04); playlist groups get crossfade presets
+        and per-transition overrides.</li>
+      <li><b>Timeline</b>: undockable into its own window; volume/opacity become <i>addable effect
+        lanes</i> per cue (hidden until added); groups collapse, move and take effects as a whole.</li>
+      <li><b>Preflight is renamed “Project status”</b>, Notes/Script unify to a single <b>Note</b> tab,
+        recording filename patterns get an insert-token dropdown, and Audio/Video each gain an
+        <b>Audition</b> tab feeding a dedicated preview device/output combo.</li>
+      <li><b>Compositions lose the visualizer flag</b> — visualizer is purely a cue type. A composition
+        owns exactly: size, frame rate, idle image, and its per-output mapping (splitting + mesh warp).</li>
+      <li><b>Targets splits into tabs</b> (Action endpoints · Trigger inputs · Remote API), the Remote
+        API tab listing its actual endpoints.</li>
+      <li><b>No built-in HaPlay importer.</b> Clean start; migration becomes a companion tool later. The
+        launcher loses the import door.</li>
+      <li><b>Settings</b>: full inventory of every pane in both scopes, auto-renumber on by default with
+        a “new project defaults” group in application scope, and Diagnostics' event list is now literally
+        the <code>Microsoft.Extensions.Logging</code> feed with a selectable level.</li>
+    </ul>
+  </div>
+
+  <h3>Screen index</h3>
+  <div class="toc">
+    <a href="#s1"><span class="no">01</span><span class="t">Launcher</span><span class="s">window</span></a>
+    <a href="#s2"><span class="no">02</span><span class="t">Cues — main view</span><span class="s">view</span></a>
+    <a href="#s3"><span class="no">03</span><span class="t">Cues — scoped to a group</span><span class="s">view</span></a>
+    <a href="#s4"><span class="no">04</span><span class="t">Inspector &amp; fade curves</span><span class="s">component</span></a>
+    <a href="#s5"><span class="no">05</span><span class="t">Timeline</span><span class="s">component</span></a>
+    <a href="#s6"><span class="no">06</span><span class="t">Audio — logical outputs</span><span class="s">view</span></a>
+    <a href="#s7"><span class="no">07</span><span class="t">Audio — patch matrix</span><span class="s">view</span></a>
+    <a href="#s8"><span class="no">08</span><span class="t">Audio — devices &amp; audition</span><span class="s">view</span></a>
+    <a href="#s9"><span class="no">09</span><span class="t">Video — compositions</span><span class="s">view</span></a>
+    <a href="#s10"><span class="no">10</span><span class="t">Video — mapping</span><span class="s">view</span></a>
+    <a href="#s11"><span class="no">11</span><span class="t">Targets</span><span class="s">view</span></a>
+    <a href="#s12"><span class="no">12</span><span class="t">Settings — application</span><span class="s">view</span></a>
+    <a href="#s13"><span class="no">13</span><span class="t">Settings — project</span><span class="s">view</span></a>
+    <a href="#s14"><span class="no">14</span><span class="t">Project status</span><span class="s">view</span></a>
+    <a href="#s15"><span class="no">15</span><span class="t">Diagnostics</span><span class="s">window</span></a>
+  </div>
+
+  <!-- ══════════════ 01 LAUNCHER ══════════════ -->
+  <div class="sechead" id="s1">
+    <p class="sectag">01 · Window</p>
+    <h2>Launcher</h2>
+  </div>
+  <p>
+    Approved in round 1; two changes. The HaPlay import door is gone — clean start, migration is a
+    possible companion tool later, so the launcher stops promising it. And projects now open straight
+    into <b>editing mode</b>. Recovery stays inline above the recents, and “This machine” keeps running
+    the cheap device checks before any project is chosen.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:820px">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">no project open</span>
+          <span class="spacer"></span>
+          <span class="chip">Settings</span>
+        </div>
+        <div class="lay" style="grid-template-columns:1fr 250px">
+          <div class="pnl">
+            <div class="pnl-hd">Recent projects <span class="hint mono">⏎ opens · editing mode</span></div>
+            <div class="chain" style="border-top:0;background:color-mix(in srgb, var(--s-amber) 9%, var(--s-panel2))">
+              <span class="badge clock">Recovery</span>
+              <span class="dim2">midsummer-2026 has an autosave newer than its file (14:02, +3 edits)</span>
+              <span class="spacer"></span>
+              <span class="btn" style="padding:2px 8px">Recover</span>
+              <span class="btn" style="padding:2px 8px">Discard</span>
+            </div>
+            <div class="recentrow">
+              <span class="stripe" style="background:var(--s-congo)"></span>
+              <span class="pname"><b>midsummer-2026</b><span>~/shows/midsummer-2026.hacue2proj</span></span>
+              <span class="meta">84 cues · 3 lists · 12 logical outs</span>
+              <span class="meta">today 14:02</span>
+            </div>
+            <div class="recentrow">
+              <span class="stripe"></span>
+              <span class="pname"><b>queen-tribute-tour</b><span>~/shows/queen-tribute.hacue2proj</span></span>
+              <span class="meta">412 cues · 1 list · 8 logical outs</span>
+              <span class="meta">Jul 28</span>
+            </div>
+            <div class="recentrow">
+              <span class="stripe"></span>
+              <span class="pname"><b>corp-keynote-demo</b><span>~/shows/keynote.hacue2proj</span></span>
+              <span class="meta">23 cues · 1 list · 4 logical outs</span>
+              <span class="meta">Jul 19</span>
+            </div>
+            <div class="recentrow">
+              <span class="stripe" style="background:var(--s-red)"></span>
+              <span class="pname"><b>bar-mitzvah-04</b><span style="color:var(--s-red)">file missing · /media/usb0/…</span></span>
+              <span class="meta">—</span>
+              <span class="meta">Jun 30</span>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Start</div>
+              <div class="field wide" style="padding-top:8px"><span class="btn primary" style="text-align:center">New project…</span></div>
+              <div class="field wide" style="padding-bottom:8px"><span class="btn" style="text-align:center">Open…</span></div>
+              <div style="padding:0 10px 8px;font-size:10.5px;color:var(--s-ink3);line-height:1.5">
+                New projects are seeded from your defaults (Settings · Application · New project
+                defaults): a Main L/R logical pair patched to the machine's default device.
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">This machine</div>
+              <div class="logtail">
+                <span><span class="t">audio</span> PortAudio · 3 devices</span>
+                <span><span class="t">video</span> 2 screens · GL ok</span>
+                <span><span class="t">ndi</span> runtime 6.1 found</span>
+                <span><span class="t">midi</span> 2 inputs · 1 output</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>HaCue2 0.1 · framework 2026.07</span>
+          <span class="spacer"></span>
+          <span>projects open in editing mode</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>01 · Launcher</b> <span>recents with recovery inline, device sanity at a glance — import door removed</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>No HaPlay importer.</b> Removed. If migration is ever needed, it's a companion converter
+        producing a <code>.hacue2proj</code>, built later, no priority.</li>
+      <li><b>New project seeding:</b> kept, and wired to the new-project-defaults settings group so the
+        first sound is never silence.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 02 CUES · MAIN VIEW ══════════════ -->
+  <div class="sechead" id="s2">
+    <p class="sectag">02 · View</p>
+    <h2>Cues — the main view</h2>
+  </div>
+  <p>
+    The launch state: editing, unlocked, everything live. The chrome carries exactly one Diagnostics
+    button (title bar). The right panel is the cue editor, and its <b>bottom edge</b> tabs between
+    <b>Cue properties</b> and <b>Lists &amp; groups</b> — scope switching and property editing share the
+    column, never the screen's bottom. The active panel below the tree handles many simultaneous cues:
+    groups aggregate their sounding children, cues from other lists carry the list name, and nothing
+    about the current scope can hide a sounding cue.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">midsummer-2026.hacue2proj *</span>
+          <div class="vtabs">
+            <span class="vtab on">Cues</span>
+            <span class="vtab">Audio</span>
+            <span class="vtab">Video</span>
+            <span class="vtab">Targets</span>
+          </div>
+          <span class="spacer"></span>
+          <span class="chip edit">Editing</span>
+          <span class="chip">Lock</span>
+          <span class="chip">Settings</span>
+          <span class="chip">Diagnostics</span>
+        </div>
+
+        <div class="transport">
+          <span class="btn go">Go</span>
+          <span class="btn">Pause</span>
+          <span class="btn">Stop</span>
+          <span class="btn panic">Panic</span>
+          <span class="btn icon">↑ Stby</span>
+          <span class="btn icon">↓ Stby</span>
+          <span class="listsel">Act 1 · merged 3 lists ▾</span>
+          <span class="spacer"></span>
+          <span class="arm"><span class="led"></span> External input</span>
+          <span class="chip">MTC 01:12:44:07</span>
+        </div>
+
+        <div class="transport" style="border-top:0;padding-top:0">
+          <span class="btn">+ Add ▾</span>
+          <span class="btn">Selection ▾</span>
+          <span class="btn">Remove</span>
+          <span class="btn icon">Renumber…</span>
+          <span class="spacer"></span>
+          <span class="mono dim3" style="font-size:9.5px">GO always works — editing never blocks playback</span>
+        </div>
+
+        <div class="lay" style="grid-template-columns:1fr 316px">
+          <div class="stack">
+            <div class="pnl" style="min-height:240px">
+              <div class="pnl-hd">Act 1 <span style="color:var(--s-rule2)">›</span> <span class="dim2">all cues</span>
+                <span class="hint mono">84 cues · undo: set fade 2.0 → 3.0 on Q13.1</span></div>
+              <div class="cuehead">
+                <span></span><span style="text-align:right">Cue</span><span></span><span>Label</span>
+                <span>Source / target</span><span style="text-align:right">Fade</span>
+                <span style="text-align:right">Len</span><span style="text-align:right">dB</span><span></span>
+              </div>
+              <div class="cue is-go">
+                <span class="stripe"></span><span class="qnum">12</span><span class="glyph">▶</span>
+                <span class="label">Preshow bed</span><span class="src">preshow-loop.wav</span>
+                <span class="n">3.0</span><span class="n">6:00</span><span class="n">−6.0</span>
+                <span class="badges"><span class="badge">loop</span></span>
+              </div>
+              <div class="cue is-stby">
+                <span class="stripe"></span><span class="qnum">12.5</span><span class="glyph">◆</span>
+                <span class="label">House to half</span><span class="src">OSC /eos/cue/2/fire</span>
+                <span class="n">—</span><span class="n">—</span><span class="n">—</span>
+                <span class="badges"><span class="badge osc">OSC</span></span>
+              </div>
+              <div class="cue group is-go">
+                <span class="stripe"></span><span class="qnum">13</span><span class="glyph">▤</span>
+                <span class="label">Act 1 · Opening sequence</span><span class="src">timeline group · 4</span>
+                <span class="n">—</span><span class="n">2:14</span><span class="n">0.0</span>
+                <span class="badges"><span class="badge">timeline</span></span>
+              </div>
+              <div class="cue child is-sel">
+                <span class="stripe"></span><span class="qnum">13.1</span><span class="glyph">▶</span>
+                <span class="label">Storm bed</span><span class="src">sfx/storm-bed.flac</span>
+                <span class="n">3.0</span><span class="n">2:14</span><span class="n">−3.0</span>
+                <span class="badges"></span>
+              </div>
+              <div class="cue child is-go">
+                <span class="stripe"></span><span class="qnum">13.2</span><span class="glyph">▦</span>
+                <span class="label">Projection · rain</span><span class="src">video/rain-loop.mov</span>
+                <span class="n">1.5</span><span class="n">0:48</span><span class="n">—</span>
+                <span class="badges"><span class="badge">Cyc</span></span>
+              </div>
+              <div class="cue child is-off">
+                <span class="stripe"></span><span class="qnum">13.3</span><span class="glyph">▶</span>
+                <span class="label">Thunder crack (cut for previews)</span><span class="src">sfx/thunder-03.wav</span>
+                <span class="n">—</span><span class="n">0:04</span><span class="n">+2.0</span>
+                <span class="badges"><span class="badge">disabled</span></span>
+              </div>
+              <div class="cue">
+                <span class="stripe"></span><span class="qnum">14</span><span class="glyph">◈</span>
+                <span class="label">Patch · Act 1 foldback up</span><span class="src">snapshot “Act 1”</span>
+                <span class="n">4.0</span><span class="n">—</span><span class="n">—</span>
+                <span class="badges"><span class="badge">patch</span></span>
+              </div>
+              <div class="cue is-broke">
+                <span class="stripe"></span><span class="qnum">15</span><span class="glyph">▶</span>
+                <span class="label">Interval music</span><span class="src">media offline · interval.wav</span>
+                <span class="n">6.0</span><span class="n">—</span><span class="n">−9.0</span>
+                <span class="badges"><span class="badge bad">offline</span></span>
+              </div>
+            </div>
+
+            <div class="pnl">
+              <div class="pnl-hd">Active · 5 <span class="hint mono">5 sounding · 1 fading · scope never hides these</span></div>
+              <div class="act">
+                <span class="stripe"></span><span class="qnum">12</span>
+                <span class="label">Preshow bed</span>
+                <span class="clock">02:41 / 06:00</span>
+                <span class="prog"><i style="width:44%"></i></span>
+                <span class="dest">Main L/R</span><span class="x">×</span>
+              </div>
+              <div class="act grp">
+                <span class="stripe"></span><span class="qnum">13</span>
+                <span class="label">Act 1 · Opening sequence <span class="list">timeline · 3 of 4</span></span>
+                <span class="clock">00:38 / 02:14</span>
+                <span class="prog"><i style="width:28%"></i></span>
+                <span class="dest">—</span><span class="x">×</span>
+              </div>
+              <div class="act child">
+                <span class="stripe"></span><span class="qnum">13.1</span>
+                <span class="label">Storm bed</span>
+                <span class="clock">00:38 / 02:14</span>
+                <span class="prog"><i style="width:28%"></i></span>
+                <span class="dest">Main, Fold</span><span class="x">×</span>
+              </div>
+              <div class="act child near">
+                <span class="stripe"></span><span class="qnum">13.2</span>
+                <span class="label">Projection · rain</span>
+                <span class="clock">00:41 / 00:48</span>
+                <span class="prog"><i style="width:85%"></i></span>
+                <span class="dest">Cyc</span><span class="x">×</span>
+              </div>
+              <div class="act fading">
+                <span class="stripe"></span><span class="qnum">9</span>
+                <span class="label">Walk-in music <span class="list">Preshow</span></span>
+                <span class="clock">fade 2.1 s</span>
+                <span class="prog"><i style="width:62%"></i></span>
+                <span class="dest">Main L/R</span><span class="x">×</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pnl">
+            <div class="pnl-hd">Q13.1 · Storm bed <span class="hint mono">media cue</span></div>
+            <div class="itabs">
+              <span class="itab">General</span>
+              <span class="itab on">Audio</span>
+              <span class="itab">Video</span>
+              <span class="itab">Effects</span>
+              <span class="itab">Note</span>
+              <span class="itab">Preview</span>
+            </div>
+            <div class="field"><span>Level</span><span class="inputish">−3.0 dB</span></div>
+            <div class="field"><span>Fade in</span><span class="pair"><span class="inputish">3.0 s</span><span class="inputish">S-curve ▾</span></span></div>
+            <div class="field"><span>Fade out</span><span class="pair"><span class="inputish">4.0 s</span><span class="inputish">custom ▾ ✎</span></span></div>
+            <div class="field"><span>Envelope</span><span class="inputish">4 points · edit…</span></div>
+
+            <div class="subhd">Sends → logical outputs</div>
+            <div style="padding:2px 10px 0;overflow-x:auto">
+              <table class="mx">
+                <thead><tr><th></th><th class="vgrp">Main L</th><th class="vgrp">Main R</th><th>Fold L</th><th>Fold R</th><th>Sub</th></tr></thead>
+                <tbody>
+                  <tr><th>Src L</th><td class="on unity">0.0</td><td></td><td class="on">−6.0</td><td></td><td></td></tr>
+                  <tr><th>Src R</th><td></td><td class="on pick">−3.0</td><td></td><td class="on">−6.0</td><td></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="chain" style="border-top:0">
+              <span class="badge">Presets</span>
+              <span class="dim3">stereo → Main · mono from L · swap · clear</span>
+            </div>
+            <div class="chain">
+              <span class="node src">Src R</span><span class="arrow">→</span>
+              <span class="node log">Main R</span><span class="dim3">−3.0</span><span class="arrow">→</span>
+              <span class="node phy">18i20 · 2</span><span class="dim3">0.0</span>
+              <span class="arrow">+</span>
+              <span class="node phy">NDI · 2</span><span class="dim3">−6.0</span>
+            </div>
+            <div class="itabs bottom">
+              <span class="itab on">Cue properties</span>
+              <span class="itab">Lists &amp; groups</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span class="ok">● outputs ok</span>
+          <span class="err">▲ 2 issues · Project status</span>
+          <span class="spacer"></span>
+          <span>3 unsaved edits</span>
+          <span class="ok">saved 14:02</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>02 · Cues, main view</b> <span>editing is the launch state; right panel tabs at its bottom edge; no permanent strip</span></figcaption>
+  </figure>
+
+  <h3>Where the strip went: the Output info drawer</h3>
+  <p>
+    Program meters, line chips and bay counters were useful but didn't earn permanent screen space. They
+    now live in a drawer summoned from the status bar (or <code>F9</code>), sliding up over the active
+    panel and staying until dismissed. The status bar keeps a one-token summary at all times —
+    <span class="num">● outputs ok</span> going amber/red is the tap on the shoulder; the drawer is the
+    glance; Diagnostics is the investigation. Pop-out to a window is available for a second monitor.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:1000px">
+        <div class="strip" style="border-top:0">
+          <section>
+            <span class="slab">Program</span>
+            <div class="mtr"><div class="bar"><i style="height:58%"></i><u style="bottom:71%"></u></div><div class="cap">ML</div></div>
+            <div class="mtr"><div class="bar"><i style="height:54%"></i><u style="bottom:68%"></u></div><div class="cap">MR</div></div>
+            <div class="mtr"><div class="bar"><i style="height:31%"></i><u style="bottom:44%"></u></div><div class="cap">FL</div></div>
+            <div class="mtr"><div class="bar"><i style="height:29%"></i><u style="bottom:41%"></u></div><div class="cap">FR</div></div>
+            <div class="mtr clip"><div class="bar"><i style="height:97%"></i><u style="bottom:99%"></u></div><div class="cap">SUB</div></div>
+          </section>
+          <section>
+            <span class="slab">Lines</span>
+            <span class="lchip ok"><span class="top"><span class="led"></span> 18i20 <span style="color:var(--s-ink3);font-size:8.5px">master</span></span><span class="bot">48k · 0 drop · 21 ms · 2/4</span></span>
+            <span class="lchip ok"><span class="top"><span class="led"></span> NDI Prog</span><span class="bot">2 rx · 0 drop · 3/8</span></span>
+            <span class="lchip warn"><span class="top"><span class="led"></span> Record</span><span class="bot">41:20 · 12 drop · 7/8</span></span>
+            <span class="lchip err"><span class="top"><span class="led"></span> Wedge</span><span class="bot">device absent</span></span>
+            <span class="lchip ok"><span class="top"><span class="led"></span> Projector A</span><span class="bot">29.97 · 0 late</span></span>
+          </section>
+          <section style="flex:1">
+            <span class="slab">Bay</span>
+            <span class="mono" style="font-size:9.5px;color:var(--s-ink2);display:flex;flex-direction:column;gap:1px">
+              <span>5 leases · 12 logical · 48 000 Hz</span>
+              <span class="dim3">clock 01:12:44.318 · epoch 7 · adv</span>
+            </span>
+            <span class="spacer"></span>
+            <span class="chip">Pop out ↗</span>
+            <span class="chip">Hide ▾</span>
+          </section>
+        </div>
+        <div class="statusbar">
+          <span class="sbtn">▾ Output info</span>
+          <span class="warn">▲ Sub clipping · Record behind</span>
+          <span class="spacer"></span>
+          <span>3 unsaved edits</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>02b · Output info drawer</b> <span>the old strip's content, on demand: toggled, poppable to its own window, closed by default</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>One Diagnostics button</b> — title bar only; the drawer links nowhere, the status bar issue
+        count opens Project status.</li>
+      <li><b>Program / Lines / Bay off the permanent UI</b> — drawer + status-bar summary as above.</li>
+      <li><b>Lists &amp; groups moved</b> to the right panel's bottom tabs (see 03 for it active).</li>
+      <li><b>Note</b> replaces Notes/Script — one tab, one name, on every cue kind.</li>
+      <li><b>Loads editing.</b> The Lock chip is the old show mode as an opt-in latch: read-only document,
+        GO untouched. Whether it stays at all is an open question at the end.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>The drawer overlays</b> the active panel — content never shifts when it opens.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 03 CUES · SCOPED ══════════════ -->
+  <div class="sechead" id="s3">
+    <p class="sectag">03 · View</p>
+    <h2>Cues — scoped to a group</h2>
+  </div>
+  <p>
+    Your expected shape — a playlist of songs where each song is a group carrying dozens of lighting,
+    projection and patch cues — is 400–600 rows flat. So the tree scopes: the right panel's
+    <b>Lists &amp; groups</b> tab lists every cue list and every group as a selectable root; picking one
+    limits the main view to that subtree, with the breadcrumb as the way out. The scope is a view filter,
+    never a transport boundary: GO fires the show's next cue regardless, and the active panel always
+    shows everything sounding, in or out of scope.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:1000px">
+        <div class="lay" style="grid-template-columns:1fr 316px">
+          <div class="stack">
+            <div class="pnl" style="min-height:210px">
+              <div class="pnl-hd">
+                Act 1 <span style="color:var(--s-rule2)">›</span>
+                Songs <span style="color:var(--s-rule2)">›</span>
+                <span style="color:var(--s-ink)">7 · Bohemian Rhapsody</span>
+                <span class="hint mono">28 cues in scope · 84 in show</span>
+              </div>
+              <div class="cuehead">
+                <span></span><span style="text-align:right">Cue</span><span></span><span>Label</span>
+                <span>Source / target</span><span style="text-align:right">Fade</span>
+                <span style="text-align:right">Len</span><span style="text-align:right">dB</span><span></span>
+              </div>
+              <div class="cue group is-go">
+                <span class="stripe"></span><span class="qnum">7</span><span class="glyph">▤</span>
+                <span class="label">Bohemian Rhapsody</span><span class="src">timeline group · 28</span>
+                <span class="n">—</span><span class="n">5:55</span><span class="n">0.0</span>
+                <span class="badges"><span class="badge">timeline</span></span>
+              </div>
+              <div class="cue child is-go">
+                <span class="stripe"></span><span class="qnum">7.1</span><span class="glyph">▶</span>
+                <span class="label">Track</span><span class="src">songs/07-bohemian.flac</span>
+                <span class="n">1.0</span><span class="n">5:55</span><span class="n">−4.0</span>
+                <span class="badges"><span class="badge">env 6</span></span>
+              </div>
+              <div class="cue child is-go">
+                <span class="stripe"></span><span class="qnum">7.2</span><span class="glyph">◈</span>
+                <span class="label">Ballad look</span><span class="src">OSC /eos/cue/7.2</span>
+                <span class="n">—</span><span class="n">—</span><span class="n">—</span>
+                <span class="badges"><span class="badge osc">OSC</span></span>
+              </div>
+              <div class="cue child is-stby">
+                <span class="stripe"></span><span class="qnum">7.3</span><span class="glyph">◈</span>
+                <span class="label">Opera section — strobe</span><span class="src">OSC /eos/cue/7.3</span>
+                <span class="n">—</span><span class="n">—</span><span class="n">—</span>
+                <span class="badges"><span class="badge osc">OSC</span></span>
+              </div>
+              <div class="cue child">
+                <span class="stripe"></span><span class="qnum">7.4</span><span class="glyph">▦</span>
+                <span class="label">Projection · silhouettes</span><span class="src">video/silhouette.mov</span>
+                <span class="n">2.0</span><span class="n">1:12</span><span class="n">—</span>
+                <span class="badges"><span class="badge">Cyc</span><span class="badge">opac 4</span></span>
+              </div>
+              <div class="cue child">
+                <span class="stripe"></span><span class="qnum">7.5</span><span class="glyph">◈</span>
+                <span class="label">Rock section — full rig</span><span class="src">OSC /eos/cue/7.5</span>
+                <span class="n">—</span><span class="n">—</span><span class="n">—</span>
+                <span class="badges"><span class="badge osc">OSC</span></span>
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Active · 4 <span class="hint mono">includes cues outside the scope</span></div>
+              <div class="act grp">
+                <span class="stripe"></span><span class="qnum">7</span>
+                <span class="label">Bohemian Rhapsody <span class="list">timeline · 3 of 28</span></span>
+                <span class="clock">01:12 / 5:55</span>
+                <span class="prog"><i style="width:20%"></i></span>
+                <span class="dest">—</span><span class="x">×</span>
+              </div>
+              <div class="act">
+                <span class="stripe"></span><span class="qnum">2</span>
+                <span class="label">Haze loop <span class="list">Preshow · out of scope</span></span>
+                <span class="clock">12:41 / ∞</span>
+                <span class="prog"><i style="width:100%"></i></span>
+                <span class="dest">—</span><span class="x">×</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pnl">
+            <div class="pnl-hd">Lists &amp; groups <span class="hint mono">pick a root to scope the tree</span></div>
+            <div class="snav" style="padding-top:4px;flex:1">
+              <span class="scope">Cue lists</span>
+              <a href="#s3">Preshow <span class="tally">11</span></a>
+              <a href="#s3">Act 1 <span class="tally">84</span></a>
+              <a href="#s3">Act 2 <span class="tally">76</span></a>
+              <span class="scope">Groups in Act 1</span>
+              <a href="#s3">Opening sequence <span class="tally">4</span></a>
+              <a href="#s3">Songs <span class="tally">412</span></a>
+              <a href="#s3" style="padding-left:24px">5 · Killer Queen <span class="tally">22</span></a>
+              <a href="#s3" style="padding-left:24px">6 · Somebody to Love <span class="tally">19</span></a>
+              <a href="#s3" class="on" style="padding-left:24px">7 · Bohemian Rhapsody <span class="tally">28</span></a>
+              <a href="#s3" style="padding-left:24px">8 · Love of My Life <span class="tally">17</span></a>
+              <a href="#s3" style="padding-left:24px">9 · Under Pressure <span class="tally">24</span></a>
+              <a href="#s3">Interval <span class="tally">3</span></a>
+            </div>
+            <div class="chain">
+              <span class="badge">Scope</span>
+              <span class="dim3">view only · not saved in the project · GO still fires the show's next cue</span>
+            </div>
+            <div class="itabs bottom">
+              <span class="itab">Cue properties</span>
+              <span class="itab on">Lists &amp; groups</span>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span class="ok">● outputs ok</span>
+          <span class="spacer"></span>
+          <span>standby moved out of scope → the breadcrumb says so, never silently</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>03 · Cues, scoped</b> <span>Lists &amp; groups active in the right panel's bottom tabs; active list unaffected by scope</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>Lists &amp; groups relocated</b> from the active panel to the right panel, tabs on the bottom
+        edge, switching against Cue properties.</li>
+      <li><b>No arming, no gates</b> — playing from edit mode is always possible; the r1 “arms disabled
+        while editing” rule is deleted.</li>
+      <li><b>Status Messages / Project status</b>: the status bar's issue counter opens the renamed
+        Project status view (screen 14) — it is exactly a collector of errors and warnings.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Selecting a cue does not flip the panel</b> — Lists &amp; groups stays put while you browse.
+        When you switch back to Cue properties yourself, it opens in the <b>no-selection state</b>
+        (empty, “select a cue to edit”), not on a stale cue; clicking a cue from there populates it.</li>
+      <li><b>Double-clicking a group does not scope to it.</b> Scoping happens only through Lists &amp;
+        groups; double-click stays free for standby/open gestures.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 04 INSPECTOR + CURVES ══════════════ -->
+  <div class="sechead" id="s4">
+    <p class="sectag">04 · Component</p>
+    <h2>Inspector tabs &amp; the fade-curve editor</h2>
+  </div>
+  <p>
+    Tab set per cue kind, selected tab remembered per kind, as approved. New here: every curve picker in
+    the app shows <b>drawn thumbnails</b> of what each fade actually does, and the last option is always
+    <b>custom</b> — opening a small editor where you drag points on the same visualization. One control,
+    used for fade-in, fade-out, crossfades and patch-cue fades alike. Playlist groups gain crossfade
+    presets with a per-transition override.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:1000px">
+        <div class="lay" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="pnl">
+            <div class="pnl-hd">Q14 · Patch cue <span class="hint mono">new kind</span></div>
+            <div class="itabs">
+              <span class="itab">General</span>
+              <span class="itab on">Patch</span>
+              <span class="itab">Note</span>
+            </div>
+            <div class="field"><span>Recall</span><span class="inputish">snapshot “Act 1” ▾</span></div>
+            <div class="field"><span>Fade</span><span class="pair"><span class="inputish">4.0 s</span><span class="inputish">equal-power ▾</span></span></div>
+            <div class="subhd">Also change</div>
+            <div class="field"><span>Fold L/R</span><span class="inputish">−6.0 → 0.0 dB</span></div>
+            <div class="field"><span>Sub</span><span class="inputish">mute → unmute</span></div>
+            <div class="field wide"><span class="mono" style="font-size:9.5px;color:var(--s-congo)">+ add level change…</span></div>
+            <div class="chain">
+              <span class="badge">Persistent</span>
+              <span class="dim3">applies to the patch and stays — stopping this cue undoes nothing</span>
+            </div>
+          </div>
+
+          <div class="pnl">
+            <div class="pnl-hd">Q13.2 · Video tab</div>
+            <div class="itabs">
+              <span class="itab">General</span>
+              <span class="itab">Audio</span>
+              <span class="itab on">Video</span>
+              <span class="itab">Effects</span>
+              <span class="itab">Note</span>
+            </div>
+            <div class="field"><span>Composition</span><span class="inputish">Cyc · 1920×1080 ▾</span></div>
+            <div class="field"><span>Layer</span><span class="inputish">2</span></div>
+            <div class="field"><span>Fit</span><span class="inputish">cover ▾</span></div>
+            <div class="field"><span>Opacity</span><span class="inputish">100 %</span></div>
+            <div style="padding:6px 10px">
+              <div class="vidcanvas" style="height:96px">
+                <div class="grid"></div>
+                <div class="ph a sel" style="left:8%;top:10%;width:60%;height:75%">rain-loop · L2</div>
+                <div class="ph b" style="left:63%;top:44%;width:33%;height:50%">logo hold · L1</div>
+              </div>
+            </div>
+            <div class="chain">
+              <span class="badge">Placement</span>
+              <span class="dim3">drag here for rough · Video view for precision</span>
+            </div>
+          </div>
+
+          <div class="pnl">
+            <div class="pnl-hd">Q3 · Group tab <span class="hint mono">playlist mode</span></div>
+            <div class="itabs">
+              <span class="itab">General</span>
+              <span class="itab on">Group</span>
+              <span class="itab">Note</span>
+            </div>
+            <div class="field"><span>Fire mode</span><span class="inputish">playlist ▾</span></div>
+            <div class="field"><span>Children</span><span class="inputish ro">20 songs</span></div>
+            <div class="check on"><span class="box"></span> Shuffle, avoid immediate repeat</div>
+            <div class="check"><span class="box"></span> Reshuffle each pass</div>
+            <div class="subhd">Crossfade between items</div>
+            <div class="field"><span>Default</span><span class="seg"><span>cut</span><span>0.5 s</span><span class="on">2 s</span><span>4 s</span><span>…</span></span></div>
+            <div class="field"><span>Curve</span><span class="inputish">equal-power ▾</span></div>
+            <div class="field wide"><span class="mono dim3" style="font-size:9.5px">per-transition overrides: set on a child's General tab · 2 set</span></div>
+            <div class="field"><span>At end</span><span class="inputish">hold last ▾</span></div>
+          </div>
+        </div>
+
+        <div class="lay" style="grid-template-columns:1fr;padding-top:0">
+          <div class="pnl">
+            <div class="pnl-hd">Fade curve · Q13.1 fade out <span class="hint mono">same control everywhere a curve is picked</span></div>
+            <div class="curves">
+              <span class="curveopt"><svg width="44" height="26" viewBox="0 0 44 26"><polyline points="2,2 42,24"></polyline></svg><span class="cap">linear</span></span>
+              <span class="curveopt"><svg width="44" height="26" viewBox="0 0 44 26"><path d="M2,2 Q30,4 42,24"></path></svg><span class="cap">eq-power</span></span>
+              <span class="curveopt"><svg width="44" height="26" viewBox="0 0 44 26"><path d="M2,2 Q10,22 42,24"></path></svg><span class="cap">expo</span></span>
+              <span class="curveopt"><svg width="44" height="26" viewBox="0 0 44 26"><path d="M2,2 C18,2 26,24 42,24"></path></svg><span class="cap">s-curve</span></span>
+              <span class="curveopt on"><svg width="44" height="26" viewBox="0 0 44 26"><path d="M2,2 L14,6 L22,18 L32,12 L42,24"></path></svg><span class="cap">custom ✎</span></span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 200px;gap:7px;padding:2px 10px 10px">
+              <div class="vidcanvas" style="height:110px">
+                <div class="grid"></div>
+                <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+                  <path d="M2,3 L28,8 L48,28 L70,20 L98,38" fill="none" stroke="#7d8cea" stroke-width="0.8" vector-effect="non-scaling-stroke"></path>
+                  <circle cx="2" cy="3" r="1.6" fill="#7d8cea"></circle>
+                  <circle cx="28" cy="8" r="1.6" fill="#7d8cea"></circle>
+                  <circle cx="48" cy="28" r="1.6" fill="#e0a85c"></circle>
+                  <circle cx="70" cy="20" r="1.6" fill="#7d8cea"></circle>
+                  <circle cx="98" cy="38" r="1.6" fill="#7d8cea"></circle>
+                </svg>
+              </div>
+              <div class="stack" style="gap:4px">
+                <div class="field" style="grid-template-columns:70px 1fr;padding:0"><span>Point 3</span><span class="inputish">48 % · −14.2 dB</span></div>
+                <div class="field" style="grid-template-columns:70px 1fr;padding:0"><span>Scale</span><span class="seg"><span class="on">dB</span><span>linear</span></span></div>
+                <div class="field" style="grid-template-columns:70px 1fr;padding:0"><span>Segment</span><span class="seg"><span class="on">smooth</span><span>hold</span></span></div>
+                <div class="field" style="grid-template-columns:70px 1fr;padding:0"><span>Save as</span><span class="inputish">“slow tail” · project preset</span></div>
+                <span class="mono dim3" style="font-size:9px">double-click adds a point · drag off the canvas removes · audition plays the fade on the cue's preview</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>04 · Inspector variants + curve editor</b> <span>patch cue, video placement, playlist crossfades, and the shared curve picker/editor</span></figcaption>
+  </figure>
+
+  <div class="cmp-wrap bleed">
+    <table class="cmp">
+      <thead>
+        <tr><th>Cue kind</th><th>Tabs</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        <tr><th>Media</th><td>General · Audio · Video · Effects · Subtitles · Note · Preview</td><td>Subtitles only when the source can carry them; Video hidden for audio-only sources</td></tr>
+        <tr><th>Group</th><td>General · Group · Note</td><td>Fire mode, playlist options + crossfade defaults, timeline handoff</td></tr>
+        <tr><th>Action</th><td>General · Action · Note</td><td>Endpoint, address, arguments</td></tr>
+        <tr><th>Fade</th><td>General · Fade · Note</td><td>Targets, duration, curve, fade-everything</td></tr>
+        <tr><th>Jump</th><td>General · Jump · Note</td><td>Targets, random pick, fire-on-jump</td></tr>
+        <tr><th>Visualizer</th><td>General · Visualizer · Video · Effects · Note</td><td>Composition placement plus preset behaviour — the only home of visualizer settings</td></tr>
+        <tr><th>Patch <span class="num">(new)</span></th><td>General · Patch · Note</td><td>Snapshot recall and/or inline level changes, fade time and curve</td></tr>
+        <tr><th>Comment</th><td>General · Note</td><td>A comment cue is just its note</td></tr>
+        <tr><th>Multi-selection</th><td>General + tabs common to the whole selection</td><td>Mixed values read <span class="num">—</span> and only write when touched</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>Fade visualizations</b> — thumbnails on every picker, doubling as the custom editor.</li>
+      <li><b>Playlist crossfades</b> — preset chips (cut · 0.5 · 2 · 4 · custom) with good defaults plus
+        per-transition overrides on the child cue.</li>
+      <li><b>Note everywhere</b> — one tab on every kind; comment cues collapse to it.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Custom curves save as project presets</b> — “slow tail” is reusable across the show; the
+        library is the preset row itself, no extra UI.</li>
+      <li><b>Editor scale is switchable</b> dB ⇄ linear (the Scale toggle in the editor) — both readings
+        are useful depending on the fade.</li>
+      <li><b>Patch cues keep the inline “also change” list</b> alongside snapshot recall — the
+        long-term-correct shape ships from the start.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 05 TIMELINE ══════════════ -->
+  <div class="sechead" id="s5">
+    <p class="sectag">05 · Component</p>
+    <h2>Timeline — dockable sheet, effect lanes, group handling</h2>
+  </div>
+  <p>
+    Still a bottom sheet by default — but with an <b>Undock ↗</b> button that lifts it into its own
+    window (remembering which mode you last used). Envelopes stop being a fixed overlay: <b>volume,
+    opacity and OSC/MIDI ramps are effect lanes you add per cue</b>, hidden until added, collapsible
+    after. Groups behave as objects: a group row collapses its children into one span-clip, drags as a
+    whole, and accepts effect lanes of its own that scale everything inside.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="lay" style="grid-template-columns:1fr">
+          <div class="pnl">
+            <div class="pnl-hd">Timeline · Q13 Act 1 · Opening sequence
+              <span class="hint mono">snap 0.5 s · zoom fit</span></div>
+            <div class="transport" style="border-bottom:1px solid var(--s-rule)">
+              <span class="btn icon">▶ from playhead</span>
+              <span class="btn icon">⏹</span>
+              <span class="btn icon">zoom −</span>
+              <span class="btn icon">zoom +</span>
+              <span class="btn icon">fit</span>
+              <span class="seg"><span class="on">snap</span><span>free</span></span>
+              <span class="btn">Duck under…</span>
+              <span class="spacer"></span>
+              <span class="btn icon">Undock ↗</span>
+              <span class="btn icon">Close ⎋</span>
+            </div>
+            <div class="tl">
+              <div class="ruler">
+                <span>0:00</span><span>0:15</span><span>0:30</span><span>0:45</span><span>1:00</span><span>1:15</span><span>1:30</span><span>1:45</span><span>2:00</span>
+              </div>
+              <div class="lane">
+                <span class="lname">▾ 13.1 · Storm bed</span>
+                <div class="ltrack"><div class="clip au" style="left:0%;width:100%">storm-bed.flac · −3.0 dB</div></div>
+              </div>
+              <div class="lane fx">
+                <span class="lname">fx · volume</span>
+                <div class="ltrack">
+                  <svg class="env" viewBox="0 0 100 22" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+                    <polyline points="0,20 8,6 55,6 70,14 88,14 100,20" fill="none" stroke="#e0a85c" stroke-width="0.7" vector-effect="non-scaling-stroke"></polyline>
+                  </svg>
+                </div>
+              </div>
+              <div class="lane">
+                <span class="lname">▾ 13.2 · Projection · rain</span>
+                <div class="ltrack"><div class="clip vi" style="left:11%;width:37%">rain-loop.mov</div></div>
+              </div>
+              <div class="lane fx">
+                <span class="lname">fx · opacity</span>
+                <div class="ltrack">
+                  <svg class="env" viewBox="0 0 100 22" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+                    <polyline points="11,20 16,4 40,4 48,20" fill="none" stroke="#5ec8cf" stroke-width="0.7" vector-effect="non-scaling-stroke"></polyline>
+                  </svg>
+                </div>
+              </div>
+              <div class="lane">
+                <span class="lname">13.3 · Thunder crack <span class="dim3">· disabled</span></span>
+                <div class="ltrack"><div class="clip au" style="left:46%;width:4%;background:repeating-linear-gradient(45deg, color-mix(in srgb, var(--s-rule2) 60%, transparent) 0 3px, transparent 3px 6px);border-color:var(--s-rule2);color:var(--s-ink3);text-decoration:line-through">thunder</div></div>
+              </div>
+              <div class="lane grp">
+                <span class="lname">▸ 13.5 · Lightning sequence <span class="dim3">· 6 cues</span></span>
+                <div class="ltrack"><div class="clip gr" style="left:44%;width:33%">collapsed group · drags as one · fx apply to all</div></div>
+              </div>
+              <div class="playhead" style="left:41%"></div>
+            </div>
+            <div class="chain">
+              <span class="badge">+ Effect lane</span>
+              <span class="dim3">volume · opacity · OSC ramp · MIDI ramp — per cue or per group, hidden until added</span>
+              <span class="spacer"></span>
+              <span class="badge">Live</span>
+              <span class="dim3">edits while running apply on the next pass</span>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span class="ok">● outputs ok</span>
+          <span class="spacer"></span>
+          <span>sheet ⇄ window state remembered per machine</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>05 · Timeline</b> <span>effect lanes added per cue, a collapsed group as one draggable span, undock in the toolbar</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>Undockable</b> — sheet by default, own window on demand, mode remembered.</li>
+      <li><b>Envelopes as addable cue-property effects</b> — volume/opacity/ramps are lanes you add and
+        hide, not a permanent overlay. This is also the model for the planned OSC/MIDI outbound ramps.</li>
+      <li><b>Groups as wholes</b> — collapse/expand, move as one, group-level effect lanes.</li>
+      <li><b>No strip, one Diagnostics button.</b></li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Child effects override group effects.</b> When a group carries the same effect kind as a
+        child, the child wins and shows a warning badge (“overrides group volume”) so the shadowing is
+        never invisible.</li>
+      <li><b>One envelope concept, two editors</b> — the effect-lane model replaces the media cue's
+        separate VolumeEnvelope; the inspector and the timeline edit the same data.</li>
+      <li><b>Disabled children render hatched with struck labels</b> (as now drawn) — unambiguous at a
+        glance, unlike ghosting.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 06 AUDIO · LOGICAL OUTPUTS ══════════════ -->
+  <div class="sechead" id="s6">
+    <p class="sectag n">06 · View · the headline feature</p>
+    <h2>Audio — logical outputs</h2>
+  </div>
+  <p>
+    The Audio view keeps its four panes — now <b>Logical outputs · Patch · Devices · Audition</b>.
+    This is the first: the project's audio vocabulary. A logical output is a named channel (optionally
+    shown as a stereo pair) that exists whether or not any hardware does; cues send to these and nothing
+    else, and the show file never contains a device name. Selecting one shows who feeds it, where it
+    goes, and its level — the effective route seen from the middle.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">midsummer-2026.hacue2proj *</span>
+          <div class="vtabs">
+            <span class="vtab">Cues</span>
+            <span class="vtab on">Audio</span>
+            <span class="vtab">Video</span>
+            <span class="vtab">Targets</span>
+          </div>
+          <span class="spacer"></span>
+          <span class="chip edit">Editing</span>
+          <span class="chip">Lock</span>
+          <span class="chip">Settings</span>
+          <span class="chip">Diagnostics</span>
+        </div>
+
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab on">Logical outputs · 12</span>
+          <span class="itab">Patch</span>
+          <span class="itab">Devices · 5</span>
+          <span class="itab">Audition</span>
+          <span class="mono" style="margin-left:auto;align-self:center;padding-right:10px;font-size:9px;color:var(--s-ink3)">mix 48 000 Hz · clock master 18i20 · edits apply live</span>
+        </div>
+
+        <div class="lay" style="grid-template-columns:1fr 348px">
+          <div class="pnl">
+            <div class="pnl-hd">Logical outputs <span class="hint mono">the only destinations cues can see</span></div>
+            <div style="overflow-x:auto">
+              <table class="diag">
+                <thead><tr><th>Name</th><th>Group</th><th>Fed by</th><th>Patched to</th><th>Meter</th></tr></thead>
+                <tbody>
+                  <tr><td class="name">Main L</td><td class="dim">Main 🔗</td><td>6 cues</td><td class="dim">18i20·1 + NDI·1 + Rec·1</td><td class="g">▮▮▮▮▮</td></tr>
+                  <tr><td class="name">Main R</td><td class="dim">Main 🔗</td><td>6 cues</td><td class="dim">18i20·2 + NDI·2 + Rec·2</td><td class="g">▮▮▮▮</td></tr>
+                  <tr><td class="name">Foldback L</td><td class="dim">Fold 🔗</td><td>4 cues</td><td class="dim">18i20·3</td><td class="g">▮▮</td></tr>
+                  <tr><td class="name">Foldback R</td><td class="dim">Fold 🔗</td><td>4 cues</td><td class="dim">18i20·4</td><td class="g">▮▮</td></tr>
+                  <tr><td class="name">Sub</td><td class="dim">—</td><td>2 cues</td><td class="dim">18i20·7</td><td class="r">▮▮▮▮▮▮▮</td></tr>
+                  <tr><td class="name">Stage cue L</td><td class="dim">Stage 🔗</td><td>1 cue</td><td class="a">Wedge·1 (absent)</td><td class="dim">—</td></tr>
+                  <tr><td class="name">Stage cue R</td><td class="dim">Stage 🔗</td><td>1 cue</td><td class="a">Wedge·2 (absent)</td><td class="dim">—</td></tr>
+                  <tr><td class="name">FX return</td><td class="dim">—</td><td>3 cues</td><td class="dim">18i20·5</td><td class="dim">—</td></tr>
+                  <tr><td class="name a" style="color:var(--s-amber)">Orchestra</td><td class="dim">—</td><td class="a">0 cues</td><td class="dim">18i20·8</td><td class="dim">—</td></tr>
+                  <tr><td class="name r" style="color:var(--s-red)">Lobby</td><td class="dim">Lobby 🔗</td><td>2 cues</td><td class="r">nothing — silent</td><td class="dim">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="chain">
+              <span class="btn" style="padding:2px 8px">+ Add</span>
+              <span class="btn" style="padding:2px 8px">+ Add stereo pair</span>
+              <span class="btn" style="padding:2px 8px">+ New group…</span>
+              <span class="btn" style="padding:2px 8px">Rename</span>
+              <span class="btn" style="padding:2px 8px">Reorder</span>
+              <span class="spacer"></span>
+              <span class="dim3">delete cleans up its cue sends automatically — one undoable edit</span>
+            </div>
+          </div>
+
+          <div class="pnl">
+            <div class="pnl-hd">Lobby <span class="hint mono">logical output · stereo pair</span></div>
+            <div class="field"><span>Name</span><span class="inputish">Lobby</span></div>
+            <div class="field"><span>Meter in summary</span><span class="seg"><span class="on">yes</span><span>no</span></span></div>
+            <div class="subhd">Fed by · 2 cues</div>
+            <div class="field wide"><span class="mono" style="font-size:10px;color:var(--s-ink2)">Q12 Preshow bed · L→L R→R · −10.0 dB</span></div>
+            <div class="field wide"><span class="mono" style="font-size:10px;color:var(--s-ink2)">Q41 Interval walk-out · L→L R→R · −10.0 dB</span></div>
+            <div class="subhd">Patched to · nothing</div>
+            <div style="padding:4px 10px 8px;font-size:11px;color:var(--s-red)">
+              No device channel receives Lobby on this machine. Cues sending here run silent — never
+              redirected to a default device.
+            </div>
+            <div class="field wide"><span class="btn primary" style="text-align:center">Patch Lobby → pick device channels…</span></div>
+            <div class="chain">
+              <span class="badge good">Portable</span>
+              <span class="dim3">this is the venue-swap seam: the show keeps “Lobby”, each venue patches it</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span class="warn">▲ Lobby patched to nothing · Orchestra fed by nothing</span>
+          <span class="spacer"></span>
+          <span>4 unsaved edits</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>06 · Audio · Logical outputs</b> <span>the project's audio vocabulary: named, metered, ref-counted, portable</span></figcaption>
+  </figure>
+
+  <p>
+    The two failure states this screen exists to catch are both on it, in colour: <b>Orchestra</b> (amber)
+    is patched to hardware but no cue feeds it — a dead channel wasting an output; <b>Lobby</b> (red) is
+    fed by cues but patched to nothing — sound that would silently vanish. HaPlay could not even express
+    the second; here it's a first-class, visible, deliberate state, because “patched to nothing <em>on
+    this machine</em>” is exactly what a show on tour looks like the day before the venue.
+  </p>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>“Logical outputs”</b> is the UI name, used everywhere: sends, patch, status messages, this
+        table. The model keeps <code>LogicalAudioChannel</code>; the model word never reaches a label.</li>
+      <li><b>“Pin to strip” became “Meter in summary”</b> — with the strip gone, this flag picks which
+        meters appear in the Output info drawer's compact row and the status-bar health token.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Per-logical-output trim is dropped</b> — patch-cell gains are the only project-side gain
+        stage. (The Level column and trim field are gone from this screen.)</li>
+      <li><b>Delete cleans up automatically</b> — removing a logical output strips its sends from every
+        cue as one undoable edit; no refuse-while-fed gate.</li>
+      <li><b>Named Output Groups are v1.</b> A group (“Main”, “Fold”, the 🔗 column) links its members
+        for editing: changing one member's patch-cell gain or mute applies the same delta to the other
+        members' corresponding cells, and send grids show grouped columns with the same linked-delta
+        behaviour. A stereo pair is just a two-member group. Grouping affects editing and display only —
+        the mix math stays per-channel.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 07 AUDIO · PATCH ══════════════ -->
+  <div class="sechead" id="s7">
+    <p class="sectag">07 · View</p>
+    <h2>Audio — patch matrix &amp; snapshots</h2>
+  </div>
+  <p>
+    Approved in round 1 — carried over with the rename. Logical outputs across, device channels down,
+    gain in the cells; the only place virtual meets physical. Gain and mute edit live; snapshots are
+    named, <em>partial</em> patch states recalled by patch cues or by hand.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab">Logical outputs · 12</span>
+          <span class="itab on">Patch</span>
+          <span class="itab">Devices · 5</span>
+          <span class="itab">Audition</span>
+          <span class="mono" style="margin-left:auto;align-self:center;padding-right:10px;font-size:9px;color:var(--s-ink3)">rows: device channels · columns: logical outputs</span>
+        </div>
+        <div class="lay" style="grid-template-columns:1fr 218px">
+          <div class="pnl">
+            <div class="pnl-hd">Patch <span class="hint mono">cell = gain dB · empty = not routed · live</span></div>
+            <div style="padding:7px 9px;overflow-x:auto">
+              <table class="mx">
+                <thead><tr><th></th><th class="vgrp">Main L</th><th class="vgrp">Main R</th><th>Fold L</th><th>Fold R</th><th>Sub</th><th>Stg L</th><th>Stg R</th><th>FX</th><th>Orch</th><th>Lby L</th><th>Lby R</th></tr></thead>
+                <tbody>
+                  <tr><th>18i20 · Out 1</th><td class="on unity">0.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>18i20 · Out 2</th><td></td><td class="on unity">0.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>18i20 · Out 3</th><td></td><td></td><td class="on">−3.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>18i20 · Out 4</th><td></td><td></td><td></td><td class="on">−3.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>18i20 · Out 5</th><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="on">−6.0</td><td></td><td></td><td></td></tr>
+                  <tr><th>18i20 · Out 7</th><td></td><td></td><td></td><td></td><td class="on">+2.0</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>18i20 · Out 8</th><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="on">0.0</td><td></td><td></td></tr>
+                  <tr><th>NDI Prog · 1</th><td class="on">−6.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>NDI Prog · 2</th><td></td><td class="on">−6.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>Record · 1</th><td class="on unity">0.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th>Record · 2</th><td></td><td class="on unity">0.0</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th class="bad">Wedge · 1</th><td></td><td></td><td></td><td></td><td></td><td class="mute">off</td><td></td><td></td><td></td><td></td><td></td></tr>
+                  <tr><th class="bad">Wedge · 2</th><td></td><td></td><td></td><td></td><td></td><td></td><td class="mute">off</td><td></td><td></td><td></td><td></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="chain" style="border-top:0">
+              <span class="badge">Presets</span>
+              <span class="dim3">stereo identity · fan out to all · mono sum · clear row · copy line patch</span>
+              <span class="spacer"></span>
+              <span class="badge bad">Unresolved</span>
+              <span class="dim2">Wedge absent — cells kept, routed silent</span>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Snapshots <span class="hint mono">partial recalls</span></div>
+              <div class="field wide" style="padding-top:6px"><span class="mono" style="font-size:10.5px;color:var(--s-ink)">▸ Preshow <span class="dim3">· full patch</span></span></div>
+              <div class="field wide"><span class="mono" style="font-size:10.5px;color:var(--s-congo)">▸ Act 1 <span class="dim3">· fold + sub only</span> · current</span></div>
+              <div class="field wide"><span class="mono" style="font-size:10.5px;color:var(--s-ink)">▸ Interval <span class="dim3">· lobby only</span></span></div>
+              <div class="chain">
+                <span class="btn" style="padding:2px 8px">Save…</span>
+                <span class="btn" style="padding:2px 8px">Recall</span>
+                <span class="btn" style="padding:2px 8px">Update</span>
+              </div>
+              <div style="padding:6px 10px 9px;font-size:10.5px;color:var(--s-ink3);line-height:1.5">
+                A snapshot stores only the cells it was saved with — recalling “Interval” touches Lobby
+                and nothing else. Used by patch cues in the list.
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Selected line</div>
+              <div class="field"><span>Line</span><span class="inputish ro">18i20 · Out 3</span></div>
+              <div class="field"><span>Carries</span><span class="inputish ro">Fold L @ −3.0</span></div>
+              <div class="field wide"><span class="btn" style="text-align:center">Solo this line to audition</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span>Editing the patch while cues run — gain and mute apply live</span>
+          <span class="spacer"></span>
+          <span class="mono">⌘Z undo</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>07 · Audio · Patch</b> <span>approved shape, renamed columns; snapshots as named partial patch states</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Solo-to-audition is always allowed</b> — it plays through the audition monitor path, so it
+        never interrupts the program mix and never appears in the Active list. “Solo” here means
+        “listen to what this line carries”, not “mute everything else”.</li>
+      <li><b>Cell interaction confirmed:</b> click toggles at unity, drag adjusts gain, right-click
+        mutes.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 08 AUDIO · DEVICES + AUDITION ══════════════ -->
+  <div class="sechead" id="s8">
+    <p class="sectag">08 · View</p>
+    <h2>Audio — devices &amp; audition</h2>
+  </div>
+  <p>
+    Devices as approved, with the recording pattern gaining an <b>insert-token dropdown</b> and a
+    <b>?</b> help popover listing every token with an example rendering. The preview/audition
+    configuration leaves this pane and becomes a proper <b>Audition</b> tab — the same control appears in
+    the Video view, because an audition rig is one thing: an audio device plus a video surface. Every
+    cue's context menu gets <b>Preview on audition outputs</b>, playing it into that rig without touching
+    the patch or the program bus.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab">Logical outputs · 12</span>
+          <span class="itab">Patch</span>
+          <span class="itab on">Devices · 5</span>
+          <span class="itab">Audition</span>
+        </div>
+        <div class="lay" style="grid-template-columns:1fr 330px">
+          <div class="pnl">
+            <div class="pnl-hd">Audio lines <span class="hint mono">machine-side · adding/removing is an edit</span></div>
+            <div style="overflow-x:auto">
+              <table class="diag">
+                <thead><tr><th>Line</th><th>Kind</th><th>Ch</th><th>Rate</th><th>State</th><th>Carries</th></tr></thead>
+                <tbody>
+                  <tr><td class="name">18i20</td><td class="dim">PortAudio · Scarlett 18i20 (ALSA)</td><td>8</td><td>48 000 native</td><td class="g">open · clock master</td><td class="dim">7 logical outs</td></tr>
+                  <tr><td class="name">NDI Prog</td><td class="dim">NDI audio · “HACUE-PROG”</td><td>2</td><td>48 000</td><td class="g">open · 2 receivers</td><td class="dim">Main pair</td></tr>
+                  <tr><td class="name">Record</td><td class="dim">File · show-{date}.flac</td><td>2</td><td class="a">44 100 · resampled</td><td class="dim">armed</td><td class="dim">Main pair</td></tr>
+                  <tr><td class="name">Stream</td><td class="dim">Live stream · RTMP ×1</td><td>2</td><td>48 000</td><td class="dim">idle</td><td class="dim">—</td></tr>
+                  <tr><td class="name r" style="color:var(--s-red)">Wedge</td><td class="dim">PortAudio · Behringer UCA222</td><td>2</td><td class="dim">—</td><td class="r">absent on this machine</td><td class="dim">Stage pair</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="chain">
+              <span class="btn" style="padding:2px 8px">+ PortAudio…</span>
+              <span class="btn" style="padding:2px 8px">+ NDI audio…</span>
+              <span class="btn" style="padding:2px 8px">+ Record…</span>
+              <span class="btn" style="padding:2px 8px">+ Stream…</span>
+              <span class="spacer"></span>
+              <span class="btn" style="padding:2px 8px">Relink absent…</span>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Project mix</div>
+              <div class="field"><span>Mix rate</span><span class="inputish">48 000 Hz ▾</span></div>
+              <div class="field"><span>Clock master</span><span class="inputish">18i20 ▾</span></div>
+              <div style="padding:4px 10px 8px;font-size:10.5px;color:var(--s-ink3);line-height:1.5">
+                The clock master must run natively at the mix rate — it is never resampled, so the show
+                clock never drifts against it. Other lines resample as needed (amber in the list).
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Record <span class="hint mono">selected line</span></div>
+              <div class="field"><span>Directory</span><span class="inputish">~/shows/recordings</span></div>
+              <div class="field"><span>Pattern</span><span class="pair" style="grid-template-columns:1fr auto auto"><span class="inputish">show-{date}-{n}.flac</span><span class="btn icon" style="padding:2px 7px">{ } ▾</span><span class="btn icon" style="padding:2px 7px">?</span></span></div>
+              <div class="field wide"><span class="mono dim3" style="font-size:9px">{date} {time} {project} {list} {n} — preview: show-2026-08-01-3.flac</span></div>
+              <div class="field"><span>Mode</span><span class="seg"><span class="on">continuous</span><span>content only</span></span></div>
+              <div class="field"><span>Format</span><span class="inputish">FLAC · 44 100 · 2ch</span></div>
+              <div class="chain">
+                <span class="badge clock">Resampled</span>
+                <span class="dim3">44.1 k sink on a 48 k mix — fine, but never eligible as clock master</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span class="warn">▲ Wedge absent — Stage pair silent until relinked</span>
+          <span class="spacer"></span>
+          <span>4 unsaved edits</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>08 · Audio · Devices</b> <span>lines, mix rate, clock master; pattern tokens insertable and documented</span></figcaption>
+  </figure>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:840px">
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab">Logical outputs · 12</span>
+          <span class="itab">Patch</span>
+          <span class="itab">Devices · 5</span>
+          <span class="itab on">Audition</span>
+          <span class="mono" style="margin-left:auto;align-self:center;padding-right:10px;font-size:9px;color:var(--s-ink3)">same pane appears in Video · one audition rig</span>
+        </div>
+        <div class="lay" style="grid-template-columns:1fr 1fr">
+          <div class="pnl">
+            <div class="pnl-hd">Audition audio</div>
+            <div class="field"><span>Device</span><span class="inputish">built-in headphones ▾</span></div>
+            <div class="field"><span>Level</span><span class="inputish">−12.0 dB</span></div>
+            <div class="check on"><span class="box"></span> Duck audition when program is sounding</div>
+            <div style="padding:4px 10px 8px;font-size:10.5px;color:var(--s-ink3);line-height:1.5">
+              Audition enters the bay as a monitor input — it never touches the patch or the program bus.
+            </div>
+          </div>
+          <div class="pnl">
+            <div class="pnl-hd">Audition video</div>
+            <div class="field"><span>Surface</span><span class="seg"><span class="on">window</span><span>screen 2</span><span>none</span></span></div>
+            <div class="field"><span>Size</span><span class="inputish">960×540 · follows composition aspect</span></div>
+            <div class="chain">
+              <span class="badge">Cue menu</span>
+              <span class="dim3">right-click any cue → “Preview on audition outputs”</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>08b · Audition tab</b> <span>one rig: audio device + video surface; identical pane in the Video view</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>Pattern help</b> — insert-token dropdown plus “?” listing tokens with a rendered example.</li>
+      <li><b>Dedicated Audition tab</b> in Audio and Video (same control, duplicated), configuring an
+        audio device + video out combo; cue context menu gains “Preview on audition outputs”.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Audio lines are project-owned</b> — they travel with the show, go absent on other machines,
+        and relink on arrival.</li>
+      <li><b>Mix-rate changes take an explicit “Apply &amp; restart audio”</b> — never a silent rebuild.</li>
+      <li><b>Per-line effects inserts deferred.</b> Visualizer cues tap their audio feed from the
+        program bus, upstream of any per-line insert, so deferring costs the visualizer nothing.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 09 VIDEO · COMPOSITIONS ══════════════ -->
+  <div class="sechead" id="s9">
+    <p class="sectag">09 · View</p>
+    <h2>Video — compositions &amp; outputs</h2>
+  </div>
+  <p>
+    Two corrections from your notes. First, <b>the visualizer flag is off the composition</b> — that was
+    HaPlay residue. A visualizer is purely a cue type; it appears on a canvas the same way any media cue
+    does, as a placement, and all its settings live on the cue. A composition owns exactly four things:
+    <b>size, frame rate, idle image, and its per-output mapping</b> (splitting + mesh warp — which live
+    on the output binding, next screen). Second, the tab order is now
+    <b>Compositions · Mapping · Outputs</b>, since mapping is the stage between the two.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">midsummer-2026.hacue2proj *</span>
+          <div class="vtabs">
+            <span class="vtab">Cues</span>
+            <span class="vtab">Audio</span>
+            <span class="vtab on">Video</span>
+            <span class="vtab">Targets</span>
+          </div>
+          <span class="spacer"></span>
+          <span class="chip edit">Editing</span>
+          <span class="chip">Lock</span>
+          <span class="chip">Settings</span>
+          <span class="chip">Diagnostics</span>
+        </div>
+
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab on">Compositions · 2</span>
+          <span class="itab">Mapping</span>
+          <span class="itab">Outputs · 3</span>
+          <span class="itab">Audition</span>
+          <span class="mono" style="margin-left:auto;align-self:center;padding-right:10px;font-size:9px;color:var(--s-ink3)">canvas thumbnails are live when the show runs</span>
+        </div>
+
+        <div class="lay" style="grid-template-columns:1fr 330px">
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Cyc <span class="hint mono">1920×1080 · 29.97 · idle: black</span></div>
+              <div style="padding:8px 10px">
+                <div class="vidcanvas" style="height:150px">
+                  <div class="grid"></div>
+                  <div class="ph a" style="left:6%;top:8%;width:58%;height:78%">Q13.2 rain-loop · L2</div>
+                  <div class="ph b sel" style="left:60%;top:40%;width:36%;height:55%">Q15.5 visualizer cue · L1</div>
+                </div>
+              </div>
+              <div class="chain" style="border-top:0">
+                <span class="badge">Layers</span>
+                <span class="dim3">placements belong to cues — the visualizer here is just Q15.5's placement · double-click opens the cue</span>
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Portal <span class="hint mono">1280×720 · 30 · idle: logo.png</span></div>
+              <div style="padding:8px 10px">
+                <div class="vidcanvas" style="height:86px">
+                  <div class="grid"></div>
+                  <div class="ph a" style="left:20%;top:12%;width:60%;height:74%">idle image · logo.png</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Video outputs <span class="hint mono">what receives each composition</span></div>
+              <div style="overflow-x:auto">
+                <table class="diag">
+                  <thead><tr><th>Output</th><th>Kind</th><th>Shows</th><th>Map</th><th>State</th></tr></thead>
+                  <tbody>
+                    <tr><td class="name">Projector A</td><td class="dim">local · screen 2 · fullscreen</td><td class="dim">Cyc</td><td class="dim">warp · 2 sect</td><td class="g">live</td></tr>
+                    <tr><td class="name">Lobby TV</td><td class="dim">local · screen 3</td><td class="dim">Cyc</td><td class="dim">clean</td><td class="r">screen absent</td></tr>
+                    <tr><td class="name">NDI Prog</td><td class="dim">NDI · video+audio</td><td class="dim">Cyc</td><td class="dim">clean</td><td class="g">2 rx</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="chain">
+                <span class="btn" style="padding:2px 8px">+ Local…</span>
+                <span class="btn" style="padding:2px 8px">+ NDI…</span>
+                <span class="btn" style="padding:2px 8px">+ Record…</span>
+                <span class="btn" style="padding:2px 8px">+ Stream…</span>
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Projector A <span class="hint mono">selected output</span></div>
+              <div class="field"><span>Composition</span><span class="inputish">Cyc ▾</span></div>
+              <div class="field"><span>Screen</span><span class="inputish">2 · 1920×1080 ▾</span></div>
+              <div class="field"><span>Mode</span><span class="seg"><span class="on">fullscreen</span><span>windowed</span></span></div>
+              <div class="field"><span>Idle fallback</span><span class="inputish">venue-logo.png · used when comp has no idle</span></div>
+              <div class="field"><span>Mapping</span><span class="pair"><span class="seg"><span class="on">on</span><span>clean</span></span><span class="btn" style="padding:2px 6px;text-align:center">Edit ›</span></span></div>
+              <div class="field wide"><span class="mono dim3" style="font-size:9.5px">mapping is per output — Lobby TV shows the same Cyc clean, no warp</span></div>
+              <div class="field wide"><span class="btn" style="text-align:center">Identify — flash output name on screen</span></div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Selected composition · Cyc</div>
+              <div class="field"><span>Size / rate</span><span class="pair"><span class="inputish">1920×1080</span><span class="inputish">29.97</span></span></div>
+              <div class="field"><span>Idle image</span><span class="inputish">black ▾</span></div>
+              <div class="field wide"><span class="btn" style="text-align:center">+ Add composition…</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span class="warn">▲ Lobby TV: screen 3 not present — output held, shows idle</span>
+          <span class="spacer"></span>
+          <span>4 unsaved edits</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>09 · Video · Compositions</b> <span>comps own size/rate/idle only; mapping is a per-output choice — warp for the projector, clean for the TV</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>No visualizer on compositions.</b> Visualizer is a cue type; its placement is just another
+        layer. Composition = size + rate + idle image, full stop.</li>
+      <li><b>Idle image kept</b>, as a composition property (per-output idle removed to avoid two idle
+        concepts — flag if you wanted it per output instead).</li>
+      <li><b>Per-output mapping surfaced in Outputs</b> — the Map column and the on/clean toggle: same
+        composition, warped to Projector A, clean to Lobby TV and NDI.</li>
+      <li><b>Tab order</b> Compositions · Mapping · Outputs.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>The canvas is a second editor for cue data</b> — placements edited here edit the cue, under
+        the same undo journal.</li>
+      <li><b>Idle images exist at both levels:</b> per output as a fallback, with the composition's idle
+        image taking precedence when set (the “Idle fallback” field on the output).</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 10 VIDEO · MAPPING ══════════════ -->
+  <div class="sechead" id="s10">
+    <p class="sectag">10 · View</p>
+    <h2>Video — output mapping</h2>
+  </div>
+  <p>
+    Now the middle tab, matching its place in the chain: composition → mapping → output. The header
+    carries an output picker, because mapping is always <em>of one output</em> — Projector A gets the
+    two-section warp below while Lobby TV keeps a clean feed of the same composition. Section list stays
+    permanent on the left; source pick and output placement sit side by side.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab">Compositions · 2</span>
+          <span class="itab on">Mapping</span>
+          <span class="itab">Outputs · 3</span>
+          <span class="itab">Audition</span>
+          <span class="mono" style="margin-left:auto;align-self:center;padding-right:10px;font-size:9px;color:var(--s-ink3)">output: Projector A ▾ · source: Cyc 1920×1080</span>
+        </div>
+        <div class="lay" style="grid-template-columns:200px 1fr 1fr">
+          <div class="pnl">
+            <div class="pnl-hd">Sections</div>
+            <div class="field wide"><span class="mono" style="font-size:10.5px;color:var(--s-congo)">▸ 1 · Left wall <span class="dim3">warp 3×3</span></span></div>
+            <div class="field wide"><span class="mono" style="font-size:10.5px;color:var(--s-ink)">▸ 2 · Right wall</span></div>
+            <div class="chain"><span class="btn" style="padding:2px 8px">+ Add</span><span class="btn" style="padding:2px 8px">Duplicate</span><span class="btn" style="padding:2px 8px">Delete</span></div>
+            <div class="subhd">Section 1</div>
+            <div class="field"><span>Rotation</span><span class="inputish">0.0°</span></div>
+            <div class="field"><span>Opacity</span><span class="inputish">100 %</span></div>
+            <div class="field"><span>Brightness</span><span class="inputish">0.92</span></div>
+            <div class="field"><span>Warp</span><span class="seg"><span>off</span><span class="on">3×3</span><span>5×5</span></span></div>
+          </div>
+          <div class="pnl">
+            <div class="pnl-hd">Source · Cyc <span class="hint mono">what each section samples</span></div>
+            <div style="padding:8px 10px">
+              <div class="vidcanvas" style="height:170px">
+                <div class="grid"></div>
+                <div class="ph a sel" style="left:2%;top:6%;width:47%;height:86%">1 · Left wall</div>
+                <div class="ph b" style="left:45%;top:6%;width:52%;height:86%">2 · Right wall</div>
+              </div>
+            </div>
+            <div class="chain" style="border-top:0">
+              <span class="badge">Overlap</span>
+              <span class="dim3">sections 1+2 overlap 4 % for edge blend</span>
+            </div>
+          </div>
+          <div class="pnl">
+            <div class="pnl-hd">Output · Projector A <span class="hint mono">where it lands · warp handles live</span></div>
+            <div style="padding:8px 10px">
+              <div class="vidcanvas" style="height:170px">
+                <div class="ph a sel" style="left:3%;top:10%;width:44%;height:80%;transform:skewY(-2deg)">1 · warp 3×3</div>
+                <div class="ph b" style="left:52%;top:8%;width:44%;height:84%">2</div>
+              </div>
+            </div>
+            <div class="chain" style="border-top:0">
+              <span class="badge good">On device</span>
+              <span class="dim3">edits render straight to the projector — the canvas here is a mirror, the wall is the truth</span>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span>Test grid: <span class="mono">G</span> toggles on output</span>
+          <span class="spacer"></span>
+          <span>4 unsaved edits</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>10 · Video · Mapping</b> <span>middle tab, per-output; section list permanent, source and destination side by side</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Mesh warp first</b>; corner-pin stays reserved in the model.</li>
+      <li><b>Test pattern is v1</b> — the per-output grid toggle ships with mapping.</li>
+      <li><b>All three input modes:</b> drag with the mouse, numeric x/y/w/h entry, and arrow-key
+        nudging of the last-clicked point for fine adjustment.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 11 TARGETS ══════════════ -->
+  <div class="sechead" id="s11">
+    <p class="sectag">11 · View</p>
+    <h2>Targets — split into tabs</h2>
+  </div>
+  <p>
+    Your call: one crowded screen becomes three focused tabs — <b>Action endpoints</b>,
+    <b>Trigger inputs</b>, <b>Remote API</b> — each with room for the detail the combined screen was
+    squeezing out. The wire monitor stays on every tab (filtered to that tab's traffic), because “did it
+    actually send/arrive” is the question on all three. Trigger inputs drawn first; the Remote API tab
+    follows with what it gains from the space: its actual endpoint list.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">midsummer-2026.hacue2proj *</span>
+          <div class="vtabs">
+            <span class="vtab">Cues</span>
+            <span class="vtab">Audio</span>
+            <span class="vtab">Video</span>
+            <span class="vtab on">Targets</span>
+          </div>
+          <span class="spacer"></span>
+          <span class="chip edit">Editing</span>
+          <span class="chip">Lock</span>
+          <span class="chip">Settings</span>
+          <span class="chip">Diagnostics</span>
+        </div>
+
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab">Action endpoints · 3</span>
+          <span class="itab on">Trigger inputs · 3</span>
+          <span class="itab">Remote API</span>
+        </div>
+
+        <div class="lay" style="grid-template-columns:1fr 1fr">
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Trigger inputs <span class="hint mono">inbound · fire cues</span></div>
+              <div style="overflow-x:auto">
+                <table class="diag">
+                  <thead><tr><th>Device / source</th><th>Kind</th><th>Bindings</th><th>Last seen</th><th>State</th></tr></thead>
+                  <tbody>
+                    <tr><td class="name">APC mini</td><td class="dim">MIDI in</td><td>9 cues</td><td class="dim">note 3 ch 1 · 14:01</td><td class="g">open</td></tr>
+                    <tr><td class="name">QLab bridge</td><td class="dim">OSC in · :9000</td><td>2 cues</td><td class="dim">/hacue/go · 13:44</td><td class="g">listening</td></tr>
+                    <tr><td class="name">Hotkeys</td><td class="dim">keyboard</td><td>6 cues</td><td class="dim">—</td><td class="dim">always</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="chain">
+                <span class="btn" style="padding:2px 8px">+ MIDI in…</span>
+                <span class="btn" style="padding:2px 8px">+ OSC listener…</span>
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Bindings on APC mini <span class="hint mono">selected device</span></div>
+              <div style="overflow-x:auto">
+                <table class="diag">
+                  <thead><tr><th>Input</th><th>Fires</th><th>Filter</th></tr></thead>
+                  <tbody>
+                    <tr><td class="name">note 3 · ch 1</td><td class="dim">Q16 Loop to 12 if held</td><td class="dim">vel ≥ 1 · no-repeat 250 ms</td></tr>
+                    <tr><td class="name">note 4 · ch 1</td><td class="dim">Q20 Blackout all</td><td class="dim">—</td></tr>
+                    <tr><td class="name">cc 48 · ch 1</td><td class="dim">master trim (ride)</td><td class="dim">0–127 → −60..0 dB</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Learn <span class="hint mono">binding Q16 · Loop to 12 if held</span></div>
+              <div class="field"><span>Listening</span><span class="inputish" style="border-color:var(--s-amber);color:var(--s-amber)">● waiting for input — press something on any device</span></div>
+              <div class="field"><span>Caught</span><span class="inputish ro">APC mini · note-on 3 · ch 1</span></div>
+              <div class="field"><span>Filter</span><span class="pair"><span class="inputish">velocity ≥ 1</span><span class="inputish">no repeat 250 ms</span></span></div>
+              <div class="chain">
+                <span class="btn primary" style="padding:2px 10px">Bind</span>
+                <span class="btn" style="padding:2px 8px">Cancel</span>
+                <span class="spacer"></span>
+                <span class="dim3">conflicts shown before bind — note 3 is free</span>
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Monitor <span class="hint mono">inbound only on this tab</span></div>
+              <div class="logtail">
+                <span><span class="t">14:01:22</span> <span style="color:var(--s-congo)">MIDI in</span> APC mini · note-on 3 ch 1 vel 127 → Q16</span>
+                <span><span class="t">13:58:41</span> <span style="color:var(--s-steel)">OSC in</span> :9000 · /hacue/go → GO</span>
+                <span><span class="t">13:58:12</span> <span class="t">key</span> Space → GO</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="sbtn">▸ Output info</span>
+          <span class="spacer"></span>
+          <span>external input: enabled</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>11 · Targets · Trigger inputs</b> <span>devices, per-device bindings, learn, and an inbound-only monitor</span></figcaption>
+  </figure>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:840px">
+        <div class="itabs" style="background:var(--s-panel)">
+          <span class="itab">Action endpoints · 3</span>
+          <span class="itab">Trigger inputs · 3</span>
+          <span class="itab on">Remote API</span>
+        </div>
+        <div class="lay" style="grid-template-columns:280px 1fr">
+          <div class="pnl">
+            <div class="pnl-hd">Server</div>
+            <div class="field"><span>State</span><span class="seg"><span class="on">on</span><span>off</span></span></div>
+            <div class="field"><span>Port</span><span class="inputish">8420</span></div>
+            <div class="field"><span>LAN</span><span class="seg"><span class="on">allowed</span><span>local only</span></span></div>
+            <div class="field"><span>Token</span><span class="inputish">•••••••• · rotate</span></div>
+            <div class="field"><span>Last call</span><span class="inputish ro">POST /cues/go · 10.0.1.7 · 13:58</span></div>
+            <div class="chain">
+              <span class="badge">Override</span>
+              <span class="dim3">project override — app default is off</span>
+            </div>
+          </div>
+          <div class="pnl">
+            <div class="pnl-hd">Endpoints <span class="hint mono">served at http://10.0.1.5:8420</span></div>
+            <div style="overflow-x:auto">
+              <table class="diag">
+                <thead><tr><th>Method</th><th>Path</th><th>Does</th><th>Calls</th></tr></thead>
+                <tbody>
+                  <tr><td class="name">POST</td><td class="dim">/cues/go</td><td class="dim">fire the standby cue</td><td>241</td></tr>
+                  <tr><td class="name">POST</td><td class="dim">/cues/{id}/fire</td><td class="dim">fire a specific cue</td><td>12</td></tr>
+                  <tr><td class="name">POST</td><td class="dim">/transport/stop · /panic · /pause</td><td class="dim">transport controls</td><td>3</td></tr>
+                  <tr><td class="name">POST</td><td class="dim">/standby/{id}</td><td class="dim">move standby</td><td>0</td></tr>
+                  <tr><td class="name">GET</td><td class="dim">/status</td><td class="dim">active cues, standby, issues</td><td>1 402</td></tr>
+                  <tr><td class="name">GET</td><td class="dim">/lists</td><td class="dim">cue lists + numbers/labels</td><td>7</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="chain">
+              <span class="badge">Docs</span>
+              <span class="dim3">GET / serves this table as JSON + examples with the token pre-filled</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>11b · Targets · Remote API</b> <span>the tab earns its space: server state plus the real endpoint list with call counts</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>Split into tabs</b> — Action endpoints · Trigger inputs · Remote API; monitor per tab,
+        filtered to that direction.</li>
+      <li><b>Remote API tab shows its endpoints</b>, with live call counts and a self-documenting root.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Continuous-controller bindings to parameters (cc → master trim etc.) are v1</b>, not just
+        note→cue firing.</li>
+      <li><b>Endpoint test messages are configurable per endpoint</b> — each action endpoint stores its
+        own test payload.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 12 SETTINGS · APPLICATION ══════════════ -->
+  <div class="sechead" id="s12">
+    <p class="sectag">12 · View</p>
+    <h2>Settings — application scope</h2>
+  </div>
+  <p>
+    Same shape as approved, two additions: a <b>New project defaults</b> group in application scope (this
+    is where “auto-renumber on for new projects” lives, plus the seed device for the Main pair), and —
+    since you asked to see what the un-drawn panes hold — a full inventory of every settings pane in both
+    scopes, below the screen.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:1000px">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">Settings</span>
+          <span class="spacer"></span>
+          <span class="chip">Close ⎋</span>
+        </div>
+        <div class="lay" style="grid-template-columns:214px 1fr">
+          <div class="pnl">
+            <div class="snav">
+              <span class="scope">Application · this machine</span>
+              <a href="#s12" class="on">Appearance &amp; layout</a>
+              <a href="#s12">Transport defaults <span class="tally ovr">1 override</span></a>
+              <a href="#s12">Hotkeys <span class="tally ovr">project</span></a>
+              <a href="#s12">New project defaults</a>
+              <a href="#s12">Remote API <span class="tally ovr">project</span></a>
+              <a href="#s12">Media cache</a>
+              <a href="#s12">Logging &amp; crash reports</a>
+              <span class="scope">Project · midsummer-2026</span>
+              <a href="#s13">Show behaviour</a>
+              <a href="#s13">Authoring defaults</a>
+              <a href="#s13">Overrides <span class="tally">2 active</span></a>
+              <a href="#s13">Save, autosave &amp; recovery</a>
+              <a href="#s14">Project status <span class="tally bad">2 errors</span></a>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Appearance &amp; layout <span class="hint mono">app-settings.json · not journaled</span></div>
+              <div class="field"><span>Theme</span><span class="seg"><span class="on">booth dark</span><span>dark</span><span>light</span></span></div>
+              <div class="field"><span>Density</span><span class="seg"><span>compact</span><span class="on">normal</span><span>relaxed</span></span></div>
+              <div class="field"><span>Cue row size</span><span class="seg"><span>26 px</span><span class="on">30 px</span><span>38 px touch</span></span></div>
+              <div class="field"><span>Font scale</span><span class="inputish">100 %</span></div>
+              <div class="subhd">Main view</div>
+              <div class="check on"><span class="box"></span> Remember inspector tab per cue kind</div>
+              <div class="check on"><span class="box"></span> Timeline sheet ⇄ window state remembered</div>
+              <div class="check"><span class="box"></span> Flat active list (default grouped)</div>
+              <div class="check"><span class="box"></span> Open Output info drawer on launch</div>
+              <div class="subhd">Meters</div>
+              <div class="field"><span>Ballistics</span><span class="seg"><span class="on">PPM fast</span><span>VU</span></span></div>
+              <div class="field"><span>Peak hold</span><span class="inputish">1.5 s</span></div>
+              <div class="field"><span>Clip resets</span><span class="seg"><span class="on">on click</span><span>3 s auto</span></span></div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">New project defaults <span class="hint mono">applied when a project is created</span></div>
+              <div class="check on"><span class="box"></span> Auto-renumber on insert</div>
+              <div class="field"><span>Seed audio</span><span class="inputish">system default device → Main L/R</span></div>
+              <div class="field"><span>Mix rate</span><span class="inputish">48 000 Hz</span></div>
+              <div class="field"><span>Default fades</span><span class="pair"><span class="inputish">in 0.1 s</span><span class="inputish">out 2.0 s</span></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>Application settings save immediately · no undo</span>
+          <span class="spacer"></span>
+          <span class="mono">app-settings.json</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>12 · Settings · Application</b> <span>machine preferences plus the defaults every new project inherits</span></figcaption>
+  </figure>
+
+  <h3>Full settings inventory — both scopes</h3>
+  <div class="cmp-wrap bleed">
+    <table class="cmp">
+      <thead>
+        <tr><th>Pane</th><th>Scope</th><th>Contents</th></tr>
+      </thead>
+      <tbody>
+        <tr><th>Appearance &amp; layout</th><td>App</td><td>Theme (booth dark / dark / light), density, cue row size, font scale · remember-inspector-tab, timeline dock state, flat/grouped active list, Output-info-on-launch · meter ballistics, peak hold, clip reset</td></tr>
+        <tr><th>Transport defaults</th><td>App</td><td>Stop fade, panic fade, double-GO guard ms, Space-is-GO focus rule, confirm-Stop-All threshold, standby-follows-click default</td></tr>
+        <tr><th>Hotkeys</th><td>App</td><td>Command × gesture grid for every transport/authoring command, per-cue-kind add shortcuts, import/export profile, per-project override column</td></tr>
+        <tr><th>New project defaults</th><td>App</td><td>Auto-renumber on insert, seed audio device → Main L/R, default mix rate, default fade in/out, default trigger mode</td></tr>
+        <tr><th>Remote API</th><td>App</td><td>Default off/on, port, LAN allowed, token — overridable per project (server + endpoint detail lives in Targets)</td></tr>
+        <tr><th>Media cache</th><td>App</td><td>Waveform/probe cache location and size budget, thumbnail cache, clear buttons</td></tr>
+        <tr><th>Logging &amp; crash reports</th><td>App</td><td>File log level, log directory, retention, crash-dump opt-in, “open logs folder”</td></tr>
+        <tr><th>Show behaviour</th><td>Project</td><td>Open mode (edit drawn as default), run status checks on open, at-list-end policy, stop/panic fades for this show, arms/external-input state on open, click-moves-standby</td></tr>
+        <tr><th>Authoring defaults</th><td>Project</td><td>New-cue trigger mode, default fades, auto-renumber (inherits app default, on), media root + relative paths, outside-media policy (keep in place / move / copy — default keep)</td></tr>
+        <tr><th>Overrides</th><td>Project</td><td>Ledger of every app setting this project overrides, app vs project value, revert per row</td></tr>
+        <tr><th>Save, autosave &amp; recovery</th><td>Project</td><td>Autosave cadence, keep-N recovery copies, recovery location, save-on-GO toggle</td></tr>
+        <tr><th>Project status</th><td>Project</td><td>Not really settings — the row is a live issue counter linking to the Project status view (screen 14)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>Every pane inventoried</b> above — un-drawn panes are now at least specified.</li>
+      <li><b>Auto-renumber default-on</b>, seeded from New project defaults, overridable per project.</li>
+      <li><b>Preflight renamed</b>; its nav row is a live counter, and the view itself is screen 14.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>The hotkey grid stays WIP</b> until most other parts are built and the command list is
+        stable.</li>
+      <li><b>Standing principle for both scopes:</b> the more user-changeable defaults, the better —
+        when a behaviour could plausibly be a preference, it becomes one, in the scope it belongs to.
+        The inventory table is the living contract and is expected to grow.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 13 SETTINGS · PROJECT ══════════════ -->
+  <div class="sechead" id="s13">
+    <p class="sectag">13 · View</p>
+    <h2>Settings — project scope</h2>
+  </div>
+  <p>
+    Journaled, undoable, travels in the file — as approved. Auto-renumber shows its inheritance: on by
+    default because the app default says so, still switchable per project. Open mode now defaults to
+    editing everywhere, so the pane's first row is only there for the show that wants to boot locked.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:1000px">
+        <div class="lay" style="grid-template-columns:214px 1fr">
+          <div class="pnl">
+            <div class="snav">
+              <span class="scope">Project · midsummer-2026</span>
+              <a href="#s13" class="on">Show behaviour</a>
+              <a href="#s13">Authoring defaults</a>
+              <a href="#s13">Overrides <span class="tally">2 active</span></a>
+              <a href="#s13">Save, autosave &amp; recovery</a>
+              <a href="#s14">Project status <span class="tally bad">2 errors</span></a>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Show behaviour <span class="hint mono">journaled · undoable</span></div>
+              <div class="field"><span>Open in</span><span class="seg"><span class="on">editing</span><span>locked</span></span></div>
+              <div class="check on"><span class="box"></span> Run status checks on open, surface issues in the status bar</div>
+              <div class="field"><span>At list end</span><span class="seg"><span class="on">hold</span><span>loop</span><span>next list</span></span></div>
+              <div class="field"><span>Stop fade</span><span class="pair"><span class="inputish">0.75 s</span><span class="inputish">equal-power ▾</span></span></div>
+              <div class="field"><span>Panic fade</span><span class="inputish" style="border-color:color-mix(in srgb, var(--s-amber) 50%, transparent)">0.25 s · overrides app ⚑</span></div>
+              <div class="check on"><span class="box"></span> External input off when the project opens</div>
+              <div class="check"><span class="box"></span> Clicking a cue row moves standby (default: view only)</div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Authoring defaults</div>
+              <div class="field"><span>New cue trigger</span><span class="seg"><span class="on">manual</span><span>follow</span><span>continue</span></span></div>
+              <div class="field"><span>Default fades</span><span class="pair"><span class="inputish">in 0.1 s</span><span class="inputish">out 2.0 s</span></span></div>
+              <div class="check on"><span class="box"></span> Auto-renumber on insert <span class="mono dim3" style="font-size:9px">· inherited on (app default) · step 1, children .1</span></div>
+              <div class="field"><span>Media root</span><span class="inputish">~/shows/midsummer-media · relative paths</span></div>
+              <div class="field"><span>Outside media</span><span class="seg"><span class="on">keep in place</span><span>move to root</span><span>copy to root</span></span></div>
+              <div class="field wide"><span class="mono dim3" style="font-size:9px">adding a file from outside the root warns and offers move/copy · this picks the default</span></div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Overrides <span class="hint mono">app settings this project defeats</span></div>
+              <div style="overflow-x:auto">
+                <table class="diag">
+                  <thead><tr><th>Setting</th><th>App value</th><th>Project value</th><th></th></tr></thead>
+                  <tbody>
+                    <tr><td class="name">Panic fade</td><td class="dim">0.15 s</td><td>0.25 s</td><td class="dim">revert ×</td></tr>
+                    <tr><td class="name">Remote API</td><td class="dim">off</td><td>on · port 8420</td><td class="dim">revert ×</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="chain">
+                <span class="badge">Rule</span>
+                <span class="dim3">a project override always wins and is always visible in both scopes — never a silent winner</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>Project settings are journaled — ⌘Z works here</span>
+          <span class="spacer"></span>
+          <span>4 unsaved edits</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>13 · Settings · Project</b> <span>show behaviour, authoring defaults with inheritance shown, and the override ledger</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>The overridable set is frozen for now</b> at panic fade, remote API, hotkeys.</li>
+      <li><b>Media outside the root is allowed.</b> Adding one warns and offers move or copy into the
+        root; the “Outside media” setting picks the default action (keep in place / move / copy — keep
+        is the default). Files outside the root are simply absolute-path references.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 14 PROJECT STATUS ══════════════ -->
+  <div class="sechead" id="s14">
+    <p class="sectag">14 · View</p>
+    <h2>Project status <span class="num" style="font-size:0.8em;color:var(--ink-3)">(was “Preflight”)</span></h2>
+  </div>
+  <p>
+    Renamed per your note — it is a collector of the project's errors and warnings, each with the fix
+    action attached: missing media, unfed or unpatched logical outputs, absent devices, dead jump
+    targets, past schedules. Reached from the status bar's issue count, the settings nav, and the
+    launcher. Relink and consolidate live here because they are what fixing usually means. Headless twin:
+    <code>hacue2 --check show.hacue2proj</code>, same checks, exit code 1 while errors remain.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:1000px">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">Project status — midsummer-2026</span>
+          <span class="spacer"></span>
+          <span class="chip">Re-run all</span>
+          <span class="chip">Copy report</span>
+          <span class="chip">Close ⎋</span>
+        </div>
+        <div class="lay" style="grid-template-columns:1fr 300px">
+          <div class="pnl">
+            <div class="pnl-hd">Checks <span class="hint mono">2 errors · 2 warnings · 9 passed · 0.4 s</span></div>
+            <div style="overflow-x:auto">
+              <table class="diag">
+                <thead><tr><th>Check</th><th>Result</th><th>Detail</th><th>Fix</th></tr></thead>
+                <tbody>
+                  <tr><td class="name">Media files</td><td class="r">1 missing</td><td class="dim">Q15 interval.wav — last seen /media/usb0</td><td class="dim">Relink ›</td></tr>
+                  <tr><td class="name">Logical outputs patched</td><td class="r">1 unpatched</td><td class="dim">Lobby fed by 2 cues, no device receives it</td><td class="dim">Patch ›</td></tr>
+                  <tr><td class="name">Logical outputs fed</td><td class="a">1 unfed</td><td class="dim">Orchestra patched but no cue sends to it</td><td class="dim">Show ›</td></tr>
+                  <tr><td class="name">Audio devices</td><td class="a">1 absent</td><td class="dim">Wedge (UCA222) — Stage pair silent</td><td class="dim">Relink ›</td></tr>
+                  <tr><td class="name">Clock master</td><td class="g">ok</td><td class="dim">18i20 native 48 000</td><td class="dim"></td></tr>
+                  <tr><td class="name">Jump / fade targets</td><td class="g">ok</td><td class="dim">31 references, all resolve</td><td class="dim"></td></tr>
+                  <tr><td class="name">Action endpoints</td><td class="g">ok</td><td class="dim">Eos + X32 reachable · Hog wing unused by any enabled cue</td><td class="dim"></td></tr>
+                  <tr><td class="name">Schedules</td><td class="g">ok</td><td class="dim">none in the past</td><td class="dim"></td></tr>
+                  <tr><td class="name">Video outputs</td><td class="g">ok</td><td class="dim">screens present · Lobby TV absent but not marked required</td><td class="dim"></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="pnl">
+              <div class="pnl-hd">Relink <span class="hint mono">for the missing file</span></div>
+              <div class="field"><span>Missing</span><span class="inputish ro">interval.wav</span></div>
+              <div class="field wide"><span class="btn" style="text-align:center">Search by filename under media root…</span></div>
+              <div class="field wide"><span class="btn" style="text-align:center">Pick file manually…</span></div>
+              <div style="padding:4px 10px 8px;font-size:10.5px;color:var(--s-ink3)">Matches by name + duration; a duration mismatch relinks with a warning badge on the cue.</div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Consolidate</div>
+              <div class="field"><span>Into</span><span class="inputish">~/shows/midsummer-tour/</span></div>
+              <div class="check on"><span class="box"></span> Copy media, rewrite to relative paths</div>
+              <div class="check on"><span class="box"></span> Include project + this report</div>
+              <div class="check"><span class="box"></span> Zip when done</div>
+              <div class="field wide"><span class="btn primary" style="text-align:center">Consolidate — 1.8 GB</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="err">2 errors keep the status token red</span>
+          <span class="spacer"></span>
+          <span class="mono">hacue2 --check exits 1 while errors remain</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>14 · Project status</b> <span>errors and warnings with fixes attached; relink and consolidate beside them</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided</p>
+    <ul>
+      <li><b>Severity table confirmed:</b> unpatched-but-fed = error; patched-but-unfed and absent
+        devices = warnings.</li>
+      <li><b>The flag is inverted: outputs can be marked <em>required</em>.</b> A required output that
+        is absent is an <em>error</em>; unmarked outputs absent are warnings. This says “the show cannot
+        run without the main PA” instead of asking every optional output to excuse itself.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ 15 DIAGNOSTICS ══════════════ -->
+  <div class="sechead" id="s15">
+    <p class="sectag">15 · Window</p>
+    <h2>Diagnostics</h2>
+  </div>
+  <p>
+    Own window, remembers its screen, meant to sit on a second monitor while operating. One change from
+    round 1: the events panel stops being its own collector — it is a live tail of the
+    <code>Microsoft.Extensions.Logging</code> pipeline, the same sink the file log uses, with a level
+    picker. One logging system, two readers.
+  </p>
+
+  <figure class="bleed">
+    <div class="frame">
+      <div class="screen" style="min-width:1000px">
+        <div class="titlebar">
+          <span class="appname">HaCue2</span>
+          <span class="projname">Diagnostics</span>
+          <span class="spacer"></span>
+          <span class="chip">Reset counters</span>
+          <span class="chip">Copy report</span>
+          <span class="chip">Close</span>
+        </div>
+        <div class="lay" style="grid-template-columns:1fr;padding:7px">
+          <div class="pnl">
+            <div class="pnl-hd">Audio bay <span class="hint mono">48 000 Hz · 480-sample chunks · 12 logical · passes: 5 voices + 4 terminals</span></div>
+            <div style="overflow-x:auto">
+              <table class="diag">
+                <thead>
+                  <tr>
+                    <th>Terminal / lease</th><th>State</th><th>In flight</th><th>Cap</th>
+                    <th>Enqueued</th><th>Processed</th><th>Dropped</th><th>Latency</th><th>Epoch</th><th>Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td class="name">18i20 · out (master)</td><td class="g">advancing</td><td>2</td><td class="dim">4</td><td>219 480</td><td>219 478</td><td>0</td><td>21.3 ms</td><td class="dim">7</td><td class="dim">48 000</td></tr>
+                  <tr><td class="name">NDI Prog · out</td><td class="g">open</td><td>3</td><td class="dim">8</td><td>219 480</td><td>219 477</td><td>0</td><td>62.5 ms</td><td class="dim">7</td><td class="dim">48 000 −1 ppm</td></tr>
+                  <tr><td class="name">Record · out</td><td class="a">armed · behind</td><td>7</td><td class="dim">8</td><td>219 480</td><td>219 461</td><td class="a">12</td><td class="a">79.1 ms</td><td class="dim">7</td><td class="dim">44 100 rs</td></tr>
+                  <tr><td class="name">Wedge · out</td><td class="r">absent</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td></tr>
+                  <tr class="sub"><td>lease · Q12 Preshow bed</td><td class="g">sounding</td><td>4</td><td class="dim">8</td><td>219 480</td><td>219 476</td><td>0</td><td>40.0 ms</td><td class="dim">7</td><td class="dim">—</td></tr>
+                  <tr class="sub"><td>lease · Q13.1 Storm bed</td><td class="g">sounding</td><td>4</td><td class="dim">8</td><td>36 960</td><td>36 956</td><td>0</td><td>40.0 ms</td><td class="dim">7</td><td class="dim">—</td></tr>
+                  <tr class="sub"><td>lease · Q9 walk-in (fading)</td><td class="a">releasing</td><td>2</td><td class="dim">8</td><td>412 800</td><td>412 798</td><td>0</td><td>40.0 ms</td><td class="dim">7</td><td class="dim">—</td></tr>
+                  <tr class="sub"><td>monitor · audition</td><td class="dim">idle</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="chain">
+              <span class="badge bad">Record behind</span>
+              <span class="dim2">7 of 8 chunks in flight, 12 dropped — the encoder is not draining. Recording will gap before it fails.</span>
+            </div>
+          </div>
+          <div class="lay" style="grid-template-columns:1fr 1fr;padding:0;gap:7px">
+            <div class="pnl">
+              <div class="pnl-hd">Video &amp; compositions</div>
+              <div style="overflow-x:auto">
+                <table class="diag">
+                  <thead><tr><th>Composition</th><th>Fps</th><th>Layers</th><th>Late</th><th>Dropped</th><th>GPU</th></tr></thead>
+                  <tbody>
+                    <tr><td class="name">Cyc · 1920×1080</td><td class="g">29.97</td><td>2</td><td>0</td><td>0</td><td class="dim">GL</td></tr>
+                    <tr><td class="name">Portal · 1280×720</td><td class="a">28.4</td><td>1</td><td class="a">6</td><td>0</td><td class="dim">GL</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="pnl">
+              <div class="pnl-hd">Log tail <span class="hint mono">MS logging pipeline · level: Warning ▾ · follows file log</span></div>
+              <div class="logtail">
+                <span><span class="t">14:02:11</span> <span class="w">WARN</span> <span class="t">S.Media.Routing</span> OutputPump Record: Submit took 118 ms</span>
+                <span><span class="t">13:58:40</span> <span class="e">ERROR</span> <span class="t">HaCue2.Audio</span> logical output Lobby unpatched — 2 senders routed silent</span>
+                <span><span class="t">13:58:40</span> <span class="w">WARN</span> <span class="t">HaCue2.Status</span> project status: 2 errors, 2 warnings</span>
+                <span><span class="t">13:44:02</span> <span class="t">INFO</span> <span class="t">S.Media.Session</span> clock master 18i20 epoch 7 · 48 000 native <span class="t">· shown because level was Info until 13:50</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>Counters since 13:44:02</span>
+          <span class="spacer"></span>
+          <span class="warn">▲ Record behind</span>
+          <span class="mono">copy report → clipboard as text</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>15 · Diagnostics</b> <span>counters as approved; events replaced by a level-filtered tail of the one real logging pipeline</span></figcaption>
+  </figure>
+
+  <div class="resolved">
+    <p class="eyebrow">Resolved from round 1</p>
+    <ul>
+      <li><b>No second logging system</b> — the panel tails <code>Microsoft.Extensions.Logging</code>
+        with a selectable minimum level; the file log stays the archive, the window is a tail.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════ OPEN QUESTIONS ══════════════ -->
+  <div class="sechead">
+    <p class="sectag">Settled</p>
+    <h2>Round-2 decisions</h2>
+  </div>
+  <p>
+    Round 1's cross-cutting questions were settled by your notes (logical outputs, tabs, no importer,
+    one undo journal, no strip); the four that revision 2 raised were settled in review. All owner
+    decisions, recorded here so no screen reopens them:
+  </p>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided in round 2 review</p>
+    <ul>
+      <li><b>External input: one master toggle.</b> The old Triggers/Schedules/Chase arms — the gates on
+        the three ways a cue fires without a keypress (MIDI/OSC/hotkey bindings, wall-clock schedules,
+        MTC chase) — collapse into a single <b>External input</b> on/off in the transport. Per-source
+        enables live in Targets; off when a project opens (project setting); never gates GO.</li>
+      <li><b>Output info: drawer + pop-out.</b> Hidden by default, status-bar toggle or <code>F9</code>,
+        slides over the active panel, poppable to its own window for a second monitor.</li>
+      <li><b>Lock latch stays</b> — one title-bar chip, opt-in only: read-only document, destructive
+        commands disabled, GO untouched. Never the launch state.</li>
+      <li><b>Row click is a per-project setting</b> (Show behaviour · “Clicking a cue row moves
+        standby”), <b>default off</b>: single click view-selects, double-click or ↑/↓ Stby moves
+        standby. Shows that want QLab-style click-to-target flip the setting.</li>
+    </ul>
+  </div>
+
+  <div class="resolved">
+    <p class="eyebrow">Decided in round 3 review</p>
+    <ul>
+      <li><b>Output Groups are v1</b> — named, linked-editing groups of logical outputs (see screen 06
+        for the spec); a stereo pair is a two-member group.</li>
+      <li><b>Multi-list transport is v1.</b> Every cue list keeps its own standby/playhead in model
+        <em>and</em> UI: the transport acts on the selected list, each list remembers its position, and
+        per-list GO becomes addressable by hotkeys, triggers and the remote API
+        (<code>POST /lists/{id}/go</code>). This supersedes the old “single playhead with model
+        insurance” resolution. The transport row and Lists &amp; groups need a dedicated drawing pass
+        for it — queued for revision 4, and the extraction plan carries the scope change.</li>
+      <li><b>Panel behaviour refined (screen 03):</b> selection never auto-flips the right panel;
+        Cue properties reopens in the no-selection state.</li>
+      <li><b>Next work product:</b> update
+        <code>Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md</code> to agree with this
+        revision before any code.</li>
+    </ul>
+  </div>
+
+  <footer>
+    HaCue2 UI design · all screens · revision 3 · 2026-08-01 · mockups are HTML, not screenshots — no
+    build exists yet · content is the fictional “midsummer-2026” show · companion:
+    Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md
+  </footer>
+
+</div>
