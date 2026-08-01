@@ -1,14 +1,18 @@
 # HaCue2 extraction and project audio patch plan
 
 Status: active plan — reviewed against the code 2026-07-30 (four architecture decisions resolved);
-updated 2026-08-01 to agree with the approved rev-3 UI design (see "Design decisions from the
-2026-08-01 UI pass", which supersedes conflicting statements elsewhere in this document)  
+updated 2026-08-01 twice: first to agree with the approved rev-3 UI design ("Design decisions from the
+2026-08-01 UI pass"), then to absorb the framework audit ("Framework audit decisions D1–D11"). **Both
+registers supersede conflicting statements elsewhere in this document**, and
+`Plans/HaCue2-Framework-Gap-Analysis.md` supersedes this document's "Current-state findings" wherever
+they disagree — it was written against the code, this section partly was not.  
 Date: 2026-07-30 · updated 2026-08-01  
 Scope: split the Cue Player out of HaPlay into a dedicated **HaCue2** application and replace
 per-cue direct-to-device audio routing with a persistent project-level logical-output patch.
 Companion documents: `Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html` (the approved
-rev-3 UI spec — authoritative for every screen), `Plans/HaCue-Feature-Ideas.md` (enhancement
-backlog, not first-release scope).
+rev-3 UI spec — authoritative for every screen), `Plans/HaCue2-Framework-Gap-Analysis.md` (the
+framework audit — authoritative for what the code currently does), `Plans/HaCue-Feature-Ideas.md`
+(enhancement backlog, not first-release scope).
 
 Naming note: the product is **HaCue2** (`UI/HaCue2/…`, `HaCue2.Core`, `.hacue2proj`,
 `hacue2 --check`). Where this document says "HaCue" below, read HaCue2; the UI word for a
@@ -193,6 +197,43 @@ decision; where older text in this document disagrees, this register wins.
     insert dropdown and help popover. The launcher (recents, inline recovery, machine device
     checks) opens projects in editing mode.
 
+## Framework audit decisions (2026-08-01) — D1–D11
+
+A six-part audit of `MediaFramework/` against the rev-3 UI and the register above produced
+`Plans/HaCue2-Framework-Gap-Analysis.md`. **That document is authoritative for current-state facts**
+about the framework; where the "Current-state findings" section below disagrees with it, the gap
+analysis wins — its §8 lists 21 specific statements in this plan that the code contradicts, with
+`file:line` evidence. Read it before starting any phase.
+
+The audit raised eleven decisions, all owner-answered:
+
+| # | Decision | Effect on this plan |
+|---|---|---|
+| D1 | **HaPlay keeps evolving alongside HaCue2** | Forking `ShowSession` is off the table. The shared engine needs a *real* cue/engine seam, and document version tolerance becomes mandatory (two live apps + the C ABI cannot share a hard `Version ==`). See gap analysis §10. |
+| D2 | **Build a clock-master watchdog** with pre-emptive detach | New Phase 3 item, not present in the recovered work. A wedged pacing master currently faults and permanently kills the router. |
+| D3 | **Outbound OSC/MIDI ramps are v1** | The automation-lane work is three features (internal audio, internal video, outbound sender), not two. Settle the three contract points in gap analysis §3.2 before fixing the lane record's shape. |
+| D4 | **Control-surface feedback extracts with `HaControl.Input`** | Phase 2 grows: the LED/scribble/motor-fader half leaves HaPlay's Control workspace too. Scope = shared sender + HaCue2-owned feedback mapping, *not* a port of HaPlay's mixer-surface logic. |
+| D5 | **Multiple visualizer cues per composition must work** | Turns register item 21 from "delete dead fields" into real framework work: key visualizer slots by cue id, one surface per source, and a documented cap (N visualizers = N renderers on one composition GL thread). |
+| D6 | **Disabled-cue auto-follow is a project setting** | Skip-onward vs stop-the-chain. The framework implements only *stop* today, and **both** the framework chain and the host's `ClipNaturallyEnded` path must honour the setting. |
+| D7 | **`MaxReleasingVoices`: bounded N, default 3** (delegated) | Per transport group, so the real ceiling is N × active lists — check that against the 8-voice budget. Fade the oldest tail when the bound is hit rather than hard-cutting. |
+| D8 | **Audition channel count follows the configured audition output** | **Settles open question 17** with a third answer: the audition rig is an output like any other and takes that output's width. Never hardcoded stereo. |
+| D9 | **Headless status CLI verb is draft** | `--check` / `--preflight` naming is unfixed; treat every occurrence as a placeholder. The headless form itself still ships. |
+| D10 | **`UI/**/*.Tests` are exempt from arch rules** | As `Test/` already is. One line in the new UI scope — which must be *added*, since the arch tests cannot see `UI/` at all today. |
+| D11 | **CI covers the extraction branch** | **Done**: `.github/workflows/build.yml` now triggers on `[master, 'next-*', 'cue-*']`. |
+
+**The single most important audit finding is not a decision but a discovery:** most of the Phase 3
+framework work already exists, tested, on an unreferenced commit now preserved as tag
+**`hacue-archive-2026-08-01`** (`bdf27ffd`) — `AudioPatchBay`, `ProgramBusSource`, `AudibleClientClock`,
+`ShowProgramAudio`, the `ShowSession` integration, the preview monitoring seam, the wide-matrix
+benchmarks and ~1100 lines of tests, with near-zero drift from today's HEAD. **Push that tag.** Phase 3
+is a recover/review/rebase job, not greenfield.
+
+**The largest uncosted gap** is also not in this plan: `ShowSession.LoadDocumentCoreAsync` unconditionally
+tears down every transport group, destroying every list's GO cursor *and stopping every playing voice in
+every list* — while the app reloads on a 300 ms debounce after any edit. Register item 5 (multi-list
+transport) and item 3 ("editing never blocks playback") are both blocked on making that load
+non-destructive. See gap analysis §2.1.
+
 ## Provisional product decisions
 
 These recommendations let implementation proceed. The questions that still need an owner decision
@@ -348,14 +389,23 @@ This is fixed in Phase 1, before the golden fixtures are recorded (resolved deci
 Phase 0 characterization pins the defect as required behavior and every later "equivalent effective
 source-to-real matrix" assertion has to carve out an exception for it.
 
-### A dead half-built version of this feature already exists
+### Two dead half-built versions already exist in the session layer
 
 `S.Media.Session/ClipAudioOutputRuntime.cs` (310 lines) is documented as "owns one `AudioRouter`
 feeding one physical `IAudioOutput`, and lets multiple cue clips add/remove routed sources" — the
 per-output half of what `AudioPatchBay` needs. It is referenced by nothing outside itself.
 
-Phase 0 must either delete it or declare it the seed of the bay. Leaving it in place while building
-a second thing with the same responsibility is how the next reviewer loses a day.
+**Settled by the audit: delete it, do not seed from it.** Its topology is precisely the `P×R` form this
+plan replaces — one router per *terminal* at the **output's** rate, every clip source routed directly to
+that terminal per cell, with no lease, no matrix reconciliation, no monitoring and no shared mix rate.
+The only reusable ideas are its base-gain bookkeeping and a fade helper that duplicates what
+`RouteGainSlot`'s per-chunk ramp already does better. The recovered archive already deletes it.
+
+**A second decoy was found in the same folder:** `SoundboardGrid.cs` (267 lines) has **zero external
+references** anywhere in `MediaFramework/` or `UI/` — only its static `SoundboardQuantization` helper is
+live, consumed by `SoundboardWorkspaceViewModel`. Delete the rest with it. Together the two are 577 lines
+shaped like responsibilities the session layer was once expected to own, and leaving them in place is how
+the next reviewer concludes the framework owns soundboard concepts.
 
 ### The router cannot host an output at a rate other than its own
 
@@ -502,15 +552,32 @@ between two applications that must read each other's cue files, so it is shared:
 - source → registry path/URI mapping and probe helpers;
 - the add-media / media-properties / subtitle-selection dialogs.
 
-`HaControl.Input` — also missed. MIDI/OSC input **device** ownership lives in
-`ControlWorkspaceViewModel` (3,825 lines across partials), which the plan leaves in HaPlay, while
-`MainViewModel` forwards `ControlMonitorRecord`s into `CueTriggerService`
-(`MainViewModel.cs:106,230`). Cue triggers cannot work in HaCue without a device layer, so the
-open/monitor/learn half is extracted:
+`HaControl.Input` — also missed.
 
-- MIDI/OSC device enumeration, open, and monitor-record stream;
-- the learn flow and the trigger-input configuration cues bind against;
-- `ActionEndpoint` outbound targets plus `ActionEndpointProbe` / `EndpointHealthMonitor`.
+> **CORRECTED 2026-08-01 by the framework audit.** This section originally claimed MIDI/OSC input
+> **device** ownership lives in `ControlWorkspaceViewModel`. That is **wrong**. The device layer is
+> already framework-side and Avalonia-free in `S.Control`: `ControlInputSession` provides ref-counted
+> device open/close, an `InputObserved` monitor-record stream and dispatcher/monitor leases, alongside
+> `ControlMIDIPortCatalogProvider`, `ControlMIDIDeviceResolver`, `ControlSystemMIDIDeviceSessions`,
+> `ControlOSCListenerManager`, `UdpControlOSCSender`, `ControlSystemConfig`/`IO` and
+> `ControlDeviceHealthRegistry`. The extraction is therefore smaller and lower-risk than this plan
+> assumed. See `Plans/HaCue2-Framework-Gap-Analysis.md` §5.1.
+
+What is actually stuck in HaPlay and must move:
+
+- **session lifecycle glue** — `ControlWorkspaceViewModel.MidiFallback.cs:165-280`: the session factory,
+  config-signature diffing, retry-on-failed-open, the sync gate and teardown ordering (~120 lines of
+  carefully-commented lifetime code every host needs, reachable today only through an Avalonia ViewModel);
+- **the learn flow, which exists twice** — a control-workspace implementation for script triggers and a
+  separate, simpler one for cue triggers — to be unified into one record→binding capture service (the
+  pure parts are already `internal static` and Avalonia-free, so they lift cleanly);
+- **the cue trigger matcher** (`CueTriggerService`'s MIDI/OSC match, map, latch and retrigger guard),
+  Avalonia-free except its hotkey path and localized strings;
+- `ActionEndpoint` outbound targets plus `ActionEndpointProbe` / `EndpointHealthMonitor` (the latter
+  needs its `DispatcherTimer` swapped for a timer abstraction);
+- the host fan-out in `MainViewModel.cs:107,215-231` — the I/O-thread pre-filter → chase → accept →
+  UI-thread post chain, 15 lines that encode the whole performance contract;
+- **the control-surface feedback half (D4)** — see the Phase 2 bullet.
 
 HaPlay keeps the full Control workspace — graphs, scripting, mixer layers, device profiles — on top
 of this shared input layer.
@@ -873,6 +940,32 @@ glitchy in-place width change. Rename, reorder, and V×R patch edits can remain 
 
 ## ShowSession redesign
 
+> **Scope widened 2026-08-01 (D1).** With HaPlay confirmed as a continuing product, `ShowSession` now has
+> **two first-class customers**, and the audit found the fault line is not HaPlay-vs-HaCue2 but
+> **engine-vs-cue-semantics**. Evidence: HaPlay already contains *two* mappers targeting `ShowDocument` —
+> the cue mapper and `MediaPlayerShowMapper`, where the **deck** wraps a single playlist item in a
+> one-clip document and invents a synthetic cue named `"player"` just to reach the engine. Only **one of
+> `ShowDocument`'s six members** (`Cues`) is a cue concept, and `ShowDocument.cs` defines zero cue types.
+> Roughly **3,900 of `ShowSession`'s 4,150 partial lines are app-neutral**; the cue-shaped surface is
+> `CueGraph` (343), `CueFireOrchestrator` (216), `GoAsync` + cursor (~35) and one `AddCue` loop.
+>
+> **Forking is therefore rejected** — it would duplicate ~10,000 lines of concurrency- and clock-critical
+> code (the claim/supersession protocol, `CommitClipAsync`, composition lifetime, device acquisition) that
+> is not cue-specific and would never legitimately diverge. The target is a shared engine with a liftable
+> cue layer:
+>
+> - **`ShowSession` core, cue-free** — load, clip commit, transport-by-clip-id, seek/pause/stop/level,
+>   compositions, live edits, taps, queries. Rename the join key `CueId` → `ClipId`; the deck already
+>   treats it as an opaque string, so this is a rename, not a redesign.
+> - **Cue layer on top** — `CueGraph` + `CueFireOrchestrator` + `GoAsync`/cursor + the `AddCue` loop become
+>   a cue runner that *drives* the core (~600 lines, along seams that already exist).
+> - **Split the `ShowDocument` record, keep one serialization envelope** so the sidecar and the C ABI do
+>   not fork.
+> - **Version tolerance is mandatory**, not optional (see Phase 4): two live apps plus an external ABI
+>   consumer cannot share a hard `Version ==` check without lockstep releases.
+>
+> Full reasoning and evidence: `Plans/HaCue2-Framework-Gap-Analysis.md` §10.
+
 Keep `ShowSession` as the compatibility facade while moving audio responsibilities into a
 collaborator. A possible neutral interface is:
 
@@ -894,9 +987,14 @@ The exact type names are less important than the ownership split:
   send matrix.
 - Fade/master/envelope updates scale the voice's logical send routes. They never rebuild or directly
   address real output devices.
-- Preview uses an injected monitoring output provider.
-- Soundboard voice APIs should leave the cue session boundary. They may keep using `VoicePlayer` in
-  HaPlay or gain their own session/service, but HaCue's cue host must not depend on the soundboard.
+- Preview uses an injected monitoring output provider, **at the audition output's own channel count**
+  (D8) rather than the current hardcoded stereo.
+- Soundboard voice APIs should leave the cue session boundary — and the audit shows this is cheaper than
+  assumed: the soundboard ViewModel **never references `ShowSession`**, the voice half of `VoicePlayer`
+  (~430 lines) touches no document, cue, group or composition, and the stop-claim protocol it shares is
+  already an extracted type. Give it `(dispatcher, standby, soundingRegistry, deviceCache)` and the
+  session's eight voice methods become removable one-line delegations. **This is the recommended first
+  concrete cut of the whole extraction.**
 
 Maintain a legacy direct-output adapter while existing tests/tools and ShowDocument v1 still use
 `ShowClipAudioRoute`. New HaCue documents must use logical sends. Delete the legacy adapter only
@@ -1110,12 +1208,20 @@ HaCue cutover phase.
 - Characterize current playback for those fixtures: routed matrix, gain composition, preview
   policy, output acquisition count, and generated ShowDocument.
 - Record a clean build/test/AOT-smoke baseline.
-- Decide `ClipAudioOutputRuntime`'s fate — delete it or declare it the bay's seed. It is dead code
-  with the bay's job description and must not survive as a decoy.
-- Benchmark the fused matrix kernel at the widths this design actually needs (up to 64×64, several
-  terminals) and set the cell-op budgets from measurement, not from the 8×8 extrapolation in
-  "Performance budgets".
+- **Push the archive tag `hacue-archive-2026-08-01` before anything else** — it is the only copy of the
+  recovered framework work (gap analysis §0) and it exists locally only.
+- **Recover and read the archived framework subset** onto a working branch. It settles several Phase 0
+  questions outright and changes what Phase 3 is.
+- `ClipAudioOutputRuntime`'s fate is **settled: delete it.** It is confirmed dead (zero external
+  references) and is explicitly *not* a usable seed — its topology is the `P×R` form this plan replaces.
+  The archived work already deletes it. **Also delete `SoundboardGrid.cs`** — a second dead file in the
+  same folder, 267 lines, zero external references, keeping only the live `SoundboardQuantization` helper.
+- The wide-matrix benchmark this phase calls for **already exists** in the archive
+  (`WideMatrixBenchmarks.cs`: an 8/16/32/64 sweep plus a program-sum-at-maximums case). Recover and run
+  it rather than writing it; set the cell-op budgets from those numbers.
 - Define latency and matrix-size budgets before the new audio stage is implemented.
+- **Decide the clock-master watchdog's trigger policy** (D2) — this is a design decision that belongs
+  here, before Phase 3 implements it in the router's fault path.
 
 Exit: compatibility behavior is pinned without changing production behavior, and the mix-cost model
 is measured rather than assumed.
@@ -1131,9 +1237,19 @@ Record the pre-fix behavior as a migration note, not as an expected-output asser
   carrier the way the deck already does, and add a regression test that an NDI-routed cue never
   resolves a hardware fallback. This is a behavior change, deliberately taken before the fixtures
   are frozen.
-- Split `CueShowSessionCoordinator` into cue transport and soundboard hosting.
+- Split `CueShowSessionCoordinator` into cue transport and soundboard hosting. **The audit makes this
+  cheaper than it looks**: the soundboard ViewModel never references `ShowSession` at all — it exposes a
+  `PlaySoundCallback` and the coordinator wires it onto the cue session, so the coupling is a wiring
+  decision, not a design one (gap analysis §10.1).
+- **Extract `VoicePlayer`'s soundboard half** (~430 of its 647 lines) into a standalone voice engine
+  taking `(dispatcher, standby, soundingRegistry, deviceCache)` instead of `ShowSession`. It touches no
+  document, no cue, no transport group and no composition; the stop-claim protocol it needs is *already*
+  a shared type. The session's eight voice methods (`ShowSession.cs:947-987`) are one-line delegations
+  that then fall away. This is the cheapest correct cut in the whole plan and it removes the
+  "soundboard depends on the cue player" liability outright.
 - Replace its concrete `OutputManagementViewModel` dependency with a focused runtime-catalog
-  interface.
+  interface. Note `IOutputRuntimeCatalog` does not exist today and has **six** concrete-type consumers to
+  invert (gap analysis §7.1).
 - Move project-independent cue compilation/mapping logic behind a cue-domain service.
 - Move scheduling, trigger, remote-command, and recovery dependencies behind explicit interfaces.
 - Remove direct access from cue code to the root `MainViewModel`.
@@ -1151,40 +1267,76 @@ every audio-capable output kind the cue editor offers actually reaches its own e
 - Extract `HaSource`: the `PlaylistItem` hierarchy and JSON contract, source→URI/probe helpers, and
   the shared add-media / media-properties / subtitle-selection dialogs. Keep the model assembly
   Avalonia-free.
-- Extract `HaControl.Input`: MIDI/OSC device open/monitor/learn plus the outbound `ActionEndpoint`
-  surface and its health probe. HaPlay's Control workspace becomes a consumer of it.
+- Extract `HaControl.Input`. **Correction from the audit: the device layer is already framework-side**
+  (`S.Control`'s `ControlInputSession` owns ref-counted open/close, the `InputObserved` monitor stream and
+  the dispatcher/monitor leases), so this plan's earlier premise that device ownership lives in
+  `ControlWorkspaceViewModel` is wrong. What actually moves is ~120 lines of session lifecycle glue
+  (`ControlWorkspaceViewModel.MidiFallback.cs:165-280`), **two duplicate learn implementations** that
+  should be unified, the cue trigger matcher, and the `ActionEndpoint`/probe/health types. It is
+  lift-and-rehome, not a rewrite (gap analysis §5.1).
+- **Extract the control-surface feedback half too (D4)** — LED, scribble strip, motor faders. The senders
+  already exist framework-side (`IControlMIDISender`, `UdpControlOSCSender`) and `ControlFeedbackMode`
+  already models echo suppression; what moves is the mapping layer and the throttle. First consumer is
+  standby/active state, which is the "which cue is standing by" gap.
 - Keep current HaPlay I/O UI as an adapter over the service.
 - Preserve the acquire/hold/detach/release ordering documented by the cue video path.
 - Add service-level tests for PortAudio shared clients, NDI carrier sides, armed encode sinks,
   output replacement, failure isolation, and lease/raw-terminal mutual exclusion.
-- Register all three libraries in the architecture-test reference rules.
+- **Add a `UI/` scope to the architecture tests first** — they currently walk only `MediaFramework/`, so
+  `UI/` is under *zero* layering enforcement and "register the new libraries" is impossible until the
+  scope exists. `UI/**/*.Tests` are exempt (D10); the allow-map must permit out-of-tree names for the
+  `External/Classic.Avalonia` references.
 
 Exit: HaPlay and a minimal test host can both use the same output runtime service without sharing a
 root ViewModel, and nothing HaCue needs from the cue domain still lives behind a HaPlay-only owner.
 
-### Phase 3 — add the project audio patch to the framework/session
+### Phase 3 — recover, review and rebase the project audio patch
 
-- Add the router's V-wide program-sum stage: sum registered program sources into one logical bus in
-  the chunk pass, then run one dense V×R pass per terminal. Prove by benchmark that it is `P + R`
-  and that it adds no queue (reported latency identical to the single-producer case).
-- Implement and test the neutral `AudioPatchBay` in `S.Media.Routing`, owning its terminals
-  outright.
-- Give the bay an injected resampler factory for terminals off the project rate, and reject a clock
-  master that cannot open natively at the project rate.
-- Extract/generalize client clock and latency behavior from `SharedAudioOutput`; avoid a stacked
-  high-latency bus. Reuse `ClientInput`'s epoch/lead machinery rather than re-deriving it.
-- Add terminal quarantine + hot-swap so a wedged pump cannot force a bay rebuild mid-show.
-- Add patch spec validation and immutable/reconciled snapshots.
-- Add the `ShowSession` program-audio target collaborator and the monitoring-output seam — and
-  change `VoicePlayer`'s preview path to use it instead of opening its own device.
-- Add logical clip sends while retaining the v1 direct-route adapter.
-- Move real device acquisition/matrix realization out of `CommitClipAsync`.
-- Add live V×R patch updates and output health events.
+**Retitled after the audit.** The bullets below were written as greenfield work; **most of them already
+exist**, tested, at tag `hacue-archive-2026-08-01`. Treat each as a review checklist against the recovered
+implementation rather than a build list.
 
-Exit: a framework test can run several simultaneous/crossfading voices through named logical
-channels to several real fake outputs, hot-change the physical patch, quarantine a wedged terminal,
-and keep the voices running — with preview auditioning through the same bay-owned line as the
-program without double-opening the device.
+Already built and tested in the archive (gap analysis §0):
+
+- the router's V-wide program-sum stage and the `AudioPatchBay` owning its terminals outright;
+- the injected resampler factory, with a clock master at a foreign rate rejected as a *named* validation
+  failure;
+- client clock/latency extracted from `SharedAudioOutput` into `AudibleClientClock`, reusing the
+  epoch/lead machinery rather than re-deriving it;
+- terminal quarantine + hot-swap, including the fix that moves deferred pump disposal **off the run-loop
+  thread** (inline, it stalled every other terminal for up to ~3 s);
+- patch validation, the `ShowSession` program-audio target, the monitoring seam with `VoicePlayer`'s
+  preview borrowing a lease instead of opening its own device;
+- logical clip sends (`ShowClipLogicalSend`) retaining the v1 direct-route adapter, plus
+  `ApplyActiveLogicalSendsAsync` for live send edits.
+
+Genuinely new work in this phase:
+
+- **The clock-master watchdog (D2)** — detect a stalling master from pump pressure/in-flight depth and
+  hand the clock off via `RetargetSlaveClock` (the only running-safe path) *before* `RunLoop` faults,
+  falling back to `NullClockedAudioOutput` when no other terminal qualifies. The watchdog must not run on
+  the router thread, false positives must be inaudible, and "report and stop" remains the fallback when
+  the handoff itself fails.
+- **The non-destructive document load** — the largest uncosted item in the plan. `LoadDocumentCoreAsync`
+  currently calls `DisposeGroupsAsync()` unconditionally, wiping every group's GO cursor and stopping
+  every playing voice in every list, on a path the app takes after every structural edit. Both
+  multi-list transport (register item 5) and "editing never blocks playback" (item 3) depend on fixing
+  it — and under D1 this is **shared work, not HaCue2 tax**, because HaPlay wants editing-while-playing
+  too. Fold it in here: it is a `ShowSession` change and this is when that file is open.
+- **Per-logical-output metering** — a peak/RMS tap on the program bus. Nothing in the framework measures
+  audio level today, and three rev-3 screens need it.
+- Raise `MaxReleasingVoices` to a bounded N (D7) and make the loop-crossfade curve data rather than
+  hardcoded `EqualPower`.
+
+Exit: unchanged from the original — several simultaneous/crossfading voices through named logical
+channels to several fake outputs, hot-changing the physical patch, quarantining a wedged terminal and
+keeping the voices running, with preview auditioning through a bay-owned line without double-opening it —
+**plus** a wedged *master* surviving via handoff, and a document reload that leaves untouched lists
+playing.
+
+> **Sequencing warning.** This phase now carries the bay recovery, the load-path change and a fault-path
+> watchdog — three structural changes to the same files. The plan's own risk register warns against
+> stacking structural work; if any phase needs splitting, it is this one.
 
 ### Phase 4 — create HaCue2 project/core
 
@@ -1196,23 +1348,55 @@ program without double-opening the device.
   item 5), custom fade curves + project curve presets (register item 16), effect lanes replacing
   `VolumeEnvelope` (register item 18), the required-output flag (register item 25), and the
   composition model without visualizer fields (register item 21).
+- **Effect lanes are three actuators under one editor (D3)**, and the lane record's shape depends on
+  settling the outbound contract first: an outbound lane is **not** undone when its cue stops (the
+  opposite rule from internal lanes, because it owns a value in another system); Panic's behaviour toward
+  an in-flight ramp must be explicit; and the runner lives beside the action-endpoint sender, never in
+  `ShowSession`. Internal lanes must keep multiplying into the documented composition chain rather than
+  becoming a second gain authority — and note a **layer-opacity lane cannot ride
+  `UpdateActivePlacementAsync`**, which does not refresh `BaseLayerOpacities` and would fight fades;
+  video needs a multiplicative automation component mirroring `SoundingLevel`, which it does not have
+  today.
+- **Custom fade curves reuse an evaluator that already exists.** `VolumeEnvelopes.Sample` is already
+  piecewise interpolation over a point list with a per-segment curve — structurally identical to a
+  normalized custom curve. The gap is only that a *fade* takes the `FadeCurve` enum by value. Widen the
+  type behind `FadeCurves.Shape` (one switch) and thread it through ~15 signatures; add the curve as a
+  **nullable companion field, not a new enum member** (see the enum caveat above).
 - **Build the edit-command journal in from the start** (see "Editing model: an undo journal, decided
   now"): commands over `HaCueProject` with `Apply`/`Revert`, coalescing groups, composite multi-edits,
   and the dirty/hash/autosave commit point hanging off it. Every editing surface added later in Phase 4
   and Phase 5 goes through it — this is the phase where that is still cheap.
 - Add `PatchSnapshot` and the `PatchCueNode` kind to the model, validator, and compiler, including
   broken-reference reporting for snapshot cells.
-- Add a `Disabled` flag to `CueNode` — skipped by GO, auto-follow and compilation, still visible.
+- Add a `Disabled` flag to `CueNode` — skipped by GO, auto-follow and compilation, still visible. **The
+  framework half already exists** (`CueDefinition.Enabled`, and GO already filters on it); the work is the
+  app model plus mapping it through. Add the D6 project setting for whether a disabled cue **skips
+  onward or stops** an auto-follow chain, and make both the framework chain and the host's
+  `ClipNaturallyEnded` path honour it.
 - Add uniform reference counting and a reverse-reference ("what targets this?") query over cues,
   logical channels, snapshots, compositions, and endpoints — the delete-safety machinery the plan
   already requires for logical channels, generalized.
-- Add the preflight validator as a pure, headless-runnable pass over a loaded project, plus relink and
-  consolidate as journaled commands.
+- Add the project-status validator as a pure, headless-runnable pass over a loaded project, plus relink
+  and consolidate as journaled commands. **Two audit notes**: a real document validator already exists
+  (`ShowDocumentValidator`) and covers every dead-reference class, so this is the *environment-aware*
+  second pass beside it (missing media, absent devices, clock master) — and every probe it needs already
+  exists, including the device-matching logic buried in `PortAudioOutputRuntime`'s open path. Upgrade the
+  return shape from bare strings to records carrying severity, subject id and a navigation target, which
+  rev-3 needs per row.
+- **Adopt additive-nullable document evolution as a rule** (D1): HaCue2-only members are nullable and do
+  not bump `ShowDocument.Version`, following the archived `LogicalSends` precedent. **Enum extension is
+  the exception** — enums round-trip numerically and the sidecar's real reader is the C ABI host, so a new
+  `FadeCurve` variant would be silently mis-read; use the nullable `CustomCurve` companion instead. Move
+  `SupportedVersion` from a hard `==` to `MinSupported`/`Current` with tolerant loading **before**
+  divergence starts.
 - Add the logical-channel and physical-patch ViewModels plus pure matrix editing operations.
-- Port cue-specific tests to `HaCue.Tests`; leave compatibility tests near the importer.
+- Port cue-specific tests to `HaCue2.Tests` — and copy the headless harness **wholesale**, including
+  `HeadlessSessionBootstrap.cs`, whose custom xunit framework warms the Avalonia session before any test
+  runs. A test assembly that copies the csproj but not that file reproduces a whole-run hang whose
+  occurrence depends on test order.
 
-Exit: a HaCue project round-trips and old fixtures migrate to an equivalent effective
-source-to-real matrix.
+Exit: a HaCue2 project round-trips, its status pass runs headlessly, and every document addition is
+additive-tolerant.
 
 ### Phase 5 — create and prove the HaCue2 application
 
@@ -1228,11 +1412,27 @@ source-to-real matrix.
   undockable timeline, and the Audition rig with per-cue "Preview on audition outputs".
 - Add the patch snapshots pane and the patch-cue editor.
 - Add the Project status UI over the Phase 4 validator, plus the relink and consolidate flows,
-  and expose it headlessly (`hacue2 --check`, exit code + machine-readable report) so it can gate
-  a fixture project in CI.
+  and expose it headlessly (exit code + machine-readable report) so it can gate a fixture project in CI.
+  The CLI verb itself is **draft** (D9).
 - Wire the existing media modules required by cue sources and outputs.
+- **Allow N simultaneous visualizer cues per composition (D5).** Today the visualizer slot dictionary is
+  keyed by composition and `Attach` *replaces* the existing one, so only one can run per canvas. Re-key by
+  cue id and give each source its own surface, honouring the hard constraint that `CreateLayerSurface()`
+  may be called at most once per source (projectM crashes otherwise) with layer 0 owning disposal. Note
+  the ceiling is real: N visualizers are N renderers on that composition's single GL thread, so this needs
+  a documented, validator-enforced cap rather than being discovered at a get-in. The z-order limitation
+  (surface layers always render above frame layers) is **separate work** and out of scope unless called.
+- **Close the video shortfalls rev-3 assumes exist**: a per-**output** test pattern and Identify flash
+  (today's pattern is composition-wide and would light up every bound output while you calibrate one),
+  composition-owned idle images with a per-output fallback (today's per-output idle is suppressed the
+  entire time a cue list holds the line), and the audition **video** surface.
 - Port project recovery, preview, schedules/triggers, remote API (including
-  `POST /lists/{id}/go`), composition mappings, and projectM behavior.
+  `POST /lists/{id}/go` — which depends on the per-list standby from Phase 4, not merely on a new route),
+  composition mappings, and projectM behavior.
+- **Add the diagnostics package**: a non-summing terminal+lease telemetry query (the current session query
+  discards all but enqueued/dropped), a clock epoch/advancing/latency snapshot (values exist on live
+  objects but nothing snapshots them), an in-memory ring `ILoggerProvider` with a volatile level switch
+  for the log tail, and a report serializer for "Copy report".
 - Run HaPlay and HaCue2 side by side against equivalent fixture shows and compare compiled
   documents/effective routes.
 - Add NativeAOT publish and Linux/Windows launch gates mirroring HaPlay's current policy.
@@ -1544,8 +1744,12 @@ Smaller than the four resolved decisions, but each needs an answer before the ph
 
 17. How many channels does preview audition, now that it can target a bay-owned multichannel line?
     It is hardcoded stereo today (`VoicePlayer.cs:182`).  
-    **Recommendation:** audition into the project's logical channels through a monitoring-only send
-    and let the patch place it, rather than adding a second channel-count concept.
+    ~~**Recommendation:** audition into the project's logical channels through a monitoring-only send~~  
+    **ANSWERED (D8, 2026-08-01):** neither stereo-forever nor audition-into-logical-channels. **The
+    audition rig is an output like any other and takes that output's own channel count** — read from the
+    configured audition device's format, never hardcoded. This is the only one of the three candidate
+    answers that survives auditioning through a multichannel interface. Rev-3 gives the rig its own
+    Audition pane (audio device + video surface) in both the Audio and Video views.
 
 18. Do the two apps share one cache/settings root? HaPlay's is `HaPlayStoragePaths.LocalAppRoot`
     (`HAPLAY_CACHE_ROOT`, `HAPLAY_SETTINGS_PATH`), and the YouTube/MMD-bake caches sit under it.  
@@ -1590,5 +1794,14 @@ The redesign is complete when:
   transportable folder. (Fixture import parity moves to the companion converter's definition of
   done.)
 - Patch snapshots recall partially, idempotently, and without interrupting a running cue.
+- **A document reload leaves untouched cue lists playing** — editing one list never stops another, which
+  is what makes both multi-list transport and edit-while-playing real (D1: HaPlay benefits equally).
+- **A wedged clock master is survived, not fatal** — the watchdog hands the clock off before the router
+  faults, and "report and stop" is only the fallback when the handoff itself fails (D2).
+- **Program levels are measured, not inferred** — per-logical-output meters read real peak/RMS from the
+  program bus.
+- **HaCue2 does not depend on the soundboard**, and HaPlay's soundboard does not depend on the cue
+  engine.
 - Full solution tests, routing/clock performance gates, NativeAOT publish, and Linux/Windows launch
-  smokes pass.
+  smokes pass — **including a HaCue2 AOT-publish gate**, which has no equivalent today and without which
+  an AOT regression ships silently.

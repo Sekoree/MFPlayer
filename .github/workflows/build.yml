@@ -1,11 +1,12 @@
 name: Build
 
 # Main CI: builds the solution, runs the architecture test, AOT-publishes the smoke exe on Windows +
-# Linux, and publishes the desktop app. Runs on master and on the rewrite branches (next-*).
+# Linux, and publishes the desktop app. Runs on master and on the long-lived work branches:
+# next-* (framework rewrite rounds) and cue-* (the HaCue2 cue-player extraction).
 
 on:
   push:
-    branches: [master, 'next-*']
+    branches: [master, 'next-*', 'cue-*']
   pull_request:
   workflow_dispatch:
 
