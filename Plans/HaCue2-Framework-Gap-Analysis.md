@@ -1511,13 +1511,14 @@ needed nothing), the state is:
 | Area | Work rows | Landed |
 |---|---|---|
 | Audio (framework) | 10 | **8** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at, per-lease input counters, clock/latency telemetry, terminal state vocabulary |
-| Session | 6 | **2** — the non-destructive document load, dead-code removal; plus D7 (`MaxReleasingVoices`), which predates the register |
+| Session | 6 | **3** — the non-destructive document load, tolerant versioning, dead-code removal; plus D7 (`MaxReleasingVoices`) |
 | Control | 9 | **2** — the LTC decoder and the transport-neutral chase ingestion |
 | Automation | 4 | **1** — the outbound OSC/MIDI ramp runner (D3) |
+| Fades | 3 | **1** — custom point-list curves as data |
 | Diagnostics | 3 | **1** — the in-memory log sink |
-| Everything else (video, fades, status, remote, build, app-support) | ~15 | 0 |
+| Everything else (video, status, remote, build, app-support) | ~13 | 0 |
 
-So roughly **15 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **17 of ~40 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1551,7 +1552,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Session | **Non-destructive document load** | ✅ **LANDED** — `preserveActiveGroups` retains unchanged groups + their GO cursors | §2.1 |
 | Session | Per-cue `Disabled` | EXISTS in framework, ABSENT in app model | §2.2 |
 | Fades | Centralised curve math | EXISTS (`FadeCurves`) | §3.1 |
-| Fades | Custom (point-list) curves as data | ABSENT — evaluator exists (`VolumeEnvelopes.Sample`) | §3.1 |
+| Fades | Custom (point-list) curves as data | ✅ **LANDED** — `CustomFadeCurve` + `FadeShape`, additive nullable document fields (no enum extension) | §3.1 |
 | Fades | Per-transition playlist crossfade | EXISTS (per-fire args) — app-only work | §3.3 |
 | Automation | Volume envelope | EXISTS | §3.2 |
 | Automation | Layer-opacity lane | ABSENT (needs a video level-composition chain) | §3.2 |
@@ -1597,4 +1598,4 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Session | `VoicePlayer` voice/preview split | Separable now (~430 voice lines, zero cue dependency) | §10.4 |
 | Session | Dead code in the session layer | ✅ **LANDED** — both deleted; `SoundboardQuantization` split out | §10.1 |
 | Session | Additive-nullable document evolution | EXISTS as a proven precedent (`LogicalSends`, no version bump) | §10.3 |
-| Session | Tolerant document versioning | ABSENT (hard `==`); enum extension silently mis-reads in the C ABI | §10.3 |
+| Session | Tolerant document versioning | ✅ **LANDED** — `MinimumSupportedVersion`..`CurrentVersion`, tolerant below / closed above | §10.3 |

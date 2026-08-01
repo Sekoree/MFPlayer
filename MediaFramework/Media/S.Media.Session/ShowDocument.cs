@@ -152,12 +152,22 @@ public sealed record ShowClipBinding(
     /// <summary>Gain curve for <see cref="FadeIn"/> (GUI <c>FadeInCurve</c>). Linear = pre-curve behavior.</summary>
     public FadeCurve FadeInCurve { get; init; } = FadeCurve.Linear;
 
+    /// <summary>Optional user-drawn shape for the fade-in, overriding <see cref="FadeInCurve"/> when set.
+    /// <para>Additive and nullable on purpose: a reader that does not know about it ignores the field and
+    /// falls back to the enum law. Extending <see cref="FadeCurve"/> instead would be a silent breaking
+    /// change, because enums round-trip numerically and the document's external reader (the C ABI host)
+    /// would decode an unknown member as some other valid law.</para></summary>
+    public CustomFadeCurve? FadeInShape { get; init; }
+
     /// <summary>Fade-out at clip end (GUI <c>FadeOutMs</c>).</summary>
     public TimeSpan FadeOut { get; init; }
 
     /// <summary>Gain curve for <see cref="FadeOut"/> - the natural fade-out AND the stop fade whenever the
     /// clip's own <see cref="FadeOut"/> wins the stop-duration precedence.</summary>
     public FadeCurve FadeOutCurve { get; init; } = FadeCurve.Linear;
+
+    /// <summary>Optional user-drawn shape for the fade-out; see <see cref="FadeInShape"/>.</summary>
+    public CustomFadeCurve? FadeOutShape { get; init; }
 
     /// <summary>Loop the trimmed clip (GUI <c>MediaCueNode.Loop</c>, also implied by <see cref="ClipEndBehavior.Loop"/>).</summary>
     public bool Loop { get; init; }

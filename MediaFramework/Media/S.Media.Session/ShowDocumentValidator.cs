@@ -19,8 +19,47 @@ public sealed class ShowDocumentValidationException(IReadOnlyList<string> errors
 /// </summary>
 public static class ShowDocumentValidator
 {
+    /// <summary>The schema version this build writes.</summary>
+    public const int CurrentVersion = 1;
+
+    /// <summary>The oldest schema version this build can still load.</summary>
+    /// <remarks>
+    /// Older documents are accepted because every field added since is additive and nullable, and
+    /// <c>LoadDocumentCoreAsync</c> null-coalesces missing collections - so an older document simply lacks
+    /// features rather than being malformed.
+    /// </remarks>
+    public const int MinimumSupportedVersion = 1;
+
     /// <summary>The single schema version this build understands.</summary>
-    public const int SupportedVersion = 1;
+    [Obsolete($"Use {nameof(CurrentVersion)} (writing) or {nameof(MinimumSupportedVersion)} (loading).")]
+    public const int SupportedVersion = CurrentVersion;
+
+    /// <summary>Point-list rules for a user-drawn fade shape: at least two points, sorted, finite, and
+    /// within the normalized 0..1 range the evaluator assumes.</summary>
+    private static void ValidateFadeShape(
+        List<string> errors, string cueId, string which, CustomFadeCurve? shape)
+    {
+        if (shape is null)
+            return;
+
+        var points = shape.Points;
+        if (points.Count < 2)
+        {
+            errors.Add($"the clip for cue '{cueId}' has a custom {which} shape with fewer than two points.");
+            return;
+        }
+
+        for (var i = 0; i < points.Count; i++)
+        {
+            var p = points[i];
+            if (!double.IsFinite(p.Progress) || !double.IsFinite(p.Level))
+                errors.Add($"the clip for cue '{cueId}' has a non-finite custom {which} shape point.");
+            else if (p.Progress < 0 || p.Progress > 1 || p.Level < 0 || p.Level > 1)
+                errors.Add($"the clip for cue '{cueId}' has a custom {which} shape point outside 0..1.");
+            if (i > 0 && p.Progress < points[i - 1].Progress)
+                errors.Add($"the clip for cue '{cueId}' has an unsorted custom {which} shape.");
+        }
+    }
 
     /// <summary>Validates <paramref name="document"/> and returns every problem found (empty ⇒ valid).</summary>
     public static IReadOnlyList<string> Validate(ShowDocument document)
@@ -28,8 +67,16 @@ public static class ShowDocumentValidator
         ArgumentNullException.ThrowIfNull(document);
         var errors = new List<string>();
 
-        if (document.Version != SupportedVersion)
-            errors.Add($"unsupported document version {document.Version} (this build supports version {SupportedVersion}).");
+        // Tolerant on the low side, closed on the high side. Two actively developed apps plus an external
+        // ABI consumer share this format, so a hard equality check would force lockstep releases for every
+        // additive change; a NEWER document still fails closed and loudly, because this build genuinely
+        // cannot know what it would be ignoring.
+        if (document.Version < MinimumSupportedVersion || document.Version > CurrentVersion)
+        {
+            errors.Add(
+                $"unsupported document version {document.Version} (this build loads " +
+                $"{MinimumSupportedVersion}..{CurrentVersion}).");
+        }
 
         // Cues: non-empty unique ids, and unique numbers (GO advances by number, so duplicates break the cursor).
         var cueIds = new HashSet<string>(StringComparer.Ordinal);
@@ -134,6 +181,11 @@ public static class ShowDocumentValidator
                         errors.Add($"the clip for cue '{clip.CueId}' has an invalid audio matrix cell gain.");
                 }
             }
+
+            // User-drawn fade shapes: the constructor enforces sortedness and finiteness, but a document
+            // deserialized straight into the record bypasses it, so the same rules are checked here.
+            ValidateFadeShape(errors, clip.CueId, "fade-in", clip.FadeInShape);
+            ValidateFadeShape(errors, clip.CueId, "fade-out", clip.FadeOutShape);
 
             // Logical sends (HaCue two-matrix model): cell sanity only - whether a LogicalChannelId
             // exists is a PROJECT question the session cannot answer from the document alone (the

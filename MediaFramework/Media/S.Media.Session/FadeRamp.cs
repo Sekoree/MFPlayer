@@ -52,6 +52,29 @@ public static class FadeCurves
             ? target + (start - target) * LevelDown(elapsed, duration, curve)
             : start + (target - start) * LevelUp(elapsed, duration, curve);
 
+    /// <summary>The down-ramp level shaped by <paramref name="shape"/>, which may be a user-drawn curve.
+    /// A custom shape is normalized (0 = fade start, 1 = fade end), so the same drawing applies to a fade
+    /// of any duration.</summary>
+    public static float LevelDown(TimeSpan elapsed, TimeSpan duration, FadeShape shape)
+    {
+        if (shape.Custom is not { } custom)
+            return LevelDown(elapsed, duration, shape.Law);
+        if (duration <= TimeSpan.Zero)
+            return custom.Evaluate(1d);
+        return custom.Evaluate(Math.Clamp(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d));
+    }
+
+    /// <summary>The up-ramp level shaped by <paramref name="shape"/>. A custom curve is used as drawn -
+    /// it is the author's shape, not a law to be inverted - so a rise reads the same curve a fall does.</summary>
+    public static float LevelUp(TimeSpan elapsed, TimeSpan duration, FadeShape shape)
+    {
+        if (shape.Custom is not { } custom)
+            return LevelUp(elapsed, duration, shape.Law);
+        if (duration <= TimeSpan.Zero || elapsed >= duration)
+            return custom.Evaluate(1d);
+        return custom.Evaluate(Math.Clamp(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d));
+    }
+
     /// <summary>Shapes linear progress <paramref name="p"/> ∈ [0,1] into a gain. Every curve maps 0 → 0 and
     /// 1 → 1 and is monotonic, so ramp endpoints (and the "target reached" checks against 0/1) hold for all.</summary>
     private static float Shape(double p, FadeCurve curve) => (float)(curve switch
@@ -174,4 +197,12 @@ internal static class FadeRamp
     /// 0 → 1, clamped, optionally shaped (<see cref="FadeCurves.LevelUp"/>; default stays linear).</summary>
     public static float LevelUp(TimeSpan elapsed, TimeSpan duration, FadeCurve curve = FadeCurve.Linear) =>
         FadeCurves.LevelUp(elapsed, duration, curve);
+
+    /// <summary>Up-ramp shaped by a <see cref="FadeShape"/>, which may carry a user-drawn curve.</summary>
+    public static float LevelUp(TimeSpan elapsed, TimeSpan duration, FadeShape shape) =>
+        FadeCurves.LevelUp(elapsed, duration, shape);
+
+    /// <summary>Down-ramp shaped by a <see cref="FadeShape"/>, which may carry a user-drawn curve.</summary>
+    public static float LevelDown(TimeSpan elapsed, TimeSpan duration, FadeShape shape) =>
+        FadeCurves.LevelDown(elapsed, duration, shape);
 }

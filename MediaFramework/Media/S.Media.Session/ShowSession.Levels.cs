@@ -29,7 +29,7 @@ public sealed partial class ShowSession
     /// stops it - without either, two 25 ms ramps would alternately overwrite the clip level and the fade-in's
     /// final full-level step would destroy the fade cue's result.</summary>
     private void StartFadeIn(string groupId, TransportVoice voice,
-        IReadOnlyList<AudioRouteTarget> routes, TimeSpan duration, FadeCurve curve, bool fadesVideo,
+        IReadOnlyList<AudioRouteTarget> routes, TimeSpan duration, FadeShape curve, bool fadesVideo,
         CancellationToken ct)
     {
         var player = voice.Player;

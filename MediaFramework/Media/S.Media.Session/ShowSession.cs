@@ -875,7 +875,11 @@ public sealed partial class ShowSession : IAsyncDisposable
         // incoming half of the cross; a configured per-cue FadeIn (and its curve) always wins.
         var fadeIn = binding.FadeIn > TimeSpan.Zero || crossfade is not null;
         var fadeInDuration = binding.FadeIn > TimeSpan.Zero ? binding.FadeIn : crossfade?.Duration ?? TimeSpan.Zero;
-        var fadeInCurve = binding.FadeIn > TimeSpan.Zero ? binding.FadeInCurve : crossfade?.Curve ?? FadeCurve.Linear;
+        // A user-drawn shape on the binding wins over the built-in law; a crossfade-implied fade-in has
+        // no binding of its own, so it keeps the crossfade's law.
+        FadeShape fadeInCurve = binding.FadeIn > TimeSpan.Zero
+            ? new FadeShape(binding.FadeInCurve, binding.FadeInShape)
+            : crossfade?.Curve ?? FadeCurve.Linear;
         // Retained for the active clip so both fade-in and every stop path ramp each route relative to its
         // configured gain rather than assuming unity.
         var routeTargets = new List<AudioRouteTarget>();
