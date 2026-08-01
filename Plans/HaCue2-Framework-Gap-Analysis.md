@@ -1512,14 +1512,15 @@ needed nothing), the state is:
 |---|---|---|
 | Audio (framework) | 10 | **8** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at, per-lease input counters, clock/latency telemetry, terminal state vocabulary |
 | Session | 6 | **3** — the non-destructive document load, tolerant versioning, dead-code removal; plus D7 (`MaxReleasingVoices`) |
-| Control | 9 | **2** — the LTC decoder and the transport-neutral chase ingestion |
+| Control | 9 | **3** — the LTC decoder, transport-neutral chase ingestion, cc→parameter bindings |
 | Automation | 4 | **1** — the outbound OSC/MIDI ramp runner (D3) |
 | Fades | 3 | **1** — custom point-list curves as data |
 | Diagnostics | 3 | **2** — the in-memory log sink, "Copy report" |
 | Video | 9 | **2** — per-output telemetry, composition target fps |
-| Everything else (status, remote, build, app-support) | ~10 | 0 |
+| Build | 4 | **1** — arch-test `UI/` scope |
+| Everything else (status, remote, app-support) | ~8 | 0 |
 
-So roughly **20 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **22 of ~40 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1575,7 +1576,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Status | Missing-media / absent-device checks | ABSENT — but every probe already exists, incl. device matching | §6.6 |
 | Control | Device layer (open/monitor/resolve/persist) | EXISTS in `S.Control` | §5.1 |
 | Control | Session lifecycle glue + learn + matching | app-side; lift-and-rehome | §5.1 |
-| Control | cc → parameter bindings | ABSENT (dead `ControlGraphConfig` schema to reuse) | §5.2 |
+| Control | cc → parameter bindings | ✅ **LANDED** — `ParameterRegistry` + `ContinuousBinding` (soft takeover) + `CoalescingParameterWriter` | §5.2 |
 | Control | Single external-input gate | ABSENT (three differently-shaped gates) | §5.3 |
 | Control | MTC decode/chase | EXISTS | §5.4 |
 | Control | Audio input capture (LTC prerequisite) | EXISTS (`PortAudioInput`, `padev:` scheme) | §5.4a |
@@ -1588,7 +1589,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | App support | `HaOutput` engine | EXISTS, 8 couplings to invert | §7.1 |
 | App support | `IOutputRuntimeCatalog` | ABSENT (6 extraction sites) | §7.1 |
 | App support | `HaSource` model | EXISTS, Avalonia-free; `CueSubtitleSelection` entangled | §7.2 |
-| Build | Arch-test coverage of `UI/` | **ABSENT (framework-only scope)** | §7.3 |
+| Build | Arch-test coverage of `UI/` | ✅ **LANDED** — `UiAllowed` map + 3 tests, incl. "no app references another app" | §7.3 |
 | Build | Second AOT head + CI gates | Template exists; HaCue2 steps ABSENT | §7.4 |
 | Build | Per-app settings/recovery roots | ABSENT (hardcoded `"HaPlay"`, 4 collision sites) | §7.5 |
 | Build | One shared media cache | EXISTS already (under `mfplayer/`), but not sandboxed by the env override | §7.5 |

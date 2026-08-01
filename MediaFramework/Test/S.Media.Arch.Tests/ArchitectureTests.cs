@@ -87,6 +87,113 @@ public sealed class ArchitectureTests
     private static readonly string[] FrameworkDirs =
         ["Media", "Control", "Interop", "Audio", "MIDI", "NDI", "OSC", "Subtitles", "Visualizer"];
 
+    /// <summary>
+    /// Layering rules for the app tree. Until now <c>UI/</c> was invisible to these tests - the scope
+    /// walked only <c>MediaFramework/</c> - so the apps and the shared app-support libraries had NO
+    /// enforcement at all, and the extraction plan's "register each new library in the arch tests" was
+    /// impossible to satisfy. This is that scope.
+    /// </summary>
+    /// <remarks>
+    /// Two differences from the framework map. Out-of-tree names are allowed (HaPlay references three
+    /// <c>External/Classic.Avalonia</c> projects), and test projects under <c>UI/</c> are exempt exactly
+    /// as <c>Test/</c> is in the framework: a test legitimately reaches across layers, so enforcing them
+    /// adds churn without catching real violations.
+    /// </remarks>
+    private static readonly Dictionary<string, HashSet<string>> UiAllowed = new(StringComparer.Ordinal)
+    {
+        // The apps sit at the top and may consume any framework layer.
+        ["HaPlay"] =
+        [
+            "Classic.Avalonia.Theme", "Classic.Avalonia.Theme.ColorPicker", "Classic.Avalonia.Theme.Dock",
+            "S.Media.Core", "S.Media.Time", "S.Media.Routing", "S.Media.Players", "S.Media.Gpu",
+            "S.Media.Compositor", "S.Media.Session", "S.Media.Subtitles", "S.Media.Interop", "S.Abi",
+            "S.Media.Decode.FFmpeg", "S.Media.Encode.FFmpeg", "S.Media.Stream.Http",
+            "S.Media.Visualizer.ProjectM", "S.Media.Source.YouTube", "S.Media.Source.MMD",
+            "S.Media.Source.Text", "S.Media.Audio.PortAudio", "S.Media.Audio.MiniAudio", "S.Media.NDI",
+            "S.Media.Present.SDL3", "S.Media.Present.SDL3.Compositor", "S.Media.Present.Avalonia",
+            "S.Control", "S.Control.Abstractions", "PMLib", "OSCLib",
+            // Shared app-support libraries, as they land (HaCue2 extraction phase 2).
+            "HaOutput", "HaSource", "HaControl.Input", "HaStrings",
+        ],
+        // A desktop head is a composition root: it references its app and nothing else.
+        ["HaPlay.Desktop"] = ["HaPlay"],
+        ["HaViz.Desktop"] =
+        [
+            "HaViz.Core", "S.Media.Core", "S.Media.Routing", "S.Media.Players", "S.Media.Decode.FFmpeg",
+            "S.Media.Audio.PortAudio", "S.Media.Present.SDL3.Compositor",
+        ],
+        ["HaViz.Android"] = ["HaViz.Core"],
+        ["HaViz.Core"] = ["S.Media.Core", "S.Media.Compositor", "S.Media.Visualizer.ProjectM", "S.Media.NDI"],
+    };
+
+    /// <summary>Every <c>UI/</c> project except test assemblies, which are exempt (see
+    /// <see cref="UiAllowed"/>).</summary>
+    private static IEnumerable<string> UiProjects(string root)
+    {
+        var ui = Path.Combine(root, "UI");
+        if (!Directory.Exists(ui))
+            yield break;
+        foreach (var f in Directory.EnumerateFiles(ui, "*.csproj", SearchOption.AllDirectories))
+        {
+            if (!Path.GetFileNameWithoutExtension(f).EndsWith(".Tests", StringComparison.Ordinal))
+                yield return f;
+        }
+    }
+
+    [Fact]
+    public void EveryUiProjectIsRegisteredInTheRules()
+    {
+        foreach (var csproj in UiProjects(RepoRoot()))
+        {
+            var name = Path.GetFileNameWithoutExtension(csproj);
+            Assert.True(UiAllowed.ContainsKey(name),
+                $"'{name}' is not in the UiAllowed map. Add it there (with its allowed references) before adding the project.");
+        }
+    }
+
+    [Fact]
+    public void UiProjectReferencesAreAllowed()
+    {
+        var violations = new List<string>();
+        foreach (var csproj in UiProjects(RepoRoot()))
+        {
+            var name = Path.GetFileNameWithoutExtension(csproj);
+            if (!UiAllowed.TryGetValue(name, out var allowed))
+                continue;
+            foreach (var dep in ProjectRefNames(csproj))
+                if (!allowed.Contains(dep))
+                    violations.Add($"{name} -> {dep}");
+        }
+
+        Assert.True(violations.Count == 0,
+            "Disallowed UI project references (fix the ref or update the UiAllowed map):\n  "
+            + string.Join("\n  ", violations));
+    }
+
+    /// <summary>No app may reference another app: HaCue2 must never depend on HaPlay, and the reverse
+    /// only through the shared support libraries. This is the rule the whole extraction exists to make
+    /// true, so it is worth asserting on its own rather than leaving it implicit in the map.</summary>
+    [Fact]
+    public void NoAppReferencesAnotherApp()
+    {
+        string[] apps = ["HaPlay", "HaCue2", "HaViz.Core"];
+        var violations = new List<string>();
+        foreach (var csproj in UiProjects(RepoRoot()))
+        {
+            var name = Path.GetFileNameWithoutExtension(csproj);
+            // A desktop head legitimately references its own app.
+            if (name.EndsWith(".Desktop", StringComparison.Ordinal) ||
+                name.EndsWith(".Android", StringComparison.Ordinal))
+                continue;
+            foreach (var dep in ProjectRefNames(csproj))
+                if (apps.Contains(dep) && dep != name)
+                    violations.Add($"{name} -> {dep}");
+        }
+
+        Assert.True(violations.Count == 0,
+            "An app references another app:\n  " + string.Join("\n  ", violations));
+    }
+
     private static string RepoRoot()  // repo root = the directory holding MFPlayer.sln
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
