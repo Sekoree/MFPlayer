@@ -361,14 +361,17 @@ public sealed partial class AudioRouter
             if (_thread.IsAlive)
             {
                 Volatile.Write(ref _stuck, 1);
-                _router.MarkOutputPumpStuck(_sinkId);
+                _router.MarkOutputPumpStuck(_sinkId, this);
                 Trace.LogError(
                     "AudioRouter.OutputPump '{OutputId}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.",
                     _sinkId);
-                // Health event (review §2.12): a wedged pump poisons the router non-restartably, so
-                // hosts need a signal to rebuild instead of discovering a dead output by silence.
+                // Health event (review §2.12 / HaCue quarantine): hosts need a signal instead of
+                // discovering a dead output by silence. The pump state is leaked (quarantined) but
+                // the router keeps running - replace/hot-swap this one output line (re-adding the
+                // same output id clears its stuck flag); only a full teardown needs a rebuild.
                 _router.RaiseOutputErrored(_sinkId, new TimeoutException(
-                    $"audio output pump '{_sinkId}' wedged in a native Submit and was leaked; the router should be rebuilt."));
+                    $"audio output pump '{_sinkId}' wedged in a native Submit and was quarantined (drainer thread leaked); " +
+                    "hot-swap this output line - the router and its other outputs keep running."));
                 return;
             }
 

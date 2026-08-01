@@ -92,6 +92,13 @@ public sealed record ShowClipAudioRoute(
 
 public sealed record ShowAudioMatrixCell(int InputChannel, int OutputChannel, float Gain);
 
+/// <summary>One cell of a clip's LOGICAL send matrix (HaCue two-matrix model): source channel
+/// <paramref name="SourceChannel"/> feeds the project logical channel with the STABLE id
+/// <paramref name="LogicalChannelId"/> at <paramref name="Gain"/>. Ids - not indices - so a send
+/// survives logical-channel reorder; an id unknown to the session's program-audio target is logged
+/// and skipped at fire time (the preflight validator owns authoring errors).</summary>
+public sealed record ShowClipLogicalSend(int SourceChannel, string LogicalChannelId, float Gain = 1f);
+
 /// <summary>
 /// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
 /// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI - D2) and played on the cue's group.
@@ -217,6 +224,13 @@ public sealed record ShowClipBinding(
     /// Non-empty plays on exactly these outputs; an empty list is explicitly silent; <see langword="null"/>
     /// inherits the show/group outputs (including the standalone session's implicit master fallback).</summary>
     public IReadOnlyList<ShowClipAudioRoute>? AudioRoutes { get; init; }
+
+    /// <summary>Logical program sends (HaCue two-matrix model): the clip's N×V matrix onto the
+    /// project's logical channels, applied when the session has an <see cref="IShowProgramAudioTarget"/>.
+    /// Takes precedence over <see cref="AudioRoutes"/> there; an empty list is explicitly silent.
+    /// Null - or a session with no program-audio target - falls back to the v1 direct-route adapter
+    /// (<see cref="AudioRoutes"/> / group outputs) unchanged.</summary>
+    public IReadOnlyList<ShowClipLogicalSend>? LogicalSends { get; init; }
 
     /// <summary>Volume-automation keyframes (GUI <c>MediaCueNode.VolumeEnvelope</c>), sorted by time.
     /// Times are CLIP positions (post-<see cref="StartOffset"/>), so the envelope survives seeks and

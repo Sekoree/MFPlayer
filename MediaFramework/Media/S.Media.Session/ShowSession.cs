@@ -122,6 +122,10 @@ public sealed partial class ShowSession : IAsyncDisposable
     // = false is NEVER disposed by the session (the host owns it - e.g. an NDI sender's audio side sharing the
     // carrier that also emits the composition's video). Null ⇒ every route uses the backend device.
     private readonly Func<string, AudioFormat, ClipAudioOutputLease?>? _audioOutputFactory;
+    // The program-audio collaborator (HaCue plan, "ShowSession redesign"): owns real outputs, the
+    // project patch and device clocks. Null = the v1 direct-route adapter (AudioRoutes/group
+    // outputs on the session's own backend) - HaPlay unchanged.
+    private readonly IShowProgramAudioTarget? _programAudio;
     // Opens + warms clips (seek-to-Start trim-in, standby pre-roll). Clips arm through here instead of a
     // direct MediaGraph build so the show can pre-roll upcoming cues (8b convergence). All access is on the
     // serial dispatcher; the engine is also internally thread-safe.
@@ -264,6 +268,98 @@ public sealed partial class ShowSession : IAsyncDisposable
         return true;
     }
 
+    /// <summary>Acquires + attaches a voice's PROGRAM input (HaCue logical sends): one V-wide lease from the
+    /// program-audio target on the clip's router, carrying the cue's N×V send matrix - realized as a synthetic
+    /// matrix route so every existing level path (<c>ApplyAudioScale</c>: fades, envelope, master trim) rides
+    /// the logical sends without touching a real device. Same error isolation as a device route: a target that
+    /// rejects the voice (foreign rate with no bridge) is logged and the clip plays without audio rather than
+    /// faulting the fire. Sends naming a logical channel the target does not have are logged and skipped (the
+    /// preflight validator owns authoring errors); declared-but-empty resolvable sends attach nothing
+    /// (explicitly silent). The lease is released through the voice's normal output teardown.</summary>
+    private bool TryAttachProgramInput(
+        S.Media.Players.MediaPlayer player,
+        IShowProgramAudioTarget target,
+        IReadOnlyList<ShowClipLogicalSend> sends,
+        int rate,
+        float attachLevel,
+        List<ClipAudioOutput> outputs,
+        List<AudioRouteTarget> routeTargets,
+        string cueId)
+    {
+        const string outputId = "_program";
+        if (player.AudioRouter is not { } router || player.AudioSourceId is not { } sourceId)
+            return false;
+
+        var channelIds = target.LogicalChannelIds;
+        var cells = new List<ShowAudioMatrixCell>(sends.Count);
+        foreach (var send in sends)
+        {
+            var busChannel = -1;
+            for (var i = 0; i < channelIds.Count; i++)
+            {
+                if (string.Equals(channelIds[i], send.LogicalChannelId, StringComparison.Ordinal))
+                {
+                    busChannel = i;
+                    break;
+                }
+            }
+
+            if (busChannel < 0 || send.SourceChannel < 0)
+            {
+                MediaDiagnostics.LogWarning(
+                    "ShowSession: clip '{0}' sends source channel {1} to unknown logical channel '{2}'; the send is skipped.",
+                    cueId, send.SourceChannel, send.LogicalChannelId);
+                continue;
+            }
+
+            cells.Add(new ShowAudioMatrixCell(send.SourceChannel, busChannel, send.Gain));
+        }
+
+        if (cells.Count == 0)
+            return false; // silent by authoring (empty/unresolvable sends) - nothing to attach
+
+        var route = new ShowClipAudioRoute { MatrixCells = cells, MatrixOutputChannels = channelIds.Count };
+        ProgramAudioInputLease lease;
+        try
+        {
+            lease = target.AcquireInput(cueId, new AudioFormat(rate, channelIds.Count));
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogWarning(
+                "ShowSession: clip '{0}' could not acquire a program input ({1}); the clip plays without audio.",
+                cueId, ex.Message);
+            return false;
+        }
+
+        try
+        {
+            router.AddOutput(lease.Output, outputId);
+            try
+            {
+                router.ApplyMatrix(sourceId, outputId, route.ToGainMatrix(attachLevel));
+            }
+            catch
+            {
+                router.RemoveOutput(outputId);
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            lease.Dispose();
+            MediaDiagnostics.LogWarning(
+                "ShowSession: clip '{0}' could not attach its program input ({1}); the clip plays without audio.",
+                cueId, ex.Message);
+            return false;
+        }
+
+        // BORROWED like a host audio lease: the voice's teardown runs the release hook, never a dispose.
+        outputs.Add(new ClipAudioOutput(lease.Output, DisposeOnRelease: false, Release: lease.Dispose));
+        routeTargets.Add(new AudioRouteTarget(outputId, 1f, route));
+        return true;
+    }
+
     /// <summary>A composition layer the active clip's video is fanned to, tagged by its composition + layer index
     /// so a live placement edit can target the right one when a clip is placed onto more than one layer.</summary>
     private readonly record struct PlacedLayer(
@@ -289,6 +385,7 @@ public sealed partial class ShowSession : IAsyncDisposable
         Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null,
         Func<string, AudioFormat, ClipAudioOutputLease?>? audioOutputFactory = null,
         Func<string, S.Media.Core.Buses.MediaItemMetadata?>? metadataProbe = null,
+        IShowProgramAudioTarget? programAudioTarget = null,
         int dispatcherCapacity = SessionDispatcher.DefaultCapacity)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -299,13 +396,15 @@ public sealed partial class ShowSession : IAsyncDisposable
         _videoOutputFactory = videoOutputFactory;
         _compositorFactory = compositorFactory;
         _audioOutputFactory = audioOutputFactory;
+        _programAudio = programAudioTarget;
         _metadataPublisher = new ShowSessionMetadataPublisher(MetadataHub, metadataProbe);
         _standby.StandbyStatesChanged += states => PreparedCuesChanged?.Invoke(states);
 
         _visualizers = new ShowSessionVisualizerService(
             RegisterVisualizerTap, RemoveTapFromActiveClips, ReleaseVisualizerTapRegistration, MetadataHub);
         _fires = new CueFireOrchestrator(this);
-        _voicePlayer = new VoicePlayer(this, _standby, audioBackend, ResolveFallbackOutputDeviceId, BuildPreviewSpec, BuildVoiceSpec);
+        _voicePlayer = new VoicePlayer(
+            this, _standby, audioBackend, programAudioTarget, ResolveFallbackOutputDeviceId, BuildPreviewSpec, BuildVoiceSpec);
         _voicePlayer.VoiceEnded += id => VoiceEnded?.Invoke(id);
         _voicePlayer.PreviewEnded += id => PreviewEnded?.Invoke(id);
         _completionMonitor = new SessionCompletionMonitor(
@@ -732,7 +831,10 @@ public sealed partial class ShowSession : IAsyncDisposable
                     placed.Slot.Opacity = 0f;
             }
 
-            if (_audioBackend is not null && player.AudioRouter is not null)
+            // Program-audio sends need no session backend (a HaCue host's bay owns the devices); the
+            // v1 direct-route adapter below still requires one.
+            var programSends = _programAudio is not null ? binding.LogicalSends : null;
+            if (player.AudioRouter is not null && (_audioBackend is not null || programSends is not null))
             {
                 var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
                 // Seed the envelope component from the automation's value at the clip's FIRST frame, before
@@ -750,7 +852,16 @@ public sealed partial class ShowSession : IAsyncDisposable
                 // route write in the session - the voice attach, the hot rebuild, every ramp - already goes
                 // through the composition; this was the one outlier.
                 var attachLevel = fadeIn ? 0f : voice.EffectiveAudioLevel;
-                if (binding.AudioRoutes is { } clipRoutes)
+                if (programSends is not null)
+                {
+                    // HaCue logical sends: the voice plays into the project's program bus through ONE
+                    // V-wide input lease; real devices, the V×R patch and clocks live behind the
+                    // target. Precedence over the direct-route adapter, mirroring its explicit-empty
+                    // semantics (empty sends = silent clip, not fallback).
+                    TryAttachProgramInput(
+                        player, _programAudio!, programSends, rate, attachLevel, outputs, routeTargets, binding.CueId);
+                }
+                else if (binding.AudioRoutes is { } clipRoutes)
                 {
                     // Per-clip routing (GUI per-cue audio): the clip plays on exactly its routed outputs/devices,
                     // each with its own N→M channel map + static gain. An explicitly empty collection means silent;

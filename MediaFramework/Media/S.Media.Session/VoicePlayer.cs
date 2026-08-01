@@ -17,6 +17,10 @@ internal sealed class VoicePlayer
     private readonly ShowSession _session;
     private readonly ClipStandbyEngine _standby;
     private readonly IAudioBackend? _audioBackend;
+    // The preview's monitoring seam (HaCue plan: preview/audition IS monitoring). When present, the
+    // preview auditions through a target-owned monitor line - never a device open of its own, so a
+    // patched line is never double-opened. Null = the legacy direct device open below (HaPlay).
+    private readonly IShowProgramAudioTarget? _programAudio;
     // Device-dependence fix #3: the fallback device is resolved fresh at each use (through the session's
     // 5 s device cache), never a construction-time snapshot - hot-plugged hardware becomes the fallback.
     private readonly Func<string?> _resolveFallbackDeviceId;
@@ -27,7 +31,7 @@ internal sealed class VoicePlayer
 
     // Preview playback (a loaded cue auditioned on a separate device, independent of the transport groups).
     private IArmedClip? _previewClip;
-    private IReadOnlyList<IAudioOutput> _previewOutputs = [];
+    private IReadOnlyList<PreviewSink> _previewOutputs = [];
     private CancellationTokenSource? _previewCts;
     private PreviewMonitor? _previewMonitor;
     // The preview's entry on the session's level/stop bus. MONITORING, by the owner's 2026-07-29 decision:
@@ -88,6 +92,11 @@ internal sealed class VoicePlayer
     private sealed record PreviewMonitor(
         string CueId, S.Media.Players.MediaPlayer Player, CancellationToken CancellationToken);
 
+    /// <summary>One preview sink and how to let it go: a non-null <see cref="Release"/> is a BORROWED
+    /// monitoring lease (run the hook, never dispose the output); null means the preview owns the
+    /// backend-created device output and disposes it.</summary>
+    private readonly record struct PreviewSink(IAudioOutput Output, Action? Release);
+
     // Lock-free query view (NXT-16 residue): the current voices (id + player), republished on the dispatcher
     // whenever a voice commits or releases, so the soundboard's 200 ms progress poll and the is-playing query
     // never round-trip the dispatcher - a parked loop must not freeze the tiles.
@@ -111,6 +120,7 @@ internal sealed class VoicePlayer
         ShowSession session,
         ClipStandbyEngine standby,
         IAudioBackend? audioBackend,
+        IShowProgramAudioTarget? programAudio,
         Func<string?> resolveFallbackDeviceId,
         Func<string, ClipSpec?> buildPreviewSpec,
         Func<string, string, string?, ClipSpec> buildVoiceSpec)
@@ -118,6 +128,7 @@ internal sealed class VoicePlayer
         _session = session;
         _standby = standby;
         _audioBackend = audioBackend;
+        _programAudio = programAudio;
         _resolveFallbackDeviceId = resolveFallbackDeviceId;
         _buildPreviewSpec = buildPreviewSpec;
         _buildVoiceSpec = buildVoiceSpec;
@@ -173,15 +184,28 @@ internal sealed class VoicePlayer
             }
 
             var player = armed.Player;
-            var outputs = new List<IAudioOutput>();
+            var outputs = new List<PreviewSink>();
             try
             {
-                if (_audioBackend is not null && player.AudioRouter is not null)
+                if (player.AudioRouter is not null && (_programAudio is not null || _audioBackend is not null))
                 {
                     var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-                    var output = _audioBackend.CreateOutput(previewDeviceId ?? _resolveFallbackDeviceId(), new AudioFormat(rate, 2));
-                    player.AttachAudioOutput(output, "_preview");
-                    outputs.Add(output);
+                    if (_programAudio is { } monitorTarget)
+                    {
+                        // The monitoring seam: audition through a target-owned line (previewDeviceId
+                        // names the endpoint; null = the target's default monitor line). Tracked
+                        // BEFORE the attach so the symmetric teardown below releases the lease even
+                        // when the attach itself faults.
+                        var lease = monitorTarget.AcquireMonitorOutput(previewDeviceId, new AudioFormat(rate, 2));
+                        outputs.Add(new PreviewSink(lease.Output, lease.Dispose));
+                        player.AttachAudioOutput(lease.Output, "_preview");
+                    }
+                    else
+                    {
+                        var output = _audioBackend!.CreateOutput(previewDeviceId ?? _resolveFallbackDeviceId(), new AudioFormat(rate, 2));
+                        outputs.Add(new PreviewSink(output, null));
+                        player.AttachAudioOutput(output, "_preview");
+                    }
                 }
 
                 armed.Start();
@@ -226,8 +250,13 @@ internal sealed class VoicePlayer
         _previewOutputs = [];
         if (clip is not null)
             await clip.ReleaseAsync().ConfigureAwait(false);
-        foreach (var output in outputs)
-            (output as IDisposable)?.Dispose();
+        foreach (var sink in outputs)
+        {
+            if (sink.Release is { } release)
+                release(); // borrowed monitoring lease - the hook detaches it, the target owns the line
+            else
+                (sink.Output as IDisposable)?.Dispose();
+        }
     }
 
     // --- soundboard voices ----------------------------------------------------------------------------

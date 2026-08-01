@@ -1,5 +1,6 @@
 using S.Media.Compositor;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Routing;
 
@@ -108,6 +109,83 @@ public sealed partial class ShowSession
             voice.SetRouteTargets(targets);
             // ONE pass through the single place a route gain is computed - it installs the edited matrix at
             // the clip's current composed level and leaves every other route value-identical.
+            voice.ApplyAudioScale(voice.RouteTargets, voice.ClipLevel);
+            return Task.FromResult(true);
+        });
+    }
+
+    /// <summary>Live-edit the active cue's LOGICAL sends (HaCue two-matrix model) while it plays - the
+    /// program-audio analogue of <see cref="ApplyActiveAudioMatrixAsync"/>. The edited sends become the
+    /// voice's <c>_program</c> route target and are installed by the one level composition
+    /// (<c>master × fade × envelope</c>) as an atomic matrix reconciliation on the clip's router - a
+    /// click-free one-chunk ramp that never touches the program lease, the bay patch, or any device.
+    /// Returns false when the cue isn't active on any group or its voice has no program input (a cue
+    /// fired without logical sends gains one on its NEXT fire, not live - that is an output rebuild, not
+    /// a send edit). Sends naming a logical channel the target does not have are logged and skipped
+    /// (fire-time parity); an edit whose every send is unknown/empty zeroes the current cells - silence,
+    /// with the lease kept so a follow-up edit is still live.</summary>
+    public Task<bool> ApplyActiveLogicalSendsAsync(string cueId, IReadOnlyList<ShowClipLogicalSend> sends)
+    {
+        ArgumentNullException.ThrowIfNull(sends);
+        return InvokeAsync(() =>
+        {
+            const string outputId = "_program";
+            if (_programAudio is not { } target
+                || ActiveVoiceOf(cueId) is not { Player: { AudioRouter: not null, AudioSourceId: not null } } voice
+                || voice.RouteTargets.FirstOrDefault(t => t.OutputId == outputId) is not { Route: { } oldRoute } old)
+                return Task.FromResult(false);
+
+            // Validate against the live source BEFORE touching anything (ApplyActiveAudioMatrixAsync's
+            // rule): a send the router would reject must fail while the live sends are still intact.
+            var srcChannels = voice.Player.AudioSource?.Format.Channels ?? 0;
+            foreach (var send in sends)
+            {
+                if (send.SourceChannel >= srcChannels)
+                    throw new ArgumentException(
+                        $"a send reads source channel {send.SourceChannel} but cue '{cueId}' has {srcChannels} source channels",
+                        nameof(sends));
+                if (!float.IsFinite(send.Gain) || send.Gain < 0f)
+                    throw new ArgumentException($"a send to '{send.LogicalChannelId}' has an invalid gain {send.Gain}", nameof(sends));
+            }
+
+            var channelIds = target.LogicalChannelIds;
+            var cells = new List<ShowAudioMatrixCell>(sends.Count);
+            foreach (var send in sends)
+            {
+                var busChannel = -1;
+                for (var i = 0; i < channelIds.Count; i++)
+                {
+                    if (string.Equals(channelIds[i], send.LogicalChannelId, StringComparison.Ordinal))
+                    {
+                        busChannel = i;
+                        break;
+                    }
+                }
+
+                if (busChannel < 0 || send.SourceChannel < 0)
+                {
+                    MediaDiagnostics.LogWarning(
+                        "ShowSession: live send edit on '{0}' names unknown logical channel '{1}'; the send is skipped.",
+                        cueId, send.LogicalChannelId);
+                    continue;
+                }
+
+                cells.Add(new ShowAudioMatrixCell(send.SourceChannel, busChannel, send.Gain));
+            }
+
+            // Nothing resolvable = silence, expressed as the CURRENT cells at zero gain: the matrix keeps
+            // its dimensions (an empty cell set cannot carry them) and the lease stays for the next edit.
+            if (cells.Count == 0)
+                cells = (oldRoute.MatrixCells ?? []).Select(c => c with { Gain = 0f }).ToList();
+            if (cells.Count == 0)
+                return Task.FromResult(true); // was already silent and stays silent
+
+            var route = oldRoute with { MatrixCells = cells, MatrixOutputChannels = channelIds.Count, Gain = 1f };
+            var targets = voice.RouteTargets.Where(t => t.OutputId != outputId).ToList();
+            targets.Add(new AudioRouteTarget(outputId, 1f, route));
+            voice.SetRouteTargets(targets);
+            // ONE pass through the single place route gains are computed - installs the edited sends at
+            // the clip's current composed level, leaving every other route value-identical.
             voice.ApplyAudioScale(voice.RouteTargets, voice.ClipLevel);
             return Task.FromResult(true);
         });

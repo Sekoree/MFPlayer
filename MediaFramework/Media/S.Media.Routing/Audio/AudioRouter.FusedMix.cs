@@ -176,8 +176,11 @@ public sealed partial class AudioRouter
     /// <summary>Dense settled-gain matrix mix: <c>dst[f,d] += Σ_s src[f,s] * gains[d*S+s]</c> -
     /// one pass over src and dst regardless of live cell count. Source widths 8 and 4 take a
     /// vector dot-product per output channel (one frame load, one gain-row load, horizontal sum -
-    /// ~3.7x the scalar shape in the MatrixMix benchmark); other widths use the scalar loop. The
-    /// vector sum reorders the additions, which is why the equivalence tests use a tolerance.</summary>
+    /// ~3.7x the scalar shape in the MatrixMix benchmark); widths above 8 take the blocked wide
+    /// path (8-float blocks into a vector accumulator, scalar tail - the HaCue Phase 0 measurement
+    /// showed the scalar fallback costing ~3.5× more per cell at 64-wide than at 8); remaining
+    /// widths use the scalar loop. The vector sums reorder the additions, which is why the
+    /// equivalence tests use a tolerance.</summary>
     internal static void ApplyFusedMatrixSettled(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
@@ -204,6 +207,36 @@ public sealed partial class AudioRouter
                 var dstFrame = dst.Slice(s * dstChannels, dstChannels);
                 for (var d = 0; d < dstChannels; d++)
                     dstFrame[d] += Vector128.Sum(srcVec * Vector128.Create(gains.Slice(d * 4, 4)));
+            }
+
+            return;
+        }
+
+        // Blocked wide path: the frame's source blocks are hoisted once (every output channel
+        // reuses them) and each gain row streams through a vector accumulator. The 512-channel
+        // cap only bounds the stackalloc; realistic router widths sit far below it.
+        if (Vector256.IsHardwareAccelerated && srcChannels > 8 && srcChannels <= 512)
+        {
+            var blocks = srcChannels >> 3;
+            var tail = srcChannels & 7;
+            Span<Vector256<float>> srcVecs = stackalloc Vector256<float>[blocks];
+            for (var s = 0; s < samplesPerChannel; s++)
+            {
+                var srcFrame = src.Slice(s * srcChannels, srcChannels);
+                for (var b = 0; b < blocks; b++)
+                    srcVecs[b] = Vector256.Create(srcFrame.Slice(b << 3, 8));
+                var dstFrame = dst.Slice(s * dstChannels, dstChannels);
+                for (var d = 0; d < dstChannels; d++)
+                {
+                    var row = gains.Slice(d * srcChannels, srcChannels);
+                    var acc = Vector256<float>.Zero;
+                    for (var b = 0; b < blocks; b++)
+                        acc += srcVecs[b] * Vector256.Create(row.Slice(b << 3, 8));
+                    var sum = Vector256.Sum(acc);
+                    for (var c = srcChannels - tail; c < srcChannels; c++)
+                        sum += srcFrame[c] * row[c];
+                    dstFrame[d] += sum;
+                }
             }
 
             return;
@@ -268,6 +301,47 @@ public sealed partial class AudioRouter
                     var from = Vector128.Create(fromGains.Slice(d * 4, 4));
                     var gain = from + (Vector128.Create(toGains.Slice(d * 4, 4)) - from) * t;
                     dstFrame[d] += Vector128.Sum(srcVec * gain);
+                }
+            }
+
+            return;
+        }
+
+        // Blocked wide path - the ramp twin of the settled kernel's wide branch, with the gain
+        // row interpolated per 8-float block before the dot product (same sample-mid t).
+        if (Vector256.IsHardwareAccelerated && srcChannels > 8 && srcChannels <= 512)
+        {
+            var blocks = srcChannels >> 3;
+            var tail = srcChannels & 7;
+            Span<Vector256<float>> srcVecs = stackalloc Vector256<float>[blocks];
+            for (var s = 0; s < samplesPerChannel; s++)
+            {
+                var t = (s + 0.5f) * invSamples;
+                var tVec = Vector256.Create(t);
+                var srcFrame = src.Slice(s * srcChannels, srcChannels);
+                for (var b = 0; b < blocks; b++)
+                    srcVecs[b] = Vector256.Create(srcFrame.Slice(b << 3, 8));
+                var dstFrame = dst.Slice(s * dstChannels, dstChannels);
+                for (var d = 0; d < dstChannels; d++)
+                {
+                    var fromRow = fromGains.Slice(d * srcChannels, srcChannels);
+                    var toRow = toGains.Slice(d * srcChannels, srcChannels);
+                    var acc = Vector256<float>.Zero;
+                    for (var b = 0; b < blocks; b++)
+                    {
+                        var from = Vector256.Create(fromRow.Slice(b << 3, 8));
+                        var gain = from + (Vector256.Create(toRow.Slice(b << 3, 8)) - from) * tVec;
+                        acc += srcVecs[b] * gain;
+                    }
+
+                    var sum = Vector256.Sum(acc);
+                    for (var c = srcChannels - tail; c < srcChannels; c++)
+                    {
+                        var from = fromRow[c];
+                        sum += srcFrame[c] * (from + (toRow[c] - from) * t);
+                    }
+
+                    dstFrame[d] += sum;
                 }
             }
 

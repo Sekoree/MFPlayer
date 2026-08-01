@@ -11,93 +11,107 @@ namespace S.Media.Core.Tests.Audio;
 /// </summary>
 public class AudioRouterFusedMatrixTests
 {
-    private const int SrcChannels = 6;
-    private const int DstChannels = 4;
     private const int Samples = 480;
 
-    private static float[] MakeSource()
+    private static float[] MakeSource(int srcChannels)
     {
-        var src = new float[Samples * SrcChannels];
+        var src = new float[Samples * srcChannels];
         var rng = new Random(42);
         for (var i = 0; i < src.Length; i++)
             src[i] = (float)(rng.NextDouble() * 2 - 1);
         return src;
     }
 
-    private static float[] MakeGains(Random rng)
+    private static float[] MakeGains(Random rng, int srcChannels, int dstChannels)
     {
-        var gains = new float[SrcChannels * DstChannels]; // [dst * S + src]
+        var gains = new float[srcChannels * dstChannels]; // [dst * S + src]
         for (var i = 0; i < gains.Length; i++)
             gains[i] = rng.NextDouble() < 0.3 ? 0f : (float)rng.NextDouble();
         return gains;
     }
 
-    private static ChannelMap SingleCell(int src, int dst)
+    private static ChannelMap SingleCell(int src, int dst, int dstChannels)
     {
-        Span<int> map = stackalloc int[DstChannels];
+        Span<int> map = dstChannels <= 64 ? stackalloc int[dstChannels] : new int[dstChannels];
         map.Fill(ChannelMap.Silence);
         map[dst] = src;
         return new ChannelMap(map);
     }
 
-    [Fact]
-    public void FusedSettled_MatchesPerCellApplyRoute()
+    /// <summary>One case per kernel code path: (4) Vector128, (6) scalar, (8) the specialized
+    /// Vector256 dot product, (12) the blocked wide path with a scalar tail, (16, 64) the blocked
+    /// wide path - 64 being the HaCue patch design's supported maximum. Wide sums reorder more
+    /// additions, hence the looser tolerance there.</summary>
+    public static TheoryData<int, int, float> KernelShapes => new()
     {
-        var src = MakeSource();
-        var gains = MakeGains(new Random(7));
+        { 4, 4, 1e-4f },
+        { 6, 4, 1e-4f },
+        { 8, 8, 1e-4f },
+        { 12, 6, 1e-3f },
+        { 16, 16, 1e-3f },
+        { 64, 64, 1e-3f },
+    };
 
-        var perCell = new float[Samples * DstChannels];
-        for (var d = 0; d < DstChannels; d++)
+    [Theory]
+    [MemberData(nameof(KernelShapes))]
+    public void FusedSettled_MatchesPerCellApplyRoute(int srcChannels, int dstChannels, float tolerance)
+    {
+        var src = MakeSource(srcChannels);
+        var gains = MakeGains(new Random(7), srcChannels, dstChannels);
+
+        var perCell = new float[Samples * dstChannels];
+        for (var d = 0; d < dstChannels; d++)
         {
-            for (var s = 0; s < SrcChannels; s++)
+            for (var s = 0; s < srcChannels; s++)
             {
-                var gain = gains[d * SrcChannels + s];
+                var gain = gains[d * srcChannels + s];
                 if (gain == 0f)
                     continue;
-                AudioRouter.ApplyRoute(src, SrcChannels, perCell, DstChannels,
-                    SingleCell(s, d), gain, gain, Samples);
+                AudioRouter.ApplyRoute(src, srcChannels, perCell, dstChannels,
+                    SingleCell(s, d, dstChannels), gain, gain, Samples);
             }
         }
 
-        var fused = new float[Samples * DstChannels];
-        AudioRouter.ApplyFusedMatrixSettled(src, SrcChannels, fused, DstChannels, gains, Samples);
+        var fused = new float[Samples * dstChannels];
+        AudioRouter.ApplyFusedMatrixSettled(src, srcChannels, fused, dstChannels, gains, Samples);
 
         for (var i = 0; i < fused.Length; i++)
-            Assert.Equal(perCell[i], fused[i], 1e-4f);
+            Assert.Equal(perCell[i], fused[i], tolerance);
     }
 
-    [Fact]
-    public void FusedRamp_MatchesPerCellApplyRouteRamp()
+    [Theory]
+    [MemberData(nameof(KernelShapes))]
+    public void FusedRamp_MatchesPerCellApplyRouteRamp(int srcChannels, int dstChannels, float tolerance)
     {
-        var src = MakeSource();
+        var src = MakeSource(srcChannels);
         var rng = new Random(11);
-        var from = MakeGains(rng);
-        var to = MakeGains(rng);
+        var from = MakeGains(rng, srcChannels, dstChannels);
+        var to = MakeGains(rng, srcChannels, dstChannels);
 
-        var perCell = new float[Samples * DstChannels];
-        for (var d = 0; d < DstChannels; d++)
+        var perCell = new float[Samples * dstChannels];
+        for (var d = 0; d < dstChannels; d++)
         {
-            for (var s = 0; s < SrcChannels; s++)
+            for (var s = 0; s < srcChannels; s++)
             {
-                var index = d * SrcChannels + s;
+                var index = d * srcChannels + s;
                 if (from[index] == 0f && to[index] == 0f)
                     continue;
-                AudioRouter.ApplyRoute(src, SrcChannels, perCell, DstChannels,
-                    SingleCell(s, d), from[index], to[index], Samples);
+                AudioRouter.ApplyRoute(src, srcChannels, perCell, dstChannels,
+                    SingleCell(s, d, dstChannels), from[index], to[index], Samples);
             }
         }
 
-        var fused = new float[Samples * DstChannels];
-        AudioRouter.ApplyFusedMatrixRamp(src, SrcChannels, fused, DstChannels, from, to, Samples);
+        var fused = new float[Samples * dstChannels];
+        AudioRouter.ApplyFusedMatrixRamp(src, srcChannels, fused, dstChannels, from, to, Samples);
 
         for (var i = 0; i < fused.Length; i++)
-            Assert.Equal(perCell[i], fused[i], 1e-4f);
+            Assert.Equal(perCell[i], fused[i], tolerance);
     }
 
     [Fact]
     public void TryGetSingleCell_DetectsShapeCorrectly()
     {
-        Assert.True(AudioRouter.TryGetSingleCell(SingleCell(2, 1), out var src, out var dst));
+        Assert.True(AudioRouter.TryGetSingleCell(SingleCell(2, 1, 4), out var src, out var dst));
         Assert.Equal(2, src);
         Assert.Equal(1, dst);
         Assert.False(AudioRouter.TryGetSingleCell(ChannelMap.Identity(2), out _, out _));

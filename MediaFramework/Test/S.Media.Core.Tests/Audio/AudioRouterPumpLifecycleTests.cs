@@ -142,6 +142,66 @@ public sealed class AudioRouterPumpLifecycleTests
     }
 
     [Fact]
+    public void RemoveOutput_WedgedPump_QuarantinesInBackground_WithoutStallingTheRunLoop()
+    {
+        // HaCue quarantine (plan Phase 3): removing an output whose drainer is wedged in a native
+        // Submit must not stall the mix. The pump teardown joins the drainer for up to ~3s; that
+        // join used to run INLINE on the run loop thread (top-of-iteration pending-dispose drain),
+        // freezing every other output for the full cap. It now runs on the thread pool, and the
+        // leak is reported afterwards via the stuck flag + a quarantine OutputErrored event.
+        var wedged = new BlockingOutput(Stereo);
+        var healthy = new RecordingOutput(Stereo);
+        using var r = new AudioRouter(SampleRate, chunkSamples: 64);
+        var errors = new List<AudioRouterOutputErrorEventArgs>();
+        r.OutputErrored += (_, e) => { lock (errors) errors.Add(e); };
+        r.AddSource(new SilenceSource(Stereo), "src");
+        r.AddOutput(healthy, "good");
+        r.AddOutput(wedged, "bad");
+        r.AddRoute("src", "good", ChannelMap.Identity(2));
+        r.AddRoute("src", "bad", ChannelMap.Identity(2));
+
+        try
+        {
+            r.Start();
+            Assert.True(wedged.Entered.Wait(TimeSpan.FromSeconds(2)), "wedged output should be blocked inside Submit");
+            Assert.True(SpinUntil(() => healthy.SubmitCount > 0, 2000), "healthy output should be flowing");
+
+            var sw = Stopwatch.StartNew();
+            Assert.True(r.RemoveOutput("bad"));
+            sw.Stop();
+            Assert.True(sw.ElapsedMilliseconds < 1000,
+                $"RemoveOutput must not join the wedged drainer inline (took {sw.ElapsedMilliseconds}ms)");
+
+            // Continuity: the run loop keeps mixing while the quarantine join runs in the background.
+            // At 64-sample chunks the wall clock paces ~750 chunks/s; a stalled loop delivers ~0.
+            var before = healthy.SubmitCount;
+            Thread.Sleep(500);
+            var grown = healthy.SubmitCount - before;
+            Assert.True(grown > 50, $"run loop stalled during quarantine: only {grown} chunks in 500ms");
+
+            // The background teardown eventually gives up joining, leaks the pump, and reports it.
+            Assert.True(SpinUntil(() => r.StuckOutputPumpIds.Contains("bad"), 6000),
+                "wedged pump was never flagged as quarantined");
+            lock (errors)
+                Assert.Contains(errors, e => e.OutputId == "bad"
+                    && e.Exception is TimeoutException t && t.Message.Contains("quarantined"));
+
+            // Hot-swap: a fresh device under the same id starts healthy - stale flag cleared, audio flows.
+            var replacement = new RecordingOutput(Stereo);
+            r.AddOutput(replacement, "bad");
+            r.AddRoute("src", "bad", ChannelMap.Identity(2));
+            Assert.DoesNotContain("bad", r.StuckOutputPumpIds);
+            Assert.True(SpinUntil(() => replacement.SubmitCount > 0, 2000),
+                "hot-swapped replacement output should receive audio");
+            r.Stop();
+        }
+        finally
+        {
+            wedged.Release(); // let the leaked drainer thread exit
+        }
+    }
+
+    [Fact]
     public void EvictionDrops_DoNotStall_StopWaitForIdle()
     {
         // Regression: Commit's pool-exhaustion eviction removed an already-enqueued chunk from _ready but did
@@ -178,11 +238,11 @@ public sealed class AudioRouterPumpLifecycleTests
     [Fact]
     public void DisposedOutput_IsReportedOnce_AndThePumpKeepsDraining()
     {
-        // Regression (found in the first HaCue-standalone attempt, kept on the restart): a host
-        // that disposes a device output while its pump is still draining made every queued chunk
-        // throw ObjectDisposedException out of Submit - one OutputErrored per chunk, reading as
-        // "an exception is thrown on close". The pump must report the disposed sink ONCE, then
-        // keep recycling chunks quietly so WaitForIdle/Stop still see progress.
+        // Regression (HaCue app close): the host disposed a PortAudio output while its pump was
+        // still draining, and every queued chunk then threw ObjectDisposedException out of
+        // Submit - one OutputErrored per chunk, reading as "an exception is thrown on close".
+        // The pump must report the disposed sink ONCE, then keep recycling chunks quietly so
+        // WaitForIdle/Stop still see progress.
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var output = new DisposableOutput(Stereo);
         r.AddSource(new SilenceSource(Stereo), "src");
@@ -233,6 +293,14 @@ public sealed class AudioRouterPumpLifecycleTests
         public int ReadInto(Span<float> dst) { dst.Clear(); return dst.Length; }
     }
 
+    private sealed class RecordingOutput(AudioFormat fmt) : IAudioOutput
+    {
+        private int _submits;
+        public int SubmitCount => Volatile.Read(ref _submits);
+        public AudioFormat Format { get; } = fmt;
+        public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Increment(ref _submits);
+    }
+
     /// <summary>Models a hardware output whose host disposes it under a running pump - Submit
     /// throws <see cref="ObjectDisposedException"/> from then on, like <c>PortAudioOutput</c>.</summary>
     private sealed class DisposableOutput(AudioFormat fmt) : IAudioOutput, IDisposable
@@ -249,14 +317,6 @@ public sealed class AudioRouterPumpLifecycleTests
         }
 
         public void Dispose() => _disposed = true;
-    }
-
-    private sealed class RecordingOutput(AudioFormat fmt) : IAudioOutput
-    {
-        private int _submits;
-        public int SubmitCount => Volatile.Read(ref _submits);
-        public AudioFormat Format { get; } = fmt;
-        public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Increment(ref _submits);
     }
 
     /// <summary>Models a hardware device: clocked (paces the router when promoted) and exposes a playback

@@ -134,6 +134,20 @@ public static class ShowDocumentValidator
                         errors.Add($"the clip for cue '{clip.CueId}' has an invalid audio matrix cell gain.");
                 }
             }
+
+            // Logical sends (HaCue two-matrix model): cell sanity only - whether a LogicalChannelId
+            // exists is a PROJECT question the session cannot answer from the document alone (the
+            // program-audio target owns the channel list; HaCue's preflight validator reports broken
+            // references against the loaded project).
+            foreach (var send in clip.LogicalSends ?? [])
+            {
+                if (send.SourceChannel < 0)
+                    errors.Add($"the clip for cue '{clip.CueId}' has a logical send with a negative source channel {send.SourceChannel}.");
+                if (string.IsNullOrWhiteSpace(send.LogicalChannelId))
+                    errors.Add($"the clip for cue '{clip.CueId}' has a logical send with an empty logical channel id.");
+                if (!float.IsFinite(send.Gain) || send.Gain < 0f)
+                    errors.Add($"the clip for cue '{clip.CueId}' has an invalid logical send gain.");
+            }
         }
 
         ValidateFollowOn(document.Cues ?? [], cueIds, errors);

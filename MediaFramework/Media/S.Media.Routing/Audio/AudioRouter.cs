@@ -379,6 +379,10 @@ public sealed partial class AudioRouter : IDisposable
             if (_state.Outputs.ContainsKey(id))
                 throw new ArgumentException($"output ID '{id}' is already registered", nameof(id));
 
+            // Hot-swap: re-registering an id whose previous pump wedged and was leaked means the
+            // host replaced the device - the fresh pump starts healthy, so clear the stale flag.
+            _stuckOutputPumps.TryRemove(id, out _);
+
             output = MaybeWrapAdaptiveRateOutputLocked(output, id);
             var floatsPerChunk = _chunkSamples * output.Format.Channels;
             var pump = new OutputPump(this, output, capacity, floatsPerChunk, id);
@@ -1463,7 +1467,20 @@ public sealed partial class AudioRouter : IDisposable
             l.LogTrace("Output {OutputId} audio pump drop (running total {Dropped})", outputId, droppedTotal);
     }
 
-    private void MarkOutputPumpStuck(string outputId) => _stuckOutputPumps.TryAdd(outputId, 0);
+    private void MarkOutputPumpStuck(string outputId, OutputPump wedgedPump)
+    {
+        lock (_gate)
+        {
+            // A wedged pump's (background) teardown can complete AFTER the host already hot-swapped
+            // the id with a fresh device. The leak still happened (logged + OutputErrored), but the
+            // LIVE line under this id is a different, healthy pump - flagging it quarantined would
+            // misreport the swap. Serialized with AddOutput under the gate so mark-vs-re-add cannot
+            // interleave. (During router Dispose the wedged pump is still the registered one, so the
+            // identity check keeps that path marking as before.)
+            if (!_state.Outputs.TryGetValue(outputId, out var entry) || ReferenceEquals(entry.Pump, wedgedPump))
+                _stuckOutputPumps.TryAdd(outputId, 0);
+        }
+    }
 
     // --- inner loop --------------------------------------------------------
 
@@ -1477,8 +1494,20 @@ public sealed partial class AudioRouter : IDisposable
             {
                 // Tear down any pumps that were detached on the previous iteration.
                 // By now the previous chunk's enqueues are flushed (we're at the top
-                // of a new iteration), so the pump is safe to dispose.
-                while (_pumpsAwaitingDispose.TryDequeue(out var p)) p.Dispose();
+                // of a new iteration), so the pump is safe to dispose. The dispose runs
+                // on the thread pool, NOT inline: it joins the drainer thread, and a
+                // drainer wedged in a native Submit holds that join for the full cap
+                // (~3 s) - inline it would stall this mix loop and starve every other
+                // output, turning one bad device into a whole-router dropout (HaCue
+                // plan: quarantining a wedged terminal must not interrupt other lines).
+                while (_pumpsAwaitingDispose.TryDequeue(out var p))
+                {
+                    ThreadPool.UnsafeQueueUserWorkItem(
+                        static pump => MediaDiagnostics.SwallowDisposeErrors(
+                            pump.Dispose, "AudioRouter.RunLoop: detached OutputPump.Dispose"),
+                        p,
+                        preferLocal: false);
+                }
 
                 if (!_clock.WaitForNextChunk(token))
                 {

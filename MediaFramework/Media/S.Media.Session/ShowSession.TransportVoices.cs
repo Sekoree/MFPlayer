@@ -424,11 +424,32 @@ public sealed partial class ShowSession
         /// player goes away, so the bus can never write to a dead player.</summary>
         public required Action<TransportVoice> VoiceRetired { get; init; }
 
-        /// <summary>How many tails one group keeps. A SCOPING policy, not an architectural limit: the list
-        /// holds N and every path already iterates it, so raising this is a one-line change. One tail is what
-        /// the cue player needs (a triple overlap is a DJ-mixer feature) and it bounds the decoder/device
-        /// cost of a fast GO sequence.</summary>
-        private const int MaxReleasingVoices = 1;
+        /// <summary>
+        /// How many tails one group keeps. A SCOPING policy, not an architectural limit: the list holds N
+        /// and every path already iterates it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Raised from 1 to 3 (HaCue2 framework audit, decision D7). At one tail, a rapid GO sequence -
+        /// fire A, then B, then C in quick succession - hard-cut A the instant C started, because B had
+        /// already taken the single release slot. A tail cut that early is still near full level, so the
+        /// artifact was an audible click with no authored cause, and rapid sequences are normal operating
+        /// for a cue player rather than an edge case.
+        /// </para>
+        /// <para>
+        /// The bound stays because each tail holds a decoder and a producer lease, so an unbounded list
+        /// would let a stuck GO exhaust resources. Three covers the realistic "GO GO GO" case while
+        /// sitting far inside the plan's budget of 8 simultaneous program voices. The residual hard cut
+        /// at the cap is much quieter than it was: a voice only reaches it after three later crossfades,
+        /// by which point its own ramp has taken it well down.
+        /// </para>
+        /// <para>
+        /// This bound is PER GROUP, and with per-list transport each cue list is its own group - so the
+        /// real ceiling is this value times the number of simultaneously active lists, and that product
+        /// is what the voice budget has to be checked against, not this constant alone.
+        /// </para>
+        /// </remarks>
+        private const int MaxReleasingVoices = 3;
 
         public int LastFiredNumber { get; set; } = int.MinValue;
 

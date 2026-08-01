@@ -155,22 +155,47 @@ public sealed class CrossfadeTests
         Assert.All(session.Snapshot(), s => Assert.False(s.IsActive));
     }
 
+    /// <summary>
+    /// A rapid GO sequence keeps its tails overlapping up to the group's cap (D7 raised it from 1 to 3).
+    /// This is the case the old single-tail policy handled badly: each new crossfade cut the previous
+    /// tail while it was still near full level, which clicked.
+    /// </summary>
     [Fact]
-    public async Task SecondReplaceMidCrossfade_HardReleasesTheFirstOutgoing()
+    public async Task RapidCrossfadeSequence_KeepsTailsOverlapping_UpToTheCap()
     {
         var releases = new ReleaseLog();
         await using var session = BuildSession(releases);
-        await session.LoadDocumentAsync(Cues("c1", "c2", "c3"));
+        await session.LoadDocumentAsync(Cues("c1", "c2", "c3", "c4"));
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
-        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c2", TimeSpan.FromSeconds(30)));
-        Assert.False(releases.IsReleased("dev-c1")); // c1 is the outgoing tail
 
-        // One outgoing max: a second crossfade replacement hard-releases the still-fading c1 before c2
-        // becomes the new outgoing (a triple overlap is deliberately out of scope).
-        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c3", TimeSpan.FromSeconds(30)));
-        Assert.True(releases.IsReleased("dev-c1"), "the first outgoing was not hard-released");
-        Assert.False(releases.IsReleased("dev-c2")); // c2 is the new outgoing tail
+        // Three crossfades in a row: c1, c2 and c3 are all still fading, c4 is active.
+        foreach (var cue in new[] { "c2", "c3", "c4" })
+            Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync(cue, TimeSpan.FromSeconds(30)));
+
+        Assert.False(releases.IsReleased("dev-c1"), "c1 was cut despite fitting inside the tail cap");
+        Assert.False(releases.IsReleased("dev-c2"));
         Assert.False(releases.IsReleased("dev-c3"));
+        Assert.False(releases.IsReleased("dev-c4"));
+    }
+
+    [Fact]
+    public async Task ReplacementBeyondTheTailCap_HardReleasesTheOldestOutgoing()
+    {
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Cues("c1", "c2", "c3", "c4", "c5"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+        foreach (var cue in new[] { "c2", "c3", "c4" })
+            Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync(cue, TimeSpan.FromSeconds(30)));
+        Assert.False(releases.IsReleased("dev-c1"));
+
+        // The fourth replacement pushes past the cap, so the OLDEST tail (c1) is hard-released and the
+        // three most recent keep fading. The bound is what stops a stuck GO exhausting decoders.
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c5", TimeSpan.FromSeconds(30)));
+        Assert.True(releases.IsReleased("dev-c1"), "the oldest outgoing was not hard-released at the cap");
+        Assert.False(releases.IsReleased("dev-c2"), "a tail inside the cap was cut");
+        Assert.False(releases.IsReleased("dev-c3"));
+        Assert.False(releases.IsReleased("dev-c4"));
         Assert.True(Assert.Single(session.Snapshot()).IsActive);
     }
 
