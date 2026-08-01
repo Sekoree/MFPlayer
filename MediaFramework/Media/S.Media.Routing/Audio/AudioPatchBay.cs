@@ -110,6 +110,50 @@ public sealed class AudioPatchBay : IDisposable
     /// <summary>The active program meter, or null when metering has not been enabled.</summary>
     public ProgramBusMeter? ProgramMeter => _bus.Meter;
 
+    /// <summary>
+    /// A whole-bay diagnostics snapshot: every terminal with its full pump counters and state, every
+    /// producer lease with its input-side counters, and the program levels when metering is on.
+    /// </summary>
+    /// <remarks>
+    /// Two gaps this closes. The counters existed but were being thrown away - the session-level query
+    /// returned only enqueued and dropped per device, discarding processed, abandoned, evictions,
+    /// in-flight and capacity. And the <b>input</b> side had no counters exposed at all, so "which lease
+    /// is starving the bus" was unanswerable; that is what <see cref="ProducerDiagnostics"/> is for.
+    /// <para>Cheap enough for a 1 Hz poll and safe from any thread. Counters are monotonic by design -
+    /// a "since" baseline belongs to the caller, which is how the existing stats views already work.</para>
+    /// </remarks>
+    public AudioPatchBayDiagnostics SnapshotDiagnostics()
+    {
+        var quarantined = _router.StuckOutputPumpIds;
+        var terminals = new List<TerminalDiagnostics>();
+        string? masterId;
+
+        lock (_gate)
+        {
+            masterId = _masterTerminalId;
+            foreach (var (id, entry) in _terminals)
+            {
+                _router.TryGetPumpStats(id, out var stats);
+                var inFlight = stats.Enqueued - stats.Processed - stats.Dropped - stats.Abandoned;
+                var isMaster = string.Equals(id, masterId, StringComparison.Ordinal);
+                var state = quarantined.Contains(id) || stats.IsStuck ? TerminalState.Quarantined
+                    : stats.PumpCapacityChunks > 0 && inFlight >= stats.PumpCapacityChunks ? TerminalState.Behind
+                    : isMaster ? TerminalState.AdvancingMaster
+                    : TerminalState.Open;
+
+                terminals.Add(new TerminalDiagnostics(
+                    id, state, entry.Terminal.Format.Channels, entry.Terminal.Format.SampleRate,
+                    isMaster, stats, Math.Max(0, inFlight)));
+            }
+        }
+
+        var producers = _bus.SnapshotProducers();
+        var levels = _bus.Meter is { } meter ? meter.Snapshot() : [];
+
+        return new AudioPatchBayDiagnostics(
+            MixSampleRate, LogicalChannels, masterId, terminals, producers, levels);
+    }
+
     /// <summary>A terminal's pump failed submitting (device fault). The terminal keeps its patch;
     /// the router's failure isolation keeps every other terminal running.</summary>
     public event EventHandler<AudioRouterOutputErrorEventArgs>? TerminalErrored
@@ -422,12 +466,15 @@ public sealed class AudioPatchBay : IDisposable
 
     /// <summary>Registers a program voice into the bus - an isolated bounded lease carrying the
     /// voice's N×V send matrix (<see cref="ProgramBusProducer.UpdateSends"/> is its live fade path).</summary>
-    public ProgramBusProducer AcquireProducer(int sourceChannels, ReadOnlySpan<float> sends)
+    /// <param name="label">Optional name for diagnostics (a cue label, say). Without it a
+    /// <see cref="SnapshotDiagnostics"/> row can report that a lease is starving the bus but not which.</param>
+    public ProgramBusProducer AcquireProducer(
+        int sourceChannels, ReadOnlySpan<float> sends, string? label = null)
     {
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            return _bus.AcquireProducer(sourceChannels, sends);
+            return _bus.AcquireProducer(sourceChannels, sends, label);
         }
     }
 

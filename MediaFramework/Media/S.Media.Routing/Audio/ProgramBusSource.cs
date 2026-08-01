@@ -95,7 +95,8 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
     /// value must be finite. Dispose the lease to remove the producer - only its own contribution
     /// stops, mid-chunk-safe for every other producer.
     /// </summary>
-    public ProgramBusProducer AcquireProducer(int sourceChannels, ReadOnlySpan<float> sends)
+    public ProgramBusProducer AcquireProducer(
+        int sourceChannels, ReadOnlySpan<float> sends, string? label = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(sourceChannels, 1);
         ValidateSends(sends, sourceChannels);
@@ -103,7 +104,8 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
         lock (_producersGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var producer = new ProgramBusProducer(this, sourceChannels, sends.ToArray(), _producerRingFrames, _clockContext);
+            var producer = new ProgramBusProducer(
+                this, sourceChannels, sends.ToArray(), _producerRingFrames, _clockContext, label);
             var next = new ProgramBusProducer[_producers.Length + 1];
             _producers.CopyTo(next, 0);
             next[^1] = producer;
@@ -144,6 +146,25 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
         Volatile.Read(ref _meter)?.Observe(destination, frames);
 
         return destination.Length;
+    }
+
+    /// <summary>One diagnostics row per live producer lease. Snapshots the array under the gate, then
+    /// reads each producer's own volatile counters - so it never blocks a submit.</summary>
+    internal IReadOnlyList<ProducerDiagnostics> SnapshotProducers()
+    {
+        ProgramBusProducer[] producers;
+        lock (_producersGate)
+            producers = _producers;
+
+        var rows = new ProducerDiagnostics[producers.Length];
+        for (var i = 0; i < producers.Length; i++)
+        {
+            var p = producers[i];
+            rows[i] = new ProducerDiagnostics(
+                p.Label, p.BufferedFrames, p.OverflowFloats, p.UnderrunFloats,
+                p.SubmitToOutputLatency, p.EpochId, p.IsAdvancing);
+        }
+        return rows;
     }
 
     internal void RemoveProducer(ProgramBusProducer producer)
@@ -238,8 +259,10 @@ public sealed class ProgramBusProducer :
         int sourceChannels,
         float[] sends,
         int ringFrames,
-        ProgramBusClockContext? clockContext)
+        ProgramBusClockContext? clockContext,
+        string? label = null)
     {
+        Label = label;
         _owner = owner;
         _sourceChannels = sourceChannels;
         _currentGains = (float[])sends.Clone();
@@ -261,6 +284,10 @@ public sealed class ProgramBusProducer :
     public AudioFormat Format => new(_owner.Format.SampleRate, _sourceChannels);
 
     /// <summary>Frames currently buffered between the voice and the bus (health surface).</summary>
+    /// <summary>Optional host-supplied name for diagnostics (a cue label, say). Diagnostics rows are of
+    /// little use without it - "one of five leases is starving the bus" is not an actionable statement.</summary>
+    public string? Label { get; }
+
     public int BufferedFrames => _ring.BufferedFrames;
 
     /// <summary>Floats dropped because the voice outran the bus (oldest-first, live policy).</summary>

@@ -1510,12 +1510,14 @@ needed nothing), the state is:
 
 | Area | Work rows | Landed |
 |---|---|---|
-| Audio (framework) | 10 | **5** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at |
+| Audio (framework) | 10 | **8** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at, per-lease input counters, clock/latency telemetry, terminal state vocabulary |
 | Session | 6 | **2** — the non-destructive document load, dead-code removal; plus D7 (`MaxReleasingVoices`), which predates the register |
 | Control | 9 | **2** — the LTC decoder and the transport-neutral chase ingestion |
-| Everything else (video, automation, fades, diagnostics, status, remote, build, app-support) | ~22 | 0 |
+| Automation | 4 | **1** — the outbound OSC/MIDI ramp runner (D3) |
+| Diagnostics | 3 | **1** — the in-memory log sink |
+| Everything else (video, fades, status, remote, build, app-support) | ~15 | 0 |
 
-So roughly **9 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **15 of ~40 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1537,13 +1539,13 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Audio | Resampler factory injection | EXISTS (`IMediaRegistry.CreateResamplingOutput`) | §1.1 |
 | Audio | Marker to stop a resampled terminal becoming clock master | **ABSENT** | §1.2 |
 | Audio | Raw-terminal (exclusive) line acquisition | **ABSENT** | §1.4, §7.1 |
-| Audio | Per-lease input health counters on the router | ABSENT (present on archived producer) | §1.4, §6.2 |
+| Audio | Per-lease input health counters on the router | ✅ **LANDED** — `ProducerDiagnostics` rows (buffered / overflow / underrun / latency / epoch) | §1.4, §6.2 |
 | Audio | Output pump counters / health | EXISTS | §1.1, §6.2 |
 | Audio | Level metering (peak/RMS) | ✅ **LANDED** — `ProgramBusMeter`, non-destructive, frame-based decay | §6.1 |
 | Audio | Per-logical-output summing node to meter at | ✅ **LANDED** — metered inside `ProgramBusSource.ReadInto` | §6.1 |
-| Audio | Clock epoch / advancing / latency in telemetry | ABSENT (values exist, nothing snapshots them) | §6.2 |
-| Audio | Terminal state vocabulary incl. `absent` | ABSENT (`absent` has no producer) | §6.2 |
-| Audio | Leases nested under terminal | DERIVABLE today, not exposed | §6.2 |
+| Audio | Clock epoch / advancing / latency in telemetry | ✅ **LANDED** — in `AudioPatchBay.SnapshotDiagnostics()` | §6.2 |
+| Audio | Terminal state vocabulary | ✅ **LANDED** — `TerminalState` (master/open/behind/quarantined). `absent` deliberately excluded: presence is a host fact the bay cannot know | §6.2 |
+| Audio | Lease rows exposed | ✅ **LANDED** — all leases feed the one program bus, so they are listed beside terminals rather than nested under one | §6.2 |
 | Session | N list-scoped transport groups + per-group GO cursor | EXISTS | §2.1 |
 | Session | Standby / next-cue pointer | ABSENT (app-level only) | §2.1 |
 | Session | **Non-destructive document load** | ✅ **LANDED** — `preserveActiveGroups` retains unchanged groups + their GO cursors | §2.1 |
@@ -1553,7 +1555,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Fades | Per-transition playlist crossfade | EXISTS (per-fire args) — app-only work | §3.3 |
 | Automation | Volume envelope | EXISTS | §3.2 |
 | Automation | Layer-opacity lane | ABSENT (needs a video level-composition chain) | §3.2 |
-| Automation | Outbound OSC/MIDI ramps | ABSENT everywhere (no timing primitives in `S.Control`) | §3.2 |
+| Automation | Outbound OSC/MIDI ramps | ✅ **LANDED** — `OutboundRampRunner` (explicit rate, lands on final value incl. on interrupt, coalesces) | §3.2 |
 | Automation | Group-level lanes | No document home (flatten in the mapper) | §3.2 |
 | Video | Per-output mapping (warp vs clean) | **EXISTS, fully wired** | §4.1 |
 | Video | Visualizer off compositions | EXISTS (flag is dead code) | §4.2 |
@@ -1565,7 +1567,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Video | Composition fps field | ABSENT (derivable from frame deltas) | §6.3 |
 | Video | GPU/GL backend identity | ABSENT (captured only for a one-shot warning) | §6.3 |
 | Diagnostics | MEL pipeline, single factory | EXISTS and consistent | §6.4 |
-| Diagnostics | In-memory subscribable log sink + level switch | ABSENT (no ring provider anywhere) | §6.4 |
+| Diagnostics | In-memory subscribable log sink + level switch | ✅ **LANDED** — `LogRingProvider` (structured entries, volatile level, drop count, EntryCaptured) | §6.4 |
 | Diagnostics | "Copy report" serialization | ABSENT | §6.5 |
 | Status | Document validator (dead references) | EXISTS (`ShowDocumentValidator`) — string list, needs severity | §6.6 |
 | Status | Missing-media / absent-device checks | ABSENT — but every probe already exists, incl. device matching | §6.6 |
