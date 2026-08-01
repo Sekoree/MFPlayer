@@ -847,7 +847,7 @@
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"
                            Text="{x:Static res:Strings.NoAudioRoutesHint}"
-                           IsVisible="{Binding VisibleAudioRoutes.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+                           IsVisible="{Binding VisibleAudioRoutes.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={StaticResource IntZero}}" />
                 <ListBox ItemsSource="{Binding VisibleAudioRoutes}"
                          SelectedItem="{Binding SelectedAudioRoute, Mode=TwoWay}">
                   <ListBox.ItemTemplate>
@@ -928,7 +928,7 @@
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"
                            Text="{x:Static res:Strings.NoVideoPlacementsHint}"
-                           IsVisible="{Binding VisibleVideoPlacements.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+                           IsVisible="{Binding VisibleVideoPlacements.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={StaticResource IntZero}}" />
 
                 <!-- The placement LIST comes before the editors that act on its selection (it used
                      to sit below all of them, at the very bottom of the tab). -->
@@ -1554,7 +1554,7 @@
                 </ToggleButton>
                 <Button Content="{x:Static res:Strings.StopAllNowPlayingButton}"
                         Command="{Binding StopCommand}"
-                        IsEnabled="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
+                        IsEnabled="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={StaticResource IntZero}}" />
               </StackPanel>
             </Grid>
 
@@ -1563,7 +1563,7 @@
                        Opacity="0.55"
                        TextWrapping="Wrap"
                        Margin="0,0,0,8"
-                       IsVisible="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+                       IsVisible="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={StaticResource IntZero}}" />
 
             <ScrollViewer>
             <!-- P4 (plan §3.2): rows are singles OR group aggregates. The implicit per-type

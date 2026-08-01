@@ -262,18 +262,39 @@ public sealed partial class AudioRouter
 
         private void DrainLoop(CancellationToken token)
         {
+            // Set once Submit threw ObjectDisposedException: the sink is gone for good, so later
+            // chunks are recycled without touching it. One error raise, not one per queued chunk -
+            // a teardown race (host disposed the output before the pump quiesced) otherwise spams
+            // an exception for every chunk still in the queue.
+            var sinkDisposed = false;
             try
             {
                 foreach (var buf in _ready.GetConsumingEnumerable(token))
                 {
-                    var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
-                    try { _sink.Submit(buf); }
-                    catch (Exception ex) { _router.RaiseOutputErrored(_sinkId, ex); }
-                    finally
+                    if (!sinkDisposed)
                     {
-                        if (submitStarted != 0)
-                            MaybeLogSlowSubmit(submitStarted);
+                        var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+                        try
+                        {
+                            _sink.Submit(buf);
+                        }
+                        catch (ObjectDisposedException ex)
+                        {
+                            sinkDisposed = true;
+                            _router.RaiseOutputErrored(_sinkId, ex);
+                        }
+                        catch (Exception ex)
+                        {
+                            _router.RaiseOutputErrored(_sinkId, ex);
+                        }
+                        finally
+                        {
+                            if (submitStarted != 0)
+                                MaybeLogSlowSubmit(submitStarted);
+                        }
                     }
+                    // Disposed-sink chunks still count as processed and recycle their buffers, so
+                    // WaitForIdle and the producer's backpressure stay truthful during teardown.
                     Interlocked.Increment(ref _processed);
                     _free.Enqueue(buf);
                 }

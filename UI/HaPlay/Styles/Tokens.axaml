@@ -21,6 +21,11 @@
       <x:Double x:Key="GapM">12</x:Double>
       <x:Double x:Key="GapL">16</x:Double>
 
+      <!-- Typed zero for Count-comparison bindings. A literal ConverterParameter="0" arrives as a
+           STRING and ObjectConverters.Equal(int, string) is never true (NotEqual: always true) -
+           every "empty list" hint bound that way was permanently invisible. -->
+      <x:Int32 x:Key="IntZero">0</x:Int32>
+
       <!-- Semantic COLOR roles are variant-aware (review P3-5): Simple/Fluent honour the dark
            variant, so every status/state/text role carries a Default (light - also what the pinned-
            Light Classic resolves) and a Dark value. Consumers MUST reference these via

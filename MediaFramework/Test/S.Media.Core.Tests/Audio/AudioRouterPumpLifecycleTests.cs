@@ -175,6 +175,46 @@ public sealed class AudioRouterPumpLifecycleTests
             $"Stop should not stall on WaitForIdle after eviction drops (took {sw.ElapsedMilliseconds}ms)");
     }
 
+    [Fact]
+    public void DisposedOutput_IsReportedOnce_AndThePumpKeepsDraining()
+    {
+        // Regression (found in the first HaCue-standalone attempt, kept on the restart): a host
+        // that disposes a device output while its pump is still draining made every queued chunk
+        // throw ObjectDisposedException out of Submit - one OutputErrored per chunk, reading as
+        // "an exception is thrown on close". The pump must report the disposed sink ONCE, then
+        // keep recycling chunks quietly so WaitForIdle/Stop still see progress.
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        var output = new DisposableOutput(Stereo);
+        r.AddSource(new SilenceSource(Stereo), "src");
+        r.AddOutput(output, "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        var disposedErrors = 0;
+        r.OutputErrored += (_, e) =>
+        {
+            if (e.Exception is ObjectDisposedException)
+                Interlocked.Increment(ref disposedErrors);
+        };
+
+        r.Start();
+        Assert.True(SpinUntil(() => output.SubmitCount > 0, 2000), "output should be flowing before disposal");
+        output.Dispose(); // the host tears the device down under the running pump
+
+        Assert.True(SpinUntil(() => Volatile.Read(ref disposedErrors) > 0, 2000),
+            "the disposed sink must be reported");
+        // The pump keeps consuming (chunks recycled, processed rising) without further error spam.
+        var processedAtError = r.GetPumpStats("out").Processed;
+        Assert.True(SpinUntil(() => r.GetPumpStats("out").Processed > processedAtError + 2, 2000),
+            "the pump should keep draining after the sink is disposed");
+        Assert.Equal(1, Volatile.Read(ref disposedErrors));
+
+        var sw = Stopwatch.StartNew();
+        r.Stop();
+        sw.Stop();
+        Assert.True(sw.ElapsedMilliseconds < 500,
+            $"Stop should not stall after sink disposal (took {sw.ElapsedMilliseconds}ms)");
+    }
+
     private static bool SpinUntil(Func<bool> cond, int timeoutMs)
     {
         var deadline = Environment.TickCount64 + timeoutMs;
@@ -191,6 +231,24 @@ public sealed class AudioRouterPumpLifecycleTests
         public AudioFormat Format { get; } = fmt;
         public bool IsExhausted => false;
         public int ReadInto(Span<float> dst) { dst.Clear(); return dst.Length; }
+    }
+
+    /// <summary>Models a hardware output whose host disposes it under a running pump - Submit
+    /// throws <see cref="ObjectDisposedException"/> from then on, like <c>PortAudioOutput</c>.</summary>
+    private sealed class DisposableOutput(AudioFormat fmt) : IAudioOutput, IDisposable
+    {
+        private int _submits;
+        private volatile bool _disposed;
+        public int SubmitCount => Volatile.Read(ref _submits);
+        public AudioFormat Format { get; } = fmt;
+
+        public void Submit(ReadOnlySpan<float> packedSamples)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            Interlocked.Increment(ref _submits);
+        }
+
+        public void Dispose() => _disposed = true;
     }
 
     private sealed class RecordingOutput(AudioFormat fmt) : IAudioOutput
