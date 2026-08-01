@@ -252,7 +252,21 @@ public sealed class ClipCompositionRuntime : IDisposable
             layerCount,
             _pumpTiming.Snapshot(),
             _compositeTiming.Snapshot(),
-            _canvasPeriod);
+            _canvasPeriod,
+            SnapshotOutputStats());
+    }
+
+    /// <summary>One throughput row per attached output. Reads the same lock-free output snapshot the pump
+    /// uses, so it never blocks a frame.</summary>
+    private IReadOnlyList<ClipCompositionOutputStats> SnapshotOutputStats()
+    {
+        var outputs = _acquiredSnapshot;
+        if (outputs.Count == 0)
+            return [];
+        var rows = new ClipCompositionOutputStats[outputs.Count];
+        for (var i = 0; i < outputs.Count; i++)
+            rows[i] = outputs[i].SnapshotStats();
+        return rows;
     }
 
     public void EnsurePumpStarted()
@@ -1180,6 +1194,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
         catch (Exception ex)
         {
+            output.RecordSubmitFailure();
             Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: Submit failed for {Line}", output.DisplayName);
             toSubmit.Dispose();
         }
@@ -1478,6 +1493,12 @@ public sealed class ClipCompositionRuntime : IDisposable
         private VideoFormat? _configuredFormat;
         private bool _retired;
 
+        // Per-output throughput. The composition-wide FramesSubmitted sums across outputs, so it cannot
+        // answer "which line is dropping" - the question a diagnostics row exists to answer.
+        private long _submitted;
+        private long _refused;
+        private long _failed;
+
         public AcquiredOutput(ClipCompositionOutputLease lease)
         {
             _lease = lease;
@@ -1546,12 +1567,45 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_lifecycleGate)
             {
                 if (_retired)
+                {
+                    Interlocked.Increment(ref _refused);
                     return false;
+                }
 
                 EnsureConfigured(frame.Format);
                 Output.Submit(frame);
+                Interlocked.Increment(ref _submitted);
                 return true;
             }
+        }
+
+        /// <summary>Counts a submit that threw, so a failing line is visible as more than a log line.</summary>
+        public void RecordSubmitFailure() => Interlocked.Increment(ref _failed);
+
+        /// <summary>This output's own throughput row, including the pump queue depth when the sink is a
+        /// <see cref="VideoOutputPump"/> (the cue-line health probe used to hardcode those to zero).</summary>
+        public ClipCompositionOutputStats SnapshotStats()
+        {
+            var queued = 0;
+            var capacity = 0;
+            if (Output is VideoOutputPump pump)
+            {
+                queued = pump.CurrentQueuedDepth;
+                capacity = pump.MaxQueueDepth;
+            }
+
+            var format = _configuredFormat;
+            return new ClipCompositionOutputStats(
+                OutputId,
+                DisplayName,
+                Interlocked.Read(ref _submitted),
+                Interlocked.Read(ref _refused),
+                Interlocked.Read(ref _failed),
+                MappingStage is not null,
+                format?.Width ?? 0,
+                format?.Height ?? 0,
+                queued,
+                capacity);
         }
 
         public void SubscribePumpPressure(ClipCompositionRuntime owner)
@@ -2034,7 +2088,48 @@ public readonly record struct ClipCompositionRuntimeStats(
     int LayerCount = 0,
     TimingSnapshot PumpTiming = default,
     TimingSnapshot CompositeTiming = default,
-    TimeSpan CanvasPeriod = default);
+    TimeSpan CanvasPeriod = default,
+    IReadOnlyList<ClipCompositionOutputStats>? Outputs = null)
+{
+    /// <summary>
+    /// The composition's target frame rate, derived from <see cref="CanvasPeriod"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is the TARGET, not the achieved rate: achieved fps is a delta of
+    /// <see cref="FramesComposited"/> over wall time, which only the caller - who knows how long it has
+    /// been since it last looked - can compute. Exposing the target here means a view can show
+    /// "29.4 / 29.97" without hardcoding the denominator, and stops each caller re-deriving it.
+    /// </remarks>
+    public double TargetFramesPerSecond =>
+        CanvasPeriod > TimeSpan.Zero ? 1d / CanvasPeriod.TotalSeconds : 0d;
+
+    /// <summary>Per-output rows, empty when the runtime was not asked for them.</summary>
+    public IReadOnlyList<ClipCompositionOutputStats> OutputStats => Outputs ?? [];
+}
+
+/// <summary>One video output's own throughput, which the composition-wide totals cannot express.</summary>
+/// <param name="OutputId">Stable id of the line.</param>
+/// <param name="DisplayName">Operator-facing name.</param>
+/// <param name="FramesSubmitted">Frames handed to this sink.</param>
+/// <param name="FramesRefused">Frames dropped because the output had already retired.</param>
+/// <param name="SubmitFailures">Submits that threw - a failing line, visible as a number rather than
+/// only as a log line.</param>
+/// <param name="IsMapped">Whether this output runs its own mapping stage (warped) or takes the raw canvas.</param>
+/// <param name="Width">Configured output width, 0 before the first frame.</param>
+/// <param name="Height">Configured output height, 0 before the first frame.</param>
+/// <param name="QueuedFrames">Current pump queue depth, when the sink is a pump.</param>
+/// <param name="QueueCapacity">Pump queue capacity, when the sink is a pump.</param>
+public readonly record struct ClipCompositionOutputStats(
+    string OutputId,
+    string DisplayName,
+    long FramesSubmitted,
+    long FramesRefused,
+    long SubmitFailures,
+    bool IsMapped,
+    int Width,
+    int Height,
+    int QueuedFrames,
+    int QueueCapacity);
 
 public readonly record struct ClipCompositionDriftWarning(
     string CompositionId,

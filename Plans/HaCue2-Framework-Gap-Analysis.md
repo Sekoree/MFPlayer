@@ -1515,10 +1515,11 @@ needed nothing), the state is:
 | Control | 9 | **2** — the LTC decoder and the transport-neutral chase ingestion |
 | Automation | 4 | **1** — the outbound OSC/MIDI ramp runner (D3) |
 | Fades | 3 | **1** — custom point-list curves as data |
-| Diagnostics | 3 | **1** — the in-memory log sink |
-| Everything else (video, status, remote, build, app-support) | ~13 | 0 |
+| Diagnostics | 3 | **2** — the in-memory log sink, "Copy report" |
+| Video | 9 | **2** — per-output telemetry, composition target fps |
+| Everything else (status, remote, build, app-support) | ~10 | 0 |
 
-So roughly **17 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **20 of ~40 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1564,12 +1565,12 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Video | Idle image usable during a show | ABSENT (suppressed while the line is held) | §4.3 |
 | Video | Per-output test pattern / Identify | **ABSENT** (today's is composition-wide) | §4.4 |
 | Video | Audition video surface | ABSENT (composition mirroring is free) | §4.5 |
-| Video | Per-output telemetry | ABSENT (per-composition is rich; pump data exists but is clip-keyed) | §6.3 |
-| Video | Composition fps field | ABSENT (derivable from frame deltas) | §6.3 |
+| Video | Per-output telemetry | ✅ **LANDED** — `ClipCompositionOutputStats` rows (submitted / refused / failures / queue depth / mapped) | §6.3 |
+| Video | Composition fps field | ✅ **LANDED** — `TargetFramesPerSecond`; achieved fps stays a caller-side delta | §6.3 |
 | Video | GPU/GL backend identity | ABSENT (captured only for a one-shot warning) | §6.3 |
 | Diagnostics | MEL pipeline, single factory | EXISTS and consistent | §6.4 |
 | Diagnostics | In-memory subscribable log sink + level switch | ✅ **LANDED** — `LogRingProvider` (structured entries, volatile level, drop count, EntryCaptured) | §6.4 |
-| Diagnostics | "Copy report" serialization | ABSENT | §6.5 |
+| Diagnostics | "Copy report" serialization | ✅ **LANDED** — `AudioPatchBayReport.Render`, invariant-formatted plain text | §6.5 |
 | Status | Document validator (dead references) | EXISTS (`ShowDocumentValidator`) — string list, needs severity | §6.6 |
 | Status | Missing-media / absent-device checks | ABSENT — but every probe already exists, incl. device matching | §6.6 |
 | Control | Device layer (open/monitor/resolve/persist) | EXISTS in `S.Control` | §5.1 |
