@@ -63,6 +63,10 @@ public sealed class ClipCompositionRuntime : IDisposable
     // Lock-free, allocation-free read of the acquired outputs for the per-frame pump (NXT-11): republished under
     // _gate whenever _acquired changes, so PumpOneFrame reads a stable immutable view without a per-frame ToList.
     private volatile IReadOnlyList<AcquiredOutput> _acquiredSnapshot = [];
+
+    /// <summary>Composition-level idle frame, shown on every output when nothing is playing. Takes
+    /// precedence over an output's own idle (owner decision, rev-3 item 23).</summary>
+    private volatile VideoFrame? _idleFrame;
     private readonly List<LayerSlot> _slots = [];
     private readonly List<SurfaceLayerSlot> _surfaceLayers = [];
     private readonly TimeSpan _canvasPeriod;
@@ -248,6 +252,57 @@ public sealed class ClipCompositionRuntime : IDisposable
         return found;
     }
 
+    /// <summary>
+    /// Sets (or clears, with null) the composition's idle frame - what every output shows while nothing
+    /// is playing on this canvas. Takes precedence over any per-output idle.
+    /// </summary>
+    /// <remarks>Ownership transfers: the runtime disposes it when replaced, cleared, or disposed. This
+    /// is the level that was missing entirely - a per-output idle existed only on local video lines, and
+    /// only while the line was NOT held by playback, so once a cue list held it the image never showed
+    /// again and the canvas simply went black.</remarks>
+    public void SetIdleFrame(VideoFrame? idle)
+    {
+        VideoFrame? retired;
+        lock (_gate)
+        {
+            retired = _idleFrame;
+            _idleFrame = _disposed ? null : idle;
+        }
+
+        if (retired is not null)
+            MediaDiagnostics.SwallowDisposeErrors(retired.Dispose, "SetIdleFrame: previous idle frame");
+        if (_disposed)
+            idle?.Dispose();
+    }
+
+    /// <summary>
+    /// Sets (or clears) ONE output's fallback idle frame, used only when the composition has no idle of
+    /// its own. Returns false when no output is attached under <paramref name="outputId"/>.
+    /// </summary>
+    public bool SetOutputIdleFrame(string outputId, VideoFrame? idle)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
+
+        VideoFrame? retired = null;
+        var found = false;
+        lock (_gate)
+        {
+            foreach (var output in _acquired)
+            {
+                if (!string.Equals(output.OutputId, outputId, StringComparison.Ordinal))
+                    continue;
+                found = output.SetIdleFrame(idle, out retired);
+                break;
+            }
+        }
+
+        if (retired is not null)
+            MediaDiagnostics.SwallowDisposeErrors(retired.Dispose, "SetOutputIdleFrame: previous idle frame");
+        if (!found)
+            idle?.Dispose();
+        return found;
+    }
+
     /// <summary>The outputs currently showing a calibration frame.</summary>
     public IReadOnlyList<string> OutputsShowingTestPattern
     {
@@ -271,6 +326,17 @@ public sealed class ClipCompositionRuntime : IDisposable
     public int LayerCount
     {
         get { lock (_gate) return _slots.Count; }
+    }
+
+    /// <summary>
+    /// True when nothing at all is rendering on this canvas - no frame layers and no surface layers.
+    /// </summary>
+    /// <remarks>Surface layers (the visualizer) are held in their own collection and never appear in
+    /// <see cref="LayerCount"/>, so anything asking "is this canvas idle" has to consult both or it will
+    /// declare a composition that is busily rendering a visualizer to be empty.</remarks>
+    private bool IsCanvasEmpty
+    {
+        get { lock (_gate) return _slots.Count == 0 && _surfaceLayers.Count == 0; }
     }
 
     public int OutputCount
@@ -1060,6 +1126,20 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (snapshot.Count == 0)
             return;
 
+        // Nothing is playing on this canvas: show the idle frame rather than leaving each sink holding
+        // whatever it last received. Two things this condition must get right. It is "no content", NOT
+        // "the mixer produced no frame this tick" - a playing clip legitimately has ticks with nothing
+        // new, and idling on those would strobe between content and the idle image. And content means
+        // frame layers AND SURFACE layers: a visualizer lives only in _surfaceLayers, so counting _slots
+        // alone reports a composition rendering a visualizer as idle and blacks it out.
+        if (IsCanvasEmpty)
+        {
+            PumpIdleFrames(snapshot);
+            sw.Stop();
+            RecordPumpTiming(sw.Elapsed, _canvasPeriod);
+            return;
+        }
+
         if (TryPumpIntegratedMultiWarp(masterPts, snapshot, sw))
             return;
 
@@ -1270,6 +1350,48 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     /// <summary>Configures the output on format change (idempotent per format) and submits;
     /// disposes the frame on submit failure.</summary>
+    /// <summary>
+    /// Submits each output's static frame while the canvas is empty: a calibration pattern if one is set,
+    /// otherwise the composition's idle image, otherwise that output's own idle fallback.
+    /// </summary>
+    /// <remarks>
+    /// The precedence is the owner's: a composition idle beats a per-output idle, because the composition
+    /// is the thing an operator thinks of as "what this canvas shows", and the per-output image exists to
+    /// cover outputs the show does not otherwise dress. A calibration pattern beats both - it is a
+    /// deliberate override and would be useless if an idle image hid it.
+    /// <para>Every frame here is stored and reused across ticks, so mapped outputs composite from it
+    /// (which does not consume it) and unmapped outputs get a clone (submitting transfers ownership).</para>
+    /// </remarks>
+    private void PumpIdleFrames(IReadOnlyList<AcquiredOutput> snapshot)
+    {
+        var compositionIdle = _idleFrame;
+
+        foreach (var output in snapshot)
+        {
+            var source = output.TestPattern ?? compositionIdle ?? output.IdleFrame;
+            if (source is null)
+                continue; // nothing to show - the historical behaviour, i.e. leave the sink alone
+
+            var stage = output.MappingStage;
+            try
+            {
+                if (stage is not null)
+                {
+                    SubmitToOutput(output, stage.Composite(source, _compositorFactory));
+                }
+                else
+                {
+                    SubmitToOutput(
+                        output, VideoFrameCpuClone.DuplicateCpuBacking(source, source.ColorTransferHint));
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: idle frame failed for {Line}", output.DisplayName);
+            }
+        }
+    }
+
     private void SubmitToOutput(AcquiredOutput output, VideoFrame toSubmit)
     {
         try
@@ -1362,6 +1484,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     public void Dispose()
     {
         MediaClock? slaveClock;
+        VideoFrame? idleToRelease;
         List<AcquiredOutput> acquiredToRetire;
         List<SubtitleLayerFeed> subtitleFeeds;
         List<SurfaceLayerSlot> surfaceLayers;
@@ -1369,6 +1492,9 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             if (_disposed) return;
             _disposed = true;
+            // The composition idle frame is owned here (per-output idles go with their outputs' retire).
+            idleToRelease = _idleFrame;
+            _idleFrame = null;
             slaveClock = _slaveClock;
             acquiredToRetire = _acquired.ToList();
             subtitleFeeds = _subtitleFeeds.ToList();
@@ -1385,6 +1511,9 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _retiredMappingStages.Enqueue(compositionStage);
             }
         }
+
+        if (idleToRelease is not null)
+            MediaDiagnostics.SwallowDisposeErrors(idleToRelease.Dispose, "ClipCompositionRuntime.Dispose: idle frame");
 
         foreach (var feed in subtitleFeeds)
             feed.Dispose();
@@ -1584,6 +1713,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// reads it once per frame, a UI thread swaps it.</summary>
         private volatile VideoFrame? _testPattern;
 
+        /// <summary>This output's fallback idle frame, shown when the composition is empty and has no
+        /// idle of its own.</summary>
+        private volatile VideoFrame? _idleFrame;
+
         // Per-output throughput. The composition-wide FramesSubmitted sums across outputs, so it cannot
         // answer "which line is dropping" - the question a diagnostics row exists to answer.
         private long _submitted;
@@ -1598,6 +1731,23 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// <summary>This output's calibration frame, or null. Owned by the output: the pump only reads it,
         /// so it survives across frames and is disposed when replaced, cleared, or retired.</summary>
         public VideoFrame? TestPattern => _testPattern;
+
+        /// <summary>This output's idle frame, or null.</summary>
+        public VideoFrame? IdleFrame => _idleFrame;
+
+        /// <summary>Swaps the idle frame, handing the previous one back for disposal.</summary>
+        public bool SetIdleFrame(VideoFrame? idle, out VideoFrame? retired)
+        {
+            lock (_lifecycleGate)
+            {
+                retired = null;
+                if (_retired)
+                    return false;
+                retired = _idleFrame;
+                _idleFrame = idle;
+                return true;
+            }
+        }
 
         /// <summary>Swaps the calibration frame, handing the previous one back for disposal.</summary>
         public bool SetTestPattern(VideoFrame? pattern, out VideoFrame? retired)
@@ -1751,6 +1901,10 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _testPattern = null;
                 if (pattern is not null)
                     MediaDiagnostics.SwallowDisposeErrors(pattern.Dispose, $"{operation}: test pattern dispose");
+                var idle = _idleFrame;
+                _idleFrame = null;
+                if (idle is not null)
+                    MediaDiagnostics.SwallowDisposeErrors(idle.Dispose, $"{operation}: idle frame dispose");
                 UnsubscribePumpPressureCore();
 
                 if (DisposeOutputOnRuntimeDispose && Output is IDisposable disposable)

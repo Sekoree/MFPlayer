@@ -1516,11 +1516,11 @@ needed nothing), the state is:
 | Automation | 4 | **1** — the outbound OSC/MIDI ramp runner (D3) |
 | Fades | 3 | **1** — custom point-list curves as data |
 | Diagnostics | 3 | **2** — the in-memory log sink, "Copy report" |
-| Video | 9 | **3** — per-output telemetry, composition target fps, per-output test pattern |
+| Video | 9 | **4** — per-output telemetry, composition target fps, per-output test pattern, idle frames |
 | Build | 4 | **1** — arch-test `UI/` scope |
 | Everything else (status, remote, app-support) | ~8 | 0 |
 
-So roughly **23 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **24 of ~40 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1563,7 +1563,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Video | Per-output mapping (warp vs clean) | **EXISTS, fully wired** | §4.1 |
 | Video | Visualizer off compositions | EXISTS (flag is dead code) | §4.2 |
 | Video | N visualizer cues per composition | ABSENT (one slot per composition) | §4.2 |
-| Video | Idle image usable during a show | ABSENT (suppressed while the line is held) | §4.3 |
+| Video | Idle image usable during a show | ✅ **LANDED** — composition idle (+ per-output fallback), shown by the pump whenever the canvas is empty | §4.3 |
 | Video | Per-output test pattern / Identify | ✅ **LANDED** — `SetOutputTestPatternAsync`, substituted upstream of that output's mapping so the grid is warped | §4.4 |
 | Video | Audition video surface | ABSENT (composition mirroring is free) | §4.5 |
 | Video | Per-output telemetry | ✅ **LANDED** — `ClipCompositionOutputStats` rows (submitted / refused / failures / queue depth / mapped) | §6.3 |

@@ -120,6 +120,46 @@ public sealed partial class ShowSession
         });
 
     /// <summary>
+    /// Sets (or clears, with null) a composition's idle frame - what its outputs show while nothing is
+    /// playing on that canvas.
+    /// </summary>
+    /// <remarks>
+    /// This level did not exist before: a per-output idle image lived only on local video lines, and only
+    /// while the line was NOT held by playback - so the moment a cue list took the line the image stopped
+    /// appearing and the canvas simply went black between cues, which is the one time an operator most
+    /// wants a logo or a holding slate. Takes precedence over any per-output idle
+    /// (<see cref="SetOutputIdleFrameAsync"/>). Ownership transfers on the call.
+    /// </remarks>
+    public Task<bool> SetCompositionIdleFrameAsync(string compositionId, VideoFrame? frame) =>
+        InvokeAsync(() =>
+        {
+            if (!_compositions.TryGetValue(compositionId, out var composition))
+            {
+                frame?.Dispose();
+                return Task.FromResult(false);
+            }
+
+            composition.SetIdleFrame(frame);
+            return Task.FromResult(true);
+        });
+
+    /// <summary>
+    /// Sets (or clears) ONE output's fallback idle frame, used only when its composition has no idle of
+    /// its own - for dressing an output the show does not otherwise cover.
+    /// </summary>
+    public Task<bool> SetOutputIdleFrameAsync(string compositionId, string outputId, VideoFrame? frame) =>
+        InvokeAsync(() =>
+        {
+            if (!_compositions.TryGetValue(compositionId, out var composition))
+            {
+                frame?.Dispose();
+                return Task.FromResult(false);
+            }
+
+            return Task.FromResult(composition.SetOutputIdleFrame(outputId, frame));
+        });
+
+    /// <summary>
     /// Shows (non-null) or hides (null) a calibration pattern on ONE video output of a composition.
     /// </summary>
     /// <remarks>
