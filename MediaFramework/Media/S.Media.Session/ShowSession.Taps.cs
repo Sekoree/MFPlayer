@@ -140,15 +140,24 @@ public sealed partial class ShowSession
     /// <param name="placements">Multiple sections of the canvas showing the same source (#26
     /// multi-placement). When non-empty this supersedes <paramref name="placement"/>; one surface layer
     /// is created per entry and they share the slot's audio tap and lifetime.</param>
+    /// <param name="visualizerId">Which visualizer on this composition to attach or replace. Several may
+    /// run at once (rev-3 decision D5); omitting it uses a single well-known slot, so a caller that only
+    /// ever wants one visualizer per canvas keeps the historical replace-in-place behaviour. Passing
+    /// <see langword="null"/> for <paramref name="source"/> with the default id removes EVERY visualizer on
+    /// the composition, which is what "clear this canvas" has always meant.</param>
     public Task<bool> SetCompositionVisualizerAsync(
         string compositionId, S.Media.Core.Buses.IAudioVisualSource? source, bool disposeSourceOnRemove = true,
         VideoPlacementSpec? placement = null, Func<string, bool>? audioFeedFilter = null,
-        bool preserveAcrossDocumentReload = false, IReadOnlyList<VideoPlacementSpec>? placements = null) =>
+        bool preserveAcrossDocumentReload = false, IReadOnlyList<VideoPlacementSpec>? placements = null,
+        string? visualizerId = null) =>
         InvokeAsync(() =>
         {
             if (source is null)
             {
-                _visualizers.Remove(compositionId);
+                if (visualizerId is null)
+                    _visualizers.Remove(compositionId);
+                else
+                    _visualizers.Remove(compositionId, visualizerId);
                 return Task.FromResult(true);
             }
 
@@ -168,7 +177,8 @@ public sealed partial class ShowSession
                 : [placement ?? new VideoPlacementSpec(compositionId, int.MaxValue - 1, Placement: "stretch")];
 
             _visualizers.Attach(
-                compositionId, composition, surfaceSource, source, resolvedPlacements,
+                compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+                composition, surfaceSource, source, resolvedPlacements,
                 disposeSourceOnRemove, audioFeedFilter, preserveAcrossDocumentReload);
             return Task.FromResult(true);
         });
@@ -185,8 +195,11 @@ public sealed partial class ShowSession
     /// 0 = the only layer for single-placement attaches). Returns false when the composition has no
     /// attached visualizer or the index is out of range.</summary>
     public Task<bool> UpdateCompositionVisualizerPlacementAsync(
-        string compositionId, VideoPlacementSpec placement, int placementIndex = 0) =>
-        InvokeAsync(() => Task.FromResult(_visualizers.UpdatePlacement(compositionId, placement, placementIndex)));
+        string compositionId, VideoPlacementSpec placement, int placementIndex = 0,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.UpdatePlacement(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placement, placementIndex)));
 
     /// <summary>Creates + registers a visualizer's audio tap and feeds it from already-playing clips
     /// (dispatcher). The service owns WHEN this happens; the tap list itself stays session-owned.</summary>

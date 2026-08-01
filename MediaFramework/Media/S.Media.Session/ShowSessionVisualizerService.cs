@@ -38,11 +38,26 @@ internal sealed class ShowSessionVisualizerService
 
     /// <summary>Fade snapshot: slot identity makes the final detach safe when a new visualizer is
     /// fired onto the same composition while the old one is fading.</summary>
-    internal sealed record FadeCapture(string CompositionId, Slot Captured, IReadOnlyList<float> StartOpacities);
+    internal sealed record FadeCapture(SlotKey Key, Slot Captured, IReadOnlyList<float> StartOpacities);
 
-    internal sealed record Reattachment(string CompositionId, Slot Captured, ClipCompositionRuntime Replacement);
+    internal sealed record Reattachment(SlotKey Key, Slot Captured, ClipCompositionRuntime Replacement);
 
-    private readonly Dictionary<string, Slot> _slots = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Identifies one visualizer: a composition plus the id of whatever attached it.
+    /// </summary>
+    /// <remarks>
+    /// Keyed by composition ALONE until now, which meant attaching a second visualizer silently replaced
+    /// the first - so "the visualizer is an ordinary layer like any other" was not true, and two
+    /// visualizer cues could not coexist on one canvas. The visualizer id is the caller's (a cue id, in
+    /// practice); <see cref="DefaultVisualizerId"/> preserves the historical single-slot behaviour for
+    /// callers that do not care.
+    /// </remarks>
+    internal readonly record struct SlotKey(string CompositionId, string VisualizerId);
+
+    /// <summary>Id used when a caller attaches without naming its visualizer - the single-slot case.</summary>
+    public const string DefaultVisualizerId = "default";
+
+    private readonly Dictionary<SlotKey, Slot> _slots = [];
     private readonly Func<IAudioVisualSource, Func<string, bool>?, Guid> _registerTap;
     private readonly Action<Guid> _detachTapFromActiveClips;
     private readonly Action<Guid> _releaseTapRegistration;
@@ -65,12 +80,30 @@ internal sealed class ShowSessionVisualizerService
         _metadataHub = metadataHub;
     }
 
-    public bool Has(string compositionId) => _slots.ContainsKey(compositionId);
+    /// <summary>True when the composition has ANY visualizer attached.</summary>
+    public bool Has(string compositionId) =>
+        _slots.Keys.Any(k => string.Equals(k.CompositionId, compositionId, StringComparison.Ordinal));
 
-    /// <summary>Removes and fully tears down the composition's visualizer (no-op when absent).</summary>
+    /// <summary>True when this specific visualizer is attached.</summary>
+    public bool Has(string compositionId, string visualizerId) =>
+        _slots.ContainsKey(new SlotKey(compositionId, visualizerId));
+
+    /// <summary>Removes and fully tears down EVERY visualizer on the composition (no-op when none).</summary>
     public void Remove(string compositionId)
     {
-        if (_slots.Remove(compositionId, out var removed))
+        foreach (var key in _slots.Keys
+                     .Where(k => string.Equals(k.CompositionId, compositionId, StringComparison.Ordinal))
+                     .ToList())
+        {
+            if (_slots.Remove(key, out var removed))
+                DisposeSlot(removed);
+        }
+    }
+
+    /// <summary>Removes one visualizer, leaving any others on the same composition running.</summary>
+    public void Remove(string compositionId, string visualizerId)
+    {
+        if (_slots.Remove(new SlotKey(compositionId, visualizerId), out var removed))
             DisposeSlot(removed);
     }
 
@@ -81,6 +114,7 @@ internal sealed class ShowSessionVisualizerService
     /// </summary>
     public void Attach(
         string compositionId,
+        string visualizerId,
         ClipCompositionRuntime composition,
         Compositor.ILayerSurfaceVideoSource surfaceSource,
         IAudioVisualSource source,
@@ -106,7 +140,9 @@ internal sealed class ShowSessionVisualizerService
         }
         composition.EnsurePumpStarted();
 
-        if (_slots.Remove(compositionId, out var existing))
+        // Replaces only the SAME visualizer id; other visualizers on this composition keep running.
+        var key = new SlotKey(compositionId, visualizerId);
+        if (_slots.Remove(key, out var existing))
             DisposeSlot(ReferenceEquals(existing.Source, source)
                 ? existing with { DisposeSource = false }
                 : existing);
@@ -115,22 +151,24 @@ internal sealed class ShowSessionVisualizerService
         if (source is IBusMetadataSink sink)
             _metadataHub.Attach(sink);
 
-        _slots[compositionId] = new Slot(
+        _slots[key] = new Slot(
             stagedLayers, tapId, source, disposeSourceOnRemove, preserveAcrossDocumentReload);
     }
 
     /// <summary>Hot-updates one surface layer's placement; false when the composition has no
     /// visualizer or the index is out of range (see ShowSession.UpdateCompositionVisualizerPlacementAsync).</summary>
-    public bool UpdatePlacement(string compositionId, VideoPlacementSpec placement, int placementIndex)
+    public bool UpdatePlacement(
+        string compositionId, string visualizerId, VideoPlacementSpec placement, int placementIndex)
     {
-        if (!_slots.TryGetValue(compositionId, out var slot)
+        var key = new SlotKey(compositionId, visualizerId);
+        if (!_slots.TryGetValue(key, out var slot)
             || placementIndex < 0 || placementIndex >= slot.Layers.Count)
             return false;
         var layer = slot.Layers[placementIndex];
         layer.Slot.UpdatePlacement(placement);
         var layers = slot.Layers.ToArray();
         layers[placementIndex] = layer with { Placement = placement };
-        _slots[compositionId] = slot with { Layers = layers };
+        _slots[key] = slot with { Layers = layers };
         return true;
     }
 
@@ -138,7 +176,7 @@ internal sealed class ShowSessionVisualizerService
     public IReadOnlyList<FadeCapture> CaptureForFade(string? compositionId) =>
         _slots
             .Where(pair => compositionId is null
-                           || string.Equals(pair.Key, compositionId, StringComparison.Ordinal))
+                           || string.Equals(pair.Key.CompositionId, compositionId, StringComparison.Ordinal))
             .Select(pair => new FadeCapture(
                 pair.Key, pair.Value,
                 pair.Value.Layers.Select(l => l.Slot.Opacity).ToArray()))
@@ -151,7 +189,7 @@ internal sealed class ShowSessionVisualizerService
         var applied = false;
         foreach (var fade in fades)
         {
-            if (!_slots.TryGetValue(fade.CompositionId, out var current)
+            if (!_slots.TryGetValue(fade.Key, out var current)
                 || !ReferenceEquals(current, fade.Captured))
                 continue;
             for (var i = 0; i < fade.Captured.Layers.Count; i++)
@@ -168,10 +206,10 @@ internal sealed class ShowSessionVisualizerService
     {
         foreach (var fade in fades)
         {
-            if (!_slots.TryGetValue(fade.CompositionId, out var current)
+            if (!_slots.TryGetValue(fade.Key, out var current)
                 || !ReferenceEquals(current, fade.Captured))
                 continue;
-            _slots.Remove(fade.CompositionId);
+            _slots.Remove(fade.Key);
             DisposeSlot(fade.Captured);
         }
     }
@@ -195,19 +233,20 @@ internal sealed class ShowSessionVisualizerService
         IReadOnlyDictionary<string, ClipCompositionRuntime> replacementCompositions)
     {
         var reattachments = new List<Reattachment>();
-        foreach (var (id, slot) in _slots.Where(kv => !preservedIds.Contains(kv.Key)).ToList())
+        foreach (var (key, slot) in _slots
+                     .Where(kv => !preservedIds.Contains(kv.Key.CompositionId)).ToList())
         {
             if (slot.PreserveAcrossDocumentReload
-                && replacementCompositions.TryGetValue(id, out var replacement)
+                && replacementCompositions.TryGetValue(key.CompositionId, out var replacement)
                 && replacement.SupportsSurfaceLayers
                 && slot.Source is Compositor.ILayerSurfaceVideoSource)
             {
-                reattachments.Add(new Reattachment(id, slot, replacement));
+                reattachments.Add(new Reattachment(key, slot, replacement));
                 continue;
             }
 
             DisposeAuxiliaries(slot);
-            _slots.Remove(id);
+            _slots.Remove(key);
         }
 
         return reattachments;
@@ -233,16 +272,16 @@ internal sealed class ShowSessionVisualizerService
                         pending.Replacement.AddSurfaceLayer(surface, placement, ownsSurface: i == 0), placement));
                 }
                 pending.Replacement.EnsurePumpStarted();
-                _slots[pending.CompositionId] = pending.Captured with { Layers = recreated };
+                _slots[pending.Key] = pending.Captured with { Layers = recreated };
             }
             catch (Exception ex)
             {
                 DisposeStagedLayers(recreated, surface);
-                _slots.Remove(pending.CompositionId);
+                _slots.Remove(pending.Key);
                 DisposeAuxiliaries(pending.Captured);
                 MediaDiagnostics.LogWarning(
                     "ShowSession: persistent visualizer could not reattach to rebuilt composition '{0}' ({1}).",
-                    pending.CompositionId, ex.Message);
+                    pending.Key.CompositionId, ex.Message);
             }
         }
     }
