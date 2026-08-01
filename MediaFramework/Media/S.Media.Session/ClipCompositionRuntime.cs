@@ -188,7 +188,15 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         OutputMappingStage? single;
         lock (_gate)
-            single = _acquired.Count == 1 ? _acquired[0].MappingStage : null;
+        {
+            // The integrated path renders the canvas straight into the warped output inside the canvas
+            // pass, which leaves no seam at which one output's canvas can be substituted. While any
+            // calibration frame is set the chained per-output path runs instead - marginally more work,
+            // during calibration only, and the only way a pattern can be warped per output.
+            single = _acquired.Count == 1 && !_acquired.Any(a => a.TestPattern is not null)
+                ? _acquired[0].MappingStage
+                : null;
+        }
 
         if (single is not null)
         {
@@ -199,6 +207,54 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             warp.SetWarpPass(_canvasFormat, null);
             _integratedWarpActive = false;
+        }
+    }
+
+    /// <summary>
+    /// Shows a calibration frame on ONE output, or clears it with null. The frame passes through that
+    /// output's mapping stage, so it is cut and mesh-warped exactly as programme content is - which is
+    /// what makes it usable for aligning a projector rather than merely proving a cable works.
+    /// </summary>
+    /// <remarks>
+    /// Per output, so calibrating a projector no longer lights up every other line bound to the same
+    /// composition - the composition-wide pattern could only be all-or-nothing. Ownership transfers: the
+    /// runtime disposes the frame when it is replaced, cleared, or the output retires.
+    /// </remarks>
+    /// <returns>False when no output is attached under <paramref name="outputId"/>.</returns>
+    public bool SetOutputTestPattern(string outputId, VideoFrame? pattern)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
+
+        VideoFrame? retired = null;
+        var found = false;
+        lock (_gate)
+        {
+            foreach (var output in _acquired)
+            {
+                if (!string.Equals(output.OutputId, outputId, StringComparison.Ordinal))
+                    continue;
+                found = output.SetTestPattern(pattern, out retired);
+                break;
+            }
+
+            if (found)
+                ReevaluateIntegratedWarp();
+        }
+
+        if (retired is not null)
+            MediaDiagnostics.SwallowDisposeErrors(retired.Dispose, "SetOutputTestPattern: previous pattern");
+        if (!found)
+            pattern?.Dispose(); // never leak a frame the caller handed over
+        return found;
+    }
+
+    /// <summary>The outputs currently showing a calibration frame.</summary>
+    public IReadOnlyList<string> OutputsShowingTestPattern
+    {
+        get
+        {
+            lock (_gate)
+                return [.. _acquired.Where(a => a.TestPattern is not null).Select(a => a.OutputId)];
         }
     }
 
@@ -1050,7 +1106,12 @@ public sealed class ClipCompositionRuntime : IDisposable
             VideoFrame mappedFrame;
             try
             {
-                mappedFrame = stage.Composite(frame, _compositorFactory);
+                // The calibration frame replaces the canvas for THIS output only, and does so before the
+                // mapping stage - so the pattern is cut and mesh-warped exactly like programme content.
+                // That is the whole point: a grid that bypassed the warp would show a rectangle on a
+                // surface the warp exists to make non-rectangular, and align nothing.
+                // Composite() does not take ownership of its source, so the stored frame survives.
+                mappedFrame = stage.Composite(output.TestPattern ?? frame, _compositorFactory);
             }
             catch (Exception ex)
             {
@@ -1084,6 +1145,32 @@ public sealed class ClipCompositionRuntime : IDisposable
             var output = unmapped[i];
             var isLast = i == unmapped.Count - 1;
             VideoFrame toSubmit;
+
+            // An unmapped output takes the pattern straight, but submitting is a transfer of ownership,
+            // so it gets a copy - the stored frame has to outlive every frame it is shown on.
+            if (output.TestPattern is { } pattern)
+            {
+                // This output still owns a share of the canvas even though it will not show it. The
+                // fan-out views share one refcount, so an unreleased view keeps the canvas buffer out of
+                // the pool forever; the no-views case owns `frame` itself on the last iteration.
+                if (views is not null)
+                    views[i].Dispose();
+                else if (isLast)
+                    frame.Dispose();
+
+                try
+                {
+                    SubmitToOutput(
+                        output, VideoFrameCpuClone.DuplicateCpuBacking(pattern, pattern.ColorTransferHint));
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: test-pattern clone failed for {Line}",
+                        output.DisplayName);
+                }
+                continue;
+            }
+
             if (views is not null)
             {
                 // The canvas frame's release moved into the views' shared countdown; `frame` itself
@@ -1493,6 +1580,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         private VideoFormat? _configuredFormat;
         private bool _retired;
 
+        /// <summary>Calibration frame that REPLACES the canvas for this output only. Volatile: the pump
+        /// reads it once per frame, a UI thread swaps it.</summary>
+        private volatile VideoFrame? _testPattern;
+
         // Per-output throughput. The composition-wide FramesSubmitted sums across outputs, so it cannot
         // answer "which line is dropping" - the question a diagnostics row exists to answer.
         private long _submitted;
@@ -1502,6 +1593,24 @@ public sealed class ClipCompositionRuntime : IDisposable
         public AcquiredOutput(ClipCompositionOutputLease lease)
         {
             _lease = lease;
+        }
+
+        /// <summary>This output's calibration frame, or null. Owned by the output: the pump only reads it,
+        /// so it survives across frames and is disposed when replaced, cleared, or retired.</summary>
+        public VideoFrame? TestPattern => _testPattern;
+
+        /// <summary>Swaps the calibration frame, handing the previous one back for disposal.</summary>
+        public bool SetTestPattern(VideoFrame? pattern, out VideoFrame? retired)
+        {
+            lock (_lifecycleGate)
+            {
+                retired = null;
+                if (_retired)
+                    return false;
+                retired = _testPattern;
+                _testPattern = pattern;
+                return true;
+            }
         }
 
         public string OutputId => _lease.OutputId;
@@ -1636,6 +1745,12 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _retired = true;
                 var retired = _mappingStage;
                 _mappingStage = null;
+                // The calibration frame is plain pixel data (never a GL resource), so it is safe to
+                // release here rather than deferring to the driver thread.
+                var pattern = _testPattern;
+                _testPattern = null;
+                if (pattern is not null)
+                    MediaDiagnostics.SwallowDisposeErrors(pattern.Dispose, $"{operation}: test pattern dispose");
                 UnsubscribePumpPressureCore();
 
                 if (DisposeOutputOnRuntimeDispose && Output is IDisposable disposable)

@@ -119,6 +119,31 @@ public sealed partial class ShowSession
             return Task.FromResult(true);
         });
 
+    /// <summary>
+    /// Shows (non-null) or hides (null) a calibration pattern on ONE video output of a composition.
+    /// </summary>
+    /// <remarks>
+    /// The per-output counterpart of <see cref="SetCompositionTestPatternAsync"/>, and the one an
+    /// operator actually wants at a get-in: the composition-wide pattern is a top-most canvas layer, so
+    /// it appears on EVERY output bound to that composition - lighting up the lobby TV and the stream
+    /// while you align the projector. This replaces the canvas for the named output alone, upstream of
+    /// that output's mapping stage, so the grid is cut and mesh-warped exactly like programme content.
+    /// <para>The host renders the grid frame (it owns section masking and what the pattern should look
+    /// like) and hands it over; the session owns it from then on. Returns false when the composition or
+    /// the output id is unknown - in which case the frame is disposed rather than leaked.</para>
+    /// </remarks>
+    public Task<bool> SetOutputTestPatternAsync(string compositionId, string outputId, VideoFrame? frame) =>
+        InvokeAsync(() =>
+        {
+            if (!_compositions.TryGetValue(compositionId, out var composition))
+            {
+                frame?.Dispose();
+                return Task.FromResult(false);
+            }
+
+            return Task.FromResult(composition.SetOutputTestPattern(outputId, frame));
+        });
+
     /// <summary>Shows (<paramref name="frame"/> non-null) or hides (null) a mapping-calibration test pattern on a
     /// composition - held in a top-most, full-canvas layer so the operator can align one output's warp against the
     /// live grid. The host renders the grid frame (it owns the mapping/section masking) and hands it here; the
