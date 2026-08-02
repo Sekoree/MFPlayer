@@ -17,7 +17,7 @@
       <!-- A polyline over the fractions, not a stretched geometry: Stretch="Fill" maps the geometry's
            BOUNDING BOX, so a curve that never reaches 1 would be drawn as if it did. -->
       <c:EnvelopeGraph Points="{Binding Shape, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
-                       Stroke="{StaticResource GelCongo}" StrokeThickness="1.4" />
+                       Stroke="{DynamicResource GelCongo}" StrokeThickness="1.4" />
 
       <ItemsControl ItemsSource="{Binding Points, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}">
         <ItemsControl.ItemsPanel>
@@ -36,10 +36,10 @@
                  because "flat until the next point" is a different KIND of thing, not a shade of one. -->
             <Panel Margin="-4">
               <Ellipse Width="8" Height="8" IsVisible="{Binding !IsHold}"
-                       Fill="{StaticResource GelCongo}"
+                       Fill="{DynamicResource GelCongo}"
                        Classes.warn="{Binding IsSelected}" />
               <Rectangle Width="8" Height="8" IsVisible="{Binding IsHold}"
-                         Fill="{StaticResource GelCongo}"
+                         Fill="{DynamicResource GelCongo}"
                          Classes.warn="{Binding IsSelected}" />
             </Panel>
           </DataTemplate>

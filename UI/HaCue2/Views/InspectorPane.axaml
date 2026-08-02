@@ -255,7 +255,7 @@
             <ItemsControl ItemsSource="{Binding EffectLanes}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="sys:String">
-                  <Border Padding="10,5" BorderBrush="{StaticResource BoothRuleSoft}" BorderThickness="0,0,0,1">
+                  <Border Padding="10,5" BorderBrush="{DynamicResource BoothRuleSoft}" BorderThickness="0,0,0,1">
                     <TextBlock Classes="mono dim2 small" Text="{Binding}" />
                   </Border>
                 </DataTemplate>

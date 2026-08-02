@@ -21,9 +21,9 @@
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.1" />
-    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="11,5" />
@@ -53,14 +53,14 @@
     </Style>
 
     <Style Selector="^:pointerover /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource ButtonHoverBg}" />
-      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothInk3}" />
     </Style>
     <Style Selector="^:pointerover">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     </Style>
     <Style Selector="^:pressed /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource ButtonPressBg}" />
+      <Setter Property="Background" Value="{DynamicResource ButtonPressBg}" />
     </Style>
     <Style Selector="^:disabled">
       <Setter Property="Opacity" Value="0.42" />
@@ -68,33 +68,33 @@
 
     <!-- GO. Wider padding and 0.2 em tracking: it is deliberately the largest word on the screen. -->
     <Style Selector="^.go">
-      <Setter Property="Background" Value="{StaticResource GoButtonBg}" />
-      <Setter Property="BorderBrush" Value="{StaticResource GoButtonBorder}" />
-      <Setter Property="Foreground" Value="{StaticResource GoButtonFg}" />
+      <Setter Property="Background" Value="{DynamicResource GoButtonBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GoButtonBorder}" />
+      <Setter Property="Foreground" Value="{DynamicResource GoButtonFg}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Padding" Value="20,5" />
       <Setter Property="TextElement.LetterSpacing" Value="2" />
     </Style>
     <Style Selector="^.go:pointerover /template/ Border#root">
       <Setter Property="Background" Value="#2A4A43" />
-      <Setter Property="BorderBrush" Value="{StaticResource GelGreen}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelGreen}" />
     </Style>
     <Style Selector="^.go:pointerover">
-      <Setter Property="Foreground" Value="{StaticResource GoButtonFg}" />
+      <Setter Property="Foreground" Value="{DynamicResource GoButtonFg}" />
     </Style>
 
     <Style Selector="^.panic">
-      <Setter Property="Foreground" Value="{StaticResource GelRed}" />
-      <Setter Property="BorderBrush" Value="{StaticResource ChipErrBorder}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ChipErrBorder}" />
     </Style>
     <Style Selector="^.panic:pointerover">
-      <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
     </Style>
 
     <Style Selector="^.primary">
-      <Setter Property="Background" Value="{StaticResource PrimaryButtonBg}" />
-      <Setter Property="BorderBrush" Value="{StaticResource PrimaryButtonBorder}" />
-      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+      <Setter Property="Background" Value="{DynamicResource PrimaryButtonBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource PrimaryButtonBorder}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     </Style>
 
     <Style Selector="^.icon">
@@ -105,7 +105,7 @@
     <Style Selector="^.quiet">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderBrush" Value="Transparent" />
-      <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
       <Setter Property="TextElement.LetterSpacing" Value="0.4" />
       <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
       <Setter Property="Padding" Value="0,2" />
@@ -116,7 +116,7 @@
       <Setter Property="BorderBrush" Value="Transparent" />
     </Style>
     <Style Selector="^.quiet:pointerover">
-      <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
     </Style>
 
     <!-- Compact variant used inside a `.chain` action row (mockup: padding 2px 8px). -->
@@ -140,8 +140,8 @@
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.25" />
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="Padding" Value="8,3" />
   </ControlTheme>
 
@@ -150,8 +150,8 @@
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.25" />
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="8,3" />
@@ -176,24 +176,24 @@
     </Setter>
 
     <Style Selector="^:pointerover /template/ Border#root">
-      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothInk3}" />
     </Style>
     <!-- A latched chip goes congo — the same gel the shell uses for "this is the current state". -->
     <Style Selector="^:checked /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource ChipEditBg}" />
-      <Setter Property="BorderBrush" Value="{StaticResource ChipEditBorder}" />
+      <Setter Property="Background" Value="{DynamicResource ChipEditBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ChipEditBorder}" />
     </Style>
     <Style Selector="^:checked">
-      <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
     </Style>
     <!-- Lock latches AMBER rather than congo: it changes what the operator may do, and that is a
          warning-class fact, not a navigation-class one. -->
     <Style Selector="^.latch-warn:checked /template/ Border#root">
       <Setter Property="Background" Value="#1AE0A85C" />
-      <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ChipWarnBorder}" />
     </Style>
     <Style Selector="^.latch-warn:checked">
-      <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelAmber}" />
     </Style>
   </ControlTheme>
 
@@ -203,8 +203,8 @@
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="0.3" />
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="Padding" Value="7,1" />
   </ControlTheme>
 
@@ -215,7 +215,7 @@
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="Transparent" />
     <Setter Property="Padding" Value="0" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
   </ControlTheme>
 
   <!-- ── the `.seg` segmented control ─────────────────────────────────────────────────────────
@@ -226,9 +226,9 @@
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="0.8" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1,1,0,1" />
     <Setter Property="Padding" Value="7,3" />
     <Setter Property="Cursor" Value="Hand" />
@@ -249,14 +249,14 @@
       <Setter Property="BorderThickness" Value="1" />
     </Style>
     <Style Selector="^:pointerover">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     </Style>
     <Style Selector="^:selected /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource SegmentOnBg}" />
-      <Setter Property="BorderBrush" Value="{StaticResource SegmentOnBorder}" />
+      <Setter Property="Background" Value="{DynamicResource SegmentOnBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SegmentOnBorder}" />
     </Style>
     <Style Selector="^:selected">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     </Style>
   </ControlTheme>
 

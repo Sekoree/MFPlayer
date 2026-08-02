@@ -24,8 +24,8 @@
         <Button Grid.Column="5" Classes="icon" Content="↓ STBY" />
         <!-- Multi-list transport is v1 (register item 5): the transport acts on the selected list and
              every list keeps its own standby. -->
-        <Border Grid.Column="6" Background="{StaticResource BoothBg}"
-                BorderBrush="{StaticResource BoothRule2}" BorderThickness="1"
+        <Border Grid.Column="6" Background="{DynamicResource BoothBg}"
+                BorderBrush="{DynamicResource BoothRule2}" BorderThickness="1"
                 CornerRadius="{StaticResource BoothCorner}" Padding="8,4">
           <TextBlock Classes="mono" FontSize="{DynamicResource FontSizeMono}"
                      Text="{Binding ListSelector}" />

@@ -7,8 +7,8 @@
         Title="Subtitles"
         Width="520" Height="360"
         WindowStartupLocation="CenterOwner"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- A list rather than a dropdown, because subtitles are not exclusive: a show routinely runs an

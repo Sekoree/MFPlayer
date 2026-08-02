@@ -13,11 +13,11 @@
 
   <!-- ══ PanelBox — the mockup's `.pnl` ══════════════════════════════════════════════════════ -->
   <ControlTheme x:Key="{x:Type c:PanelBox}" TargetType="c:PanelBox">
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource PanelCorner}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
     <Setter Property="VerticalContentAlignment" Value="Stretch" />
     <Setter Property="Template">
@@ -30,8 +30,8 @@
           <DockPanel LastChildFill="True">
             <Border Name="head"
                     DockPanel.Dock="Top"
-                    Background="{StaticResource BoothPanel2}"
-                    BorderBrush="{StaticResource BoothRule}"
+                    Background="{DynamicResource BoothPanel2}"
+                    BorderBrush="{DynamicResource BoothRule}"
                     BorderThickness="0,0,0,1"
                     Padding="9,5"
                     IsVisible="{Binding Header, RelativeSource={RelativeSource TemplatedParent},
@@ -44,7 +44,7 @@
                                   ContentTemplate="{TemplateBinding HeaderTemplate}"
                                   TextElement.FontFamily="{StaticResource MonoFont}"
                                   TextElement.FontSize="{DynamicResource FontSizeMonoSmall}"
-                                  TextElement.Foreground="{StaticResource BoothInk3}"
+                                  TextElement.Foreground="{DynamicResource BoothInk3}"
                                   TextElement.LetterSpacing="1.25" />
                 <ContentPresenter Grid.Column="1"
                                   Margin="8,0,0,0"
@@ -52,7 +52,7 @@
                                   Content="{TemplateBinding Subhead}"
                                   TextElement.FontFamily="{StaticResource MonoFont}"
                                   TextElement.FontSize="{DynamicResource FontSizeMonoSmall}"
-                                  TextElement.Foreground="{StaticResource BoothInk}" />
+                                  TextElement.Foreground="{DynamicResource BoothInk}" />
                 <!-- The hint is right-aligned prose, so it keeps sentence case and near-zero tracking:
                      it is read, not scanned. -->
                 <ContentPresenter Grid.Column="2"
@@ -62,7 +62,7 @@
                                   Content="{TemplateBinding Hint}"
                                   TextElement.FontFamily="{StaticResource MonoFont}"
                                   TextElement.FontSize="{DynamicResource FontSizeMonoSmall}"
-                                  TextElement.Foreground="{StaticResource BoothInk3}"
+                                  TextElement.Foreground="{DynamicResource BoothInk3}"
                                   TextBlock.TextTrimming="CharacterEllipsis"
                                   TextElement.LetterSpacing="0.35" />
               </Grid>
@@ -90,8 +90,8 @@
        4 px, no text, no minimum width. `.fading` recolours it amber, which is the same signal the
        row's stripe carries: a cue on its way out is amber everywhere it appears. -->
   <ControlTheme x:Key="{x:Type ProgressBar}" TargetType="ProgressBar">
-    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelGreen}" />
     <Setter Property="CornerRadius" Value="2" />
     <Setter Property="MinWidth" Value="0" />
     <Setter Property="MinHeight" Value="4" />
@@ -109,10 +109,10 @@
       </ControlTemplate>
     </Setter>
     <Style Selector="^.fading">
-      <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelAmber}" />
     </Style>
     <Style Selector="^.near">
-      <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
     </Style>
   </ControlTheme>
 
@@ -120,17 +120,17 @@
   <ControlTheme x:Key="{x:Type c:LevelMeter}" TargetType="c:LevelMeter">
     <Setter Property="Width" Value="7" />
     <Setter Property="Height" Value="34" />
-    <Setter Property="Fill" Value="{StaticResource MeterFill}" />
-    <Setter Property="TrackBrush" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
-    <Setter Property="PeakBrush" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Fill" Value="{DynamicResource MeterFill}" />
+    <Setter Property="TrackBrush" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
+    <Setter Property="PeakBrush" Value="{DynamicResource BoothInk2}" />
     <Style Selector="^[IsClipping=True]">
-      <Setter Property="BorderBrush" Value="{StaticResource GelRed}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelRed}" />
     </Style>
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type c:CanvasGrid}" TargetType="c:CanvasGrid">
-    <Setter Property="Stroke" Value="{StaticResource CanvasGridLine}" />
+    <Setter Property="Stroke" Value="{DynamicResource CanvasGridLine}" />
     <Setter Property="IsHitTestVisible" Value="False" />
   </ControlTheme>
 
@@ -140,7 +140,7 @@
        commands have icons, and an empty 20 px column reads as a rendering fault. -->
   <ControlTheme x:Key="{x:Type MenuItem}" TargetType="MenuItem">
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
     <Setter Property="Padding" Value="9,4" />
     <Setter Property="Template">
@@ -159,20 +159,20 @@
                        VerticalAlignment="Center"
                        FontFamily="{StaticResource MonoFont}"
                        FontSize="{DynamicResource FontSizeMicro}"
-                       Foreground="{StaticResource BoothInk3}"
+                       Foreground="{DynamicResource BoothInk3}"
                        Text="{TemplateBinding InputGesture}" />
             <Path Name="rightArrow"
                   Grid.Column="2"
                   Margin="4,0,8,0"
                   VerticalAlignment="Center"
                   Data="M0,0L4,3.5 0,7z"
-                  Fill="{StaticResource BoothInk3}" />
+                  Fill="{DynamicResource BoothInk3}" />
             <Popup Name="PART_Popup"
                    IsLightDismissEnabled="False"
                    IsOpen="{TemplateBinding IsSubMenuOpen, Mode=TwoWay}"
                    Placement="RightEdgeAlignedTop">
-              <Border Background="{StaticResource BoothPanel}"
-                      BorderBrush="{StaticResource BoothRule2}"
+              <Border Background="{DynamicResource BoothPanel}"
+                      BorderBrush="{DynamicResource BoothRule2}"
                       BorderThickness="1"
                       CornerRadius="{StaticResource BoothCorner}"
                       Padding="0,3">
@@ -186,7 +186,7 @@
     <Style Selector="^:separator">
       <Setter Property="Template">
         <ControlTemplate>
-          <Border Height="1" Margin="0,3" Background="{StaticResource BoothRule}" />
+          <Border Height="1" Margin="0,3" Background="{DynamicResource BoothRule}" />
         </ControlTemplate>
       </Setter>
     </Style>
@@ -194,7 +194,7 @@
       <Setter Property="IsVisible" Value="False" />
     </Style>
     <Style Selector="^:selected /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource SegmentOnBg}" />
+      <Setter Property="Background" Value="{DynamicResource SegmentOnBg}" />
     </Style>
     <Style Selector="^:disabled">
       <Setter Property="Opacity" Value="0.42" />
@@ -202,8 +202,8 @@
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type MenuFlyoutPresenter}" TargetType="MenuFlyoutPresenter">
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="0,3" />
@@ -223,8 +223,8 @@
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type ContextMenu}" TargetType="ContextMenu">
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="0,3" />
@@ -245,12 +245,12 @@
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type FlyoutPresenter}" TargetType="FlyoutPresenter">
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="0" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     <Setter Property="Template">
       <ControlTemplate>
         <Border Background="{TemplateBinding Background}"
@@ -268,11 +268,11 @@
 
   <!-- ══ tooltip ════════════════════════════════════════════════════════════════════════════ -->
   <ControlTheme x:Key="{x:Type ToolTip}" TargetType="ToolTip">
-    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
     <Setter Property="Padding" Value="8,5" />
     <Setter Property="MaxWidth" Value="360" />
@@ -302,12 +302,12 @@
       </ControlTemplate>
     </Setter>
     <Style Selector="^:pointerover /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource ChipEditBorder}" />
+      <Setter Property="Background" Value="{DynamicResource ChipEditBorder}" />
     </Style>
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type Separator}" TargetType="Separator">
-    <Setter Property="Background" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothRule}" />
     <Setter Property="Height" Value="1" />
     <Setter Property="Margin" Value="0" />
     <Setter Property="Template">

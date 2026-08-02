@@ -22,13 +22,17 @@ public enum Density
 /// exactly this).
 /// </para>
 /// <para>
-/// <b>Metrics are live; the palette is not.</b> Row heights and font sizes are pushed in as resource
-/// overrides and every control that uses them reads them with <c>DynamicResource</c>, so a change
-/// lands immediately. The COLOUR palette is applied at startup instead: 840-odd
-/// <c>StaticResource</c> references resolve once when the theme is built, and converting every one of
-/// them to a dynamic lookup to make a preference live would be a large change with a real chance of
-/// missing some — which would show up as one panel in the wrong colours. The Appearance pane says so
-/// rather than pretending.
+/// <b>Everything here is live.</b> Metrics and colours are both pushed in as resource overrides, and
+/// every control reads them with <c>DynamicResource</c>, so a change lands on the next layout without
+/// a restart. Getting the palette there needed the colour references converted from
+/// <c>StaticResource</c> — a static lookup resolves once when the theme is built, which is why this
+/// was startup-only until the conversion.
+/// </para>
+/// <para>
+/// A palette re-states only what actually depends on the surface: the 13 base colours, the 13 brushes
+/// built from them, and the 14 pre-computed OPAQUE mixes. The 35 gel-over-transparent washes are
+/// palette-independent by construction — they tint whatever they sit on, which is why the mockup
+/// authored them with an alpha channel.
 /// </para>
 /// </remarks>
 public sealed class Appearance
@@ -56,8 +60,25 @@ public sealed class Appearance
     /// <summary>The one instance the app reads. Set before the first window if it is being restored.</summary>
     public static Appearance Current { get; } = new();
 
-    /// <summary>Which palette to build at startup. Changing it later needs a restart.</summary>
-    public string Palette { get; set; } = "booth dark";
+    /// <summary>The palettes the Appearance pane offers. Booth dark is the tokens themselves.</summary>
+    public static IReadOnlyList<string> Palettes { get; } = ["booth dark", "dark", "light"];
+
+    private readonly ResourceDictionary _palette = [];
+    private string _paletteName = "booth dark";
+
+    /// <summary>Which palette is drawn. Live — the app re-tints on the next layout.</summary>
+    public string Palette
+    {
+        get => _paletteName;
+        set
+        {
+            if (value == _paletteName)
+                return;
+
+            _paletteName = value;
+            ApplyPalette();
+        }
+    }
 
     public Density Density { get; private set; } = Density.Normal;
 
@@ -78,9 +99,15 @@ public sealed class Appearance
     {
         ArgumentNullException.ThrowIfNull(application);
 
+        // Palette first, metrics last: both are appended AFTER the theme bundle, so they win, and a
+        // metric never depends on a colour.
+        if (!application.Resources.MergedDictionaries.Contains(_palette))
+            application.Resources.MergedDictionaries.Add(_palette);
+
         if (!application.Resources.MergedDictionaries.Contains(_overrides))
             application.Resources.MergedDictionaries.Add(_overrides);
 
+        ApplyPalette();
         Apply();
     }
 
@@ -122,6 +149,33 @@ public sealed class Appearance
             out var percent) && percent > 0
             ? percent / 100
             : fallback;
+
+    /// <summary>
+    /// Loads the chosen palette's overrides into the live dictionary.
+    /// </summary>
+    /// <remarks>
+    /// The dictionary is CLEARED and refilled rather than swapped: a replaced dictionary breaks every
+    /// DynamicResource already pointing into it, which would leave the app half re-tinted.
+    /// </remarks>
+    private void ApplyPalette()
+    {
+        _palette.Clear();
+
+        // "booth dark" is Tokens.axaml itself — nothing to override, which is why it is the default
+        // and why an empty dictionary is the correct representation of it.
+        ResourceDictionary? loaded = _paletteName switch
+        {
+            "light" => new Themes.LightPalette(),
+            "dark" => new Themes.NeutralDarkPalette(),
+            _ => null,
+        };
+
+        if (loaded is null)
+            return;
+
+        foreach (var entry in loaded)
+            _palette[entry.Key] = entry.Value;
+    }
 
     private void Apply()
     {

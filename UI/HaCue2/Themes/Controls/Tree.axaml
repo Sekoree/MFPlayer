@@ -24,14 +24,14 @@
   <StreamGeometry x:Key="TreeDataGridItemCollapsedChevronPathData">M 2,-2 L 8,4 L 2,10 L 3.5,11.5 L 11,4 L 3.5,-3.5 Z</StreamGeometry>
   <StreamGeometry x:Key="TreeDataGridItemExpandedChevronPathData">M -2,2 L 4,8 L 10,2 L 11.5,3.5 L 4,11 L -3.5,3.5 Z</StreamGeometry>
 
-  <SolidColorBrush x:Key="TreeDataGridGridLinesBrush" Color="{StaticResource BoothRuleColor}" />
+  <SolidColorBrush x:Key="TreeDataGridGridLinesBrush" Color="{DynamicResource BoothRuleColor}" />
   <SolidColorBrush x:Key="TreeDataGridSelectedCellBackgroundBrush" Color="Transparent" />
 
   <ControlTheme x:Key="TreeDataGridExpandCollapseChevron" TargetType="ToggleButton">
     <Setter Property="Margin" Value="0" />
     <Setter Property="Width" Value="10" />
     <Setter Property="Height" Value="10" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="Template">
       <ControlTemplate>
         <Border Background="Transparent"
@@ -51,16 +51,16 @@
     <!-- An open group's chevron is brighter than a closed one's: the two states have to be tellable
          apart at a glance from across a booth, which is the whole reason the tree exists. -->
     <Style Selector="^:checked /template/ Path#ChevronPath">
-      <Setter Property="Fill" Value="{StaticResource GelCongo}" />
+      <Setter Property="Fill" Value="{DynamicResource GelCongo}" />
     </Style>
     <Style Selector="^:pointerover /template/ Path#ChevronPath">
-      <Setter Property="Fill" Value="{StaticResource BoothInk}" />
+      <Setter Property="Fill" Value="{DynamicResource BoothInk}" />
     </Style>
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type TreeDataGrid}" TargetType="TreeDataGrid">
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="Template">
       <ControlTemplate>
         <Border x:Name="RootBorder"
@@ -75,8 +75,8 @@
                           VerticalScrollBarVisibility="Disabled"
                           BringIntoViewOnFocusChange="{TemplateBinding (ScrollViewer.BringIntoViewOnFocusChange)}">
               <Border x:Name="ColumnHeadersPresenterBorder"
-                      Background="{StaticResource BoothPanel2}"
-                      BorderBrush="{StaticResource BoothRule}"
+                      Background="{DynamicResource BoothPanel2}"
+                      BorderBrush="{DynamicResource BoothRule}"
                       BorderThickness="0,0,0,1">
                 <TreeDataGridColumnHeadersPresenter Name="PART_ColumnHeadersPresenter"
                                                     ElementFactory="{TemplateBinding ElementFactory}"
@@ -104,13 +104,13 @@
       <ControlTemplate>
         <Border x:Name="DataGridBorder"
                 Background="{TemplateBinding Background}"
-                BorderBrush="{StaticResource BoothRule}"
+                BorderBrush="{DynamicResource BoothRule}"
                 BorderThickness="0,0,1,0">
           <Panel>
             <DockPanel Margin="{TemplateBinding Padding}">
               <Path x:Name="SortIcon"
                     DockPanel.Dock="Right"
-                    Fill="{StaticResource BoothInk3}"
+                    Fill="{DynamicResource BoothInk3}"
                     Width="7" Height="7"
                     Margin="4,0,0,0"
                     Stretch="Uniform"
@@ -121,7 +121,7 @@
                                 VerticalAlignment="Center"
                                 TextElement.FontFamily="{StaticResource MonoFont}"
                                 TextElement.FontSize="{DynamicResource FontSizeNano}"
-                                TextElement.Foreground="{StaticResource BoothInk3}"
+                                TextElement.Foreground="{DynamicResource BoothInk3}"
                                 TextElement.LetterSpacing="1" />
             </DockPanel>
             <Thumb Name="PART_Resizer"
@@ -141,7 +141,7 @@
     </Setter>
 
     <Style Selector="^:pointerover /template/ Border#DataGridBorder">
-      <Setter Property="Background" Value="{StaticResource ButtonHoverBg}" />
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBg}" />
     </Style>
     <Style Selector="^:sortascending /template/ Path#SortIcon">
       <Setter Property="IsVisible" Value="True" />
@@ -159,7 +159,7 @@
       <ControlTemplate>
         <Border x:Name="RowBorder"
                 Background="{TemplateBinding Background}"
-                BorderBrush="{StaticResource BoothRuleSoft}"
+                BorderBrush="{DynamicResource BoothRuleSoft}"
                 BorderThickness="0,0,0,1">
           <TreeDataGridCellsPresenter Name="PART_CellsPresenter"
                                       ElementFactory="{TemplateBinding ElementFactory}"
@@ -173,10 +173,10 @@
          load-bearing the same way it is in Chrome.axaml: last wins at equal priority, so selection
          must come after the run states or a selected running cue would stop looking selected. -->
     <Style Selector="^:pointerover /template/ Border#RowBorder">
-      <Setter Property="Background" Value="{StaticResource ButtonHoverBg}" />
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBg}" />
     </Style>
     <Style Selector="^:selected /template/ Border#RowBorder">
-      <Setter Property="Background" Value="{StaticResource CueSelectedWash}" />
+      <Setter Property="Background" Value="{DynamicResource CueSelectedWash}" />
     </Style>
   </ControlTheme>
 
@@ -227,7 +227,7 @@
                      TextTrimming="CharacterEllipsis"
                      FontFamily="{StaticResource MonoFont}"
                      FontSize="{DynamicResource FontSizeMonoSmall}"
-                     Foreground="{StaticResource BoothInk2}" />
+                     Foreground="{DynamicResource BoothInk2}" />
         </Border>
       </ControlTemplate>
     </Setter>

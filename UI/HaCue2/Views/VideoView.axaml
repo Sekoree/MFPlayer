@@ -11,11 +11,11 @@
 
   <DockPanel>
 
-    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Background="{StaticResource BoothPanel}">
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Background="{DynamicResource BoothPanel}">
       <ListBox Grid.Column="0" Theme="{StaticResource SectionTabs}"
-               Background="{StaticResource BoothPanel}"
+               Background="{DynamicResource BoothPanel}"
                ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" />
-      <Border Grid.Column="1" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1">
+      <Border Grid.Column="1" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1">
         <TextBlock Classes="mono dim3 micro" HorizontalAlignment="Right" VerticalAlignment="Center"
                    Margin="10,0" Text="{Binding TabHint}" />
       </Border>
@@ -70,8 +70,8 @@
             </c:PanelBox.Footer>
 
             <DockPanel>
-              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                      BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
                 <Grid ColumnDefinitions="82,*,40,62,76" ColumnSpacing="5">
                   <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="OUTPUT" />
                   <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
@@ -274,8 +274,8 @@
       <Grid IsVisible="{Binding IsOutputsPane}" Margin="7">
         <c:PanelBox Header="Video outputs" Hint="composition · mapping · state, per output">
           <DockPanel>
-            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+            <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                    BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="140,*,120,140,140" ColumnSpacing="8">
                 <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="OUTPUT" />
                 <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />

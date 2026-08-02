@@ -36,7 +36,7 @@
                                                 Converter={x:Static conv:UpperCaseConverter.Instance}}"
                               TextElement.FontFamily="{StaticResource MonoFont}"
                               TextElement.FontSize="{DynamicResource FontSizeMonoSmall}"
-                              TextElement.Foreground="{StaticResource BoothInk3}"
+                              TextElement.Foreground="{DynamicResource BoothInk3}"
                               TextBlock.TextWrapping="Wrap"
                               TextElement.LetterSpacing="0.85" />
             <ContentPresenter Grid.Column="1"
@@ -62,7 +62,7 @@
                                                 Converter={x:Static conv:UpperCaseConverter.Instance}}"
                               TextElement.FontFamily="{StaticResource MonoFont}"
                               TextElement.FontSize="{DynamicResource FontSizeMonoSmall}"
-                              TextElement.Foreground="{StaticResource BoothInk3}"
+                              TextElement.Foreground="{DynamicResource BoothInk3}"
                               TextBlock.TextWrapping="Wrap"
                               TextElement.LetterSpacing="0.85" />
             <ContentPresenter Grid.Column="1"
@@ -94,7 +94,7 @@
     <ControlTheme x:Key="Subhead" TargetType="ContentControl">
       <Setter Property="Template">
         <ControlTemplate>
-          <Border BorderBrush="{StaticResource BoothRuleSoft}"
+          <Border BorderBrush="{DynamicResource BoothRuleSoft}"
                   BorderThickness="0,1,0,0"
                   Margin="0,5,0,0"
                   Padding="10,9,10,3">
@@ -102,7 +102,7 @@
                                                 Converter={x:Static conv:UpperCaseConverter.Instance}}"
                               TextElement.FontFamily="{StaticResource MonoFont}"
                               TextElement.FontSize="{DynamicResource FontSizeMicro}"
-                              TextElement.Foreground="{StaticResource BoothInk3}"
+                              TextElement.Foreground="{DynamicResource BoothInk3}"
                               TextElement.LetterSpacing="1.2" />
           </Border>
         </ControlTemplate>
@@ -114,7 +114,7 @@
          ramp all offer the same five shapes drawn the same way. -->
     <DataTemplate x:Key="CurveItemTemplate" x:DataType="vm:CurveOption">
       <StackPanel Orientation="Horizontal" Spacing="6">
-        <Path Data="{Binding Shape}" Stroke="{StaticResource BoothInk2}" StrokeThickness="1.2"
+        <Path Data="{Binding Shape}" Stroke="{DynamicResource BoothInk2}" StrokeThickness="1.2"
               Width="28" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
         <TextBlock Classes="mono" FontSize="{DynamicResource FontSizeMono}"
                    VerticalAlignment="Center" Text="{Binding Name}" />
@@ -150,7 +150,7 @@
     <ControlTheme x:Key="ColumnHeadText" TargetType="TextBlock">
       <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
       <Setter Property="FontSize" Value="{DynamicResource FontSizeMicro}" />
-      <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
       <Setter Property="LetterSpacing" Value="1.1" />
       <Setter Property="VerticalAlignment" Value="Center" />
     </ControlTheme>
@@ -167,35 +167,35 @@
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
   </Style>
   <Style Selector="TextBlock.dim2">
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
   </Style>
   <Style Selector="TextBlock.dim3">
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
   </Style>
   <!-- A number that must line up with the number above it: mono, right-aligned, ink-2. -->
   <Style Selector="TextBlock.num">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="TextAlignment" Value="Right" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
   <!-- semantic colour — always last, so it wins over any typographic role above -->
   <Style Selector="TextBlock.ok">
-    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelGreen}" />
   </Style>
   <Style Selector="TextBlock.warn">
-    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelAmber}" />
   </Style>
   <Style Selector="TextBlock.err">
-    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
   </Style>
   <Style Selector="TextBlock.info">
-    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelSteel}" />
   </Style>
   <Style Selector="TextBlock.accent">
-    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
   </Style>
 
   <Style Selector="TextBlock.micro">
@@ -208,7 +208,7 @@
   <Style Selector="TextBlock.caps">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="1.3" />
   </Style>
   <Style Selector="TextBlock.ellipsis">
@@ -217,14 +217,14 @@
 
   <!-- ══ shell bands ════════════════════════════════════════════════════════════════════════ -->
   <Style Selector="Border.titlebar">
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="Padding" Value="12,7" />
   </Style>
   <Style Selector="Border.transport">
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="Padding" Value="10,7" />
   </Style>
@@ -233,15 +233,15 @@
     <Setter Property="Padding" Value="10,0,10,7" />
   </Style>
   <Style Selector="Border.statusbar">
-    <Setter Property="Background" Value="{StaticResource BoothBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="0,1,0,0" />
     <Setter Property="Padding" Value="12,4" />
   </Style>
   <!-- `.chain` — the action / explanation strip at the foot of a panel. -->
   <Style Selector="Border.chain">
-    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="0,1,0,0" />
     <Setter Property="Padding" Value="10,8" />
   </Style>
@@ -253,7 +253,7 @@
        A chip is chrome-scale (title bar, status bar); a badge is row-scale (a tag on one cue). They
        differ in size, not in kind, and both are outline-only so they never compete with a gel wash. -->
   <Style Selector="Border.chip">
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="8,3" />
@@ -262,38 +262,38 @@
   <Style Selector="Border.chip > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="1.25" />
   </Style>
   <Style Selector="Border.chip.live">
-    <Setter Property="Background" Value="{StaticResource ChipLiveBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource ChipLiveBorder}" />
+    <Setter Property="Background" Value="{DynamicResource ChipLiveBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ChipLiveBorder}" />
   </Style>
   <Style Selector="Border.chip.live > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelGreen}" />
   </Style>
   <Style Selector="Border.chip.edit">
-    <Setter Property="Background" Value="{StaticResource ChipEditBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource ChipEditBorder}" />
+    <Setter Property="Background" Value="{DynamicResource ChipEditBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ChipEditBorder}" />
   </Style>
   <Style Selector="Border.chip.edit > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="Border.chip.warn">
-    <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ChipWarnBorder}" />
   </Style>
   <Style Selector="Border.chip.warn > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelAmber}" />
   </Style>
   <Style Selector="Border.chip.err">
-    <Setter Property="BorderBrush" Value="{StaticResource ChipErrBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ChipErrBorder}" />
   </Style>
   <Style Selector="Border.chip.err > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
   </Style>
 
   <Style Selector="Border.badge">
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="4,1" />
@@ -302,38 +302,38 @@
   <Style Selector="Border.badge > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="0.5" />
   </Style>
   <Style Selector="Border.badge.midi">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeCongoBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeCongoBorder}" />
   </Style>
   <Style Selector="Border.badge.midi > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="Border.badge.osc">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeSteelBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeSteelBorder}" />
   </Style>
   <Style Selector="Border.badge.osc > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelSteel}" />
   </Style>
   <Style Selector="Border.badge.clock">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeAmberBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeAmberBorder}" />
   </Style>
   <Style Selector="Border.badge.clock > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelAmber}" />
   </Style>
   <Style Selector="Border.badge.bad">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeRedBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeRedBorder}" />
   </Style>
   <Style Selector="Border.badge.bad > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
   </Style>
   <Style Selector="Border.badge.good">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeGreenBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeGreenBorder}" />
   </Style>
   <Style Selector="Border.badge.good > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelGreen}" />
   </Style>
 
   <!-- ══ cue rows ═══════════════════════════════════════════════════════════════════════════
@@ -342,15 +342,15 @@
        the most urgent state, ordered broken > running > standby > selected, because the stripe is the
        thing scanned down the left edge and it must mean one thing. -->
   <Style Selector="Border.cuerow">
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRuleSoft}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="MinHeight" Value="{DynamicResource CueRowHeight}" />
   </Style>
   <Style Selector="Border.cuerow.is-go">
-    <Setter Property="Background" Value="{StaticResource CueGoWash}" />
+    <Setter Property="Background" Value="{DynamicResource CueGoWash}" />
   </Style>
   <Style Selector="Border.cuerow.is-stby">
-    <Setter Property="Background" Value="{StaticResource CueStandbyWash}" />
+    <Setter Property="Background" Value="{DynamicResource CueStandbyWash}" />
   </Style>
   <Style Selector="Border.cuerow.is-off">
     <Setter Property="Opacity" Value="0.42" />
@@ -361,42 +361,42 @@
     <Setter Property="Background" Value="Transparent" />
   </Style>
   <Style Selector="Border.stripe.is-sel">
-    <Setter Property="Background" Value="{StaticResource GelCongo}" />
+    <Setter Property="Background" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="Border.stripe.is-stby">
-    <Setter Property="Background" Value="{StaticResource GelAmber}" />
+    <Setter Property="Background" Value="{DynamicResource GelAmber}" />
   </Style>
   <Style Selector="Border.stripe.is-go">
-    <Setter Property="Background" Value="{StaticResource GelGreen}" />
+    <Setter Property="Background" Value="{DynamicResource GelGreen}" />
   </Style>
   <Style Selector="Border.stripe.is-broke">
-    <Setter Property="Background" Value="{StaticResource GelRed}" />
+    <Setter Property="Background" Value="{DynamicResource GelRed}" />
   </Style>
   <Style Selector="Border.stripe.fading">
-    <Setter Property="Background" Value="{StaticResource GelAmber}" />
+    <Setter Property="Background" Value="{DynamicResource GelAmber}" />
   </Style>
   <Style Selector="Border.stripe.grp">
-    <Setter Property="Background" Value="{StaticResource GelCongo}" />
+    <Setter Property="Background" Value="{DynamicResource GelCongo}" />
   </Style>
 
   <!-- Cue-row cell roles. `.glyph` is the kind marker (▶ ◈ ▤ ▦), `.src` the source/target line. -->
   <Style Selector="TextBlock.qnum">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="TextAlignment" Value="Right" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <Style Selector="TextBlock.glyph">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="TextAlignment" Value="Center" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <Style Selector="TextBlock.src">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="TextTrimming" Value="CharacterEllipsis" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
@@ -409,30 +409,30 @@
        mockup's deliberate choice over ghosting, because "skipped for this performance" must survive a
        glance in a dark booth. -->
   <Style Selector="TextBlock.cuelabel.is-go, TextBlock.cuelabel.is-stby">
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     <Setter Property="FontWeight" Value="Medium" />
   </Style>
   <Style Selector="TextBlock.cuelabel.off">
     <Setter Property="TextDecorations" Value="Strikethrough" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
   </Style>
   <Style Selector="TextBlock.qnum.off">
     <Setter Property="TextDecorations" Value="Strikethrough" />
   </Style>
   <Style Selector="TextBlock.glyph.is-go">
-    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelGreen}" />
   </Style>
   <Style Selector="TextBlock.glyph.is-stby">
-    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelAmber}" />
   </Style>
   <Style Selector="TextBlock.src.is-broke">
-    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
   </Style>
   <!-- A group's label is the strongest text in the tree: it is a container, and the chevron beside it
        only says "openable", not "this is where the cues below belong". -->
   <Style Selector="TextBlock.cuelabel.grp">
     <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
   </Style>
 
   <!-- ══ the cue tree's rows ════════════════════════════════════════════════════════════════
@@ -445,127 +445,127 @@
 
   <!-- ══ active-cue rows ════════════════════════════════════════════════════════════════════ -->
   <Style Selector="Border.actrow">
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRuleSoft}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="MinHeight" Value="{DynamicResource ActiveRowHeight}" />
   </Style>
   <Style Selector="Border.actrow.grp">
-    <Setter Property="Background" Value="{StaticResource ActiveGroupWash}" />
+    <Setter Property="Background" Value="{DynamicResource ActiveGroupWash}" />
   </Style>
   <Style Selector="TextBlock.clock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="TextAlignment" Value="Right" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <!-- A cue within seconds of its end reads red before it is a problem. -->
   <Style Selector="Border.actrow.near TextBlock.clock">
-    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
   </Style>
   <Style Selector="TextBlock.dest">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="TextAlignment" Value="Right" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
   <!-- ══ Output-info drawer line chips (`.lchip`) ═══════════════════════════════════════════ -->
   <Style Selector="Border.lchip">
-    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="8,3" />
     <Setter Property="MinWidth" Value="92" />
   </Style>
   <Style Selector="Border.lchip.ok">
-    <Setter Property="BorderBrush" Value="{StaticResource LineChipOkBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LineChipOkBorder}" />
   </Style>
   <Style Selector="Border.lchip.warn">
-    <Setter Property="BorderBrush" Value="{StaticResource LineChipWarnBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LineChipWarnBorder}" />
   </Style>
   <Style Selector="Border.lchip.err">
-    <Setter Property="Background" Value="{StaticResource LineChipErrBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource LineChipErrBorder}" />
+    <Setter Property="Background" Value="{DynamicResource LineChipErrBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LineChipErrBorder}" />
   </Style>
   <!-- The LED is the only round thing in the whole app, which is exactly why it reads as a lamp. -->
   <Style Selector="Ellipse.led">
     <Setter Property="Width" Value="6" />
     <Setter Property="Height" Value="6" />
-    <Setter Property="Fill" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Fill" Value="{DynamicResource BoothRule2}" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <Style Selector="Ellipse.led.ok">
-    <Setter Property="Fill" Value="{StaticResource GelGreen}" />
+    <Setter Property="Fill" Value="{DynamicResource GelGreen}" />
   </Style>
   <Style Selector="Ellipse.led.warn">
-    <Setter Property="Fill" Value="{StaticResource GelAmber}" />
+    <Setter Property="Fill" Value="{DynamicResource GelAmber}" />
   </Style>
   <Style Selector="Ellipse.led.err">
-    <Setter Property="Fill" Value="{StaticResource GelRed}" />
+    <Setter Property="Fill" Value="{DynamicResource GelRed}" />
   </Style>
 
   <!-- ══ matrix cells (patch and per-cue sends) ═════════════════════════════════════════════ -->
   <Style Selector="Border.mxcell">
     <Setter Property="Width" Value="46" />
     <Setter Property="Height" Value="21" />
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="0,0,1,1" />
   </Style>
   <Style Selector="Border.mxcell > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="HorizontalAlignment" Value="Center" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <Style Selector="Border.mxcell.on">
-    <Setter Property="Background" Value="{StaticResource MatrixOnBg}" />
+    <Setter Property="Background" Value="{DynamicResource MatrixOnBg}" />
   </Style>
   <Style Selector="Border.mxcell.on > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
   </Style>
   <Style Selector="Border.mxcell.unity">
-    <Setter Property="Background" Value="{StaticResource MatrixUnityBg}" />
+    <Setter Property="Background" Value="{DynamicResource MatrixUnityBg}" />
   </Style>
   <Style Selector="Border.mxcell.mute">
-    <Setter Property="Background" Value="{StaticResource MatrixMuteBg}" />
+    <Setter Property="Background" Value="{DynamicResource MatrixMuteBg}" />
   </Style>
   <Style Selector="Border.mxcell.mute > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
   </Style>
   <!-- The cell the inspector below is currently explaining. -->
   <Style Selector="Border.mxcell.pick">
-    <Setter Property="BorderBrush" Value="{StaticResource GelAmber}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GelAmber}" />
     <Setter Property="BorderThickness" Value="2" />
   </Style>
   <Style Selector="Border.mxhead">
-    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="0,0,1,1" />
     <Setter Property="Padding" Value="5,4" />
   </Style>
   <Style Selector="Border.mxhead > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMicro}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="0.55" />
   </Style>
   <!-- A column belonging to a named Output Group (register item 9) is marked in congo, because the
        linked-delta editing rule applies to it and the operator must know before dragging a cell. -->
   <Style Selector="Border.mxhead.vgrp > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="Border.mxhead.rowhead > TextBlock">
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="TextAlignment" Value="Right" />
   </Style>
   <Style Selector="Border.mxhead.bad > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelRed}" />
   </Style>
 
   <!-- ══ the effective-route chain (`.node`) ════════════════════════════════════════════════
@@ -573,8 +573,8 @@
        This strip is the answer to "why is this silent", so its colours must match the screens that
        raised the question. -->
   <Style Selector="Border.node">
-    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="6,2" />
@@ -585,22 +585,22 @@
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
   </Style>
   <Style Selector="Border.node.src">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeSteelBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeSteelBorder}" />
   </Style>
   <Style Selector="Border.node.src > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelSteel}" />
   </Style>
   <Style Selector="Border.node.log">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeCongoBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeCongoBorder}" />
   </Style>
   <Style Selector="Border.node.log > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="Border.node.phy">
-    <Setter Property="BorderBrush" Value="{StaticResource BadgeGreenBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BadgeGreenBorder}" />
   </Style>
   <Style Selector="Border.node.phy > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelGreen}" />
   </Style>
 
   <!-- ══ timeline ═══════════════════════════════════════════════════════════════════════════ -->
@@ -614,37 +614,37 @@
   <Style Selector="Border.tlclip > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <Style Selector="Border.tlclip.au">
-    <Setter Property="Background" Value="{StaticResource ClipAudioBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource ClipAudioBorder}" />
+    <Setter Property="Background" Value="{DynamicResource ClipAudioBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ClipAudioBorder}" />
   </Style>
   <Style Selector="Border.tlclip.vi">
-    <Setter Property="Background" Value="{StaticResource ClipVideoBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource ClipVideoBorder}" />
+    <Setter Property="Background" Value="{DynamicResource ClipVideoBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ClipVideoBorder}" />
   </Style>
   <Style Selector="Border.tlclip.ac">
-    <Setter Property="Background" Value="{StaticResource ClipActionBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource ClipActionBorder}" />
+    <Setter Property="Background" Value="{DynamicResource ClipActionBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ClipActionBorder}" />
   </Style>
   <Style Selector="Border.tlclip.gr">
-    <Setter Property="Background" Value="{StaticResource ClipGroupBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource ClipGroupBorder}" />
+    <Setter Property="Background" Value="{DynamicResource ClipGroupBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ClipGroupBorder}" />
   </Style>
   <!-- Disabled children render hatched with a struck label (register item 18) — unambiguous, unlike
        ghosting, which a dim booth screen turns into "did I render that?". -->
   <Style Selector="Border.tlclip.off">
     <Setter Property="Background" Value="{StaticResource DisabledHatch}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
   </Style>
   <Style Selector="Border.tlclip.off > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="TextDecorations" Value="Strikethrough" />
   </Style>
   <Style Selector="Border.tllane">
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRuleSoft}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="MinHeight" Value="30" />
   </Style>
@@ -652,13 +652,13 @@
     <Setter Property="MinHeight" Value="24" />
   </Style>
   <Style Selector="Border.tllane.grp">
-    <Setter Property="Background" Value="{StaticResource LaneGroupWash}" />
+    <Setter Property="Background" Value="{DynamicResource LaneGroupWash}" />
   </Style>
 
   <!-- ══ video canvases ═════════════════════════════════════════════════════════════════════ -->
   <Style Selector="Border.vidcanvas">
-    <Setter Property="Background" Value="{StaticResource CanvasBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource CanvasBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="ClipToBounds" Value="True" />
   </Style>
@@ -673,21 +673,21 @@
     <Setter Property="VerticalAlignment" Value="Top" />
   </Style>
   <Style Selector="Border.placement.a">
-    <Setter Property="Background" Value="{StaticResource PlacementABg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource PlacementABorder}" />
+    <Setter Property="Background" Value="{DynamicResource PlacementABg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PlacementABorder}" />
   </Style>
   <Style Selector="Border.placement.a > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelSteel}" />
   </Style>
   <Style Selector="Border.placement.b">
-    <Setter Property="Background" Value="{StaticResource PlacementBBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource PlacementBBorder}" />
+    <Setter Property="Background" Value="{DynamicResource PlacementBBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PlacementBBorder}" />
   </Style>
   <Style Selector="Border.placement.b > TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="Border.placement.sel">
-    <Setter Property="BorderBrush" Value="{StaticResource GelAmber}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GelAmber}" />
     <Setter Property="BorderThickness" Value="2" />
   </Style>
 
@@ -696,23 +696,23 @@
        caption come from the item TEMPLATE, which a control theme's `/template/` scope cannot address —
        and a ControlTheme is not allowed to carry a descendant selector at all. -->
   <Style Selector="ListBox.curves Path">
-    <Setter Property="Stroke" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Stroke" Value="{DynamicResource BoothInk2}" />
   </Style>
   <Style Selector="ListBox.curves TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
   </Style>
   <Style Selector="ListBox.curves ListBoxItem:selected Path">
-    <Setter Property="Stroke" Value="{StaticResource GelCongo}" />
+    <Setter Property="Stroke" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="ListBox.curves ListBoxItem:selected TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
   </Style>
 
   <!-- ══ log tail ═══════════════════════════════════════════════════════════════════════════ -->
   <Style Selector="TextBlock.logline">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
   </Style>
 
 </Styles>

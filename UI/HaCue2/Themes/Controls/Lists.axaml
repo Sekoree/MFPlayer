@@ -22,7 +22,7 @@
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="Padding" Value="0" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
     <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
     <Setter Property="Template">
@@ -69,7 +69,7 @@
       <Setter Property="Background" Value="#0AFFFFFF" />
     </Style>
     <Style Selector="^:selected /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource CueSelectedWash}" />
+      <Setter Property="Background" Value="{DynamicResource CueSelectedWash}" />
     </Style>
   </ControlTheme>
 
@@ -78,7 +78,7 @@
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.35" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="Transparent" />
     <Setter Property="BorderThickness" Value="1" />
@@ -97,14 +97,14 @@
       </ControlTemplate>
     </Setter>
     <Style Selector="^:pointerover">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     </Style>
     <Style Selector="^:selected /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-      <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+      <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     </Style>
     <Style Selector="^:selected">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     </Style>
   </ControlTheme>
 
@@ -113,7 +113,7 @@
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="0.8" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0,0,0,2" />
@@ -131,14 +131,14 @@
       </ControlTemplate>
     </Setter>
     <Style Selector="^:pointerover">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     </Style>
     <Style Selector="^:selected /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource BoothPanel}" />
-      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+      <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelCongo}" />
     </Style>
     <Style Selector="^:selected">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     </Style>
   </ControlTheme>
 
@@ -155,7 +155,7 @@
   <!-- ── 4. settings / scope navigation (`.snav a`) ─────────────────────────────────────────── -->
   <ControlTheme x:Key="NavItem" TargetType="ListBoxItem">
     <Setter Property="FontSize" Value="11.5" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="Transparent" />
     <Setter Property="BorderThickness" Value="2,0,0,0" />
@@ -179,11 +179,11 @@
       <Setter Property="Background" Value="#0AFFFFFF" />
     </Style>
     <Style Selector="^:selected /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource NavSelectedBg}" />
-      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+      <Setter Property="Background" Value="{DynamicResource NavSelectedBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelCongo}" />
     </Style>
     <Style Selector="^:selected">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     </Style>
   </ControlTheme>
 
@@ -192,7 +192,7 @@
        numerals, and vertical rules in a dense table only add noise. -->
   <ControlTheme x:Key="TableRowItem" TargetType="ListBoxItem"
                 BasedOn="{StaticResource {x:Type ListBoxItem}}">
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRuleSoft}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="Padding" Value="0" />
     <Setter Property="Cursor" Value="Hand" />
@@ -229,8 +229,8 @@
   <ControlTheme x:Key="SectionTabs" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
     <Setter Property="ItemContainerTheme" Value="{StaticResource SectionTabItem}" />
     <Setter Property="ItemsPanel" Value="{StaticResource HorizontalItemsPanel}" />
-    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="Template">
       <ControlTemplate>
@@ -271,8 +271,8 @@
        actually does, and the last option is always "custom ✎". A named list ("equal power", "expo")
        asks the operator to remember what those sound like; a drawn shape does not. -->
   <ControlTheme x:Key="CurveOptionItem" TargetType="ListBoxItem">
-    <Setter Property="Background" Value="{StaticResource BoothBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Background" Value="{DynamicResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="5,4,5,3" />
     <Setter Property="Cursor" Value="Hand" />
@@ -291,7 +291,7 @@
     <!-- congo @ 12 % over the well background -->
     <Style Selector="^:selected /template/ Border#root">
       <Setter Property="Background" Value="#191D2D" />
-      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelCongo}" />
     </Style>
     <!-- The thumbnail's own colouring lives in Chrome.axaml under `ListBox.curves`: a ControlTheme may
          not carry a descendant selector, and the Path and caption come from the ITEM template, which

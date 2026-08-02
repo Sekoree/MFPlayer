@@ -8,8 +8,8 @@
         Width="460" SizeToContent="Height"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The one modal shape in the app. Every "…" button that just needs a couple of values and a verb

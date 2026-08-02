@@ -9,8 +9,8 @@
         Width="1440" Height="900"
         MinWidth="1080" MinHeight="700"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The one window (register item 1): four views in the title bar, a Settings window and a
@@ -67,7 +67,7 @@
         <TextBlock Grid.Column="1" Classes="mono ok small" VerticalAlignment="Center"
                    Text="{Binding OutputSummary}" />
         <!-- The issue count is the doorway to Project status; it is the only red thing on the bar. -->
-        <Button Grid.Column="2" Theme="{StaticResource LinkButton}" Foreground="{StaticResource GelRed}"
+        <Button Grid.Column="2" Theme="{StaticResource LinkButton}" Foreground="{DynamicResource GelRed}"
                 Content="{Binding IssueSummary}" Click="OnProjectStatus" />
         <!-- The undo toast names the DOMAIN as well as the edit ("undo: patch — Fold L → Out 3 gain"):
              with one journal across every view, ⌘Z can otherwise change a screen nobody is looking at. -->
@@ -88,15 +88,15 @@
       <ContentControl Content="{Binding CurrentPane}" />
 
       <Border VerticalAlignment="Bottom"
-              Background="{StaticResource BoothPanel}"
-              BorderBrush="{StaticResource BoothRule2}"
+              Background="{DynamicResource BoothPanel}"
+              BorderBrush="{DynamicResource BoothRule2}"
               BorderThickness="0,1,0,0"
               IsVisible="{Binding IsOutputInfoOpen}">
         <Grid ColumnDefinitions="Auto,Auto,*" DataContext="{Binding OutputInfo}"
               x:DataType="vm:OutputInfoViewModel">
 
           <!-- Program -->
-          <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+          <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
                   Padding="11,6">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Classes="caps" Text="PROGRAM" VerticalAlignment="Center">
@@ -124,7 +124,7 @@
           </Border>
 
           <!-- Lines -->
-          <Border Grid.Column="1" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+          <Border Grid.Column="1" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
                   Padding="11,6">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Classes="caps" Text="LINES" VerticalAlignment="Center">

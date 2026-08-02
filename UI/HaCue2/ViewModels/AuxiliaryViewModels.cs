@@ -350,7 +350,7 @@ public partial class SettingsViewModel : ObservableObject
     public string ScopeFile => IsApplicationScope ? "app-settings.json" : "4 unsaved edits";
 
     // ── appearance ────────────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<string> Themes { get; } = ["booth dark", "dark", "light"];
+    public IReadOnlyList<string> Themes { get; } = Appearance.Palettes;
 
     /// <summary>
     /// Why the theme row does not take effect immediately.
@@ -360,7 +360,8 @@ public partial class SettingsViewModel : ObservableObject
     /// up once when the theme is built, so a palette swap needs the app to build it again — the
     /// alternative is a live lookup on 840-odd references, which is a refactor, not a preference.
     /// </remarks>
-    public string ThemeNote => "the palette is applied when the app starts · density and size are live";
+    public string ThemeNote =>
+        "booth dark is the skin the show was designed in · light is for plotting at a desk";
     public IReadOnlyList<string> Densities { get; } = ["compact", "normal", "relaxed"];
     public IReadOnlyList<string> RowSizes { get; } = ["26 px", "30 px", "38 px touch"];
     public IReadOnlyList<string> Ballistics { get; } = ["PPM fast", "VU"];

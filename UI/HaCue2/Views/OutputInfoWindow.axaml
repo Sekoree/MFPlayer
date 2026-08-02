@@ -8,17 +8,17 @@
         Width="1020" Height="140"
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The drawer, popped out for a second monitor (screen 02b, round-2 decision). Same content, no
        toggle of its own — closing the window is how it goes away, and the shell's drawer is closed
        while this exists so the same meters are never live in two places. -->
 
-  <Grid ColumnDefinitions="Auto,Auto,*" Background="{StaticResource BoothPanel}">
+  <Grid ColumnDefinitions="Auto,Auto,*" Background="{DynamicResource BoothPanel}">
 
-    <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+    <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
             Padding="11,8">
       <StackPanel Orientation="Horizontal" Spacing="10">
         <TextBlock Classes="caps" VerticalAlignment="Center" Text="PROGRAM" />
@@ -41,7 +41,7 @@
       </StackPanel>
     </Border>
 
-    <Border Grid.Column="1" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+    <Border Grid.Column="1" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
             Padding="11,8">
       <StackPanel Orientation="Horizontal" Spacing="10">
         <TextBlock Classes="caps" VerticalAlignment="Center" Text="LINES" />

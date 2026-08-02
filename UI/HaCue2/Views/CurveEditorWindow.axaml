@@ -8,8 +8,8 @@
         Width="700" Height="340"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7">

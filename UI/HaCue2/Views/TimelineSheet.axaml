@@ -44,21 +44,21 @@
         </Grid>
       </Border>
 
-      <Panel Background="{StaticResource BoothBg}">
+      <Panel Background="{DynamicResource BoothBg}">
         <DockPanel>
 
           <!-- ruler: the label column is skipped so 0:00 lines up with the start of the tracks -->
           <Grid DockPanel.Dock="Top" ColumnDefinitions="168,*"
-                Background="{StaticResource BoothBg}">
-            <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,1" />
+                Background="{DynamicResource BoothBg}">
+            <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,1" />
             <ItemsControl Grid.Column="1" ItemsSource="{Binding Ruler}"
-                          BorderBrush="{StaticResource BoothRule}">
+                          BorderBrush="{DynamicResource BoothRule}">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate><UniformGrid Rows="1" /></ItemsPanelTemplate>
               </ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Border BorderBrush="{StaticResource BoothRule}" BorderThickness="1,0,0,1" Padding="4,2">
+                  <Border BorderBrush="{DynamicResource BoothRule}" BorderThickness="1,0,0,1" Padding="4,2">
                     <TextBlock Classes="mono dim3" FontSize="{DynamicResource FontSizeNano}"
                                Text="{Binding}" />
                   </Border>
@@ -76,7 +76,7 @@
                             Classes.fx="{Binding IsEffect}"
                             Classes.grp="{Binding IsGroup}">
                       <Grid ColumnDefinitions="168,*">
-                        <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}"
+                        <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}"
                                 BorderThickness="0,0,1,0" Padding="8,8,8,0">
                           <TextBlock Classes="mono dim2 small ellipsis" Text="{Binding Name}" />
                         </Border>
@@ -86,7 +86,7 @@
                                covers only part of a cue must be drawn only over that part. -->
                           <c:EnvelopeGraph Points="{Binding Envelope}"
                                            IsVisible="{Binding HasEnvelope}"
-                                           Stroke="{StaticResource GelAmber}" StrokeThickness="1"
+                                           Stroke="{DynamicResource GelAmber}" StrokeThickness="1"
                                            Margin="0,4" />
 
                           <c:ClipLane Clips="{Binding Clips}"
@@ -103,7 +103,7 @@
               <!-- the playhead sits above the lanes and starts after the label column -->
               <Grid ColumnDefinitions="168,*" IsHitTestVisible="False">
                 <c:FractionPanel Grid.Column="1">
-                  <Border Width="1" Background="{StaticResource GelAmber}"
+                  <Border Width="1" Background="{DynamicResource GelAmber}"
                           c:Fraction.Left="{Binding Playhead}"
                           c:Fraction.Height="1" />
                 </c:FractionPanel>

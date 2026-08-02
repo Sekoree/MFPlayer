@@ -8,8 +8,8 @@
         Width="900" Height="560"
         MinWidth="820" MinHeight="480"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screen 01. Recovery is inline above the recents rather than a modal, because the answer
@@ -45,8 +45,8 @@
           <!-- Inline recovery. Amber, not red: an autosave newer than the file is a question, not a
                fault, and the show still opens either way. -->
           <Border DockPanel.Dock="Top"
-                  Background="{StaticResource RecoveryBannerBg}"
-                  BorderBrush="{StaticResource BoothRule}"
+                  Background="{DynamicResource RecoveryBannerBg}"
+                  BorderBrush="{DynamicResource BoothRule}"
                   BorderThickness="0,0,0,1"
                   Padding="10,8"
                   IsVisible="{Binding HasRecovery}">

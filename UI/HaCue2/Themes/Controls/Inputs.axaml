@@ -16,13 +16,13 @@
   <ControlTheme x:Key="{x:Type TextBox}" TargetType="TextBox">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="10.5" />
-    <Setter Property="Background" Value="{StaticResource BoothBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
-    <Setter Property="CaretBrush" Value="{StaticResource GelCongo}" />
-    <Setter Property="SelectionBrush" Value="{StaticResource SegmentOnBg}" />
-    <Setter Property="SelectionForegroundBrush" Value="{StaticResource BoothInk}" />
-    <Setter Property="PlaceholderForeground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Background" Value="{DynamicResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource GelCongo}" />
+    <Setter Property="SelectionBrush" Value="{DynamicResource SegmentOnBg}" />
+    <Setter Property="SelectionForegroundBrush" Value="{DynamicResource BoothInk}" />
+    <Setter Property="PlaceholderForeground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="6,3" />
@@ -69,10 +69,10 @@
     </Setter>
 
     <Style Selector="^:pointerover /template/ Border#root">
-      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothInk3}" />
     </Style>
     <Style Selector="^:focus /template/ Border#root">
-      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelCongo}" />
     </Style>
     <Style Selector="^:disabled">
       <Setter Property="Opacity" Value="0.5" />
@@ -84,13 +84,13 @@
          text — which survives a low-resolution screenshot better than a 1 px dash would anyway. -->
     <Style Selector="^.ro">
       <Setter Property="IsReadOnly" Value="True" />
-      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
-      <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="Cursor" Value="Arrow" />
     </Style>
     <Style Selector="^.ro:pointerover /template/ Border#root">
-      <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
     </Style>
 
     <!-- A short scalar reads better left-aligned at a fixed width than stretched across a panel:
@@ -102,11 +102,11 @@
 
     <!-- Value wells that carry a state colour (the amber "listening" field on the Learn pane). -->
     <Style Selector="^.warn">
-      <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
-      <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ChipWarnBorder}" />
+      <Setter Property="Foreground" Value="{DynamicResource GelAmber}" />
     </Style>
     <Style Selector="^.override">
-      <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ChipWarnBorder}" />
     </Style>
   </ControlTheme>
 
@@ -116,7 +116,7 @@
   <ControlTheme x:Key="{x:Type ComboBoxItem}" TargetType="ComboBoxItem">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="10.5" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="Padding" Value="7,3" />
     <Setter Property="Cursor" Value="Hand" />
@@ -130,20 +130,20 @@
       </ControlTemplate>
     </Setter>
     <Style Selector="^:pointerover /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+      <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
     </Style>
     <Style Selector="^:selected /template/ Border#root">
-      <Setter Property="Background" Value="{StaticResource SegmentOnBg}" />
+      <Setter Property="Background" Value="{DynamicResource SegmentOnBg}" />
     </Style>
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type ComboBox}" TargetType="ComboBox">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="10.5" />
-    <Setter Property="Background" Value="{StaticResource BoothBg}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
-    <Setter Property="PlaceholderForeground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Background" Value="{DynamicResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
+    <Setter Property="PlaceholderForeground" Value="{DynamicResource BoothInk3}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
     <Setter Property="Padding" Value="6,3" />
@@ -177,7 +177,7 @@
                        Margin="0,0,6,0"
                        VerticalAlignment="Center"
                        FontSize="{DynamicResource FontSizeMicro}"
-                       Foreground="{StaticResource BoothInk3}"
+                       Foreground="{DynamicResource BoothInk3}"
                        Text="▾" />
             <Popup Name="PART_Popup"
                    Grid.Column="0"
@@ -187,8 +187,8 @@
                    IsOpen="{TemplateBinding IsDropDownOpen, Mode=TwoWay}"
                    PlacementTarget="{TemplateBinding}"
                    InheritsTransform="True">
-              <Border Background="{StaticResource BoothPanel}"
-                      BorderBrush="{StaticResource BoothRule2}"
+              <Border Background="{DynamicResource BoothPanel}"
+                      BorderBrush="{DynamicResource BoothRule2}"
                       BorderThickness="1"
                       CornerRadius="{StaticResource BoothCorner}">
                 <ScrollViewer HorizontalScrollBarVisibility="Disabled"
@@ -203,10 +203,10 @@
     </Setter>
 
     <Style Selector="^:pointerover /template/ Border#root">
-      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothInk3}" />
     </Style>
     <Style Selector="^:dropdownopen /template/ Border#root">
-      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelCongo}" />
     </Style>
     <Style Selector="^:disabled">
       <Setter Property="Opacity" Value="0.5" />
@@ -219,9 +219,9 @@
        state from across a room. -->
   <ControlTheme x:Key="{x:Type CheckBox}" TargetType="CheckBox">
     <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
-    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
     <Setter Property="Padding" Value="7,0,0,0" />
     <Setter Property="MinHeight" Value="0" />
     <Setter Property="Cursor" Value="Hand" />
@@ -248,17 +248,17 @@
     </Setter>
 
     <Style Selector="^:pointerover /template/ Border#box">
-      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothInk3}" />
     </Style>
     <Style Selector="^:checked /template/ Border#box">
       <Setter Property="Background" Value="#737D8CEA" />
-      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource GelCongo}" />
     </Style>
     <Style Selector="^:checked">
-      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+      <Setter Property="Foreground" Value="{DynamicResource BoothInk}" />
     </Style>
     <Style Selector="^:indeterminate /template/ Border#box">
-      <Setter Property="Background" Value="{StaticResource BoothRule2}" />
+      <Setter Property="Background" Value="{DynamicResource BoothRule2}" />
     </Style>
     <Style Selector="^:disabled">
       <Setter Property="Opacity" Value="0.42" />

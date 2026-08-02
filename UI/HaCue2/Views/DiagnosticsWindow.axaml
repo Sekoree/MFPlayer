@@ -8,8 +8,8 @@
         Width="1140" Height="700"
         MinWidth="960" MinHeight="560"
         WindowStartupLocation="CenterOwner"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screen 15. Its own window, meant to sit on a second monitor for a whole show. -->
@@ -50,8 +50,8 @@
         </c:PanelBox.Footer>
 
         <DockPanel>
-          <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                  BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+          <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                  BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
             <Grid ColumnDefinitions="220,110,66,50,90,90,66,80,50,110" ColumnSpacing="6">
               <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="TERMINAL / LEASE" />
               <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
@@ -69,7 +69,7 @@
           <ListBox Theme="{StaticResource ReadonlyRows}" ItemsSource="{Binding BayRows}">
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="vm:BayRow">
-                <Border BorderBrush="{StaticResource BoothRuleSoft}" BorderThickness="0,0,0,1">
+                <Border BorderBrush="{DynamicResource BoothRuleSoft}" BorderThickness="0,0,0,1">
                   <Grid ColumnDefinitions="220,110,66,50,90,90,66,80,50,110" ColumnSpacing="6" Margin="8,4">
                     <!-- Leases are indented but listed BESIDE the terminals: every lease feeds the one
                          program bus, which then fans out to all terminals, so nesting a lease under a
@@ -103,8 +103,8 @@
 
         <c:PanelBox Grid.Column="0" Header="Video &amp; compositions">
           <DockPanel>
-            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+            <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                    BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="*,66,60,50,66,50" ColumnSpacing="6">
                 <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="COMPOSITION" />
                 <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="FPS" />

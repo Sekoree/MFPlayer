@@ -8,8 +8,8 @@
         Width="1060" Height="560"
         MinWidth="900" MinHeight="460"
         WindowStartupLocation="CenterOwner"
-        Background="{StaticResource BoothBg}"
-        Foreground="{StaticResource BoothInk}"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screen 14, the renamed Preflight. It is a COLLECTOR of the project's errors and warnings, each
@@ -45,8 +45,8 @@
 
       <c:PanelBox Grid.Column="0" Header="Checks" Hint="{Binding Summary}">
         <DockPanel>
-          <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                  BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+          <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                  BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
             <Grid ColumnDefinitions="180,110,*,80" ColumnSpacing="8">
               <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="CHECK" />
               <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="RESULT" />
@@ -68,7 +68,7 @@
                   <!-- Every failing row carries its own fix; a status list that only reports is a list
                        the operator has to translate into actions under time pressure. -->
                   <Button Grid.Column="3" Theme="{StaticResource LinkButton}"
-                          Foreground="{StaticResource GelCongo}"
+                          Foreground="{DynamicResource GelCongo}"
                           IsVisible="{Binding HasFix}" Content="{Binding Fix}" />
                 </Grid>
               </DataTemplate>

@@ -37,7 +37,7 @@
   <DockPanel>
 
     <ListBox DockPanel.Dock="Top" Theme="{StaticResource SectionTabs}"
-             Background="{StaticResource BoothPanel}"
+             Background="{DynamicResource BoothPanel}"
              ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" />
 
     <Panel>
@@ -56,8 +56,8 @@
           </c:PanelBox.Footer>
 
           <DockPanel>
-            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+            <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                    BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="100,*,70,150,90" ColumnSpacing="8">
                 <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="ENDPOINT" />
                 <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
@@ -117,8 +117,8 @@
             </c:PanelBox.Footer>
 
             <DockPanel>
-              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                      BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
                 <Grid ColumnDefinitions="100,*,70,150,90" ColumnSpacing="8">
                   <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="DEVICE / SOURCE" />
                   <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
@@ -136,8 +136,8 @@
 
           <c:PanelBox Grid.Row="1" Header="Bindings on APC mini" Hint="selected device">
             <DockPanel>
-              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                      BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
                 <Grid ColumnDefinitions="110,*,180" ColumnSpacing="8">
                   <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="INPUT" />
                   <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="FIRES" />
@@ -246,8 +246,8 @@
           </c:PanelBox.Footer>
 
           <DockPanel>
-            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
-                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+            <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
+                    BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="60,260,*,70" ColumnSpacing="8">
                 <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="METHOD" />
                 <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="PATH" />

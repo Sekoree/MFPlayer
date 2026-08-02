@@ -1,0 +1,77 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Class="HaCue2.Themes.LightPalette">
+
+  <!-- ══════════════════════════════════════════════════════════════════════════════════════════
+       The LIGHT palette.
+
+       Only three kinds of token need re-stating, which is why this file is short rather than a second
+       copy of Tokens.axaml:
+         · the 13 base COLOURS — the surface ramp inverts, the ink ramp inverts, and the five gels
+           DARKEN (a #7D8CEA that reads well on near-black is illegible on near-white; the hue is the
+           vocabulary, the lightness is not);
+         · the 13 brushes built from those colours, because Tokens resolves them statically at load;
+         · the 14 pre-computed OPAQUE mixes, which were mixed against a dark surface.
+
+       The 35 gel-over-transparent washes are deliberately NOT here: they tint whatever they sit on,
+       so they work on either surface unchanged. That is why the mockup's washes were authored with an
+       alpha channel in the first place.
+
+       For the booth this is the wrong skin and the app knows it — booth dark stays the default. This
+       exists for the paperwork half of the job: a laptop in a bright room, plotting a show at a desk.
+       ══════════════════════════════════════════════════════════════════════════════════════════ -->
+
+  <!-- ── surfaces (the dark ramp, inverted: bg is the DIMMEST here, panels sit above it) ────── -->
+  <Color x:Key="BoothBgColor">#EDEEF1</Color>
+  <Color x:Key="BoothPanelColor">#F9FAFC</Color>
+  <Color x:Key="BoothPanel2Color">#E7E9EE</Color>
+  <Color x:Key="BoothRuleColor">#D3D7DF</Color>
+  <Color x:Key="BoothRule2Color">#B9BFCA</Color>
+
+  <SolidColorBrush x:Key="BoothBg" Color="{StaticResource BoothBgColor}" />
+  <SolidColorBrush x:Key="BoothPanel" Color="{StaticResource BoothPanelColor}" />
+  <SolidColorBrush x:Key="BoothPanel2" Color="{StaticResource BoothPanel2Color}" />
+  <SolidColorBrush x:Key="BoothRule" Color="{StaticResource BoothRuleColor}" />
+  <SolidColorBrush x:Key="BoothRule2" Color="{StaticResource BoothRule2Color}" />
+  <!-- rule @ 55 %, as in the dark palette -->
+  <SolidColorBrush x:Key="BoothRuleSoft" Color="#8CD3D7DF" />
+
+  <!-- ── ink ──────────────────────────────────────────────────────────────────────────────── -->
+  <Color x:Key="BoothInkColor">#14171C</Color>
+  <Color x:Key="BoothInk2Color">#4E5561</Color>
+  <Color x:Key="BoothInk3Color">#7B838F</Color>
+
+  <SolidColorBrush x:Key="BoothInk" Color="{StaticResource BoothInkColor}" />
+  <SolidColorBrush x:Key="BoothInk2" Color="{StaticResource BoothInk2Color}" />
+  <SolidColorBrush x:Key="BoothInk3" Color="{StaticResource BoothInk3Color}" />
+
+  <!-- ── gels · same five hues, darkened to hold contrast on a light surface ───────────────── -->
+  <Color x:Key="GelCongoColor">#4353C4</Color>
+  <Color x:Key="GelAmberColor">#A3701A</Color>
+  <Color x:Key="GelGreenColor">#2A7D57</Color>
+  <Color x:Key="GelRedColor">#C0394A</Color>
+  <Color x:Key="GelSteelColor">#1E8790</Color>
+
+  <SolidColorBrush x:Key="GelCongo" Color="{StaticResource GelCongoColor}" />
+  <SolidColorBrush x:Key="GelAmber" Color="{StaticResource GelAmberColor}" />
+  <SolidColorBrush x:Key="GelGreen" Color="{StaticResource GelGreenColor}" />
+  <SolidColorBrush x:Key="GelRed" Color="{StaticResource GelRedColor}" />
+  <SolidColorBrush x:Key="GelSteel" Color="{StaticResource GelSteelColor}" />
+
+  <!-- ── the pre-computed OPAQUE mixes, re-mixed against a light surface ───────────────────── -->
+  <SolidColorBrush x:Key="GoButtonBg" Color="#CFEBDD" />
+  <SolidColorBrush x:Key="GoButtonFg" Color="#123B2C" />
+  <SolidColorBrush x:Key="PrimaryButtonBg" Color="#DCE0F6" />
+  <SolidColorBrush x:Key="ButtonHoverBg" Color="#E2E5EC" />
+  <SolidColorBrush x:Key="ButtonPressBg" Color="#D2D6DE" />
+  <SolidColorBrush x:Key="MatrixOnBg" Color="#D7DCF5" />
+  <SolidColorBrush x:Key="MatrixUnityBg" Color="#BAC2EE" />
+  <SolidColorBrush x:Key="MatrixMuteBg" Color="#F0D3D8" />
+  <SolidColorBrush x:Key="ClipAudioBg" Color="#D5EBE3" />
+  <SolidColorBrush x:Key="ClipVideoBg" Color="#D6E9EF" />
+  <SolidColorBrush x:Key="ClipActionBg" Color="#DDE0F2" />
+  <SolidColorBrush x:Key="ClipGroupBg" Color="#DCDFEC" />
+  <SolidColorBrush x:Key="CanvasBg" Color="#FFFFFF" />
+  <SolidColorBrush x:Key="RecoveryBannerBg" Color="#E8E6E2" />
+
+</ResourceDictionary>
