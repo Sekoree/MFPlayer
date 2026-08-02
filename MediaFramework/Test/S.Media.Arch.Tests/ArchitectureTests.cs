@@ -205,6 +205,35 @@ public sealed class ArchitectureTests
     /// crude, but it fails on the way the coupling actually comes back - someone reaching for the session to
     /// get "just one thing" - and it fails at the moment it is written rather than a release later.
     /// </remarks>
+    /// <summary>
+    /// The cue layer drives the engine through <c>ICueRunnerHost</c> and never holds the session itself.
+    /// </summary>
+    /// <remarks>
+    /// The other half of the engine/cue seam. The soundboard test guards "the engine has no soundboard in
+    /// it"; this guards "the cue layer is liftable" - if the runner can reach <c>ShowSession</c> directly it
+    /// can reach anything on it, and the seam stops being a boundary and becomes a suggestion.
+    /// </remarks>
+    [Fact]
+    public void TheCueRunnerDrivesTheEngineThroughItsHostInterfaceOnly()
+    {
+        var path = Path.Combine(RepoRoot(), "MediaFramework", "Media", "S.Media.Session", "CueRunner.cs");
+        Assert.True(File.Exists(path), $"expected the cue runner at {path}");
+        var code = StripComments(File.ReadAllText(path));
+
+        Assert.False(
+            code.Contains("ShowSession", StringComparison.Ordinal),
+            "CueRunner must reach the engine only through ICueRunnerHost, never ShowSession directly.");
+    }
+
+    /// <summary>Drops <c>//</c> comments so a source rule is about code, not prose. A file may legitimately
+    /// NAME the type it is decoupled from when explaining the decoupling.</summary>
+    private static string StripComments(string source) =>
+        string.Join("\n", source.Split('\n').Select(line =>
+        {
+            var slashes = line.IndexOf("//", StringComparison.Ordinal);
+            return slashes >= 0 ? line[..slashes] : line;
+        }));
+
     [Fact]
     public void TheSoundboardDoesNotReachIntoCueOrDocumentConcerns()
     {
@@ -228,13 +257,7 @@ public sealed class ArchitectureTests
         // Comments are stripped first: the rule is about what the CODE depends on, and the file
         // legitimately points at ShowSession in prose ("the session forwards this event", "identical to
         // TransportVoice.StopClaim"). Those references are documentation of a relationship, not a use of it.
-        var code = string.Join("\n", source
-            .Split('\n')
-            .Select(line =>
-            {
-                var slashes = line.IndexOf("//", StringComparison.Ordinal);
-                return slashes >= 0 ? line[..slashes] : line;
-            }));
+        var code = StripComments(source);
 
         var found = forbidden.Where(t => code.Contains(t, StringComparison.Ordinal)).ToArray();
 

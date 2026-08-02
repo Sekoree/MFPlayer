@@ -1538,14 +1538,14 @@ needed nothing), the state is:
 | Audio (framework) | 11 | **10** | raw-terminal (exclusive) line acquisition — half app-side (§7.1) |
 | Video | 9 | **8** | GL-backend surfacing in a host UI (app-side) |
 | Control | 9 | **4** | external-input gate; per-endpoint test message; session lifecycle glue + learn (app-side) |
-| Session | 6 | **4** | engine/cue-semantics seam (CueId→ClipId rename, cue-runner lift, document split); per-list standby pointer |
+| Session | 6 | **5** | `ShowDocument` record split (`Cues` to the cue layer, one JSON envelope); per-list standby pointer |
 | Automation | 4 | **2** | group-level lanes (RESOLVED: flatten in the mapper, no framework work) |
 | Diagnostics | 3 | **2** | validator severity levels |
 | Fades | 3 | **1** | — the other two were re-scoped into the landed curve work |
 | Build | 4 | **1** | second AOT head + CI gates; per-app settings roots (both app-side) |
 | Everything else (status, remote, app-support) | ~8 | 0 | all Phase-2 app-side |
 
-So roughly **32 of ~41 work items**, but that understates the weight: the recovered bay is the single
+So roughly **34 of ~41 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1621,7 +1621,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Build | One shared media cache | EXISTS already (under `mfplayer/`), but not sandboxed by the env override | §7.5 |
 | Test | Headless Avalonia harness | EXISTS (~1023 lines) — must be copied, incl. the anti-hang bootstrap | §7.6 |
 | Session | `ShowDocument` as a shared engine contract | EXISTS — two mappers already target it (cue + deck); only 1 of 6 members is cue-shaped | §10.1 |
-| Session | Engine / cue-semantics seam | **PARTIAL** — `CueId`→`ClipId` (wire pinned), cue-free validation + `PlayClipAsync(clipId, groupId)` landed; cue-runner lift + document split still open | §10.2 |
+| Session | Engine / cue-semantics seam | **MOSTLY LANDED** — `CueId`→`ClipId`, cue-free core, and the cue-runner lift (`CueRunner` owns the graph, reaches the engine only via `ICueRunnerHost`; arch-guarded). Document-record split still open | §10.2 |
 | Session | Soundboard→cue-session coupling | Wiring only — the soundboard VM never references `ShowSession` | §10.1 |
 | Session | `VoicePlayer` voice/preview split | ✅ **LANDED** — `SoundboardVoicePlayer` + `CuePreviewPlayer` on narrow `ISessionVoiceHost`/`ISessionPreviewHost`; arch-test guards the seam | §10.4 |
 | Session | Dead code in the session layer | ✅ **LANDED** — both deleted; `SoundboardQuantization` split out | §10.1 |

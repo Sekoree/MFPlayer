@@ -73,7 +73,7 @@ public sealed partial class ShowSession
         // Lock-free (NXT-16 residue): the graph reference is volatile and CueGraph is internally locked, so
         // this UI/fire-failure query never queues behind the dispatcher (a long command would stall it).
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return Task.FromResult(_cueGraph.Cues);
+        return Task.FromResult(_fires.Cues);
     }
 
     /// <summary>The cue ids whose clips are currently prepared (warm) in the standby engine - a UI "ready"
@@ -98,7 +98,7 @@ public sealed partial class ShowSession
 
     /// <summary>An immutable snapshot of the cue execution log.</summary>
     public Task<IReadOnlyList<CueExecutionLogEntry>> GetCueExecutionLogAsync() =>
-        InvokeAsync(() => Task.FromResult(_cueGraph.ExecutionLog));
+        InvokeAsync(() => Task.FromResult(_fires.ExecutionLog));
 
     /// <summary>A composition's pump stats (frames submitted to its layers + composited), or null when no
     /// composition with that id is loaded - proves the cue→clip→layer→composite path ran (headless).</summary>

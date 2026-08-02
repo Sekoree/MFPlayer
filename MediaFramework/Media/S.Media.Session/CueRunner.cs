@@ -1,17 +1,22 @@
 namespace S.Media.Session;
 
 /// <summary>
-/// The session's fire sequencing: owns the fire-lock (fires/GOs never interleave - the app drives GO
+/// The cue layer: fire sequencing and GO. Owns the fire-lock (fires/GOs never interleave - the app drives GO
 /// serially) and the in-flight fire's cancellation source, and runs every cue fire OFF the serial dispatcher
 /// (NXT-03) so a pre-wait or media open never parks the loop - STOP/LOAD/DISPOSE preempt it through
-/// <see cref="CancelActiveFire"/>. State reads/commits (GO's cue selection and cursor advance) stay on
-/// <see cref="ShowSession"/> as internal dispatcher-marshaled operations; this class owns only the
-/// when/ordering. Split out of the session along its ownership seam (review Part-5 #2); the session's public
-/// fire/GO API delegates here.
+/// <see cref="CancelActiveFire"/>.
 /// </summary>
-internal sealed class CueFireOrchestrator
+/// <remarks>
+/// <para>
+/// Reaches the engine only through <see cref="ICueRunnerHost"/>. That is the point: cue semantics - what
+/// "next" means, when a cue is skipped, how the cursor moves - are this type's business, and the engine
+/// underneath has no opinion about any of it. A host with no cue list never constructs this at all.
+/// </para>
+/// <para>The session's public fire/GO API delegates here.</para>
+/// </remarks>
+internal sealed class CueRunner
 {
-    private readonly ShowSession _session;
+    private readonly ICueRunnerHost _host;
 
     // The cancellation source of the in-flight cue fire (its pre/post-wait + open + auto-continue chain). Set
     // while a fire runs; read off-dispatcher by CancelActiveFire so STOP/LOAD/DISPOSE can abort it (NXT-03).
@@ -23,7 +28,111 @@ internal sealed class CueFireOrchestrator
     // reload discard its (now-stale) clip at commit instead of corrupting the newer show.
     private readonly SemaphoreSlim _fireLock = new(1, 1);
 
-    public CueFireOrchestrator(ShowSession session) => _session = session;
+    /// <summary>The live cue graph. Volatile: staged off the dispatcher during a load and swapped in by a
+    /// single atomic reference assignment, so a fire that straddles the load sees one graph or the other -
+    /// never a half-built one.</summary>
+    private volatile CueGraph _graph = new();
+
+    // The one in-flight explicit crossfade fire's window: published just before the graph action runs and
+    // consumed by it. A field rather than a parameter because the action closure is built at load time,
+    // long before any particular fire knows whether it carries a crossfade.
+    private Tuple<TimeSpan, FadeCurve>? _pendingFireCrossfade;
+
+    public CueRunner(ICueRunnerHost host) => _host = host;
+
+    /// <summary>Every cue in the live graph, in registration order.</summary>
+    public IReadOnlyList<CueDefinition> Cues => _graph.Cues;
+
+    /// <summary>An immutable snapshot of the cue execution log.</summary>
+    public IReadOnlyList<CueExecutionLogEntry> ExecutionLog => _graph.ExecutionLog;
+
+    /// <summary>Looks a cue up in the live graph.</summary>
+    public bool TryGetCue(string cueId, out CueDefinition cue) => _graph.TryGetCue(cueId, out cue);
+
+    /// <summary>
+    /// Builds a replacement cue graph without installing it - each cue wired to the engine's play primitive.
+    /// </summary>
+    /// <remarks>
+    /// Staging and committing are separate so a load that fails part-way leaves the running show intact:
+    /// nothing observable changes until <see cref="Commit"/> performs its single reference swap.
+    /// </remarks>
+    /// <param name="cues">The document's cues; registration order is by cue number.</param>
+    /// <param name="resolveClip">Cue id → its clip, or null when the cue binds none.</param>
+    /// <param name="defaultGroup">The group a cue with no explicit group plays on.</param>
+    public CueGraph StageCues(
+        IReadOnlyList<CueDefinition> cues,
+        Func<string, ShowClipBinding?> resolveClip,
+        string defaultGroup)
+    {
+        var graph = new CueGraph();
+        foreach (var cue in cues.OrderBy(c => c.Number))
+        {
+            var groupId = cue.GroupId ?? defaultGroup;
+            var binding = resolveClip(cue.Id);
+            // A cue without a clip currently has no executable session action. Do not report it as Fired: that
+            // produced a successful no-op and made HaPlay briefly mark a stale/unbound media cue as playing.
+            // Future control/stop cues need their own action binding rather than relying on an empty clip.
+            graph.AddCue(
+                cue,
+                ct => _host.PlayClipAsync(
+                    groupId, binding, ct, waitForStartBarrier: null, crossfade: TakePendingFireCrossfade()),
+                binding is null ? static () => false : null);
+        }
+
+        return graph;
+    }
+
+    /// <summary>Installs a staged graph. One atomic reference assignment - the load's commit point.</summary>
+    public void Commit(CueGraph graph) => _graph = graph;
+
+    /// <summary>Consumes the pending crossfade window, if any. Read once per graph action.</summary>
+    private (TimeSpan Duration, FadeCurve Curve)? TakePendingFireCrossfade() =>
+        Interlocked.Exchange(ref _pendingFireCrossfade, null) is { } pending
+            ? (pending.Item1, pending.Item2)
+            : null;
+
+    /// <summary>Runs a cue's fire against the live graph, publishing its crossfade window first.</summary>
+    private async Task<CueExecutionStatus> FireOnGraphAsync(
+        string cueId, CancellationToken token, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+    {
+        if (crossfade is { } window)
+            Interlocked.Exchange(ref _pendingFireCrossfade, Tuple.Create(window.Duration, window.Curve));
+        try
+        {
+            return await _graph.FireAsync(cueId, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A skipped/failed/cancelled fire may never reach its clip action - the unconsumed window
+            // must not leak into a later plain fire.
+            if (crossfade is not null)
+                Interlocked.Exchange(ref _pendingFireCrossfade, null);
+        }
+    }
+
+    /// <summary>
+    /// GO's cue selection: the next armed and enabled cue on <paramref name="groupId"/> after the cursor.
+    /// </summary>
+    /// <remarks>Reads the cursor from the engine, then decides here - "next" is a cue-list question, and a
+    /// disabled or unarmed cue is skipped rather than fired (NXT-07).</remarks>
+    private async Task<(CueDefinition? Next, int Generation)> SelectNextGoCueAsync(string groupId, string defaultGroup)
+    {
+        var (cursor, generation) = await _host.ReadGoCursorAsync(groupId).ConfigureAwait(false);
+        var next = _graph.Cues
+            .Where(c => (c.GroupId ?? defaultGroup) == groupId && c.Number > cursor && c.Armed && c.Enabled)
+            .OrderBy(c => c.Number)
+            .FirstOrDefault();
+        return (next, generation);
+    }
+
+    /// <summary>The next <paramref name="count"/> clip-bound cue ids on a group after <paramref name="cursor"/> -
+    /// what the engine pre-rolls so the next GO opens warm.</summary>
+    public IReadOnlyList<string> UpcomingCueIds(string groupId, string defaultGroup, int cursor, int count) =>
+        [.. _graph.Cues
+            .Where(c => (c.GroupId ?? defaultGroup) == groupId && c.Number > cursor)
+            .OrderBy(c => c.Number)
+            .Take(count)
+            .Select(c => c.Id)];
 
     /// <summary>See <see cref="ShowSession.FireCueAsync(string)"/> (the public doc lives there).
     /// <paramref name="crossfade"/> is the optional dual-voice window of the crossfade overload; null is the
@@ -47,7 +156,7 @@ internal sealed class CueFireOrchestrator
     {
         using var cts = new CancellationTokenSource();
         _activeFireCts = cts;
-        try { return await _session.FireOnGraphAsync(cueId, cts.Token, crossfade).ConfigureAwait(false); }
+        try { return await FireOnGraphAsync(cueId, cts.Token, crossfade).ConfigureAwait(false); }
         finally { _activeFireCts = null; }
     }
 
@@ -115,7 +224,7 @@ internal sealed class CueFireOrchestrator
     /// <see cref="CueFaultPolicy.StopShow"/> fault still propagates, matching single-cue fire.</summary>
     private async Task<CueExecutionStatus> FireForGroupAsync(string cueId, CancellationToken token)
     {
-        try { return await _session.FireOnGraphAsync(cueId, token).ConfigureAwait(false); }
+        try { return await FireOnGraphAsync(cueId, token).ConfigureAwait(false); }
         catch (OperationCanceledException) { return CueExecutionStatus.Failed; }
     }
 
@@ -128,7 +237,7 @@ internal sealed class CueFireOrchestrator
         var reachedBarrier = false;
         try
         {
-            return await _session.FireCueIndependentAtBarrierAsync(
+            return await _host.FireCueIndependentAtBarrierAsync(
                     cueId,
                     runtimeGroupId,
                     async () =>
@@ -193,7 +302,7 @@ internal sealed class CueFireOrchestrator
         try
         {
             // Selection on the dispatcher (reads the cue graph + the group cursor).
-            var (next, generation) = await _session.SelectNextGoCueAsync(groupId).ConfigureAwait(false);
+            var (next, generation) = await SelectNextGoCueAsync(groupId, _host.DefaultGroupId).ConfigureAwait(false);
             if (next is null)
                 return CueExecutionStatus.NotReady;
 
@@ -204,8 +313,8 @@ internal sealed class CueFireOrchestrator
 
             // Advance the cursor on the dispatcher - only when the cue actually ran (or faulted), never a skip/cancel.
             if (status is CueExecutionStatus.Fired or CueExecutionStatus.Failed)
-                await _session.AdvanceGoCursorAsync(groupId, next.Number, generation).ConfigureAwait(false);
-            _ = _session.WarmUpcomingAsync(groupId); // pre-roll the next cue(s) in the background so the next GO is instant
+                await _host.AdvanceGoCursorAsync(groupId, next.Number, generation).ConfigureAwait(false);
+            _ = _host.WarmUpcomingAsync(groupId); // pre-roll the next cue(s) in the background so the next GO is instant
             return status;
         }
         finally

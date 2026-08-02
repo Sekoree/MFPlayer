@@ -69,7 +69,7 @@ public readonly record struct VoiceProgress(string VoiceId, TimeSpan Position, T
 ///   <c>TransportGroup</c> model itself (§A).</description></item>
 /// </list>
 /// </summary>
-public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
+public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost, ICueRunnerHost
 {
     /// <summary>The implicit group cues fall into when <see cref="CueDefinition.GroupId"/> is null.</summary>
     public const string DefaultGroup = "main";
@@ -88,7 +88,6 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
     private readonly IAudioBackend? _audioBackend;
     // Swapped atomically on load (NXT-12 transactional load); volatile because fires and the lock-free cue-
     // definition query read it OFF the dispatcher (the graph itself is internally locked).
-    private volatile CueGraph _cueGraph = new();
     private readonly Dictionary<string, TransportGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
     // Lock-free view of the compositions for the UI health poll: republished (on the dispatcher) whenever
@@ -146,6 +145,28 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
     void ISessionVoiceHost.NotifyCompletionWorkAvailable() => NotifyCompletionWorkAvailable();
     bool ISessionVoiceHost.IsDisposed => IsDisposed;
     ClipCompositionRuntime? ISessionPreviewHost.AuditionComposition => _auditionComposition;
+
+    // ICueRunnerHost, explicitly, for the same reason: these stay internal. (WarmUpcomingAsync is public and
+    // binds implicitly - it is a host-facing pre-roll hint, not part of the cue seam alone.)
+    string ICueRunnerHost.DefaultGroupId => DefaultGroup;
+
+    ValueTask ICueRunnerHost.PlayClipAsync(
+        string groupId,
+        ShowClipBinding? binding,
+        CancellationToken cancellationToken,
+        Func<Task>? waitForStartBarrier,
+        (TimeSpan Duration, FadeCurve Curve)? crossfade) =>
+        PlayClipAsync(groupId, binding, cancellationToken, waitForStartBarrier, crossfade);
+
+    Task<CueExecutionStatus> ICueRunnerHost.FireCueIndependentAtBarrierAsync(
+        string cueId, string independentGroupId, Func<Task>? waitForStartBarrier, CancellationToken cancellationToken) =>
+        FireCueIndependentAtBarrierAsync(cueId, independentGroupId, waitForStartBarrier, cancellationToken);
+
+    Task<(int Cursor, int Generation)> ICueRunnerHost.ReadGoCursorAsync(string groupId) =>
+        InvokeAsync(() => Task.FromResult((GetOrAddGroup(groupId).LastFiredNumber, _showGeneration)));
+
+    Task ICueRunnerHost.AdvanceGoCursorAsync(string groupId, int number, int generation) =>
+        AdvanceGoCursorAsync(groupId, number, generation);
     private readonly ShowSessionMetadataPublisher _metadataPublisher;
     private readonly SessionCompletionMonitor _completionMonitor;
     // The level/stop bus: every sounding source registers with its program/monitoring classification, and
@@ -378,7 +399,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
     // along its ownership seam - review Part-5 #2); this session's public fire/GO API delegates to it.
     // _showGeneration is bumped on every load so a fire whose open straddled a reload discards its (now-stale)
     // clip at commit instead of corrupting the newer show.
-    private readonly CueFireOrchestrator _fires;
+    private readonly CueRunner _fires;
     private volatile int _showGeneration;
 
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
@@ -411,7 +432,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
 
         _visualizers = new ShowSessionVisualizerService(
             RegisterVisualizerTap, RemoveTapFromActiveClips, ReleaseVisualizerTapRegistration, MetadataHub);
-        _fires = new CueFireOrchestrator(this);
+        _fires = new CueRunner(this);
         // Two independent surfaces, not one class with two halves: a voice is a raw path with no cue,
         // document or canvas anywhere in reach, and saying so in the constructor signatures is what stops
         // a soundboard from quietly becoming part of what "the playback engine" means.
@@ -726,20 +747,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
         }
 
         var newClipsByCue = document.Clips.ToDictionary(c => c.ClipId, StringComparer.Ordinal);
-        var newCueGraph = new CueGraph();
-        foreach (var cue in document.Cues.OrderBy(c => c.Number))
-        {
-            var groupId = cue.GroupId ?? DefaultGroup;
-            var binding = newClipsByCue.GetValueOrDefault(cue.Id);
-            // A cue without a clip currently has no executable session action. Do not report it as Fired: that
-            // produced a successful no-op and made HaPlay briefly mark a stale/unbound media cue as playing.
-            // Future control/stop cues need their own action binding rather than relying on an empty clip.
-            newCueGraph.AddCue(
-                cue,
-                ct => PlayClipAsync(
-                    groupId, binding, ct, waitForStartBarrier: null, crossfade: TakePendingFireCrossfade()),
-                binding is null ? static () => false : null);
-        }
+        // Staged, not installed: the cue layer builds its replacement graph here and it becomes live only at
+        // the commit below, so a load that throws part-way leaves the running show untouched.
+        var newCueGraph = _fires.StageCues(
+            document.Cues, id => newClipsByCue.GetValueOrDefault(id), DefaultGroup);
 
         // Which running groups may survive this reload (opt-in; see RetainableGroupIds). Computed BEFORE the
         // teardown because it reads the live voices' bindings.
@@ -780,7 +791,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
         ReattachPersistentVisualizers(visualizersToReattach);
         PublishCompositionsView(); // refresh the lock-free health-poll view for the new composition set
 
-        _cueGraph = newCueGraph;
+        _fires.Commit(newCueGraph);
         _clipsById = newClipsByCue;
         _routes = document.Routes;
         _audioOutputs = document.AudioOutputs;
@@ -1256,12 +1267,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
     {
         var group = GetOrAddGroup(groupId);
         var specs = new List<ClipSpec>();
-        foreach (var cue in _cueGraph.Cues
-                     .Where(c => (c.GroupId ?? DefaultGroup) == groupId && c.Number > group.LastFiredNumber)
-                     .OrderBy(c => c.Number)
-                     .Take(count))
+        // Which cues come next is the cue layer's call; turning them into openable specs is the engine's.
+        foreach (var cueId in _fires.UpcomingCueIds(groupId, DefaultGroup, group.LastFiredNumber, count))
         {
-            if (_clipsById.TryGetValue(cue.Id, out var binding))
+            if (_clipsById.TryGetValue(cueId, out var binding))
                 specs.Add(BuildClipSpec(binding));
         }
 

@@ -96,7 +96,7 @@ public sealed partial class ShowSession
     internal Task<CueExecutionStatus> FireCueIndependentAtBarrierAsync(
         string cueId,
         string independentGroupId,
-        Func<Task> waitForStartBarrier,
+        Func<Task>? waitForStartBarrier,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(waitForStartBarrier);
@@ -113,7 +113,7 @@ public sealed partial class ShowSession
         ArgumentException.ThrowIfNullOrWhiteSpace(independentGroupId);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (!_cueGraph.TryGetCue(cueId, out var cue))
+        if (!_fires.TryGetCue(cueId, out var cue))
             throw new ArgumentException($"cue '{cueId}' is not registered", nameof(cueId));
         if (!cue.Enabled)
             return CueExecutionStatus.SkippedDisabled;
@@ -138,41 +138,6 @@ public sealed partial class ShowSession
         catch (OperationCanceledException)
         {
             return CueExecutionStatus.Failed;
-        }
-    }
-
-    // The one in-flight explicit crossfade fire's window: published by FireOnGraphAsync just before the
-    // graph fire runs (the orchestrator holds the fire lock, so at most one exists) and consumed exactly
-    // once by the fired cue's clip action - the graph action closures are fixed at load time, so the
-    // window rides beside the fire rather than through the CueGraph signature. Interlocked because the
-    // set (fire worker) and consume (dispatcher, inside the fire's PlayClipAsync) are different threads.
-    private Tuple<TimeSpan, FadeCurve>? _pendingFireCrossfade;
-
-    /// <summary>Takes (and clears) the pending crossfade window for the clip action of an in-flight
-    /// explicit crossfade fire. Null for every other fire - the plain path is untouched.</summary>
-    private (TimeSpan Duration, FadeCurve Curve)? TakePendingFireCrossfade() =>
-        Interlocked.Exchange(ref _pendingFireCrossfade, null) is { } pending
-            ? (pending.Item1, pending.Item2)
-            : null;
-
-    /// <summary>Runs the current cue graph's fire - the <see cref="CueFireOrchestrator"/>'s state seam. Reads
-    /// <see cref="_cueGraph"/> off-dispatcher exactly as the fire core always has (the graph reference swaps
-    /// atomically on load; the show-generation guard makes a straddling fire discard its stale clip at commit).</summary>
-    internal async Task<CueExecutionStatus> FireOnGraphAsync(
-        string cueId, CancellationToken token, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
-    {
-        if (crossfade is { } window)
-            Interlocked.Exchange(ref _pendingFireCrossfade, Tuple.Create(window.Duration, window.Curve));
-        try
-        {
-            return await _cueGraph.FireAsync(cueId, token).ConfigureAwait(false);
-        }
-        finally
-        {
-            // A skipped/failed/cancelled fire may never reach its clip action - the unconsumed window
-            // must not leak into a later plain fire.
-            if (crossfade is not null)
-                Interlocked.Exchange(ref _pendingFireCrossfade, null);
         }
     }
 
@@ -218,21 +183,6 @@ public sealed partial class ShowSession
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _fires.GoAsync(groupId);
     }
-
-    /// <summary>GO's cue selection (dispatcher): the next armed+enabled cue in <paramref name="groupId"/> after
-    /// the group's cursor, plus the show generation it was read under (so the matching cursor advance can no-op
-    /// when a reload swapped the show in between).</summary>
-    internal Task<(CueDefinition? Next, int Generation)> SelectNextGoCueAsync(string groupId) =>
-        InvokeAsync(() =>
-        {
-            var group = GetOrAddGroup(groupId);
-            var next = _cueGraph.Cues
-                .Where(c => (c.GroupId ?? DefaultGroup) == groupId && c.Number > group.LastFiredNumber
-                            && c.Armed && c.Enabled)
-                .OrderBy(c => c.Number)
-                .FirstOrDefault();
-            return Task.FromResult((next, _showGeneration));
-        });
 
     /// <summary>GO's cursor advance (dispatcher). A no-op when <paramref name="generation"/> no longer matches -
     /// a reload swapped the show between selection and advance, and the fresh show's cursor must not inherit the
