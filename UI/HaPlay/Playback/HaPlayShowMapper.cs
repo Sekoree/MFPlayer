@@ -270,7 +270,7 @@ public static class HaPlayShowMapper
                 .ToArray()
             : null;
         return new ShowClipBinding(
-            CueId: cueId,
+            ClipId: cueId,
             MediaPath: mediaPath,
             CompositionId: primary?.CompositionId.ToString(),
             LayerIndex: primary?.LayerIndex ?? 0,

@@ -97,6 +97,41 @@ public sealed class ShowDocumentTests
     }
 
     [Fact]
+    public void TheClipJoinKeyStillSerialisesAsCueId()
+    {
+        // The C# property is ClipId (the core has no cues), but the sidecar format has an external C ABI
+        // consumer and every show already on disk. A rename must not move the wire, so this pins the name
+        // rather than trusting that nobody renames it "for consistency" later.
+        var doc = ShowDocument.Empty with { Clips = [new ShowClipBinding("clip-1", "/a.mp4")] };
+
+        var json = doc.ToJson();
+
+        Assert.Contains("\"CueId\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"ClipId\"", json, StringComparison.Ordinal);
+        Assert.Equal("clip-1", ShowDocument.FromJson(json).Clips[0].ClipId);
+    }
+
+    [Fact]
+    public void ADocumentSavedBeforeTheRename_StillLoads()
+    {
+        // Literal pre-rename JSON, not something this build produced - the point is that an older file
+        // (or the ABI host) keeps working, which a round-trip through our own serializer cannot show.
+        const string json = """
+            {
+              "Version": 1,
+              "Cues": [],
+              "Clips": [ { "CueId": "cue-7", "MediaPath": "/legacy.mp4" } ],
+              "Compositions": [],
+              "Routes": []
+            }
+            """;
+
+        var doc = ShowDocument.FromJson(json);
+
+        Assert.Equal("cue-7", Assert.Single(doc.Clips).ClipId);
+    }
+
+    [Fact]
     public void ToJson_FromJson_RoundTripsBothAutomationLanes()
     {
         // The two lanes are independent: a clip may automate volume, opacity, both, or neither, and the

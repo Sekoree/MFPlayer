@@ -963,14 +963,14 @@ public sealed class PlaylistGroupTests
         // offset (the session's ClipApproachingEnd hook)…
         Assert.Equal(
             TimeSpan.FromMilliseconds(1200),
-            doc.Clips.Single(c => c.CueId == inPlaylist.Id.ToString()).PreEndNotify);
+            doc.Clips.Single(c => c.ClipId == inPlaylist.Id.ToString()).PreEndNotify);
         // …while a nested group's children and cues outside the playlist stay at zero (butt splice).
         Assert.Equal(
             TimeSpan.Zero,
-            doc.Clips.Single(c => c.CueId == inNested.Id.ToString()).PreEndNotify);
+            doc.Clips.Single(c => c.ClipId == inNested.Id.ToString()).PreEndNotify);
         Assert.Equal(
             TimeSpan.Zero,
-            doc.Clips.Single(c => c.CueId == outside.Id.ToString()).PreEndNotify);
+            doc.Clips.Single(c => c.ClipId == outside.Id.ToString()).PreEndNotify);
     }
 
     [Fact]

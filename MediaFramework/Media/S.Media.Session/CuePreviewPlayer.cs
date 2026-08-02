@@ -33,7 +33,7 @@ internal sealed class CuePreviewPlayer
     // Device-dependence fix #3: the fallback device is resolved fresh at each use (through the session's
     // 5 s device cache), never a construction-time snapshot - hot-plugged hardware becomes the fallback.
     private readonly Func<string?> _resolveFallbackDeviceId;
-    // The spec builder stays on the session (it reads _clipsByCue / the registry / the device-rate cache);
+    // The spec builder stays on the session (it reads _clipsById / the registry / the device-rate cache);
     // it runs inside a dispatcher work item, so it may read dispatcher-confined session state.
     private readonly Func<string, ClipSpec?> _buildPreviewSpec;
 

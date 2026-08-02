@@ -381,7 +381,7 @@ public sealed partial class ShowSession
             {
                 result.Add(new ActiveClipPipelineMetrics(
                     view.GroupId,
-                    view.Group.ActiveBinding?.CueId,
+                    view.Group.ActiveBinding?.ClipId,
                     player.GetMetrics()));
             }
             catch (ObjectDisposedException) { /* clip retired between snapshot publish and read */ }

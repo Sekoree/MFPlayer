@@ -41,6 +41,44 @@ public sealed partial class ShowSession
             cueId, crossfade is { } duration && duration > TimeSpan.Zero ? (duration, crossfadeCurve) : null);
     }
 
+    /// <summary>
+    /// Plays a clip by id on a transport group, with no cue involved.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The engine's cue-free entry point. Everything <see cref="FireCueAsync(string)"/> adds on top of this -
+    /// arm/enable checks, pre/post waits, follow-ons, the GO cursor - is cue-list semantics; the act of
+    /// playing a clip on a group is not, and a host that has no cue list should not have to fabricate one to
+    /// reach it. HaPlay's deck did exactly that, minting a cue per track whose only purpose was to be
+    /// looked up and discarded.
+    /// </para>
+    /// <para>
+    /// Replaces whatever the group is playing, exactly as a fired cue would - the group is the slot, so this
+    /// is the same transport contract, reached without the cue layer.
+    /// </para>
+    /// </remarks>
+    /// <returns><see cref="CueExecutionStatus.Fired"/>, or <see cref="CueExecutionStatus.NotReady"/> when no
+    /// clip has that id.</returns>
+    public async Task<CueExecutionStatus> PlayClipAsync(
+        string clipId,
+        string groupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clipId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupId);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // Read the binding table on the dispatcher (it is dispatcher-confined and a load can swap it), then
+        // play OFF it - the media open must not park the serial loop (NXT-19).
+        var binding = await InvokeAsync(() =>
+            Task.FromResult(_clipsById.GetValueOrDefault(clipId))).ConfigureAwait(false);
+        if (binding is null)
+            return CueExecutionStatus.NotReady;
+
+        await PlayClipAsync(groupId, binding, cancellationToken, waitForStartBarrier: null).ConfigureAwait(false);
+        return CueExecutionStatus.Fired;
+    }
+
     /// <summary>Fires one media cue on a caller-owned transport group instead of the group encoded in the
     /// show document. This is the manual-override path used by HaPlay: different children of one authored
     /// group can then play concurrently, while re-firing the same child replaces only its own manual slot.</summary>
@@ -81,7 +119,7 @@ public sealed partial class ShowSession
             return CueExecutionStatus.SkippedDisabled;
         if (!cue.Armed)
             return CueExecutionStatus.SkippedNotArmed;
-        if (!_clipsByCue.TryGetValue(cueId, out var binding))
+        if (!_clipsById.TryGetValue(cueId, out var binding))
             return CueExecutionStatus.NotReady;
 
         try

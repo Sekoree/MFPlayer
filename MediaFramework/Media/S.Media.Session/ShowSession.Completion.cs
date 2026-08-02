@@ -111,7 +111,7 @@ public sealed partial class ShowSession
             if (++monitor.StalledTicks >= EndMonitorStallTicks)
             {
                 await ReleaseActiveVoiceAsync(group).ConfigureAwait(false);
-                ClipNaturallyEnded?.Invoke(binding.CueId);
+                ClipNaturallyEnded?.Invoke(binding.ClipId);
                 return true;
             }
         }
@@ -129,7 +129,7 @@ public sealed partial class ShowSession
             && remaining > TimeSpan.Zero && remaining <= binding.PreEndNotify)
         {
             monitor.PreEndNotified = true;
-            ClipApproachingEnd?.Invoke(binding.CueId);
+            ClipApproachingEnd?.Invoke(binding.ClipId);
         }
 
         var naturalFade = binding.FadeOut > TimeSpan.Zero
@@ -196,7 +196,7 @@ public sealed partial class ShowSession
         }
 
         await ReleaseActiveVoiceAsync(group).ConfigureAwait(false);
-        ClipNaturallyEnded?.Invoke(binding.CueId);
+        ClipNaturallyEnded?.Invoke(binding.ClipId);
         return true;
     }
 
@@ -248,7 +248,7 @@ public sealed partial class ShowSession
             if (ex is not OperationCanceledException)
                 MediaDiagnostics.LogWarning(
                     "ShowSession: loop-crossfade re-open failed for cue '{0}'; falling back to the butt-splice wrap ({1}).",
-                    binding.CueId, ex.Message);
+                    binding.ClipId, ex.Message);
             // Re-arm the seek-back wrap on the dispatcher (monitor state is dispatcher-confined). If the
             // clip was stopped/replaced meanwhile the monitor is dead and the flag is inert either way.
             try

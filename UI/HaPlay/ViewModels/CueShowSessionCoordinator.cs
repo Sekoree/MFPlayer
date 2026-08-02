@@ -1844,7 +1844,7 @@ public sealed class CueShowSessionCoordinator
                     groupByCue[cueGuid] = c.GroupId ?? ShowSession.DefaultGroup;
             _cueGroupByCueId = groupByCue;
             _cueShowBoundCueIds = doc.Clips
-                .Select(clip => Guid.TryParse(clip.CueId, out var cueId) ? cueId : Guid.Empty)
+                .Select(clip => Guid.TryParse(clip.ClipId, out var cueId) ? cueId : Guid.Empty)
                 .Where(cueId => cueId != Guid.Empty)
                 .ToHashSet();
             Trace.LogInformation(

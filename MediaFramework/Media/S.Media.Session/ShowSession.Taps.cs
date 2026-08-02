@@ -227,7 +227,7 @@ public sealed partial class ShowSession
         {
             if (voice.Player is not { AudioRouter: not null, AudioSourceId: not null } player)
                 continue;
-            if (tap.Filter is not null && !tap.Filter(voice.Binding.CueId))
+            if (tap.Filter is not null && !tap.Filter(voice.Binding.ClipId))
                 continue; // selective feed: this clip is not in the tap's listen set
             try
             {
@@ -319,12 +319,12 @@ public sealed partial class ShowSession
     /// <summary>Publishes what's playing to <see cref="MetadataHub"/>: an immediate filename-derived
     /// entry, refined by the host's metadata probe (tags + cover art) off the dispatcher when set.</summary>
     private void PublishItemMetadata(ShowClipBinding binding) =>
-        _metadataPublisher.Publish(binding.MediaPath, binding.CueId);
+        _metadataPublisher.Publish(binding.MediaPath, binding.ClipId);
 
     /// <summary>The preview instance's spec for a loaded cue (a variant key distinct from the GO-prepared
     /// clip so an audition never consumes it), or null when the cue has no clip binding. Dispatcher-read.</summary>
     private ClipSpec? BuildPreviewSpec(string cueId) =>
-        _clipsByCue.TryGetValue(cueId, out var binding) ? BuildClipSpec(binding, "preview") : null;
+        _clipsById.TryGetValue(cueId, out var binding) ? BuildClipSpec(binding, "preview") : null;
 
     /// <summary>A soundboard voice's spec: a fresh unbounded file open at the target device's backend rate
     /// (JACK graphs reject the media's own rate - the same resolution every clip spec gets). Dispatcher-read.</summary>

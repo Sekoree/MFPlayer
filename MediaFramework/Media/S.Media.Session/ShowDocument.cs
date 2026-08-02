@@ -100,9 +100,23 @@ public sealed record ShowAudioMatrixCell(int InputChannel, int OutputChannel, fl
 public sealed record ShowClipLogicalSend(int SourceChannel, string LogicalChannelId, float Gain = 1f);
 
 /// <summary>
-/// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
-/// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI - D2) and played on the cue's group.
+/// A playable clip: an id plus the media it plays. When something fires the clip, <see cref="MediaPath"/> is
+/// opened through the session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI - D2) and played
+/// on the addressed group.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="ClipId"/> is an opaque join key, not a cue reference. It is named that way because the engine
+/// has two customers and only one of them has cues: a cue list binds a cue id to a clip of the same id,
+/// while HaPlay's deck addresses clips directly and never had a cue in the first place (it used to invent
+/// one). The core does not know which it is talking to, and should not.
+/// </para>
+/// <para>
+/// The wire name stays <c>"CueId"</c>. This is a rename, not a change of meaning, and the sidecar format has
+/// an external C ABI consumer plus every show already saved to disk - so the JSON must not move (§10.3:
+/// never change the format unless the meaning of a member changes).
+/// </para>
+/// </remarks>
 /// <param name="AudioStreamIndex">Audio track selection (03 §6 multi-track): <c>null</c> = automatic,
 /// <c>-1</c> (<see cref="S.Media.Players.MediaPlayerOpenOptions.DisabledStreamIndex"/>) = no audio, otherwise
 /// the chosen stream index. Lets a multi-track clip (e.g. language stems) pick which track this cue plays.</param>
@@ -112,7 +126,7 @@ public sealed record ShowClipLogicalSend(int SourceChannel, string LogicalChanne
 /// is set. A null selection path uses <see cref="MediaPath"/> as the container; <see cref="ShowSubtitleSelection.StreamIndex"/>
 /// selects an embedded stream.</param>
 public sealed record ShowClipBinding(
-    string CueId,
+    [property: JsonPropertyName("CueId")] string ClipId,
     string MediaPath,
     string? CompositionId = null,
     int LayerIndex = 0,

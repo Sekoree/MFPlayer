@@ -153,7 +153,7 @@ public class ShowDocumentMapperTests
 
         // Clips: one per resolvable media cue, with playback params + composition placement.
         Assert.Equal(3, doc.Clips.Count);
-        var introClip = doc.Clips.Single(c => c.CueId == intro.Id.ToString());
+        var introClip = doc.Clips.Single(c => c.ClipId == intro.Id.ToString());
         Assert.Equal("/media/intro.mp4", introClip.MediaPath);
         Assert.Equal(compId.ToString(), introClip.CompositionId);
         Assert.Equal(1, introClip.LayerIndex);
@@ -167,12 +167,12 @@ public class ShowDocumentMapperTests
 
         // Live + image sources resolve to a path / scheme URI. The NDI URI is the option-carrying descriptor
         // form (shared with the deck) - assert via the provider's parser so option order stays free.
-        var camUri = doc.Clips.Single(c => c.CueId == camB.Id.ToString()).MediaPath;
+        var camUri = doc.Clips.Single(c => c.ClipId == camB.Id.ToString()).MediaPath;
         var camDescriptor = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(camUri);
         Assert.Equal("STUDIO (CAM 2)", camDescriptor.SourceName);
         Assert.True(camDescriptor.ReceiveAudio);
         Assert.True(camDescriptor.ReceiveVideo);
-        Assert.Equal("/media/a.png", doc.Clips.Single(c => c.CueId == slideA.Id.ToString()).MediaPath);
+        Assert.Equal("/media/a.png", doc.Clips.Single(c => c.ClipId == slideA.Id.ToString()).MediaPath);
 
         // Composition + output-mapping warp section carried through (1:1, minus Name/corner-pin).
         var comp = Assert.Single(doc.Compositions);

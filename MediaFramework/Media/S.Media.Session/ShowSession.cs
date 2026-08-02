@@ -131,7 +131,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
     // serial dispatcher; the engine is also internally thread-safe.
     private readonly ClipStandbyEngine _standby = new();
     // Cue id → its clip binding (built on load) so the standby pre-roll can look up upcoming cues' media.
-    private IReadOnlyDictionary<string, ShowClipBinding> _clipsByCue =
+    private IReadOnlyDictionary<string, ShowClipBinding> _clipsById =
         new Dictionary<string, ShowClipBinding>(StringComparer.Ordinal);
     // Soundboard voices + the cue preview - playback outside the transport groups, split along its ownership
     // seam (review Part-5 #2). Owns the voice/preview registries and monitors; this session's public
@@ -606,7 +606,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
             var allUnchanged = true;
             foreach (var voice in voices)
             {
-                var incoming = newClipsByCue.GetValueOrDefault(voice.Binding.CueId);
+                var incoming = newClipsByCue.GetValueOrDefault(voice.Binding.ClipId);
                 if (incoming is null || !SameClipBinding(voice.Binding, incoming))
                 {
                     allUnchanged = false;
@@ -725,7 +725,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
             throw; // running show left intact - fields are not mutated until the commit below
         }
 
-        var newClipsByCue = document.Clips.ToDictionary(c => c.CueId, StringComparer.Ordinal);
+        var newClipsByCue = document.Clips.ToDictionary(c => c.ClipId, StringComparer.Ordinal);
         var newCueGraph = new CueGraph();
         foreach (var cue in document.Cues.OrderBy(c => c.Number))
         {
@@ -781,7 +781,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
         PublishCompositionsView(); // refresh the lock-free health-poll view for the new composition set
 
         _cueGraph = newCueGraph;
-        _clipsByCue = newClipsByCue;
+        _clipsById = newClipsByCue;
         _routes = document.Routes;
         _audioOutputs = document.AudioOutputs;
         _showGeneration++; // a fire whose open straddled this reload bails at commit (NXT-03 off-dispatcher)
@@ -938,7 +938,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
                     timelineClaims.Add(surfaceComp.AcquireTransportTimeline(group.Timeline));
                     MediaDiagnostics.LogInformation(
                         "clip {CueId}: video composites as a GPU layer surface on {Composition} (NXT-10)",
-                        binding.CueId, placement.CompositionId);
+                        binding.ClipId, placement.CompositionId);
                 }
                 else
                 {
@@ -1009,7 +1009,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
                     // target. Precedence over the direct-route adapter, mirroring its explicit-empty
                     // semantics (empty sends = silent clip, not fallback).
                     TryAttachProgramInput(
-                        player, _programAudio!, programSends, rate, attachLevel, outputs, routeTargets, binding.CueId);
+                        player, _programAudio!, programSends, rate, attachLevel, outputs, routeTargets, binding.ClipId);
                 }
                 else if (binding.AudioRoutes is { } clipRoutes)
                 {
@@ -1073,9 +1073,9 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
 
             // Effect buses (Phase 4): registered audio taps ride along on every fired clip, and the
             // metadata hub learns what's playing (visualizers/overlays pick both up).
-            AttachAudioTaps(player, binding.CueId);
+            AttachAudioTaps(player, binding.ClipId);
             PublishItemMetadata(binding);
-            WireRouterAlerts(player, binding.CueId);
+            WireRouterAlerts(player, binding.ClipId);
 
             armed.Start();
             // Commit: the displaced voice moves to its release (ramp armed inside the handoff) or is
@@ -1159,7 +1159,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
         // A non-null variant (e.g. "preview") gives a distinct standby key so this arms a FRESH instance
         // instead of consuming GO's prepared clip.
         return new ClipSpec(
-            variant is null ? binding.CueId : $"{binding.CueId}:{variant}",
+            variant is null ? binding.ClipId : $"{binding.ClipId}:{variant}",
             ClipMediaSource.File(_registry, binding.MediaPath, options),
             window,
             cacheKey: $"{binding.MediaPath}|audio:{binding.AudioStreamIndex?.ToString() ?? "auto"}" +
@@ -1261,7 +1261,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
                      .OrderBy(c => c.Number)
                      .Take(count))
         {
-            if (_clipsByCue.TryGetValue(cue.Id, out var binding))
+            if (_clipsById.TryGetValue(cue.Id, out var binding))
                 specs.Add(BuildClipSpec(binding));
         }
 
@@ -1296,7 +1296,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
     /// <summary>Resolves the N→M channel map for this clip's source→output route, or null for the source-derived default.</summary>
     private ChannelMap? ResolveOutputChannelMap(ShowClipBinding binding, string outputId)
     {
-        var sourceId = binding.CueId;
+        var sourceId = binding.ClipId;
         foreach (var route in _routes)
             if (route.Enabled
                 && string.Equals(route.SourceId, sourceId, StringComparison.Ordinal)

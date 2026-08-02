@@ -1621,7 +1621,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Build | One shared media cache | EXISTS already (under `mfplayer/`), but not sandboxed by the env override | §7.5 |
 | Test | Headless Avalonia harness | EXISTS (~1023 lines) — must be copied, incl. the anti-hang bootstrap | §7.6 |
 | Session | `ShowDocument` as a shared engine contract | EXISTS — two mappers already target it (cue + deck); only 1 of 6 members is cue-shaped | §10.1 |
-| Session | Engine / cue-semantics seam | ABSENT (fused; the deck invents a cue named `"player"` to reach the engine) | §10.2 |
+| Session | Engine / cue-semantics seam | **PARTIAL** — `CueId`→`ClipId` (wire pinned), cue-free validation + `PlayClipAsync(clipId, groupId)` landed; cue-runner lift + document split still open | §10.2 |
 | Session | Soundboard→cue-session coupling | Wiring only — the soundboard VM never references `ShowSession` | §10.1 |
 | Session | `VoicePlayer` voice/preview split | ✅ **LANDED** — `SoundboardVoicePlayer` + `CuePreviewPlayer` on narrow `ISessionVoiceHost`/`ISessionPreviewHost`; arch-test guards the seam | §10.4 |
 | Session | Dead code in the session layer | ✅ **LANDED** — both deleted; `SoundboardQuantization` split out | §10.1 |

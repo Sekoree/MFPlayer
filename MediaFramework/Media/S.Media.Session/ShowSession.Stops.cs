@@ -251,7 +251,7 @@ public sealed partial class ShowSession
     /// live on <see cref="SoundingStopClaim.AwaitReleaseAsync"/>, shared with the soundboard's stop domain;
     /// all this adds is what a TRANSPORT voice's fallback release actually is.</summary>
     private Task AwaitVoiceReleaseAsync(TransportGroup group, TransportVoice voice, DateTime deadline) =>
-        voice.StopClaim.AwaitReleaseAsync(deadline, "cue", voice.Binding.CueId, async () =>
+        voice.StopClaim.AwaitReleaseAsync(deadline, "cue", voice.Binding.ClipId, async () =>
         {
             try
             {
