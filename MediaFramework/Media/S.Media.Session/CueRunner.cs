@@ -125,6 +125,23 @@ internal sealed class CueRunner
         return (next, generation);
     }
 
+    /// <summary>
+    /// What GO would fire next on <paramref name="groupId"/>, without firing it.
+    /// </summary>
+    /// <remarks>The standby readout. Deliberately runs the SAME selection GO uses rather than a parallel
+    /// "next cue" rule, so what a list says it will do and what it then does cannot disagree.</remarks>
+    public async Task<CueDefinition?> PeekNextAsync(string groupId)
+    {
+        var (next, _) = await SelectNextGoCueAsync(groupId, _host.DefaultGroupId).ConfigureAwait(false);
+        return next;
+    }
+
+    /// <summary>The cue number that would put <paramref name="cueId"/> next in line, or null if unknown.</summary>
+    /// <remarks>One before the cue's own number: GO selects the lowest number strictly greater than the
+    /// cursor, so parking the cursor just below a cue makes that cue next.</remarks>
+    public int? CursorForStandby(string cueId) =>
+        _graph.TryGetCue(cueId, out var cue) ? cue.Number - 1 : null;
+
     /// <summary>The next <paramref name="count"/> clip-bound cue ids on a group after <paramref name="cursor"/> -
     /// what the engine pre-rolls so the next GO opens warm.</summary>
     public IReadOnlyList<string> UpcomingCueIds(string groupId, string defaultGroup, int cursor, int count) =>

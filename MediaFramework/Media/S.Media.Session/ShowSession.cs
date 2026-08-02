@@ -97,6 +97,26 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         new Dictionary<string, ClipCompositionRuntime>(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime.LayerSlot> _testPatternSlots = new(StringComparer.Ordinal);
     private IReadOnlyList<OutputPatchRoute> _routes = [];
+
+    /// <summary>
+    /// Each group's GO cursor: the number of the last cue fired there, or <see cref="int.MinValue"/> for
+    /// "nothing yet". Dispatcher-confined.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Held here rather than on <c>TransportGroup</c> because it is a per-LIST position, not a property of a
+    /// live playing object. On the group it died whenever the group did - and a reload disposes every group
+    /// that is not actively sounding, so a list you had GO'd partway through and then stopped silently
+    /// rewound to the top on the next edit. Edits are the app's normal path (debounced ~300 ms after any
+    /// structural change), which made that the common case rather than an edge one.
+    /// </para>
+    /// <para>Cursors persist across a preserving reload and are cleared by a non-preserving one - the same
+    /// opt-in that distinguishes "this is an edit of the running show" from "this is a different show".</para>
+    /// </remarks>
+    private readonly Dictionary<string, int> _goCursors = new(StringComparer.Ordinal);
+
+    /// <summary>This group's GO cursor. <see cref="int.MinValue"/> when nothing has fired there yet.</summary>
+    private int GetGoCursor(string groupId) => _goCursors.GetValueOrDefault(groupId, int.MinValue);
     private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
     private readonly SessionDispatcher _dispatcher;
     private readonly Func<string, int, int, int, IVideoOverlaySource?>? _subtitleFactory;
@@ -163,7 +183,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         FireCueIndependentAtBarrierAsync(cueId, independentGroupId, waitForStartBarrier, cancellationToken);
 
     Task<(int Cursor, int Generation)> ICueRunnerHost.ReadGoCursorAsync(string groupId) =>
-        InvokeAsync(() => Task.FromResult((GetOrAddGroup(groupId).LastFiredNumber, _showGeneration)));
+        InvokeAsync(() => Task.FromResult((GetGoCursor(groupId), _showGeneration)));
 
     Task ICueRunnerHost.AdvanceGoCursorAsync(string groupId, int number, int generation) =>
         AdvanceGoCursorAsync(groupId, number, generation);
@@ -600,8 +620,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// mutually exclusive with the app's normal editing loop.
     /// </para>
     /// <para>
-    /// A retained group also keeps its <c>LastFiredNumber</c> GO cursor, which is the per-list playhead
-    /// multi-list transport needs to survive an edit.
+    /// GO cursors are no longer tied to this decision at all - they live on the session (<c>_goCursors</c>)
+    /// and survive any preserving reload, playing or not.
     /// </para>
     /// </remarks>
     private HashSet<string> RetainableGroupIds(
@@ -791,6 +811,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         ReattachPersistentVisualizers(visualizersToReattach);
         PublishCompositionsView(); // refresh the lock-free health-poll view for the new composition set
 
+        // A non-preserving load is "a different show", so its lists start at the top; a preserving load is an
+        // edit of the running show and must not rewind every list's playhead.
+        if (!preserveActiveGroups)
+            _goCursors.Clear();
         _fires.Commit(newCueGraph);
         _clipsById = newClipsByCue;
         _routes = document.Routes;
@@ -1268,7 +1292,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         var group = GetOrAddGroup(groupId);
         var specs = new List<ClipSpec>();
         // Which cues come next is the cue layer's call; turning them into openable specs is the engine's.
-        foreach (var cueId in _fires.UpcomingCueIds(groupId, DefaultGroup, group.LastFiredNumber, count))
+        foreach (var cueId in _fires.UpcomingCueIds(groupId, DefaultGroup, GetGoCursor(groupId), count))
         {
             if (_clipsById.TryGetValue(cueId, out var binding))
                 specs.Add(BuildClipSpec(binding));

@@ -1538,14 +1538,14 @@ needed nothing), the state is:
 | Audio (framework) | 11 | **10** | raw-terminal (exclusive) line acquisition — half app-side (§7.1) |
 | Video | 9 | **8** | GL-backend surfacing in a host UI (app-side) |
 | Control | 9 | **4** | external-input gate; per-endpoint test message; session lifecycle glue + learn (app-side) |
-| Session | 6 | **5** | per-list standby pointer (blocks remote `/lists/{id}/go`) |
+| Session | 6 | **6** | — |
 | Automation | 4 | **2** | group-level lanes (RESOLVED: flatten in the mapper, no framework work) |
 | Diagnostics | 3 | **2** | validator severity levels |
 | Fades | 3 | **1** | — the other two were re-scoped into the landed curve work |
 | Build | 4 | **1** | second AOT head + CI gates; per-app settings roots (both app-side) |
 | Everything else (status, remote, app-support) | ~8 | 0 | all Phase-2 app-side |
 
-So roughly **35 of ~41 work items**, but that understates the weight: the recovered bay is the single
+So roughly **36 of ~41 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1575,7 +1575,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Audio | Terminal state vocabulary | ✅ **LANDED** — `TerminalState` (master/open/behind/quarantined). `absent` deliberately excluded: presence is a host fact the bay cannot know | §6.2 |
 | Audio | Lease rows exposed | ✅ **LANDED** — all leases feed the one program bus, so they are listed beside terminals rather than nested under one | §6.2 |
 | Session | N list-scoped transport groups + per-group GO cursor | EXISTS | §2.1 |
-| Session | Standby / next-cue pointer | ABSENT (app-level only) | §2.1 |
+| Session | Standby / next-cue pointer | ✅ **LANDED** — GO cursors moved onto the session (survive a preserving reload, playing or not) + public `GetStandbyCueAsync`/`SetStandbyCueAsync` per group | §2.1 |
 | Session | **Non-destructive document load** | ✅ **LANDED** — `preserveActiveGroups` retains unchanged groups + their GO cursors | §2.1 |
 | Session | Per-cue `Disabled` | EXISTS in framework, ABSENT in app model | §2.2 |
 | Fades | Centralised curve math | EXISTS (`FadeCurves`) | §3.1 |
@@ -1610,7 +1610,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Control | Transport-neutral chase contract | ✅ **LANDED** — `MidiTimecodeChaseClock.FeedFrame(value)` ingests whole frames from any transport | §5.4a |
 | Control | LTC generation | ✅ **LANDED** — `LinearTimecodeGenerator`, pull-based, exact-rational frame length; round-trips through the decoder at all 4 rates | §5.4a |
 | Remote | Route table / self-documentation / counters | ABSENT (hand-written switch) | §5.5 |
-| Remote | `POST /lists/{id}/go` | Blocked on per-list standby, not on routing | §5.5 |
+| Remote | `POST /lists/{id}/go` | **UNBLOCKED** — per-list standby landed; remains app-side routing work | §5.5 |
 | Endpoints | Per-endpoint configurable test message | ABSENT (probes hardcoded; MIDI sends nothing) | §5.6 |
 | App support | `HaOutput` engine | EXISTS, 8 couplings to invert | §7.1 |
 | App support | `IOutputRuntimeCatalog` | ABSENT (6 extraction sites) | §7.1 |

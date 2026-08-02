@@ -191,9 +191,48 @@ public sealed partial class ShowSession
         InvokeAsync(() =>
         {
             if (_showGeneration == generation)
-                GetOrAddGroup(groupId).LastFiredNumber = number;
+                _goCursors[groupId] = number;
             return Task.CompletedTask;
         });
+
+    /// <summary>
+    /// What GO would fire next on <paramref name="groupId"/> - the list's standby cue - without firing it.
+    /// Null when the list has run out or has no armed, enabled cue after its cursor.
+    /// </summary>
+    /// <remarks>Each cue list is its own transport group, so this is per-list standby: a host (or the
+    /// remote API) can show and drive several lists independently off one session.</remarks>
+    public Task<CueDefinition?> GetStandbyCueAsync(string groupId = DefaultGroup)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _fires.PeekNextAsync(groupId);
+    }
+
+    /// <summary>
+    /// Moves a list's GO cursor so <paramref name="cueId"/> becomes standby. Null rewinds to the top.
+    /// </summary>
+    /// <returns>False when <paramref name="cueId"/> names no cue - the cursor is left alone.</returns>
+    /// <remarks>
+    /// Sets the position only; nothing is armed, opened or played, so this is safe to call on a list that is
+    /// currently sounding - the running clip is untouched and the change takes effect at the next GO.
+    /// </remarks>
+    public Task<bool> SetStandbyCueAsync(string? cueId, string groupId = DefaultGroup)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupId);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return InvokeAsync(() =>
+        {
+            if (cueId is null)
+            {
+                _goCursors.Remove(groupId); // back to "nothing fired yet"
+                return Task.FromResult(true);
+            }
+
+            if (_fires.CursorForStandby(cueId) is not { } cursor)
+                return Task.FromResult(false);
+            _goCursors[groupId] = cursor;
+            return Task.FromResult(true);
+        });
+    }
 
     /// <summary>Seeks the active clip on <paramref name="groupId"/> (coordinated A/V seek).</summary>
     public Task SeekAsync(TimeSpan position, string groupId = DefaultGroup) =>

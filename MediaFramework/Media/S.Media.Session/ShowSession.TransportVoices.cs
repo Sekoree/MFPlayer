@@ -470,7 +470,6 @@ public sealed partial class ShowSession
         /// </remarks>
         private const int MaxReleasingVoices = 3;
 
-        public int LastFiredNumber { get; set; } = int.MinValue;
 
         /// <summary>True while the host holds this group paused (Set(All)PausedAsync). The end monitor's
         /// stall-at-EOF check reads it so a paused clip's stopped clock is never mistaken for a natural end.
