@@ -17,18 +17,34 @@ namespace HaCue2.Sample;
 /// </remarks>
 public static class SampleRuntime
 {
+    /// <summary>
+    /// Invented telemetry for the SAMPLE show, or nothing at all for any other project.
+    /// </summary>
+    /// <remarks>
+    /// The guard is load-bearing now that the app can open real files. Every value below is written
+    /// against the midsummer-2026 show by name — Q13.1, the Wedge, the Lobby TV — and none of it means
+    /// anything about somebody else's project. Inventing sounding cues for a show that has none would
+    /// be worse than showing an idle one; and before the guard existed, opening any other project
+    /// simply threw.
+    /// </remarks>
     public static ShowRuntime For(HaCueProject project)
     {
-        var act1 = project.CueLists.First(list => list.Name == "Act 1");
+        if (project.CueLists.FirstOrDefault(list => list.Name == "Act 1") is not { } act1
+            || project.CueLists.FirstOrDefault(list => list.Name == "Preshow") is not { } preshow
+            || project.AudioLines.FirstOrDefault(line => line.Name == "Wedge") is not { } wedge
+            || project.VideoOutputs.FirstOrDefault(output => output.Name == "Lobby TV") is not { } lobbyTv)
+        {
+            // A real project gets an idle runtime: nothing sounding, no meters, no invented log. Which
+            // is exactly what the shell should show for a show that is not running.
+            return ShowRuntime.Idle;
+        }
+
         var preshowBed = Find(act1, "12");
         var opening = Find(act1, "13");
         var stormBed = Find(act1, "13.1");
         var rain = Find(act1, "13.2");
         var intervalMusic = Find(act1, "15");
-        var walkIn = Find(project.CueLists.First(list => list.Name == "Preshow"), "2");
-
-        var wedge = project.AudioLines.First(line => line.Name == "Wedge");
-        var lobbyTv = project.VideoOutputs.First(output => output.Name == "Lobby TV");
+        var walkIn = Find(preshow, "2");
 
         var channels = project.AudioPatch.LogicalChannels.ToDictionary(channel => channel.Name);
 

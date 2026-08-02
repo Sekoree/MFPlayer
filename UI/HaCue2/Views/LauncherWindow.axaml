@@ -92,7 +92,7 @@
         <c:PanelBox Grid.Row="0" Header="Start">
           <StackPanel Margin="0,8,0,8">
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="primary block" Content="NEW PROJECT…" />
+              <Button Classes="primary block" Content="NEW PROJECT…" Click="OnNewProject" />
             </ContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
               <Button Classes="block" Content="OPEN…" Click="OnOpenExisting" />

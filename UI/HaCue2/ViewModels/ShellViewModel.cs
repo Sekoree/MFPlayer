@@ -126,9 +126,71 @@ public partial class ShellViewModel : ObservableObject
 
     public IReadOnlyList<string> Views { get; } = [CuesView, AudioView, VideoView, TargetsView];
 
+    /// <summary>
+    /// Where this project lives on disk, or empty when it has never been saved.
+    /// </summary>
+    /// <remarks>
+    /// Tracked here rather than on the document because it is not a property of the SHOW — the same
+    /// file copied to a booth machine is the same show at a different path, and writing the path into
+    /// the document would make every copy differ from its original for no reason.
+    /// </remarks>
+    public string Path { get; private set; } = "";
+
+    public bool HasPath => Path.Length > 0;
+
     /// <summary>The title bar's project name, with the mockup's unsaved marker.</summary>
     public string ProjectFile =>
-        Project.Title + HaCueProjectFile.Extension + (Journal.IsDirty ? " *" : "");
+        (HasPath ? System.IO.Path.GetFileName(Path) : Project.Title + HaCueProjectFile.Extension)
+        + (Journal.IsDirty ? " *" : "");
+
+    /// <summary>What the last file operation said, for the status bar.</summary>
+    [ObservableProperty]
+    private string _fileMessage = "";
+
+    /// <summary>
+    /// Saves to a known path, or reports that one is needed.
+    /// </summary>
+    /// <remarks>
+    /// Returns false when there is nowhere to save YET, so the caller opens Save As rather than this
+    /// silently doing nothing — a Ctrl+S that appears to work and did not is the worst outcome here.
+    /// </remarks>
+    public async Task<bool> SaveAsync()
+    {
+        if (!HasPath)
+            return false;
+
+        await SaveToAsync(Path).ConfigureAwait(true);
+        return true;
+    }
+
+    /// <summary>Saves to a path the operator chose, and adopts it.</summary>
+    public async Task SaveToAsync(string path)
+    {
+        var result = await ProjectFiles.SaveAsync(Project, ProjectFiles.WithExtension(path))
+            .ConfigureAwait(true);
+
+        FileMessage = result.Message;
+
+        if (!result.Succeeded)
+            return;
+
+        Path = result.Path;
+        // Clean means "matches the file", so this is the ONE place the flag may be cleared: after a
+        // write that actually happened.
+        Journal.MarkSaved();
+        Refresh();
+        OnPropertyChanged(nameof(Path));
+        OnPropertyChanged(nameof(HasPath));
+    }
+
+    /// <summary>Adopts a path for a project that was just opened from it.</summary>
+    public void AdoptPath(string path)
+    {
+        Path = path;
+        OnPropertyChanged(nameof(Path));
+        OnPropertyChanged(nameof(HasPath));
+        OnPropertyChanged(nameof(ProjectFile));
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CurrentPane))]

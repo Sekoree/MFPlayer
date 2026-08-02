@@ -27,5 +27,22 @@ public partial class TimelineSheet : UserControl
 
     private void OnClipGestureCompleted(object? sender, EventArgs e) => Timeline?.EndGesture();
 
+    /// <summary>
+    /// Ducks the clip the tree has selected under everything overlapping it.
+    /// </summary>
+    /// <remarks>
+    /// The BED is the selected cue, not a separate pick: the operator is looking at the lane they want
+    /// pushed down, and asking them to choose it again in a dialog is a question they already answered.
+    /// </remarks>
+    private void OnDuck(object? sender, RoutedEventArgs e)
+    {
+        if (Timeline is not { } timeline
+            || this.FindAncestorOfType<CuesView>()?.DataContext is not CuesViewModel cues
+            || cues.SelectedCue is not { } selected)
+            return;
+
+        PromptWindow.Show(this, timeline.Duck(selected.Id), timeline.Refresh);
+    }
+
     private TimelineViewModel? Timeline => DataContext as TimelineViewModel;
 }

@@ -6,6 +6,7 @@ using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
+using HaCue2.Core.Timeline;
 using HaCue2.Presentation;
 using HaCue2.Session;
 
@@ -478,6 +479,99 @@ public sealed partial class TimelineViewModel : ObservableObject
     {
         _drag?.Dispose();
         _drag = null;
+    }
+
+    /// <summary>
+    /// Ducks the selected clip under everything else that overlaps it.
+    /// </summary>
+    /// <remarks>
+    /// An AUTHORING helper: it writes ordinary keyframes into the bed's own volume lane, so the
+    /// operator can see exactly what will happen and drag it afterwards. A live side-chain would be
+    /// invisible during the show, which is when it matters.
+    /// </remarks>
+    public PromptViewModel? Duck(Guid bedId)
+    {
+        // The bed must be IN this group. FindCue searches the whole show, and ducking a cue that is
+        // not on this timeline under cues that are is a sentence with no meaning.
+        if (_group is null
+            || _journal is null
+            || _group.Children.FirstOrDefault(child => child.Id == bedId) is not MediaCueNode bed)
+            return null;
+
+        var voices = _group.Children
+            .Where(child => child.Id != bedId && child is MediaCueNode or GroupCueNode)
+            .Select(Span)
+            .Where(span => span.LengthMs > 0)
+            .ToList();
+
+        if (voices.Count == 0)
+            return null;
+
+        return new PromptViewModel(
+            $"Duck “{bed.Label}”",
+            $"under {voices.Count} overlapping cue(s) · writes keyframes you can drag",
+            [
+                new PromptField { Label = "Depth", Kind = PromptFieldKind.Number, Value = "-12", Hint = "dB" },
+                new PromptField { Label = "Ramp", Kind = PromptFieldKind.Number, Value = "500", Hint = "ms each side" },
+                new PromptField
+                {
+                    Label = "Lead",
+                    Kind = PromptFieldKind.Number,
+                    Value = "250",
+                    Hint = "ms · how early it dips and how late it recovers",
+                },
+            ],
+            prompt =>
+            {
+                var lane = bed.EffectLanes.FirstOrDefault(item => item.Kind == EffectLaneKind.Volume);
+                var span = Span(bed);
+
+                var ducked = DuckMath.ApplyDucks(
+                    lane?.Points ?? [],
+                    span.StartMs,
+                    span.LengthMs,
+                    voices,
+                    prompt["Depth"].Decimal(-12),
+                    prompt["Ramp"].Number(500),
+                    prompt["Lead"].Number(250));
+
+                using var scope = _journal.Composite($"duck “{bed.Label}”", "cues");
+
+                if (lane is null)
+                {
+                    // The bed has no volume lane yet. Adding one is part of the same edit — an undo
+                    // that left an empty lane behind would leave the cue changed in a way nobody asked
+                    // for (register item 18: lanes are hidden until added).
+                    var added = new EffectLane { Kind = EffectLaneKind.Volume, Points = [.. ducked] };
+                    _journal.Do(new AddItemCommand<EffectLane>(
+                        bed.EffectLanes, added, bed.EffectLanes.Count, "cues", "add volume lane"));
+                }
+                else
+                {
+                    var target = lane;
+                    _journal.Do(new SetValueCommand<List<LanePoint>>(
+                        bed.Id, $"lane:{lane.Id}", "cues",
+                        () => target.Points, points => target.Points = points, [.. ducked],
+                        "duck under the voice-over"));
+                }
+
+                Refresh();
+            },
+            confirm: "DUCK");
+    }
+
+    /// <summary>Where a child sits on the group's timeline, and for how long.</summary>
+    private TimelineSpan Span(CueNode cue)
+    {
+        var length = cue is MediaCueNode media
+            ? media.TrimmedLength(_runtime.MediaDurations.TryGetValue(cue.Id, out var probed) ? probed : null)
+            : null;
+
+        // An unprobed, untrimmed cue has no honest length. Eight seconds is the same nominal the
+        // timeline DRAWS with, so the dip matches the block the operator is looking at.
+        var lengthMs = (int)(length?.TotalMilliseconds ?? 8_000);
+
+        return new TimelineSpan(cue.TimelineOffsetMs, cue.TimelineOffsetMs + lengthMs);
     }
 
     /// <summary>Re-reads the lanes and the ruler from the document.</summary>

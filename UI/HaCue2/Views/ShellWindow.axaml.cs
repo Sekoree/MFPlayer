@@ -2,6 +2,8 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Platform.Storage;
+using HaCue2.Session;
 using HaCue2.ViewModels;
 
 namespace HaCue2.Views;
@@ -56,9 +58,51 @@ public partial class ShellWindow : Window
                 shell.Redo();
                 e.Handled = true;
                 return;
+
+            // Save is a window key for the same reason undo is: it is about the DOCUMENT, and which
+            // view happens to be focused has nothing to do with it.
+            case Key.S when control && !shift:
+                _ = SaveAsync(shell);
+                e.Handled = true;
+                return;
+
+            case Key.S when control && shift:
+                _ = SaveAsAsync(shell);
+                e.Handled = true;
+                return;
         }
 
         base.OnKeyDown(e);
+    }
+
+    /// <summary>
+    /// Saves, asking where only when there is nowhere yet.
+    /// </summary>
+    /// <remarks>
+    /// The fallback matters: a Ctrl+S on a project that has never been saved must open Save As rather
+    /// than appearing to work and writing nothing, which is the worst outcome this code can produce.
+    /// </remarks>
+    private async Task SaveAsync(ShellViewModel shell)
+    {
+        if (!await shell.SaveAsync())
+            await SaveAsAsync(shell);
+    }
+
+    private async Task SaveAsAsync(ShellViewModel shell)
+    {
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Save project",
+            SuggestedFileName = shell.Project.Title,
+            DefaultExtension = ProjectFiles.Extension.TrimStart('.'),
+            FileTypeChoices =
+            [
+                new FilePickerFileType("HaCue2 project") { Patterns = [$"*{ProjectFiles.Extension}"] },
+            ],
+        });
+
+        if (file?.TryGetLocalPath() is { } path)
+            await shell.SaveToAsync(path);
     }
 
     private void OnHideDrawer(object? sender, RoutedEventArgs e)

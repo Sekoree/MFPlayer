@@ -19,6 +19,35 @@ public partial class LauncherViewModel : ObservableObject
     /// <summary>Raised when a recent is opened; the App swaps the launcher for the shell.</summary>
     public event Action<RecentProjectRow>? ProjectRequested;
 
+    /// <summary>Raised with a project the launcher loaded or created, and where it came from.</summary>
+    public event Action<HaCueProject, string>? ProjectOpened;
+
+    /// <summary>What went wrong with the last open, for the launcher's own line.</summary>
+    [ObservableProperty]
+    private string _openFailure = "";
+
+    /// <summary>Hands a loaded project to the shell.</summary>
+    public void Adopt(HaCueProject project, string path) => ProjectOpened?.Invoke(project, path);
+
+    /// <summary>The prompt behind "New project…".</summary>
+    public PromptViewModel NewProject() =>
+        new(
+            "New project",
+            "seeded with a Main L/R pair and one cue list",
+            [
+                new PromptField { Label = "Name", Value = "Untitled show" },
+                new PromptField
+                {
+                    Label = "Media root",
+                    Value = "",
+                    Hint = "where this show's media lives · relinking searches under it",
+                },
+            ],
+            prompt => Adopt(
+                ProjectFiles.Create(prompt["Name"].Value.Trim(), prompt["Media root"].Value.Trim()),
+                ""),
+            confirm: "CREATE");
+
     public IReadOnlyList<RecentProjectRow> Recents { get; } = SampleShow.Recents;
     public IReadOnlyList<LogLine> MachineChecks { get; } = SampleShow.MachineChecks;
     public string RecoveryNotice { get; } = SampleShow.RecoveryNotice;

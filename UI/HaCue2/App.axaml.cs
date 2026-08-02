@@ -42,11 +42,25 @@ public partial class App : Application
     {
         var vm = new LauncherViewModel();
         var window = new LauncherWindow { DataContext = vm };
+
         vm.ProjectRequested += _ =>
         {
             OpenShell().Show();
             window.Close();
         };
+
+        // A project the launcher actually loaded or created, rather than the sample.
+        vm.ProjectOpened += (project, path) =>
+        {
+            var shell = new ShellViewModel(project, Machine);
+
+            if (path.Length > 0)
+                shell.AdoptPath(path);
+
+            new ShellWindow { DataContext = shell }.Show();
+            window.Close();
+        };
+
         return window;
     }
 
