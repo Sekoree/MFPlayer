@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The headless twin of the Project status view: same checks, an exit code, and a machine-readable
+         report. It exists as its own console binary rather than a flag on the desktop app because that
+         app is a WinExe — on Windows it has no console attached, so a check verb there would print
+         its report into nowhere. A pre-show script and a CI gate both need stdout.
+
+         NAMING IS DRAFT (audit decision D9): the plan writes this as a flag on `hacue2`, and whether it
+         ends up a verb on the app or this separate binary is unsettled. The CHECKS are the product; the
+         command that runs them is a wrapper either way. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>HaCue2.Check</RootNamespace>
+        <AssemblyName>hacue2-check</AssemblyName>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
+    </ItemGroup>
+
+</Project>

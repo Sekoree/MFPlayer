@@ -130,6 +130,9 @@ public sealed class ArchitectureTests
             "S.Media.Session", "S.Media.Core", "S.Media.Time", "S.Media.Routing", "S.Media.Players",
             "S.Media.Compositor", "S.Media.Gpu",
         ],
+        // The headless status runner: the project model and nothing else, which is what lets it run
+        // where no audio backend or window system exists.
+        ["HaCue2.Check"] = ["HaCue2.Core"],
         // A desktop head is a composition root: it references its app and nothing else.
         ["HaCue2.Desktop"] = ["HaCue2"],
         ["HaPlay.Desktop"] = ["HaPlay"],
