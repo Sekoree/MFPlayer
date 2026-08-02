@@ -849,8 +849,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             var generation = _showGeneration;
             var grp = GetOrAddGroup(groupId);
             // Compositions are resolved per-placement in CommitClipAsync (also on the dispatcher) so a clip can
-            // fan onto several - the group + generation are all the pre-open setup needs.
-            return Task.FromResult((generation, group: grp));
+            // fan onto several - the group, generation and open ticket are all the pre-open setup needs.
+            return Task.FromResult((generation, group: grp, ticket: grp.NextOpenTicket()));
         }).ConfigureAwait(false);
 
         // --- OPEN (OFF the dispatcher): arm the clip through the standby engine - it opens via the registry
@@ -894,11 +894,16 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         string groupId,
         ShowClipBinding binding,
         CancellationToken cancellationToken,
-        (int generation, TransportGroup group) setup,
+        (int generation, TransportGroup group, long ticket) setup,
         IArmedClip armed,
         (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
     {
-        if (cancellationToken.IsCancellationRequested || _showGeneration != setup.generation || _disposed)
+        // Superseded by a later open on the same group (see TransportGroup.OpenSequence), cancelled, or
+        // straddling a reload - discard without touching the live show.
+        if (cancellationToken.IsCancellationRequested
+            || _showGeneration != setup.generation
+            || setup.group.OpenSequence != setup.ticket
+            || _disposed)
         {
             await armed.ReleaseAsync().ConfigureAwait(false);
             return;

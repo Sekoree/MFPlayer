@@ -99,7 +99,7 @@ public partial class PipelineStatsViewModel : ViewModelBase
         foreach (var clip in clips)
         {
             var m = clip.Metrics;
-            var clipLabel = clip.CueId is { Length: > 0 } cue ? $"{sessionName} · {cue}" : sessionName;
+            var clipLabel = clip.ClipId is { Length: > 0 } id ? $"{sessionName} · {id}" : sessionName;
 
             if (m.Video is { } video && (video.DecodedCount > 0 || video.QueueDepth > 0))
             {

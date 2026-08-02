@@ -468,6 +468,23 @@ public sealed partial class ShowSession
         /// is what the voice budget has to be checked against, not this constant alone.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Monotonic counter of opens started against this group; a commit whose ticket is no longer the
+        /// latest discards its clip.
+        /// </summary>
+        /// <remarks>
+        /// Gives "the last clip ASKED for is the one that plays" regardless of how long each open took. The
+        /// cue path never needed it because the fire-lock serialises fires, but the cue-free
+        /// <c>PlayClipAsync</c> has no such lock - so without this, two rapid opens on one group race, and a
+        /// slow FIRST open could commit after a fast second one and leave the wrong clip playing. Ordering by
+        /// request rather than by open duration is also the better answer: it is what a deck's rapid track
+        /// changes mean.
+        /// </remarks>
+        public long OpenSequence { get; private set; }
+
+        /// <summary>Takes the next open ticket. Dispatcher-confined, like every other group mutation.</summary>
+        public long NextOpenTicket() => ++OpenSequence;
+
         private const int MaxReleasingVoices = 3;
 
 

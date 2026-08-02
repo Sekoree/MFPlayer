@@ -31,7 +31,7 @@ public sealed class PipelineMetricsTests
 
         var entry = Assert.Single(session.GetActiveClipPipelineMetrics());
         Assert.Equal(ShowSession.DefaultGroup, entry.GroupId);
-        Assert.Equal("cue1", entry.CueId);
+        Assert.Equal("cue1", entry.ClipId);
         Assert.NotNull(entry.Metrics);
         Assert.NotNull(entry.Metrics.Clock);
     }

@@ -357,11 +357,11 @@ public sealed partial class ShowSession
     }
 
     /// <summary>One active clip's full pipeline snapshot for the debug-stats poll: the transport group it
-    /// plays in, the cue id, and the player's <see cref="S.Media.Players.MediaPlayerMetrics"/> (decode
+    /// plays in, the clip id, and the player's <see cref="S.Media.Players.MediaPlayerMetrics"/> (decode
     /// timing, jitter-buffer depth, router mix timing, per-output pump queues/drops/submit timing).</summary>
     public sealed record ActiveClipPipelineMetrics(
         string GroupId,
-        string? CueId,
+        string? ClipId,
         S.Media.Players.MediaPlayerMetrics Metrics);
 
     /// <summary>Lock-free pipeline metrics for every group's active clip - the debug-stats analogue of

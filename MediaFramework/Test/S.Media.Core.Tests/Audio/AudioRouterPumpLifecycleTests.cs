@@ -173,11 +173,16 @@ public sealed class AudioRouterPumpLifecycleTests
                 $"RemoveOutput must not join the wedged drainer inline (took {sw.ElapsedMilliseconds}ms)");
 
             // Continuity: the run loop keeps mixing while the quarantine join runs in the background.
-            // At 64-sample chunks the wall clock paces ~750 chunks/s; a stalled loop delivers ~0.
+            //
+            // Phrased as "does it make progress at all, given time" rather than "does it hit a throughput
+            // floor inside a fixed sleep". The property under test is stalled-vs-running, and a stalled loop
+            // delivers exactly 0 no matter how long you wait - so a generous poll separates the two just as
+            // sharply while a rate assertion also fails whenever the machine is merely busy (this flaked
+            // roughly 1 run in 10 under a full-solution run).
             var before = healthy.SubmitCount;
-            Thread.Sleep(500);
-            var grown = healthy.SubmitCount - before;
-            Assert.True(grown > 50, $"run loop stalled during quarantine: only {grown} chunks in 500ms");
+            Assert.True(
+                SpinUntil(() => healthy.SubmitCount - before > 20, 5000),
+                $"run loop stalled during quarantine: only {healthy.SubmitCount - before} chunks in 5s");
 
             // The background teardown eventually gives up joining, leaks the pump, and reports it.
             Assert.True(SpinUntil(() => r.StuckOutputPumpIds.Contains("bad"), 6000),

@@ -107,6 +107,29 @@ public sealed class CueFreeCoreTests
     }
 
     [Fact]
+    public async Task OverlappingPlaysOnOneGroup_LeaveExactlyOneClipActive()
+    {
+        await using var session = new ShowSession(
+            ToneAudioDecoderProvider.Registry(),
+            new RecordingAudioBackend(),
+            audioOutputFactory: (_, format) => new ClipAudioOutputLease(new DiscardingAudioOutput(format)));
+        await session.LoadDocumentAsync(ClipsOnly("first", "second"));
+
+        // The cue path serialises through the fire-lock; the cue-free path has none, so two overlapping opens
+        // on one group must still resolve to a single consistent voice rather than two actives or a torn
+        // group. WHICH one wins is decided by open ticket (TransportGroup.OpenSequence) - deliberately not
+        // asserted here, because with both calls started concurrently the order in which they reach the
+        // dispatcher is not itself defined, so an assertion on it would be testing the scheduler.
+        await Task.WhenAll(
+            session.PlayClipAsync("first", "deck"),
+            session.PlayClipAsync("second", "deck"));
+
+        var active = Assert.Single(session.GetActiveClipPipelineMetrics(), m => m.GroupId == "deck");
+        Assert.Contains(active.ClipId, (string[])["first", "second"]);
+        Assert.Single(await session.SnapshotAsync(), g => g.GroupId == "deck");
+    }
+
+    [Fact]
     public async Task CuesAndCueFreeClipsCoexistInOneDocument()
     {
         await using var session = new ShowSession(
