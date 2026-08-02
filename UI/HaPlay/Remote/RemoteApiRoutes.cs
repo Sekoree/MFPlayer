@@ -3,76 +3,137 @@ using System.Threading;
 
 namespace HaPlay.Remote;
 
-/// <summary>One documented route: what it answers to, and what it does.</summary>
-/// <param name="Method">The single legal application method (<c>GET</c> or <c>POST</c>).</param>
-/// <param name="Pattern">The path as an operator reads it, e.g. <c>/api/v1/cues/{cue}/go</c>.</param>
-/// <param name="Summary">One line describing the effect.</param>
-public sealed record RemoteApiRoute(string Method, string Pattern, string Summary);
+/// <summary>One documented and enforced route family: what it answers to, and what it does.</summary>
+public sealed class RemoteApiRoute
+{
+    private readonly Func<string[], bool> _matchesRest;
+
+    internal RemoteApiRoute(
+        string method,
+        string pattern,
+        string summary,
+        string domain,
+        Func<string[], bool> matchesRest,
+        params string[] probePaths)
+    {
+        Method = method;
+        Pattern = pattern;
+        Summary = summary;
+        Domain = domain;
+        _matchesRest = matchesRest;
+        ProbePaths = Array.AsReadOnly(probePaths);
+    }
+
+    /// <summary>The single legal application method (<c>GET</c> or <c>POST</c>).</summary>
+    public string Method { get; }
+
+    /// <summary>The path as an operator reads it, e.g. <c>/api/v1/cues/{cue}/go</c>.</summary>
+    public string Pattern { get; }
+
+    /// <summary>One line describing the effect.</summary>
+    public string Summary { get; }
+
+    internal string Domain { get; }
+
+    /// <summary>Concrete paths covering every alternative accepted by this route family. These make the
+    /// documentation-to-dispatch relationship executable in tests rather than merely aspirational.</summary>
+    internal IReadOnlyList<string> ProbePaths { get; }
+
+    internal bool Matches(string domain, string[] rest) =>
+        string.Equals(domain, Domain, StringComparison.Ordinal) && _matchesRest(rest);
+}
 
 /// <summary>
-/// The remote API's route table: the one place that knows which domains exist, which method each takes,
-/// and what each does.
+/// The remote API's route table: the one place that defines which path shapes exist, which method each
+/// takes, and how each is presented to an operator.
 /// </summary>
 /// <remarks>
-/// <para>
-/// Dispatch itself stays a nested switch - it does real per-domain work (1-based indices, playlist
-/// addressing, query parameters) that a generic matcher would only obscure. What moved here is everything
-/// that was previously <em>restated</em>: the method rule and the human-readable surface.
-/// </para>
-/// <para>
-/// The method rule had been written twice - once in the request gate, once in <c>AllowedMethodsFor</c> -
-/// and they drifted the moment a domain was added: <c>/lists</c> advertised <c>GET</c> in its <c>Allow</c>
-/// header and then answered 405 to a GET. One table means the header and the gate cannot disagree.
-/// </para>
-/// <para>
-/// The surface used to live only in a class comment, which is why the API could not describe itself.
-/// <c>GET /api/v1/endpoints</c> now serves this table, and a test asserts every domain named here is one
-/// the dispatcher actually handles - a comment cannot be checked, a table can.
-/// </para>
+/// Dispatch remains a nested switch because its per-domain work is clearer that way. Admission does not:
+/// <see cref="TryMatch"/> gates every request through this table before a handler runs, so a documented
+/// route cannot accept a different method and an undocumented suffix cannot accidentally reach a handler.
+/// The concrete probe paths additionally exercise every accepted verb in the dispatcher tests.
 /// </remarks>
 public static class RemoteApiRoutes
 {
-    /// <summary>Every route the API answers, in the order an operator would read them.</summary>
-    public static IReadOnlyList<RemoteApiRoute> All { get; } =
+    private static bool Is(string value, string expected) =>
+        value.Equals(expected, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsOneOf(string value, params string[] expected) =>
+        expected.Any(item => Is(value, item));
+
+    /// <summary>Every route family the API answers, in the order an operator would read them.</summary>
+    public static IReadOnlyList<RemoteApiRoute> All { get; } = Array.AsReadOnly<RemoteApiRoute>(
     [
-        new("GET", "/api/v1/status", "Whether the API is reachable, and its bind/auth posture."),
-        new("GET", "/api/v1/endpoints", "This table."),
-        new("POST", "/api/v1/cues/go|pause|resume|stop|panic", "Transport for the selected cue list."),
-        new("POST", "/api/v1/cues/{cue}/go|stop", "One cue, resolved in the selected list first."),
-        new("GET", "/api/v1/lists", "The loaded cue lists."),
-        new("POST", "/api/v1/lists/{list}/cues/{cue}/go|stop", "One cue within a named list (unambiguous)."),
-        new("POST", "/api/v1/players/{player}/play|pause|toggle|stop|next|prev", "Deck transport."),
-        new("POST", "/api/v1/players/{player}/volume?db=-10", "Set a deck's output level in dB."),
-        new("POST", "/api/v1/players/{player}/hold[?on=true|false]", "Toggle a deck's hold-frame fallback."),
-        new("POST", "/api/v1/players/{player}/{playlist}/{item}[/play]", "Play one playlist item."),
-        new("POST", "/api/v1/soundboards/stop", "Stop every sounding tile."),
-        new("POST", "/api/v1/soundboards/{board}/{tile}[/tap|play|stop|fade]", "One soundboard tile."),
-        new("POST", "/api/v1/control/arm|disarm", "Arm or disarm the Control workspace."),
-    ];
+        new("GET", "/api/v1/status", "Whether the API is reachable, and its bind/auth posture.",
+            "status", static rest => rest.Length == 0,
+            "/api/v1/status"),
+        new("GET", "/api/v1/endpoints", "This table.",
+            "endpoints", static rest => rest.Length == 0,
+            "/api/v1/endpoints"),
+        new("POST", "/api/v1/cues/go|pause|resume|stop|panic", "Transport for the selected cue list.",
+            "cues", static rest => rest.Length == 1 && IsOneOf(rest[0], "go", "pause", "resume", "stop", "panic"),
+            "/api/v1/cues/go", "/api/v1/cues/pause", "/api/v1/cues/resume",
+            "/api/v1/cues/stop", "/api/v1/cues/panic"),
+        new("POST", "/api/v1/cues/{cue}/go|stop", "One cue, resolved in the selected list first.",
+            "cues", static rest => rest.Length == 2 && IsOneOf(rest[1], "go", "stop"),
+            "/api/v1/cues/__missing__/go", "/api/v1/cues/__missing__/stop"),
+        new("GET", "/api/v1/lists", "The loaded cue lists.",
+            "lists", static rest => rest.Length == 0,
+            "/api/v1/lists"),
+        new("POST", "/api/v1/lists/{list}/cues/{cue}/go|stop", "One cue within a named list (unambiguous).",
+            "lists", static rest => rest.Length == 4 && Is(rest[1], "cues") && IsOneOf(rest[3], "go", "stop"),
+            "/api/v1/lists/__missing__/cues/1/go", "/api/v1/lists/__missing__/cues/1/stop"),
+        new("POST", "/api/v1/players/{player}/play|pause|toggle|stop|next|prev|previous", "Deck transport.",
+            "players", static rest => rest.Length == 2
+                && IsOneOf(rest[1], "play", "pause", "toggle", "stop", "next", "prev", "previous"),
+            "/api/v1/players/1/play", "/api/v1/players/1/pause", "/api/v1/players/1/toggle",
+            "/api/v1/players/1/stop", "/api/v1/players/1/next", "/api/v1/players/1/prev",
+            "/api/v1/players/1/previous"),
+        new("POST", "/api/v1/players/{player}/volume?db=-10", "Set a deck's output level in dB.",
+            "players", static rest => rest.Length == 2 && Is(rest[1], "volume"),
+            "/api/v1/players/1/volume"),
+        new("POST", "/api/v1/players/{player}/hold[?on=true|false]", "Toggle a deck's hold-frame fallback.",
+            "players", static rest => rest.Length == 2 && Is(rest[1], "hold"),
+            "/api/v1/players/1/hold"),
+        new("POST", "/api/v1/players/{player}/{playlist}/{item}[/play]", "Play one playlist item.",
+            "players", static rest => (rest.Length == 3 || rest.Length == 4 && Is(rest[3], "play"))
+                && int.TryParse(rest[1], out _) && int.TryParse(rest[2], out _),
+            "/api/v1/players/1/1/1", "/api/v1/players/1/1/1/play"),
+        new("POST", "/api/v1/soundboards/stop", "Stop every sounding tile.",
+            "soundboards", static rest => rest.Length == 1 && Is(rest[0], "stop"),
+            "/api/v1/soundboards/stop"),
+        new("POST", "/api/v1/soundboards/{board}/{tile}[/tap|play|stop|fade]", "One soundboard tile.",
+            "soundboards", static rest => (rest.Length == 2 || rest.Length == 3
+                    && IsOneOf(rest[2], "tap", "play", "stop", "fade"))
+                && int.TryParse(rest[0], out _) && int.TryParse(rest[1], out _),
+            "/api/v1/soundboards/1/1", "/api/v1/soundboards/1/1/tap",
+            "/api/v1/soundboards/1/1/play", "/api/v1/soundboards/1/1/stop",
+            "/api/v1/soundboards/1/1/fade"),
+        new("POST", "/api/v1/control/arm|enable|disarm|disable", "Arm or disarm the Control workspace.",
+            "control", static rest => rest.Length == 1 && IsOneOf(rest[0], "arm", "enable", "disarm", "disable"),
+            "/api/v1/control/arm", "/api/v1/control/enable",
+            "/api/v1/control/disarm", "/api/v1/control/disable"),
+    ]);
 
     /// <summary>The domains the table covers, lower-cased.</summary>
     public static FrozenSet<string> Domains { get; } =
-        All.Select(DomainOf).Where(d => d.Length > 0).ToFrozenSet(StringComparer.Ordinal);
+        All.Select(route => route.Domain).ToFrozenSet(StringComparer.Ordinal);
 
-    /// <summary>
-    /// The one legal application method for a request. The single source of truth for both the request
-    /// gate and the <c>Allow</c> header.
-    /// </summary>
-    /// <param name="domain">First path segment after <c>/api/v1</c>, lower-cased.</param>
-    /// <param name="restSegments">How many segments follow it.</param>
-    public static string MethodFor(string domain, int restSegments) => domain switch
+    /// <summary>Resolves one exact path shape to its route family.</summary>
+    public static bool TryMatch(string domain, string[] rest, out RemoteApiRoute route)
     {
-        "status" or "endpoints" => "GET",
-        // The one mixed domain: the bare inventory reads, anything addressed under a list commands.
-        "lists" when restSegments == 0 => "GET",
-        _ => "POST",
-    };
+        ArgumentNullException.ThrowIfNull(domain);
+        ArgumentNullException.ThrowIfNull(rest);
+        foreach (var candidate in All)
+        {
+            if (!candidate.Matches(domain, rest))
+                continue;
+            route = candidate;
+            return true;
+        }
 
-    private static string DomainOf(RemoteApiRoute route)
-    {
-        var segments = route.Pattern.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        // api / v1 / {domain} / …
-        return segments.Length >= 3 ? segments[2].ToLowerInvariant() : string.Empty;
+        route = null!;
+        return false;
     }
 }
 
@@ -80,11 +141,6 @@ public static class RemoteApiRoutes
 /// Per-domain request counters, so an operator can tell "the controller never reached us" from "it reached
 /// us and we refused it".
 /// </summary>
-/// <remarks>
-/// Counted per DOMAIN rather than per route pattern: dispatch resolves a domain and then does its own
-/// per-shape work, so a route-pattern counter would need the matcher this deliberately does not have, and
-/// would report zero for anything it failed to match - the exact case worth counting.
-/// </remarks>
 public sealed class RemoteApiCounters
 {
     private readonly Dictionary<string, Counter> _byDomain =
@@ -97,23 +153,20 @@ public sealed class RemoteApiCounters
         private long _requests;
         private long _failures;
 
-        public void Record(bool ok)
-        {
-            Interlocked.Increment(ref _requests);
-            if (!ok)
-                Interlocked.Increment(ref _failures);
-        }
+        public void RecordRequest() => Interlocked.Increment(ref _requests);
+        public void RecordFailure() => Interlocked.Increment(ref _failures);
 
         public (long Requests, long Failures) Read() =>
             (Interlocked.Read(ref _requests), Interlocked.Read(ref _failures));
     }
 
-    /// <summary>Records one dispatched request. <paramref name="status"/> below 400 counts as handled.</summary>
-    public void Record(string domain, int status)
-    {
-        var counter = _byDomain.GetValueOrDefault(domain) ?? _unknown;
-        counter.Record(status < 400);
-    }
+    private Counter CounterFor(string domain) => _byDomain.GetValueOrDefault(domain) ?? _unknown;
+
+    /// <summary>Records a request as soon as it reaches dispatch, before any handler or snapshot runs.</summary>
+    public void RecordRequest(string domain) => CounterFor(domain).RecordRequest();
+
+    /// <summary>Records a refused or failed request, including exceptions and cancellation.</summary>
+    public void RecordFailure(string domain) => CounterFor(domain).RecordFailure();
 
     /// <summary>Request/failure totals per domain, plus an <c>(unknown)</c> row for unrouted requests.</summary>
     public IReadOnlyList<(string Domain, long Requests, long Failures)> Snapshot()

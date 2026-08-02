@@ -67,21 +67,23 @@ public sealed class RemoteApiDispatcherTests
     }
 
     [Fact]
-    public void EveryDocumentedDomain_IsOneTheDispatcherActuallyHandles()
+    public void EveryDocumentedRouteAlternative_IsOneTheDispatcherActuallyHandles()
     {
         DispatchUi(static () =>
         {
             var (dispatcher, _, _, _) = CreateDispatcher();
 
-            // The point of a table over a class comment: this can be checked. A documented domain that
-            // 404s as "unknown endpoint" is the drift a comment would have hidden.
-            foreach (var domain in RemoteApiRoutes.Domains)
+            // Exercise every verb/optional-suffix alternative, not merely one bare request per domain.
+            // Target lookup may legitimately fail (the probe ids are synthetic); route lookup may not.
+            foreach (var route in RemoteApiRoutes.All)
             {
-                var probe = Execute(dispatcher, $"/api/v1/{domain}",
-                    method: RemoteApiRoutes.MethodFor(domain, 0));
-                Assert.False(
-                    probe.Status == 404 && probe.Body.Contains("Unknown endpoint", StringComparison.Ordinal),
-                    $"documented domain '{domain}' is not routed");
+                foreach (var path in route.ProbePaths)
+                {
+                    var probe = Execute(dispatcher, path, method: route.Method);
+                    Assert.False(
+                        probe.Status == 404 && probe.Body.Contains("Unknown endpoint", StringComparison.Ordinal),
+                        $"documented route '{route.Method} {path}' is not routed");
+                }
             }
         });
     }
@@ -96,12 +98,35 @@ public sealed class RemoteApiDispatcherTests
 
             Execute(dispatcher, "/api/v1/lists", method: "GET");          // handled
             Execute(dispatcher, "/api/v1/lists/Nope/cues/1/go");           // refused (404)
+            Execute(dispatcher, "/api/v1/lists/Nope/cues/1/go", method: "GET"); // refused (405)
+            Execute(dispatcher, "/api/v1/no-such-domain");                 // refused before routing
 
             var body = Execute(dispatcher, "/api/v1/endpoints", method: "GET").Body;
 
             // "Did the controller reach us at all" is the question counters exist to answer - so a refused
-            // request must still be counted, not dropped.
-            Assert.Contains("\"domain\":\"lists\",\"requests\":2,\"failures\":1", body, StringComparison.Ordinal);
+            // request must still be counted, including one rejected before handler dispatch. The endpoint
+            // request itself is admitted before it snapshots, so its row is current rather than one behind.
+            Assert.Contains("\"domain\":\"lists\",\"requests\":3,\"failures\":2", body, StringComparison.Ordinal);
+            Assert.Contains("\"domain\":\"endpoints\",\"requests\":1,\"failures\":0", body, StringComparison.Ordinal);
+            Assert.Contains("\"domain\":\"(unknown)\",\"requests\":1,\"failures\":1", body, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void Counters_RecordCancellationAsAFailedAdmittedRequest()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, _, _, _) = CreateDispatcher();
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => dispatcher
+                .ExecuteAsync("GET", "/api/v1/status", cancellationToken: cancelled.Token)
+                .GetAwaiter().GetResult());
+
+            var body = Execute(dispatcher, "/api/v1/endpoints", method: "GET").Body;
+            Assert.Contains("\"domain\":\"status\",\"requests\":1,\"failures\":1", body, StringComparison.Ordinal);
         });
     }
 
@@ -188,7 +213,9 @@ public sealed class RemoteApiDispatcherTests
             var getMutation = Execute(dispatcher, "/api/v1/cues/go", method: "GET");
             Assert.Equal(405, getMutation.Status);
             Assert.Equal("POST", getMutation.Allow);
-            Assert.Equal("GET, OPTIONS", RemoteApiDispatcher.AllowedMethodsFor("/api/v1/status/detail"));
+            Assert.Equal(404, Execute(dispatcher, "/api/v1/status/detail", method: "GET").Status);
+            Assert.Equal(404, Execute(dispatcher, "/api/v1/endpoints/garbage", method: "GET").Status);
+            Assert.Equal("OPTIONS", RemoteApiDispatcher.AllowedMethodsFor("/api/v1/status/detail"));
             Assert.Equal("POST, OPTIONS", RemoteApiDispatcher.AllowedMethodsFor("/api/v1/cues/go"));
         });
     }

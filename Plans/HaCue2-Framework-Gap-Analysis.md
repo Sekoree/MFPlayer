@@ -1542,7 +1542,7 @@ needed nothing), the state is:
 | Automation | 4 | **2** | group-level lanes (RESOLVED: flatten in the mapper, no framework work) |
 | Diagnostics | 3 | **3** | — |
 | Fades | 3 | **1** | — the other two were re-scoped into the landed curve work |
-| Build | 4 | **3** | second AOT head + CI gates (app-side) |
+| Build | 4 | **2** | HaCue2-owned storage resolver + second AOT head/CI gates (app-side) |
 | Everything else (status, remote, app-support) | ~8 | 0 | all Phase-2 app-side |
 
 **Hardening pass (commit `0d2ac4a2` "Gap fixup", 2026-08-02).** 34 framework files, ~+1,250 lines (about
@@ -1563,12 +1563,14 @@ already marked landed:
 - **`LinearTimecodeGenerator`** — rejects an invalid authored label at construction and at `Seek`.
 
 **Framework tranche: COMPLETE (2026-08-02).** Every register row that lands inside `MediaFramework/` is
-done. Everything still open is Phase-2 app-side work in `UI/HaPlay/` — verified by locating each remaining
-row's files rather than by reading its label: the external-input gate is three services under
-`UI/HaPlay/Services/`, the per-endpoint test message is `ActionEndpoint*` under `UI/HaPlay/`, and
-raw-terminal acquisition is `PortAudioOutputRuntime` under `UI/HaPlay/OutputPreview/`.
+done. Everything still open is Phase-2 app-side work — verified by locating each remaining row's files
+rather than by reading its label: the external-input gate is three services under `UI/HaPlay/`, the
+per-endpoint test message is `ActionEndpoint*` under `UI/HaPlay/`, raw-terminal acquisition is
+`PortAudioOutputRuntime` under `UI/HaPlay/OutputPreview/`, and HaCue2 still needs its own storage resolver
+(or a neutral shared one) once its app assembly exists; it cannot reference HaPlay's helper.
 
-So roughly **41 of ~41 work items** (the remainder are HaCue2-app-shaped, not gaps), but that understates the weight: the recovered bay is the single
+So roughly **40 of ~41 currently addressable work items** (the remainder are HaCue2-app-shaped, not
+framework gaps), but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1632,7 +1634,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Control | LTC decoder | ✅ **LANDED** — `LinearTimecodeDecoder`, biphase-mark, polarity/amplitude independent | §5.4a |
 | Control | Transport-neutral chase contract | ✅ **LANDED** — `MidiTimecodeChaseClock.FeedFrame(value)` ingests whole frames from any transport | §5.4a |
 | Control | LTC generation | ✅ **LANDED** — `LinearTimecodeGenerator`, pull-based, exact-rational frame length; round-trips through the decoder at all 4 rates | §5.4a |
-| Remote | Route table / self-documentation / counters | ✅ **LANDED** — `RemoteApiRoutes` (authoritative method rule + surface), `GET /api/v1/endpoints`, per-domain counters; drift-guarded by test | §5.5 |
+| Remote | Route table / self-documentation / counters | ✅ **LANDED** — `RemoteApiRoutes` gates exact path shapes + methods, `GET /api/v1/endpoints`, admission-time per-domain counters incl. 404/405; every documented alternative is drift-tested | §5.5 |
 | Remote | `POST /lists/{id}/go` | **PARTIAL** — list-scoped cue addressing landed (`GET /lists`, `/lists/{list}/cues/{cue}/go\|stop`). The BARE `/lists/{id}/go` still needs per-list standby in the VM (10 `StandbyCueNode` write sites to mirror) — a feature, not a route | §5.5 |
 | Endpoints | Per-endpoint configurable test message | **ABSENT — APP-SIDE** (`ActionEndpoint*` are all `UI/HaPlay/`) | §5.6 |
 | App support | `HaOutput` engine | EXISTS, 8 couplings to invert | §7.1 |
@@ -1640,7 +1642,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | App support | `HaSource` model | EXISTS, Avalonia-free; `CueSubtitleSelection` entangled | §7.2 |
 | Build | Arch-test coverage of `UI/` | ✅ **LANDED** — `UiAllowed` map + 3 tests, incl. "no app references another app" | §7.3 |
 | Build | Second AOT head + CI gates | Template exists; HaCue2 steps ABSENT | §7.4 |
-| Build | Per-app settings/recovery roots | ✅ **LANDED** — `HaPlayStoragePaths.AppName` (root + `{APP}_CACHE_ROOT` derived; late change throws) | §7.5 |
+| Build | Per-app settings/recovery roots | 🟡 **PREPARED, NOT LANDED FOR HaCue2** — `HaPlayStoragePaths.AppName` proves the naming/root policy, but the helper lives in HaPlay and the architecture rules correctly forbid HaCue2 from referencing it; move it to a neutral owner or add the HaCue2-local resolver with the new app head | §7.5 |
 | Build | One shared media cache | ✅ **LANDED** — `S.Media.Core.MediaCachePaths` (`MFPLAYER_CACHE_ROOT`); both cache sites now redirectable, and the test sandbox sets it | §7.5 |
 | Test | Headless Avalonia harness | EXISTS (~1023 lines) — must be copied, incl. the anti-hang bootstrap | §7.6 |
 | Session | `ShowDocument` as a shared engine contract | EXISTS — two mappers already target it (cue + deck); only 1 of 6 members is cue-shaped | §10.1 |

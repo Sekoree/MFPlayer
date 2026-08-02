@@ -83,35 +83,43 @@ public sealed class RemoteApiDispatcher
             index++;
         if (index < segments.Length && segments[index].Equals("v1", StringComparison.OrdinalIgnoreCase))
             index++;
-        if (index >= segments.Length)
-            return RemoteApiResult.Fail(404, "Unknown endpoint.");
-
-        var domain = segments[index].ToLowerInvariant();
-        var rest = segments[(index + 1)..];
+        var domain = index < segments.Length ? segments[index].ToLowerInvariant() : string.Empty;
+        var rest = index < segments.Length ? segments[(index + 1)..] : [];
         query ??= new Dictionary<string, string>();
 
-        var allow = ApplicationMethodFor(domain, rest.Length);
-        if (!string.Equals(method, allow, StringComparison.OrdinalIgnoreCase))
-            return RemoteApiResult.MethodNotAllowed(allow);
+        // Count on admission, before a handler or /endpoints snapshot runs. This makes the endpoint's own
+        // request visible in its response and ensures early refusals (notably 404/405) are not lost.
+        _counters.RecordRequest(domain);
+        try
+        {
+            if (!RemoteApiRoutes.TryMatch(domain, rest, out var route))
+                return Complete(domain, RemoteApiResult.Fail(404, "Unknown endpoint."));
 
-        cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(method, route.Method, StringComparison.OrdinalIgnoreCase))
+                return Complete(domain, RemoteApiResult.MethodNotAllowed(route.Method));
 
-        // VM access has UI-thread affinity; tests already run on the headless UI thread.
-        if (Dispatcher.UIThread.CheckAccess())
-            return Counted(domain, Handle(domain, rest, query));
-        return Counted(domain, await Dispatcher.UIThread.InvokeAsync(
-            () => Handle(domain, rest, query),
-            DispatcherPriority.Normal,
-            cancellationToken));
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // VM access has UI-thread affinity; tests already run on the headless UI thread.
+            if (Dispatcher.UIThread.CheckAccess())
+                return Complete(domain, Handle(domain, rest, query));
+            return Complete(domain, await Dispatcher.UIThread.InvokeAsync(
+                () => Handle(domain, rest, query),
+                DispatcherPriority.Normal,
+                cancellationToken));
+        }
+        catch
+        {
+            _counters.RecordFailure(domain);
+            throw;
+        }
     }
 
-    /// <summary>Records a dispatched request against its domain and passes the result through.</summary>
-    /// <remarks>Wraps the RESULT rather than the call so both the on-thread and marshalled paths count
-    /// identically - and so a 404/405 is counted as a failure, which is the case an operator is trying to
-    /// diagnose when a controller "does nothing".</remarks>
-    private RemoteApiResult Counted(string domain, RemoteApiResult result)
+    /// <summary>Records a refused result against the request already admitted for this domain.</summary>
+    private RemoteApiResult Complete(string domain, RemoteApiResult result)
     {
-        _counters.Record(domain, result.Status);
+        if (result.Status >= 400)
+            _counters.RecordFailure(domain);
         return result;
     }
 
@@ -125,14 +133,11 @@ public sealed class RemoteApiDispatcher
         if (index < segments.Length && segments[index].Equals("v1", StringComparison.OrdinalIgnoreCase))
             index++;
         var domain = index < segments.Length ? segments[index].ToLowerInvariant() : string.Empty;
-        var rest = index + 1 < segments.Length ? segments.Length - index - 1 : 0;
-        return ApplicationMethodFor(domain, rest) + ", OPTIONS";
+        var rest = index < segments.Length ? segments[(index + 1)..] : [];
+        return RemoteApiRoutes.TryMatch(domain, rest, out var route)
+            ? route.Method + ", OPTIONS"
+            : "OPTIONS";
     }
-
-    /// <summary>The one legal application method - delegated to the route table, which is the single
-    /// source of truth for both the request gate and the <c>Allow</c> header.</summary>
-    private static string ApplicationMethodFor(string domain, int restSegments) =>
-        RemoteApiRoutes.MethodFor(domain, restSegments);
 
     private RemoteApiResult Handle(string domain, string[] rest, IReadOnlyDictionary<string, string> query) =>
         domain switch

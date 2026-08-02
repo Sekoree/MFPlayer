@@ -195,16 +195,48 @@ public sealed class ArchitectureTests
     }
 
     /// <summary>
-    /// The soundboard is neutral one-shot playback and must stay that way: no cue, no document, no
-    /// transport group, no composition.
+    /// Only the known composition root and still-coupled output-engine implementation types may name
+    /// <c>OutputManagementViewModel</c>; playback/session consumers use <c>IOutputRuntimeCatalog</c>.
     /// </summary>
     /// <remarks>
-    /// This is the engine/cue-semantics seam stated as a rule rather than an intention. The soundboard and
-    /// the cue preview used to share one class holding a whole <c>ShowSession</c>, which is how an app
-    /// adopting the playback engine ended up inheriting soundboard responsibilities. A source-text check is
-    /// crude, but it fails on the way the coupling actually comes back - someone reaching for the session to
-    /// get "just one thing" - and it fails at the moment it is written rather than a release later.
+    /// The allow-list makes today's remaining boundary work explicit (deck, line VM and local-window
+    /// runtime) while scanning the whole app prevents a new consumer or renamed file from silently escaping
+    /// a four-file spot check. Removing an allowed dependency deliberately requires updating this list.
     /// </remarks>
+    [Fact]
+    public void OnlyKnownOutputEngineOwnersUseTheConcreteViewModel()
+    {
+        var appRoot = Path.Combine(RepoRoot(), "UI", "HaPlay");
+        string[] allowed =
+        [
+            Path.Combine("OutputPreview", "LocalVideoPreviewRuntime.cs"),
+            Path.Combine("ViewModels", "MainViewModel.cs"),
+            Path.Combine("ViewModels", "MediaPlayerViewModel.cs"),
+            Path.Combine("ViewModels", "OutputLineViewModel.cs"),
+            Path.Combine("ViewModels", "OutputManagementViewModel.cs"),
+        ];
+
+        Assert.All(allowed, rel => Assert.True(File.Exists(Path.Combine(appRoot, rel)),
+            $"known concrete output-engine owner moved or disappeared: {rel}"));
+
+        var allowedSet = allowed.ToHashSet(StringComparer.Ordinal);
+        var offenders = Directory.EnumerateFiles(appRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(path => (Path: path, Rel: Path.GetRelativePath(appRoot, path)))
+            .Where(x => !x.Rel.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                        && !x.Rel.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            .Where(x => !allowedSet.Contains(x.Rel))
+            .Where(x => StripComments(File.ReadAllText(x.Path))
+                .Contains("OutputManagementViewModel", StringComparison.Ordinal))
+            .Select(x => x.Rel)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "new concrete output-engine dependencies must use IOutputRuntimeCatalog or be reviewed as an "
+            + "explicit owner: "
+            + string.Join(", ", offenders));
+    }
+
     /// <summary>
     /// The cue layer drives the engine through <c>ICueRunnerHost</c> and never holds the session itself.
     /// </summary>
@@ -213,41 +245,6 @@ public sealed class ArchitectureTests
     /// it"; this guards "the cue layer is liftable" - if the runner can reach <c>ShowSession</c> directly it
     /// can reach anything on it, and the seam stops being a boundary and becomes a suggestion.
     /// </remarks>
-    /// <summary>
-    /// Playback-side consumers reach the output engine through <c>IOutputRuntimeCatalog</c>, not through
-    /// the 1,800-line view model that implements it.
-    /// </summary>
-    /// <remarks>
-    /// Guards the extraction rather than the interface: adding a member to the catalog is fine, but a
-    /// consumer quietly typing a field as <c>OutputManagementViewModel</c> again to reach one convenient
-    /// extra member is how the seam disappears. Checked on the playback/session consumers - the view layer
-    /// and the app root legitimately hold the concrete view model.
-    /// </remarks>
-    [Fact]
-    public void PlaybackConsumersReachTheOutputEngineThroughItsCatalogInterface()
-    {
-        string[] consumers =
-        [
-            Path.Combine("UI", "HaPlay", "Playback", "CueCompositionRuntime.cs"),
-            Path.Combine("UI", "HaPlay", "Playback", "IdleLogoSlateSession.cs"),
-            Path.Combine("UI", "HaPlay", "ViewModels", "CueShowSessionCoordinator.cs"),
-            Path.Combine("UI", "HaPlay", "ViewModels", "SoundboardWorkspaceViewModel.cs"),
-        ];
-
-        var offenders = consumers
-            .Select(rel => (Rel: rel, Path: Path.Combine(RepoRoot(), rel)))
-            .Where(x => File.Exists(x.Path))
-            .Where(x => StripComments(File.ReadAllText(x.Path))
-                .Contains("OutputManagementViewModel", StringComparison.Ordinal))
-            .Select(x => x.Rel)
-            .ToArray();
-
-        Assert.True(
-            offenders.Length == 0,
-            "these must depend on IOutputRuntimeCatalog, not the concrete view model: "
-            + string.Join(", ", offenders));
-    }
-
     [Fact]
     public void TheCueRunnerDrivesTheEngineThroughItsHostInterfaceOnly()
     {
@@ -269,6 +266,17 @@ public sealed class ArchitectureTests
             return slashes >= 0 ? line[..slashes] : line;
         }));
 
+    /// <summary>
+    /// The soundboard is neutral one-shot playback and must stay that way: no cue, no document, no
+    /// transport group, no composition.
+    /// </summary>
+    /// <remarks>
+    /// This is the engine/cue-semantics seam stated as a rule rather than an intention. The soundboard and
+    /// the cue preview used to share one class holding a whole <c>ShowSession</c>, which is how an app
+    /// adopting the playback engine ended up inheriting soundboard responsibilities. A source-text check is
+    /// crude, but it fails on the way the coupling actually comes back - someone reaching for the session to
+    /// get "just one thing" - and it fails at the moment it is written rather than a release later.
+    /// </remarks>
     [Fact]
     public void TheSoundboardDoesNotReachIntoCueOrDocumentConcerns()
     {
