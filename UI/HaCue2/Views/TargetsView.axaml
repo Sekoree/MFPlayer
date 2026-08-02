@@ -67,6 +67,7 @@
               </Grid>
             </Border>
             <ListBox Theme="{StaticResource TableRows}"
+                     IsVisible="{Binding !HasNoEndpoints}"
                      ItemsSource="{Binding Endpoints}" SelectedItem="{Binding SelectedEndpoint}"
                      ItemTemplate="{StaticResource SourceRowTemplate}" />
           </DockPanel>
@@ -127,6 +128,7 @@
                 </Grid>
               </Border>
               <ListBox Theme="{StaticResource TableRows}"
+                       IsVisible="{Binding !HasNoSources}"
                        ItemsSource="{Binding Sources}" SelectedItem="{Binding SelectedSource}"
                        ItemTemplate="{StaticResource SourceRowTemplate}" />
             </DockPanel>

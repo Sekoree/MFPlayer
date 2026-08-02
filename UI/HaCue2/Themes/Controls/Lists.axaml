@@ -76,7 +76,7 @@
   <!-- ── 1. title-bar view tabs (`.vtab`) — CUES · AUDIO · VIDEO · TARGETS ──────────────────── -->
   <ControlTheme x:Key="ViewTabItem" TargetType="ListBoxItem">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.35" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="Background" Value="Transparent" />
@@ -111,7 +111,7 @@
   <!-- ── 2. section tabs (`.itab`) — the Audio/Video/Targets pane strips and the inspector ──── -->
   <ControlTheme x:Key="SectionTabItem" TargetType="ListBoxItem">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="0.8" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="Background" Value="Transparent" />

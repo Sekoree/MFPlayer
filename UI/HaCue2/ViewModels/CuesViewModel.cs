@@ -172,6 +172,83 @@ public partial class CuesViewModel : ObservableObject
             ? lookup(media)
             : null;
 
+    // ── transport (register item 3: GO always works, nothing gates playback) ───────────────────
+
+    /// <summary>
+    /// Fires standby and moves it to the next cue.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// "Next" is the next ENABLED cue in list order — a disabled cue stays visible and is stepped over
+    /// rather than deleted, which is the whole reason disabling exists (dropping one for a single
+    /// performance by deleting it is how shows lose cues).
+    /// </para>
+    /// <para>
+    /// No engine yet, so nothing sounds. The CURSOR is real, and it is the half that has to be right:
+    /// where standby lands after a GO is the thing an operator watches all night.
+    /// </para>
+    /// </remarks>
+    public void Go()
+    {
+        if (ScopedList is not { } list)
+            return;
+
+        var order = list.Flatten().Where(cue => cue.Enabled).ToList();
+        if (order.Count == 0)
+            return;
+
+        var at = list.StandbyCueId is { } standby
+            ? order.FindIndex(cue => cue.Id == standby)
+            : -1;
+
+        SetStandby(list, at + 1 < order.Count ? order[at + 1].Id : null);
+    }
+
+    /// <summary>Moves standby without firing — the ↑/↓ keys.</summary>
+    public void StepStandby(int delta)
+    {
+        if (ScopedList is not { } list)
+            return;
+
+        var order = list.Flatten().Where(cue => cue.Enabled).ToList();
+        if (order.Count == 0)
+            return;
+
+        var at = list.StandbyCueId is { } standby
+            ? order.FindIndex(cue => cue.Id == standby)
+            : -1;
+
+        var next = Math.Clamp(at + delta, 0, order.Count - 1);
+        SetStandby(list, order[next].Id);
+    }
+
+    /// <summary>
+    /// Puts standby on the selected cue — the Esc key, and "move standby here".
+    /// </summary>
+    /// <remarks>
+    /// Esc is "get me back to where I am looking", which during a show is the selected row. It never
+    /// stops anything: there is a PANIC button for that, and an Esc that stopped the show because
+    /// somebody reached for it out of habit would be unforgivable.
+    /// </remarks>
+    public void StandbyHere()
+    {
+        if (ScopedList is { } list && SelectedCue is { } row)
+            SetStandby(list, row.Id);
+    }
+
+    private void SetStandby(CueList list, Guid? id)
+    {
+        var target = list;
+
+        _journal.Do(new SetValueCommand<Guid?>(
+            list.Id, "standby", "cues",
+            () => target.StandbyCueId, value => target.StandbyCueId = value, id,
+            id is null ? "clear standby" : "move standby"));
+        _journal.CloseGroup();
+
+        Refresh();
+    }
+
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
     public void Refresh()
     {
@@ -185,6 +262,7 @@ public partial class CuesViewModel : ObservableObject
         Timeline.Refresh();
         OnPropertyChanged(nameof(TreeHint));
         OnPropertyChanged(nameof(Breadcrumb));
+        OnPropertyChanged(nameof(IsEmpty));
     }
 
     private void Rebuild()
@@ -203,6 +281,8 @@ public partial class CuesViewModel : ObservableObject
         foreach (var row in rows)
             Cues.Add(row);
     }
+
+    public bool IsEmpty => Cues.Count == 0;
 
     public bool IsScoped => SelectedScope is { IsList: false };
 
@@ -246,6 +326,7 @@ public partial class CuesViewModel : ObservableObject
         Rebuild();
         SelectedCue = null;
         OnPropertyChanged(nameof(TreeHint));
+        OnPropertyChanged(nameof(IsEmpty));
     }
 
     /// <summary>

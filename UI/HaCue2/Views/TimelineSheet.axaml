@@ -59,7 +59,7 @@
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Border BorderBrush="{StaticResource BoothRule}" BorderThickness="1,0,0,1" Padding="4,2">
-                    <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                    <TextBlock Classes="mono dim3" FontSize="{DynamicResource FontSizeNano}"
                                Text="{Binding}" />
                   </Border>
                 </DataTemplate>

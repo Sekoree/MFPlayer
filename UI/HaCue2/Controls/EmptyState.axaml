@@ -1,0 +1,22 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             x:Class="HaCue2.Controls.EmptyState"
+             x:DataType="c:EmptyState"
+             x:CompileBindings="True">
+
+  <!-- What a list says when it is legitimately empty. A blank panel is indistinguishable from one
+       that failed to load, and the difference matters most on a machine somebody is setting up for
+       the first time. -->
+
+  <Border Padding="18,22" HorizontalAlignment="Center" VerticalAlignment="Center">
+    <StackPanel Spacing="6" HorizontalAlignment="Center">
+      <TextBlock Classes="mono dim2" HorizontalAlignment="Center"
+                 FontSize="{DynamicResource FontSizeBase}"
+                 Text="{Binding Headline, RelativeSource={RelativeSource AncestorType=c:EmptyState}}" />
+      <TextBlock Classes="mono dim3 small" HorizontalAlignment="Center" TextWrapping="Wrap"
+                 MaxWidth="320" TextAlignment="Center"
+                 Text="{Binding Detail, RelativeSource={RelativeSource AncestorType=c:EmptyState}}" />
+    </StackPanel>
+  </Border>
+</UserControl>

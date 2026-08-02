@@ -43,6 +43,29 @@ public partial class ShellWindow : Window
 
         switch (e.Key)
         {
+            // Register item 3: GO always works. It is deliberately NOT gated on focus being anywhere
+            // in particular, and deliberately not swallowed while a text box has focus either — see
+            // the guard below, which is the one exception.
+            case Key.Space when !control && !IsTyping():
+                shell.Cues.Go();
+                e.Handled = true;
+                return;
+
+            case Key.Escape:
+                shell.Cues.StandbyHere();
+                e.Handled = true;
+                return;
+
+            case Key.Up when !control && !IsTyping():
+                shell.Cues.StepStandby(-1);
+                e.Handled = true;
+                return;
+
+            case Key.Down when !control && !IsTyping():
+                shell.Cues.StepStandby(1);
+                e.Handled = true;
+                return;
+
             case Key.F9:
                 shell.IsOutputInfoOpen = !shell.IsOutputInfoOpen;
                 e.Handled = true;
@@ -74,6 +97,16 @@ public partial class ShellWindow : Window
 
         base.OnKeyDown(e);
     }
+
+    /// <summary>
+    /// Whether the focus is in something that eats keys.
+    /// </summary>
+    /// <remarks>
+    /// Space in a cue LABEL has to be a space. This is the one place a transport key gives way, and it
+    /// gives way to typing rather than to focus being "somewhere else" — every other control in the
+    /// app can have focus and Space still fires the show.
+    /// </remarks>
+    private bool IsTyping() => FocusManager?.GetFocusedElement() is TextBox;
 
     /// <summary>
     /// Saves, asking where only when there is nowhere yet.

@@ -32,7 +32,11 @@
         <!-- One pane per composition, at the composition's own aspect ratio. Two hard-coded panels
              would stop agreeing with the document the first time somebody added a third canvas. -->
         <ScrollViewer Grid.Column="0">
-          <ItemsControl ItemsSource="{Binding Compositions}">
+          <Panel>
+          <c:EmptyState IsVisible="{Binding HasNoCompositions}"
+                        Headline="No compositions"
+                        Detail="A composition is a canvas cues are placed on. Add one on the right." />
+          <ItemsControl IsVisible="{Binding !HasNoCompositions}" ItemsSource="{Binding Compositions}">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate><StackPanel Spacing="7" /></ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
@@ -48,6 +52,7 @@
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
+          </Panel>
         </ScrollViewer>
 
         <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="7">
@@ -279,7 +284,10 @@
                 <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
               </Grid>
             </Border>
-            <ListBox Theme="{StaticResource TableRows}"
+            <c:EmptyState IsVisible="{Binding HasNoOutputs}"
+                          Headline="No video outputs"
+                          Detail="Nothing receives a composition yet. Add a local screen, an NDI sender, a recorder or a stream." />
+            <ListBox IsVisible="{Binding !HasNoOutputs}" Theme="{StaticResource TableRows}"
                      ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:VideoOutputRow">

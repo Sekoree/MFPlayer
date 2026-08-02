@@ -10,7 +10,7 @@
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource BoothBg}"
         Foreground="{StaticResource BoothInk}"
-        FontSize="{StaticResource FontSizeBase}">
+        FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The one modal shape in the app. Every "…" button that just needs a couple of values and a verb
        opens this; anything with a real editing surface of its own (the curve editor, the subtitle

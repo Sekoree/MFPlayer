@@ -24,6 +24,10 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // Before any window: the override dictionary has to be on the application for the first
+        // layout, or the app visibly re-flows on the operator's first look at it.
+        Appearance.Current.Attach(this);
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             // OnLastWindowClose, not OnMainWindowClose: the launcher hands over to the shell by opening

@@ -10,7 +10,7 @@
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource BoothBg}"
         Foreground="{StaticResource BoothInk}"
-        FontSize="{StaticResource FontSizeBase}">
+        FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screen 14, the renamed Preflight. It is a COLLECTOR of the project's errors and warnings, each
        with the fix action attached — missing media, unfed or unpatched logical outputs, absent

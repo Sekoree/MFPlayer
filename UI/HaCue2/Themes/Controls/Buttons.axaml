@@ -19,7 +19,7 @@
 
   <ControlTheme x:Key="{x:Type Button}" TargetType="Button">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.1" />
     <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
     <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
@@ -107,7 +107,7 @@
       <Setter Property="BorderBrush" Value="Transparent" />
       <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
       <Setter Property="TextElement.LetterSpacing" Value="0.4" />
-      <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+      <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
       <Setter Property="Padding" Value="0,2" />
       <Setter Property="HorizontalContentAlignment" Value="Left" />
     </Style>
@@ -137,7 +137,7 @@
        on Button for the doorways — both share the look through the class names below. -->
 
   <ControlTheme x:Key="ChipButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.25" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
@@ -147,7 +147,7 @@
 
   <ControlTheme x:Key="ChipToggle" TargetType="ToggleButton">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="1.25" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
@@ -200,7 +200,7 @@
   <!-- Status-bar buttons: no fill, hairline border, 1 px vertical padding — they must not add height
        to a 20 px bar. -->
   <ControlTheme x:Key="StatusButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="0.3" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
@@ -210,7 +210,7 @@
 
   <!-- Bare text button used where the mockup has a clickable status word (issue counts, "revert ×"). -->
   <ControlTheme x:Key="LinkButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="0.3" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="Transparent" />
@@ -224,7 +224,7 @@
        right edge), matching the mockup's `border-right: 0` trick. -->
   <ControlTheme x:Key="SegmentItem" TargetType="ListBoxItem">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="TextElement.LetterSpacing" Value="0.8" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="Background" Value="Transparent" />

@@ -27,7 +27,7 @@
         <Border Grid.Column="6" Background="{StaticResource BoothBg}"
                 BorderBrush="{StaticResource BoothRule2}" BorderThickness="1"
                 CornerRadius="{StaticResource BoothCorner}" Padding="8,4">
-          <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+          <TextBlock Classes="mono" FontSize="{DynamicResource FontSizeMono}"
                      Text="{Binding ListSelector}" />
         </Border>
 
@@ -69,11 +69,17 @@
         <!-- ── the cue tree ─────────────────────────────────────────────────────────────── -->
         <c:PanelBox Grid.Row="0" MinHeight="240"
                     Header="{Binding Breadcrumb}" Hint="{Binding TreeHint}">
+          <Panel>
+          <!-- A list nobody has put a cue in yet says so and names the way out. -->
+          <c:EmptyState IsVisible="{Binding IsEmpty}"
+                        Headline="No cues in this list"
+                        Detail="Use + ADD above to make one. GO still works — it simply has nothing to fire." />
+
           <!-- The tree proper. A TreeDataGrid rather than an indented flat list because a group
                has to LOOK like a group: it carries a chevron, it opens and closes, and its cues are
                visibly inside it. An indent margin alone could not tell a group apart from a cue that
                happened to be nested — which is what this replaced. -->
-          <TreeDataGrid Source="{Binding CueSource}"
+          <TreeDataGrid IsVisible="{Binding !IsEmpty}" Source="{Binding CueSource}"
                         CanUserResizeColumns="True"
                         CanUserSortColumns="False">
             <TreeDataGrid.ContextMenu>
@@ -157,6 +163,7 @@
               </DataTemplate>
             </TreeDataGrid.Resources>
           </TreeDataGrid>
+          </Panel>
         </c:PanelBox>
 
         <!-- ── the Active panel ─────────────────────────────────────────────────────────────
@@ -180,7 +187,7 @@
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
                                 VerticalAlignment="Center">
                       <TextBlock Classes="cuelabel" Text="{Binding Label}" />
-                      <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeMonoSmall}"
+                      <TextBlock Classes="mono dim3" FontSize="{DynamicResource FontSizeMonoSmall}"
                                  IsVisible="{Binding HasQualifier}" Text="{Binding Qualifier}" />
                     </StackPanel>
                     <TextBlock Grid.Column="3" Classes="clock" Text="{Binding Clock}" />

@@ -11,7 +11,7 @@
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource BoothBg}"
         Foreground="{StaticResource BoothInk}"
-        FontSize="{StaticResource FontSizeBase}">
+        FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The one window (register item 1): four views in the title bar, a Settings window and a
        Diagnostics window beside it, and no permanent output strip — the Output info drawer overlays
@@ -148,13 +148,13 @@
                                    Classes.ok="{Binding IsOk}"
                                    Classes.warn="{Binding IsWarn}"
                                    Classes.err="{Binding IsError}" />
-                          <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+                          <TextBlock Classes="mono" FontSize="{DynamicResource FontSizeMono}"
                                      Text="{Binding Name}" />
-                          <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                          <TextBlock Classes="mono dim3" FontSize="{DynamicResource FontSizeNano}"
                                      VerticalAlignment="Center"
                                      IsVisible="{Binding HasSuffix}" Text="{Binding Suffix}" />
                         </StackPanel>
-                        <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                        <TextBlock Classes="mono dim3" FontSize="{DynamicResource FontSizeNano}"
                                    Classes.warn="{Binding IsWarn}" Classes.err="{Binding IsError}"
                                    Text="{Binding Detail}" />
                       </StackPanel>

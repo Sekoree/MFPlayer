@@ -205,6 +205,9 @@ public partial class AudioViewModel : ObservableObject
     // ── 08 · devices ──────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<AudioLineRow> Lines { get; private set; }
 
+    /// <summary>A brand-new project has no lines until somebody adds one.</summary>
+    public bool HasNoLines => Lines.Count == 0;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedLineName))]
     private AudioLineRow? _selectedLine;

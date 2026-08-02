@@ -10,7 +10,7 @@
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource BoothBg}"
         Foreground="{StaticResource BoothInk}"
-        FontSize="{StaticResource FontSizeBase}">
+        FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screens 12 and 13, in one window with one nav, because the split that matters is a SCOPE split
        and it is easier to understand when both scopes are visible at once:
@@ -63,6 +63,9 @@
                   <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Themes}"
                            SelectedItem="{Binding Theme}" />
                 </HeaderedContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding ThemeNote}" />
+                </ContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Density">
                   <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Densities}"
                            SelectedItem="{Binding Density}" />
@@ -72,7 +75,7 @@
                            SelectedItem="{Binding RowSize}" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Font scale">
-                  <TextBox Classes="short" Text="100 %" />
+                  <TextBox Classes="short" Text="{Binding FontScale}" />
                 </HeaderedContentControl>
 
                 <ContentControl Theme="{StaticResource Subhead}" Content="Main view" />
@@ -157,7 +160,7 @@
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:HotkeyRow">
                     <Grid ColumnDefinitions="*,140,110,140" ColumnSpacing="8" Margin="8,4">
-                      <TextBlock Grid.Column="0" FontSize="{StaticResource FontSizeSmall}" Text="{Binding Command}" />
+                      <TextBlock Grid.Column="0" FontSize="{DynamicResource FontSizeSmall}" Text="{Binding Command}" />
                       <TextBlock Grid.Column="1" Classes="mono small" Text="{Binding Gesture}" />
                       <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding Group}" />
                       <TextBlock Grid.Column="3" Classes="mono dim3 small"

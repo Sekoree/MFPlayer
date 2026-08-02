@@ -90,6 +90,9 @@ public partial class VideoViewModel : ObservableObject
 
     public IReadOnlyList<VideoOutputRow> Outputs { get; }
 
+    public bool HasNoCompositions => Compositions.Count == 0;
+    public bool HasNoOutputs => Outputs.Count == 0;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(MappingSource))]
     [NotifyPropertyChangedFor(nameof(MappingTarget))]

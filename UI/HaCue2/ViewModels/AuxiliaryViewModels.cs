@@ -351,6 +351,16 @@ public partial class SettingsViewModel : ObservableObject
 
     // ── appearance ────────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<string> Themes { get; } = ["booth dark", "dark", "light"];
+
+    /// <summary>
+    /// Why the theme row does not take effect immediately.
+    /// </summary>
+    /// <remarks>
+    /// Said out loud rather than left for the operator to discover. Every colour in the app is looked
+    /// up once when the theme is built, so a palette swap needs the app to build it again — the
+    /// alternative is a live lookup on 840-odd references, which is a refactor, not a preference.
+    /// </remarks>
+    public string ThemeNote => "the palette is applied when the app starts · density and size are live";
     public IReadOnlyList<string> Densities { get; } = ["compact", "normal", "relaxed"];
     public IReadOnlyList<string> RowSizes { get; } = ["26 px", "30 px", "38 px touch"];
     public IReadOnlyList<string> Ballistics { get; } = ["PPM fast", "VU"];
@@ -358,7 +368,27 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty] private string _theme = "booth dark";
     [ObservableProperty] private string _density = "normal";
-    [ObservableProperty] private string _rowSize = "30 px";
+    [ObservableProperty] private string _rowSize = "26 px";
+    [ObservableProperty] private string _fontScale = "100 %";
+
+    // Density, row size and font scale are LIVE: they push resource overrides that every control reads
+    // dynamically, so the app re-lays-out as the operator moves the segment. That is the half of the
+    // Appearance pane that can honestly work without a restart.
+
+    partial void OnDensityChanged(string value) => Appearance.Current.Set(value switch
+    {
+        "compact" => Session.Density.Compact,
+        "relaxed" => Session.Density.Relaxed,
+        _ => Session.Density.Normal,
+    });
+
+    partial void OnRowSizeChanged(string value) =>
+        Appearance.Current.SetRowHeight(Appearance.ParseRowHeight(value));
+
+    partial void OnFontScaleChanged(string value) =>
+        Appearance.Current.SetFontScale(Appearance.ParseFontScale(value));
+
+    partial void OnThemeChanged(string value) => Appearance.Current.Palette = value;
     [ObservableProperty] private string _ballistic = "PPM fast";
     [ObservableProperty] private string _clipReset = "on click";
     [ObservableProperty] private bool _rememberInspectorTab = true;

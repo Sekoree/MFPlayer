@@ -10,7 +10,7 @@
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource BoothBg}"
         Foreground="{StaticResource BoothInk}"
-        FontSize="{StaticResource FontSizeBase}">
+        FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screen 01. Recovery is inline above the recents rather than a modal, because the answer
        ("recover or discard") is only meaningful next to the project it is about. "This machine" runs

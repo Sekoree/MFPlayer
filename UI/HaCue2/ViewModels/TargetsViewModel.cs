@@ -46,6 +46,9 @@ public partial class TargetsViewModel : ObservableObject
     /// <summary>The journal, for the dialogs the view opens.</summary>
     public ProjectJournal Journal => _journal ?? new ProjectJournal(_project);
 
+    public bool HasNoEndpoints => Endpoints.Count == 0;
+    public bool HasNoSources => Sources.Count == 0;
+
     /// <summary>Re-reads the endpoints and inputs after a dialog added one.</summary>
     public void Refresh()
     {
@@ -55,6 +58,8 @@ public partial class TargetsViewModel : ObservableObject
         OnPropertyChanged(nameof(Endpoints));
         OnPropertyChanged(nameof(Sources));
         OnPropertyChanged(nameof(Bindings));
+        OnPropertyChanged(nameof(HasNoEndpoints));
+        OnPropertyChanged(nameof(HasNoSources));
     }
 
     public const string RemoteTab = "REMOTE API";

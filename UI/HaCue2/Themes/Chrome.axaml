@@ -35,7 +35,7 @@
                               Content="{Binding Header, RelativeSource={RelativeSource TemplatedParent},
                                                 Converter={x:Static conv:UpperCaseConverter.Instance}}"
                               TextElement.FontFamily="{StaticResource MonoFont}"
-                              TextElement.FontSize="{StaticResource FontSizeMonoSmall}"
+                              TextElement.FontSize="{DynamicResource FontSizeMonoSmall}"
                               TextElement.Foreground="{StaticResource BoothInk3}"
                               TextBlock.TextWrapping="Wrap"
                               TextElement.LetterSpacing="0.85" />
@@ -61,7 +61,7 @@
                               Content="{Binding Header, RelativeSource={RelativeSource TemplatedParent},
                                                 Converter={x:Static conv:UpperCaseConverter.Instance}}"
                               TextElement.FontFamily="{StaticResource MonoFont}"
-                              TextElement.FontSize="{StaticResource FontSizeMonoSmall}"
+                              TextElement.FontSize="{DynamicResource FontSizeMonoSmall}"
                               TextElement.Foreground="{StaticResource BoothInk3}"
                               TextBlock.TextWrapping="Wrap"
                               TextElement.LetterSpacing="0.85" />
@@ -101,7 +101,7 @@
             <ContentPresenter Content="{Binding Content, RelativeSource={RelativeSource TemplatedParent},
                                                 Converter={x:Static conv:UpperCaseConverter.Instance}}"
                               TextElement.FontFamily="{StaticResource MonoFont}"
-                              TextElement.FontSize="{StaticResource FontSizeMicro}"
+                              TextElement.FontSize="{DynamicResource FontSizeMicro}"
                               TextElement.Foreground="{StaticResource BoothInk3}"
                               TextElement.LetterSpacing="1.2" />
           </Border>
@@ -116,7 +116,7 @@
       <StackPanel Orientation="Horizontal" Spacing="6">
         <Path Data="{Binding Shape}" Stroke="{StaticResource BoothInk2}" StrokeThickness="1.2"
               Width="28" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
-        <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+        <TextBlock Classes="mono" FontSize="{DynamicResource FontSizeMono}"
                    VerticalAlignment="Center" Text="{Binding Name}" />
       </StackPanel>
     </DataTemplate>
@@ -125,7 +125,7 @@
          where there is room to read them; repeating one in a 100 px well just squeezes the name that
          tells you which curve is currently set. -->
     <DataTemplate x:Key="CurveNameTemplate" x:DataType="vm:CurveOption">
-      <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+      <TextBlock Classes="mono" FontSize="{DynamicResource FontSizeMono}"
                  VerticalAlignment="Center" Text="{Binding Name}" />
     </DataTemplate>
 
@@ -149,7 +149,7 @@
     <!-- ── column head for the hand-built tables (`.cuehead`, `.diag thead`) ─────────────────- -->
     <ControlTheme x:Key="ColumnHeadText" TargetType="TextBlock">
       <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-      <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
+      <Setter Property="FontSize" Value="{DynamicResource FontSizeMicro}" />
       <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
       <Setter Property="LetterSpacing" Value="1.1" />
       <Setter Property="VerticalAlignment" Value="Center" />
@@ -175,7 +175,7 @@
   <!-- A number that must line up with the number above it: mono, right-aligned, ink-2. -->
   <Style Selector="TextBlock.num">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
     <Setter Property="TextAlignment" Value="Right" />
     <Setter Property="VerticalAlignment" Value="Center" />
@@ -199,15 +199,15 @@
   </Style>
 
   <Style Selector="TextBlock.micro">
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMicro}" />
   </Style>
   <Style Selector="TextBlock.small">
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
   </Style>
   <!-- Uppercase mono caption — used for the drawer's rotated section slabs and inline eyebrows. -->
   <Style Selector="TextBlock.caps">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="1.3" />
   </Style>
@@ -261,7 +261,7 @@
   </Style>
   <Style Selector="Border.chip > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="1.25" />
   </Style>
@@ -301,7 +301,7 @@
   </Style>
   <Style Selector="Border.badge > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="0.5" />
   </Style>
@@ -344,7 +344,7 @@
   <Style Selector="Border.cuerow">
     <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
-    <Setter Property="MinHeight" Value="{StaticResource CueRowHeight}" />
+    <Setter Property="MinHeight" Value="{DynamicResource CueRowHeight}" />
   </Style>
   <Style Selector="Border.cuerow.is-go">
     <Setter Property="Background" Value="{StaticResource CueGoWash}" />
@@ -388,14 +388,14 @@
   </Style>
   <Style Selector="TextBlock.glyph">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="TextAlignment" Value="Center" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
   <Style Selector="TextBlock.src">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="TextTrimming" Value="CharacterEllipsis" />
     <Setter Property="VerticalAlignment" Value="Center" />
@@ -447,14 +447,14 @@
   <Style Selector="Border.actrow">
     <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
-    <Setter Property="MinHeight" Value="{StaticResource ActiveRowHeight}" />
+    <Setter Property="MinHeight" Value="{DynamicResource ActiveRowHeight}" />
   </Style>
   <Style Selector="Border.actrow.grp">
     <Setter Property="Background" Value="{StaticResource ActiveGroupWash}" />
   </Style>
   <Style Selector="TextBlock.clock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
     <Setter Property="TextAlignment" Value="Right" />
     <Setter Property="VerticalAlignment" Value="Center" />
@@ -465,7 +465,7 @@
   </Style>
   <Style Selector="TextBlock.dest">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="TextAlignment" Value="Right" />
     <Setter Property="VerticalAlignment" Value="Center" />
@@ -517,7 +517,7 @@
   </Style>
   <Style Selector="Border.mxcell > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="HorizontalAlignment" Value="Center" />
     <Setter Property="VerticalAlignment" Value="Center" />
@@ -550,7 +550,7 @@
   </Style>
   <Style Selector="Border.mxhead > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMicro}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
     <Setter Property="LetterSpacing" Value="0.55" />
   </Style>
@@ -560,7 +560,7 @@
     <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
   </Style>
   <Style Selector="Border.mxhead.rowhead > TextBlock">
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
     <Setter Property="TextAlignment" Value="Right" />
   </Style>
@@ -582,7 +582,7 @@
   </Style>
   <Style Selector="Border.node > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMono}" />
   </Style>
   <Style Selector="Border.node.src">
     <Setter Property="BorderBrush" Value="{StaticResource BadgeSteelBorder}" />
@@ -613,7 +613,7 @@
   </Style>
   <Style Selector="Border.tlclip > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
@@ -669,7 +669,7 @@
   </Style>
   <Style Selector="Border.placement > TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
     <Setter Property="VerticalAlignment" Value="Top" />
   </Style>
   <Style Selector="Border.placement.a">
@@ -711,7 +711,7 @@
   <!-- ══ log tail ═══════════════════════════════════════════════════════════════════════════ -->
   <Style Selector="TextBlock.logline">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
   </Style>
 

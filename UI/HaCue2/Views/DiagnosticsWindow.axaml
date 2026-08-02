@@ -10,7 +10,7 @@
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource BoothBg}"
         Foreground="{StaticResource BoothInk}"
-        FontSize="{StaticResource FontSizeBase}">
+        FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screen 15. Its own window, meant to sit on a second monitor for a whole show. -->
 

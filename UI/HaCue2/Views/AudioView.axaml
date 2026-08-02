@@ -119,14 +119,14 @@
               <ItemsControl ItemsSource="{Binding Senders}" Margin="10,2">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="sys:String">
-                    <TextBlock Classes="mono dim2" FontSize="{StaticResource FontSizeMono}"
+                    <TextBlock Classes="mono dim2" FontSize="{DynamicResource FontSizeMono}"
                                Margin="0,2" TextWrapping="Wrap" Text="{Binding}" />
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
               <ContentControl Theme="{StaticResource Subhead}" Content="Patched to" />
-              <TextBlock Margin="10,4,10,8" FontSize="{StaticResource FontSizeSmall}" TextWrapping="Wrap"
+              <TextBlock Margin="10,4,10,8" FontSize="{DynamicResource FontSizeSmall}" TextWrapping="Wrap"
                          Classes="err" IsVisible="{Binding IsSelectedOutputUnpatched}"
                          Text="No device channel receives Lobby on this machine. Cues sending here run silent — never redirected to a default device." />
               <ContentControl Theme="{StaticResource FieldWide}">
@@ -240,7 +240,10 @@
               </Grid>
             </Border>
 
-            <ListBox Theme="{StaticResource TableRows}"
+            <c:EmptyState IsVisible="{Binding HasNoLines}"
+                          Headline="No audio lines"
+                          Detail="Add one above. A line is a device this show sends to; logical outputs are patched onto its channels." />
+            <ListBox IsVisible="{Binding !HasNoLines}" Theme="{StaticResource TableRows}"
                      ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:AudioLineRow">

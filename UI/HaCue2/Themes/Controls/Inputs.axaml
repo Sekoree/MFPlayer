@@ -176,7 +176,7 @@
             <TextBlock Grid.Column="1"
                        Margin="0,0,6,0"
                        VerticalAlignment="Center"
-                       FontSize="{StaticResource FontSizeMicro}"
+                       FontSize="{DynamicResource FontSizeMicro}"
                        Foreground="{StaticResource BoothInk3}"
                        Text="▾" />
             <Popup Name="PART_Popup"
@@ -218,7 +218,7 @@
        when ticked. The label brightening is load-bearing — it is how a settings pane reads its own
        state from across a room. -->
   <ControlTheme x:Key="{x:Type CheckBox}" TargetType="CheckBox">
-    <Setter Property="FontSize" Value="{StaticResource FontSizeSmall}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
     <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />

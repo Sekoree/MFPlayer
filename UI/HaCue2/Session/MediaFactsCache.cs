@@ -54,26 +54,37 @@ public sealed class MediaFactsCache
         return durations;
     }
 
-    /// <summary>Cues whose file has been looked at and could not be opened.</summary>
+    /// <summary>
+    /// Cues whose file has been looked at and could not be opened.
+    /// </summary>
+    /// <remarks>
+    /// Two things are deliberately NOT broken. A path nobody has probed yet is unknown — painting a
+    /// cue red before anybody looked is the failure this whole seam exists to avoid. And a RELATIVE
+    /// path with no media root configured is UNRESOLVED: nobody has said where this show's media
+    /// lives, so "not found" would be reporting a question as an answer. The project-status pass
+    /// reports the missing root; the cue list stays quiet about it.
+    /// </remarks>
     public IReadOnlySet<Guid> BrokenIn(HaCueProject project, string? projectPath)
     {
         var broken = new HashSet<Guid>();
 
         foreach (var cue in project.AllCues().OfType<MediaCueNode>())
         {
-            if (cue.MediaPath.Length == 0)
+            if (cue.MediaPath.Length == 0 || !IsResolvable(project, cue.MediaPath, projectPath))
                 continue;
 
             var resolved = MediaPaths.Resolve(project, cue.MediaPath, projectPath);
 
-            // Only a path that HAS been probed can be called broken. An unprobed one is unknown, and
-            // painting a cue red before anybody looked is the failure this whole seam exists to avoid.
-            if (Facts(resolved) is { } facts && facts.Duration is null && !facts.HasAudio && !facts.HasVideo)
+            if (Facts(resolved) is { } facts && !facts.IsKnown)
                 broken.Add(cue.Id);
         }
 
         return broken;
     }
+
+    /// <summary>Whether a stored path names a place on this machine at all.</summary>
+    private static bool IsResolvable(HaCueProject project, string path, string? projectPath) =>
+        Path.IsPathRooted(MediaPaths.Resolve(project, path, projectPath));
 
     /// <summary>
     /// Probes every media file the project references that has not been looked at yet.
@@ -92,6 +103,10 @@ public sealed class MediaFactsCache
             foreach (var reference in MediaPaths.ReferencesIn(project))
             {
                 var resolved = MediaPaths.Resolve(project, reference.Path, projectPath);
+
+                // Nothing to open: a relative path with no media root is not a location.
+                if (!Path.IsPathRooted(resolved))
+                    continue;
 
                 if (_byPath.ContainsKey(resolved) || !_inFlight.Add(resolved))
                     continue;

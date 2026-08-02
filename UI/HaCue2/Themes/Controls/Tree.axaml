@@ -120,7 +120,7 @@
                                 Content="{TemplateBinding Header}"
                                 VerticalAlignment="Center"
                                 TextElement.FontFamily="{StaticResource MonoFont}"
-                                TextElement.FontSize="{StaticResource FontSizeNano}"
+                                TextElement.FontSize="{DynamicResource FontSizeNano}"
                                 TextElement.Foreground="{StaticResource BoothInk3}"
                                 TextElement.LetterSpacing="1" />
             </DockPanel>
@@ -154,7 +154,7 @@
   </ControlTheme>
 
   <ControlTheme x:Key="{x:Type TreeDataGridRow}" TargetType="TreeDataGridRow">
-    <Setter Property="MinHeight" Value="{StaticResource CueRowHeight}" />
+    <Setter Property="MinHeight" Value="{DynamicResource CueRowHeight}" />
     <Setter Property="Template">
       <ControlTemplate>
         <Border x:Name="RowBorder"
@@ -226,7 +226,7 @@
                      VerticalAlignment="Center"
                      TextTrimming="CharacterEllipsis"
                      FontFamily="{StaticResource MonoFont}"
-                     FontSize="{StaticResource FontSizeMonoSmall}"
+                     FontSize="{DynamicResource FontSizeMonoSmall}"
                      Foreground="{StaticResource BoothInk2}" />
         </Border>
       </ControlTemplate>

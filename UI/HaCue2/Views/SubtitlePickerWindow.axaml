@@ -9,7 +9,7 @@
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource BoothBg}"
         Foreground="{StaticResource BoothInk}"
-        FontSize="{StaticResource FontSizeBase}">
+        FontSize="{DynamicResource FontSizeBase}">
 
   <!-- A list rather than a dropdown, because subtitles are not exclusive: a show routinely runs an
        embedded track for one language and a hand-corrected sidecar for another, both at once. -->
