@@ -28,7 +28,7 @@ public sealed class CueShowSessionCoordinator
 
     private CuePlayerViewModel CuePlayer { get; }
     private SoundboardWorkspaceViewModel Soundboard { get; }
-    private OutputManagementViewModel OutputManagement { get; }
+    private IOutputRuntimeCatalog OutputManagement { get; }
 
     // The cue workspace's playback runtime: the headless per-app ShowSession (Phase-8 cutover complete - the
     // legacy CuePlaybackEngine/SoundboardEngine/HaPlayPlaybackSession fallbacks are deleted).
@@ -160,10 +160,11 @@ public sealed class CueShowSessionCoordinator
     /// it against the session's voice snapshot to catch releases that raise no VoiceEnded (fade-outs).</summary>
     private readonly HashSet<Guid> _soundboardActiveTiles = new();
 
-    public CueShowSessionCoordinator(
+    // Internal for the same reason as the catalog interface it takes - see IOutputRuntimeCatalog.
+    internal CueShowSessionCoordinator(
         CuePlayerViewModel cuePlayer,
         SoundboardWorkspaceViewModel soundboard,
-        OutputManagementViewModel outputManagement)
+        IOutputRuntimeCatalog outputManagement)
     {
         CuePlayer = cuePlayer;
         Soundboard = soundboard;

@@ -213,6 +213,41 @@ public sealed class ArchitectureTests
     /// it"; this guards "the cue layer is liftable" - if the runner can reach <c>ShowSession</c> directly it
     /// can reach anything on it, and the seam stops being a boundary and becomes a suggestion.
     /// </remarks>
+    /// <summary>
+    /// Playback-side consumers reach the output engine through <c>IOutputRuntimeCatalog</c>, not through
+    /// the 1,800-line view model that implements it.
+    /// </summary>
+    /// <remarks>
+    /// Guards the extraction rather than the interface: adding a member to the catalog is fine, but a
+    /// consumer quietly typing a field as <c>OutputManagementViewModel</c> again to reach one convenient
+    /// extra member is how the seam disappears. Checked on the playback/session consumers - the view layer
+    /// and the app root legitimately hold the concrete view model.
+    /// </remarks>
+    [Fact]
+    public void PlaybackConsumersReachTheOutputEngineThroughItsCatalogInterface()
+    {
+        string[] consumers =
+        [
+            Path.Combine("UI", "HaPlay", "Playback", "CueCompositionRuntime.cs"),
+            Path.Combine("UI", "HaPlay", "Playback", "IdleLogoSlateSession.cs"),
+            Path.Combine("UI", "HaPlay", "ViewModels", "CueShowSessionCoordinator.cs"),
+            Path.Combine("UI", "HaPlay", "ViewModels", "SoundboardWorkspaceViewModel.cs"),
+        ];
+
+        var offenders = consumers
+            .Select(rel => (Rel: rel, Path: Path.Combine(RepoRoot(), rel)))
+            .Where(x => File.Exists(x.Path))
+            .Where(x => StripComments(File.ReadAllText(x.Path))
+                .Contains("OutputManagementViewModel", StringComparison.Ordinal))
+            .Select(x => x.Rel)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "these must depend on IOutputRuntimeCatalog, not the concrete view model: "
+            + string.Join(", ", offenders));
+    }
+
     [Fact]
     public void TheCueRunnerDrivesTheEngineThroughItsHostInterfaceOnly()
     {

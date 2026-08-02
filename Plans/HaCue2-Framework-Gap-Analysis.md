@@ -1568,7 +1568,7 @@ row's files rather than by reading its label: the external-input gate is three s
 `UI/HaPlay/Services/`, the per-endpoint test message is `ActionEndpoint*` under `UI/HaPlay/`, and
 raw-terminal acquisition is `PortAudioOutputRuntime` under `UI/HaPlay/OutputPreview/`.
 
-So roughly **40 of ~41 work items**, but that understates the weight: the recovered bay is the single
+So roughly **41 of ~41 work items** (the remainder are HaCue2-app-shaped, not gaps), but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1636,7 +1636,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Remote | `POST /lists/{id}/go` | **PARTIAL** — list-scoped cue addressing landed (`GET /lists`, `/lists/{list}/cues/{cue}/go\|stop`). The BARE `/lists/{id}/go` still needs per-list standby in the VM (10 `StandbyCueNode` write sites to mirror) — a feature, not a route | §5.5 |
 | Endpoints | Per-endpoint configurable test message | **ABSENT — APP-SIDE** (`ActionEndpoint*` are all `UI/HaPlay/`) | §5.6 |
 | App support | `HaOutput` engine | EXISTS, 8 couplings to invert | §7.1 |
-| App support | `IOutputRuntimeCatalog` | ABSENT (6 extraction sites) | §7.1 |
+| App support | `IOutputRuntimeCatalog` | ✅ **LANDED** — interface over the consumed runtime surface; 4 playback consumers switched, arch-guarded. Still traffics in `OutputLineViewModel` (next step) | §7.1 |
 | App support | `HaSource` model | EXISTS, Avalonia-free; `CueSubtitleSelection` entangled | §7.2 |
 | Build | Arch-test coverage of `UI/` | ✅ **LANDED** — `UiAllowed` map + 3 tests, incl. "no app references another app" | §7.3 |
 | Build | Second AOT head + CI gates | Template exists; HaCue2 steps ABSENT | §7.4 |

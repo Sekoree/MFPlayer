@@ -21,14 +21,14 @@ internal sealed class IdleLogoSlateSession : IDisposable
     private readonly List<StaticSlateVideoOutput> _localLogos = new();
     private readonly List<OutputLineViewModel> _localLines = new();
     private readonly List<OutputLineViewModel> _ndiLines = new();
-    private readonly OutputManagementViewModel _outputs;
+    private readonly IOutputRuntimeCatalog _outputs;
     private bool _disposed;
 
     private IdleLogoSlateSession(
         IReadOnlyList<StaticSlateVideoOutput> localLogos,
         IReadOnlyList<OutputLineViewModel> localLines,
         IReadOnlyList<OutputLineViewModel> ndiLines,
-        OutputManagementViewModel outputs)
+        IOutputRuntimeCatalog outputs)
     {
         _localLogos.AddRange(localLogos);
         _localLines.AddRange(localLines);
@@ -38,7 +38,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
 
     public static bool TryStart(
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
-        OutputManagementViewModel repository,
+        IOutputRuntimeCatalog repository,
         string imagePath,
         [NotNullWhen(true)] out IdleLogoSlateSession? session,
         out string? errorMessage)

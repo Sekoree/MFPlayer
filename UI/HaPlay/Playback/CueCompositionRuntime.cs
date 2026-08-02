@@ -25,7 +25,7 @@ internal sealed class CueCompositionRuntime : IDisposable
     public CueCompositionRuntime(
         CueComposition composition,
         IReadOnlyList<OutputLineViewModel> targetLines,
-        OutputManagementViewModel outputs,
+        IOutputRuntimeCatalog outputs,
         IReadOnlyDictionary<Guid, CueOutputMapping?>? mappingsByLine = null)
     {
         _composition = composition;
@@ -193,7 +193,7 @@ internal sealed class CueCompositionRuntime : IDisposable
     private static IReadOnlyList<ClipCompositionOutputLease> BuildOutputLeases(
         CueComposition composition,
         IReadOnlyList<OutputLineViewModel> targetLines,
-        OutputManagementViewModel outputs,
+        IOutputRuntimeCatalog outputs,
         IReadOnlyDictionary<Guid, CueOutputMapping?>? mappingsByLine)
     {
         var leases = new List<ClipCompositionOutputLease>();

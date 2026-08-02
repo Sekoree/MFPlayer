@@ -22,11 +22,54 @@ using S.Media.Routing;
 
 namespace HaPlay.ViewModels;
 
-public partial class OutputManagementViewModel : ViewModelBase
+public partial class OutputManagementViewModel : ViewModelBase, IOutputRuntimeCatalog
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.ViewModels.OutputManagementViewModel");
 
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
+
+    // --- IOutputRuntimeCatalog ----------------------------------------------------------------------
+    // Explicit implementations: these members are internal and stay that way. An internal member cannot
+    // implicitly satisfy an interface (CS0737), and making them public to avoid the forwarding would widen
+    // the view model's surface for the sake of a compiler rule - the opposite of what extracting this
+    // interface is for.
+
+    SharedAudioOutputLease? IOutputRuntimeCatalog.TryAcquirePortAudioByLineId(Guid lineId, bool liveMonitoring) =>
+        TryAcquirePortAudioByLineId(lineId, liveMonitoring);
+
+    IAudioOutput? IOutputRuntimeCatalog.TryAcquireEncodeAudioByLineId(Guid lineId) =>
+        TryAcquireEncodeAudioByLineId(lineId);
+
+    void IOutputRuntimeCatalog.ReleaseEncodeAudioByLineId(Guid lineId) => ReleaseEncodeAudioByLineId(lineId);
+
+    IVideoOutput? IOutputRuntimeCatalog.TryAcquireLocalVideoOutputForPlayback(OutputLineViewModel line) =>
+        TryAcquireLocalVideoOutputForPlayback(line);
+
+    void IOutputRuntimeCatalog.ReleaseLocalVideoOutputForPlayback(OutputLineViewModel line) =>
+        ReleaseLocalVideoOutputForPlayback(line);
+
+    NDIOutput? IOutputRuntimeCatalog.TryAcquireNDICarrierForPlayback(
+        OutputLineViewModel line, bool needsVideo, bool needsAudio) =>
+        TryAcquireNDICarrierForPlayback(line, needsVideo, needsAudio);
+
+    void IOutputRuntimeCatalog.ReleaseNDICarrierForPlayback(
+        OutputLineViewModel line, bool releaseVideo, bool releaseAudio) =>
+        ReleaseNDICarrierForPlayback(line, releaseVideo, releaseAudio);
+
+    void IOutputRuntimeCatalog.SetNDICarrierLogo(OutputLineViewModel line, VideoFrame? logoFrame) =>
+        SetNDICarrierLogo(line, logoFrame);
+
+    void IOutputRuntimeCatalog.StopPreviewsForPlayback(IEnumerable<OutputLineViewModel> lines) =>
+        StopPreviewsForPlayback(lines);
+
+    IAudioOutput IOutputRuntimeCatalog.WrapAudioEffectsForLine(Guid lineId, IAudioOutput inner, bool disposeInner) =>
+        WrapAudioEffectsForLine(lineId, inner, disposeInner);
+
+    Func<Guid, Playback.OutputLineHealthEvaluator.LineHealthMetrics?>? IOutputRuntimeCatalog.CueLineMetricsProbe
+    {
+        get => CueLineMetricsProbe;
+        set => CueLineMetricsProbe = value;
+    }
 
     public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 

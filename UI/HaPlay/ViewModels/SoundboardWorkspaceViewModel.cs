@@ -25,9 +25,12 @@ public sealed record SoundboardOutputOption(Guid Id, string Name)
 /// </summary>
 public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
 {
-    private readonly OutputManagementViewModel? _outputs;
+    private readonly IOutputRuntimeCatalog? _outputs;
 
-    public SoundboardWorkspaceViewModel(OutputManagementViewModel? outputs = null)
+    // Internal because IOutputRuntimeCatalog is: its health-probe member exposes
+    // OutputLineHealthEvaluator.LineHealthMetrics, whose owning class is internal. Nothing outside
+    // HaPlay / HaPlay.Desktop / HaPlay.Tests constructs this.
+    internal SoundboardWorkspaceViewModel(IOutputRuntimeCatalog? outputs = null)
     {
         _outputs = outputs;
         Boards.Add(new SoundboardViewModel(DefaultBoardName(1)));
