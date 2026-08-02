@@ -355,7 +355,7 @@
               <TextBox Classes="ro" Text="mute → unmute" />
             </HeaderedContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="quiet" Content="+ add level change…" />
+              <Button Classes="quiet" Content="+ add level change…" Click="OnAddLevelChange" />
             </ContentControl>
 
             <!-- A patch cue changes the console and leaves it changed: stopping it undoes nothing. -->

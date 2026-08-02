@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
+using HaCue2.Core.Model;
 using HaCue2.ViewModels;
 
 namespace HaCue2.Views;
@@ -11,6 +12,18 @@ public partial class InspectorPane : UserControl
     public InspectorPane() => InitializeComponent();
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+
+    /// <summary>A level change on a patch cue: one logical output moved to a level.</summary>
+    private void OnAddLevelChange(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not InspectorViewModel inspector)
+            return;
+
+        PromptWindow.Show(
+            this,
+            Dialogs.AddLevelChange(inspector.Journal, inspector.Cue as PatchCueNode),
+            inspector.Reload);
+    }
 
     private void OnChooseSubtitles(object? sender, RoutedEventArgs e)
     {

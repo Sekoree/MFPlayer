@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Presentation;
 using HaCue2.Sample;
@@ -16,10 +17,14 @@ namespace HaCue2.ViewModels;
 public partial class TargetsViewModel : ObservableObject
 {
     private readonly HaCueProject _project;
+    private readonly ShowRuntime _runtime;
+    private readonly ProjectJournal? _journal;
 
-    public TargetsViewModel(HaCueProject project, ShowRuntime runtime)
+    public TargetsViewModel(HaCueProject project, ShowRuntime runtime, ProjectJournal? journal = null)
     {
         _project = project;
+        _runtime = runtime;
+        _journal = journal;
 
         EndpointsTab = $"ACTION ENDPOINTS · {project.ActionEndpoints.Count}";
         TriggersTab = $"TRIGGER INPUTS · {project.TriggerInputs.Count}";
@@ -36,6 +41,20 @@ public partial class TargetsViewModel : ObservableObject
         _port = (project.Settings.RemoteApi?.Port ?? 8420).ToString();
         _serverState = project.Settings.RemoteApi?.Enabled == true ? "on" : "off";
         _lanMode = project.Settings.RemoteApi?.LanAllowed == true ? "allowed" : "local only";
+    }
+
+    /// <summary>The journal, for the dialogs the view opens.</summary>
+    public ProjectJournal Journal => _journal ?? new ProjectJournal(_project);
+
+    /// <summary>Re-reads the endpoints and inputs after a dialog added one.</summary>
+    public void Refresh()
+    {
+        Endpoints = TargetPresentation.Endpoints(_project, _runtime);
+        Sources = TargetPresentation.Sources(_project, _runtime);
+
+        OnPropertyChanged(nameof(Endpoints));
+        OnPropertyChanged(nameof(Sources));
+        OnPropertyChanged(nameof(Bindings));
     }
 
     public const string RemoteTab = "REMOTE API";
@@ -63,7 +82,7 @@ public partial class TargetsViewModel : ObservableObject
     };
 
     // ── action endpoints ──────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<TriggerSourceRow> Endpoints { get; }
+    public IReadOnlyList<TriggerSourceRow> Endpoints { get; private set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedEndpointName))]
@@ -84,7 +103,7 @@ public partial class TargetsViewModel : ObservableObject
     private string _testMessage;
 
     // ── trigger inputs ────────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<TriggerSourceRow> Sources { get; }
+    public IReadOnlyList<TriggerSourceRow> Sources { get; private set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Bindings))]

@@ -59,6 +59,16 @@ public partial class CuesViewModel : ObservableObject
 
     private HaCueProject Project => _journal.Project;
 
+    /// <summary>The journal, for the dialogs the view opens.</summary>
+    public ProjectJournal Journal => _journal;
+
+    /// <summary>The cue list the tree is currently showing, whether scoped to it or to a group in it.</summary>
+    public CueList? ScopedList => SelectedScope is not { } scope
+        ? Project.CueLists.FirstOrDefault()
+        : scope.IsList
+            ? Project.CueLists.FirstOrDefault(list => list.Id == scope.Id)
+            : Project.CueLists.FirstOrDefault(list => list.Flatten().Any(cue => cue.Id == scope.Id));
+
     // ── the tree ──────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The TOP-LEVEL rows. A group's cues hang off <see cref="CueRow.Children"/>.</summary>

@@ -151,6 +151,74 @@ public partial class VideoViewModel : ObservableObject
 
     public AuditionViewModel Audition { get; } = new();
 
+    /// <summary>The journal, for the dialogs the view opens.</summary>
+    public ProjectJournal Journal => _journal;
+
+    // ── mapping sections ──────────────────────────────────────────────────────────────────────
+    // These have nothing to ask, so they act directly rather than opening a prompt. A new section
+    // covers the whole frame, which is the only starting shape that is obviously wrong in a way the
+    // operator can see and drag into place.
+
+    public void AddSection()
+    {
+        if (MappedOutput is not { } output)
+            return;
+
+        _journal.Do(new AddItemCommand<MappingSection>(
+            output.Mapping,
+            new MappingSection { Name = $"Section {output.Mapping.Count + 1}" },
+            output.Mapping.Count,
+            "mapping",
+            "add mapping section"));
+        _journal.CloseGroup();
+
+        SelectedSection = output.Mapping.Count - 1;
+        Refresh();
+    }
+
+    /// <summary>
+    /// Copies the selected section, offset slightly.
+    /// </summary>
+    /// <remarks>
+    /// Offset rather than exactly on top: two identical sections look like one, and the operator would
+    /// drag what they think is the copy and find they moved the original.
+    /// </remarks>
+    public void DuplicateSection()
+    {
+        if (Section is not { } section || MappedOutput is not { } output)
+            return;
+
+        _journal.Do(new AddItemCommand<MappingSection>(
+            output.Mapping,
+            section with
+            {
+                Id = Guid.NewGuid(),
+                Name = $"{section.Name} copy",
+                TargetX = Math.Min(section.TargetX + 0.02, 1 - section.TargetWidth),
+                TargetY = Math.Min(section.TargetY + 0.02, 1 - section.TargetHeight),
+            },
+            SelectedSection + 1,
+            "mapping",
+            $"duplicate “{section.Name}”"));
+        _journal.CloseGroup();
+
+        SelectedSection = Math.Min(SelectedSection + 1, output.Mapping.Count - 1);
+        Refresh();
+    }
+
+    public void DeleteSection()
+    {
+        if (Section is not { } section || MappedOutput is not { } output)
+            return;
+
+        _journal.Do(new RemoveItemCommand<MappingSection>(
+            output.Mapping, section, "mapping", $"delete “{section.Name}”"));
+        _journal.CloseGroup();
+
+        SelectedSection = Math.Clamp(SelectedSection, 0, Math.Max(0, output.Mapping.Count - 1));
+        Refresh();
+    }
+
     // ── the section editor: register item 22's numeric route ───────────────────────────────────
     // The same eight numbers a drag moves, typed. The pane already told the operator these existed;
     // a canvas alone cannot hit "exactly half", which is the number a two-projector blend is made of.

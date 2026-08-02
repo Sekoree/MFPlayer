@@ -49,8 +49,8 @@
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <StackPanel Orientation="Horizontal" Spacing="6">
-                <Button Classes="tight" Content="+ OSC OUT…" />
-                <Button Classes="tight" Content="+ MIDI OUT…" />
+                <Button Classes="tight" Content="+ OSC OUT…" Click="OnDialog" Tag="end:osc" />
+                <Button Classes="tight" Content="+ MIDI OUT…" Click="OnDialog" Tag="end:midi" />
               </StackPanel>
             </Border>
           </c:PanelBox.Footer>
@@ -109,8 +109,8 @@
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Button Classes="tight" Content="+ MIDI IN…" />
-                  <Button Classes="tight" Content="+ OSC LISTENER…" />
+                  <Button Classes="tight" Content="+ MIDI IN…" Click="OnDialog" Tag="in:midi" />
+                  <Button Classes="tight" Content="+ OSC LISTENER…" Click="OnDialog" Tag="in:osc" />
                 </StackPanel>
               </Border>
             </c:PanelBox.Footer>

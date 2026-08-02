@@ -57,7 +57,7 @@ public partial class ShellViewModel : ObservableObject
         };
         Audio = new AudioViewModel(Journal, Runtime);
         Video = new VideoViewModel(project, Runtime, Journal);
-        Targets = new TargetsViewModel(project, Runtime);
+        Targets = new TargetsViewModel(project, Runtime, Journal);
         OutputInfo = new OutputInfoViewModel(Runtime);
 
         // A project as loaded is clean, whatever its contents. The dirty flag answers "does this

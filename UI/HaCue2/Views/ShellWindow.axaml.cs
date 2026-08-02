@@ -85,7 +85,7 @@ public partial class ShellWindow : Window
         => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = new DiagnosticsViewModel(Shell.Runtime) });
 
     private void OnProjectStatus(object? sender, RoutedEventArgs e)
-        => _projectStatus = Reopen(_projectStatus, () => new ProjectStatusWindow { DataContext = new ProjectStatusViewModel(Shell.Project, Shell.Environment) });
+        => _projectStatus = Reopen(_projectStatus, () => new ProjectStatusWindow { DataContext = new ProjectStatusViewModel(Shell.Project, Shell.Environment, Shell.Journal) });
 
     /// <summary>
     /// Bring an already-open auxiliary window forward instead of stacking a second copy. Diagnostics

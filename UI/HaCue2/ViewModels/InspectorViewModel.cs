@@ -42,6 +42,9 @@ public partial class InspectorViewModel : ObservableObject
 
     private HaCueProject Project => _journal.Project;
 
+    /// <summary>The journal, for the dialogs the view opens.</summary>
+    public ProjectJournal Journal => _journal;
+
     /// <summary>The lead cue — the one whose values the single-selection fields show.</summary>
     public CueNode? Cue => _selection.Count > 0 ? Project.FindCue(_selection[0]) : null;
 

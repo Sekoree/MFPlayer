@@ -85,10 +85,10 @@
               <TextBox Classes="ro" Text="{Binding MissingFile}" />
             </HeaderedContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="block" Content="SEARCH BY FILENAME UNDER MEDIA ROOT…" />
+              <Button Classes="block" Content="SEARCH BY FILENAME UNDER MEDIA ROOT…" Click="OnRelinkRoot" />
             </ContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="block" Content="PICK FILE MANUALLY…" />
+              <Button Classes="block" Content="PICK FILE MANUALLY…" Click="OnRelinkOne" />
             </ContentControl>
             <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
                        Text="Matches by name + duration; a duration mismatch relinks with a warning badge on the cue." />

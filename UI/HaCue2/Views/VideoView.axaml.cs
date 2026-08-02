@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using HaCue2.Controls;
+using HaCue2.Core.Model;
 using HaCue2.ViewModels;
 
 namespace HaCue2.Views;
@@ -46,6 +47,42 @@ public partial class VideoView : UserControl
     /// stored rather than as what was typed.
     /// </remarks>
     private void OnSectionFieldCommitted(object? sender, RoutedEventArgs e) => Video?.Refresh();
+
+    /// <summary>Opens whichever dialog the button asked for, by its Tag.</summary>
+    private void OnDialog(object? sender, RoutedEventArgs e)
+    {
+        if (Video is not { } video || (sender as Control)?.Tag as string is not { } verb)
+            return;
+
+        var journal = video.Journal;
+
+        // The mapping-section verbs are not prompts at all — they act on the selection directly,
+        // because "duplicate this section" has nothing to ask.
+        switch (verb)
+        {
+            case "section":
+                video.AddSection();
+                return;
+            case "section:copy":
+                video.DuplicateSection();
+                return;
+            case "section:delete":
+                video.DeleteSection();
+                return;
+        }
+
+        var prompt = verb switch
+        {
+            "out:local" => Dialogs.AddVideoOutput(journal, VideoOutputKind.LocalScreen, video.Screens),
+            "out:ndi" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Ndi, video.Screens),
+            "out:record" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Record, video.Screens),
+            "out:stream" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Stream, video.Screens),
+            "composition" => Dialogs.AddComposition(journal),
+            _ => null,
+        };
+
+        PromptWindow.Show(this, prompt, video.Refresh);
+    }
 
     private VideoViewModel? Video => DataContext as VideoViewModel;
 }

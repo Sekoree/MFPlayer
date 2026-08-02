@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
+using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Validation;
 using HaCue2.Sample;
@@ -428,8 +429,17 @@ public partial class SettingsViewModel : ObservableObject
 /// </remarks>
 public partial class ProjectStatusViewModel : ObservableObject
 {
-    public ProjectStatusViewModel(HaCueProject project, IProjectEnvironment? environment = null)
+    private readonly ProjectJournal? _journal;
+    private readonly IProjectEnvironment? _environment;
+
+    public ProjectStatusViewModel(
+        HaCueProject project,
+        IProjectEnvironment? environment = null,
+        ProjectJournal? journal = null)
     {
+        _journal = journal;
+        _environment = environment;
+        Project = project;
         Report = ProjectStatus.Run(project, environment: environment);
         Title = $"Project status — {project.Title}";
 
@@ -451,9 +461,104 @@ public partial class ProjectStatusViewModel : ObservableObject
             .FirstOrDefault()?.Message ?? "nothing missing";
     }
 
-    public ProjectStatusReport Report { get; }
+    public ProjectStatusReport Report { get; private set; }
     public IReadOnlyList<CheckRow> Checks { get; }
     public string Title { get; }
+
+    /// <summary>The document, for the relink actions this window offers.</summary>
+    public HaCueProject Project { get; } = null!;
+
+    /// <summary>
+    /// Relinks every missing file by searching a new root.
+    /// </summary>
+    /// <remarks>
+    /// Register-item behaviour worth restating: relink only touches MISSING references. Rewriting ones
+    /// that already resolve would, on a machine where the old root is still mounted, silently move the
+    /// show onto a different copy of the same media. The unresolved list is reported rather than
+    /// swallowed — a relink that fixed nine of ten files and said "done" fails on the tenth cue,
+    /// mid-performance, with no record of which one.
+    /// </remarks>
+    public PromptViewModel? RelinkUnderRoot()
+    {
+        if (_journal is null)
+            return null;
+
+        return new PromptViewModel(
+            "Relink under a new root",
+            "only MISSING files are touched",
+            [
+                new PromptField { Label = "Root", Value = Project.Settings.MediaRoot, Hint = "the folder to search" },
+                new PromptField
+                {
+                    Label = "Match",
+                    Kind = PromptFieldKind.Choice,
+                    Options = ["by filename anywhere", "by the same sub-path"],
+                    Hint = "filename survives a reorganised tree · sub-path keeps the structure",
+                },
+            ],
+            prompt =>
+            {
+                var root = prompt["Root"].Value.Trim();
+                if (root.Length == 0)
+                    return;
+
+                LastRelink = MediaEdits.Relink(
+                    _journal,
+                    root,
+                    prompt["Match"].SelectedIndex == 0
+                        ? RelinkStrategy.ByFileName
+                        : RelinkStrategy.BySubPath);
+
+                Rerun();
+            },
+            confirm: "RELINK");
+    }
+
+    /// <summary>Points ONE missing reference at a file the operator chose.</summary>
+    public void RelinkOne(string cuePath, string chosen)
+    {
+        if (_journal is null || chosen.Length == 0)
+            return;
+
+        MediaEdits.RelinkOne(_journal, cuePath, chosen);
+        Rerun();
+    }
+
+    /// <summary>The path a manual relink would replace, or empty when nothing is missing.</summary>
+    public string MissingPath =>
+        MediaPaths.ReferencesIn(Project)
+            .Select(reference => reference.Path)
+            .FirstOrDefault(path => !FileSystemEnvironment.Instance.MediaExists(
+                MediaPaths.Resolve(Project, path, null)))
+        ?? "";
+
+    /// <summary>What the last relink changed and what it could not find.</summary>
+    public MediaEditResult? LastRelink { get; private set; }
+
+    public string RelinkSummary => LastRelink is not { } result
+        ? ""
+        : result.IsComplete
+            ? $"relinked {result.Changed.Count} file(s)"
+            : $"relinked {result.Changed.Count} · {result.Unresolved.Count} still missing";
+
+    public bool HasRelinked => LastRelink is not null;
+
+    private void Rerun()
+    {
+        Report = ProjectStatus.Run(Project, environment: _environment);
+        OnPropertyChanged(nameof(Report));
+        OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(RelinkSummary));
+        OnPropertyChanged(nameof(HasRelinked));
+        OnPropertyChanged(nameof(MissingPath));
+
+        // The window's own missing-file readout, re-derived the same way the constructor did it.
+        MissingFile = Report.Checks
+            .FirstOrDefault(check => check.Name == "Media files")?.Issues
+            .Select(issue => issue.Message)
+            .FirstOrDefault()
+            ?? "nothing is missing";
+    }
 
     public string Summary => Report.Summary;
 

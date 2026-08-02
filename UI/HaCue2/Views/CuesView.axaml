@@ -50,7 +50,7 @@
         <Button Grid.Column="0" Content="+ ADD ▾" />
         <Button Grid.Column="1" Content="SELECTION ▾" />
         <Button Grid.Column="2" Content="REMOVE" />
-        <Button Grid.Column="3" Classes="icon" Content="RENUMBER…" />
+        <Button Grid.Column="3" Classes="icon" Content="RENUMBER…" Click="OnRenumber" />
         <TextBlock Grid.Column="5" Classes="mono dim3 small" VerticalAlignment="Center"
                    Text="GO always works — editing never blocks playback" />
       </Grid>

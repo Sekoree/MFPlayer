@@ -56,10 +56,10 @@
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Button Classes="tight" Content="+ LOCAL…" />
-                  <Button Classes="tight" Content="+ NDI…" />
-                  <Button Classes="tight" Content="+ RECORD…" />
-                  <Button Classes="tight" Content="+ STREAM…" />
+                  <Button Classes="tight" Content="+ LOCAL…" Click="OnDialog" Tag="out:local" />
+                  <Button Classes="tight" Content="+ NDI…" Click="OnDialog" Tag="out:ndi" />
+                  <Button Classes="tight" Content="+ RECORD…" Click="OnDialog" Tag="out:record" />
+                  <Button Classes="tight" Content="+ STREAM…" Click="OnDialog" Tag="out:stream" />
                 </StackPanel>
               </Border>
             </c:PanelBox.Footer>
@@ -145,7 +145,7 @@
                 <ComboBox ItemsSource="{Binding IdleImages}" SelectedIndex="0" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="+ ADD COMPOSITION…" />
+                <Button Classes="block" Content="+ ADD COMPOSITION…" Click="OnDialog" Tag="composition" />
               </ContentControl>
             </StackPanel>
           </c:PanelBox>
@@ -170,9 +170,9 @@
 
               <Border Classes="chain" Margin="0,6,0,0">
                 <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="6">
-                  <Button Classes="tight" Content="+ ADD" />
-                  <Button Classes="tight" Content="DUPLICATE" />
-                  <Button Classes="tight" Content="DELETE" />
+                  <Button Classes="tight" Content="+ ADD" Click="OnDialog" Tag="section" />
+                  <Button Classes="tight" Content="DUPLICATE" Click="OnDialog" Tag="section:copy" />
+                  <Button Classes="tight" Content="DELETE" Click="OnDialog" Tag="section:delete" />
                 </WrapPanel>
               </Border>
 

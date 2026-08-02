@@ -85,6 +85,36 @@ public static class MediaEdits
     /// nobody asked about — and on a machine where the old root is still mounted, would silently move
     /// the show onto a different copy of the same media.
     /// </remarks>
+    /// <summary>
+    /// Points every reference to one path at a file the operator chose.
+    /// </summary>
+    /// <remarks>
+    /// The manual counterpart to <see cref="Relink"/>, for the file a search cannot find because it
+    /// was renamed. Every reference to the SAME old path moves together — two cues pointing at one
+    /// missing file are one problem, and fixing it twice is a way to fix it inconsistently.
+    /// </remarks>
+    public static MediaEditResult RelinkOne(ProjectJournal journal, string oldPath, string newPath)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var references = MediaPaths.ReferencesIn(journal.Project)
+            .Where(reference => reference.Path == oldPath)
+            .ToList();
+
+        if (references.Count == 0 || newPath.Length == 0)
+            return new MediaEditResult([], [oldPath]);
+
+        using var scope = journal.Composite($"relink {System.IO.Path.GetFileName(oldPath)}", "media");
+
+        foreach (var reference in references)
+        {
+            journal.Do(new RewriteMediaPathCommand(
+                reference, newPath, $"relink {reference.Describe}"));
+        }
+
+        return new MediaEditResult([newPath], []);
+    }
+
     public static MediaEditResult Relink(
         ProjectJournal journal,
         string newRoot,

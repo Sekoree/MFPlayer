@@ -62,6 +62,109 @@ public partial class AudioViewModel : ObservableObject
 
     private HaCueProject _project => _journal.Project;
 
+    /// <summary>The journal, for the dialogs the view opens.</summary>
+    public ProjectJournal Journal => _journal;
+
+    /// <summary>What a new group would take as members — the selected output, when there is one.</summary>
+    public IReadOnlyList<Guid> SelectedOutputIds =>
+        SelectedOutput is { } row ? [row.Id] : [];
+
+    /// <summary>
+    /// Patches the selected logical output onto a device line's channels.
+    /// </summary>
+    /// <remarks>
+    /// Register item 8's "pick device channels" — the operator names the LINE and the first channel,
+    /// and the cells land from there. Null when there is nothing selected or nowhere to patch to, so
+    /// the button opens nothing rather than a modal that says "select something first".
+    /// </remarks>
+    public PromptViewModel? PatchSelectedToDevice()
+    {
+        if (SelectedOutput is not { } row
+            || _project.FindChannel(row.Id) is not { } channel
+            || _project.AudioLines.Count == 0)
+            return null;
+
+        var lines = _project.AudioLines;
+
+        return new PromptViewModel(
+            $"Patch “{channel.Name}”",
+            "which line, and which channel on it",
+            [
+                new PromptField
+                {
+                    Label = "Line",
+                    Kind = PromptFieldKind.Choice,
+                    Options = [.. lines.Select(line => $"{line.Name} · {line.Channels}ch")],
+                },
+                new PromptField
+                {
+                    Label = "Channel",
+                    Kind = PromptFieldKind.Number,
+                    Value = "1",
+                    Hint = "1-based, as the device numbers its outputs",
+                },
+            ],
+            prompt =>
+            {
+                var line = lines[Math.Clamp(prompt["Line"].SelectedIndex, 0, lines.Count - 1)];
+                var lineChannel = Math.Clamp(prompt["Channel"].Number(1) - 1, 0, line.Channels - 1);
+
+                _journal.Do(new SetPatchCellCommand(
+                    _project.AudioPatch, channel.Id, line.Id, lineChannel, 0, false,
+                    $"patch {channel.Name} → {line.Name} {lineChannel + 1}"));
+                _journal.CloseGroup();
+            },
+            confirm: "PATCH");
+    }
+
+    /// <summary>
+    /// Points every absent line at a device that is here.
+    /// </summary>
+    /// <remarks>
+    /// One prompt for all of them rather than one per line: an interface that changed name changed it
+    /// for every line on it, and answering the same question five times is how an operator gives up
+    /// halfway and leaves the show half-patched.
+    /// </remarks>
+    public PromptViewModel? RelinkAbsentLines()
+    {
+        var absent = _project.AudioLines
+            .Where(line => _runtime.AbsentLines.Contains(line.Id))
+            .ToList();
+
+        if (absent.Count == 0)
+            return null;
+
+        return new PromptViewModel(
+            "Relink absent lines",
+            $"{absent.Count} line(s) are not on this machine",
+            [
+                new PromptField
+                {
+                    Label = "Device",
+                    Value = "",
+                    Hint = "the new device name · matched the same way as before",
+                },
+            ],
+            prompt =>
+            {
+                var hint = prompt["Device"].Value.Trim();
+                if (hint.Length == 0)
+                    return;
+
+                using var scope = _journal.Composite("relink absent lines", "audio");
+
+                foreach (var line in absent)
+                {
+                    var target = line;
+                    _journal.Do(new SetValueCommand<string>(
+                        target.Id, "deviceHint", "audio",
+                        () => target.DeviceHint, value => target.DeviceHint = value, hint,
+                        $"relink “{target.Name}”"));
+                }
+            },
+            confirm: "RELINK");
+    }
+
     private string ClockMasterName =>
         _project.AudioPatch.ClockMasterLineId is { } id
             ? _project.FindLine(id)?.Name ?? "none"

@@ -1,0 +1,50 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.PromptWindow"
+        x:DataType="vm:PromptViewModel"
+        Title="{Binding Title}"
+        Width="460" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- The one modal shape in the app. Every "…" button that just needs a couple of values and a verb
+       opens this; anything with a real editing surface of its own (the curve editor, the subtitle
+       picker) gets its own window instead. -->
+
+  <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7">
+    <DockPanel>
+
+      <Border DockPanel.Dock="Bottom" Classes="chain">
+        <DockPanel LastChildFill="False">
+          <Button DockPanel.Dock="Right" Classes="primary" Content="{Binding Confirm}" Click="OnConfirm" />
+          <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
+                  Content="CANCEL" Click="OnCancel" />
+        </DockPanel>
+      </Border>
+
+      <ItemsControl ItemsSource="{Binding Fields}" Margin="0,6,0,8">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:PromptField">
+            <StackPanel>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{Binding Label}">
+                <Panel>
+                  <TextBox IsVisible="{Binding IsText}" Text="{Binding Value}" />
+                  <ComboBox IsVisible="{Binding IsChoice}" HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" />
+                  <CheckBox IsVisible="{Binding IsToggle}" IsChecked="{Binding IsOn}" />
+                </Panel>
+              </HeaderedContentControl>
+              <TextBlock Classes="mono dim3 micro" Margin="115,0,10,4" TextWrapping="Wrap"
+                         IsVisible="{Binding HasHint}" Text="{Binding Hint}" />
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </DockPanel>
+  </c:PanelBox>
+</Window>
