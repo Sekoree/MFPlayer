@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using S.Media.FFmpeg.Common;
 
+using S.Media.Core;
+
 namespace S.Media.Source.YouTube;
 
 /// <summary>Progress phases of a prepare (download-then-remux) run, for the readiness UI.</summary>
@@ -42,9 +44,9 @@ public sealed class YouTubePreparer
     private readonly object _assetGate = new();
     private readonly Dictionary<string, AssetLeaseEntry> _activeAssets = new(StringComparer.Ordinal);
 
-    /// <summary>Default cache root: <c>~/.cache/mfplayer/youtube</c> (or the platform equivalent).</summary>
-    public static string DefaultCacheRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "mfplayer", "youtube-cache");
+    /// <summary>Default cache root: <c>~/.cache/mfplayer/youtube-cache</c> (or the platform equivalent),
+    /// redirectable via <see cref="MediaCachePaths.RootOverrideVariable"/>.</summary>
+    public static string DefaultCacheRoot => MediaCachePaths.For("youtube-cache");
 
     /// <param name="maxCacheBytes">YT-03: optional cap on total committed <c>.mkv</c> asset bytes; oldest
     /// (LRU by last-write) beyond the cap are evicted after a successful prepare. Null = unbounded.</param>

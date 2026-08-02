@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using S.Media.Core;
 
 namespace HaPlay.Tests;
 
@@ -18,6 +19,17 @@ internal static class TestCacheSandbox
             var dir = Path.Combine(Path.GetTempPath(), "haplay-test-cache", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             Environment.SetEnvironmentVariable("HAPLAY_CACHE_ROOT", dir);
+        }
+
+        // The framework's SHARED media cache (prepared YouTube assets, baked MMD physics) is a separate
+        // root: it is keyed by source material rather than by app, so it deliberately lives outside
+        // HAPLAY_CACHE_ROOT. Redirecting only the app root left both of those writing into the developer's
+        // real cache directory for the whole suite.
+        if (Environment.GetEnvironmentVariable(MediaCachePaths.RootOverrideVariable) is null or "")
+        {
+            var mediaDir = Path.Combine(Path.GetTempPath(), "mfplayer-test-cache", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(mediaDir);
+            Environment.SetEnvironmentVariable(MediaCachePaths.RootOverrideVariable, mediaDir);
         }
         // MainViewModel-heavy tests explicitly exercise flush/recovery where relevant. Disabling its recurring
         // dispatcher timer prevents hundreds of short-lived test VMs being retained by timer event handlers.

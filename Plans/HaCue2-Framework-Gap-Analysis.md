@@ -1542,8 +1542,25 @@ needed nothing), the state is:
 | Automation | 4 | **2** | group-level lanes (RESOLVED: flatten in the mapper, no framework work) |
 | Diagnostics | 3 | **3** | — |
 | Fades | 3 | **1** | — the other two were re-scoped into the landed curve work |
-| Build | 4 | **1** | second AOT head + CI gates; per-app settings roots (both app-side) |
+| Build | 4 | **3** | second AOT head + CI gates (app-side) |
 | Everything else (status, remote, app-support) | ~8 | 0 | all Phase-2 app-side |
+
+**Hardening pass (commit `0d2ac4a2` "Gap fixup", 2026-08-02).** 34 framework files, ~+1,250 lines (about
+half tests), no app-side changes. It did not open or close register ROWS - it fixed correctness inside rows
+already marked landed:
+
+- **`AudioPatchBay`** — terminal replacement is now staged then swapped, so a factory/format failure leaves
+  the old terminal flowing instead of tearing it down; the bay owns clock policy explicitly and suppresses
+  the router's generic adaptive hook (auto-promotion on removal could silently make a rate-adapted secondary
+  the pace master while the bay reported none); adaptive-rate wrapping is role-aware (master direct at the
+  project rate, secondaries wrapped) and re-staged on master promotion; monitor inputs follow the stable
+  terminal id across a swap.
+- **`AudioRouter`** — `AddOutput` overload to suppress the generic adaptive hook, `RemoveOutput` with
+  cancellation.
+- **`OutboundRampRunner`** — multi-point ramps (`OutboundRampPoint`) and `WaitForPendingSendAsync`.
+- **`ShowDocumentValidator`** — envelope validation for BOTH lanes (negative times, unsorted points,
+  non-finite levels, volume outside 0..+12 dB). The opacity lane shipped without it.
+- **`LinearTimecodeGenerator`** — rejects an invalid authored label at construction and at `Seek`.
 
 **Framework tranche: COMPLETE (2026-08-02).** Every register row that lands inside `MediaFramework/` is
 done. Everything still open is Phase-2 app-side work in `UI/HaPlay/` — verified by locating each remaining
@@ -1551,7 +1568,7 @@ row's files rather than by reading its label: the external-input gate is three s
 `UI/HaPlay/Services/`, the per-endpoint test message is `ActionEndpoint*` under `UI/HaPlay/`, and
 raw-terminal acquisition is `PortAudioOutputRuntime` under `UI/HaPlay/OutputPreview/`.
 
-So roughly **37 of ~41 work items**, but that understates the weight: the recovered bay is the single
+So roughly **39 of ~41 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1623,8 +1640,8 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | App support | `HaSource` model | EXISTS, Avalonia-free; `CueSubtitleSelection` entangled | §7.2 |
 | Build | Arch-test coverage of `UI/` | ✅ **LANDED** — `UiAllowed` map + 3 tests, incl. "no app references another app" | §7.3 |
 | Build | Second AOT head + CI gates | Template exists; HaCue2 steps ABSENT | §7.4 |
-| Build | Per-app settings/recovery roots | ABSENT (hardcoded `"HaPlay"`, 4 collision sites) | §7.5 |
-| Build | One shared media cache | EXISTS already (under `mfplayer/`), but not sandboxed by the env override | §7.5 |
+| Build | Per-app settings/recovery roots | ✅ **LANDED** — `HaPlayStoragePaths.AppName` (root + `{APP}_CACHE_ROOT` derived; late change throws) | §7.5 |
+| Build | One shared media cache | ✅ **LANDED** — `S.Media.Core.MediaCachePaths` (`MFPLAYER_CACHE_ROOT`); both cache sites now redirectable, and the test sandbox sets it | §7.5 |
 | Test | Headless Avalonia harness | EXISTS (~1023 lines) — must be copied, incl. the anti-hang bootstrap | §7.6 |
 | Session | `ShowDocument` as a shared engine contract | EXISTS — two mappers already target it (cue + deck); only 1 of 6 members is cue-shaped | §10.1 |
 | Session | Engine / cue-semantics seam | ✅ **LANDED** — `CueId`→`ClipId` (wire pinned), cue-free core + `PlayClipAsync`, cue-runner lift (`CueRunner` owns the graph via `ICueRunnerHost`, arch-guarded), validator split (`CueListValidator`). Record split deferred: the envelope must stay one type | §10.2 |

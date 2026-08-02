@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 
+using S.Media.Core;
+
 namespace S.Media.Source.MMD;
 
 /// <summary>
@@ -283,8 +285,17 @@ public static class MMDPhysicsBakeCache
     private static readonly Dictionary<string, Task<MMDBakedPhysics?>> Pending = new(StringComparer.Ordinal);
     private static readonly Lock Gate = new();
 
-    public static string CacheDirectory { get; set; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "mfplayer", "mmd-bake");
+    private static string? _cacheDirectoryOverride;
+
+    /// <summary>Where baked physics is stored. Defaults to the shared media cache (redirectable via
+    /// <see cref="MediaCachePaths.RootOverrideVariable"/>); assigning overrides it outright.</summary>
+    /// <remarks>The default resolves on ACCESS, not at type initialisation - a value baked in when this type
+    /// was first touched would be decided by test ordering rather than by the override.</remarks>
+    public static string CacheDirectory
+    {
+        get => _cacheDirectoryOverride ?? MediaCachePaths.For("mmd-bake");
+        set => _cacheDirectoryOverride = value;
+    }
 
     /// <summary>Test/diagnostic hook: number of bakes currently in flight (evicted on completion).</summary>
     internal static int PendingBakeCount
