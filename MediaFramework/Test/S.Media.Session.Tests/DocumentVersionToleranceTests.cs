@@ -38,7 +38,7 @@ public class DocumentVersionToleranceTests
         var errors = ShowDocumentValidator.Validate(At(ShowDocumentValidator.CurrentVersion + 1));
 
         var error = Assert.Single(errors);
-        Assert.Contains("unsupported document version", error, StringComparison.Ordinal);
+        Assert.Contains("unsupported document version", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class DocumentVersionToleranceTests
 
         var errors = ShowDocumentValidator.Validate(document);
 
-        Assert.Contains(errors, e => e.Contains("outside 0..1", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Message.Contains("outside 0..1", StringComparison.Ordinal));
     }
 
     [Fact]

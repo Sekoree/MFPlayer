@@ -41,7 +41,7 @@ public sealed class ValidatorSeamTests
 
         Assert.Contains(
             ShowDocumentValidator.Validate(doc),
-            e => e.Contains("typo", StringComparison.Ordinal) && e.Contains("clip", StringComparison.Ordinal));
+            e => e.Message.Contains("typo", StringComparison.Ordinal) && e.Message.Contains("clip", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -62,8 +62,8 @@ public sealed class ValidatorSeamTests
             new CueDefinition("c", 1, "C"),  // duplicate number
         ]);
 
-        Assert.Contains(errors, e => e.Contains("duplicate cue id", StringComparison.Ordinal));
-        Assert.Contains(errors, e => e.Contains("duplicate cue number", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Message.Contains("duplicate cue id", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Message.Contains("duplicate cue number", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public sealed class ValidatorSeamTests
 
         Assert.Contains(
             ShowDocumentValidator.Validate(doc),
-            e => e.Contains("duplicate cue id", StringComparison.Ordinal));
+            e => e.Message.Contains("duplicate cue id", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public sealed class ValidatorSeamTests
 
         Assert.Contains(
             CueListValidator.Validate(cues),
-            e => e.Contains("ghost", StringComparison.Ordinal));
+            e => e.Message.Contains("ghost", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -108,12 +108,74 @@ public sealed class ValidatorSeamTests
     }
 
     [Fact]
+    public void AnIssueCarriesItsSubject_SoAHostCanNavigateToIt()
+    {
+        var doc = Doc(
+            clips: [new ShowClipBinding("stinger", "/a.wav")],
+            routes: [new OutputPatchRoute("typo", ShowSession.MasterOutputId)]);
+
+        var issue = Assert.Single(ShowDocumentValidator.Validate(doc));
+
+        // Parsing the id back out of the sentence works until someone rewords the sentence.
+        Assert.Equal("route", issue.SubjectKind);
+        Assert.Equal("typo", issue.SubjectId);
+    }
+
+    [Fact]
+    public void AClipIssueIsAttributedToItsClip()
+    {
+        var doc = Doc(clips: [new ShowClipBinding("stinger", "   ")]);
+
+        var issue = Assert.Single(ShowDocumentValidator.Validate(doc));
+
+        Assert.Equal("clip", issue.SubjectKind);
+        Assert.Equal("stinger", issue.SubjectId);
+        Assert.Equal(ShowValidationSeverity.Error, issue.Severity);
+    }
+
+    [Fact]
+    public void AnEmptyCueLabel_WarnsRatherThanBlockingTheShow()
+    {
+        var doc = Doc(cues: [new CueDefinition("a", 1, "")]);
+
+        var issue = Assert.Single(ShowDocumentValidator.Validate(doc));
+
+        // Deliberate behaviour change: this used to refuse to open the show. A missing label is a cosmetic
+        // gap in the operator's list and cannot affect playback.
+        Assert.Equal(ShowValidationSeverity.Warning, issue.Severity);
+        Assert.Equal("cue", issue.SubjectKind);
+        ShowDocumentValidator.ThrowIfInvalid(doc); // must not throw
+    }
+
+    [Fact]
+    public void ADocumentWithBothAWarningAndAnError_StillThrows()
+    {
+        var doc = Doc(cues: [new CueDefinition("a", 1, ""), new CueDefinition("a", 2, "B")]);
+
+        var thrown = Assert.Throws<ShowDocumentValidationException>(() => ShowDocumentValidator.ThrowIfInvalid(doc));
+
+        // The exception carries the blocking problems only - a warning in that list would read as a cause.
+        Assert.All(thrown.Errors, e => Assert.Equal(ShowValidationSeverity.Error, e.Severity));
+        Assert.Contains(thrown.Errors, e => e.Message.Contains("duplicate cue id", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AWholeDocumentRule_HasNoSubject()
+    {
+        var doc = Doc() with { Version = ShowDocumentValidator.CurrentVersion + 1 };
+
+        var issue = Assert.Single(ShowDocumentValidator.Validate(doc));
+
+        Assert.Null(issue.SubjectKind);
+    }
+
+    [Fact]
     public void AnUnknownStopTarget_IsACueRule()
     {
         var cues = new[] { new CueDefinition("a", 1, "A") with { StopTargetIds = ["ghost"] } };
 
         Assert.Contains(
             CueListValidator.Validate(cues),
-            e => e.Contains("stop-target", StringComparison.Ordinal));
+            e => e.Message.Contains("stop-target", StringComparison.Ordinal));
     }
 }

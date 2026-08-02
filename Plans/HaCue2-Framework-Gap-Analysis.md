@@ -1535,17 +1535,23 @@ needed nothing), the state is:
 
 | Area | Work rows | Landed | Remaining |
 |---|---|---|---|
-| Audio (framework) | 11 | **10** | raw-terminal (exclusive) line acquisition — half app-side (§7.1) |
+| Audio (framework) | 11 | **10** | raw-terminal acquisition — the remaining half is app-side (§7.1) |
 | Video | 9 | **8** | GL-backend surfacing in a host UI (app-side) |
-| Control | 9 | **4** | external-input gate; per-endpoint test message; session lifecycle glue + learn (app-side) |
+| Control | 9 | **4** | all three remaining are app-side: external-input gate, per-endpoint test message, session lifecycle glue + learn |
 | Session | 6 | **6** | — |
 | Automation | 4 | **2** | group-level lanes (RESOLVED: flatten in the mapper, no framework work) |
-| Diagnostics | 3 | **2** | validator severity levels |
+| Diagnostics | 3 | **3** | — |
 | Fades | 3 | **1** | — the other two were re-scoped into the landed curve work |
 | Build | 4 | **1** | second AOT head + CI gates; per-app settings roots (both app-side) |
 | Everything else (status, remote, app-support) | ~8 | 0 | all Phase-2 app-side |
 
-So roughly **36 of ~41 work items**, but that understates the weight: the recovered bay is the single
+**Framework tranche: COMPLETE (2026-08-02).** Every register row that lands inside `MediaFramework/` is
+done. Everything still open is Phase-2 app-side work in `UI/HaPlay/` — verified by locating each remaining
+row's files rather than by reading its label: the external-input gate is three services under
+`UI/HaPlay/Services/`, the per-endpoint test message is `ActionEndpoint*` under `UI/HaPlay/`, and
+raw-terminal acquisition is `PortAudioOutputRuntime` under `UI/HaPlay/OutputPreview/`.
+
+So roughly **37 of ~41 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1566,7 +1572,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Audio | Wedged **pacing master** survival | ✅ **LANDED** — `ClockMasterWatchdog` + `PromoteClockMaster` (D2) | §1.3 |
 | Audio | Resampler factory injection | EXISTS (`IMediaRegistry.CreateResamplingOutput`) | §1.1 |
 | Audio | Marker to stop a resampled terminal becoming clock master | ✅ **LANDED** — `IRateAdaptedOutput`; auto-promotion refuses it | §1.2 |
-| Audio | Raw-terminal (exclusive) line acquisition | **ABSENT** | §1.4, §7.1 |
+| Audio | Raw-terminal (exclusive) line acquisition | **ABSENT — APP-SIDE** (`UI/HaPlay/OutputPreview/PortAudioOutputRuntime.cs` never exposes the raw terminal) | §1.4, §7.1 |
 | Audio | Per-lease input health counters on the router | ✅ **LANDED** — `ProducerDiagnostics` rows (buffered / overflow / underrun / latency / epoch) | §1.4, §6.2 |
 | Audio | Output pump counters / health | EXISTS | §1.1, §6.2 |
 | Audio | Level metering (peak/RMS) | ✅ **LANDED** — `ProgramBusMeter`, non-destructive, frame-based decay | §6.1 |
@@ -1598,12 +1604,12 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Diagnostics | MEL pipeline, single factory | EXISTS and consistent | §6.4 |
 | Diagnostics | In-memory subscribable log sink + level switch | ✅ **LANDED** — `LogRingProvider` (structured entries, volatile level, drop count, EntryCaptured) | §6.4 |
 | Diagnostics | "Copy report" serialization | ✅ **LANDED** — `AudioPatchBayReport.Render`, invariant-formatted plain text | §6.5 |
-| Status | Document validator (dead references) | EXISTS (`ShowDocumentValidator`) — string list, needs severity | §6.6 |
+| Status | Document validator (dead references) | ✅ **LANDED** — `ShowValidationIssue` (severity + subject kind/id for navigation); `ThrowIfInvalid` blocks on Errors only | §6.6 |
 | Status | Missing-media / absent-device checks | ABSENT — but every probe already exists, incl. device matching | §6.6 |
 | Control | Device layer (open/monitor/resolve/persist) | EXISTS in `S.Control` | §5.1 |
 | Control | Session lifecycle glue + learn + matching | app-side; lift-and-rehome | §5.1 |
 | Control | cc → parameter bindings | ✅ **LANDED** — `ParameterRegistry` + `ContinuousBinding` (soft takeover) + `CoalescingParameterWriter` | §5.2 |
-| Control | Single external-input gate | ABSENT (three differently-shaped gates) | §5.3 |
+| Control | Single external-input gate | **ABSENT — APP-SIDE** (all three gates live in `UI/HaPlay/Services/`) | §5.3 |
 | Control | MTC decode/chase | EXISTS | §5.4 |
 | Control | Audio input capture (LTC prerequisite) | EXISTS (`PortAudioInput`, `padev:` scheme) | §5.4a |
 | Control | LTC decoder | ✅ **LANDED** — `LinearTimecodeDecoder`, biphase-mark, polarity/amplitude independent | §5.4a |
@@ -1611,7 +1617,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Control | LTC generation | ✅ **LANDED** — `LinearTimecodeGenerator`, pull-based, exact-rational frame length; round-trips through the decoder at all 4 rates | §5.4a |
 | Remote | Route table / self-documentation / counters | ABSENT (hand-written switch) | §5.5 |
 | Remote | `POST /lists/{id}/go` | **UNBLOCKED** — per-list standby landed; remains app-side routing work | §5.5 |
-| Endpoints | Per-endpoint configurable test message | ABSENT (probes hardcoded; MIDI sends nothing) | §5.6 |
+| Endpoints | Per-endpoint configurable test message | **ABSENT — APP-SIDE** (`ActionEndpoint*` are all `UI/HaPlay/`) | §5.6 |
 | App support | `HaOutput` engine | EXISTS, 8 couplings to invert | §7.1 |
 | App support | `IOutputRuntimeCatalog` | ABSENT (6 extraction sites) | §7.1 |
 | App support | `HaSource` model | EXISTS, Avalonia-free; `CueSubtitleSelection` entangled | §7.2 |

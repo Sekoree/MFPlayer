@@ -20,10 +20,10 @@ namespace S.Media.Session;
 public static class CueListValidator
 {
     /// <summary>Every problem found in <paramref name="cues"/>. Empty when the list is valid (including empty).</summary>
-    public static IReadOnlyList<string> Validate(IReadOnlyList<CueDefinition> cues)
+    public static IReadOnlyList<ShowValidationIssue> Validate(IReadOnlyList<CueDefinition> cues)
     {
         ArgumentNullException.ThrowIfNull(cues);
-        var errors = new List<string>();
+        var errors = new ShowValidationIssues();
 
         // Cues: non-empty unique ids, and unique numbers (GO advances by number, so duplicates break the cursor).
         var cueIds = new HashSet<string>(StringComparer.Ordinal);
@@ -33,14 +33,15 @@ public static class CueListValidator
             if (string.IsNullOrEmpty(cue.Id))
                 errors.Add("a cue has an empty id.");
             else if (!cueIds.Add(cue.Id))
-                errors.Add($"duplicate cue id '{cue.Id}'.");
+                errors.Add("cue", cue.Id, $"duplicate cue id '{cue.Id}'.");
             if (string.IsNullOrEmpty(cue.Label))
-                errors.Add($"cue '{cue.Id}' has an empty label.");
+                // WARNING, not an error: a missing label is a cosmetic gap in the operator's list. Refusing
+                // to open a show over it - which is what this used to do - is out of all proportion.
+                errors.Warn("cue", cue.Id, $"cue '{cue.Id}' has an empty label.");
             if (!cueNumbers.Add(cue.Number))
-                errors.Add($"duplicate cue number {cue.Number} - GO uses the number as its cursor, so it must be unique.");
+                errors.Add("cue", cue.Id, $"duplicate cue number {cue.Number} - GO uses the number as its cursor, so it must be unique.");
             if (!CueFaultPolicySupport.IsSupported(cue.FaultPolicy))
-                errors.Add(
-                    $"cue '{cue.Id}' uses unsupported fault policy {CueFaultPolicySupport.Display(cue.FaultPolicy)}; "
+                errors.Add("cue", cue.Id, $"cue '{cue.Id}' uses unsupported fault policy {CueFaultPolicySupport.Display(cue.FaultPolicy)}; "
                     + $"this runtime supports only {CueFaultPolicy.StopShow} and {CueFaultPolicy.Continue}.");
         }
 
@@ -50,14 +51,14 @@ public static class CueListValidator
         foreach (var cue in cues)
             foreach (var target in cue.StopTargetIds ?? [])
                 if (!cueIds.Contains(target))
-                    errors.Add($"cue '{cue.Id}' lists unknown stop-target cue '{target}'.");
+                    errors.Add("cue", cue.Id, $"cue '{cue.Id}' lists unknown stop-target cue '{target}'.");
 
         return errors;
     }
 
     /// <summary>Checks that follow-on links resolve, and that the <em>auto-continue</em> subgraph (the only one
     /// that recurses in <see cref="CueGraph"/>) is acyclic - a cycle would auto-continue forever.</summary>
-    private static void ValidateFollowOn(IReadOnlyList<CueDefinition> cues, HashSet<string> cueIds, List<string> errors)
+    private static void ValidateFollowOn(IReadOnlyList<CueDefinition> cues, HashSet<string> cueIds, ShowValidationIssues errors)
     {
         // Out-degree ≤ 1 functional graph over auto-continue follow-on edges.
         var next = new Dictionary<string, string>(StringComparer.Ordinal);

@@ -187,42 +187,42 @@ public sealed class ShowSessionTests
     public void Validator_RejectsMalformedScalarsAndPaths()
     {
         // DOC-01: numeric/path invariants are enforced at load rather than silently mis-played.
-        static IReadOnlyList<string> ValidateClip(ShowClipBinding clip, params ShowComposition[] comps) =>
+        static IReadOnlyList<ShowValidationIssue> ValidateClip(ShowClipBinding clip, params ShowComposition[] comps) =>
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A")], [clip], comps, []));
 
-        Assert.Contains(ValidateClip(new ShowClipBinding("a", "   ")), e => e.Contains("empty media path"));
+        Assert.Contains(ValidateClip(new ShowClipBinding("a", "   ")), e => e.Message.Contains("empty media path"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x") { StartOffset = TimeSpan.FromSeconds(-1) }),
-            e => e.Contains("negative start offset"));
+            e => e.Message.Contains("negative start offset"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x") { FadeOut = TimeSpan.FromSeconds(-1) }),
-            e => e.Contains("negative fade-out"));
+            e => e.Message.Contains("negative fade-out"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x", LayerIndex: -1)),
-            e => e.Contains("negative layer index"));
+            e => e.Message.Contains("negative layer index"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x", AudioStreamIndex: -2)),
-            e => e.Contains("audio stream index"));
+            e => e.Message.Contains("audio stream index"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
                 { Placement = new ShowVideoPlacement(Opacity: 2) }, new ShowComposition("c", "C", 320, 240)),
-            e => e.Contains("opacity"));
+            e => e.Message.Contains("opacity"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
                 { Placement = new ShowVideoPlacement(DestWidth: 0) }, new ShowComposition("c", "C", 320, 240)),
-            e => e.Contains("non-positive dest width"));
+            e => e.Message.Contains("non-positive dest width"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
                 { Placement = new ShowVideoPlacement(RotationDegrees: double.NaN) }, new ShowComposition("c", "C", 320, 240)),
-            e => e.Contains("non-finite rotation"));
+            e => e.Message.Contains("non-finite rotation"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
                 { Placement = new ShowVideoPlacement(CropLeft: 0.6, CropRight: 0.6) }, new ShowComposition("c", "C", 320, 240)),
-            e => e.Contains("horizontal crops"));
+            e => e.Message.Contains("horizontal crops"));
         Assert.Contains(
             ValidateClip(new ShowClipBinding("a", "x") { AudioRoutes = [new ShowClipAudioRoute(SampleRate: 0)] }),
-            e => e.Contains("non-positive audio route sample rate"));
+            e => e.Message.Contains("non-positive audio route sample rate"));
 
         // A default clip and a fully-valid placement pass clean.
         Assert.Empty(ValidateClip(new ShowClipBinding("a", "media://ok", CompositionId: "c")
@@ -239,45 +239,45 @@ public sealed class ShowSessionTests
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A"), new CueDefinition("b", 1, "B")], [], [], [])),
-            e => e.Contains("duplicate cue number"));
+            e => e.Message.Contains("duplicate cue number"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A", FollowOnCueId: "ghost")], [], [], [])),
-            e => e.Contains("unknown follow-on"));
+            e => e.Message.Contains("unknown follow-on"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A", FollowOnCueId: "b", AutoContinue: true),
                  new CueDefinition("b", 2, "B", FollowOnCueId: "a", AutoContinue: true)], [], [], [])),
-            e => e.Contains("cycle"));
+            e => e.Message.Contains("cycle"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A")],
                 [new ShowClipBinding("a", "x"), new ShowClipBinding("a", "y")], [], [])),
-            e => e.Contains("more than one clip"));
+            e => e.Message.Contains("more than one clip"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A"), new CueDefinition("a", 2, "A2")], [], [], [])),
-            e => e.Contains("duplicate cue id"));
+            e => e.Message.Contains("duplicate cue id"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "")], [], [], [])),
-            e => e.Contains("empty label"));
+            e => e.Message.Contains("empty label"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A")],
                 [new ShowClipBinding("a", "x", CompositionId: "ghost")], [], [])),
-            e => e.Contains("unknown composition"));
+            e => e.Message.Contains("unknown composition"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A", FaultPolicy: CueFaultPolicy.HoldLastFrame)], [], [], [])),
-            e => e.Contains("unsupported fault policy") && e.Contains(nameof(CueFaultPolicy.HoldLastFrame)));
+            e => e.Message.Contains("unsupported fault policy") && e.Message.Contains(nameof(CueFaultPolicy.HoldLastFrame)));
 
         // An extra fan-out placement pointing at a non-existent composition is caught at load, not dropped silently.
         Assert.Contains(
@@ -286,7 +286,7 @@ public sealed class ShowSessionTests
                 [new ShowClipBinding("a", "x", CompositionId: "real")
                     { ExtraPlacements = [new ShowClipPlacement("ghost", 1)] }],
                 [new ShowComposition("real", "Real", 320, 240)], [])),
-            e => e.Contains("extra placement on unknown composition"));
+            e => e.Message.Contains("extra placement on unknown composition"));
 
         Assert.Empty(ShowDocumentValidator.Validate(TwoAudioCues()));
     }

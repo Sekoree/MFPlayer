@@ -156,9 +156,9 @@ public sealed class ProgramAudioTargetTests
             new ShowClipLogicalSend(0, "main-l", float.NaN),
         ]);
         var errors = ShowDocumentValidator.Validate(doc);
-        Assert.Contains(errors, e => e.Contains("negative source channel"));
-        Assert.Contains(errors, e => e.Contains("empty logical channel id"));
-        Assert.Contains(errors, e => e.Contains("invalid logical send gain"));
+        Assert.Contains(errors, e => e.Message.Contains("negative source channel"));
+        Assert.Contains(errors, e => e.Message.Contains("empty logical channel id"));
+        Assert.Contains(errors, e => e.Message.Contains("invalid logical send gain"));
         // Whether an id EXISTS is a project question (the target owns the channel list) - not a
         // document error, so a well-formed unknown id passes here and is skipped at fire time.
         Assert.Empty(ShowDocumentValidator.Validate(OneCue([new ShowClipLogicalSend(0, "unknown-anywhere")])));

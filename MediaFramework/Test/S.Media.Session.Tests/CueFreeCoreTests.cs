@@ -42,7 +42,7 @@ public sealed class CueFreeCoreTests
         // not relax this with it.
         var errors = ShowDocumentValidator.Validate(ClipsOnly("dup", "dup"));
 
-        Assert.Contains(errors, e => e.Contains("dup", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Message.Contains("dup", StringComparison.Ordinal));
     }
 
     [Fact]

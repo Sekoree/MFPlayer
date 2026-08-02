@@ -3,11 +3,12 @@ namespace S.Media.Session;
 /// <summary>Thrown when a <see cref="ShowDocument"/> fails validation at load. The running show is left
 /// untouched - validation happens before any teardown (NXT-12), so a malformed document can never destroy
 /// a live show or leave a half-built replacement.</summary>
-public sealed class ShowDocumentValidationException(IReadOnlyList<string> errors)
+public sealed class ShowDocumentValidationException(IReadOnlyList<ShowValidationIssue> errors)
     : Exception("show document is invalid:" + Environment.NewLine + "  - " + string.Join(Environment.NewLine + "  - ", errors))
 {
-    /// <summary>Every problem found, so a caller/editor can surface them all at once.</summary>
-    public IReadOnlyList<string> Errors { get; } = errors;
+    /// <summary>Every blocking problem found, so a caller/editor can surface them all at once.</summary>
+    /// <remarks>Errors only - warnings never reach here, because a document that only warns still loads.</remarks>
+    public IReadOnlyList<ShowValidationIssue> Errors { get; } = errors;
 }
 
 /// <summary>
@@ -37,7 +38,7 @@ public static class ShowDocumentValidator
     /// <summary>Point-list rules for a user-drawn fade shape: at least two points, sorted, finite, and
     /// within the normalized 0..1 range the evaluator assumes.</summary>
     private static void ValidateFadeShape(
-        List<string> errors, string cueId, string which, CustomFadeCurve? shape)
+        ShowValidationIssues errors, string cueId, string which, CustomFadeCurve? shape)
     {
         if (shape is null)
             return;
@@ -62,10 +63,10 @@ public static class ShowDocumentValidator
     }
 
     /// <summary>Validates <paramref name="document"/> and returns every problem found (empty ⇒ valid).</summary>
-    public static IReadOnlyList<string> Validate(ShowDocument document)
+    public static IReadOnlyList<ShowValidationIssue> Validate(ShowDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var errors = new List<string>();
+        var errors = new ShowValidationIssues();
 
         // Tolerant on the low side, closed on the high side. Two actively developed apps plus an external
         // ABI consumer share this format, so a hard equality check would force lockstep releases for every
@@ -85,11 +86,11 @@ public static class ShowDocumentValidator
             if (string.IsNullOrEmpty(comp.Id))
                 errors.Add("a composition has an empty id.");
             else if (!compIds.Add(comp.Id))
-                errors.Add($"duplicate composition id '{comp.Id}'.");
+                errors.Add("composition", comp.Id, $"duplicate composition id '{comp.Id}'.");
             if (comp.Width <= 0 || comp.Height <= 0)
-                errors.Add($"composition '{comp.Id}' has non-positive dimensions {comp.Width}x{comp.Height}.");
+                errors.Add("composition", comp.Id, $"composition '{comp.Id}' has non-positive dimensions {comp.Width}x{comp.Height}.");
             if (comp.FrameRateNum <= 0 || comp.FrameRateDen <= 0)
-                errors.Add($"composition '{comp.Id}' has a non-positive frame rate {comp.FrameRateNum}/{comp.FrameRateDen}.");
+                errors.Add("composition", comp.Id, $"composition '{comp.Id}' has a non-positive frame rate {comp.FrameRateNum}/{comp.FrameRateDen}.");
         }
 
         // Clips: ids are unique (the runtime keys clips by id - a duplicate throws at load) and any placement
@@ -103,36 +104,36 @@ public static class ShowDocumentValidator
         foreach (var clip in document.Clips ?? [])
         {
             if (!clipIds.Add(clip.ClipId))
-                errors.Add($"more than one clip has the id '{clip.ClipId}' - clip ids must be unique.");
+                errors.Add("clip", clip.ClipId, $"more than one clip has the id '{clip.ClipId}' - clip ids must be unique.");
             if (string.IsNullOrWhiteSpace(clip.ClipId))
                 errors.Add("a clip has an empty id.");
             if (clip.CompositionId is { Length: > 0 } cid && !compIds.Contains(cid))
-                errors.Add($"the clip for cue '{clip.ClipId}' references unknown composition '{cid}'.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' references unknown composition '{cid}'.");
 
             // DOC-01: scalar/path sanity so a malformed clip is caught at load, not silently mis-played.
             if (string.IsNullOrWhiteSpace(clip.MediaPath))
-                errors.Add($"the clip for cue '{clip.ClipId}' has an empty media path.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an empty media path.");
             if (clip.StartOffset < TimeSpan.Zero)
-                errors.Add($"the clip for cue '{clip.ClipId}' has a negative start offset.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a negative start offset.");
             if (clip.EndOffset < TimeSpan.Zero)
-                errors.Add($"the clip for cue '{clip.ClipId}' has a negative end offset.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a negative end offset.");
             if (clip.FadeIn < TimeSpan.Zero)
-                errors.Add($"the clip for cue '{clip.ClipId}' has a negative fade-in.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a negative fade-in.");
             if (clip.FadeOut < TimeSpan.Zero)
-                errors.Add($"the clip for cue '{clip.ClipId}' has a negative fade-out.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a negative fade-out.");
             if (clip.PreEndNotify < TimeSpan.Zero)
-                errors.Add($"the clip for cue '{clip.ClipId}' has a negative pre-end notify window.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a negative pre-end notify window.");
             if (clip.LoopCrossfade < TimeSpan.Zero)
-                errors.Add($"the clip for cue '{clip.ClipId}' has a negative loop crossfade window.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a negative loop crossfade window.");
             if (clip.LayerIndex < 0)
-                errors.Add($"the clip for cue '{clip.ClipId}' has a negative layer index {clip.LayerIndex}.");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a negative layer index {clip.LayerIndex}.");
             if (clip.VideoStreamIndex is { } vsi && vsi < -1)
-                errors.Add($"clip '{clip.ClipId}': VideoStreamIndex {vsi} is invalid (null = automatic, -1 = disabled, >= 0 = stream index).");
+                errors.Add("clip", clip.ClipId, $"clip '{clip.ClipId}': VideoStreamIndex {vsi} is invalid (null = automatic, -1 = disabled, >= 0 = stream index).");
             if (clip.AudioStreamIndex is { } asi && asi < -1)
-                errors.Add($"the clip for cue '{clip.ClipId}' has an audio stream index {asi} below -1 (use -1 for none, null for auto).");
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an audio stream index {asi} below -1 (use -1 for none, null for auto).");
             foreach (var sub in clip.GetSubtitleSelections())
                 if (sub.StreamIndex < -1)
-                    errors.Add($"the clip for cue '{clip.ClipId}' has a subtitle stream index {sub.StreamIndex} below -1.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a subtitle stream index {sub.StreamIndex} below -1.");
             if (clip.Placement is { } placement)
                 ValidatePlacement(clip.ClipId, "its placement", placement, errors);
 
@@ -141,11 +142,11 @@ public static class ShowDocumentValidator
             foreach (var extra in clip.ExtraPlacements ?? [])
             {
                 if (string.IsNullOrEmpty(extra.CompositionId))
-                    errors.Add($"the clip for cue '{clip.ClipId}' has an extra placement with an empty composition id.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an extra placement with an empty composition id.");
                 else if (!compIds.Contains(extra.CompositionId))
-                    errors.Add($"the clip for cue '{clip.ClipId}' has an extra placement on unknown composition '{extra.CompositionId}'.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an extra placement on unknown composition '{extra.CompositionId}'.");
                 if (extra.LayerIndex < 0)
-                    errors.Add($"the clip for cue '{clip.ClipId}' has an extra placement with a negative layer index {extra.LayerIndex}.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an extra placement with a negative layer index {extra.LayerIndex}.");
                 if (extra.Placement is { } extraPlacement)
                     ValidatePlacement(clip.ClipId, $"its placement on '{extra.CompositionId}'", extraPlacement, errors);
             }
@@ -153,18 +154,18 @@ public static class ShowDocumentValidator
             foreach (var audioRoute in clip.AudioRoutes ?? [])
             {
                 if (!float.IsFinite(audioRoute.Gain) || audioRoute.Gain < 0f)
-                    errors.Add($"the clip for cue '{clip.ClipId}' has an invalid audio-route gain.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an invalid audio-route gain.");
                 if (audioRoute.SampleRate is { } rate && rate <= 0)
-                    errors.Add($"the clip for cue '{clip.ClipId}' has a non-positive audio route sample rate {rate}.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a non-positive audio route sample rate {rate}.");
                 if (audioRoute.MatrixOutputChannels is <= 0)
-                    errors.Add($"the clip for cue '{clip.ClipId}' has a non-positive audio matrix output count.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a non-positive audio matrix output count.");
                 foreach (var cell in audioRoute.MatrixCells ?? [])
                 {
                     if (cell.InputChannel < 0 || cell.OutputChannel < 0
                         || audioRoute.MatrixOutputChannels is { } outputs && cell.OutputChannel >= outputs)
-                        errors.Add($"the clip for cue '{clip.ClipId}' has an audio matrix cell outside its declared dimensions.");
+                        errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an audio matrix cell outside its declared dimensions.");
                     if (!float.IsFinite(cell.Gain) || cell.Gain < 0f)
-                        errors.Add($"the clip for cue '{clip.ClipId}' has an invalid audio matrix cell gain.");
+                        errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an invalid audio matrix cell gain.");
                 }
             }
 
@@ -180,11 +181,11 @@ public static class ShowDocumentValidator
             foreach (var send in clip.LogicalSends ?? [])
             {
                 if (send.SourceChannel < 0)
-                    errors.Add($"the clip for cue '{clip.ClipId}' has a logical send with a negative source channel {send.SourceChannel}.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a logical send with a negative source channel {send.SourceChannel}.");
                 if (string.IsNullOrWhiteSpace(send.LogicalChannelId))
-                    errors.Add($"the clip for cue '{clip.ClipId}' has a logical send with an empty logical channel id.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has a logical send with an empty logical channel id.");
                 if (!float.IsFinite(send.Gain) || send.Gain < 0f)
-                    errors.Add($"the clip for cue '{clip.ClipId}' has an invalid logical send gain.");
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an invalid logical send gain.");
             }
         }
 
@@ -199,9 +200,9 @@ public static class ShowDocumentValidator
             if (string.IsNullOrEmpty(output.Id))
                 errors.Add("an audio output has an empty id.");
             else if (!audioOutputIds.Add(output.Id))
-                errors.Add($"duplicate audio output id '{output.Id}'.");
+                errors.Add("audioOutput", output.Id, $"duplicate audio output id '{output.Id}'.");
             if (string.IsNullOrWhiteSpace(output.GroupId))
-                errors.Add($"audio output '{output.Id}' has an empty group id.");
+                errors.Add("audioOutput", output.Id, $"audio output '{output.Id}' has an empty group id.");
         }
 
         foreach (var route in document.Routes ?? [])
@@ -212,10 +213,10 @@ public static class ShowDocumentValidator
             // ShowClipBinding.ClipId). Validating it against cue ids only ever worked because the two were
             // the same string; in a document with no cues it rejected perfectly good routes.
             if (!clipIds.Contains(route.SourceId))
-                errors.Add($"route '{route.SourceId}' → '{route.OutputId}' references an unknown clip.");
+                errors.Add("route", route.SourceId, $"route '{route.SourceId}' → '{route.OutputId}' references an unknown clip.");
             if (!string.Equals(route.OutputId, ShowSession.MasterOutputId, StringComparison.Ordinal)
                 && !audioOutputIds.Contains(route.OutputId))
-                errors.Add($"route '{route.SourceId}' → '{route.OutputId}' references an undeclared audio output.");
+                errors.Add("route", route.SourceId, $"route '{route.SourceId}' → '{route.OutputId}' references an undeclared audio output.");
         }
 
         return errors;
@@ -223,7 +224,7 @@ public static class ShowDocumentValidator
 
     /// <summary>DOC-01: a placement's geometry must be finite and in range so the compositor is never handed
     /// a NaN/Infinity transform, a collapsed/negative dest rect, or crops that erase the whole frame.</summary>
-    private static void ValidatePlacement(string cueId, string where, ShowVideoPlacement p, List<string> errors)
+    private static void ValidatePlacement(string cueId, string where, ShowVideoPlacement p, ShowValidationIssues errors)
     {
         void Finite(double v, string name)
         {
@@ -268,8 +269,12 @@ public static class ShowDocumentValidator
     /// <summary>Throws <see cref="ShowDocumentValidationException"/> if <paramref name="document"/> is invalid.</summary>
     public static void ThrowIfInvalid(ShowDocument document)
     {
-        var errors = Validate(document);
-        if (errors.Count > 0)
+        // Errors only: a warning is something the operator should see in a status panel, not something that
+        // refuses to open their show.
+        var errors = Validate(document)
+            .Where(i => i.Severity == ShowValidationSeverity.Error)
+            .ToArray();
+        if (errors.Length > 0)
             throw new ShowDocumentValidationException(errors);
     }
 
