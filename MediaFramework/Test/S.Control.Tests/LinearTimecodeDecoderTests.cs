@@ -185,6 +185,23 @@ public class LinearTimecodeDecoderTests
     }
 
     [Fact]
+    public void DecodesQuietNoisySignal_WithDcOffset()
+    {
+        var start = new MidiTimecodeValue(3, 4, 5, 6, MidiTimecodeRate.Fps25);
+        var audio = LtcSignal.Frames(start, 12, SampleRate, 25, amplitude: 0.2f);
+        var random = new Random(12345);
+        for (var i = 0; i < audio.Length; i++)
+            audio[i] += 0.35f + (float)((random.NextDouble() - 0.5) * 0.03);
+
+        var decoded = Decode(audio);
+
+        Assert.NotEmpty(decoded);
+        Assert.All(decoded, value => Assert.True(value.IsValid));
+        for (var i = 1; i < decoded.Count; i++)
+            Assert.Equal(decoded[i - 1].FrameNumber + 1, decoded[i].FrameNumber);
+    }
+
+    [Fact]
     public void LocksMidStream_WithoutKnowingWhereAFrameBegan()
     {
         var start = new MidiTimecodeValue(7, 8, 9, 10, MidiTimecodeRate.Fps25);

@@ -167,6 +167,69 @@ public sealed class NonDestructiveLoadTests
     }
 
     [Fact]
+    public async Task DeeplyEqualNestedRoutingAndAutomation_IsRetainedByValue()
+    {
+        static ShowDocument Document() => new(
+            Version: 1,
+            Cues: [Cue("b1", 1, "listB")],
+            Clips:
+            [
+                new ShowClipBinding("b1", "fake://b")
+                {
+                    AudioRoutes =
+                    [
+                        new ShowClipAudioRoute("dev-b1", [0, 1])
+                        {
+                            MatrixCells = [new ShowAudioMatrixCell(0, 0, 0.5f)],
+                            MatrixOutputChannels = 2,
+                        },
+                    ],
+                    VolumeEnvelope =
+                    [
+                        new ShowEnvelopePoint(TimeSpan.Zero, 0.5f),
+                        new ShowEnvelopePoint(TimeSpan.FromSeconds(1), 1f, FadeCurve.SCurve),
+                    ],
+                    OpacityEnvelope = [new ShowEnvelopePoint(TimeSpan.Zero, 0.75f)],
+                },
+            ],
+            Compositions: [], Routes: []);
+
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Document());
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("b1"));
+
+        await session.LoadDocumentAsync(Document(), preserveActiveGroups: true);
+
+        Assert.False(releases.IsReleased("dev-b1"),
+            "separately deserialized but value-equal nested lists restarted the voice");
+    }
+
+    [Fact]
+    public async Task ChangingInheritedGlobalRoute_StopsTheVoiceWithTheStaleOutput()
+    {
+        static ShowDocument Document(int[] matrix) => new(
+            Version: 1,
+            Cues: [Cue("b1", 1, "listB")],
+            Clips: [new ShowClipBinding("b1", "fake://b")], // null routes = inherit show/group patch
+            Compositions: [],
+            Routes: [new OutputPatchRoute("b1", "line", ChannelMatrix: matrix)])
+        {
+            AudioOutputs = [new ShowAudioOutput("line", "dev-inherited", "listB")],
+        };
+
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Document([0, 1]));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("b1"));
+
+        await session.LoadDocumentAsync(Document([1, 0]), preserveActiveGroups: true);
+
+        Assert.True(releases.IsReleased("dev-inherited"),
+            "a global patch edit retained a voice on its old route");
+    }
+
+    [Fact]
     public async Task ARetainedGroup_KeepsItsGoCursor()
     {
         var releases = new ReleaseLog();

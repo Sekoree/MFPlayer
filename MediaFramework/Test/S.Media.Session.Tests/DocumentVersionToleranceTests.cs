@@ -86,4 +86,35 @@ public class DocumentVersionToleranceTests
 
         Assert.Empty(ShowDocumentValidator.Validate(document));
     }
+
+    [Fact]
+    public void AutomationEnvelopes_RejectNegativeUnsortedNonFiniteAndOutOfRangePoints()
+    {
+        var document = At(ShowDocumentValidator.CurrentVersion) with
+        {
+            Clips =
+            [
+                new ShowClipBinding("c1", "fake://a")
+                {
+                    VolumeEnvelope =
+                    [
+                        new ShowEnvelopePoint(TimeSpan.FromSeconds(1), VolumeEnvelopes.MaxLevel + 1),
+                        new ShowEnvelopePoint(TimeSpan.FromMilliseconds(-1), float.NaN),
+                    ],
+                    OpacityEnvelope =
+                    [
+                        new ShowEnvelopePoint(TimeSpan.Zero, float.PositiveInfinity),
+                    ],
+                },
+            ],
+        };
+
+        var errors = ShowDocumentValidator.Validate(document);
+
+        Assert.Contains(errors, e => e.Message.Contains("negative volume envelope time"));
+        Assert.Contains(errors, e => e.Message.Contains("unsorted volume envelope"));
+        Assert.Contains(errors, e => e.Message.Contains("outside 0..+12 dB"));
+        Assert.Contains(errors, e => e.Message.Contains("non-finite volume envelope"));
+        Assert.Contains(errors, e => e.Message.Contains("non-finite opacity envelope"));
+    }
 }

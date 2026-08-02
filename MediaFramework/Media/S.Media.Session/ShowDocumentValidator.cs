@@ -62,6 +62,37 @@ public static class ShowDocumentValidator
         }
     }
 
+    private static void ValidateEnvelope(
+        ShowValidationIssues errors,
+        string cueId,
+        string which,
+        IReadOnlyList<ShowEnvelopePoint>? points,
+        bool opacity)
+    {
+        if (points is null)
+            return;
+
+        for (var i = 0; i < points.Count; i++)
+        {
+            var point = points[i];
+            if (point.Time < TimeSpan.Zero)
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' has a negative {which} envelope time at point {i}.");
+            if (i > 0 && point.Time < points[i - 1].Time)
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' has an unsorted {which} envelope.");
+            if (!float.IsFinite(point.Level))
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' has a non-finite {which} envelope level at point {i}.");
+            else if (!opacity && (point.Level < 0f || point.Level > VolumeEnvelopes.MaxLevel))
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' has a volume envelope level outside 0..+12 dB at point {i}.");
+            if (!Enum.IsDefined(point.CurveToNext))
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' has an unknown {which} envelope curve at point {i}.");
+        }
+    }
+
     /// <summary>Validates <paramref name="document"/> and returns every problem found (empty ⇒ valid).</summary>
     public static IReadOnlyList<ShowValidationIssue> Validate(ShowDocument document)
     {
@@ -173,6 +204,12 @@ public static class ShowDocumentValidator
             // deserialized straight into the record bypasses it, so the same rules are checked here.
             ValidateFadeShape(errors, clip.ClipId, "fade-in", clip.FadeInShape);
             ValidateFadeShape(errors, clip.ClipId, "fade-out", clip.FadeOutShape);
+            if (!Enum.IsDefined(clip.FadeInCurve))
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an unknown fade-in curve.");
+            if (!Enum.IsDefined(clip.FadeOutCurve))
+                errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an unknown fade-out curve.");
+            ValidateEnvelope(errors, clip.ClipId, "volume", clip.VolumeEnvelope, opacity: false);
+            ValidateEnvelope(errors, clip.ClipId, "opacity", clip.OpacityEnvelope, opacity: true);
 
             // Logical sends (HaCue two-matrix model): cell sanity only - whether a LogicalChannelId
             // exists is a PROJECT question the session cannot answer from the document alone (the

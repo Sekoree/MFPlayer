@@ -94,11 +94,15 @@ public sealed class CompositionPreservationTests
     }
 
     // Audio-only document (no clip needed): just the composition the visualizer attaches to.
-    private static ShowDocument CanvasDoc(int w = 128, int h = 72, int fpsNum = 60) => new(
+    private static ShowDocument CanvasDoc(
+        int w = 128,
+        int h = 72,
+        int fpsNum = 60,
+        ClipOutputMappingSpec? mapping = null) => new(
         Version: 1,
         Cues: [],
         Clips: [],
-        Compositions: [new ShowComposition("screen", "Screen", w, h, fpsNum, 1)],
+        Compositions: [new ShowComposition("screen", "Screen", w, h, fpsNum, 1, mapping)],
         Routes: []);
 
     private static ShowSession NewSurfaceSession(
@@ -399,5 +403,27 @@ public sealed class CompositionPreservationTests
 
         Assert.True(viz.Disposed, "a size change must rebuild and dispose the visualizer even with preserve=true");
         Assert.False(await session.HasCompositionVisualizerAsync("screen"));
+    }
+
+    [Fact]
+    public async Task Preserve_ButDifferentCompositionMapping_RebuildsTheRuntime()
+    {
+        static ClipOutputMappingSpec Mapping(double x) => new(
+        [
+            new ClipOutputMappingSection(
+                "panel", true,
+                0, 0, 1, 1,
+                x, 0, 128, 72),
+        ]);
+
+        await using var session = NewSurfaceSession();
+        await session.LoadDocumentAsync(CanvasDoc(mapping: Mapping(0)));
+        var viz = new FakeVisualizer();
+        Assert.True(await session.SetCompositionVisualizerAsync("screen", viz));
+
+        await session.LoadDocumentAsync(
+            CanvasDoc(mapping: Mapping(10)), preserveMatchingCompositions: true);
+
+        Assert.True(viz.Disposed, "a changed output mapping reused a stale composition runtime");
     }
 }

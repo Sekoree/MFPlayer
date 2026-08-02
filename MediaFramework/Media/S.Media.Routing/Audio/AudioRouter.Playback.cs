@@ -147,7 +147,10 @@ public sealed partial class AudioRouter
         foreach (var id in OutputIds.Order(StringComparer.Ordinal))
         {
             if (id == removedOutputId) continue;
-            if (!TryGetOutput(id, out var s) || s is not IClockedOutput) continue;
+            if (!TryGetOutput(id, out var s)
+                || s is not IClockedOutput
+                || s is IAdaptiveRateWrappedOutput or IRateAdaptedOutput)
+                continue;
             RetargetSlaveClock(id);
             if (s is IPlaybackClock pc)
                 _attachedMasterClock?.SetMaster(pc);

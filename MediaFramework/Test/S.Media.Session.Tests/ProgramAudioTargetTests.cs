@@ -184,6 +184,22 @@ public sealed class ProgramAudioTargetTests
         Assert.Throws<ArgumentException>(() => target.AcquireMonitorOutput("nope", new AudioFormat(Rate, 2)));
     }
 
+    [Fact]
+    public void Adapter_ReportsMonitorWidth_AndLabelsProgramLeases()
+    {
+        using var bay = new AudioPatchBay(2, Rate);
+        bay.AddTerminal("monitor-8", new PeakAudioOutput(new AudioFormat(Rate, 8)), new float[2, 8]);
+        var target = new PatchBayShowProgramAudioTarget(
+            bay, ["l", "r"], defaultMonitorTerminalId: "monitor-8");
+
+        Assert.True(target.TryGetMonitorFormat(null, out var monitorFormat));
+        Assert.Equal(8, monitorFormat.Channels);
+
+        using var lease = target.AcquireInput("cue:spoken-word", new AudioFormat(Rate, 2));
+        var producer = Assert.Single(bay.SnapshotDiagnostics().Producers);
+        Assert.Equal("cue:spoken-word", producer.Label);
+    }
+
     private static async Task WaitForPeakAsync(PeakAudioOutput output, float level, string message)
     {
         var deadline = Environment.TickCount64 + 5000;

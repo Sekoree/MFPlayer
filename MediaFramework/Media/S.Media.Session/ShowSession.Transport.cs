@@ -227,7 +227,7 @@ public sealed partial class ShowSession
                 return Task.FromResult(true);
             }
 
-            if (_fires.CursorForStandby(cueId) is not { } cursor)
+            if (_fires.CursorForStandby(cueId, groupId, DefaultGroup) is not { } cursor)
                 return Task.FromResult(false);
             _goCursors[groupId] = cursor;
             return Task.FromResult(true);

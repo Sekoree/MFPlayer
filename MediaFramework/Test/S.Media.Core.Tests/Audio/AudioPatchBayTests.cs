@@ -404,6 +404,61 @@ public class AudioPatchBayTests
         }
     }
 
+    [Fact]
+    public void AdaptiveRate_WrapsSecondariesButNeverTheMaster_AndRebuildsOnPromotion()
+    {
+        var wrappedIds = new List<string>();
+        var wrappers = new List<TrackingAdaptiveOutput>();
+        using var bay = new AudioPatchBay(
+            2,
+            Rate,
+            adaptiveRateWrapper: (_, inner, id, maxDelta) =>
+            {
+                Assert.Equal(3, maxDelta);
+                wrappedIds.Add(id);
+                var wrapper = new TrackingAdaptiveOutput(inner);
+                wrappers.Add(wrapper);
+                return wrapper;
+            });
+        var master = new NullClockedAudioOutput(new AudioFormat(Rate, 2));
+        var backup = new NullClockedAudioOutput(new AudioFormat(Rate, 2));
+        master.Start();
+        backup.Start();
+
+        bay.AddTerminal("master", master, new float[,] { { 1, 0 }, { 0, 1 } }, isClockMaster: true);
+        bay.AddTerminal("backup", backup, new float[,] { { 1, 0 }, { 0, 1 } });
+
+        Assert.Equal(["backup"], wrappedIds);
+        Assert.Equal("master", bay.ClockMasterTerminalId);
+
+        bay.PromoteClockMaster("backup");
+
+        Assert.Equal("backup", bay.ClockMasterTerminalId);
+        Assert.Equal(["backup", "master"], wrappedIds);
+        Assert.True(wrappers[0].Disposed); // backup's old adaptive chain retired before it became master
+        Assert.False(wrappers[1].Disposed); // the demoted master now owns the live correction chain
+    }
+
+    [Fact]
+    public void ReplaceTerminal_WrapperFactoryFailure_LeavesOldTerminalAttached()
+    {
+        using var bay = new AudioPatchBay(
+            2,
+            Rate,
+            resamplerFactory: (_, _) => throw new InvalidOperationException("converter unavailable"));
+        bay.AddTerminal("house", new CapturingOutput(new AudioFormat(Rate, 2)),
+            new float[,] { { 1, 0 }, { 0, 1 } });
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            bay.ReplaceTerminal("house", new CapturingOutput(new AudioFormat(44_100, 2))));
+
+        Assert.Contains("converter unavailable", error.Message);
+        Assert.Equal(1, bay.TerminalCount);
+        Assert.True(bay.TryGetTerminalFormat("house", out var format));
+        Assert.Equal(Rate, format.SampleRate);
+        bay.UpdatePatch("house", new float[,] { { 0.5f, 0 }, { 0, 0.5f } });
+    }
+
     private static void WaitFor(Func<bool> condition, string message, int timeoutMs = 5000)
     {
         var deadline = Environment.TickCount64 + timeoutMs;
@@ -435,6 +490,22 @@ public class AudioPatchBayTests
         public AudioFormat Format => fmt;
         public bool Disposed { get; private set; }
         public void Submit(ReadOnlySpan<float> samples) { }
+        public void Dispose() => Disposed = true;
+    }
+
+    private sealed class TrackingAdaptiveOutput(IAudioOutput inner)
+        : IAudioOutput, IClockedOutput, IPlaybackClock, IAdaptiveRateWrappedOutput, IDisposable
+    {
+        public AudioFormat Format => inner.Format;
+        public bool Disposed { get; private set; }
+        public void Submit(ReadOnlySpan<float> samples) => inner.Submit(samples);
+        public bool WaitForCapacity(int samplesPerChannel, CancellationToken cancellationToken) =>
+            inner is not IClockedOutput clocked
+            || clocked.WaitForCapacity(samplesPerChannel, cancellationToken);
+        public TimeSpan ElapsedSinceStart => ((IPlaybackClock)inner).ElapsedSinceStart;
+        public long EpochId => ((IPlaybackClock)inner).EpochId;
+        public bool IsAdvancing => ((IPlaybackClock)inner).IsAdvancing;
+        public ClockReading Read() => ((IPlaybackClock)inner).Read();
         public void Dispose() => Disposed = true;
     }
 

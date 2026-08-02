@@ -103,6 +103,9 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>Mapping stages whose compositor must be torn down on the pump (driver) thread -
     /// retired by live mapping updates or runtime dispose; drained at the next tick.</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<OutputMappingStage> _retiredMappingStages = new();
+    /// <summary>Stored idle/calibration frames retired by a control thread. They are disposed only at
+    /// the next pump boundary, after the previous iteration can no longer be reading their pixels.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentQueue<VideoFrame> _retiredStaticFrames = new();
 
     /// <summary>True when the single mapped output's warp runs inside the canvas compositor
     /// (<see cref="IWarpPassVideoCompositor"/>) - the mixer frame is already warped and the
@@ -246,7 +249,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         if (retired is not null)
-            MediaDiagnostics.SwallowDisposeErrors(retired.Dispose, "SetOutputTestPattern: previous pattern");
+            RetireStaticFrame(retired);
         if (!found)
             pattern?.Dispose(); // never leak a frame the caller handed over
         return found;
@@ -270,7 +273,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         if (retired is not null)
-            MediaDiagnostics.SwallowDisposeErrors(retired.Dispose, "SetIdleFrame: previous idle frame");
+            RetireStaticFrame(retired);
         if (_disposed)
             idle?.Dispose();
     }
@@ -297,7 +300,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         if (retired is not null)
-            MediaDiagnostics.SwallowDisposeErrors(retired.Dispose, "SetOutputIdleFrame: previous idle frame");
+            RetireStaticFrame(retired);
         if (!found)
             idle?.Dispose();
         return found;
@@ -485,7 +488,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (removed is null)
             return false;
 
-        if (removed.Retire("ClipCompositionRuntime.RemoveOutput") is { } retired)
+        if (removed.Retire("ClipCompositionRuntime.RemoveOutput", RetireStaticFrame) is { } retired)
             _retiredMappingStages.Enqueue(retired);
         ReevaluateIntegratedWarp();
         return true;
@@ -540,6 +543,25 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         while (_retiredMappingStages.TryDequeue(out var stage))
             stage.DisposeCompositor();
+    }
+
+    private void RetireStaticFrame(VideoFrame frame)
+    {
+        lock (_gate)
+        {
+            if (_slaveClock is not null)
+            {
+                _retiredStaticFrames.Enqueue(frame);
+                return;
+            }
+        }
+        MediaDiagnostics.SwallowDisposeErrors(frame.Dispose, "ClipCompositionRuntime: retired static frame");
+    }
+
+    private void DrainRetiredStaticFrames()
+    {
+        while (_retiredStaticFrames.TryDequeue(out var frame))
+            MediaDiagnostics.SwallowDisposeErrors(frame.Dispose, "ClipCompositionRuntime: retired static frame");
     }
 
     public void SetClockMaster(IPlaybackClock master, IPlayhead? timeline = null)
@@ -1039,6 +1061,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
         if (_disposed) return;
         DrainRetiredMappingStages();
+        DrainRetiredStaticFrames();
         PumpOneFrame();
         CheckMasterDrift();
     }
@@ -1366,8 +1389,26 @@ public sealed class ClipCompositionRuntime : IDisposable
                 continue; // nothing to show - the historical behaviour, i.e. leave the sink alone
 
             var stage = output.MappingStage;
+            VideoFrame? compositionMapped = null;
             try
             {
+                // Idle/calibration content follows the same composition-level FX as programme frames.
+                // The composition mapping is canvas-sized, then the per-output stage fans it out.
+                if (_compositionMappingStage is { } compositionStage)
+                {
+                    try
+                    {
+                        compositionMapped = compositionStage.Composite(source, _compositorFactory);
+                        source = compositionMapped;
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.LogWarning(
+                            ex,
+                            "ClipCompositionRuntime.Pump: idle composition mapping failed for {Composition}",
+                            CompositionName);
+                    }
+                }
                 if (stage is not null)
                 {
                     SubmitToOutput(output, stage.Composite(source, _compositorFactory));
@@ -1381,6 +1422,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             catch (Exception ex)
             {
                 Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: idle frame failed for {Line}", output.DisplayName);
+            }
+            finally
+            {
+                compositionMapped?.Dispose();
             }
         }
     }
@@ -1561,7 +1606,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         if (idleToRelease is not null)
-            MediaDiagnostics.SwallowDisposeErrors(idleToRelease.Dispose, "ClipCompositionRuntime.Dispose: idle frame");
+            RetireStaticFrame(idleToRelease);
 
         foreach (var feed in subtitleFeeds)
             feed.Dispose();
@@ -1570,7 +1615,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         foreach (var acquired in acquiredToRetire)
         {
-            if (acquired.Retire("ClipCompositionRuntime.Dispose") is { } stage)
+            if (acquired.Retire("ClipCompositionRuntime.Dispose", RetireStaticFrame) is { } stage)
                 _retiredMappingStages.Enqueue(stage);
         }
 
@@ -1601,6 +1646,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         // Best-effort fallback for stages the driver window didn't reach (pump never started, or
         // the dispose deadline lapsed) - mirrors the direct canvas-compositor dispose below.
         DrainRetiredMappingStages();
+        DrainRetiredStaticFrames();
 
         MediaDiagnostics.SwallowDisposeErrors(_mixer.Dispose, "ClipCompositionRuntime.Dispose: mixer");
         MediaDiagnostics.SwallowDisposeErrors(_compositor.Dispose, "ClipCompositionRuntime.Dispose: compositor");
@@ -1933,7 +1979,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             pump.PumpPressure += _pressureHandler;
         }
 
-        public OutputMappingStage? Retire(string operation)
+        public OutputMappingStage? Retire(string operation, Action<VideoFrame> retireStaticFrame)
         {
             lock (_lifecycleGate)
             {
@@ -1948,11 +1994,11 @@ public sealed class ClipCompositionRuntime : IDisposable
                 var pattern = _testPattern;
                 _testPattern = null;
                 if (pattern is not null)
-                    MediaDiagnostics.SwallowDisposeErrors(pattern.Dispose, $"{operation}: test pattern dispose");
+                    retireStaticFrame(pattern);
                 var idle = _idleFrame;
                 _idleFrame = null;
                 if (idle is not null)
-                    MediaDiagnostics.SwallowDisposeErrors(idle.Dispose, $"{operation}: idle frame dispose");
+                    retireStaticFrame(idle);
                 UnsubscribePumpPressureCore();
 
                 if (DisposeOutputOnRuntimeDispose && Output is IDisposable disposable)

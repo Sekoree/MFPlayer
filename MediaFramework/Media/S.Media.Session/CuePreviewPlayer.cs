@@ -124,6 +124,10 @@ internal sealed class CuePreviewPlayer
         // failed on exactly the interfaces a show is most likely to be run through.
         int AuditionChannels(string? deviceId)
         {
+            if (_programAudio is { } target
+                && target.TryGetMonitorFormat(deviceId, out var monitorFormat)
+                && monitorFormat.Channels > 0)
+                return monitorFormat.Channels;
             if (_audioBackend is null)
                 return 2;
             try
@@ -155,6 +159,7 @@ internal sealed class CuePreviewPlayer
 
             var player = armed.Player;
             var outputs = new List<PreviewSink>();
+            var layers = new List<ClipCompositionRuntime.IPlacedClipLayer>();
             try
             {
                 if (player.AudioRouter is not null && (_programAudio is not null || _audioBackend is not null))
@@ -185,7 +190,6 @@ internal sealed class CuePreviewPlayer
                 // so the monitor shows it composited - placement, fit, effects, mapping - rather than as a
                 // bare source-resolution picture. Skipped silently when the rig is off, which is the common
                 // case and must cost nothing.
-                var layers = new List<ClipCompositionRuntime.IPlacedClipLayer>();
                 if (_host.AuditionComposition is { } audition && player.VideoSource is { } previewVideo)
                 {
                     var slot = audition.AddLayer(
@@ -217,6 +221,7 @@ internal sealed class CuePreviewPlayer
                 // player. Assigning the fields first is what makes the single teardown cover them.
                 _previewClip = armed;
                 _previewOutputs = outputs;
+                _previewLayers = layers;
                 await ReleasePreviewAsync().ConfigureAwait(false);
                 throw;
             }

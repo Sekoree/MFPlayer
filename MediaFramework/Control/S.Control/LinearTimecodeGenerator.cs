@@ -71,6 +71,8 @@ public sealed class LinearTimecodeGenerator
     {
         if (sampleRate <= 0)
             throw new ArgumentOutOfRangeException(nameof(sampleRate), "sample rate must be positive");
+        if (!start.IsValid)
+            throw new ArgumentException("the starting timecode is not a valid label for its rate", nameof(start));
 
         var (num, den) = FrameRatio(start.Rate);
         _num = num;
@@ -112,6 +114,8 @@ public sealed class LinearTimecodeGenerator
     /// </remarks>
     public void Seek(MidiTimecodeValue value)
     {
+        if (!value.IsValid)
+            throw new ArgumentException("the seek target is not a valid timecode label for its rate", nameof(value));
         if (value.Rate != _current.Rate)
             throw new ArgumentException(
                 $"generator is running at {MidiTimecodeRates.Label(_current.Rate)}; " +

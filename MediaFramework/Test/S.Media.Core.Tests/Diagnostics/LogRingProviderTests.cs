@@ -121,6 +121,21 @@ public class LogRingProviderTests
     }
 
     [Fact]
+    public void ThrowingEntrySubscriber_DoesNotBreakLoggingOrLaterSubscribers()
+    {
+        using var provider = new LogRingProvider(minimumLevel: LogLevel.Trace);
+        var seen = new List<string>();
+        provider.EntryCaptured += _ => throw new InvalidOperationException("broken view");
+        provider.EntryCaptured += entry => seen.Add(entry.Message);
+
+        var error = Record.Exception(() => Logger(provider).LogInformation("still captured"));
+
+        Assert.Null(error);
+        Assert.Equal(["still captured"], seen);
+        Assert.Equal("still captured", Assert.Single(provider.Snapshot()).Message);
+    }
+
+    [Fact]
     public void Clear_EmptiesTheRingAndTheDroppedCount()
     {
         using var provider = new LogRingProvider(capacity: 2, minimumLevel: LogLevel.Trace);

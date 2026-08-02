@@ -139,8 +139,11 @@ internal sealed class CueRunner
     /// <summary>The cue number that would put <paramref name="cueId"/> next in line, or null if unknown.</summary>
     /// <remarks>One before the cue's own number: GO selects the lowest number strictly greater than the
     /// cursor, so parking the cursor just below a cue makes that cue next.</remarks>
-    public int? CursorForStandby(string cueId) =>
-        _graph.TryGetCue(cueId, out var cue) ? cue.Number - 1 : null;
+    public int? CursorForStandby(string cueId, string groupId, string defaultGroup) =>
+        _graph.TryGetCue(cueId, out var cue)
+        && string.Equals(cue.GroupId ?? defaultGroup, groupId, StringComparison.Ordinal)
+            ? cue.Number - 1
+            : null;
 
     /// <summary>The next <paramref name="count"/> clip-bound cue ids on a group after <paramref name="cursor"/> -
     /// what the engine pre-rolls so the next GO opens warm.</summary>

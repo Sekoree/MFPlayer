@@ -140,6 +140,18 @@ public sealed class StandbyCursorTests
     }
 
     [Fact]
+    public async Task SettingStandbyToACueFromAnotherList_IsRejected()
+    {
+        await using var session = Session();
+        await session.LoadDocumentAsync(TwoLists());
+        await session.GoAsync("listA");
+
+        Assert.False(await session.SetStandbyCueAsync("b3", "listA"));
+
+        Assert.Equal("a2", (await session.GetStandbyCueAsync("listA"))?.Id);
+    }
+
+    [Fact]
     public async Task AListRunOut_HasNoStandby()
     {
         await using var session = Session();

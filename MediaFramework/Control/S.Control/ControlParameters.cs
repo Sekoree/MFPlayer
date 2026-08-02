@@ -1,3 +1,5 @@
+using S.Media.Session;
+
 namespace S.Control;
 
 /// <summary>
@@ -8,12 +10,15 @@ namespace S.Control;
 /// <param name="Minimum">Lowest value the parameter accepts.</param>
 /// <param name="Maximum">Highest value the parameter accepts.</param>
 /// <param name="Unit">Unit for display, e.g. <c>dB</c>. Purely presentational.</param>
+/// <param name="MappingCurve">Curve applied to normalized controller travel before scaling it into
+/// this target's output range.</param>
 public sealed record ParameterTarget(
     string Id,
     string DisplayName,
     double Minimum,
     double Maximum,
-    string Unit = "")
+    string Unit = "",
+    FadeCurve MappingCurve = FadeCurve.Linear)
 {
     /// <summary>Clamps <paramref name="value"/> into this parameter's range.</summary>
     public double Clamp(double value) => Math.Clamp(value, Minimum, Maximum);
@@ -49,8 +54,11 @@ public sealed class ParameterRegistry
         ArgumentNullException.ThrowIfNull(get);
         ArgumentNullException.ThrowIfNull(set);
         ArgumentException.ThrowIfNullOrEmpty(target.Id);
-        if (target.Maximum <= target.Minimum)
+        if (!double.IsFinite(target.Minimum) || !double.IsFinite(target.Maximum)
+            || target.Maximum <= target.Minimum)
             throw new ArgumentException($"parameter '{target.Id}' has an empty range", nameof(target));
+        if (!Enum.IsDefined(target.MappingCurve))
+            throw new ArgumentException($"parameter '{target.Id}' has an unknown mapping curve", nameof(target));
 
         lock (_gate)
             _entries[target.Id] = new Entry(target, get, set);
@@ -159,8 +167,14 @@ public sealed class ContinuousBinding
     {
         ArgumentNullException.ThrowIfNull(spec);
         ArgumentNullException.ThrowIfNull(registry);
-        if (Math.Abs(spec.InputMax - spec.InputMin) < double.Epsilon)
+        if (!double.IsFinite(spec.InputMin) || !double.IsFinite(spec.InputMax)
+            || Math.Abs(spec.InputMax - spec.InputMin) < double.Epsilon)
             throw new ArgumentException("a continuous binding needs a non-empty input range", nameof(spec));
+        if (spec.OutputMin is { } outputMin && !double.IsFinite(outputMin)
+            || spec.OutputMax is { } outputMax && !double.IsFinite(outputMax))
+            throw new ArgumentException("continuous binding output bounds must be finite", nameof(spec));
+        if (!double.IsFinite(spec.SoftTakeoverTolerance) || spec.SoftTakeoverTolerance is < 0 or > 1)
+            throw new ArgumentOutOfRangeException(nameof(spec), "soft-takeover tolerance must be in 0..1");
 
         _spec = spec;
         _registry = registry;
@@ -182,6 +196,8 @@ public sealed class ContinuousBinding
     /// </summary>
     public bool Apply(double rawValue)
     {
+        if (!double.IsFinite(rawValue))
+            return false;
         if (!_registry.TryGetTarget(_spec.TargetId, out var target))
             return false;
 
@@ -189,7 +205,8 @@ public sealed class ContinuousBinding
         var outMax = _spec.OutputMax ?? target.Maximum;
 
         var t = Math.Clamp((rawValue - _spec.InputMin) / (_spec.InputMax - _spec.InputMin), 0d, 1d);
-        var mapped = outMin + (outMax - outMin) * t;
+        var shaped = FadeCurves.ShapeProgress(t, target.MappingCurve);
+        var mapped = outMin + (outMax - outMin) * shaped;
 
         if (!_latched)
         {

@@ -150,7 +150,7 @@ public sealed partial class ShowSession
                 voice.ClipLevel,
                 voice.CaptureLayerFadeLevels(),
                 remaining,
-                binding.FadeOutCurve,
+                new FadeShape(binding.FadeOutCurve, binding.FadeOutShape),
                 monitor.CancellationToken,
                 naturalClaim);
             return true;
@@ -281,7 +281,7 @@ public sealed partial class ShowSession
         float startAudioScale,
         IReadOnlyList<float> startLayerFadeLevels,
         TimeSpan duration,
-        FadeCurve curve,
+        FadeShape curve,
         CancellationToken ct,
         CancellationToken claim)
     {
@@ -296,7 +296,7 @@ public sealed partial class ShowSession
                     return Task.FromResult(true);
                 var scale = FadeRamp.LevelDown(elapsed, duration, curve);
                 voice.ApplyFadeLevel(routeTargets, startAudioScale, startLayerFadeLevels, scale);
-                return Task.FromResult(scale <= 0f);
+                return Task.FromResult(elapsed >= duration);
             }),
             onCompleted: () => InvokeAsync(async () =>
             {

@@ -160,7 +160,7 @@ public sealed partial class ShowSession
     private sealed record VoiceStopFade(
         TransportVoice Voice,
         TimeSpan Duration,
-        FadeCurve Curve,
+        FadeShape Curve,
         float StartAudioScale,
         IReadOnlyList<float> StartLayerOpacities,
         IReadOnlyList<AudioRouteTarget> RouteTargets,
@@ -202,7 +202,9 @@ public sealed partial class ShowSession
                     stopFade = new VoiceStopFade(
                         voice,
                         duration,
-                        clipFadeWins ? voice.Binding.FadeOutCurve : curve,
+                        clipFadeWins
+                            ? new FadeShape(voice.Binding.FadeOutCurve, voice.Binding.FadeOutShape)
+                            : curve,
                         voice.ClipLevel,
                         voice.CaptureLayerFadeLevels(),
                         voice.RouteTargets,

@@ -140,6 +140,19 @@ public class LinearTimecodeGeneratorTests
     }
 
     [Fact]
+    public void InvalidAuthoredLabels_AreRejectedAtConstructionAndSeek()
+    {
+        var invalidDropLabel = new MidiTimecodeValue(0, 1, 0, 0, MidiTimecodeRate.Fps2997Drop);
+        Assert.False(invalidDropLabel.IsValid);
+        Assert.Throws<ArgumentException>(() =>
+            new LinearTimecodeGenerator(SampleRate, invalidDropLabel));
+
+        var generator = new LinearTimecodeGenerator(
+            SampleRate, new MidiTimecodeValue(0, 0, 0, 0, MidiTimecodeRate.Fps2997Drop));
+        Assert.Throws<ArgumentException>(() => generator.Seek(invalidDropLabel));
+    }
+
+    [Fact]
     public void Amplitude_ScalesTheSignal_WithoutChangingWhatItSays()
     {
         var start = new MidiTimecodeValue(0, 0, 0, 3, MidiTimecodeRate.Fps25);

@@ -36,6 +36,14 @@ public interface IShowProgramAudioTarget
     /// show master trim, and auditioning a patched line never double-opens its device.
     /// </summary>
     ProgramAudioInputLease AcquireMonitorOutput(string? endpointId, AudioFormat format);
+
+    /// <summary>Gets the native width/rate of a monitoring endpoint without acquiring it. The default
+    /// implementation preserves compatibility for custom targets; callers then use a conservative fallback.</summary>
+    bool TryGetMonitorFormat(string? endpointId, out AudioFormat format)
+    {
+        format = default;
+        return false;
+    }
 }
 
 /// <summary>A leased program (or monitor) input: <see cref="Output"/> is the sink the voice's clip
@@ -118,7 +126,7 @@ public sealed class PatchBayShowProgramAudioTarget : IShowProgramAudioTarget
         var sends = new float[channels * channels];
         for (var channel = 0; channel < channels; channel++)
             sends[channel * channels + channel] = 1f;
-        var producer = _bay.AcquireProducer(channels, sends);
+        var producer = _bay.AcquireProducer(channels, sends, voiceId);
         try
         {
             return Bridge(producer, format, producer.Dispose);
@@ -153,6 +161,17 @@ public sealed class PatchBayShowProgramAudioTarget : IShowProgramAudioTarget
             lease.Dispose();
             throw;
         }
+    }
+
+    public bool TryGetMonitorFormat(string? endpointId, out AudioFormat format)
+    {
+        var terminalId = endpointId ?? _defaultMonitorTerminalId;
+        if (terminalId is null)
+        {
+            format = default;
+            return false;
+        }
+        return _bay.TryGetTerminalFormat(terminalId, out format);
     }
 
     /// <summary>Returns the lease, resampler-wrapping <paramref name="inner"/> when the requested

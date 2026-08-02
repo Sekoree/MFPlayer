@@ -75,15 +75,21 @@ public static class FadeCurves
         return custom.Evaluate(Math.Clamp(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d));
     }
 
-    /// <summary>Shapes linear progress <paramref name="p"/> ∈ [0,1] into a gain. Every curve maps 0 → 0 and
-    /// 1 → 1 and is monotonic, so ramp endpoints (and the "target reached" checks against 0/1) hold for all.</summary>
-    private static float Shape(double p, FadeCurve curve) => (float)(curve switch
+    /// <summary>Shapes a normalized 0..1 progress value with a built-in curve. Every curve maps 0 → 0
+    /// and 1 → 1 and is monotonic.</summary>
+    public static double ShapeProgress(double progress, FadeCurve curve)
     {
-        FadeCurve.EqualPower => Math.Sin(p * Math.PI / 2d),
-        FadeCurve.Exponential => p * p * p,
-        FadeCurve.SCurve => p * p * (3d - 2d * p),
-        _ => p,
-    });
+        var p = Math.Clamp(progress, 0d, 1d);
+        return curve switch
+        {
+            FadeCurve.EqualPower => Math.Sin(p * Math.PI / 2d),
+            FadeCurve.Exponential => p * p * p,
+            FadeCurve.SCurve => p * p * (3d - 2d * p),
+            _ => p,
+        };
+    }
+
+    private static float Shape(double p, FadeCurve curve) => (float)ShapeProgress(p, curve);
 }
 
 /// <summary>

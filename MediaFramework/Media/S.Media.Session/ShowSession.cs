@@ -6,6 +6,7 @@ using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using S.Media.Routing;
 using S.Media.Time;
+using System.Text.Json;
 
 namespace S.Media.Session;
 
@@ -90,6 +91,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     // definition query read it OFF the dispatcher (the graph itself is internally locked).
     private readonly Dictionary<string, TransportGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
+    private Dictionary<string, ShowComposition> _compositionDefinitions = new(StringComparer.Ordinal);
     // Lock-free view of the compositions for the UI health poll: republished (on the dispatcher) whenever
     // _compositions changes, so GetCompositionStats can read it - and the runtime's own thread-safe GetStats -
     // off any thread without marshaling (mirrors _groupViews / SnapshotAsync).
@@ -625,7 +627,9 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// </para>
     /// </remarks>
     private HashSet<string> RetainableGroupIds(
-        IReadOnlyDictionary<string, ShowClipBinding> newClipsByCue, ShowDocument document)
+        IReadOnlyDictionary<string, ShowClipBinding> newClipsByCue,
+        ShowDocument document,
+        IReadOnlySet<string> preservedCompositionIds)
     {
         var retained = new HashSet<string>(StringComparer.Ordinal);
         if (_groups.Count == 0)
@@ -634,6 +638,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // A group only means anything if the incoming document still routes cues to it.
         var incomingGroupIds = new HashSet<string>(
             document.Cues.Select(c => c.GroupId ?? DefaultGroup), StringComparer.Ordinal);
+        var inheritedRoutingChanged = !SameRoutes(_routes, document.Routes)
+                                      || !_audioOutputs.SequenceEqual(document.AudioOutputs);
 
         foreach (var (groupId, group) in _groups)
         {
@@ -653,6 +659,26 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     allUnchanged = false;
                     break;
                 }
+
+                // A retained video voice still owns live LayerSlots. Its compositions must therefore
+                // be the exact runtimes retained above; otherwise the old runtime would be disposed
+                // under a voice that continues to submit to it.
+                if (voice.Binding.GetPlacements().Any(
+                        p => !preservedCompositionIds.Contains(p.CompositionId)))
+                {
+                    allUnchanged = false;
+                    break;
+                }
+
+                // Null direct routes inherit the show/group patch. If that patch changed, keeping the
+                // voice would preserve stale physical output leases despite an equal clip binding.
+                if (inheritedRoutingChanged
+                    && voice.Binding.AudioRoutes is null
+                    && voice.Binding.LogicalSends is null)
+                {
+                    allUnchanged = false;
+                    break;
+                }
             }
 
             if (allUnchanged)
@@ -666,32 +692,33 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// Whether two clip bindings describe the same playback in every respect.
     /// </summary>
     /// <remarks>
-    /// Record equality covers the scalar fields - including any added later, which is why the comparison is
-    /// written this way rather than as a field list that would silently rot. The list-valued members need
-    /// element-wise comparison because record equality compares those by reference, and two separately
-    /// deserialized documents never share list instances.
+    /// The source-generated wire form is a convenient canonical deep representation: it compares nested
+    /// arrays/lists by value, includes newly-added fields automatically, and deliberately distinguishes null
+    /// from an empty AudioRoutes/LogicalSends list because those have different routing semantics.
     /// </remarks>
-    private static bool SameClipBinding(ShowClipBinding a, ShowClipBinding b)
+    private static bool SameClipBinding(ShowClipBinding a, ShowClipBinding b) =>
+        JsonSerializer.Serialize(a, ShowDocumentJsonContext.Default.ShowClipBinding)
+        == JsonSerializer.Serialize(b, ShowDocumentJsonContext.Default.ShowClipBinding);
+
+    private static bool SameComposition(ShowComposition a, ShowComposition b) =>
+        JsonSerializer.Serialize(a with { Name = string.Empty }, ShowDocumentJsonContext.Default.ShowComposition)
+        == JsonSerializer.Serialize(b with { Name = string.Empty }, ShowDocumentJsonContext.Default.ShowComposition);
+
+    private static bool SameRoutes(
+        IReadOnlyList<OutputPatchRoute> a,
+        IReadOnlyList<OutputPatchRoute> b)
     {
-        static ShowClipBinding WithoutLists(ShowClipBinding x) => x with
+        if (a.Count != b.Count) return false;
+        for (var i = 0; i < a.Count; i++)
         {
-            Subtitles = null,
-            ExtraPlacements = null,
-            AudioRoutes = null,
-            LogicalSends = null,
-            VolumeEnvelope = null,
-        };
-
-        static bool Same<T>(IReadOnlyList<T>? x, IReadOnlyList<T>? y) =>
-            (x is null or { Count: 0 } && y is null or { Count: 0 })
-            || (x is not null && y is not null && x.SequenceEqual(y));
-
-        return WithoutLists(a) == WithoutLists(b)
-            && Same(a.Subtitles, b.Subtitles)
-            && Same(a.ExtraPlacements, b.ExtraPlacements)
-            && Same(a.AudioRoutes, b.AudioRoutes)
-            && Same(a.LogicalSends, b.LogicalSends)
-            && Same(a.VolumeEnvelope, b.VolumeEnvelope);
+            if (a[i] with { ChannelMatrix = null } != b[i] with { ChannelMatrix = null })
+                return false;
+            if ((a[i].ChannelMatrix is null) != (b[i].ChannelMatrix is null))
+                return false;
+            if (a[i].ChannelMatrix is { } am && !am.AsSpan().SequenceEqual(b[i].ChannelMatrix!))
+                return false;
+        }
+        return true;
     }
 
     private async Task LoadDocumentCoreAsync(
@@ -724,6 +751,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             foreach (var comp in document.Compositions)
             {
                 if (_compositions.TryGetValue(comp.Id, out var live)
+                    && _compositionDefinitions.TryGetValue(comp.Id, out var previous)
+                    && SameComposition(previous, comp)
                     && live.CanvasFormat.Width == comp.Width
                     && live.CanvasFormat.Height == comp.Height
                     && live.CanvasFormat.FrameRate.Numerator == comp.FrameRateNum
@@ -775,7 +804,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // Which running groups may survive this reload (opt-in; see RetainableGroupIds). Computed BEFORE the
         // teardown because it reads the live voices' bindings.
         var retainedGroupIds = preserveActiveGroups
-            ? RetainableGroupIds(newClipsByCue, document)
+            ? RetainableGroupIds(newClipsByCue, document, preservedIds)
             : new HashSet<string>(StringComparer.Ordinal);
 
         // Commit (atomic on the dispatcher): retire the running show, then swap in the staged graph. Nothing
@@ -819,6 +848,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         _clipsById = newClipsByCue;
         _routes = document.Routes;
         _audioOutputs = document.AudioOutputs;
+        _compositionDefinitions = document.Compositions.ToDictionary(c => c.Id, StringComparer.Ordinal);
         _showGeneration++; // a fire whose open straddled this reload bails at commit (NXT-03 off-dispatcher)
 
         // Background pre-roll of the first cues so the first GO arms instantly. Launched with ExecutionContext
@@ -1008,7 +1038,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // (the video twin of the envelope seeding below, and the same clip-relative time basis).
             if (binding.OpacityEnvelope is { Count: > 0 } seedLane && layers.Count > 0)
             {
-                var seed = Math.Clamp(VolumeEnvelopes.Sample(seedLane, binding.StartOffset), 0f, 1f);
+                var seed = Math.Clamp(VolumeEnvelopes.Sample(seedLane, TimeSpan.Zero), 0f, 1f);
                 foreach (var placed in layers)
                     placed.Slot.AutomationLevel = seed;
             }
@@ -1032,7 +1062,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 // whose automation begins below unity would otherwise attach at unity and burst until the
                 // runner's first tick - loud on a cue authored quiet. The runner then simply keeps writing the
                 // same component as the clip plays on.
-                voice.Level.Envelope = VolumeEnvelopes.Sample(binding.VolumeEnvelope, binding.StartOffset);
+                voice.Level.Envelope = VolumeEnvelopes.Sample(binding.VolumeEnvelope, TimeSpan.Zero);
                 // The level every route attaches at, so the FIRST buffer the device sees is already at the
                 // composed level: 0 for a fade-in (the ramp lifts it), else the voice's own composition -
                 // the master trim it stamped at construction, times the envelope seeded just above.

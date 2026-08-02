@@ -55,7 +55,7 @@ public sealed class ProgramBusMeter
     private readonly int _channels;
     private readonly float[] _peak;      // linear, decaying
     private readonly float[] _meanSquare; // linear power, exponentially smoothed
-    private readonly bool[] _clipped;
+    private readonly int[] _clipped;
     private readonly float _peakDecayPerFrame;
     private readonly float _rmsAlphaPerFrame;
 
@@ -66,7 +66,7 @@ public sealed class ProgramBusMeter
         _channels = channels;
         _peak = new float[channels];
         _meanSquare = new float[channels];
-        _clipped = new bool[channels];
+        _clipped = new int[channels];
 
         // Peak: multiply by this each frame so the level falls PeakDecayDbPerSecond per second.
         _peakDecayPerFrame = (float)Math.Pow(10d, -PeakDecayDbPerSecond / (20d * sampleRate));
@@ -103,8 +103,6 @@ public sealed class ProgramBusMeter
         {
             var peak = _peak[channel] * chunkDecay;
             var meanSquare = _meanSquare[channel];
-            var clipped = _clipped[channel];
-
             for (var frame = 0; frame < frames; frame++)
             {
                 var sample = interleaved[frame * _channels + channel];
@@ -113,7 +111,7 @@ public sealed class ProgramBusMeter
                 if (magnitude > peak)
                     peak = magnitude;
                 if (magnitude >= 1f)
-                    clipped = true;
+                    Volatile.Write(ref _clipped[channel], 1);
 
                 // One-pole towards the instantaneous power.
                 meanSquare += _rmsAlphaPerFrame * (sample * sample - meanSquare);
@@ -123,7 +121,6 @@ public sealed class ProgramBusMeter
             // a real (and famously puzzling) stall on some CPUs.
             _peak[channel] = peak < SilenceLinear ? 0f : peak;
             _meanSquare[channel] = meanSquare < 1e-20f ? 0f : meanSquare;
-            _clipped[channel] = clipped;
         }
     }
 
@@ -143,7 +140,7 @@ public sealed class ProgramBusMeter
             destination[channel] = new ProgramChannelLevel(
                 LinearToDb(_peak[channel]),
                 LinearToDb(MathF.Sqrt(_meanSquare[channel])),
-                _clipped[channel]);
+                Volatile.Read(ref _clipped[channel]) != 0);
         }
     }
 
@@ -157,7 +154,11 @@ public sealed class ProgramBusMeter
     }
 
     /// <summary>Clears the sticky clip latch on every channel.</summary>
-    public void ResetClip() => Array.Clear(_clipped);
+    public void ResetClip()
+    {
+        for (var channel = 0; channel < _channels; channel++)
+            Interlocked.Exchange(ref _clipped[channel], 0);
+    }
 
     private static float LinearToDb(float linear) =>
         linear <= SilenceLinear ? SilenceDb : 20f * MathF.Log10(linear);

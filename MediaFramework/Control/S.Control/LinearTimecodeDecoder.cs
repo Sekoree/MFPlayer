@@ -45,7 +45,11 @@ public sealed class LinearTimecodeDecoder
     private readonly int _sampleRate;
 
     // Zero-crossing interval measurement.
-    private float _previousSample;
+    // Schmitt-trigger state. A slowly-following DC estimate removes capture-interface bias; the
+    // peak follower makes the hysteresis scale with hot and quiet LTC alike.
+    private float _dcEstimate;
+    private float _signalEnvelope;
+    private int _polarity;
     private int _samplesSinceTransition;
 
     // Biphase decoding: a short interval is half a bit cell, so two shorts make one `1`.
@@ -74,12 +78,15 @@ public sealed class LinearTimecodeDecoder
     /// <summary>Drops bit lock and all partial state. Call when the capture stream restarts.</summary>
     public void Reset()
     {
-        _previousSample = 0f;
+        _dcEstimate = 0f;
+        _signalEnvelope = 0f;
+        _polarity = 0;
         _samplesSinceTransition = 0;
         _halfBitPending = false;
         _referenceCellSamples = 0;
         _window = UInt128.Zero;
         _locked = false;
+        _sampleIndex = 0;
         _lastFrameSampleIndex = -1;
     }
 
@@ -98,19 +105,41 @@ public sealed class LinearTimecodeDecoder
             _sampleIndex++;
             _samplesSinceTransition++;
 
-            // Transitions are zero crossings, so the decode is independent of level and of polarity -
-            // an inverted or quiet LTC track decodes identically.
-            var crossed = (_previousSample < 0f && sample >= 0f) || (_previousSample >= 0f && sample < 0f);
-            _previousSample = sample;
+            if (!float.IsFinite(sample))
+            {
+                DropSignalLock();
+                continue;
+            }
+
+            // DC-block + amplitude-relative Schmitt trigger: a noisy sample hovering around zero cannot
+            // manufacture several edges, while a quiet or biased capture still crosses both thresholds.
+            _dcEstimate += 0.001f * (sample - _dcEstimate);
+            var centered = sample - _dcEstimate;
+            _signalEnvelope = Math.Max(MathF.Abs(centered), _signalEnvelope * 0.9995f);
+            var threshold = Math.Max(0.00001f, _signalEnvelope * 0.08f);
+            var crossed = false;
+            if (_polarity == 0)
+            {
+                if (centered >= threshold) _polarity = 1;
+                else if (centered <= -threshold) _polarity = -1;
+            }
+            else if (_polarity < 0 && centered >= threshold)
+            {
+                _polarity = 1;
+                crossed = true;
+            }
+            else if (_polarity > 0 && centered <= -threshold)
+            {
+                _polarity = -1;
+                crossed = true;
+            }
             if (!crossed)
             {
                 // A run far longer than a bit cell means the signal stopped (or was never LTC): drop
                 // lock rather than let a stale half-bit corrupt the next frame.
                 if (_referenceCellSamples > 0 && _samplesSinceTransition > _referenceCellSamples * 4)
                 {
-                    _halfBitPending = false;
-                    _locked = false;
-                    _referenceCellSamples = 0;
+                    DropSignalLock();
                 }
                 continue;
             }
@@ -151,6 +180,15 @@ public sealed class LinearTimecodeDecoder
                 _referenceCellSamples = (_referenceCellSamples * 7 + interval) / 8;
             }
         }
+    }
+
+    private void DropSignalLock()
+    {
+        _halfBitPending = false;
+        _locked = false;
+        _referenceCellSamples = 0;
+        _polarity = 0;
+        _samplesSinceTransition = 0;
     }
 
     private void PushBit(bool bit, Action<MidiTimecodeValue> onFrame)

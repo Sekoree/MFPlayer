@@ -333,6 +333,8 @@ public sealed record ShowDocument(
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(ShowDocument))]
+[JsonSerializable(typeof(ShowClipBinding))]
+[JsonSerializable(typeof(ShowComposition))]
 // Standalone root for the geometry-effect registry factory (OutputMappingGeometryEffect.FromJson).
 [JsonSerializable(typeof(ClipOutputMappingSpec))]
 internal partial class ShowDocumentJsonContext : JsonSerializerContext;

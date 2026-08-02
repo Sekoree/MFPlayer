@@ -122,7 +122,14 @@ public sealed class LogRingProvider : ILoggerProvider
             _next = (_next + 1) % _entries.Length;
         }
 
-        EntryCaptured?.Invoke(entry);
+        var captured = EntryCaptured;
+        if (captured is null)
+            return;
+        foreach (Action<LogRingEntry> subscriber in captured.GetInvocationList())
+        {
+            try { subscriber(entry); }
+            catch { /* diagnostics observers must never break the logger or starve later observers */ }
+        }
     }
 
     private sealed class RingLogger(LogRingProvider owner, string category) : ILogger

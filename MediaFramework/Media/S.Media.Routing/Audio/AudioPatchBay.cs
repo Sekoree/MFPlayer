@@ -19,7 +19,7 @@ namespace S.Media.Routing;
 /// a master that cannot open natively at the mix rate is a named validation failure, because the
 /// resampling wrapper does not report its own internal delay and would skew the program clock
 /// silently. Terminal outputs are BORROWED (the host's lease owns the device); the bay disposes
-/// only the resampler wrappers it created.</para>
+/// only the resampler and adaptive-rate wrappers it created.</para>
 /// </summary>
 public sealed class AudioPatchBay : IDisposable
 {
@@ -30,6 +30,8 @@ public sealed class AudioPatchBay : IDisposable
     private readonly string _busId;
     private readonly int _mixSampleRate;
     private readonly Func<IAudioOutput, AudioFormat, IAudioOutput>? _resamplerFactory;
+    private readonly AdaptiveRateOutputWrapper? _adaptiveRateWrapper;
+    private readonly int _adaptiveRateMaxDeltaHz;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, TerminalEntry> _terminals = new(StringComparer.Ordinal);
     // The clock-master triple the producer clocks read through the proxy/lead delegates. Volatile:
@@ -39,7 +41,13 @@ public sealed class AudioPatchBay : IDisposable
     private volatile string? _masterTerminalId;
     private bool _disposed;
 
-    private sealed record TerminalEntry(IAudioOutput Terminal, IAudioOutput Routed, bool OwnsRouted, bool IsClockMaster, float[,] Patch);
+    private sealed record TerminalEntry(
+        IAudioOutput Terminal,
+        IAudioOutput Routed,
+        bool IsClockMaster,
+        float[,] Patch);
+
+    private sealed record PreparedTerminal(IAudioOutput Routed, IDisposable? Cleanup);
 
     /// <param name="logicalChannels">V - the project's logical channel count.</param>
     /// <param name="mixSampleRate">The fixed project mix rate (plan decision 7).</param>
@@ -47,14 +55,25 @@ public sealed class AudioPatchBay : IDisposable
     /// the mix rate (the neutral seam for <c>ResamplingAudioOutput.Wrap</c>, which lives in the
     /// FFmpeg module). Null = foreign-rate terminals are rejected with a named error.</param>
     /// <param name="producerRingFrames">Per-producer bounded ring capacity in frames.</param>
+    /// <param name="adaptiveRateWrapper">Optional registry-wired adaptive-rate wrapper. When set,
+    /// every non-master terminal is wrapped for independent hardware-clock drift correction. The
+    /// clock master is always attached directly at the project rate.</param>
+    /// <param name="adaptiveRateMaxDeltaHz">Maximum adaptive correction in Hz.</param>
     public AudioPatchBay(
         int logicalChannels,
         int mixSampleRate,
         Func<IAudioOutput, AudioFormat, IAudioOutput>? resamplerFactory = null,
-        int producerRingFrames = 4800)
+        int producerRingFrames = 4800,
+        AdaptiveRateOutputWrapper? adaptiveRateWrapper = null,
+        int adaptiveRateMaxDeltaHz = 3)
     {
+        if (adaptiveRateMaxDeltaHz < 0)
+            throw new ArgumentOutOfRangeException(nameof(adaptiveRateMaxDeltaHz));
         _mixSampleRate = mixSampleRate;
         _router = new AudioRouter(mixSampleRate, ChunkSamples);
+        // The bay owns the clock policy explicitly. Letting AudioRouter auto-promote on removal can
+        // silently turn a rate-adapted secondary into the pace master while the bay reports no master.
+        _router.AutoWirePrimary = false;
         // Producer leases rebase their clocks from whatever terminal is CURRENTLY the clock master,
         // through this late-bound proxy: no master (yet, or after removal) degrades every producer
         // clock to the wall-clock fallback domain, and a master appearing later is picked up as an
@@ -66,6 +85,8 @@ public sealed class AudioPatchBay : IDisposable
             new ProgramBusClockContext(new MasterClockProxy(this), DownstreamLeadTicks));
         _busId = _router.AddSource(_bus, "program-bus");
         _resamplerFactory = resamplerFactory;
+        _adaptiveRateWrapper = adaptiveRateWrapper;
+        _adaptiveRateMaxDeltaHz = adaptiveRateMaxDeltaHz;
     }
 
     public int LogicalChannels => _bus.BusChannels;
@@ -195,7 +216,8 @@ public sealed class AudioPatchBay : IDisposable
             if (isClockMaster && _terminals.Values.Any(t => t.IsClockMaster))
                 throw new InvalidOperationException("the bay already has a clock-master terminal");
             ValidateRate(terminalId, terminal, isClockMaster);
-            AttachLocked(terminalId, terminal, patch, isClockMaster);
+            var prepared = PrepareTerminal(terminalId, terminal, isClockMaster);
+            AttachLocked(terminalId, terminal, prepared, patch, isClockMaster);
         }
     }
 
@@ -209,8 +231,8 @@ public sealed class AudioPatchBay : IDisposable
     /// another terminal or a producer. Driven by health events - <see cref="TerminalErrored"/>,
     /// <see cref="TerminalPressure"/>, <see cref="TryGetTerminalStats"/> - not by silence.
     /// <para>The replacement is validated BEFORE the old line is detached: a failed swap throws and
-    /// leaves the old terminal attached and flowing. Monitor inputs on the old line are stranded by
-    /// the swap (their routes die with the old terminal) - dispose and re-acquire them. If the old
+    /// leaves the old terminal attached and flowing. Monitor inputs follow the stable terminal id across
+    /// the swap. If the old
     /// line was the clock master, producer clocks ride the wall-clock fallback for the swap gap and
     /// re-anchor to the new master's clock on its first read.</para>
     /// </summary>
@@ -228,22 +250,28 @@ public sealed class AudioPatchBay : IDisposable
             ValidatePatch(newPatch, newTerminal.Format.Channels);
             ValidateRate(terminalId, newTerminal, old.IsClockMaster);
 
-            _terminals.Remove(terminalId);
-            if (old.IsClockMaster)
+            // Factories and format checks can fail. Complete all of them before touching the live
+            // route so ordinary replacement failures genuinely leave the old terminal flowing.
+            var prepared = PrepareTerminal(terminalId, newTerminal, old.IsClockMaster);
+
+            try
             {
-                _masterTerminalClock = null;
-                _masterTerminal = null;
-                _masterTerminalId = null;
+                _router.ReplaceOutputKeepingRoutes(terminalId, prepared.Routed, prepared.Cleanup);
+            }
+            catch
+            {
+                prepared.Cleanup?.Dispose();
+                throw;
             }
 
-            // A healthy pump detaches in ~a chunk; a wedged one is quarantined in the background by
-            // the router (leaked drainer + TerminalErrored) - either way this returns promptly and
-            // the mix keeps running for every other line.
-            _router.RemoveOutput(terminalId);
-            if (old.OwnsRouted)
-                (old.Routed as IDisposable)?.Dispose();
-
-            AttachLocked(terminalId, newTerminal, newPatch, old.IsClockMaster);
+            _router.ApplyMatrix(_busId, terminalId, newPatch);
+            _terminals[terminalId] = new TerminalEntry(
+                newTerminal, prepared.Routed, old.IsClockMaster, (float[,])newPatch.Clone());
+            if (old.IsClockMaster)
+            {
+                _masterTerminal = prepared.Routed;
+                _masterTerminalClock = prepared.Routed as IPlaybackClock;
+            }
         }
     }
 
@@ -284,7 +312,7 @@ public sealed class AudioPatchBay : IDisposable
             if (string.Equals(terminalId, _masterTerminalId, StringComparison.Ordinal))
                 return;
             ValidateRate(terminalId, promoted.Terminal, isClockMaster: true);
-            if (promoted.Routed is not IClockedOutput)
+            if (promoted.Terminal is not IClockedOutput)
                 throw new ArgumentException(
                     $"terminal '{terminalId}' cannot pace the bay: it does not implement IClockedOutput.",
                     nameof(terminalId));
@@ -296,6 +324,70 @@ public sealed class AudioPatchBay : IDisposable
     private void PromoteClockMasterLocked(string terminalId)
     {
         var promoted = _terminals[terminalId];
+
+        // With adaptive drift correction enabled, clock role is part of the wrapper topology: the
+        // promoted line must become direct/native, and the old master becomes an adaptive secondary.
+        // Both chains are staged before either live output changes; router replacement preserves program
+        // and monitor routes under their stable output ids.
+        if (_adaptiveRateWrapper is not null)
+        {
+            var promotedPrepared = PrepareTerminal(terminalId, promoted.Terminal, isClockMaster: true);
+            PreparedTerminal? demotedPrepared = null;
+            TerminalEntry? oldMaster = null;
+            var oldMasterId = _masterTerminalId;
+            try
+            {
+                if (oldMasterId is not null && _terminals.TryGetValue(oldMasterId, out oldMaster))
+                    demotedPrepared = PrepareTerminal(oldMasterId, oldMaster.Terminal, isClockMaster: false);
+            }
+            catch
+            {
+                promotedPrepared.Cleanup?.Dispose();
+                throw;
+            }
+
+            try
+            {
+                _router.ReplaceOutputKeepingRoutes(terminalId, promotedPrepared.Routed, promotedPrepared.Cleanup);
+            }
+            catch
+            {
+                promotedPrepared.Cleanup?.Dispose();
+                demotedPrepared?.Cleanup?.Dispose();
+                throw;
+            }
+            _terminals[terminalId] = promoted with
+            {
+                Routed = promotedPrepared.Routed,
+                IsClockMaster = true,
+            };
+
+            _router.RetargetSlaveClock(terminalId);
+
+            if (oldMasterId is not null && oldMaster is not null && demotedPrepared is not null)
+            {
+                try
+                {
+                    _router.ReplaceOutputKeepingRoutes(
+                        oldMasterId, demotedPrepared.Routed, demotedPrepared.Cleanup);
+                    _terminals[oldMasterId] = oldMaster with
+                    {
+                        Routed = demotedPrepared.Routed,
+                        IsClockMaster = false,
+                    };
+                }
+                catch
+                {
+                    demotedPrepared.Cleanup?.Dispose();
+                    throw;
+                }
+            }
+
+            _masterTerminal = promotedPrepared.Routed;
+            _masterTerminalClock = promotedPrepared.Routed as IPlaybackClock;
+            _masterTerminalId = terminalId;
+            return;
+        }
 
         // Retarget first: if it throws, the old master is still installed and still pacing.
         _router.RetargetSlaveClock(terminalId);
@@ -357,7 +449,7 @@ public sealed class AudioPatchBay : IDisposable
         {
             if (entry.IsClockMaster || quarantined.Contains(id))
                 continue;
-            if (entry.Terminal.Format.SampleRate != MixSampleRate || entry.Routed is not IClockedOutput)
+            if (entry.Terminal.Format.SampleRate != MixSampleRate || entry.Terminal is not IClockedOutput)
                 continue;
             eligible.Add(id);
         }
@@ -365,7 +457,7 @@ public sealed class AudioPatchBay : IDisposable
     }
 
     /// <summary>Rate half of terminal validation, shared by add and replace. Throws the named
-    /// errors the plan requires; never wraps here (wrapping happens in <see cref="AttachLocked"/>).</summary>
+    /// errors the plan requires; never wraps here (wrapping happens in <see cref="PrepareTerminal"/>).</summary>
     private void ValidateRate(string terminalId, IAudioOutput terminal, bool isClockMaster)
     {
         if (terminal.Format.SampleRate == MixSampleRate)
@@ -382,40 +474,99 @@ public sealed class AudioPatchBay : IDisposable
                 $"{MixSampleRate} Hz and no resampler factory was provided.");
     }
 
-    /// <summary>Wires a validated terminal into the router under <paramref name="terminalId"/> and
-    /// records its entry. Caller holds <see cref="_gate"/> and has run <see cref="ValidatePatch"/> +
-    /// <see cref="ValidateRate"/> (and the duplicate-id / single-master checks for a fresh add).</summary>
-    private void AttachLocked(string terminalId, IAudioOutput terminal, float[,] patch, bool isClockMaster)
+    /// <summary>Builds the complete wrapper chain without changing live router state.</summary>
+    private PreparedTerminal PrepareTerminal(string terminalId, IAudioOutput terminal, bool isClockMaster)
     {
         var routed = terminal;
-        var owns = false;
-        if (terminal.Format.SampleRate != MixSampleRate)
-        {
-            routed = _resamplerFactory!(terminal, new AudioFormat(MixSampleRate, terminal.Format.Channels));
-            owns = !ReferenceEquals(routed, terminal);
-        }
-
-        _router.AddOutput(routed, terminalId);
+        var owned = new List<IDisposable>(2);
         try
         {
+            if (terminal.Format.SampleRate != MixSampleRate)
+            {
+                var wrapped = _resamplerFactory!(terminal, new AudioFormat(MixSampleRate, terminal.Format.Channels));
+                if (wrapped is null)
+                    throw new InvalidOperationException($"resampler factory returned null for terminal '{terminalId}'");
+                routed = wrapped;
+                if (!ReferenceEquals(routed, terminal) && routed is IDisposable disposable)
+                    owned.Insert(0, disposable);
+            }
+
+            if (!isClockMaster && _adaptiveRateWrapper is not null)
+            {
+                var wrapped = _adaptiveRateWrapper(_router, routed, terminalId, _adaptiveRateMaxDeltaHz);
+                if (wrapped is null)
+                    throw new InvalidOperationException($"adaptive-rate factory returned null for terminal '{terminalId}'");
+                if (!ReferenceEquals(wrapped, routed) && wrapped is IDisposable disposable)
+                    owned.Insert(0, disposable);
+                routed = wrapped;
+            }
+
+            routed.Format.Validate(nameof(terminal));
+            if (routed.Format.SampleRate != MixSampleRate || routed.Format.Channels != terminal.Format.Channels)
+                throw new InvalidOperationException(
+                    $"terminal wrapper for '{terminalId}' reports {routed.Format}; expected " +
+                    $"{MixSampleRate} Hz and {terminal.Format.Channels} channels");
+
+            return new PreparedTerminal(routed, owned.Count == 0 ? null : new OwnedWrapperChain(owned));
+        }
+        catch
+        {
+            foreach (var wrapper in owned)
+            {
+                try { wrapper.Dispose(); }
+                catch { /* preserve the factory/validation failure */ }
+            }
+            throw;
+        }
+    }
+
+    /// <summary>Wires a fully prepared terminal into the router and records its entry.</summary>
+    private void AttachLocked(
+        string terminalId,
+        IAudioOutput terminal,
+        PreparedTerminal prepared,
+        float[,] patch,
+        bool isClockMaster)
+    {
+        var added = false;
+        var cleanupRegistered = false;
+
+        try
+        {
+            // The bay already applied the exact role-aware wrapper chain; suppress the router's
+            // generic adaptive hook so a master can never be wrapped and a secondary cannot be doubled.
+            _router.AddOutput(prepared.Routed, terminalId, adaptiveRateEligible: false);
+            added = true;
+            if (prepared.Cleanup is not null)
+            {
+                _router.RegisterOutputCleanup(terminalId, prepared.Cleanup);
+                cleanupRegistered = true;
+            }
             _router.ApplyMatrix(_busId, terminalId, patch);
             if (isClockMaster)
                 _router.RetargetSlaveClock(terminalId);
         }
         catch
         {
-            _router.RemoveOutput(terminalId);
-            if (owns)
-                (routed as IDisposable)?.Dispose();
+            if (added)
+            {
+                if (cleanupRegistered)
+                    _router.RemoveOutput(terminalId);
+                else
+                    _router.RemoveOutputAndDispose(terminalId, prepared.Cleanup);
+            }
+            else
+                prepared.Cleanup?.Dispose();
             throw;
         }
 
-        _terminals[terminalId] = new TerminalEntry(terminal, routed, owns, isClockMaster, (float[,])patch.Clone());
+        _terminals[terminalId] = new TerminalEntry(
+            terminal, prepared.Routed, isClockMaster, (float[,])patch.Clone());
         if (isClockMaster)
         {
             // The master is never wrapped, so routed == terminal here; producer clocks follow it.
-            _masterTerminal = routed;
-            _masterTerminalClock = routed as IPlaybackClock;
+            _masterTerminal = prepared.Routed;
+            _masterTerminalClock = prepared.Routed as IPlaybackClock;
             _masterTerminalId = terminalId;
         }
     }
@@ -459,8 +610,6 @@ public sealed class AudioPatchBay : IDisposable
         }
 
         _router.RemoveOutput(terminalId);
-        if (entry.OwnsRouted)
-            (entry.Routed as IDisposable)?.Dispose();
         return true;
     }
 
@@ -516,8 +665,8 @@ public sealed class AudioPatchBay : IDisposable
                 terminalChannels,
                 MixSampleRate,
                 clockContext: new ProgramBusClockContext(
-                    entry.Routed as IPlaybackClock ?? new NeverClock(),
-                    () => TerminalLeadTicks(terminalId, entry.Routed)));
+                    new TerminalClockProxy(this, terminalId),
+                    () => TerminalLeadTicks(terminalId)));
             ProgramBusProducer input;
             try
             {
@@ -568,23 +717,36 @@ public sealed class AudioPatchBay : IDisposable
 
     /// <summary>Lead between a monitor input and ONE terminal's speaker: that terminal's pump
     /// in-flight plus its reported device latency. Hot-path safe like the master variant.</summary>
-    private long TerminalLeadTicks(string terminalId, IAudioOutput terminal)
+    private long TerminalLeadTicks(string terminalId)
     {
+        IAudioOutput? terminal;
+        lock (_gate)
+            terminal = _terminals.GetValueOrDefault(terminalId)?.Routed;
         long ticks = 0;
         if (_router.TryGetPumpStats(terminalId, out var pump))
             ticks = pump.InFlight * (long)ChunkSamples * TimeSpan.TicksPerSecond / _mixSampleRate;
-        return ticks + AudioOutputLatency.Of(terminal).Ticks;
+        return ticks + (terminal is null ? 0 : AudioOutputLatency.Of(terminal).Ticks);
     }
 
-    /// <summary>Placeholder clock for an unclocked monitored terminal: always throws, which the
-    /// audible clock treats as a permanent outage - the lease's clock runs in the advancing
-    /// wall-clock fallback domain.</summary>
-    private sealed class NeverClock : IPlaybackClock
+    private sealed class TerminalClockProxy(AudioPatchBay bay, string terminalId) : IPlaybackClock
     {
-        public TimeSpan ElapsedSinceStart => throw new InvalidOperationException("terminal exposes no clock");
-        public long EpochId => throw new InvalidOperationException("terminal exposes no clock");
-        public bool IsAdvancing => throw new InvalidOperationException("terminal exposes no clock");
-        public ClockReading Read() => throw new InvalidOperationException("terminal exposes no clock");
+        private IPlaybackClock Inner
+        {
+            get
+            {
+                lock (bay._gate)
+                    return bay._terminals.TryGetValue(terminalId, out var entry)
+                           && entry.Routed is IPlaybackClock clock
+                        ? clock
+                        : throw new InvalidOperationException(
+                            $"terminal '{terminalId}' exposes no playback clock");
+            }
+        }
+
+        public TimeSpan ElapsedSinceStart => Inner.ElapsedSinceStart;
+        public long EpochId => Inner.EpochId;
+        public bool IsAdvancing => Inner.IsAdvancing;
+        public ClockReading Read() => Inner.Read();
     }
 
     /// <summary>Per-terminal pump health (queue depth, drops, submit failures).</summary>
@@ -614,14 +776,12 @@ public sealed class AudioPatchBay : IDisposable
 
     public void Dispose()
     {
-        List<TerminalEntry> owned;
         List<ProgramBusSource> monitors;
         lock (_gate)
         {
             if (_disposed)
                 return;
             _disposed = true;
-            owned = _terminals.Values.Where(t => t.OwnsRouted).ToList();
             _terminals.Clear();
             monitors = _monitorBuses.Values.ToList();
             _monitorBuses.Clear();
@@ -633,11 +793,6 @@ public sealed class AudioPatchBay : IDisposable
         foreach (var monitor in monitors)
             monitor.Dispose();
         _router.Dispose();
-        foreach (var entry in owned)
-        {
-            try { (entry.Routed as IDisposable)?.Dispose(); }
-            catch { /* best effort */ }
-        }
     }
 
     /// <summary>Everything between the program bus and the speaker on the MASTER path: chunks in the
@@ -668,6 +823,22 @@ public sealed class AudioPatchBay : IDisposable
         public long EpochId => Inner.EpochId;
         public bool IsAdvancing => Inner.IsAdvancing;
         public ClockReading Read() => Inner.Read();
+    }
+
+    private sealed class OwnedWrapperChain(List<IDisposable> wrappers) : IDisposable
+    {
+        private List<IDisposable>? _wrappers = wrappers;
+
+        public void Dispose()
+        {
+            var owned = Interlocked.Exchange(ref _wrappers, null);
+            if (owned is null) return;
+            foreach (var wrapper in owned)
+            {
+                try { wrapper.Dispose(); }
+                catch { /* best-effort teardown; terminal devices themselves are borrowed */ }
+            }
+        }
     }
 
     private void ValidatePatch(float[,] patch, int terminalChannels)

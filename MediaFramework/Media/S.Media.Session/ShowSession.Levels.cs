@@ -55,7 +55,9 @@ public sealed partial class ShowSession
             // Audio leg = ApplyAudioScale(frac), exactly as before; the opacity leg ramps each layer
             // from 0 toward its authored value (base × frac) - the mirror of the stop fade's ramp down.
             voice.ApplyFadeLevel(routes, 1f, voice.BaseLayerFadeLevels, frac);
-            if (frac < 1f)
+            // A custom curve may intentionally end below 1. Completion is temporal, not inferred
+            // from the authored endpoint value, otherwise that fade slot can remain claimed forever.
+            if (elapsed < duration)
                 return Task.FromResult(false);
             voice.EndClipFade(slotToken);
             return Task.FromResult(true);

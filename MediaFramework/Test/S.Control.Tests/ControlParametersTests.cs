@@ -1,4 +1,5 @@
 using S.Control;
+using S.Media.Session;
 using Xunit;
 
 namespace S.Control.Tests;
@@ -86,6 +87,21 @@ public class ControlParametersTests
         Assert.Equal(-10, box.Value, 5);
         binding.Apply(127);
         Assert.Equal(0, box.Value, 5);
+    }
+
+    [Fact]
+    public void TargetMappingCurve_ShapesControllerTravel()
+    {
+        var registry = RegistryWith(
+            new ParameterTarget("curved", "Curved", 0, 1, MappingCurve: FadeCurve.Exponential),
+            0,
+            out var box);
+        var binding = new ContinuousBinding(
+            new ContinuousBindingSpec("curved", InputMin: 0, InputMax: 100, SoftTakeover: false),
+            registry);
+
+        Assert.True(binding.Apply(50));
+        Assert.Equal(0.125, box.Value, 4);
     }
 
     [Fact]

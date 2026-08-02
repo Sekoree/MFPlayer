@@ -1,4 +1,5 @@
 using S.Control;
+using S.Media.Session;
 using Xunit;
 
 namespace S.Control.Tests;
@@ -115,8 +116,73 @@ public class OutboundRampRunnerTests
 
         // It keeps trying, and still attempts the terminal value - which is how a recovering endpoint
         // ends up holding the right number instead of whatever it caught mid-fade.
-        Assert.True(runner.IsFinished);
+        Assert.False(runner.IsFinished); // terminal delivery never succeeded, so completion cannot be claimed
         Assert.True(attempts > 1, "a failing send aborted the ramp");
+    }
+
+    [Fact]
+    public void FailedTerminalSend_IsRetriedUntilItActuallyLands()
+    {
+        var attempts = 0;
+        var runner = new OutboundRampRunner(Ramp(0, 1, 1), value =>
+        {
+            Assert.Equal(1, value, 10);
+            if (attempts++ == 0)
+                throw new TimeoutException("one transient failure");
+        });
+
+        runner.Advance(TimeSpan.FromSeconds(1));
+        Assert.False(runner.IsFinished);
+
+        runner.Advance(TimeSpan.FromSeconds(2));
+        Assert.True(runner.IsFinished);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task AsyncSender_HoldsOneInFlightAndOnlyTheNewestPendingValue()
+    {
+        var firstMayFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sent = new List<double>();
+        var calls = 0;
+        var runner = new OutboundRampRunner(
+            Ramp(0, 1, 10),
+            async (value, _) =>
+            {
+                lock (sent) sent.Add(value);
+                if (Interlocked.Increment(ref calls) == 1)
+                    await firstMayFinish.Task;
+            },
+            sendRateHz: 100);
+
+        runner.Advance(TimeSpan.Zero);
+        await Task.Delay(25); // first send is in flight
+        runner.Advance(TimeSpan.FromSeconds(1));
+        runner.Advance(TimeSpan.FromSeconds(2));
+        runner.Advance(TimeSpan.FromSeconds(3));
+        firstMayFinish.SetResult();
+        await runner.WaitForPendingSendAsync();
+
+        lock (sent)
+        {
+            Assert.Equal(2, sent.Count);
+            Assert.Equal(0, sent[0], 5);
+            Assert.Equal(0.3, sent[1], 3);
+        }
+    }
+
+    [Fact]
+    public void SegmentsUseTheirAuthoredCurve()
+    {
+        var sent = new List<double>();
+        var runner = new OutboundRampRunner(
+            [new OutboundRampPoint(TimeSpan.Zero, 0, FadeCurve.Exponential),
+             new OutboundRampPoint(TimeSpan.FromSeconds(1), 1)],
+            sent.Add);
+
+        runner.Advance(TimeSpan.FromMilliseconds(500));
+
+        Assert.Equal(0.125, sent[^1], 3);
     }
 
     [Fact]

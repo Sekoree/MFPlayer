@@ -87,7 +87,7 @@ public sealed partial class AudioRouter : IDisposable
     private int _sampleRate;
     private readonly int _chunkSamples;
     private readonly Lock _gate = new();
-    private readonly ConcurrentQueue<OutputPump> _pumpsAwaitingDispose = new();
+    private readonly ConcurrentQueue<DetachedOutputPump> _pumpsAwaitingDispose = new();
     private readonly ConcurrentDictionary<string, byte> _stuckOutputPumps = new(StringComparer.Ordinal);
     private readonly ILogger? _log;
     private readonly int _pumpCapacityChunks;
@@ -358,7 +358,11 @@ public sealed partial class AudioRouter : IDisposable
     /// knob via its <c>outputPumpCapacityChunks</c> parameter.
     /// </para>
     /// </remarks>
-    public string AddOutput(IAudioOutput output, string? id = null, int? pumpCapacityChunks = null)
+    public string AddOutput(
+        IAudioOutput output,
+        string? id = null,
+        int? pumpCapacityChunks = null,
+        bool adaptiveRateEligible = true)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -383,14 +387,17 @@ public sealed partial class AudioRouter : IDisposable
             // host replaced the device - the fresh pump starts healthy, so clear the stale flag.
             _stuckOutputPumps.TryRemove(id, out _);
 
-            output = MaybeWrapAdaptiveRateOutputLocked(output, id);
+            var callerOutput = output;
+            if (adaptiveRateEligible)
+                output = MaybeWrapAdaptiveRateOutputLocked(output, id);
+            var ownedWrapper = !ReferenceEquals(output, callerOutput) ? output as IDisposable : null;
             var floatsPerChunk = _chunkSamples * output.Format.Channels;
             var pump = new OutputPump(this, output, capacity, floatsPerChunk, id);
             // Pumps start idle; if the router is already running the drainer must start now so
             // this output receives chunks. If stopped, Start() will launch it later.
             if (_isRunning)
                 pump.EnsureStarted();
-            var entry = new OutputEntry(id, output, pump);
+            var entry = new OutputEntry(id, output, pump, ownedWrapper);
             _sinkFormats[id] = output.Format;
             Volatile.Write(ref _state, _state with { Outputs = _state.Outputs.Add(id, entry) });
             AutoWirePrimaryOutputIfNeeded(id, output);
@@ -408,11 +415,110 @@ public sealed partial class AudioRouter : IDisposable
     /// (briefly waited for) before the pump's thread teardown is scheduled.
     /// Returns false if no output had that ID.
     /// </summary>
-    public bool RemoveOutput(string id, CancellationToken cancellationToken = default)
+    public bool RemoveOutput(string id, CancellationToken cancellationToken = default) =>
+        RemoveOutputCore(id, disposeAfterPump: null, cancellationToken);
+
+    /// <summary>
+    /// Routing-internal ownership overload used by composites such as <see cref="AudioPatchBay"/>.
+    /// The cleanup is performed only after the detached output pump has stopped, and is deliberately
+    /// leaked with a quarantined pump if a native Submit never returns.
+    /// </summary>
+    internal bool RemoveOutputAndDispose(
+        string id,
+        IDisposable? disposeAfterPump,
+        CancellationToken cancellationToken = default) =>
+        RemoveOutputCore(id, disposeAfterPump, cancellationToken);
+
+    /// <summary>Transfers ownership of wrapper cleanup associated with a registered output.</summary>
+    internal void RegisterOutputCleanup(string id, IDisposable cleanup)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        ArgumentNullException.ThrowIfNull(cleanup);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_state.Outputs.TryGetValue(id, out var entry))
+                throw new ArgumentException($"unknown output ID '{id}'", nameof(id));
+            if (entry.AdditionalCleanup is not null)
+                throw new InvalidOperationException($"output '{id}' already has registered cleanup");
+            Volatile.Write(ref _state, _state with
+            {
+                Outputs = _state.Outputs.SetItem(id, entry with { AdditionalCleanup = cleanup }),
+            });
+        }
+    }
+
+    /// <summary>
+    /// Atomically swaps an output implementation while preserving every route targeting its id. The old
+    /// pump and wrappers retire after the state swap; the new cleanup transfers to the router only when
+    /// the swap commits. Used for patch-bay hot swap and clock-role wrapper changes.
+    /// </summary>
+    internal void ReplaceOutputKeepingRoutes(string id, IAudioOutput output, IDisposable? cleanup)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        ArgumentNullException.ThrowIfNull(output);
+        output.Format.Validate(nameof(output));
+        if (output.Format.SampleRate != _sampleRate)
+            throw new InvalidOperationException(
+                $"output sample rate {output.Format.SampleRate} doesn't match router's {_sampleRate}");
+
+        DetachedOutputPump detached;
+        bool wasRunning;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_state.Outputs.TryGetValue(id, out var old))
+                throw new ArgumentException($"unknown output ID '{id}'", nameof(id));
+            if (old.Output.Format.Channels != output.Format.Channels)
+                throw new InvalidOperationException(
+                    $"replacement output '{id}' has {output.Format.Channels} channels; existing routes require " +
+                    $"{old.Output.Format.Channels}");
+
+            var capacity = old.Pump.Stats.PumpCapacityChunks;
+            var pump = new OutputPump(this, output, capacity, _chunkSamples * output.Format.Channels, id);
+            try
+            {
+                if (_isRunning)
+                    pump.EnsureStarted();
+            }
+            catch
+            {
+                pump.Dispose();
+                throw;
+            }
+
+            var replacement = new OutputEntry(id, output, pump, AdditionalCleanup: cleanup);
+            var routes = _state.Routes
+                .Select(r => r.Route.OutputId == id ? new ResolvedRoute(r.Route, r.Source, replacement) : r)
+                .ToImmutableArray();
+            Volatile.Write(ref _state, _state with
+            {
+                Outputs = _state.Outputs.SetItem(id, replacement),
+                Routes = routes,
+            });
+            _sinkFormats[id] = output.Format;
+            _stuckOutputPumps.TryRemove(id, out _);
+            detached = new DetachedOutputPump(old.Pump, old.OwnedWrapper, old.AdditionalCleanup);
+            wasRunning = _isRunning;
+        }
+
+        detached.Pump.AbandonQueue();
+        detached.Pump.WaitForIdle(TimeSpan.FromMilliseconds(100));
+        if (wasRunning)
+            _pumpsAwaitingDispose.Enqueue(detached);
+        else
+            detached.Dispose();
+    }
+
+    private bool RemoveOutputCore(
+        string id,
+        IDisposable? disposeAfterPump,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
         OutputPump? pump;
-        IAudioOutput? removedOutput;
+        IDisposable? ownedWrapper;
+        IDisposable? registeredCleanup;
         bool wasRunning;
         var removedRoutes = 0;
         lock (_gate)
@@ -420,7 +526,8 @@ public sealed partial class AudioRouter : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_state.Outputs.TryGetValue(id, out var entry)) return false;
             pump = entry.Pump;
-            removedOutput = entry.Output;
+            ownedWrapper = entry.OwnedWrapper;
+            registeredCleanup = entry.AdditionalCleanup;
             removedRoutes = _state.Routes.Count(r => r.Route.OutputId == id);
             Volatile.Write(ref _state, _state with
             {
@@ -439,14 +546,10 @@ public sealed partial class AudioRouter : IDisposable
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioRouter.RemoveOutput", slowWarningMs: 250);
         pump.AbandonQueue();
         pump.WaitForIdle(TimeSpan.FromMilliseconds(100), cancellationToken);
-        if (wasRunning) _pumpsAwaitingDispose.Enqueue(pump);
-        else pump.Dispose();
-
-        // Dispose the router-created adaptive-rate wrapper (if any) so its monitor subscription /
-        // resampler don't leak. We only dispose wrappers WE created (IAdaptiveRateWrappedOutput) - the
-        // pump doesn't own its inner and we must never dispose the caller's own output.
-        if (removedOutput is IAdaptiveRateWrappedOutput and IDisposable wrapper)
-            MediaDiagnostics.SwallowDisposeErrors(wrapper.Dispose, "AudioRouter.RemoveOutput: adaptive wrapper");
+        var additionalCleanup = CombineCleanup(registeredCleanup, disposeAfterPump);
+        var detached = new DetachedOutputPump(pump, ownedWrapper, additionalCleanup);
+        if (wasRunning) _pumpsAwaitingDispose.Enqueue(detached);
+        else detached.Dispose();
         timing?.SetOutcome($"id={id} routes={removedRoutes} running={wasRunning}");
         Trace.LogDebug("RemoveOutput: id={OutputId} removedRoutes={RemovedRoutes} wasRunning={WasRunning}",
             id, removedRoutes, wasRunning);
@@ -1350,10 +1453,11 @@ public sealed partial class AudioRouter : IDisposable
             {
                 MediaDiagnostics.SwallowDisposeErrors(entry.Pump.Dispose, "AudioRouter.Dispose: OutputPump.Dispose");
                 disposedOutputs++;
-                // Dispose router-created adaptive-rate wrappers (monitor subscription / resampler); never
-                // the caller's own output (the pump doesn't own its inner).
-                if (entry.Output is IAdaptiveRateWrappedOutput and IDisposable wrapper)
-                    MediaDiagnostics.SwallowDisposeErrors(wrapper.Dispose, "AudioRouter.Dispose: adaptive wrapper");
+                if (!entry.Pump.Stats.IsStuck && entry.OwnedWrapper is not null)
+                    MediaDiagnostics.SwallowDisposeErrors(entry.OwnedWrapper.Dispose, "AudioRouter.Dispose: owned output wrapper");
+                if (!entry.Pump.Stats.IsStuck && entry.AdditionalCleanup is not null
+                    && !ReferenceEquals(entry.AdditionalCleanup, entry.OwnedWrapper))
+                    MediaDiagnostics.SwallowDisposeErrors(entry.AdditionalCleanup.Dispose, "AudioRouter.Dispose: output cleanup");
             }
 
             foreach (var (_, entry) in _state.Sources)
@@ -1503,8 +1607,8 @@ public sealed partial class AudioRouter : IDisposable
                 while (_pumpsAwaitingDispose.TryDequeue(out var p))
                 {
                     ThreadPool.UnsafeQueueUserWorkItem(
-                        static pump => MediaDiagnostics.SwallowDisposeErrors(
-                            pump.Dispose, "AudioRouter.RunLoop: detached OutputPump.Dispose"),
+                        static detached => MediaDiagnostics.SwallowDisposeErrors(
+                            detached.Dispose, "AudioRouter.RunLoop: detached output cleanup"),
                         p,
                         preferLocal: false);
                 }
@@ -1859,7 +1963,51 @@ public sealed partial class AudioRouter : IDisposable
     /// source is never disposed by the router.
     /// </param>
     private sealed record SourceEntry(string Id, IAudioSource Source, float[] Scratch, IDisposable? OwnedWrapper = null);
-    private sealed record OutputEntry(string Id, IAudioOutput Output, OutputPump Pump);
+    private sealed record OutputEntry(
+        string Id,
+        IAudioOutput Output,
+        OutputPump Pump,
+        IDisposable? OwnedWrapper = null,
+        IDisposable? AdditionalCleanup = null);
+
+    private static IDisposable? CombineCleanup(IDisposable? first, IDisposable? second)
+    {
+        if (first is null) return second;
+        if (second is null || ReferenceEquals(first, second)) return first;
+        return new CompositeCleanup(first, second);
+    }
+
+    private sealed class CompositeCleanup(params IDisposable[] items) : IDisposable
+    {
+        private IDisposable[]? _items = items;
+
+        public void Dispose()
+        {
+            var owned = Interlocked.Exchange(ref _items, null);
+            if (owned is null) return;
+            foreach (var item in owned)
+                MediaDiagnostics.SwallowDisposeErrors(item.Dispose, "AudioRouter: composite output cleanup");
+        }
+    }
+
+    /// <summary>Orders teardown so no wrapper can be disposed while a pump still calls it.</summary>
+    private sealed record DetachedOutputPump(
+        OutputPump Pump,
+        IDisposable? OwnedWrapper,
+        IDisposable? AdditionalCleanup) : IDisposable
+    {
+        public void Dispose()
+        {
+            Pump.Dispose();
+            if (Pump.Stats.IsStuck)
+                return;
+
+            if (OwnedWrapper is not null)
+                MediaDiagnostics.SwallowDisposeErrors(OwnedWrapper.Dispose, "AudioRouter: owned output wrapper");
+            if (AdditionalCleanup is not null && !ReferenceEquals(AdditionalCleanup, OwnedWrapper))
+                MediaDiagnostics.SwallowDisposeErrors(AdditionalCleanup.Dispose, "AudioRouter: detached output cleanup");
+        }
+    }
 
     private sealed record RouterState(
         ImmutableDictionary<string, SourceEntry> Sources,

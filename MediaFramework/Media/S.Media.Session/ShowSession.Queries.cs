@@ -116,6 +116,8 @@ public sealed partial class ShowSession
             if (!_compositions.TryGetValue(compositionId, out var composition))
                 return Task.FromResult(false);
             composition.UpdateCompositionMapping(mapping);
+            if (_compositionDefinitions.TryGetValue(compositionId, out var definition))
+                _compositionDefinitions[compositionId] = definition with { OutputMapping = mapping };
             return Task.FromResult(true);
         });
 
