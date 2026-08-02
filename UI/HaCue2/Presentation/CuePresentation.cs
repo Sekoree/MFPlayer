@@ -23,24 +23,31 @@ namespace HaCue2.Presentation;
 /// </remarks>
 public static class CuePresentation
 {
-    /// <summary>Every row of a list, groups expanded, in fire order.</summary>
+    /// <summary>
+    /// A list's cues as a TREE: top-level rows, each group carrying its children.
+    /// </summary>
+    /// <remarks>
+    /// Nested rather than flattened-with-a-depth-number because the tree control indents, expands and
+    /// collapses from the shape itself. A flat list with an indent margin could only ever LOOK like a
+    /// hierarchy, and a group was indistinguishable from a cue that happened to be indented.
+    /// </remarks>
     public static IReadOnlyList<CueRow> Rows(CueList list, HaCueProject project, ShowRuntime runtime) =>
-        [.. list.Cues.SelectMany(cue => Rows(cue, project, runtime, depth: 0))];
+        [.. list.Cues.Select(cue => Row(cue, project, runtime, depth: 0))];
 
     /// <summary>The rows for one subtree — the scoped view (screen 03) narrows to exactly this.</summary>
     public static IReadOnlyList<CueRow> Subtree(CueNode root, HaCueProject project, ShowRuntime runtime) =>
-        [.. Rows(root, project, runtime, depth: 0)];
+        [Row(root, project, runtime, depth: 0)];
 
-    private static IEnumerable<CueRow> Rows(
-        CueNode cue, HaCueProject project, ShowRuntime runtime, int depth)
+    /// <summary>Every row of a tree, in fire order — what a flat operation walks.</summary>
+    public static IEnumerable<CueRow> Flatten(IEnumerable<CueRow> rows)
     {
-        yield return Row(cue, project, runtime, depth);
-
-        if (cue is not GroupCueNode group)
-            yield break;
-
-        foreach (var row in group.Children.SelectMany(child => Rows(child, project, runtime, depth + 1)))
+        foreach (var row in rows)
+        {
             yield return row;
+
+            foreach (var child in Flatten(row.Children))
+                yield return child;
+        }
     }
 
     private static CueRow Row(CueNode cue, HaCueProject project, ShowRuntime runtime, int depth)
@@ -59,6 +66,9 @@ public static class CuePresentation
             Level = Level(cue),
             Badges = Badges(cue, project, runtime),
             Depth = depth,
+            Children = cue is GroupCueNode group
+                ? [.. group.Children.Select(child => Row(child, project, runtime, depth + 1))]
+                : [],
             IsRunning = runtime.Sounding.Contains(cue.Id),
             IsStandby = standby,
             IsBroken = runtime.Broken.Contains(cue.Id),

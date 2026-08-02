@@ -132,9 +132,11 @@
     <!-- ── a nav row: name on the left, tally on the right ───────────────────────────────────
          Shared by the scope picker (screen 03) and both settings navs (screens 12/13), because they
          are the same control: a list of destinations, each with a count that may be a warning. -->
-    <DataTemplate x:Key="ScopeItemTemplate" x:DataType="vm:SettingsPane">
+    <DataTemplate x:Key="ScopeItemTemplate" x:DataType="vm:INavRow">
       <Grid ColumnDefinitions="*,Auto">
-        <TextBlock Grid.Column="0" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+        <!-- Indented, so a group nested inside another sits under it in the scope picker. -->
+        <TextBlock Grid.Column="0" Margin="{Binding Indent}"
+                   Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
         <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
                    Margin="8,0,0,0"
                    IsVisible="{Binding HasTally}"
@@ -406,24 +408,39 @@
   <!-- A live cue's own row: label brightens and thickens. A DISABLED cue is struck through — the
        mockup's deliberate choice over ghosting, because "skipped for this performance" must survive a
        glance in a dark booth. -->
-  <Style Selector="Border.cuerow.is-go TextBlock.cuelabel, Border.cuerow.is-stby TextBlock.cuelabel">
+  <Style Selector="TextBlock.cuelabel.is-go, TextBlock.cuelabel.is-stby">
     <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
     <Setter Property="FontWeight" Value="Medium" />
   </Style>
-  <Style Selector="Border.cuerow.is-off TextBlock.cuelabel">
+  <Style Selector="TextBlock.cuelabel.off">
+    <Setter Property="TextDecorations" Value="Strikethrough" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+  </Style>
+  <Style Selector="TextBlock.qnum.off">
     <Setter Property="TextDecorations" Value="Strikethrough" />
   </Style>
-  <Style Selector="Border.cuerow.is-go TextBlock.glyph">
+  <Style Selector="TextBlock.glyph.is-go">
     <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
   </Style>
-  <Style Selector="Border.cuerow.is-stby TextBlock.glyph">
+  <Style Selector="TextBlock.glyph.is-stby">
     <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
   </Style>
-  <Style Selector="Border.cuerow.is-broke TextBlock.src">
+  <Style Selector="TextBlock.src.is-broke">
     <Setter Property="Foreground" Value="{StaticResource GelRed}" />
   </Style>
-  <Style Selector="Border.cuerow.grp TextBlock.cuelabel">
-    <Setter Property="FontWeight" Value="Medium" />
+  <!-- A group's label is the strongest text in the tree: it is a container, and the chevron beside it
+       only says "openable", not "this is where the cues below belong". -->
+  <Style Selector="TextBlock.cuelabel.grp">
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+  </Style>
+
+  <!-- ══ the cue tree's rows ════════════════════════════════════════════════════════════════
+       A TreeDataGridRow is built by the control, so there is no markup to hang Classes.is-go from;
+       the wash is bound through a converter instead, keyed off the row's own state. Selection is set
+       inside the ControlTheme's template and therefore still wins over this. -->
+  <Style Selector="TreeDataGridRow" x:DataType="vm:CueRow">
+    <Setter Property="Background" Value="{Binding Wash, Converter={x:Static conv:RowWashBrushConverter.Instance}}" />
   </Style>
 
   <!-- ══ active-cue rows ════════════════════════════════════════════════════════════════════ -->

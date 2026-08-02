@@ -64,8 +64,25 @@ public sealed record CueRow
     /// <summary>The Note tab's content — one tab on every kind, and the whole of a comment cue.</summary>
     public string Note { get; init; } = "";
 
-    /// <summary>Indent level; the mockup only ever draws one, but groups nest in the real model.</summary>
+    /// <summary>Indent level. The TreeDataGrid indents from the hierarchy itself; this is kept for
+    /// anything that still reads a row out of tree context.</summary>
     public int Depth { get; init; }
+
+    /// <summary>A group's cues. Empty for everything else — this is what makes the tree a tree.</summary>
+    public IReadOnlyList<CueRow> Children { get; init; } = [];
+
+    /// <summary>
+    /// Whether this row gets an expander.
+    /// </summary>
+    /// <remarks>
+    /// A GROUP with no cues in it still gets one, deliberately: an empty group is a thing an operator
+    /// made and needs to see is empty, and a row with no chevron reads as an ordinary cue — which is
+    /// exactly the confusion the tree was adopted to end.
+    /// </remarks>
+    public bool HasChildren => IsGroup;
+
+    /// <summary>Groups open by default: a collapsed show hides the cues somebody came here to read.</summary>
+    public bool IsExpanded { get; set; } = true;
 
     public bool IsRunning { get; init; }
     public bool IsStandby { get; init; }
@@ -75,6 +92,20 @@ public sealed record CueRow
     public bool IsDisabled { get; init; }
 
     public bool IsGroup => Kind == CueKind.Group;
+
+    /// <summary>
+    /// The wash behind the row. Most urgent state wins, exactly as the stripe does.
+    /// </summary>
+    /// <remarks>
+    /// Group last: a running cue inside a group must read as running, not as a group member.
+    /// </remarks>
+    public RowWash Wash => IsRunning
+        ? RowWash.Running
+        : IsStandby
+            ? RowWash.Standby
+            : IsGroup
+                ? RowWash.Group
+                : RowWash.None;
 
     /// <summary>
     /// The kind marker in the tree's glyph column. The mockup uses ◈ for both patch cues and OSC
@@ -423,7 +454,7 @@ public sealed record CurveOption(string Name, string PathData)
 public sealed record CurvePoint(double X, double Y, bool IsSelected = false);
 
 /// <summary>A named settings pane in the nav (screens 12/13).</summary>
-public sealed record SettingsPane
+public sealed record SettingsPane : INavRow
 {
     public required string Name { get; init; }
     public string Tally { get; init; } = "";
@@ -431,4 +462,37 @@ public sealed record SettingsPane
     public bool HasTally => Tally.Length > 0;
     public bool TallyIsBad => TallyGel == Gel.Red;
     public bool TallyIsOverride => TallyGel == Gel.Amber;
+
+    /// <summary>Settings panes are a flat list; only the scope picker nests.</summary>
+    public Thickness Indent => default;
+}
+
+/// <summary>
+/// A row in a navigation list: a destination, with a count beside it.
+/// </summary>
+/// <remarks>
+/// The scope picker (screen 03) and both settings navs (screens 12/13) share one DataTemplate because
+/// they are the same control. Sharing it needs a shared TYPE: a compiled binding whose x:DataType does
+/// not match the item silently resolves to nothing, and the row falls back to ToString() — which is
+/// exactly what the scope picker was doing, printing "ScopeEntry { Id = … }" down the side of the app.
+/// </remarks>
+public interface INavRow
+{
+    string Name { get; }
+    string Tally { get; }
+    bool HasTally { get; }
+    bool TallyIsBad { get; }
+    bool TallyIsOverride { get; }
+
+    /// <summary>Nesting, so a group inside a group sits under it.</summary>
+    Thickness Indent { get; }
+}
+
+/// <summary>Which wash sits behind a cue row. Mapped to a token by RowWashBrushConverter.</summary>
+public enum RowWash
+{
+    None,
+    Running,
+    Standby,
+    Group,
 }

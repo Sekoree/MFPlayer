@@ -1,0 +1,236 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:conv="using:Avalonia.Controls.Converters">
+
+  <!-- ControlThemes for Avalonia.Controls.TreeDataGrid, written onto the booth-dark palette.
+
+       The package ships Themes/Generic.axaml (templates + neutral resources) and Themes/Fluent.axaml
+       (the same templates with Fluent system colours). NEITHER is included here: Fluent's brushes
+       resolve Fluent-only palette colours through StaticResource, and a StaticResource on a
+       SolidColorBrush THROWS rather than deferring — which is exactly the crash HaPlay hit under the
+       Simple theme (HaPlay.Tests/SimpleThemeTreeDataGridResourceTests). HaCue2 sits on SimpleTheme for
+       plumbing, so it would hit it too.
+
+       The template structure below mirrors Generic.axaml part for part — every PART_ name, presenter
+       and state the control code looks for — because those names ARE the control's contract. Only the
+       visuals differ. -->
+
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
+  </ResourceDictionary.MergedDictionaries>
+
+  <!-- Chevrons, as in Generic.axaml. Kept verbatim so an expander points the way every other
+       TreeDataGrid does. -->
+  <StreamGeometry x:Key="TreeDataGridItemCollapsedChevronPathData">M 2,-2 L 8,4 L 2,10 L 3.5,11.5 L 11,4 L 3.5,-3.5 Z</StreamGeometry>
+  <StreamGeometry x:Key="TreeDataGridItemExpandedChevronPathData">M -2,2 L 4,8 L 10,2 L 11.5,3.5 L 4,11 L -3.5,3.5 Z</StreamGeometry>
+
+  <SolidColorBrush x:Key="TreeDataGridGridLinesBrush" Color="{StaticResource BoothRuleColor}" />
+  <SolidColorBrush x:Key="TreeDataGridSelectedCellBackgroundBrush" Color="Transparent" />
+
+  <ControlTheme x:Key="TreeDataGridExpandCollapseChevron" TargetType="ToggleButton">
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="Width" Value="10" />
+    <Setter Property="Height" Value="10" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="Transparent"
+                Width="{TemplateBinding Width}" Height="{TemplateBinding Height}"
+                HorizontalAlignment="Center" VerticalAlignment="Center">
+          <Path x:Name="ChevronPath"
+                Data="{StaticResource TreeDataGridItemCollapsedChevronPathData}"
+                Fill="{TemplateBinding Foreground}"
+                Stretch="Uniform"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:checked /template/ Path#ChevronPath">
+      <Setter Property="Data" Value="{StaticResource TreeDataGridItemExpandedChevronPathData}" />
+    </Style>
+    <!-- An open group's chevron is brighter than a closed one's: the two states have to be tellable
+         apart at a glance from across a booth, which is the whole reason the tree exists. -->
+    <Style Selector="^:checked /template/ Path#ChevronPath">
+      <Setter Property="Fill" Value="{StaticResource GelCongo}" />
+    </Style>
+    <Style Selector="^:pointerover /template/ Path#ChevronPath">
+      <Setter Property="Fill" Value="{StaticResource BoothInk}" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type TreeDataGrid}" TargetType="TreeDataGrid">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="RootBorder"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}">
+          <DockPanel>
+            <ScrollViewer Name="PART_HeaderScrollViewer"
+                          DockPanel.Dock="Top"
+                          IsVisible="{TemplateBinding ShowColumnHeaders}"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled"
+                          BringIntoViewOnFocusChange="{TemplateBinding (ScrollViewer.BringIntoViewOnFocusChange)}">
+              <Border x:Name="ColumnHeadersPresenterBorder"
+                      Background="{StaticResource BoothPanel2}"
+                      BorderBrush="{StaticResource BoothRule}"
+                      BorderThickness="0,0,0,1">
+                <TreeDataGridColumnHeadersPresenter Name="PART_ColumnHeadersPresenter"
+                                                    ElementFactory="{TemplateBinding ElementFactory}"
+                                                    Items="{TemplateBinding Columns}" />
+              </Border>
+            </ScrollViewer>
+            <ScrollViewer Name="PART_ScrollViewer"
+                          HorizontalScrollBarVisibility="Auto"
+                          BringIntoViewOnFocusChange="{TemplateBinding (ScrollViewer.BringIntoViewOnFocusChange)}">
+              <TreeDataGridRowsPresenter Name="PART_RowsPresenter"
+                                         Columns="{TemplateBinding Columns}"
+                                         ElementFactory="{TemplateBinding ElementFactory}"
+                                         Items="{TemplateBinding Rows}" />
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type TreeDataGridColumnHeader}" TargetType="TreeDataGridColumnHeader">
+    <Setter Property="Padding" Value="8,4" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="DataGridBorder"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{StaticResource BoothRule}"
+                BorderThickness="0,0,1,0">
+          <Panel>
+            <DockPanel Margin="{TemplateBinding Padding}">
+              <Path x:Name="SortIcon"
+                    DockPanel.Dock="Right"
+                    Fill="{StaticResource BoothInk3}"
+                    Width="7" Height="7"
+                    Margin="4,0,0,0"
+                    Stretch="Uniform"
+                    VerticalAlignment="Center"
+                    IsVisible="False" />
+              <ContentPresenter Name="PART_ContentPresenter"
+                                Content="{TemplateBinding Header}"
+                                VerticalAlignment="Center"
+                                TextElement.FontFamily="{StaticResource MonoFont}"
+                                TextElement.FontSize="{StaticResource FontSizeNano}"
+                                TextElement.Foreground="{StaticResource BoothInk3}"
+                                TextElement.LetterSpacing="1" />
+            </DockPanel>
+            <Thumb Name="PART_Resizer"
+                   HorizontalAlignment="Right"
+                   Width="5"
+                   Background="Transparent"
+                   Cursor="SizeWestEast">
+              <Thumb.Template>
+                <ControlTemplate>
+                  <Border Background="{TemplateBinding Background}" />
+                </ControlTemplate>
+              </Thumb.Template>
+            </Thumb>
+          </Panel>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^:pointerover /template/ Border#DataGridBorder">
+      <Setter Property="Background" Value="{StaticResource ButtonHoverBg}" />
+    </Style>
+    <Style Selector="^:sortascending /template/ Path#SortIcon">
+      <Setter Property="IsVisible" Value="True" />
+      <Setter Property="Data" Value="M 0,7 L 3.5,0 L 7,7 Z" />
+    </Style>
+    <Style Selector="^:sortdescending /template/ Path#SortIcon">
+      <Setter Property="IsVisible" Value="True" />
+      <Setter Property="Data" Value="M 0,0 L 7,0 L 3.5,7 Z" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type TreeDataGridRow}" TargetType="TreeDataGridRow">
+    <Setter Property="MinHeight" Value="{StaticResource CueRowHeight}" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="RowBorder"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{StaticResource BoothRuleSoft}"
+                BorderThickness="0,0,0,1">
+          <TreeDataGridCellsPresenter Name="PART_CellsPresenter"
+                                      ElementFactory="{TemplateBinding ElementFactory}"
+                                      Items="{TemplateBinding Columns}"
+                                      Rows="{TemplateBinding Rows}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <!-- The state washes the ListBox carried on Border.cuerow, moved to the row itself. The order is
+         load-bearing the same way it is in Chrome.axaml: last wins at equal priority, so selection
+         must come after the run states or a selected running cue would stop looking selected. -->
+    <Style Selector="^:pointerover /template/ Border#RowBorder">
+      <Setter Property="Background" Value="{StaticResource ButtonHoverBg}" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#RowBorder">
+      <Setter Property="Background" Value="{StaticResource CueSelectedWash}" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type TreeDataGridExpanderCell}" TargetType="TreeDataGridExpanderCell">
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="CellBorder"
+                Background="{TemplateBinding Background}"
+                Padding="{TemplateBinding Indent, Converter={x:Static conv:IndentConverter.Instance}}">
+          <DockPanel>
+            <Border DockPanel.Dock="Left" Margin="3,0" Width="10" Height="10"
+                    VerticalAlignment="Center">
+              <ToggleButton Theme="{StaticResource TreeDataGridExpandCollapseChevron}"
+                            Focusable="False"
+                            IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
+                            IsVisible="{TemplateBinding ShowExpander}" />
+            </Border>
+            <Decorator Name="PART_Content" />
+          </DockPanel>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type TreeDataGridTemplateCell}" TargetType="TreeDataGridTemplateCell">
+    <Setter Property="Template">
+      <ControlTemplate>
+        <!-- Content is STRETCHED, not centred. A cell whose content is a full-height rule (the state
+             stripe) has no text to give it a height, and a centred presenter collapsed it to nothing —
+             the stripe simply did not draw. Each cell template centres its own text instead. -->
+        <ContentPresenter Name="PART_ContentPresenter"
+                          Content="{TemplateBinding Content}"
+                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                          HorizontalContentAlignment="Stretch"
+                          VerticalContentAlignment="Stretch"
+                          VerticalAlignment="Stretch" />
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type TreeDataGridTextCell}" TargetType="TreeDataGridTextCell">
+    <Setter Property="Padding" Value="6,2" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+          <TextBlock Text="{TemplateBinding Value}"
+                     VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis"
+                     FontFamily="{StaticResource MonoFont}"
+                     FontSize="{StaticResource FontSizeMonoSmall}"
+                     Foreground="{StaticResource BoothInk2}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+</ResourceDictionary>

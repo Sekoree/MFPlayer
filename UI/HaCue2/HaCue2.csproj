@@ -35,6 +35,11 @@
              failure mode that cost a day in the first extraction attempt. -->
         <PackageReference Include="Avalonia.Themes.Simple"/>
         <PackageReference Include="Avalonia.Fonts.Inter"/>
+        <!-- The cue tree. Neither of the package's own theme files is included: Fluent.axaml resolves
+             Fluent-only palette colours through StaticResource on SolidColorBrush, which THROWS rather
+             than deferring under SimpleTheme (see HaPlay.Tests/SimpleThemeTreeDataGridResourceTests).
+             Themes/Controls/Tree.axaml restates the templates on the booth-dark palette instead. -->
+        <PackageReference Include="TreeDataGrid.Avalonia"/>
         <PackageReference Include="CommunityToolkit.Mvvm"/>
     </ItemGroup>
 

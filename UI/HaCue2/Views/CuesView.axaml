@@ -69,77 +69,94 @@
         <!-- ── the cue tree ─────────────────────────────────────────────────────────────── -->
         <c:PanelBox Grid.Row="0" MinHeight="240"
                     Header="{Binding Breadcrumb}" Hint="{Binding TreeHint}">
-          <DockPanel>
-            <Border DockPanel.Dock="Top" BorderBrush="{StaticResource BoothRule}"
-                    BorderThickness="0,0,0,1" Padding="0,4">
-              <Grid ColumnDefinitions="3,64,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
-                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="CUE" />
-                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="LABEL" />
-                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="SOURCE / TARGET" />
-                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="FADE" />
-                <TextBlock Grid.Column="6" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LEN" />
-                <TextBlock Grid.Column="7" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="DB" />
-              </Grid>
-            </Border>
+          <!-- The tree proper. A TreeDataGrid rather than an indented flat list because a group
+               has to LOOK like a group: it carries a chevron, it opens and closes, and its cues are
+               visibly inside it. An indent margin alone could not tell a group apart from a cue that
+               happened to be nested — which is what this replaced. -->
+          <TreeDataGrid Source="{Binding CueSource}"
+                        CanUserResizeColumns="True"
+                        CanUserSortColumns="False">
+            <TreeDataGrid.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" />
+                <MenuItem Header="Move standby here" />
+                <Separator />
+                <MenuItem Header="Disable for this performance" />
+                <MenuItem Header="Renumber from here…" />
+              </ContextMenu>
+            </TreeDataGrid.ContextMenu>
 
-            <ListBox ItemsSource="{Binding Cues}" SelectedItem="{Binding SelectedCue}"
-                     SelectionMode="Multiple"
-                     SelectionChanged="OnCueSelectionChanged">
-              <ListBox.ContextMenu>
-                <ContextMenu>
-                  <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" />
-                  <MenuItem Header="Move standby here" />
-                  <Separator />
-                  <MenuItem Header="Disable for this performance" />
-                  <MenuItem Header="Renumber from here…" />
-                </ContextMenu>
-              </ListBox.ContextMenu>
-              <ListBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:CueRow">
-                  <!-- State washes stack; the stripe takes the single most urgent state. -->
-                  <Border Classes="cuerow"
-                          Classes.is-go="{Binding IsRunning}"
-                          Classes.is-stby="{Binding IsStandby}"
-                          Classes.is-broke="{Binding IsBroken}"
-                          Classes.is-off="{Binding IsDisabled}"
-                          Classes.grp="{Binding IsGroup}">
-                    <Grid ColumnDefinitions="3,64,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
-                      <Border Grid.Column="0" Classes="stripe"
-                              Classes.is-stby="{Binding IsStandby}"
-                              Classes.is-go="{Binding IsRunning}"
-                              Classes.is-broke="{Binding IsBroken}" />
-                      <TextBlock Grid.Column="1" Classes="qnum" Margin="{Binding NumberIndent}"
-                                 Text="{Binding Number}" />
-                      <TextBlock Grid.Column="2" Classes="glyph" Text="{Binding Glyph}" />
-                      <TextBlock Grid.Column="3" Classes="cuelabel" Text="{Binding Label}" />
-                      <TextBlock Grid.Column="4" Classes="src" Text="{Binding Source}" />
-                      <TextBlock Grid.Column="5" Classes="num" Text="{Binding Fade}" />
-                      <TextBlock Grid.Column="6" Classes="num" Text="{Binding Length}" />
-                      <TextBlock Grid.Column="7" Classes="num" Text="{Binding Level}" />
-                      <ItemsControl Grid.Column="8" ItemsSource="{Binding Badges}"
-                                    HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <ItemsControl.ItemsPanel>
-                          <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="3" /></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate x:DataType="vm:Badge">
-                            <Border Classes="badge"
-                                    Classes.midi="{Binding IsMidi}"
-                                    Classes.osc="{Binding IsOsc}"
-                                    Classes.clock="{Binding IsClock}"
-                                    Classes.bad="{Binding IsBad}"
-                                    Classes.good="{Binding IsGood}">
-                              <TextBlock Text="{Binding Text}" />
-                            </Border>
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
-                    </Grid>
-                  </Border>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </DockPanel>
+            <TreeDataGrid.Resources>
+              <!-- One template per column, keyed by the name the source asks for. -->
+
+              <DataTemplate x:Key="StripeCell" x:DataType="vm:CueRow">
+                <Border Classes="stripe"
+                        Classes.is-stby="{Binding IsStandby}"
+                        Classes.is-go="{Binding IsRunning}"
+                        Classes.is-broke="{Binding IsBroken}"
+                        Classes.grp="{Binding IsGroup}" />
+              </DataTemplate>
+
+              <DataTemplate x:Key="NumberCell" x:DataType="vm:CueRow">
+                <StackPanel Orientation="Horizontal" Spacing="7" Margin="0,0,6,0" VerticalAlignment="Center">
+                  <TextBlock Classes="qnum" Classes.off="{Binding IsDisabled}"
+                             Width="46" TextAlignment="Right" Text="{Binding Number}" />
+                  <TextBlock Classes="glyph"
+                             Classes.is-go="{Binding IsRunning}"
+                             Classes.is-stby="{Binding IsStandby}"
+                             Text="{Binding Glyph}" />
+                </StackPanel>
+              </DataTemplate>
+
+              <DataTemplate x:Key="LabelCell" x:DataType="vm:CueRow">
+                <TextBlock Classes="cuelabel" Margin="2,0,8,0" VerticalAlignment="Center"
+                           Classes.grp="{Binding IsGroup}"
+                           Classes.is-go="{Binding IsRunning}"
+                           Classes.is-stby="{Binding IsStandby}"
+                           Classes.off="{Binding IsDisabled}"
+                           Text="{Binding Label}" />
+              </DataTemplate>
+
+              <DataTemplate x:Key="SourceCell" x:DataType="vm:CueRow">
+                <TextBlock Classes="src" Margin="0,0,8,0" VerticalAlignment="Center"
+                           Classes.is-broke="{Binding IsBroken}" Text="{Binding Source}" />
+              </DataTemplate>
+
+              <DataTemplate x:Key="FadeCell" x:DataType="vm:CueRow">
+                <TextBlock Classes="num" Margin="0,0,8,0" VerticalAlignment="Center" Text="{Binding Fade}" />
+              </DataTemplate>
+
+              <DataTemplate x:Key="LengthCell" x:DataType="vm:CueRow">
+                <TextBlock Classes="num" Margin="0,0,8,0" VerticalAlignment="Center" Text="{Binding Length}" />
+              </DataTemplate>
+
+              <DataTemplate x:Key="LevelCell" x:DataType="vm:CueRow">
+                <TextBlock Classes="num" Margin="0,0,8,0" VerticalAlignment="Center" Text="{Binding Level}" />
+              </DataTemplate>
+
+              <DataTemplate x:Key="BadgeCell" x:DataType="vm:CueRow">
+                <ItemsControl ItemsSource="{Binding Badges}"
+                              HorizontalAlignment="Right" VerticalAlignment="Center"
+                              Margin="0,0,8,0">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="3" /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:Badge">
+                      <Border Classes="badge"
+                              Classes.midi="{Binding IsMidi}"
+                              Classes.osc="{Binding IsOsc}"
+                              Classes.clock="{Binding IsClock}"
+                              Classes.bad="{Binding IsBad}"
+                              Classes.good="{Binding IsGood}">
+                        <TextBlock Text="{Binding Text}" />
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </DataTemplate>
+            </TreeDataGrid.Resources>
+          </TreeDataGrid>
         </c:PanelBox>
 
         <!-- ── the Active panel ─────────────────────────────────────────────────────────────

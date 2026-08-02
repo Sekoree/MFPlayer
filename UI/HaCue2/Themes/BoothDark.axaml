@@ -22,6 +22,7 @@
         <ResourceInclude Source="avares://HaCue2/Themes/Controls/Lists.axaml" />
         <ResourceInclude Source="avares://HaCue2/Themes/Controls/Scrolling.axaml" />
         <ResourceInclude Source="avares://HaCue2/Themes/Controls/Surfaces.axaml" />
+        <ResourceInclude Source="avares://HaCue2/Themes/Controls/Tree.axaml" />
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Styles.Resources>

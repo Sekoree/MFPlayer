@@ -1,3 +1,6 @@
+using System.Globalization;
+using Avalonia.Controls;
+using Avalonia.Controls.Models.TreeDataGrid;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
@@ -39,21 +42,113 @@ public partial class CuesViewModel : ObservableObject
         Cues = [];
         ActiveCues = [.. runtime.ActiveCues];
         Rebuild();
+
+        CueSource = BuildSource();
+        CueSource.RowSelection!.SelectionChanged += (_, _) =>
+        {
+            // The tree is the authority on what is selected — SelectedCue follows it rather than the
+            // other way round, so a click, a keyboard move and a programmatic set all take one path.
+            SetProperty(ref _selectedCue, CueSource.RowSelection.SelectedItem, nameof(SelectedCue));
+            Inspector.Show([.. CueSource.RowSelection.SelectedItems.OfType<CueRow>().Select(row => row.Id)]);
+        };
+
         SelectedCue = Cues.FirstOrDefault();
     }
 
     private HaCueProject Project => _journal.Project;
 
     // ── the tree ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The TOP-LEVEL rows. A group's cues hang off <see cref="CueRow.Children"/>.</summary>
     public ObservableCollection<CueRow> Cues { get; }
 
-    [ObservableProperty]
+    /// <summary>Every row in fire order, groups included — what a flat question asks.</summary>
+    public IEnumerable<CueRow> AllRows => CuePresentation.Flatten(Cues);
+
+    /// <summary>
+    /// What the tree control binds to.
+    /// </summary>
+    /// <remarks>
+    /// Built here rather than declared in XAML because the app needs the selection model: multi-select
+    /// (screen 04's tab intersection) and the inspector both hang off <c>RowSelection</c>, and the
+    /// XAML-only form does not hand it over.
+    /// </remarks>
+    public HierarchicalTreeDataGridSource<CueRow> CueSource { get; }
+
+    private HierarchicalTreeDataGridSource<CueRow> BuildSource()
+    {
+        var source = new HierarchicalTreeDataGridSource<CueRow>(Cues)
+        {
+            Columns =
+            {
+                // The state stripe is its OWN column, before the expander, so it stays flush with the
+                // left edge — indentation must not push a cue's most urgent state out of line.
+                new TemplateColumn<CueRow>(null, "StripeCell", width: new GridLength(3)),
+                new HierarchicalExpanderColumn<CueRow>(
+                    new TemplateColumn<CueRow>("CUE", "NumberCell", width: new GridLength(112)),
+                    row => row.Children,
+                    row => row.HasChildren,
+                    row => row.IsExpanded),
+                new TemplateColumn<CueRow>("LABEL", "LabelCell", width: new GridLength(1, GridUnitType.Star)),
+                new TemplateColumn<CueRow>("SOURCE / TARGET", "SourceCell", width: new GridLength(148)),
+                new TemplateColumn<CueRow>("FADE", "FadeCell", width: new GridLength(52)),
+                new TemplateColumn<CueRow>("LEN", "LengthCell", width: new GridLength(52)),
+                new TemplateColumn<CueRow>("DB", "LevelCell", width: new GridLength(48)),
+                new TemplateColumn<CueRow>(null, "BadgeCell", width: new GridLength(66)),
+            },
+        };
+
+        // Screen 04's tab table is the intersection of the selected kinds', which needs more than one.
+        source.RowSelection!.SingleSelect = false;
+        return source;
+    }
+
     private CueRow? _selectedCue;
 
-    partial void OnSelectedCueChanged(CueRow? value)
+    /// <summary>
+    /// The lead selected row. Setting it drives the TREE's selection, which then reports back.
+    /// </summary>
+    /// <remarks>
+    /// One direction only. Assigning the field here and telling the inspector separately would let the
+    /// two disagree the moment the tree changed selection on its own — which it does whenever a row is
+    /// clicked, or the keyboard moves, or a rebuild drops the row that was selected. Selecting a cue
+    /// must NOT flip the right panel to Cue properties (register item 7), and it does not.
+    /// </remarks>
+    public CueRow? SelectedCue
     {
-        // Selecting a cue must NOT flip the right panel to Cue properties (register item 7).
-        Inspector.Show(value is null ? [] : [value.Id]);
+        get => _selectedCue;
+        set
+        {
+            if (ReferenceEquals(_selectedCue, value))
+                return;
+
+            if (value is null)
+                CueSource.RowSelection!.Clear();
+            else if (IndexOf(value) is { } path)
+                CueSource.RowSelection!.SelectedIndex = path;
+        }
+    }
+
+    /// <summary>Where a row sits in the tree, as the index path the selection model speaks in.</summary>
+    private IndexPath? IndexOf(CueRow target)
+    {
+        static IndexPath? Search(IReadOnlyList<CueRow> rows, CueRow target, IndexPath prefix)
+        {
+            for (var index = 0; index < rows.Count; index++)
+            {
+                var here = prefix.Append(index);
+
+                if (ReferenceEquals(rows[index], target))
+                    return here;
+
+                if (Search(rows[index].Children, target, here) is { } found)
+                    return found;
+            }
+
+            return null;
+        }
+
+        return Search(Cues, target, default);
     }
 
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
@@ -61,7 +156,9 @@ public partial class CuesViewModel : ObservableObject
     {
         var selected = SelectedCue?.Id;
         Rebuild();
-        SelectedCue = Cues.FirstOrDefault(row => row.Id == selected);
+        // By ID, not by reference: Rebuild replaces every row object, so the old instance is gone even
+        // though the cue it stood for is still there.
+        SelectedCue = AllRows.FirstOrDefault(row => row.Id == selected);
         Inspector.Reload();
         Timeline.Refresh();
         OnPropertyChanged(nameof(TreeHint));
@@ -98,9 +195,13 @@ public partial class CuesViewModel : ObservableObject
         get
         {
             var total = Project.AllCues().Count();
+            // Counted over the whole tree, not the top level: after the move to a hierarchy, Cues.Count
+            // is the number of ROOTS, and "3 cues in scope" for a scope holding thirty would be a lie.
+            var shown = AllRows.Count();
+
             return IsScoped
-                ? $"{Cues.Count} cues in scope · {total} in show"
-                : $"{Cues.Count} cues · {total} in show";
+                ? $"{shown} cues in scope · {total} in show"
+                : $"{shown} cues · {total} in show";
         }
     }
 
@@ -231,9 +332,15 @@ public partial class CuesViewModel : ObservableObject
 
 /// <summary>A scope root: a cue list, or a group inside one.</summary>
 /// <param name="Depth">Nesting, so a song inside "Songs" is indented under it.</param>
-public sealed record ScopeEntry(Guid Id, string Name, int Count, bool IsList, int Depth)
+public sealed record ScopeEntry(Guid Id, string Name, int Count, bool IsList, int Depth) : INavRow
 {
-    public string Tally => Count.ToString();
+    public string Tally => Count.ToString(CultureInfo.CurrentCulture);
+    public bool HasTally => true;
+
+    // A scope tally is a count of cues, never a warning — those belong to the settings navs.
+    public bool TallyIsBad => false;
+    public bool TallyIsOverride => false;
+
     public Thickness Indent => new(12 + (Depth * 12), 0, 0, 0);
 }
 
