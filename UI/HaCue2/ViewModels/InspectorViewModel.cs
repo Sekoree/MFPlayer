@@ -164,6 +164,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CanBePlaced));
         OnPropertyChanged(nameof(IsCoverArtOnly));
         OnPropertyChanged(nameof(CanBePlaced));
+        OnPropertyChanged(nameof(CanChooseSubtitles));
+        OnPropertyChanged(nameof(SubtitlePicker));
     }
 
     private CueKind KindOf() => Cue is null ? CueKind.Comment : CuePresentation.KindOf(Cue);
@@ -649,6 +651,19 @@ public partial class InspectorViewModel : ObservableObject
     public string SubtitleSummary => Cue is MediaCueNode { Subtitles.Count: > 0 } media
         ? string.Join(" · ", media.Subtitles.Select(Describe))
         : "none";
+
+    /// <summary>The picker for this cue's subtitles, or null when there is no cue to edit.</summary>
+    public SubtitlePickerViewModel? SubtitlePicker =>
+        Cue is MediaCueNode media ? new SubtitlePickerViewModel(_journal, media, Facts) : null;
+
+    /// <summary>
+    /// A cue can always be given a SIDECAR, even when its file carries no tracks.
+    /// </summary>
+    /// <remarks>
+    /// Gating the button on embedded tracks would hide the commonest case: a file with no subtitles at
+    /// all and a hand-made .srt beside it.
+    /// </remarks>
+    public bool CanChooseSubtitles => Cue is MediaCueNode { MediaPath.Length: > 0 };
 
     private static string Describe(SubtitleSelection selection) =>
         selection.Path.Length > 0 ? Path.GetFileName(selection.Path) : $"track #{selection.StreamIndex}";

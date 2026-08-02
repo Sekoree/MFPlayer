@@ -209,8 +209,8 @@
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Subtitles">
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
                 <TextBox Grid.Column="0" Classes="ro" IsReadOnly="True" Text="{Binding SubtitleSummary}" />
-                <Button Grid.Column="1" Classes="tight" Content="CHOOSE…"
-                        IsEnabled="{Binding HasSubtitleTracks}" />
+                <Button Grid.Column="1" Classes="tight" Content="CHOOSE…" Click="OnChooseSubtitles"
+                        IsEnabled="{Binding CanChooseSubtitles}" />
               </Grid>
             </HeaderedContentControl>
 

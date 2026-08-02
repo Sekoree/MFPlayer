@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.SubtitlePickerWindow"
+        x:DataType="vm:SubtitlePickerViewModel"
+        Title="Subtitles"
+        Width="520" Height="360"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- A list rather than a dropdown, because subtitles are not exclusive: a show routinely runs an
+       embedded track for one language and a hand-corrected sidecar for another, both at once. -->
+
+  <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7">
+    <DockPanel>
+
+      <Border DockPanel.Dock="Bottom" Classes="chain">
+        <DockPanel LastChildFill="False">
+          <Button DockPanel.Dock="Left" Classes="tight" Content="+ SIDECAR FILE…" Click="OnAddSidecar" />
+          <Button DockPanel.Dock="Right" Classes="primary" Content="DONE" Click="OnDone" />
+          <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
+                  Content="CANCEL" Click="OnCancel" />
+        </DockPanel>
+      </Border>
+
+      <TextBlock DockPanel.Dock="Top" Classes="mono dim3 micro" Margin="10,6"
+                 IsVisible="{Binding !HasChoices}" TextWrapping="Wrap"
+                 Text="Nothing embedded in this file. A sidecar (.srt / .ass) can still be added." />
+
+      <ScrollViewer>
+        <ItemsControl ItemsSource="{Binding Choices}" Margin="10,4">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:SubtitleChoice">
+              <CheckBox Margin="0,3" IsChecked="{Binding IsChosen}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <TextBlock Classes="mono small" Text="{Binding Label}" />
+                  <Border Classes="badge" IsVisible="{Binding IsSidecar}">
+                    <TextBlock Text="SIDECAR" />
+                  </Border>
+                </StackPanel>
+              </CheckBox>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </DockPanel>
+  </c:PanelBox>
+</Window>

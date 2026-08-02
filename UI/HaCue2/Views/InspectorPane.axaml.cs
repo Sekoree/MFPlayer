@@ -12,6 +12,18 @@ public partial class InspectorPane : UserControl
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
+    private void OnChooseSubtitles(object? sender, RoutedEventArgs e)
+    {
+        if (this.FindAncestorOfType<Window>() is not { } owner
+            || DataContext is not InspectorViewModel inspector
+            || inspector.SubtitlePicker is not { } picker)
+            return;
+
+        var window = new SubtitlePickerWindow(picker);
+        window.Closed += (_, _) => inspector.Reload();
+        window.ShowDialog(owner);
+    }
+
     private void OnPlace(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector)
