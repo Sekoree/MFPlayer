@@ -1,0 +1,274 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Views.TargetsView"
+             x:DataType="vm:TargetsViewModel">
+
+  <!-- Screen 11. One crowded screen split into three focused tabs, each keeping the wire monitor
+       filtered to its own direction. -->
+
+  <UserControl.Resources>
+    <!-- The endpoint list and the trigger-source list are the same table read in two directions,
+         so they share a template: name · kind · how many cues · last traffic · state. -->
+    <DataTemplate x:Key="SourceRowTemplate" x:DataType="vm:TriggerSourceRow">
+      <Grid ColumnDefinitions="100,*,70,150,90" ColumnSpacing="8" Margin="8,4">
+        <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Name}" />
+        <TextBlock Grid.Column="1" Classes="mono dim3 small ellipsis" Text="{Binding Kind}" />
+        <TextBlock Grid.Column="2" Classes="mono dim2 small" Text="{Binding Bindings}" />
+        <TextBlock Grid.Column="3" Classes="mono dim3 small ellipsis" Text="{Binding LastSeen}" />
+        <TextBlock Grid.Column="4" Classes="mono dim2 small" Text="{Binding State.Text}"
+                   Classes.ok="{Binding State.IsGood}" Classes.warn="{Binding State.IsWarn}"
+                   Classes.err="{Binding State.IsBad}" />
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="MonitorLineTemplate" x:DataType="vm:LogLine">
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,1">
+        <TextBlock Classes="mono dim3 small" Text="{Binding Time}" />
+        <TextBlock Classes="mono small" Text="{Binding Level}"
+                   Classes.accent="{Binding IsAccent}" Classes.info="{Binding IsInfo}"
+                   Classes.dim3="{Binding !IsAccent}" />
+        <TextBlock Classes="logline" Text="{Binding Message}" />
+      </StackPanel>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <DockPanel>
+
+    <ListBox DockPanel.Dock="Top" Theme="{StaticResource SectionTabs}"
+             Background="{StaticResource BoothPanel}"
+             ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" />
+
+    <Panel>
+
+      <!-- ══ ACTION ENDPOINTS ═══════════════════════════════════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsEndpointsPane}" ColumnDefinitions="*,*" Margin="7" ColumnSpacing="7">
+
+        <c:PanelBox Grid.Column="0" Header="Action endpoints" Hint="outbound · cues send here">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Classes="tight" Content="+ OSC OUT…" />
+                <Button Classes="tight" Content="+ MIDI OUT…" />
+              </StackPanel>
+            </Border>
+          </c:PanelBox.Footer>
+
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Grid ColumnDefinitions="100,*,70,150,90" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="ENDPOINT" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="USED BY" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="LAST SENT" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+              </Grid>
+            </Border>
+            <ListBox Theme="{StaticResource TableRows}"
+                     ItemsSource="{Binding Endpoints}" SelectedItem="{Binding SelectedEndpoint}"
+                     ItemTemplate="{StaticResource SourceRowTemplate}" />
+          </DockPanel>
+        </c:PanelBox>
+
+        <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
+          <c:PanelBox Grid.Row="0" Header="Eos" Hint="selected endpoint">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Host">
+                <TextBox Text="10.0.1.20" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Port">
+                <TextBox Text="8000" />
+              </HeaderedContentControl>
+              <!-- Register item 24: the test payload is stored PER endpoint. A generic ping proves the
+                   socket is open; it does not prove the desk understood you. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Test message">
+                <TextBox Text="{Binding TestMessage}" />
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="block" Content="SEND TEST" />
+              </ContentControl>
+            </StackPanel>
+          </c:PanelBox>
+
+          <c:PanelBox Grid.Row="1" Header="Monitor" Hint="{Binding MonitorHint}">
+            <ListBox Theme="{StaticResource ReadonlyRows}" Margin="10,8"
+                     ItemsSource="{Binding Monitor}"
+                     ItemTemplate="{StaticResource MonitorLineTemplate}" />
+          </c:PanelBox>
+        </Grid>
+      </Grid>
+
+      <!-- ══ TRIGGER INPUTS ═════════════════════════════════════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsTriggersPane}" ColumnDefinitions="*,*" Margin="7" ColumnSpacing="7">
+
+        <Grid Grid.Column="0" RowDefinitions="Auto,*" RowSpacing="7">
+
+          <c:PanelBox Grid.Row="0" Header="Trigger inputs" Hint="inbound · fire cues">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Classes="tight" Content="+ MIDI IN…" />
+                  <Button Classes="tight" Content="+ OSC LISTENER…" />
+                </StackPanel>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <DockPanel>
+              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+                <Grid ColumnDefinitions="100,*,70,150,90" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="DEVICE / SOURCE" />
+                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
+                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="BINDINGS" />
+                  <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="LAST SEEN" />
+                  <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+                </Grid>
+              </Border>
+              <ListBox Theme="{StaticResource TableRows}"
+                       ItemsSource="{Binding Sources}" SelectedItem="{Binding SelectedSource}"
+                       ItemTemplate="{StaticResource SourceRowTemplate}" />
+            </DockPanel>
+          </c:PanelBox>
+
+          <c:PanelBox Grid.Row="1" Header="Bindings on APC mini" Hint="selected device">
+            <DockPanel>
+              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+                <Grid ColumnDefinitions="110,*,180" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="INPUT" />
+                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="FIRES" />
+                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="FILTER" />
+                </Grid>
+              </Border>
+              <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Bindings}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:BindingRow">
+                    <Grid ColumnDefinitions="110,*,180" ColumnSpacing="8" Margin="8,4">
+                      <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Input}" />
+                      <TextBlock Grid.Column="1" Classes="mono dim3 small ellipsis" Text="{Binding Fires}" />
+                      <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding Filter}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </c:PanelBox>
+        </Grid>
+
+        <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
+
+          <c:PanelBox Grid.Row="0" Header="Learn" Hint="{Binding LearnTarget}">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="6">
+                  <Button Grid.Column="0" Classes="primary tight" Content="BIND" />
+                  <Button Grid.Column="1" Classes="tight" Content="CANCEL" />
+                  <!-- Conflicts are shown BEFORE the bind, not after: rebinding a note that already
+                       fires something is how a show loses a cue silently. -->
+                  <TextBlock Grid.Column="2" Classes="mono dim3 small" HorizontalAlignment="Right"
+                             VerticalAlignment="Center" Text="conflicts shown before bind — note 3 is free" />
+                </Grid>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Listening">
+                <TextBox Classes="warn ro" Text="● waiting for input — press something on any device" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Caught">
+                <TextBox Classes="ro" Text="{Binding LearnCaught}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Filter">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="velocity ≥ 1" />
+                  <TextBox Grid.Column="1" Text="no repeat 250 ms" />
+                </Grid>
+              </HeaderedContentControl>
+            </StackPanel>
+          </c:PanelBox>
+
+          <c:PanelBox Grid.Row="1" Header="Monitor" Hint="{Binding MonitorHint}">
+            <ListBox Theme="{StaticResource ReadonlyRows}" Margin="10,8"
+                     ItemsSource="{Binding Monitor}"
+                     ItemTemplate="{StaticResource MonitorLineTemplate}" />
+          </c:PanelBox>
+        </Grid>
+      </Grid>
+
+      <!-- ══ REMOTE API ═════════════════════════════════════════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsRemotePane}" ColumnDefinitions="280,*" Margin="7" ColumnSpacing="7">
+
+        <c:PanelBox Grid.Column="0" Header="Server" VerticalAlignment="Top">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <Border Classes="badge"><TextBlock Text="OVERRIDE" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                           Text="project override — app default is off" />
+              </StackPanel>
+            </Border>
+          </c:PanelBox.Footer>
+
+          <StackPanel Margin="0,6,0,8">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="State">
+              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding ServerStates}"
+                       SelectedItem="{Binding ServerState}" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Port">
+              <TextBox Classes="short" Text="{Binding Port}" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="LAN">
+              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding LanModes}"
+                       SelectedItem="{Binding LanMode}" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Token">
+              <TextBox Text="•••••••• · rotate" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Last call">
+              <TextBox Classes="ro" Text="{Binding LastCall}" />
+            </HeaderedContentControl>
+          </StackPanel>
+        </c:PanelBox>
+
+        <c:PanelBox Grid.Column="1" Header="Endpoints" Hint="{Binding ServedAt}">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <Border Classes="badge"><TextBlock Text="DOCS" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                           Text="GET / serves this table as JSON + examples with the token pre-filled" />
+              </StackPanel>
+            </Border>
+          </c:PanelBox.Footer>
+
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Grid ColumnDefinitions="60,260,*,70" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="METHOD" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="PATH" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="DOES" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="CALLS" />
+              </Grid>
+            </Border>
+            <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Routes}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:EndpointRow">
+                  <Grid ColumnDefinitions="60,260,*,70" ColumnSpacing="8" Margin="8,4">
+                    <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Method}" />
+                    <TextBlock Grid.Column="1" Classes="mono dim3 small" Text="{Binding Path}" />
+                    <TextBlock Grid.Column="2" Classes="mono dim3 small ellipsis" Text="{Binding Does}" />
+                    <TextBlock Grid.Column="3" Classes="num" Text="{Binding Calls}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </c:PanelBox>
+      </Grid>
+
+    </Panel>
+  </DockPanel>
+</UserControl>

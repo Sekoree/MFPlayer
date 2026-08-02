@@ -1,0 +1,675 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="using:HaCue2.Converters"
+        xmlns:vm="using:HaCue2.ViewModels">
+
+  <!-- ══════════════════════════════════════════════════════════════════════════════════════════
+       The chrome vocabulary — everything the mockup expresses as a CSS class rather than a control.
+       Class names are kept IDENTICAL to the HTML (`.chip`, `.badge`, `.chain`, `.is-go`, `.lchip`) so
+       a screen can be checked against the mockup by reading the two side by side.
+
+       Nothing here sets a bare `TextBlock` default: FontSize and Foreground are inherited properties,
+       so the shell sets them once on the window root and every descendant follows. A blanket
+       `Style Selector="TextBlock"` would instead beat inheritance inside control templates and quietly
+       repaint half the theme.
+       ══════════════════════════════════════════════════════════════════════════════════════════ -->
+
+  <Styles.Resources>
+    <ResourceDictionary>
+      <!-- Same reason as the control dictionaries: {StaticResource} resolves against this file's own
+           root, so the tokens have to be reachable from here and not only from the bundle. -->
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+    <!-- ── field rows (the mockup's `.field`) ────────────────────────────────────────────────
+         A 96 px mono caps label and a value. The fixed label column is what makes a stack of
+         unrelated fields read as a form instead of as a list of sentences. -->
+    <ControlTheme x:Key="Field" TargetType="HeaderedContentControl">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Grid ColumnDefinitions="96,*" Margin="10,3" VerticalAlignment="Center">
+            <ContentPresenter Grid.Column="0"
+                              VerticalAlignment="Center"
+                              Content="{Binding Header, RelativeSource={RelativeSource TemplatedParent},
+                                                Converter={x:Static conv:UpperCaseConverter.Instance}}"
+                              TextElement.FontFamily="{StaticResource MonoFont}"
+                              TextElement.FontSize="{StaticResource FontSizeMonoSmall}"
+                              TextElement.Foreground="{StaticResource BoothInk3}"
+                              TextBlock.TextWrapping="Wrap"
+                              TextElement.LetterSpacing="0.85" />
+            <ContentPresenter Grid.Column="1"
+                              Margin="9,0,0,0"
+                              VerticalAlignment="Center"
+                              HorizontalContentAlignment="Stretch"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}" />
+          </Grid>
+        </ControlTemplate>
+      </Setter>
+    </ControlTheme>
+
+    <!-- Full-bleed row: a value that needs the whole width, or a block button. -->
+    <ControlTheme x:Key="FieldWide" TargetType="ContentControl">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Margin="10,3">
+            <ContentPresenter HorizontalContentAlignment="Stretch"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}" />
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </ControlTheme>
+
+    <!-- ── `.subhd` — a section break inside a panel body ────────────────────────────────────- -->
+    <ControlTheme x:Key="Subhead" TargetType="ContentControl">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border BorderBrush="{StaticResource BoothRuleSoft}"
+                  BorderThickness="0,1,0,0"
+                  Margin="0,5,0,0"
+                  Padding="10,9,10,3">
+            <ContentPresenter Content="{Binding Content, RelativeSource={RelativeSource TemplatedParent},
+                                                Converter={x:Static conv:UpperCaseConverter.Instance}}"
+                              TextElement.FontFamily="{StaticResource MonoFont}"
+                              TextElement.FontSize="{StaticResource FontSizeMicro}"
+                              TextElement.Foreground="{StaticResource BoothInk3}"
+                              TextElement.LetterSpacing="1.2" />
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </ControlTheme>
+
+    <!-- ── fade-curve picker item (register item 16) ─────────────────────────────────────────
+         Every curve picker in the app uses this template, so a fade, a crossfade and a patch cue's
+         ramp all offer the same five shapes drawn the same way. -->
+    <DataTemplate x:Key="CurveItemTemplate" x:DataType="vm:CurveOption">
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <Path Data="{Binding Shape}" Stroke="{StaticResource BoothInk2}" StrokeThickness="1.2"
+              Width="28" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+        <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+                   VerticalAlignment="Center" Text="{Binding Name}" />
+      </StackPanel>
+    </DataTemplate>
+
+    <!-- The CLOSED state of a curve picker shows the name only. The thumbnails belong in the drop-down,
+         where there is room to read them; repeating one in a 100 px well just squeezes the name that
+         tells you which curve is currently set. -->
+    <DataTemplate x:Key="CurveNameTemplate" x:DataType="vm:CurveOption">
+      <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+                 VerticalAlignment="Center" Text="{Binding Name}" />
+    </DataTemplate>
+
+    <!-- ── a nav row: name on the left, tally on the right ───────────────────────────────────
+         Shared by the scope picker (screen 03) and both settings navs (screens 12/13), because they
+         are the same control: a list of destinations, each with a count that may be a warning. -->
+    <DataTemplate x:Key="ScopeItemTemplate" x:DataType="vm:SettingsPane">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
+                   Margin="8,0,0,0"
+                   IsVisible="{Binding HasTally}"
+                   Classes.err="{Binding TallyIsBad}"
+                   Classes.warn="{Binding TallyIsOverride}"
+                   Text="{Binding Tally}" />
+      </Grid>
+    </DataTemplate>
+
+    <!-- ── column head for the hand-built tables (`.cuehead`, `.diag thead`) ─────────────────- -->
+    <ControlTheme x:Key="ColumnHeadText" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+      <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
+      <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+      <Setter Property="LetterSpacing" Value="1.1" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </ControlTheme>
+
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <!-- ══ text roles ═════════════════════════════════════════════════════════════════════════
+       TYPOGRAPHIC roles first, then SEMANTIC colour. Order is load-bearing: two style setters at the
+       same priority are resolved last-wins, so `.num` (which sets ink-2 for column alignment) has to
+       be declared BEFORE `.warn`/`.err`, or a dropped-chunk count would render in the same grey as a
+       healthy one and the whole state-colour vocabulary would silently stop working on numbers. -->
+  <Style Selector="TextBlock.mono">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+  </Style>
+  <Style Selector="TextBlock.dim2">
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+  </Style>
+  <Style Selector="TextBlock.dim3">
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+  </Style>
+  <!-- A number that must line up with the number above it: mono, right-aligned, ink-2. -->
+  <Style Selector="TextBlock.num">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="TextAlignment" Value="Right" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- semantic colour — always last, so it wins over any typographic role above -->
+  <Style Selector="TextBlock.ok">
+    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+  </Style>
+  <Style Selector="TextBlock.warn">
+    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+  </Style>
+  <Style Selector="TextBlock.err">
+    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+  </Style>
+  <Style Selector="TextBlock.info">
+    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+  </Style>
+  <Style Selector="TextBlock.accent">
+    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+  </Style>
+
+  <Style Selector="TextBlock.micro">
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
+  </Style>
+  <Style Selector="TextBlock.small">
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+  </Style>
+  <!-- Uppercase mono caption — used for the drawer's rotated section slabs and inline eyebrows. -->
+  <Style Selector="TextBlock.caps">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="LetterSpacing" Value="1.3" />
+  </Style>
+  <Style Selector="TextBlock.ellipsis">
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+  </Style>
+
+  <!-- ══ shell bands ════════════════════════════════════════════════════════════════════════ -->
+  <Style Selector="Border.titlebar">
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="12,7" />
+  </Style>
+  <Style Selector="Border.transport">
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="10,7" />
+  </Style>
+  <!-- The authoring row sits directly under the transport row and shares its bottom rule. -->
+  <Style Selector="Border.transport.second">
+    <Setter Property="Padding" Value="10,0,10,7" />
+  </Style>
+  <Style Selector="Border.statusbar">
+    <Setter Property="Background" Value="{StaticResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="0,1,0,0" />
+    <Setter Property="Padding" Value="12,4" />
+  </Style>
+  <!-- `.chain` — the action / explanation strip at the foot of a panel. -->
+  <Style Selector="Border.chain">
+    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="0,1,0,0" />
+    <Setter Property="Padding" Value="10,8" />
+  </Style>
+  <Style Selector="Border.chain.flush">
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <!-- ══ chips and badges ═══════════════════════════════════════════════════════════════════
+       A chip is chrome-scale (title bar, status bar); a badge is row-scale (a tag on one cue). They
+       differ in size, not in kind, and both are outline-only so they never compete with a gel wash. -->
+  <Style Selector="Border.chip">
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Border.chip > TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="LetterSpacing" Value="1.25" />
+  </Style>
+  <Style Selector="Border.chip.live">
+    <Setter Property="Background" Value="{StaticResource ChipLiveBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource ChipLiveBorder}" />
+  </Style>
+  <Style Selector="Border.chip.live > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+  </Style>
+  <Style Selector="Border.chip.edit">
+    <Setter Property="Background" Value="{StaticResource ChipEditBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource ChipEditBorder}" />
+  </Style>
+  <Style Selector="Border.chip.edit > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+  </Style>
+  <Style Selector="Border.chip.warn">
+    <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
+  </Style>
+  <Style Selector="Border.chip.warn > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+  </Style>
+  <Style Selector="Border.chip.err">
+    <Setter Property="BorderBrush" Value="{StaticResource ChipErrBorder}" />
+  </Style>
+  <Style Selector="Border.chip.err > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+  </Style>
+
+  <Style Selector="Border.badge">
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="4,1" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Border.badge > TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="LetterSpacing" Value="0.5" />
+  </Style>
+  <Style Selector="Border.badge.midi">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeCongoBorder}" />
+  </Style>
+  <Style Selector="Border.badge.midi > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+  </Style>
+  <Style Selector="Border.badge.osc">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeSteelBorder}" />
+  </Style>
+  <Style Selector="Border.badge.osc > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+  </Style>
+  <Style Selector="Border.badge.clock">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeAmberBorder}" />
+  </Style>
+  <Style Selector="Border.badge.clock > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+  </Style>
+  <Style Selector="Border.badge.bad">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeRedBorder}" />
+  </Style>
+  <Style Selector="Border.badge.bad > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+  </Style>
+  <Style Selector="Border.badge.good">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeGreenBorder}" />
+  </Style>
+  <Style Selector="Border.badge.good > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+  </Style>
+
+  <!-- ══ cue rows ═══════════════════════════════════════════════════════════════════════════
+       The washes stack on purpose: a row can be sounding AND selected, and the mockup's single-class
+       drawing is just an artefact of a static picture. The stripe, however, is exclusive — it takes
+       the most urgent state, ordered broken > running > standby > selected, because the stripe is the
+       thing scanned down the left edge and it must mean one thing. -->
+  <Style Selector="Border.cuerow">
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="MinHeight" Value="{StaticResource CueRowHeight}" />
+  </Style>
+  <Style Selector="Border.cuerow.is-go">
+    <Setter Property="Background" Value="{StaticResource CueGoWash}" />
+  </Style>
+  <Style Selector="Border.cuerow.is-stby">
+    <Setter Property="Background" Value="{StaticResource CueStandbyWash}" />
+  </Style>
+  <Style Selector="Border.cuerow.is-off">
+    <Setter Property="Opacity" Value="0.42" />
+  </Style>
+
+  <Style Selector="Border.stripe">
+    <Setter Property="Width" Value="3" />
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Border.stripe.is-sel">
+    <Setter Property="Background" Value="{StaticResource GelCongo}" />
+  </Style>
+  <Style Selector="Border.stripe.is-stby">
+    <Setter Property="Background" Value="{StaticResource GelAmber}" />
+  </Style>
+  <Style Selector="Border.stripe.is-go">
+    <Setter Property="Background" Value="{StaticResource GelGreen}" />
+  </Style>
+  <Style Selector="Border.stripe.is-broke">
+    <Setter Property="Background" Value="{StaticResource GelRed}" />
+  </Style>
+  <Style Selector="Border.stripe.fading">
+    <Setter Property="Background" Value="{StaticResource GelAmber}" />
+  </Style>
+  <Style Selector="Border.stripe.grp">
+    <Setter Property="Background" Value="{StaticResource GelCongo}" />
+  </Style>
+
+  <!-- Cue-row cell roles. `.glyph` is the kind marker (▶ ◈ ▤ ▦), `.src` the source/target line. -->
+  <Style Selector="TextBlock.qnum">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="TextAlignment" Value="Right" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.glyph">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="TextAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.src">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.cuelabel">
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- A live cue's own row: label brightens and thickens. A DISABLED cue is struck through — the
+       mockup's deliberate choice over ghosting, because "skipped for this performance" must survive a
+       glance in a dark booth. -->
+  <Style Selector="Border.cuerow.is-go TextBlock.cuelabel, Border.cuerow.is-stby TextBlock.cuelabel">
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="FontWeight" Value="Medium" />
+  </Style>
+  <Style Selector="Border.cuerow.is-off TextBlock.cuelabel">
+    <Setter Property="TextDecorations" Value="Strikethrough" />
+  </Style>
+  <Style Selector="Border.cuerow.is-go TextBlock.glyph">
+    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+  </Style>
+  <Style Selector="Border.cuerow.is-stby TextBlock.glyph">
+    <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+  </Style>
+  <Style Selector="Border.cuerow.is-broke TextBlock.src">
+    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+  </Style>
+  <Style Selector="Border.cuerow.grp TextBlock.cuelabel">
+    <Setter Property="FontWeight" Value="Medium" />
+  </Style>
+
+  <!-- ══ active-cue rows ════════════════════════════════════════════════════════════════════ -->
+  <Style Selector="Border.actrow">
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="MinHeight" Value="{StaticResource ActiveRowHeight}" />
+  </Style>
+  <Style Selector="Border.actrow.grp">
+    <Setter Property="Background" Value="{StaticResource ActiveGroupWash}" />
+  </Style>
+  <Style Selector="TextBlock.clock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="TextAlignment" Value="Right" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <!-- A cue within seconds of its end reads red before it is a problem. -->
+  <Style Selector="Border.actrow.near TextBlock.clock">
+    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+  </Style>
+  <Style Selector="TextBlock.dest">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="TextAlignment" Value="Right" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- ══ Output-info drawer line chips (`.lchip`) ═══════════════════════════════════════════ -->
+  <Style Selector="Border.lchip">
+    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="MinWidth" Value="92" />
+  </Style>
+  <Style Selector="Border.lchip.ok">
+    <Setter Property="BorderBrush" Value="{StaticResource LineChipOkBorder}" />
+  </Style>
+  <Style Selector="Border.lchip.warn">
+    <Setter Property="BorderBrush" Value="{StaticResource LineChipWarnBorder}" />
+  </Style>
+  <Style Selector="Border.lchip.err">
+    <Setter Property="Background" Value="{StaticResource LineChipErrBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource LineChipErrBorder}" />
+  </Style>
+  <!-- The LED is the only round thing in the whole app, which is exactly why it reads as a lamp. -->
+  <Style Selector="Ellipse.led">
+    <Setter Property="Width" Value="6" />
+    <Setter Property="Height" Value="6" />
+    <Setter Property="Fill" Value="{StaticResource BoothRule2}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Ellipse.led.ok">
+    <Setter Property="Fill" Value="{StaticResource GelGreen}" />
+  </Style>
+  <Style Selector="Ellipse.led.warn">
+    <Setter Property="Fill" Value="{StaticResource GelAmber}" />
+  </Style>
+  <Style Selector="Ellipse.led.err">
+    <Setter Property="Fill" Value="{StaticResource GelRed}" />
+  </Style>
+
+  <!-- ══ matrix cells (patch and per-cue sends) ═════════════════════════════════════════════ -->
+  <Style Selector="Border.mxcell">
+    <Setter Property="Width" Value="46" />
+    <Setter Property="Height" Value="21" />
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="0,0,1,1" />
+  </Style>
+  <Style Selector="Border.mxcell > TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Border.mxcell.on">
+    <Setter Property="Background" Value="{StaticResource MatrixOnBg}" />
+  </Style>
+  <Style Selector="Border.mxcell.on > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+  </Style>
+  <Style Selector="Border.mxcell.unity">
+    <Setter Property="Background" Value="{StaticResource MatrixUnityBg}" />
+  </Style>
+  <Style Selector="Border.mxcell.mute">
+    <Setter Property="Background" Value="{StaticResource MatrixMuteBg}" />
+  </Style>
+  <Style Selector="Border.mxcell.mute > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+  </Style>
+  <!-- The cell the inspector below is currently explaining. -->
+  <Style Selector="Border.mxcell.pick">
+    <Setter Property="BorderBrush" Value="{StaticResource GelAmber}" />
+    <Setter Property="BorderThickness" Value="2" />
+  </Style>
+  <Style Selector="Border.mxhead">
+    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="0,0,1,1" />
+    <Setter Property="Padding" Value="5,4" />
+  </Style>
+  <Style Selector="Border.mxhead > TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="LetterSpacing" Value="0.55" />
+  </Style>
+  <!-- A column belonging to a named Output Group (register item 9) is marked in congo, because the
+       linked-delta editing rule applies to it and the operator must know before dragging a cell. -->
+  <Style Selector="Border.mxhead.vgrp > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+  </Style>
+  <Style Selector="Border.mxhead.rowhead > TextBlock">
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="TextAlignment" Value="Right" />
+  </Style>
+  <Style Selector="Border.mxhead.bad > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+  </Style>
+
+  <!-- ══ the effective-route chain (`.node`) ════════════════════════════════════════════════
+       source → logical → physical, in the three gels those tiers use everywhere else in the app.
+       This strip is the answer to "why is this silent", so its colours must match the screens that
+       raised the question. -->
+  <Style Selector="Border.node">
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="6,2" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Border.node > TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+  </Style>
+  <Style Selector="Border.node.src">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeSteelBorder}" />
+  </Style>
+  <Style Selector="Border.node.src > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+  </Style>
+  <Style Selector="Border.node.log">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeCongoBorder}" />
+  </Style>
+  <Style Selector="Border.node.log > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+  </Style>
+  <Style Selector="Border.node.phy">
+    <Setter Property="BorderBrush" Value="{StaticResource BadgeGreenBorder}" />
+  </Style>
+  <Style Selector="Border.node.phy > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+  </Style>
+
+  <!-- ══ timeline ═══════════════════════════════════════════════════════════════════════════ -->
+  <Style Selector="Border.tlclip">
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Margin" Value="0,4" />
+    <Setter Property="Padding" Value="5,2" />
+    <Setter Property="ClipToBounds" Value="True" />
+  </Style>
+  <Style Selector="Border.tlclip > TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Border.tlclip.au">
+    <Setter Property="Background" Value="{StaticResource ClipAudioBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource ClipAudioBorder}" />
+  </Style>
+  <Style Selector="Border.tlclip.vi">
+    <Setter Property="Background" Value="{StaticResource ClipVideoBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource ClipVideoBorder}" />
+  </Style>
+  <Style Selector="Border.tlclip.ac">
+    <Setter Property="Background" Value="{StaticResource ClipActionBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource ClipActionBorder}" />
+  </Style>
+  <Style Selector="Border.tlclip.gr">
+    <Setter Property="Background" Value="{StaticResource ClipGroupBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource ClipGroupBorder}" />
+  </Style>
+  <!-- Disabled children render hatched with a struck label (register item 18) — unambiguous, unlike
+       ghosting, which a dim booth screen turns into "did I render that?". -->
+  <Style Selector="Border.tlclip.off">
+    <Setter Property="Background" Value="{StaticResource DisabledHatch}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+  </Style>
+  <Style Selector="Border.tlclip.off > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="TextDecorations" Value="Strikethrough" />
+  </Style>
+  <Style Selector="Border.tllane">
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="MinHeight" Value="30" />
+  </Style>
+  <Style Selector="Border.tllane.fx">
+    <Setter Property="MinHeight" Value="24" />
+  </Style>
+  <Style Selector="Border.tllane.grp">
+    <Setter Property="Background" Value="{StaticResource LaneGroupWash}" />
+  </Style>
+
+  <!-- ══ video canvases ═════════════════════════════════════════════════════════════════════ -->
+  <Style Selector="Border.vidcanvas">
+    <Setter Property="Background" Value="{StaticResource CanvasBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="ClipToBounds" Value="True" />
+  </Style>
+  <Style Selector="Border.placement">
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="5,2" />
+    <Setter Property="VerticalAlignment" Value="Stretch" />
+  </Style>
+  <Style Selector="Border.placement > TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeNano}" />
+    <Setter Property="VerticalAlignment" Value="Top" />
+  </Style>
+  <Style Selector="Border.placement.a">
+    <Setter Property="Background" Value="{StaticResource PlacementABg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource PlacementABorder}" />
+  </Style>
+  <Style Selector="Border.placement.a > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelSteel}" />
+  </Style>
+  <Style Selector="Border.placement.b">
+    <Setter Property="Background" Value="{StaticResource PlacementBBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource PlacementBBorder}" />
+  </Style>
+  <Style Selector="Border.placement.b > TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+  </Style>
+  <Style Selector="Border.placement.sel">
+    <Setter Property="BorderBrush" Value="{StaticResource GelAmber}" />
+    <Setter Property="BorderThickness" Value="2" />
+  </Style>
+
+  <!-- ══ fade-curve thumbnails ══════════════════════════════════════════════════════════════
+       These live here rather than in the CurveOptionItem ControlTheme because the drawn shape and its
+       caption come from the item TEMPLATE, which a control theme's `/template/` scope cannot address —
+       and a ControlTheme is not allowed to carry a descendant selector at all. -->
+  <Style Selector="ListBox.curves Path">
+    <Setter Property="Stroke" Value="{StaticResource BoothInk2}" />
+  </Style>
+  <Style Selector="ListBox.curves TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+  </Style>
+  <Style Selector="ListBox.curves ListBoxItem:selected Path">
+    <Setter Property="Stroke" Value="{StaticResource GelCongo}" />
+  </Style>
+  <Style Selector="ListBox.curves ListBoxItem:selected TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+  </Style>
+
+  <!-- ══ log tail ═══════════════════════════════════════════════════════════════════════════ -->
+  <Style Selector="TextBlock.logline">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+  </Style>
+
+</Styles>

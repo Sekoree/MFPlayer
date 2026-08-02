@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <!-- Test projects opt out of the repo-wide AOT/trim analysis (the same way the framework's do).
+             One test here deliberately reflects over a command's private fields to prove the journal
+             holds no document snapshots — the property is about what a type may HOLD, which no public
+             surface can express. The library itself stays AOT-clean. -->
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" />
+        <PackageReference Include="xunit" />
+        <PackageReference Include="xunit.runner.visualstudio" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
+    </ItemGroup>
+
+</Project>

@@ -86,6 +86,8 @@ public static class SampleShow
         {
             Number = "13.1", Label = "Storm bed", Kind = CueKind.Media, Source = "sfx/storm-bed.flac",
             Fade = "3.0", Length = "2:14", Level = "−3.0", Depth = 1,
+            Note = "Storm bed runs under the whole opening. Do not stop it on the scene change — "
+                 + "Q14 rides the foldback instead.",
         },
         new()
         {
@@ -107,7 +109,35 @@ public static class SampleShow
         {
             Number = "15", Label = "Interval music", Kind = CueKind.Media,
             Source = "media offline · interval.wav", Fade = "6.0", Level = "−9.0", IsBroken = true,
+            Note = "Relink before the get-in. Last seen on the USB stick in the road case.",
             Badges = [new Badge("offline", Gel.Red)],
+        },
+        // The remaining four kinds. They are here so every inspector variant in the tab table on
+        // screen 04 is REACHABLE: a tab set that no sample cue can select is a tab set nobody can
+        // review. Their numbers match the cues the other screens already name — Q15.5 is the
+        // visualizer placement drawn on the Cyc canvas (screen 09) and Q16 is the jump the APC mini
+        // fires (screen 11).
+        new()
+        {
+            Number = "15.5", Label = "Interval visualizer", Kind = CueKind.Visualizer,
+            Source = "projectM · preset pack A", Fade = "2.0", Badges = [new Badge("Cyc")],
+        },
+        new()
+        {
+            Number = "16", Label = "Loop to 12 if held", Kind = CueKind.Jump,
+            Source = "→ Q12 · while held", Badges = [new Badge("MIDI", Gel.Congo)],
+        },
+        new()
+        {
+            Number = "17", Label = "Fade band mics down", Kind = CueKind.Fade,
+            Source = "Main + Fold · to −inf", Fade = "4.0",
+        },
+        new()
+        {
+            Number = "18", Label = "— Act 2 begins —", Kind = CueKind.Comment,
+            Source = "comment",
+            Note = "House lights to half on the band's cue, not on a count. Stage manager calls it; "
+                 + "we follow. If the call is late, hold — Q19 has a 6 s pre-wait to absorb it.",
         },
     ];
 

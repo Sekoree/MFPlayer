@@ -1,0 +1,315 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
+       below resolves against the file's own root. Avalonia resolves StaticResource by walking the
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       which is why Avalonia's own themes never reach across control files for a key. -->
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
+  </ResourceDictionary.MergedDictionaries>
+
+  <!-- Every repeating surface in HaCue2 is a ListBox: the cue tree, the active panel, the tables, and
+       all four kinds of tab strip. That is deliberate — a tab strip IS a single selection over a small
+       list, and modelling it as one means the view-model exposes `Items` + `Selected` and nothing else,
+       whatever the strip happens to look like. The look is carried entirely by an ItemContainerTheme.
+
+       Row STATE (go / standby / broken / disabled), by contrast, lives in the ItemTemplate, not in the
+       container: a row can be sounding and selected at the same time, and washes that stack are the
+       honest rendering of that. -->
+
+  <ControlTheme x:Key="{x:Type ListBox}" TargetType="ListBox">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+    <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}">
+          <ScrollViewer Name="PART_ScrollViewer"
+                        HorizontalScrollBarVisibility="{TemplateBinding (ScrollViewer.HorizontalScrollBarVisibility)}"
+                        VerticalScrollBarVisibility="{TemplateBinding (ScrollViewer.VerticalScrollBarVisibility)}">
+            <ItemsPresenter Name="PART_ItemsPresenter"
+                            Margin="{TemplateBinding Padding}"
+                            ItemsPanel="{TemplateBinding ItemsPanel}" />
+          </ScrollViewer>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <!-- Base row: no chrome of its own, a congo wash when selected. Used by the cue tree, the active
+       panel and every table. -->
+  <ControlTheme x:Key="{x:Type ListBoxItem}" TargetType="ListBoxItem">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}">
+          <ContentPresenter Margin="{TemplateBinding Padding}"
+                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="#0AFFFFFF" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource CueSelectedWash}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ── 1. title-bar view tabs (`.vtab`) — CUES · AUDIO · VIDEO · TARGETS ──────────────────── -->
+  <ControlTheme x:Key="ViewTabItem" TargetType="ListBoxItem">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="TextElement.LetterSpacing" Value="1.35" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="12,4" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{StaticResource BoothCorner}">
+          <ContentPresenter Margin="{TemplateBinding Padding}" Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+      <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    </Style>
+    <Style Selector="^:selected">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ── 2. section tabs (`.itab`) — the Audio/Video/Targets pane strips and the inspector ──── -->
+  <ControlTheme x:Key="SectionTabItem" TargetType="ListBoxItem">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="TextElement.LetterSpacing" Value="0.8" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0,0,0,2" />
+    <Setter Property="Padding" Value="9,6,9,5" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}">
+          <ContentPresenter Margin="{TemplateBinding Padding}" Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+    </Style>
+    <Style Selector="^:selected">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ── 3. bottom-edge tabs (`.itabs.bottom`) — the Cues right panel ────────────────────────
+       Register item 7: Cue properties | Lists & groups live at the BOTTOM of the right column, so the
+       hand that switches them is never crossing the cue list. The marker rule moves to the top edge
+       accordingly — a tab indicator always points at the content it governs. -->
+  <ControlTheme x:Key="BottomTabItem" TargetType="ListBoxItem"
+                BasedOn="{StaticResource SectionTabItem}">
+    <Setter Property="BorderThickness" Value="0,2,0,0" />
+    <Setter Property="Padding" Value="9,5,9,6" />
+  </ControlTheme>
+
+  <!-- ── 4. settings / scope navigation (`.snav a`) ─────────────────────────────────────────── -->
+  <ControlTheme x:Key="NavItem" TargetType="ListBoxItem">
+    <Setter Property="FontSize" Value="11.5" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="2,0,0,0" />
+    <Setter Property="Padding" Value="10,4" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}">
+          <ContentPresenter Margin="{TemplateBinding Padding}"
+                            HorizontalAlignment="Stretch"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="#0AFFFFFF" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource NavSelectedBg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+    </Style>
+    <Style Selector="^:selected">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ── 5. data-table rows (`.diag tbody tr`) ───────────────────────────────────────────────
+       Hairline under every row, no vertical rules: the columns are already aligned by tabular mono
+       numerals, and vertical rules in a dense table only add noise. -->
+  <ControlTheme x:Key="TableRowItem" TargetType="ListBoxItem"
+                BasedOn="{StaticResource {x:Type ListBoxItem}}">
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRuleSoft}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Cursor" Value="Hand" />
+  </ControlTheme>
+
+  <!-- Rows the operator reads but never selects (log tails, endpoint lists). -->
+  <ControlTheme x:Key="ReadonlyRowItem" TargetType="ListBoxItem"
+                BasedOn="{StaticResource {x:Type ListBoxItem}}">
+    <Setter Property="Focusable" Value="False" />
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+  </ControlTheme>
+
+  <!-- Horizontal strips reuse one panel template. -->
+  <ItemsPanelTemplate x:Key="HorizontalItemsPanel">
+    <StackPanel Orientation="Horizontal" />
+  </ItemsPanelTemplate>
+
+  <!-- ── the tab-strip ListBox shells ────────────────────────────────────────────────────────── -->
+  <ControlTheme x:Key="ViewTabs" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+    <Setter Property="ItemContainerTheme" Value="{StaticResource ViewTabItem}" />
+    <Setter Property="ItemsPanel" Value="{StaticResource HorizontalItemsPanel}" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <ControlTheme x:Key="SectionTabs" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+    <Setter Property="ItemContainerTheme" Value="{StaticResource SectionTabItem}" />
+    <Setter Property="ItemsPanel" Value="{StaticResource HorizontalItemsPanel}" />
+    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}">
+          <!-- A media cue carries six tabs and the inspector column is 316 px wide, so the strip has
+               to scroll rather than clip its last tab away. The bar stays hidden: this is a wheel /
+               swipe affordance, not a control to aim at. -->
+          <ScrollViewer HorizontalScrollBarVisibility="Hidden"
+                        VerticalScrollBarVisibility="Disabled">
+            <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+          </ScrollViewer>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <ControlTheme x:Key="BottomTabs" TargetType="ListBox" BasedOn="{StaticResource SectionTabs}">
+    <Setter Property="ItemContainerTheme" Value="{StaticResource BottomTabItem}" />
+    <Setter Property="BorderThickness" Value="0,1,0,0" />
+  </ControlTheme>
+
+  <ControlTheme x:Key="NavList" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+    <Setter Property="ItemContainerTheme" Value="{StaticResource NavItem}" />
+  </ControlTheme>
+
+  <ControlTheme x:Key="TableRows" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+    <Setter Property="ItemContainerTheme" Value="{StaticResource TableRowItem}" />
+  </ControlTheme>
+
+  <ControlTheme x:Key="ReadonlyRows" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+    <Setter Property="ItemContainerTheme" Value="{StaticResource ReadonlyRowItem}" />
+  </ControlTheme>
+
+  <!-- ── 6. fade-curve picker (`.curveopt`) ──────────────────────────────────────────────────
+       Register item 16: every curve picker in the app shows DRAWN thumbnails of what each fade
+       actually does, and the last option is always "custom ✎". A named list ("equal power", "expo")
+       asks the operator to remember what those sound like; a drawn shape does not. -->
+  <ControlTheme x:Key="CurveOptionItem" TargetType="ListBoxItem">
+    <Setter Property="Background" Value="{StaticResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="5,4,5,3" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{StaticResource BoothCorner}">
+          <ContentPresenter Margin="{TemplateBinding Padding}" Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <!-- congo @ 12 % over the well background -->
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="#191D2D" />
+      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+    </Style>
+    <!-- The thumbnail's own colouring lives in Chrome.axaml under `ListBox.curves`: a ControlTheme may
+         not carry a descendant selector, and the Path and caption come from the ITEM template, which
+         /template/ cannot reach. -->
+  </ControlTheme>
+
+  <ControlTheme x:Key="CurveOptions" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+    <Setter Property="ItemContainerTheme" Value="{StaticResource CurveOptionItem}" />
+    <Setter Property="ItemsPanel">
+      <ItemsPanelTemplate>
+        <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="6" />
+      </ItemsPanelTemplate>
+    </Setter>
+    <Setter Property="Template">
+      <ControlTemplate>
+        <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+</ResourceDictionary>

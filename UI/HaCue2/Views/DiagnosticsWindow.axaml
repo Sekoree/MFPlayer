@@ -1,0 +1,168 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.DiagnosticsWindow"
+        x:DataType="vm:DiagnosticsViewModel"
+        Title="HaCue2 — Diagnostics"
+        Width="1140" Height="700"
+        MinWidth="960" MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- Screen 15. Its own window, meant to sit on a second monitor for a whole show. -->
+
+  <DockPanel>
+
+    <Border Classes="titlebar" DockPanel.Dock="Top">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+        <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
+                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
+                   Text="Diagnostics" VerticalAlignment="Center" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="RESET COUNTERS" />
+        <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="COPY REPORT" />
+        <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="CLOSE" Click="OnClose" />
+      </Grid>
+    </Border>
+
+    <Border Classes="statusbar" DockPanel.Dock="Bottom">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="15">
+        <TextBlock Grid.Column="0" Classes="mono dim3 small" Text="{Binding CountersSince}" />
+        <TextBlock Grid.Column="2" Classes="mono warn small" Text="▲ Record behind" />
+        <TextBlock Grid.Column="3" Classes="mono dim3 small" Text="copy report → clipboard as text" />
+      </Grid>
+    </Border>
+
+    <Grid RowDefinitions="*,Auto" Margin="7" RowSpacing="7">
+
+      <c:PanelBox Grid.Row="0" Header="Audio bay" Hint="{Binding BayHeader}">
+        <c:PanelBox.Footer>
+          <Border Classes="chain">
+            <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge bad"><TextBlock Text="RECORD BEHIND" /></Border>
+                <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                         Text="{Binding BayWarning}" />
+              </DockPanel>
+          </Border>
+        </c:PanelBox.Footer>
+
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                  BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+            <Grid ColumnDefinitions="220,110,66,50,90,90,66,80,50,110" ColumnSpacing="6">
+              <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="TERMINAL / LEASE" />
+              <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+              <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="IN FLIGHT" />
+              <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="CAP" />
+              <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="ENQUEUED" />
+              <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="PROCESSED" />
+              <TextBlock Grid.Column="6" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="DROPPED" />
+              <TextBlock Grid.Column="7" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LATENCY" />
+              <TextBlock Grid.Column="8" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="EPOCH" />
+              <TextBlock Grid.Column="9" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="RATE" />
+            </Grid>
+          </Border>
+
+          <ListBox Theme="{StaticResource ReadonlyRows}" ItemsSource="{Binding BayRows}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:BayRow">
+                <Border BorderBrush="{StaticResource BoothRuleSoft}" BorderThickness="0,0,0,1">
+                  <Grid ColumnDefinitions="220,110,66,50,90,90,66,80,50,110" ColumnSpacing="6" Margin="8,4">
+                    <!-- Leases are indented but listed BESIDE the terminals: every lease feeds the one
+                         program bus, which then fans out to all terminals, so nesting a lease under a
+                         terminal would draw a parent relationship that does not exist. -->
+                    <TextBlock Grid.Column="0" Classes="mono small"
+                               Margin="{Binding NameIndent}"
+                               Text="{Binding Name}"
+                               Classes.dim2="{Binding IsLease}" />
+                    <TextBlock Grid.Column="1" Classes="mono small" Text="{Binding State.Text}"
+                               Classes.ok="{Binding State.IsGood}" Classes.warn="{Binding State.IsWarn}"
+                               Classes.err="{Binding State.IsBad}" />
+                    <TextBlock Grid.Column="2" Classes="num" Text="{Binding InFlight}" />
+                    <TextBlock Grid.Column="3" Classes="num dim3" Text="{Binding Capacity}" />
+                    <TextBlock Grid.Column="4" Classes="num" Text="{Binding Enqueued}" />
+                    <TextBlock Grid.Column="5" Classes="num" Text="{Binding Processed}" />
+                    <TextBlock Grid.Column="6" Classes="num" Text="{Binding Dropped.Text}"
+                               Classes.warn="{Binding Dropped.IsWarn}" />
+                    <TextBlock Grid.Column="7" Classes="num" Text="{Binding Latency.Text}"
+                               Classes.warn="{Binding Latency.IsWarn}" />
+                    <TextBlock Grid.Column="8" Classes="num dim3" Text="{Binding Epoch}" />
+                    <TextBlock Grid.Column="9" Classes="num dim3" Text="{Binding Rate}" />
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </c:PanelBox>
+
+      <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="7" Height="220">
+
+        <c:PanelBox Grid.Column="0" Header="Video &amp; compositions">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Grid ColumnDefinitions="*,66,60,50,66,50" ColumnSpacing="6">
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="COMPOSITION" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="FPS" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LAYERS" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LATE" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="DROPPED" />
+                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="GPU" />
+              </Grid>
+            </Border>
+            <ListBox Theme="{StaticResource ReadonlyRows}" ItemsSource="{Binding Compositions}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:CompositionStatsRow">
+                  <Grid ColumnDefinitions="*,66,60,50,66,50" ColumnSpacing="6" Margin="8,4">
+                    <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Name}" />
+                    <!-- The target rate, not an achieved one: achieved fps is a delta over wall time
+                         that only the caller can compute, and inventing it here would be a lie. -->
+                    <TextBlock Grid.Column="1" Classes="num" Text="{Binding Fps.Text}"
+                               Classes.ok="{Binding Fps.IsGood}" Classes.warn="{Binding Fps.IsWarn}" />
+                    <TextBlock Grid.Column="2" Classes="num" Text="{Binding Layers}" />
+                    <TextBlock Grid.Column="3" Classes="num" Text="{Binding Late.Text}"
+                               Classes.warn="{Binding Late.IsWarn}" />
+                    <TextBlock Grid.Column="4" Classes="num" Text="{Binding Dropped}" />
+                    <TextBlock Grid.Column="5" Classes="num dim3" Text="{Binding Gpu}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </c:PanelBox>
+
+        <!-- Not a second event collector: a level-filtered tail of the SAME Microsoft.Extensions.Logging
+             pipeline the file log uses (register item 27). One logging system, two readers. -->
+        <c:PanelBox Grid.Column="1" Header="Log tail" Hint="MS logging pipeline · follows the file log">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="chain flush" Padding="10,5">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Classes="caps" VerticalAlignment="Center" Text="MINIMUM LEVEL" />
+                <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding MinimumLevel}"
+                          MinWidth="120" />
+              </StackPanel>
+            </Border>
+            <ListBox Theme="{StaticResource ReadonlyRows}" Margin="10,6"
+                     ItemsSource="{Binding Log}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:LogLine">
+                  <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,1">
+                    <TextBlock Classes="mono dim3 small" Text="{Binding Time}" />
+                    <TextBlock Classes="mono dim3 small" Width="46" Text="{Binding Level}"
+                               Classes.warn="{Binding IsWarn}" Classes.err="{Binding IsError}" />
+                    <TextBlock Classes="mono dim3 small" Text="{Binding Category}" />
+                    <TextBlock Classes="logline" Text="{Binding Message}" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </c:PanelBox>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

@@ -1,0 +1,120 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.ProjectStatusWindow"
+        x:DataType="vm:ProjectStatusViewModel"
+        Title="HaCue2 — Project status"
+        Width="1060" Height="560"
+        MinWidth="900" MinHeight="460"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- Screen 14, the renamed Preflight. It is a COLLECTOR of the project's errors and warnings, each
+       with the fix action attached — missing media, unfed or unpatched logical outputs, absent
+       devices, dead jump targets, past schedules. Relink and consolidate live here because they are
+       what fixing usually means.
+
+       Severity (register item 25): unpatched-but-fed = error; patched-but-unfed and absent devices =
+       warnings, except an output flagged REQUIRED, whose absence is an error. -->
+
+  <DockPanel>
+
+    <Border Classes="titlebar" DockPanel.Dock="Top">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+        <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
+                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
+                   Text="{Binding Title}" VerticalAlignment="Center" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="RE-RUN ALL" />
+        <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="COPY REPORT" />
+        <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="CLOSE ⎋" Click="OnClose" />
+      </Grid>
+    </Border>
+
+    <Border Classes="statusbar" DockPanel.Dock="Bottom">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0" Classes="mono err small" Text="{Binding ErrorNote}" />
+        <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding HeadlessNote}" />
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="*,300" Margin="7" ColumnSpacing="7">
+
+      <c:PanelBox Grid.Column="0" Header="Checks" Hint="{Binding Summary}">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                  BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+            <Grid ColumnDefinitions="180,110,*,80" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="CHECK" />
+              <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="RESULT" />
+              <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="DETAIL" />
+              <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="FIX" />
+            </Grid>
+          </Border>
+
+          <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Checks}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:CheckRow">
+                <Grid ColumnDefinitions="180,110,*,80" ColumnSpacing="8" Margin="8,5">
+                  <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Check}" />
+                  <TextBlock Grid.Column="1" Classes="mono small" Text="{Binding Result.Text}"
+                             Classes.ok="{Binding Result.IsGood}"
+                             Classes.warn="{Binding Result.IsWarn}"
+                             Classes.err="{Binding Result.IsBad}" />
+                  <TextBlock Grid.Column="2" Classes="mono dim3 small ellipsis" Text="{Binding Detail}" />
+                  <!-- Every failing row carries its own fix; a status list that only reports is a list
+                       the operator has to translate into actions under time pressure. -->
+                  <Button Grid.Column="3" Theme="{StaticResource LinkButton}"
+                          Foreground="{StaticResource GelCongo}"
+                          IsVisible="{Binding HasFix}" Content="{Binding Fix}" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </c:PanelBox>
+
+      <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*" RowSpacing="7">
+
+        <c:PanelBox Grid.Row="0" Header="Relink" Hint="for the missing file">
+          <StackPanel Margin="0,6,0,8">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Missing">
+              <TextBox Classes="ro" Text="{Binding MissingFile}" />
+            </HeaderedContentControl>
+            <ContentControl Theme="{StaticResource FieldWide}">
+              <Button Classes="block" Content="SEARCH BY FILENAME UNDER MEDIA ROOT…" />
+            </ContentControl>
+            <ContentControl Theme="{StaticResource FieldWide}">
+              <Button Classes="block" Content="PICK FILE MANUALLY…" />
+            </ContentControl>
+            <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                       Text="Matches by name + duration; a duration mismatch relinks with a warning badge on the cue." />
+          </StackPanel>
+        </c:PanelBox>
+
+        <c:PanelBox Grid.Row="1" Header="Consolidate">
+          <StackPanel Margin="0,6,0,8">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Into">
+              <TextBox Text="{Binding ConsolidateInto}" />
+            </HeaderedContentControl>
+            <CheckBox Margin="10,3" IsChecked="{Binding CopyMedia}"
+                      Content="Copy media, rewrite to relative paths" />
+            <CheckBox Margin="10,3" IsChecked="{Binding IncludeReport}"
+                      Content="Include project + this report" />
+            <CheckBox Margin="10,3" IsChecked="{Binding ZipWhenDone}" Content="Zip when done" />
+            <ContentControl Theme="{StaticResource FieldWide}">
+              <Button Classes="primary block" Content="CONSOLIDATE — 1.8 GB" />
+            </ContentControl>
+            <!-- Consolidate must report what it could NOT copy rather than quietly producing a
+                 project that half-works at the venue. -->
+            <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                       Text="Anything that cannot be copied is reported, not skipped silently." />
+          </StackPanel>
+        </c:PanelBox>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

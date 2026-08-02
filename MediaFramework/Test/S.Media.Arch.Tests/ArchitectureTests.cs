@@ -121,6 +121,15 @@ public sealed class ArchitectureTests
         // fills this in with the same layers HaPlay consumes; the entry that must never appear is
         // "HaPlay", which NoAppReferencesAnotherApp asserts separately.
         ["HaCue2"] = [],
+        // The project model: document, journal, validation, patch operations. It may see the session
+        // layer (it reuses ShowValidationIssue and CustomFadeCurve, and the compiler that turns a
+        // HaCueProject into a ShowDocument lands here) but nothing above it, and no UI toolkit — this
+        // is what keeps the project-status pass runnable from a script.
+        ["HaCue2.Core"] =
+        [
+            "S.Media.Session", "S.Media.Core", "S.Media.Time", "S.Media.Routing", "S.Media.Players",
+            "S.Media.Compositor", "S.Media.Gpu",
+        ],
         // A desktop head is a composition root: it references its app and nothing else.
         ["HaCue2.Desktop"] = ["HaCue2"],
         ["HaPlay.Desktop"] = ["HaPlay"],

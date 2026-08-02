@@ -1,0 +1,66 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Controls.MatrixView"
+             x:DataType="c:MatrixView"
+             x:CompileBindings="True">
+
+  <!-- One control for both matrices in the app: the project patch (device channels × logical outputs)
+       and a cue's sends (source channels × logical outputs). They are the same grid read at two
+       levels, and building them from one control is what keeps "click toggles at unity, drag adjusts
+       gain, right-click mutes" (register item 13) a single behaviour rather than two. -->
+
+  <StackPanel>
+
+    <!-- column heads -->
+    <StackPanel Orientation="Horizontal">
+      <Border Classes="mxhead" Width="{Binding RowHeaderWidth, RelativeSource={RelativeSource AncestorType=c:MatrixView}}" />
+      <ItemsControl ItemsSource="{Binding Columns, RelativeSource={RelativeSource AncestorType=c:MatrixView}}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:MatrixColumn">
+            <!-- A column in a named Output Group is marked congo: editing one of its cells applies the
+                 same delta to the group's other members, and that must be visible before the drag. -->
+            <Border Classes="mxhead" Width="46" Classes.vgrp="{Binding IsGrouped}">
+              <TextBlock Text="{Binding Header}" HorizontalAlignment="Center" />
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+
+    <!-- rows -->
+    <ItemsControl ItemsSource="{Binding Rows, RelativeSource={RelativeSource AncestorType=c:MatrixView}}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:MatrixRow">
+          <StackPanel Orientation="Horizontal">
+            <Border Classes="mxhead rowhead" Classes.bad="{Binding IsAbsent}"
+                    Width="{Binding RowHeaderWidth, RelativeSource={RelativeSource AncestorType=c:MatrixView}}">
+              <TextBlock Text="{Binding Header}" HorizontalAlignment="Right" />
+            </Border>
+            <ItemsControl ItemsSource="{Binding Cells}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:MatrixCell">
+                  <Border Classes="mxcell"
+                          Classes.on="{Binding IsOn}"
+                          Classes.unity="{Binding IsUnity}"
+                          Classes.mute="{Binding IsMuted}"
+                          Classes.pick="{Binding IsPicked}">
+                    <TextBlock Text="{Binding Text}" />
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+
+  </StackPanel>
+</UserControl>

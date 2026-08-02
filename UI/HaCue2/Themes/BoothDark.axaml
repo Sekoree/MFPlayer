@@ -1,0 +1,31 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- The HaCue2 theme bundle: tokens, from-scratch ControlThemes for every control the app shows,
+       and the class-based chrome vocabulary.
+
+       Named "booth dark" because that is what the Appearance pane calls it (screen 12), and because it
+       is not a dark VARIANT of a light theme — it is the only skin the mockup specifies. The plain
+       dark/light options in that pane are a later exercise: everything colour lives in Tokens.axaml, so
+       they become two more token sets rather than a re-theme.
+
+       Order matters. Tokens first so the control dictionaries can be looked up against a populated
+       parent; Chrome last so a chrome class can override a control theme's own setter, never the
+       reverse. -->
+
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
+        <ResourceInclude Source="avares://HaCue2/Themes/Controls/Buttons.axaml" />
+        <ResourceInclude Source="avares://HaCue2/Themes/Controls/Inputs.axaml" />
+        <ResourceInclude Source="avares://HaCue2/Themes/Controls/Lists.axaml" />
+        <ResourceInclude Source="avares://HaCue2/Themes/Controls/Scrolling.axaml" />
+        <ResourceInclude Source="avares://HaCue2/Themes/Controls/Surfaces.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <StyleInclude Source="avares://HaCue2/Themes/Chrome.axaml" />
+
+</Styles>

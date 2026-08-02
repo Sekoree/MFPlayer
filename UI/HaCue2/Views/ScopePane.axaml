@@ -1,0 +1,40 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Views.ScopePane"
+             x:DataType="vm:CuesViewModel">
+
+  <!-- Screen 03. A song-per-group show is 400–600 rows flat, so the tree scopes: pick a list or a
+       group here and the main view narrows to that subtree, with the breadcrumb as the way out.
+       Scoping happens ONLY here — double-clicking a group in the tree deliberately does not scope,
+       leaving that gesture free for standby/open. -->
+
+  <DockPanel>
+
+    <Border DockPanel.Dock="Bottom" Classes="chain">
+      <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="SCOPE" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                   Text="view only · not saved in the project · GO still fires the show's next cue" />
+              </DockPanel>
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Margin="0,4,0,0">
+
+        <TextBlock Classes="caps" Margin="12,9,12,4" Text="CUE LISTS" />
+        <ListBox Theme="{StaticResource NavList}"
+                 ItemsSource="{Binding CueLists}"
+                 SelectedItem="{Binding SelectedScope}"
+                 ItemTemplate="{StaticResource ScopeItemTemplate}" />
+
+        <TextBlock Classes="caps" Margin="12,9,12,4" Text="GROUPS IN ACT 1" />
+        <ListBox Theme="{StaticResource NavList}"
+                 ItemsSource="{Binding Groups}"
+                 SelectedItem="{Binding SelectedScope}"
+                 ItemTemplate="{StaticResource ScopeItemTemplate}" />
+
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>

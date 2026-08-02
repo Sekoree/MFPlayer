@@ -1,0 +1,137 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Views.TimelineSheet"
+             x:DataType="vm:TimelineViewModel">
+
+  <!-- Screen 05. A bottom sheet by default, undockable to its own window (mode remembered per
+       machine). Envelopes are not a fixed overlay: volume, opacity and outbound OSC/MIDI ramps are
+       effect LANES added per cue or per group and hidden until added (register item 18). -->
+
+  <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7,0,7,7" Height="300">
+
+    <c:PanelBox.Footer>
+      <Border Classes="chain">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
+          <Border Grid.Column="0" Classes="badge"><TextBlock Text="+ EFFECT LANE" /></Border>
+          <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis"
+                     Text="volume · opacity · OSC ramp · MIDI ramp — per cue or per group, hidden until added" />
+          <Border Grid.Column="2" Classes="badge"><TextBlock Text="LIVE" /></Border>
+          <TextBlock Grid.Column="3" Classes="mono dim3 small" VerticalAlignment="Center"
+                     Text="edits while running apply on the next pass" />
+        </Grid>
+      </Border>
+    </c:PanelBox.Footer>
+
+    <DockPanel>
+
+      <Border Classes="transport" DockPanel.Dock="Top">
+        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
+          <Button Grid.Column="0" Classes="icon" Content="▶ FROM PLAYHEAD" />
+          <Button Grid.Column="1" Classes="icon" Content="⏹" />
+          <Button Grid.Column="2" Classes="icon" Content="ZOOM −" />
+          <Button Grid.Column="3" Classes="icon" Content="ZOOM +" />
+          <Button Grid.Column="4" Classes="icon" Content="FIT" />
+          <ListBox Grid.Column="5" Theme="{StaticResource Segment}" SelectedIndex="0">
+            <ListBoxItem>snap</ListBoxItem>
+            <ListBoxItem>free</ListBoxItem>
+          </ListBox>
+          <Button Grid.Column="6" Content="DUCK UNDER…" />
+          <Button Grid.Column="8" Classes="icon" Content="UNDOCK ↗" />
+          <Button Grid.Column="9" Classes="icon" Content="CLOSE ⎋" Click="OnClose" />
+        </Grid>
+      </Border>
+
+      <Panel Background="{StaticResource BoothBg}">
+        <DockPanel>
+
+          <!-- ruler: the label column is skipped so 0:00 lines up with the start of the tracks -->
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="168,*"
+                Background="{StaticResource BoothBg}">
+            <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,1" />
+            <ItemsControl Grid.Column="1" ItemsSource="{Binding Ruler}"
+                          BorderBrush="{StaticResource BoothRule}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><UniformGrid Rows="1" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border BorderBrush="{StaticResource BoothRule}" BorderThickness="1,0,0,1" Padding="4,2">
+                    <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                               Text="{Binding}" />
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Grid>
+
+          <ScrollViewer>
+            <Panel>
+              <ItemsControl ItemsSource="{Binding Lanes}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:TimelineLane">
+                    <Border Classes="tllane"
+                            Classes.fx="{Binding IsEffect}"
+                            Classes.grp="{Binding IsGroup}">
+                      <Grid ColumnDefinitions="168,*">
+                        <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}"
+                                BorderThickness="0,0,1,0" Padding="8,8,8,0">
+                          <TextBlock Classes="mono dim2 small ellipsis" Text="{Binding Name}" />
+                        </Border>
+
+                        <Panel Grid.Column="1">
+                          <!-- Fractions of the lane, not a stretched geometry: an envelope that
+                               covers only part of a cue must be drawn only over that part. -->
+                          <c:EnvelopeGraph Points="{Binding Envelope}"
+                                           IsVisible="{Binding HasEnvelope}"
+                                           Stroke="{StaticResource GelAmber}" StrokeThickness="1"
+                                           Margin="0,4" />
+
+                          <ItemsControl ItemsSource="{Binding Clips}">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerTheme>
+                              <ControlTheme TargetType="ContentPresenter" x:DataType="vm:TimelineClip">
+                                <Setter Property="(c:Fraction.Left)" Value="{Binding Left}" />
+                                <Setter Property="(c:Fraction.Width)" Value="{Binding Width}" />
+                                <Setter Property="(c:Fraction.Height)" Value="1" />
+                              </ControlTheme>
+                            </ItemsControl.ItemContainerTheme>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:TimelineClip">
+                                <Border Classes="tlclip"
+                                        Classes.au="{Binding IsAudio}"
+                                        Classes.vi="{Binding IsVideo}"
+                                        Classes.ac="{Binding IsAction}"
+                                        Classes.gr="{Binding IsGroup}"
+                                        Classes.off="{Binding IsDisabled}">
+                                  <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                                </Border>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </Panel>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <!-- the playhead sits above the lanes and starts after the label column -->
+              <Grid ColumnDefinitions="168,*" IsHitTestVisible="False">
+                <c:FractionPanel Grid.Column="1">
+                  <Border Width="1" Background="{StaticResource GelAmber}"
+                          c:Fraction.Left="{Binding Playhead}"
+                          c:Fraction.Height="1" />
+                </c:FractionPanel>
+              </Grid>
+            </Panel>
+          </ScrollViewer>
+        </DockPanel>
+      </Panel>
+    </DockPanel>
+  </c:PanelBox>
+</UserControl>

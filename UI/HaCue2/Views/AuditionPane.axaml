@@ -1,0 +1,55 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Views.AuditionPane"
+             x:DataType="vm:AuditionViewModel">
+
+  <!-- Screen 08b, shown identically in the Audio and Video views. Audition enters the bay as a
+       MONITOR input: it never touches the patch or the program bus, which is what makes previewing
+       a cue mid-show safe and why "solo this line to audition" is always allowed. -->
+
+  <Grid ColumnDefinitions="*,*" Margin="7" ColumnSpacing="7">
+
+    <c:PanelBox Grid.Column="0" Header="Audition audio" VerticalAlignment="Top">
+      <StackPanel Margin="0,6,0,8">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="Device">
+          <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding Device}" />
+        </HeaderedContentControl>
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
+          <TextBox Classes="short" Text="{Binding Level}" />
+        </HeaderedContentControl>
+        <CheckBox Margin="10,4" IsChecked="{Binding DuckWhenProgramSounds}"
+                  Content="Duck audition when program is sounding" />
+        <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                   Text="Audition enters the bay as a monitor input — it never touches the patch or the program bus." />
+      </StackPanel>
+    </c:PanelBox>
+
+    <c:PanelBox Grid.Column="1" Header="Audition video" VerticalAlignment="Top">
+      <c:PanelBox.Footer>
+        <Border Classes="chain">
+          <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="CUE MENU" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                       Text="right-click any cue → “Preview on audition outputs”" />
+              </DockPanel>
+        </Border>
+      </c:PanelBox.Footer>
+
+      <StackPanel Margin="0,6,0,8">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="Surface">
+          <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Surfaces}"
+                   SelectedItem="{Binding Surface}" />
+        </HeaderedContentControl>
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="Size">
+          <TextBox Classes="ro" Text="{Binding Size}" />
+        </HeaderedContentControl>
+        <!-- The audition canvas is COMPOSED, not a raw decode: it accepts the extra GL thread so a
+             preview shows placement, fit and mapping exactly as they will appear on the wall. -->
+        <TextBlock Margin="10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                   Text="The preview renders through its own composition, so placement, fit and mapping look the way they will on the output." />
+      </StackPanel>
+    </c:PanelBox>
+  </Grid>
+</UserControl>

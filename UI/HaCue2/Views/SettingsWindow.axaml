@@ -1,0 +1,406 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.SettingsWindow"
+        x:DataType="vm:SettingsViewModel"
+        Title="HaCue2 — Settings"
+        Width="1000" Height="680"
+        MinWidth="880" MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- Screens 12 and 13, in one window with one nav, because the split that matters is a SCOPE split
+       and it is easier to understand when both scopes are visible at once:
+         · application — this machine, app-settings.json, saves immediately, no undo
+         · project     — travels in the file, journaled, ⌘Z works
+       A project override always wins AND is always visible in both scopes (register item 26). -->
+
+  <DockPanel>
+
+    <Border Classes="titlebar" DockPanel.Dock="Top">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+        <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
+                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
+                   Text="Settings" VerticalAlignment="Center" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="CLOSE ⎋" Click="OnClose" />
+      </Grid>
+    </Border>
+
+    <Border Classes="statusbar" DockPanel.Dock="Bottom">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0" Classes="mono dim3 small" Text="{Binding ScopeNote}" />
+        <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding ScopeFile}" />
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="214,*" Margin="7" ColumnSpacing="7">
+
+      <c:PanelBox Grid.Column="0">
+        <StackPanel Margin="0,6">
+          <TextBlock Classes="caps" Margin="12,9,12,4" Text="APPLICATION · THIS MACHINE" />
+          <ListBox Theme="{StaticResource NavList}"
+                   ItemsSource="{Binding ApplicationPanes}" SelectedItem="{Binding SelectedPane}"
+                   ItemTemplate="{StaticResource ScopeItemTemplate}" />
+          <TextBlock Classes="caps" Margin="12,12,12,4" Text="PROJECT · MIDSUMMER-2026" />
+          <ListBox Theme="{StaticResource NavList}"
+                   ItemsSource="{Binding ProjectPanes}" SelectedItem="{Binding SelectedPane}"
+                   ItemTemplate="{StaticResource ScopeItemTemplate}" />
+        </StackPanel>
+      </c:PanelBox>
+
+      <ScrollViewer Grid.Column="1">
+        <Panel>
+
+          <!-- ══ Appearance & layout ═════════════════════════════════════════════════════════ -->
+          <StackPanel IsVisible="{Binding IsAppearancePane}" Spacing="7">
+            <c:PanelBox Header="Appearance &amp; layout" Hint="app-settings.json · not journaled">
+              <StackPanel Margin="0,6,0,8">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Theme">
+                  <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Themes}"
+                           SelectedItem="{Binding Theme}" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Density">
+                  <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Densities}"
+                           SelectedItem="{Binding Density}" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Cue row size">
+                  <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding RowSizes}"
+                           SelectedItem="{Binding RowSize}" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Font scale">
+                  <TextBox Classes="short" Text="100 %" />
+                </HeaderedContentControl>
+
+                <ContentControl Theme="{StaticResource Subhead}" Content="Main view" />
+                <CheckBox Margin="10,3" IsChecked="{Binding RememberInspectorTab}"
+                          Content="Remember inspector tab per cue kind" />
+                <CheckBox Margin="10,3" IsChecked="{Binding RememberTimelineDock}"
+                          Content="Timeline sheet ⇄ window state remembered" />
+                <CheckBox Margin="10,3" IsChecked="{Binding FlatActiveList}"
+                          Content="Flat active list (default grouped)" />
+                <CheckBox Margin="10,3" IsChecked="{Binding OpenDrawerOnLaunch}"
+                          Content="Open Output info drawer on launch" />
+
+                <ContentControl Theme="{StaticResource Subhead}" Content="Meters" />
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Ballistics">
+                  <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Ballistics}"
+                           SelectedItem="{Binding Ballistic}" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Peak hold">
+                  <TextBox Classes="short" Text="1.5 s" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Clip resets">
+                  <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding ClipResets}"
+                           SelectedItem="{Binding ClipReset}" />
+                </HeaderedContentControl>
+              </StackPanel>
+            </c:PanelBox>
+          </StackPanel>
+
+          <!-- ══ Transport defaults ══════════════════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsTransportPane}" VerticalAlignment="Top"
+                      Header="Transport defaults" Hint="app-settings.json · not journaled">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Stop fade">
+                <TextBox Classes="short" Text="0.75 s" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Panic fade">
+                <TextBox Classes="short" Text="0.15 s" />
+              </HeaderedContentControl>
+              <!-- Two GOs inside the guard window are one GO. The alternative — trusting the operator's
+                   finger under pressure — fires the next cue early, which is unrecoverable live. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Double-GO guard">
+                <TextBox Classes="short" Text="{Binding DoubleGoGuard}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Space is GO">
+                <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding SpaceRules}"
+                         SelectedItem="{Binding SpaceRule}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Confirm Stop All">
+                <TextBox Classes="short" Text="{Binding ConfirmStopAll}" />
+              </HeaderedContentControl>
+              <CheckBox Margin="10,4" IsChecked="{Binding StandbyFollowsClickDefault}"
+                        Content="New projects start with “clicking a cue row moves standby” on" />
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ Hotkeys — WIP by decision, not by omission ══════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsHotkeysPane}" VerticalAlignment="Top"
+                      Header="Hotkeys" Hint="command × gesture">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <DockPanel LastChildFill="True">
+                  <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge clock">
+                    <TextBlock Text="WIP" />
+                  </Border>
+                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="the grid stays a stub until the command list is stable — binding a moving target would have to be redone, and would look settled while it wasn't" />
+                </DockPanel>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <DockPanel>
+              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+                <Grid ColumnDefinitions="*,140,110,140" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="COMMAND" />
+                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="GESTURE" />
+                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="GROUP" />
+                  <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="PROJECT OVERRIDE" />
+                </Grid>
+              </Border>
+              <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Hotkeys}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:HotkeyRow">
+                    <Grid ColumnDefinitions="*,140,110,140" ColumnSpacing="8" Margin="8,4">
+                      <TextBlock Grid.Column="0" FontSize="{StaticResource FontSizeSmall}" Text="{Binding Command}" />
+                      <TextBlock Grid.Column="1" Classes="mono small" Text="{Binding Gesture}" />
+                      <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding Group}" />
+                      <TextBlock Grid.Column="3" Classes="mono dim3 small"
+                                 Classes.warn="{Binding HasOverride}" Text="{Binding OverrideText}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </c:PanelBox>
+
+          <!-- ══ Remote API (app default) ════════════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsRemoteApiPane}" VerticalAlignment="Top"
+                      Header="Remote API" Hint="the machine default · a project may override it">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <DockPanel LastChildFill="True">
+                  <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge">
+                    <TextBlock Text="ELSEWHERE" />
+                  </Border>
+                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="the running server and its endpoint list live in Targets · Remote API — this pane only sets what a new project inherits" />
+                </DockPanel>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <StackPanel Margin="0,6,0,8">
+              <!-- Default OFF: a cue player that answers the network the moment it launches is a
+                   surprise on a venue LAN, and this is a machine-wide default. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Default">
+                <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding RemoteDefaults}"
+                         SelectedItem="{Binding RemoteDefault}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Port">
+                <TextBox Classes="short" Text="{Binding RemotePort}" />
+              </HeaderedContentControl>
+              <CheckBox Margin="10,4" IsChecked="{Binding RemoteLanAllowed}"
+                        Content="Allow calls from the LAN (otherwise local only)" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Token">
+                <TextBox Text="•••••••• · rotate" />
+              </HeaderedContentControl>
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ Media cache ═════════════════════════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsCachePane}" VerticalAlignment="Top"
+                      Header="Media cache" Hint="derived data only — never show content">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Location">
+                <TextBox Text="{Binding CacheRoot}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Waveforms">
+                <TextBox Classes="short" Text="{Binding WaveformBudget}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Thumbnails">
+                <TextBox Classes="short" Text="{Binding ThumbnailBudget}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="In use">
+                <TextBox Classes="ro" Text="{Binding CacheInUse}" />
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="block" Content="CLEAR WAVEFORM &amp; PROBE CACHE" />
+              </ContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="block" Content="CLEAR THUMBNAIL CACHE" />
+              </ContentControl>
+              <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
+                         Text="Everything here is re-derivable from the media. Clearing costs time on the next open, never show data." />
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ Logging & crash reports ═════════════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsLoggingPane}" VerticalAlignment="Top"
+                      Header="Logging &amp; crash reports">
+            <StackPanel Margin="0,6,0,8">
+              <!-- The same pipeline the Diagnostics log tail reads. This sets what reaches the FILE;
+                   the tail has its own live level picker, because the archive and the reader answer
+                   different questions. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="File log level">
+                <ComboBox ItemsSource="{Binding LogLevels}" SelectedItem="{Binding FileLogLevel}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Directory">
+                <TextBox Text="{Binding LogDirectory}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Retention">
+                <TextBox Classes="short" Text="{Binding LogRetention}" />
+              </HeaderedContentControl>
+              <CheckBox Margin="10,4" IsChecked="{Binding CrashDumps}"
+                        Content="Write a crash report when the app faults" />
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="block" Content="OPEN LOGS FOLDER" />
+              </ContentControl>
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ Save, autosave & recovery (project scope) ═══════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsSavePane}" VerticalAlignment="Top"
+                      Header="Save, autosave &amp; recovery" Hint="journaled · undoable">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Autosave every">
+                <TextBox Classes="short" Text="{Binding AutosaveCadence}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Keep">
+                <TextBox Classes="short" Text="{Binding RecoveryCopies}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Recovery in">
+                <TextBox Text="{Binding RecoveryLocation}" />
+              </HeaderedContentControl>
+              <!-- Off by default: a GO is a performance action and a disk write on it is a stall. -->
+              <CheckBox Margin="10,4" IsChecked="{Binding SaveOnGo}" Content="Save on every GO" />
+              <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
+                         Text="An autosave newer than the file is offered on the launcher, beside the project it belongs to — recover or discard, never silently." />
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ New project defaults ════════════════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsNewProjectPane}" VerticalAlignment="Top"
+                      Header="New project defaults" Hint="applied when a project is created">
+            <StackPanel Margin="0,6,0,8">
+              <!-- Auto-renumber is ON by default and seeded from here (register item 20). -->
+              <CheckBox Margin="10,3" IsChecked="{Binding AutoRenumberDefault}"
+                        Content="Auto-renumber on insert" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Seed audio">
+                <TextBox Text="system default device → Main L/R" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Mix rate">
+                <TextBox Classes="short" Text="48 000 Hz" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Default fades">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="in 0.1 s" />
+                  <TextBox Grid.Column="1" Text="out 2.0 s" />
+                </Grid>
+              </HeaderedContentControl>
+              <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
+                         Text="A new project is seeded with a Main L/R pair patched to this machine's default device, so the first sound is never silence." />
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ Show behaviour (project scope) ══════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsShowBehaviourPane}" VerticalAlignment="Top"
+                      Header="Show behaviour" Hint="journaled · undoable">
+            <StackPanel Margin="0,6,0,8">
+              <!-- Editing is the default everywhere; this row exists only for the show that wants to
+                   boot locked (register item 2). -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Open in">
+                <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding OpenModes}"
+                         SelectedItem="{Binding OpenMode}" />
+              </HeaderedContentControl>
+              <CheckBox Margin="10,3" IsChecked="{Binding RunChecksOnOpen}"
+                        Content="Run status checks on open, surface issues in the status bar" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="At list end">
+                <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding ListEndPolicies}"
+                         SelectedItem="{Binding ListEndPolicy}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Stop fade">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Classes="short" Text="0.75 s" />
+                  <TextBox Grid.Column="1" Text="equal-power" />
+                </Grid>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Panic fade">
+                <TextBox Classes="override" Text="0.25 s · overrides app ⚑" />
+              </HeaderedContentControl>
+              <CheckBox Margin="10,3" IsChecked="{Binding ExternalInputOffOnOpen}"
+                        Content="External input off when the project opens" />
+              <CheckBox Margin="10,3" IsChecked="{Binding ClickMovesStandby}"
+                        Content="Clicking a cue row moves standby (default: view only)" />
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ Authoring defaults ══════════════════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsAuthoringPane}" VerticalAlignment="Top"
+                      Header="Authoring defaults">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="New cue trigger">
+                <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding TriggerModes}"
+                         SelectedItem="{Binding TriggerMode}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Default fades">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="in 0.1 s" />
+                  <TextBox Grid.Column="1" Text="out 2.0 s" />
+                </Grid>
+              </HeaderedContentControl>
+              <CheckBox Margin="10,3" IsChecked="{Binding AutoRenumber}"
+                        Content="Auto-renumber on insert — inherited on (app default) · step 1, children .1" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Media root">
+                <TextBox Text="~/shows/midsummer-media · relative paths" />
+              </HeaderedContentControl>
+              <!-- Media outside the root is ALLOWED (register item 26): adding one warns and offers
+                   move/copy, and this picks the default answer. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Outside media">
+                <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding OutsideMediaPolicies}"
+                         SelectedItem="{Binding OutsideMediaPolicy}" />
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
+                           Text="adding a file from outside the root warns and offers move/copy · this picks the default" />
+              </ContentControl>
+            </StackPanel>
+          </c:PanelBox>
+
+          <!-- ══ Overrides ledger ════════════════════════════════════════════════════════════ -->
+          <c:PanelBox IsVisible="{Binding IsOverridesPane}" VerticalAlignment="Top"
+                      Header="Overrides" Hint="app settings this project defeats">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="RULE" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="a project override always wins and is always visible in both scopes — never a silent winner" />
+              </DockPanel>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <DockPanel>
+              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+                <Grid ColumnDefinitions="200,180,*,80" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="SETTING" />
+                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="APP VALUE" />
+                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="PROJECT VALUE" />
+                  <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="" />
+                </Grid>
+              </Border>
+              <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Overrides}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:OverrideRow">
+                    <Grid ColumnDefinitions="200,180,*,80" ColumnSpacing="8" Margin="8,4">
+                      <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Setting}" />
+                      <TextBlock Grid.Column="1" Classes="mono dim3 small" Text="{Binding AppValue}" />
+                      <TextBlock Grid.Column="2" Classes="mono dim2 small" Text="{Binding ProjectValue}" />
+                      <Button Grid.Column="3" Theme="{StaticResource LinkButton}" Content="revert ×" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </c:PanelBox>
+
+        </Panel>
+      </ScrollViewer>
+    </Grid>
+  </DockPanel>
+</Window>

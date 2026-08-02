@@ -1,0 +1,281 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
+       below resolves against the file's own root. Avalonia resolves StaticResource by walking the
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       which is why Avalonia's own themes never reach across control files for a key. -->
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
+  </ResourceDictionary.MergedDictionaries>
+
+  <!-- The mockup's `.btn` family. One template, six class variants — the classes are the mockup's own
+       names so a screen in the HTML and a screen in XAML read the same:
+         (none)     flat panel-2 button                       .icon     the same, tighter padding
+         .go        the GO key: green, wide tracking          .panic    red text and border
+         .primary   congo, for the one affirmative action     .quiet    borderless, for inline links
+       Every button is uppercase mono with tracking, because in a booth the label is read at a glance
+       and never re-read. -->
+
+  <ControlTheme x:Key="{x:Type Button}" TargetType="Button">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMono}" />
+    <Setter Property="TextElement.LetterSpacing" Value="1.1" />
+    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="11,5" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Margin="{TemplateBinding Padding}"
+                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            RecognizesAccessKey="True" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^ /template/ ContentPresenter">
+      <Setter Property="TextBlock.TextTrimming" Value="None" />
+    </Style>
+
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource ButtonHoverBg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+    </Style>
+    <Style Selector="^:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    </Style>
+    <Style Selector="^:pressed /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource ButtonPressBg}" />
+    </Style>
+    <Style Selector="^:disabled">
+      <Setter Property="Opacity" Value="0.42" />
+    </Style>
+
+    <!-- GO. Wider padding and 0.2 em tracking: it is deliberately the largest word on the screen. -->
+    <Style Selector="^.go">
+      <Setter Property="Background" Value="{StaticResource GoButtonBg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource GoButtonBorder}" />
+      <Setter Property="Foreground" Value="{StaticResource GoButtonFg}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Padding" Value="20,5" />
+      <Setter Property="TextElement.LetterSpacing" Value="2" />
+    </Style>
+    <Style Selector="^.go:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="#2A4A43" />
+      <Setter Property="BorderBrush" Value="{StaticResource GelGreen}" />
+    </Style>
+    <Style Selector="^.go:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource GoButtonFg}" />
+    </Style>
+
+    <Style Selector="^.panic">
+      <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+      <Setter Property="BorderBrush" Value="{StaticResource ChipErrBorder}" />
+    </Style>
+    <Style Selector="^.panic:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    </Style>
+
+    <Style Selector="^.primary">
+      <Setter Property="Background" Value="{StaticResource PrimaryButtonBg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource PrimaryButtonBorder}" />
+      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    </Style>
+
+    <Style Selector="^.icon">
+      <Setter Property="Padding" Value="8,5" />
+    </Style>
+
+    <!-- Inline actions inside a panel body ("+ add level change…"): reads as a link, not a key. -->
+    <Style Selector="^.quiet">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+      <Setter Property="TextElement.LetterSpacing" Value="0.4" />
+      <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+      <Setter Property="Padding" Value="0,2" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+    </Style>
+    <Style Selector="^.quiet:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="^.quiet:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    </Style>
+
+    <!-- Compact variant used inside a `.chain` action row (mockup: padding 2px 8px). -->
+    <Style Selector="^.tight">
+      <Setter Property="Padding" Value="8,2" />
+    </Style>
+
+    <!-- Full-width call to action inside a side panel. -->
+    <Style Selector="^.block">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ── title-bar / status-bar chips ──────────────────────────────────────────────────────────
+       A chip is a latch or a doorway, never a verb: "Editing", "Lock", "Settings", "Diagnostics".
+       Implemented on ToggleButton so the latching ones (Lock, Output info) can show their state, and
+       on Button for the doorways — both share the look through the class names below. -->
+
+  <ControlTheme x:Key="ChipButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="TextElement.LetterSpacing" Value="1.25" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Padding" Value="8,3" />
+  </ControlTheme>
+
+  <ControlTheme x:Key="ChipToggle" TargetType="ToggleButton">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="TextElement.LetterSpacing" Value="1.25" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Margin="{TemplateBinding Padding}"
+                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+    </Style>
+    <!-- A latched chip goes congo — the same gel the shell uses for "this is the current state". -->
+    <Style Selector="^:checked /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource ChipEditBg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource ChipEditBorder}" />
+    </Style>
+    <Style Selector="^:checked">
+      <Setter Property="Foreground" Value="{StaticResource GelCongo}" />
+    </Style>
+    <!-- Lock latches AMBER rather than congo: it changes what the operator may do, and that is a
+         warning-class fact, not a navigation-class one. -->
+    <Style Selector="^.latch-warn:checked /template/ Border#root">
+      <Setter Property="Background" Value="#1AE0A85C" />
+      <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
+    </Style>
+    <Style Selector="^.latch-warn:checked">
+      <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- Status-bar buttons: no fill, hairline border, 1 px vertical padding — they must not add height
+       to a 20 px bar. -->
+  <ControlTheme x:Key="StatusButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="TextElement.LetterSpacing" Value="0.3" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Padding" Value="7,1" />
+  </ControlTheme>
+
+  <!-- Bare text button used where the mockup has a clickable status word (issue counts, "revert ×"). -->
+  <ControlTheme x:Key="LinkButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="TextElement.LetterSpacing" Value="0.3" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+  </ControlTheme>
+
+  <!-- ── the `.seg` segmented control ─────────────────────────────────────────────────────────
+       Rendered as a ListBox of RadioButton-like items so exactly one is on and the whole group is a
+       single bound selection. Items butt together with a shared 1 px border (only the last keeps its
+       right edge), matching the mockup's `border-right: 0` trick. -->
+  <ControlTheme x:Key="SegmentItem" TargetType="ListBoxItem">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeMonoSmall}" />
+    <Setter Property="TextElement.LetterSpacing" Value="0.8" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1,1,0,1" />
+    <Setter Property="Padding" Value="7,3" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}">
+          <ContentPresenter Margin="{TemplateBinding Padding}"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <!-- :nth-last-child(1) restores the right edge on the final segment. -->
+    <Style Selector="^:nth-last-child(1)">
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="^:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource SegmentOnBg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SegmentOnBorder}" />
+    </Style>
+    <Style Selector="^:selected">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="Segment" TargetType="ListBox">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalAlignment" Value="Left" />
+    <Setter Property="ItemContainerTheme" Value="{StaticResource SegmentItem}" />
+    <Setter Property="ItemsPanel">
+      <ItemsPanelTemplate>
+        <StackPanel Orientation="Horizontal" />
+      </ItemsPanelTemplate>
+    </Setter>
+    <Setter Property="Template">
+      <ControlTemplate>
+        <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+</ResourceDictionary>

@@ -1,0 +1,185 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:v="using:HaCue2.Views"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.ShellWindow"
+        x:DataType="vm:ShellViewModel"
+        Title="HaCue2"
+        Width="1440" Height="900"
+        MinWidth="1080" MinHeight="700"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- The one window (register item 1): four views in the title bar, a Settings window and a
+       Diagnostics window beside it, and no permanent output strip — the Output info drawer overlays
+       the content on demand and the status bar carries a one-token summary at all times. -->
+
+  <Window.DataTemplates>
+    <DataTemplate DataType="vm:CuesViewModel"><v:CuesView /></DataTemplate>
+    <DataTemplate DataType="vm:AudioViewModel"><v:AudioView /></DataTemplate>
+    <DataTemplate DataType="vm:VideoViewModel"><v:VideoView /></DataTemplate>
+    <DataTemplate DataType="vm:TargetsViewModel"><v:TargetsView /></DataTemplate>
+  </Window.DataTemplates>
+
+  <DockPanel>
+
+    <!-- ── title bar ──────────────────────────────────────────────────────────────────────── -->
+    <Border Classes="titlebar" DockPanel.Dock="Top">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+        <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
+                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" VerticalAlignment="Center"
+                   Text="{Binding ProjectFile}" Margin="0,0,6,0" />
+
+        <ListBox Grid.Column="2"
+                 Theme="{StaticResource ViewTabs}"
+                 ItemsSource="{Binding Views}"
+                 SelectedItem="{Binding SelectedView}" />
+
+        <!-- The mode chip is a readout, not a control: it says which mode you are in, and Lock beside
+             it is the only way to change that. -->
+        <Border Grid.Column="4" Classes="chip" Classes.edit="{Binding !IsLocked}"
+                Classes.warn="{Binding IsLocked}">
+          <TextBlock Text="{Binding ModeLabel}" />
+        </Border>
+
+        <!-- Register item 2: opt-in latch, read-only document, GO untouched, never the launch state. -->
+        <ToggleButton Grid.Column="5" Theme="{StaticResource ChipToggle}" Classes="latch-warn"
+                      IsChecked="{Binding IsLocked}" Content="LOCK"
+                      ToolTip.Tip="Read-only document and destructive commands disabled. GO, preview and audition are untouched." />
+
+        <Button Grid.Column="6" Theme="{StaticResource ChipButton}" Content="SETTINGS" Click="OnSettings" />
+        <!-- Exactly one Diagnostics button in the whole app, and it is here. -->
+        <Button Grid.Column="7" Theme="{StaticResource ChipButton}" Content="DIAGNOSTICS" Click="OnDiagnostics" />
+      </Grid>
+    </Border>
+
+    <!-- ── status bar ─────────────────────────────────────────────────────────────────────── -->
+    <Border Classes="statusbar" DockPanel.Dock="Bottom">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="15">
+        <ToggleButton Grid.Column="0" Theme="{StaticResource ChipToggle}"
+                      IsChecked="{Binding IsOutputInfoOpen}"
+                      Content="▸ OUTPUT INFO"
+                      ToolTip.Tip="F9 — program meters, line chips and bay counters, over the content" />
+        <TextBlock Grid.Column="1" Classes="mono ok small" VerticalAlignment="Center"
+                   Text="{Binding OutputSummary}" />
+        <!-- The issue count is the doorway to Project status; it is the only red thing on the bar. -->
+        <Button Grid.Column="2" Theme="{StaticResource LinkButton}" Foreground="{StaticResource GelRed}"
+                Content="{Binding IssueSummary}" Click="OnProjectStatus" />
+        <TextBlock Grid.Column="4" Classes="mono dim3 small" VerticalAlignment="Center"
+                   Text="{Binding UnsavedSummary}" />
+        <TextBlock Grid.Column="5" Classes="mono ok small" VerticalAlignment="Center"
+                   Text="{Binding SavedSummary}" />
+      </Grid>
+    </Border>
+
+    <!-- ── content + the Output info drawer ───────────────────────────────────────────────── -->
+    <!-- The drawer is the LAST child of a Grid cell shared with the content, so it slides over the
+         active panel instead of pushing it: content never shifts when it opens (screen 02b, Decided). -->
+    <Grid>
+      <ContentControl Content="{Binding CurrentPane}" />
+
+      <Border VerticalAlignment="Bottom"
+              Background="{StaticResource BoothPanel}"
+              BorderBrush="{StaticResource BoothRule2}"
+              BorderThickness="0,1,0,0"
+              IsVisible="{Binding IsOutputInfoOpen}">
+        <Grid ColumnDefinitions="Auto,Auto,*" DataContext="{Binding OutputInfo}"
+              x:DataType="vm:OutputInfoViewModel">
+
+          <!-- Program -->
+          <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+                  Padding="11,6">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Classes="caps" Text="PROGRAM" VerticalAlignment="Center">
+                <TextBlock.RenderTransform>
+                  <RotateTransform Angle="-90" />
+                </TextBlock.RenderTransform>
+              </TextBlock>
+              <ItemsControl ItemsSource="{Binding Meters}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ProgramMeter">
+                    <StackPanel Spacing="4" Width="22" HorizontalAlignment="Center">
+                      <c:LevelMeter HorizontalAlignment="Center"
+                                    Level="{Binding Level}" Peak="{Binding Peak}"
+                                    IsClipping="{Binding IsClipping}" />
+                      <TextBlock Classes="caps" HorizontalAlignment="Center"
+                                 Classes.err="{Binding IsClipping}" Text="{Binding Caption}" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <!-- Lines -->
+          <Border Grid.Column="1" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+                  Padding="11,6">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Classes="caps" Text="LINES" VerticalAlignment="Center">
+                <TextBlock.RenderTransform>
+                  <RotateTransform Angle="-90" />
+                </TextBlock.RenderTransform>
+              </TextBlock>
+              <ItemsControl ItemsSource="{Binding Lines}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:OutputLineChip">
+                    <Border Classes="lchip"
+                            Classes.ok="{Binding IsOk}"
+                            Classes.warn="{Binding IsWarn}"
+                            Classes.err="{Binding IsError}">
+                      <StackPanel Spacing="1">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                          <Ellipse Classes="led"
+                                   Classes.ok="{Binding IsOk}"
+                                   Classes.warn="{Binding IsWarn}"
+                                   Classes.err="{Binding IsError}" />
+                          <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+                                     Text="{Binding Name}" />
+                          <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                                     VerticalAlignment="Center"
+                                     IsVisible="{Binding HasSuffix}" Text="{Binding Suffix}" />
+                        </StackPanel>
+                        <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                                   Classes.warn="{Binding IsWarn}" Classes.err="{Binding IsError}"
+                                   Text="{Binding Detail}" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <!-- Bay -->
+          <Border Grid.Column="2" Padding="11,6">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Classes="caps" Text="BAY" VerticalAlignment="Center">
+                <TextBlock.RenderTransform>
+                  <RotateTransform Angle="-90" />
+                </TextBlock.RenderTransform>
+              </TextBlock>
+              <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                <TextBlock Classes="mono dim2 small" Text="{Binding BaySummary}" />
+                <TextBlock Classes="mono dim3 small" Text="{Binding BayClock}" />
+              </StackPanel>
+              <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="POP OUT ↗"
+                      Click="OnPopOutDrawer" />
+              <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="HIDE ▾"
+                      Click="OnHideDrawer" />
+            </Grid>
+          </Border>
+        </Grid>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

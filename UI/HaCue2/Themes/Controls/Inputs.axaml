@@ -1,0 +1,268 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
+       below resolves against the file's own root. Avalonia resolves StaticResource by walking the
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       which is why Avalonia's own themes never reach across control files for a key. -->
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
+  </ResourceDictionary.MergedDictionaries>
+
+  <!-- The mockup's `.inputish`: a small dark well with a rule-2 hairline, mono 10.5 px, 2 px corners.
+       Everything an operator types into looks like this — text, numbers, and the closed state of a
+       picker — so a value is recognisable as editable without reading it. -->
+
+  <ControlTheme x:Key="{x:Type TextBox}" TargetType="TextBox">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="10.5" />
+    <Setter Property="Background" Value="{StaticResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="CaretBrush" Value="{StaticResource GelCongo}" />
+    <Setter Property="SelectionBrush" Value="{StaticResource SegmentOnBg}" />
+    <Setter Property="SelectionForegroundBrush" Value="{StaticResource BoothInk}" />
+    <Setter Property="PlaceholderForeground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="6,3" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}">
+          <DockPanel Margin="{TemplateBinding Padding}">
+            <ContentPresenter DockPanel.Dock="Left" Content="{TemplateBinding InnerLeftContent}" />
+            <ContentPresenter DockPanel.Dock="Right" Content="{TemplateBinding InnerRightContent}" />
+            <ScrollViewer Name="PART_ScrollViewer"
+                          HorizontalScrollBarVisibility="{TemplateBinding (ScrollViewer.HorizontalScrollBarVisibility)}"
+                          VerticalScrollBarVisibility="{TemplateBinding (ScrollViewer.VerticalScrollBarVisibility)}">
+              <Panel>
+                <TextBlock Name="placeholder"
+                           Text="{TemplateBinding PlaceholderText}"
+                           Foreground="{TemplateBinding PlaceholderForeground}"
+                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                           IsVisible="{Binding Text, RelativeSource={RelativeSource TemplatedParent},
+                                               Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                <TextPresenter Name="PART_TextPresenter"
+                               CaretBrush="{TemplateBinding CaretBrush}"
+                               CaretIndex="{TemplateBinding CaretIndex}"
+                               SelectionBrush="{TemplateBinding SelectionBrush}"
+                               SelectionForegroundBrush="{TemplateBinding SelectionForegroundBrush}"
+                               SelectionStart="{TemplateBinding SelectionStart}"
+                               SelectionEnd="{TemplateBinding SelectionEnd}"
+                               Text="{TemplateBinding Text, Mode=TwoWay}"
+                               TextAlignment="{TemplateBinding TextAlignment}"
+                               TextWrapping="{TemplateBinding TextWrapping}"
+                               PasswordChar="{TemplateBinding PasswordChar}"
+                               RevealPassword="{TemplateBinding RevealPassword}"
+                               VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+              </Panel>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+    </Style>
+    <Style Selector="^:focus /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+    </Style>
+    <Style Selector="^:disabled">
+      <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- The mockup's `.inputish.ro`: a value the app computed, shown in the same well so the reading
+         is comparable, but visibly not yours to type into. The HTML used a dashed border; Avalonia's
+         Border has no dash, so the same "hands off" reading comes from a recessed border and ink-2
+         text — which survives a low-resolution screenshot better than a 1 px dash would anyway. -->
+    <Style Selector="^.ro">
+      <Setter Property="IsReadOnly" Value="True" />
+      <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+      <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="^.ro:pointerover /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    </Style>
+
+    <!-- A short scalar reads better left-aligned at a fixed width than stretched across a panel:
+         a 150 px well holding "0.0°" says "type a number here", a 400 px one says "type a sentence". -->
+    <Style Selector="^.short">
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="Width" Value="150" />
+    </Style>
+
+    <!-- Value wells that carry a state colour (the amber "listening" field on the Learn pane). -->
+    <Style Selector="^.warn">
+      <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
+      <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+    </Style>
+    <Style Selector="^.override">
+      <Setter Property="BorderBrush" Value="{StaticResource ChipWarnBorder}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ── ComboBox ─────────────────────────────────────────────────────────────────────────────
+       The closed state is an `.inputish` with the mockup's ▾ affordance; the drop-down is a plain
+       dark list. No focus ring beyond the congo border: a booth screen is busy enough. -->
+  <ControlTheme x:Key="{x:Type ComboBoxItem}" TargetType="ComboBoxItem">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="10.5" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Padding" Value="7,3" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root" Background="{TemplateBinding Background}">
+          <ContentPresenter Margin="{TemplateBinding Padding}"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource SegmentOnBg}" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type ComboBox}" TargetType="ComboBox">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="10.5" />
+    <Setter Property="Background" Value="{StaticResource BoothBg}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="PlaceholderForeground" Value="{StaticResource BoothInk3}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="6,3" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="MaxDropDownHeight" Value="360" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Name="placeholder"
+                       Grid.Column="0"
+                       Margin="{TemplateBinding Padding}"
+                       VerticalAlignment="Center"
+                       Foreground="{TemplateBinding PlaceholderForeground}"
+                       Text="{TemplateBinding PlaceholderText}"
+                       IsVisible="{Binding SelectionBoxItem, RelativeSource={RelativeSource TemplatedParent},
+                                           Converter={x:Static ObjectConverters.IsNull}}" />
+            <ContentControl Grid.Column="0"
+                            Margin="{TemplateBinding Padding}"
+                            VerticalContentAlignment="Center"
+                            Content="{TemplateBinding SelectionBoxItem}"
+                            ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
+            <TextBlock Grid.Column="1"
+                       Margin="0,0,6,0"
+                       VerticalAlignment="Center"
+                       FontSize="{StaticResource FontSizeMicro}"
+                       Foreground="{StaticResource BoothInk3}"
+                       Text="▾" />
+            <Popup Name="PART_Popup"
+                   Grid.Column="0"
+                   MinWidth="{Binding Bounds.Width, RelativeSource={RelativeSource TemplatedParent}}"
+                   MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                   IsLightDismissEnabled="True"
+                   IsOpen="{TemplateBinding IsDropDownOpen, Mode=TwoWay}"
+                   PlacementTarget="{TemplateBinding}"
+                   InheritsTransform="True">
+              <Border Background="{StaticResource BoothPanel}"
+                      BorderBrush="{StaticResource BoothRule2}"
+                      BorderThickness="1"
+                      CornerRadius="{StaticResource BoothCorner}">
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                  <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+                </ScrollViewer>
+              </Border>
+            </Popup>
+          </Grid>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+    </Style>
+    <Style Selector="^:dropdownopen /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+    </Style>
+    <Style Selector="^:disabled">
+      <Setter Property="Opacity" Value="0.5" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ── CheckBox ─────────────────────────────────────────────────────────────────────────────
+       The mockup's `.check` row: a 10 px box, a 7 px gap, 11 px label in ink-2 that brightens to ink
+       when ticked. The label brightening is load-bearing — it is how a settings pane reads its own
+       state from across a room. -->
+  <ControlTheme x:Key="{x:Type CheckBox}" TargetType="CheckBox">
+    <Setter Property="FontSize" Value="{StaticResource FontSizeSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk2}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="Padding" Value="7,0,0,0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Grid ColumnDefinitions="Auto,*" Background="Transparent">
+          <Border Name="box"
+                  Grid.Column="0"
+                  Width="10" Height="10"
+                  VerticalAlignment="Center"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="1"
+                  CornerRadius="{StaticResource BoothCorner}" />
+          <ContentPresenter Grid.Column="1"
+                            Margin="{TemplateBinding Padding}"
+                            VerticalAlignment="Center"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            TextBlock.TextWrapping="Wrap" />
+        </Grid>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^:pointerover /template/ Border#box">
+      <Setter Property="BorderBrush" Value="{StaticResource BoothInk3}" />
+    </Style>
+    <Style Selector="^:checked /template/ Border#box">
+      <Setter Property="Background" Value="#737D8CEA" />
+      <Setter Property="BorderBrush" Value="{StaticResource GelCongo}" />
+    </Style>
+    <Style Selector="^:checked">
+      <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    </Style>
+    <Style Selector="^:indeterminate /template/ Border#box">
+      <Setter Property="Background" Value="{StaticResource BoothRule2}" />
+    </Style>
+    <Style Selector="^:disabled">
+      <Setter Property="Opacity" Value="0.42" />
+    </Style>
+  </ControlTheme>
+
+</ResourceDictionary>

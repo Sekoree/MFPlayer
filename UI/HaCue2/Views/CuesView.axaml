@@ -1,0 +1,201 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:v="using:HaCue2.Views"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Views.CuesView"
+             x:DataType="vm:CuesViewModel">
+
+  <!-- Screens 02, 03, 05. The launch state: editing, unlocked, everything live. -->
+
+  <DockPanel>
+
+    <!-- ══ transport ═══════════════════════════════════════════════════════════════════════
+         GO always works. There are no arming gates on playback (register item 3) — the only arm
+         left is External input, which covers MIDI/OSC/hotkey triggers, schedules and MTC chase, and
+         never gates GO. -->
+    <Border Classes="transport" DockPanel.Dock="Top">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
+        <Button Grid.Column="0" Classes="go" Content="GO" />
+        <Button Grid.Column="1" Content="PAUSE" />
+        <Button Grid.Column="2" Content="STOP" />
+        <Button Grid.Column="3" Classes="panic" Content="PANIC" />
+        <Button Grid.Column="4" Classes="icon" Content="↑ STBY" />
+        <Button Grid.Column="5" Classes="icon" Content="↓ STBY" />
+        <!-- Multi-list transport is v1 (register item 5): the transport acts on the selected list and
+             every list keeps its own standby. -->
+        <Border Grid.Column="6" Background="{StaticResource BoothBg}"
+                BorderBrush="{StaticResource BoothRule2}" BorderThickness="1"
+                CornerRadius="{StaticResource BoothCorner}" Padding="8,4">
+          <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}"
+                     Text="{Binding ListSelector}" />
+        </Border>
+
+        <ToggleButton Grid.Column="8" Theme="{StaticResource ChipToggle}"
+                      IsChecked="{Binding $parent[v:ShellWindow].((vm:ShellViewModel)DataContext).IsExternalInputEnabled}"
+                      ToolTip.Tip="MIDI/OSC/hotkey triggers, wall-clock schedules and MTC chase. Off when a project opens; never gates GO.">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Ellipse Classes="led"
+                     Classes.ok="{Binding $parent[v:ShellWindow].((vm:ShellViewModel)DataContext).IsExternalInputEnabled}" />
+            <TextBlock Text="EXTERNAL INPUT" />
+          </StackPanel>
+        </ToggleButton>
+
+        <Border Grid.Column="9" Classes="chip"><TextBlock Text="{Binding ChaseReadout}" /></Border>
+      </Grid>
+    </Border>
+
+    <Border Classes="transport second" DockPanel.Dock="Top">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="7">
+        <Button Grid.Column="0" Content="+ ADD ▾" />
+        <Button Grid.Column="1" Content="SELECTION ▾" />
+        <Button Grid.Column="2" Content="REMOVE" />
+        <Button Grid.Column="3" Classes="icon" Content="RENUMBER…" />
+        <TextBlock Grid.Column="5" Classes="mono dim3 small" VerticalAlignment="Center"
+                   Text="GO always works — editing never blocks playback" />
+      </Grid>
+    </Border>
+
+    <!-- ══ timeline sheet (screen 05) ═══════════════════════════════════════════════════════ -->
+    <v:TimelineSheet DockPanel.Dock="Bottom"
+                     DataContext="{Binding Timeline}"
+                     IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).IsTimelineOpen}" />
+
+    <!-- ══ tree · active · right column ════════════════════════════════════════════════════ -->
+    <Grid ColumnDefinitions="*,316" Margin="7" ColumnSpacing="7">
+
+      <Grid Grid.Column="0" RowDefinitions="2*,Auto" RowSpacing="7">
+
+        <!-- ── the cue tree ─────────────────────────────────────────────────────────────── -->
+        <c:PanelBox Grid.Row="0" MinHeight="240"
+                    Header="{Binding Breadcrumb}" Hint="{Binding TreeHint}">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" BorderBrush="{StaticResource BoothRule}"
+                    BorderThickness="0,0,0,1" Padding="0,4">
+              <Grid ColumnDefinitions="3,50,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="CUE" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="LABEL" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="SOURCE / TARGET" />
+                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="FADE" />
+                <TextBlock Grid.Column="6" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LEN" />
+                <TextBlock Grid.Column="7" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="DB" />
+              </Grid>
+            </Border>
+
+            <ListBox ItemsSource="{Binding Cues}" SelectedItem="{Binding SelectedCue}"
+                     SelectionMode="Multiple"
+                     SelectionChanged="OnCueSelectionChanged">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" />
+                  <MenuItem Header="Move standby here" />
+                  <Separator />
+                  <MenuItem Header="Disable for this performance" />
+                  <MenuItem Header="Renumber from here…" />
+                </ContextMenu>
+              </ListBox.ContextMenu>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:CueRow">
+                  <!-- State washes stack; the stripe takes the single most urgent state. -->
+                  <Border Classes="cuerow"
+                          Classes.is-go="{Binding IsRunning}"
+                          Classes.is-stby="{Binding IsStandby}"
+                          Classes.is-broke="{Binding IsBroken}"
+                          Classes.is-off="{Binding IsDisabled}"
+                          Classes.grp="{Binding IsGroup}">
+                    <Grid ColumnDefinitions="3,50,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
+                      <Border Grid.Column="0" Classes="stripe"
+                              Classes.is-stby="{Binding IsStandby}"
+                              Classes.is-go="{Binding IsRunning}"
+                              Classes.is-broke="{Binding IsBroken}" />
+                      <TextBlock Grid.Column="1" Classes="qnum" Margin="{Binding NumberIndent}"
+                                 Text="{Binding Number}" />
+                      <TextBlock Grid.Column="2" Classes="glyph" Text="{Binding Glyph}" />
+                      <TextBlock Grid.Column="3" Classes="cuelabel" Text="{Binding Label}" />
+                      <TextBlock Grid.Column="4" Classes="src" Text="{Binding Source}" />
+                      <TextBlock Grid.Column="5" Classes="num" Text="{Binding Fade}" />
+                      <TextBlock Grid.Column="6" Classes="num" Text="{Binding Length}" />
+                      <TextBlock Grid.Column="7" Classes="num" Text="{Binding Level}" />
+                      <ItemsControl Grid.Column="8" ItemsSource="{Binding Badges}"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="3" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:Badge">
+                            <Border Classes="badge"
+                                    Classes.midi="{Binding IsMidi}"
+                                    Classes.osc="{Binding IsOsc}"
+                                    Classes.clock="{Binding IsClock}"
+                                    Classes.bad="{Binding IsBad}"
+                                    Classes.good="{Binding IsGood}">
+                              <TextBlock Text="{Binding Text}" />
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </c:PanelBox>
+
+        <!-- ── the Active panel ─────────────────────────────────────────────────────────────
+             Nothing about the current scope can hide a sounding cue: groups aggregate their sounding
+             children and cues from another list carry that list's name. -->
+        <c:PanelBox Grid.Row="1" MaxHeight="220"
+                    Header="Active" Subhead="{Binding ActiveCues.Count}"
+                    Hint="{Binding ActivePanelHint}">
+          <ListBox ItemsSource="{Binding ActiveCues}" ItemContainerTheme="{StaticResource ReadonlyRowItem}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ActiveCueRow">
+                <Border Classes="actrow"
+                        Classes.grp="{Binding IsGroup}"
+                        Classes.near="{Binding IsNearEnd}">
+                  <Grid ColumnDefinitions="3,46,*,96,130,78,20" ColumnSpacing="9" Margin="0,0,10,0">
+                    <Border Grid.Column="0" Classes="stripe is-go"
+                            Classes.fading="{Binding IsFading}"
+                            Classes.grp="{Binding IsGroup}" />
+                    <TextBlock Grid.Column="1" Classes="qnum" Margin="{Binding NumberIndent}"
+                               Text="{Binding Number}" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center">
+                      <TextBlock Classes="cuelabel" Text="{Binding Label}" />
+                      <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeMonoSmall}"
+                                 IsVisible="{Binding HasQualifier}" Text="{Binding Qualifier}" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="3" Classes="clock" Text="{Binding Clock}" />
+                    <ProgressBar Grid.Column="4" Maximum="1" Value="{Binding Progress}"
+                                 VerticalAlignment="Center"
+                                 Classes.fading="{Binding IsFading}"
+                                 Classes.near="{Binding IsNearEnd}" />
+                    <TextBlock Grid.Column="5" Classes="dest" Text="{Binding Destination}" />
+                    <TextBlock Grid.Column="6" Classes="glyph" Text="×" />
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </c:PanelBox>
+      </Grid>
+
+      <!-- ── right column: Cue properties | Lists & groups, tabs on the BOTTOM edge ───────── -->
+      <c:PanelBox Grid.Column="1"
+                  Header="{Binding RightPanelHeader}" Hint="{Binding RightPanelHint}">
+        <c:PanelBox.Footer>
+          <ListBox Theme="{StaticResource BottomTabs}"
+                   ItemsSource="{Binding RightTabs}"
+                   SelectedItem="{Binding SelectedRightTab}" />
+        </c:PanelBox.Footer>
+
+        <Panel>
+          <v:InspectorPane DataContext="{Binding Inspector}"
+                           IsVisible="{Binding $parent[c:PanelBox].((vm:CuesViewModel)DataContext).IsPropertiesTab}" />
+          <v:ScopePane IsVisible="{Binding !IsPropertiesTab}" />
+        </Panel>
+      </c:PanelBox>
+    </Grid>
+  </DockPanel>
+</UserControl>

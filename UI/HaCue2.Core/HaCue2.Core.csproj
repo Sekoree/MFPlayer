@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- HaCue2's project model: the document, its serialization, the edit-command journal, validation,
+         and the pure patch-matrix operations. Phase 4 of
+         Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md.
+
+         Deliberately UI-FREE. Nothing here references Avalonia, so the model can be validated, edited
+         and round-tripped headlessly — which is what makes the project-status pass runnable from a
+         script (register item 25) and what keeps the journal testable without a window.
+
+         It references S.Media.Session for two things it should not re-invent: `ShowValidationIssue`
+         (severity + subject + navigation target — exactly the shape rev-3 needs per row) and
+         `CustomFadeCurve`/`FadeShape`, whose evaluator the plan explicitly says to reuse. The compiler
+         that turns a HaCueProject into a ShowDocument lands in this project too, which is the other
+         reason the reference belongs here rather than in the app. -->
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>HaCue2.Core</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Session\S.Media.Session.csproj" />
+    </ItemGroup>
+
+</Project>

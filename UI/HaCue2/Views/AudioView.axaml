@@ -1,0 +1,331 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:sys="using:System"
+             xmlns:v="using:HaCue2.Views"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Views.AudioView"
+             x:DataType="vm:AudioViewModel">
+
+  <!-- Screens 06–08b: Logical outputs · Patch · Devices · Audition.
+
+       The headline feature is the first pane. A logical output is a named channel that exists whether
+       or not any hardware does; cues send to these and nothing else, and the show file never contains
+       a device name. That is the venue-swap seam — the show keeps "Lobby", each venue patches it. -->
+
+  <DockPanel>
+
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*"
+          Background="{StaticResource BoothPanel}">
+      <ListBox Grid.Column="0" Theme="{StaticResource SectionTabs}"
+               Background="{StaticResource BoothPanel}"
+               ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" />
+      <Border Grid.Column="1" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1">
+        <TextBlock Classes="mono dim3 micro" HorizontalAlignment="Right" VerticalAlignment="Center"
+                   Margin="10,0" Text="{Binding TabHint}" />
+      </Border>
+    </Grid>
+
+    <Panel>
+
+      <!-- ══ 06 · LOGICAL OUTPUTS ═══════════════════════════════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsOutputsPane}" ColumnDefinitions="*,348" Margin="7" ColumnSpacing="7">
+
+        <c:PanelBox Grid.Column="0" Header="Logical outputs" Hint="the only destinations cues can see">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+                <Button Grid.Column="0" Classes="tight" Content="+ ADD" />
+                <Button Grid.Column="1" Classes="tight" Content="+ ADD STEREO PAIR" />
+                <Button Grid.Column="2" Classes="tight" Content="+ NEW GROUP…" />
+                <Button Grid.Column="3" Classes="tight" Content="RENAME" />
+                <Button Grid.Column="4" Classes="tight" Content="REORDER" />
+                <!-- Register item 11: no refuse-while-fed gate. Deleting strips the sends from every
+                     cue as ONE undoable edit, which is the only version of this that an operator can
+                     safely reverse. -->
+                <TextBlock Grid.Column="5" Classes="mono dim3 small" HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="delete cleans up its cue sends automatically — one undoable edit" />
+              </Grid>
+            </Border>
+          </c:PanelBox.Footer>
+
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Grid ColumnDefinitions="120,90,70,*,90" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="NAME" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="GROUP" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="FED BY" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="PATCHED TO" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="METER" />
+              </Grid>
+            </Border>
+
+            <ListBox Theme="{StaticResource TableRows}"
+                     ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:LogicalOutputRow">
+                  <Grid ColumnDefinitions="120,90,70,*,90" ColumnSpacing="8" Margin="8,4">
+                    <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Name}"
+                               Classes.warn="{Binding FedBy.IsWarn}" Classes.err="{Binding PatchedTo.IsBad}" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                      <TextBlock Classes="mono dim3 small" Text="{Binding Group}" />
+                      <!-- 🔗 marks Output-Group membership: editing one member's cell moves the others
+                           by the same delta (register item 9). -->
+                      <TextBlock Classes="mono dim3 micro" VerticalAlignment="Center"
+                                 IsVisible="{Binding HasGroup}" Text="🔗" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Classes="mono dim2 small" Text="{Binding FedBy.Text}"
+                               Classes.warn="{Binding FedBy.IsWarn}" />
+                    <TextBlock Grid.Column="3" Classes="mono dim3 small ellipsis" Text="{Binding PatchedTo.Text}"
+                               Classes.warn="{Binding PatchedTo.IsWarn}" Classes.err="{Binding PatchedTo.IsBad}" />
+                    <TextBlock Grid.Column="4" Classes="mono ok small" Text="{Binding MeterGlyphs}"
+                               Classes.err="{Binding IsMeterHot}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </c:PanelBox>
+
+        <c:PanelBox Grid.Column="1" Header="Lobby" Hint="logical output · stereo pair">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge good"><TextBlock Text="PORTABLE" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                           Text="this is the venue-swap seam: the show keeps “Lobby”, each venue patches it" />
+              </DockPanel>
+            </Border>
+          </c:PanelBox.Footer>
+
+          <ScrollViewer>
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
+                <TextBox Text="Lobby" />
+              </HeaderedContentControl>
+              <!-- With the permanent strip gone, this flag picks what appears in the Output info
+                   drawer's compact row and in the status-bar health token. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Meter in summary">
+                <ListBox Theme="{StaticResource Segment}" SelectedIndex="0">
+                  <ListBoxItem>yes</ListBoxItem>
+                  <ListBoxItem>no</ListBoxItem>
+                </ListBox>
+              </HeaderedContentControl>
+
+              <ContentControl Theme="{StaticResource Subhead}" Content="Fed by · 2 cues" />
+              <ItemsControl ItemsSource="{Binding LobbySenders}" Margin="10,2">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="sys:String">
+                    <TextBlock Classes="mono dim2" FontSize="{StaticResource FontSizeMono}"
+                               Margin="0,2" TextWrapping="Wrap" Text="{Binding}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <ContentControl Theme="{StaticResource Subhead}" Content="Patched to · nothing" />
+              <TextBlock Margin="10,4,10,8" FontSize="{StaticResource FontSizeSmall}" TextWrapping="Wrap"
+                         Classes="err"
+                         Text="No device channel receives Lobby on this machine. Cues sending here run silent — never redirected to a default device." />
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="primary block" Content="PATCH LOBBY → PICK DEVICE CHANNELS…" />
+              </ContentControl>
+            </StackPanel>
+          </ScrollViewer>
+        </c:PanelBox>
+      </Grid>
+
+      <!-- ══ 07 · PATCH ═════════════════════════════════════════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsPatchPane}" ColumnDefinitions="*,260" Margin="7" ColumnSpacing="7">
+
+        <c:PanelBox Grid.Column="0" Header="Patch" Hint="cell = gain dB · empty = not routed · live">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
+                <Border Grid.Column="0" Classes="badge"><TextBlock Text="PRESETS" /></Border>
+                <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Text="stereo identity · fan out to all · mono sum · clear row · copy line patch" />
+                <Border Grid.Column="2" Classes="badge bad"><TextBlock Text="UNRESOLVED" /></Border>
+                <!-- An absent line keeps its cells and routes silent. Dropping the patch would lose
+                     show data the moment someone unplugs a box. -->
+                <TextBlock Grid.Column="3" Classes="mono dim2 small" VerticalAlignment="Center"
+                           Text="Wedge absent — cells kept, routed silent" />
+              </Grid>
+            </Border>
+          </c:PanelBox.Footer>
+
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" Padding="9,7">
+            <c:MatrixView Columns="{Binding PatchColumns}" Rows="{Binding PatchRows}"
+                          RowHeaderWidth="104" />
+          </ScrollViewer>
+        </c:PanelBox>
+
+        <Grid Grid.Column="1" RowDefinitions="*,Auto" RowSpacing="7">
+
+          <c:PanelBox Grid.Row="0" Header="Snapshots" Hint="partial recalls">
+            <c:PanelBox.Footer>
+              <StackPanel>
+                <Border Classes="chain">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Classes="tight" Content="SAVE…" />
+                    <Button Classes="tight" Content="RECALL" />
+                    <Button Classes="tight" Content="UPDATE" />
+                  </StackPanel>
+                </Border>
+                <TextBlock Margin="10,6,10,9" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                           Text="A snapshot stores only the cells it was saved with — recalling “Interval” touches Lobby and nothing else. Used by patch cues in the list." />
+              </StackPanel>
+            </c:PanelBox.Footer>
+
+            <ItemsControl ItemsSource="{Binding Snapshots}" Margin="10,6">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="sys:String">
+                  <TextBlock Classes="mono" FontSize="10.5" Margin="0,3" Text="{Binding}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </c:PanelBox>
+
+          <c:PanelBox Grid.Row="1" Header="Selected line">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Line">
+                <TextBox Classes="ro" Text="18i20 · Out 3" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Carries">
+                <TextBox Classes="ro" Text="Fold L @ −3.0" />
+              </HeaderedContentControl>
+              <!-- Always allowed: it plays through the audition monitor path, so it never interrupts
+                   the program mix and never appears in the Active list (register item 13). -->
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="block" Content="SOLO THIS LINE TO AUDITION" />
+              </ContentControl>
+            </StackPanel>
+          </c:PanelBox>
+        </Grid>
+      </Grid>
+
+      <!-- ══ 08 · DEVICES ═══════════════════════════════════════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsDevicesPane}" ColumnDefinitions="*,330" Margin="7" ColumnSpacing="7">
+
+        <c:PanelBox Grid.Column="0" Header="Audio lines" Hint="machine-side · adding/removing is an edit">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6">
+                <Button Grid.Column="0" Classes="tight" Content="+ PORTAUDIO…" />
+                <Button Grid.Column="1" Classes="tight" Content="+ NDI AUDIO…" />
+                <Button Grid.Column="2" Classes="tight" Content="+ RECORD…" />
+                <Button Grid.Column="3" Classes="tight" Content="+ STREAM…" />
+                <Button Grid.Column="5" Classes="tight" Content="RELINK ABSENT…" />
+              </Grid>
+            </Border>
+          </c:PanelBox.Footer>
+
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Grid ColumnDefinitions="90,*,40,110,150,110" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="LINE" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="CH" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="RATE" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" Text="CARRIES" />
+              </Grid>
+            </Border>
+
+            <ListBox Theme="{StaticResource TableRows}"
+                     ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:AudioLineRow">
+                  <Grid ColumnDefinitions="90,*,40,110,150,110" ColumnSpacing="8" Margin="8,4">
+                    <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Name}"
+                               Classes.err="{Binding State.IsBad}" />
+                    <TextBlock Grid.Column="1" Classes="mono dim3 small ellipsis" Text="{Binding Kind}" />
+                    <TextBlock Grid.Column="2" Classes="mono dim2 small" Text="{Binding Channels}" />
+                    <TextBlock Grid.Column="3" Classes="mono dim2 small" Text="{Binding Rate.Text}"
+                               Classes.warn="{Binding Rate.IsWarn}" />
+                    <TextBlock Grid.Column="4" Classes="mono dim2 small" Text="{Binding State.Text}"
+                               Classes.ok="{Binding State.IsGood}" Classes.warn="{Binding State.IsWarn}"
+                               Classes.err="{Binding State.IsBad}" />
+                    <TextBlock Grid.Column="5" Classes="mono dim3 small" Text="{Binding Carries}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </c:PanelBox>
+
+        <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
+
+          <c:PanelBox Grid.Row="0" Header="Project mix">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Mix rate">
+                <ComboBox ItemsSource="{Binding MixRates}" SelectedIndex="1" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Clock master">
+                <ComboBox ItemsSource="{Binding ClockMasters}" SelectedIndex="0" />
+              </HeaderedContentControl>
+              <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                         Text="The clock master must run natively at the mix rate — it is never resampled, so the show clock never drifts against it. Other lines resample as needed (amber in the list)." />
+              <!-- Register item 14: never a silent rebuild. -->
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="block" Content="APPLY &amp; RESTART AUDIO" />
+              </ContentControl>
+            </StackPanel>
+          </c:PanelBox>
+
+          <c:PanelBox Grid.Row="1" Header="Record" Hint="selected line">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge clock"><TextBlock Text="RESAMPLED" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="44.1 k sink on a 48 k mix — fine, but never eligible as clock master" />
+              </DockPanel>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Directory">
+                <TextBox Text="~/shows/recordings" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Pattern">
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
+                  <TextBox Grid.Column="0" Text="show-{date}-{n}.flac" />
+                  <!-- Register item 30: insert-token dropdown plus a "?" listing every token with a
+                       rendered example — the tokens are unguessable otherwise. -->
+                  <!-- {}-escaped: a value starting with "{" is otherwise read as a markup extension. -->
+                  <Button Grid.Column="1" Classes="icon" Content="{}{ } ▾" />
+                  <Button Grid.Column="2" Classes="icon" Content="?" />
+                </Grid>
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding PatternTokens}" />
+              </ContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode">
+                <ListBox Theme="{StaticResource Segment}" SelectedIndex="0">
+                  <ListBoxItem>continuous</ListBoxItem>
+                  <ListBoxItem>content only</ListBoxItem>
+                </ListBox>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Format">
+                <TextBox Classes="ro" Text="FLAC · 44 100 · 2ch" />
+              </HeaderedContentControl>
+            </StackPanel>
+          </c:PanelBox>
+        </Grid>
+      </Grid>
+
+      <!-- ══ 08b · AUDITION ═════════════════════════════════════════════════════════════════ -->
+      <!-- One rig, one pane, duplicated verbatim in the Video view — an audition rig is a single
+           thing (an audio device plus a video surface) and splitting its two halves across two views
+           would make it look like two. -->
+      <Panel IsVisible="{Binding IsAuditionPane}">
+        <v:AuditionPane DataContext="{Binding Audition}" />
+      </Panel>
+
+    </Panel>
+  </DockPanel>
+</UserControl>

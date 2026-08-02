@@ -1,0 +1,320 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:c="using:HaCue2.Controls"
+                    xmlns:conv="using:HaCue2.Converters">
+
+  <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
+       below resolves against the file's own root. Avalonia resolves StaticResource by walking the
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       which is why Avalonia's own themes never reach across control files for a key. -->
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
+  </ResourceDictionary.MergedDictionaries>
+
+  <!-- ══ PanelBox — the mockup's `.pnl` ══════════════════════════════════════════════════════ -->
+  <ControlTheme x:Key="{x:Type c:PanelBox}" TargetType="c:PanelBox">
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource PanelCorner}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Stretch" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                ClipToBounds="True">
+          <DockPanel LastChildFill="True">
+            <Border Name="head"
+                    DockPanel.Dock="Top"
+                    Background="{StaticResource BoothPanel2}"
+                    BorderBrush="{StaticResource BoothRule}"
+                    BorderThickness="0,0,0,1"
+                    Padding="9,5"
+                    IsVisible="{Binding Header, RelativeSource={RelativeSource TemplatedParent},
+                                        Converter={x:Static ObjectConverters.IsNotNull}}">
+              <Grid ColumnDefinitions="Auto,Auto,*">
+                <ContentPresenter Grid.Column="0"
+                                  VerticalAlignment="Center"
+                                  Content="{Binding Header, RelativeSource={RelativeSource TemplatedParent},
+                                                    Converter={x:Static conv:UpperCaseConverter.Instance}}"
+                                  ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                  TextElement.FontFamily="{StaticResource MonoFont}"
+                                  TextElement.FontSize="{StaticResource FontSizeMonoSmall}"
+                                  TextElement.Foreground="{StaticResource BoothInk3}"
+                                  TextElement.LetterSpacing="1.25" />
+                <ContentPresenter Grid.Column="1"
+                                  Margin="8,0,0,0"
+                                  VerticalAlignment="Center"
+                                  Content="{TemplateBinding Subhead}"
+                                  TextElement.FontFamily="{StaticResource MonoFont}"
+                                  TextElement.FontSize="{StaticResource FontSizeMonoSmall}"
+                                  TextElement.Foreground="{StaticResource BoothInk}" />
+                <!-- The hint is right-aligned prose, so it keeps sentence case and near-zero tracking:
+                     it is read, not scanned. -->
+                <ContentPresenter Grid.Column="2"
+                                  Margin="10,0,0,0"
+                                  HorizontalAlignment="Right"
+                                  VerticalAlignment="Center"
+                                  Content="{TemplateBinding Hint}"
+                                  TextElement.FontFamily="{StaticResource MonoFont}"
+                                  TextElement.FontSize="{StaticResource FontSizeMonoSmall}"
+                                  TextElement.Foreground="{StaticResource BoothInk3}"
+                                  TextBlock.TextTrimming="CharacterEllipsis"
+                                  TextElement.LetterSpacing="0.35" />
+              </Grid>
+            </Border>
+
+            <ContentPresenter Name="foot"
+                              DockPanel.Dock="Bottom"
+                              Content="{TemplateBinding Footer}"
+                              IsVisible="{Binding Footer, RelativeSource={RelativeSource TemplatedParent},
+                                                  Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+            <ContentPresenter Name="PART_ContentPresenter"
+                              Padding="{TemplateBinding Padding}"
+                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}" />
+          </DockPanel>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <!-- ══ ProgressBar — the active panel's `.prog` sliver ═════════════════════════════════════
+       4 px, no text, no minimum width. `.fading` recolours it amber, which is the same signal the
+       row's stripe carries: a cue on its way out is amber everywhere it appears. -->
+  <ControlTheme x:Key="{x:Type ProgressBar}" TargetType="ProgressBar">
+    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="Foreground" Value="{StaticResource GelGreen}" />
+    <Setter Property="CornerRadius" Value="2" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="MinHeight" Value="4" />
+    <Setter Property="Height" Value="4" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                ClipToBounds="True">
+          <Border Name="PART_Indicator"
+                  HorizontalAlignment="Left"
+                  VerticalAlignment="Stretch"
+                  Background="{TemplateBinding Foreground}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^.fading">
+      <Setter Property="Foreground" Value="{StaticResource GelAmber}" />
+    </Style>
+    <Style Selector="^.near">
+      <Setter Property="Foreground" Value="{StaticResource GelRed}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ══ level meter / canvas grid defaults ═════════════════════════════════════════════════ -->
+  <ControlTheme x:Key="{x:Type c:LevelMeter}" TargetType="c:LevelMeter">
+    <Setter Property="Width" Value="7" />
+    <Setter Property="Height" Value="34" />
+    <Setter Property="Fill" Value="{StaticResource MeterFill}" />
+    <Setter Property="TrackBrush" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule}" />
+    <Setter Property="PeakBrush" Value="{StaticResource BoothInk2}" />
+    <Style Selector="^[IsClipping=True]">
+      <Setter Property="BorderBrush" Value="{StaticResource GelRed}" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type c:CanvasGrid}" TargetType="c:CanvasGrid">
+    <Setter Property="Stroke" Value="{StaticResource CanvasGridLine}" />
+    <Setter Property="IsHitTestVisible" Value="False" />
+  </ControlTheme>
+
+  <!-- ══ menus ══════════════════════════════════════════════════════════════════════════════
+       Dropdowns behind "+ Add ▾" / "Selection ▾" and the cue context menu (which is where "Preview on
+       audition outputs" lives, register item 15). Deliberately no icon gutter: none of HaCue2's menu
+       commands have icons, and an empty 20 px column reads as a rendering fault. -->
+  <ControlTheme x:Key="{x:Type MenuItem}" TargetType="MenuItem">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeSmall}" />
+    <Setter Property="Padding" Value="9,4" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root" Background="{TemplateBinding Background}">
+          <Grid ColumnDefinitions="*,Auto,Auto">
+            <ContentPresenter Name="PART_HeaderPresenter"
+                              Grid.Column="0"
+                              Margin="{TemplateBinding Padding}"
+                              VerticalAlignment="Center"
+                              Content="{TemplateBinding Header}"
+                              ContentTemplate="{TemplateBinding HeaderTemplate}" />
+            <TextBlock Name="PART_InputGestureText"
+                       Grid.Column="1"
+                       Margin="18,0,4,0"
+                       VerticalAlignment="Center"
+                       FontFamily="{StaticResource MonoFont}"
+                       FontSize="{StaticResource FontSizeMicro}"
+                       Foreground="{StaticResource BoothInk3}"
+                       Text="{TemplateBinding InputGesture}" />
+            <Path Name="rightArrow"
+                  Grid.Column="2"
+                  Margin="4,0,8,0"
+                  VerticalAlignment="Center"
+                  Data="M0,0L4,3.5 0,7z"
+                  Fill="{StaticResource BoothInk3}" />
+            <Popup Name="PART_Popup"
+                   IsLightDismissEnabled="False"
+                   IsOpen="{TemplateBinding IsSubMenuOpen, Mode=TwoWay}"
+                   Placement="RightEdgeAlignedTop">
+              <Border Background="{StaticResource BoothPanel}"
+                      BorderBrush="{StaticResource BoothRule2}"
+                      BorderThickness="1"
+                      CornerRadius="{StaticResource BoothCorner}"
+                      Padding="0,3">
+                <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" />
+              </Border>
+            </Popup>
+          </Grid>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:separator">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Height="1" Margin="0,3" Background="{StaticResource BoothRule}" />
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="^:empty /template/ Path#rightArrow">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource SegmentOnBg}" />
+    </Style>
+    <Style Selector="^:disabled">
+      <Setter Property="Opacity" Value="0.42" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type MenuFlyoutPresenter}" TargetType="MenuFlyoutPresenter">
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="0,3" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                Padding="{TemplateBinding Padding}">
+          <ItemsPresenter Name="PART_ItemsPresenter"
+                          ItemsPanel="{TemplateBinding ItemsPanel}"
+                          KeyboardNavigation.TabNavigation="Continue" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type ContextMenu}" TargetType="ContextMenu">
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="0,3" />
+    <Setter Property="Focusable" Value="True" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                Padding="{TemplateBinding Padding}">
+          <ItemsPresenter Name="PART_ItemsPresenter"
+                          ItemsPanel="{TemplateBinding ItemsPanel}"
+                          KeyboardNavigation.TabNavigation="Continue" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type FlyoutPresenter}" TargetType="FlyoutPresenter">
+    <Setter Property="Background" Value="{StaticResource BoothPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <!-- ══ tooltip ════════════════════════════════════════════════════════════════════════════ -->
+  <ControlTheme x:Key="{x:Type ToolTip}" TargetType="ToolTip">
+    <Setter Property="Background" Value="{StaticResource BoothPanel2}" />
+    <Setter Property="BorderBrush" Value="{StaticResource BoothRule2}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource BoothCorner}" />
+    <Setter Property="Foreground" Value="{StaticResource BoothInk}" />
+    <Setter Property="FontSize" Value="{StaticResource FontSizeSmall}" />
+    <Setter Property="Padding" Value="8,5" />
+    <Setter Property="MaxWidth" Value="360" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            TextBlock.TextWrapping="Wrap" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+  <!-- ══ splitters and rules ════════════════════════════════════════════════════════════════ -->
+  <ControlTheme x:Key="{x:Type GridSplitter}" TargetType="GridSplitter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root" Background="{TemplateBinding Background}" />
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="Background" Value="{StaticResource ChipEditBorder}" />
+    </Style>
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type Separator}" TargetType="Separator">
+    <Setter Property="Background" Value="{StaticResource BoothRule}" />
+    <Setter Property="Height" Value="1" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}" Height="{TemplateBinding Height}" />
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+</ResourceDictionary>

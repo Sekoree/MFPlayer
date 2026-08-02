@@ -1,0 +1,341 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:sys="using:System"
+             xmlns:v="using:HaCue2.Views"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Views.VideoView"
+             x:DataType="vm:VideoViewModel">
+
+  <!-- Screens 09–10: Compositions · Mapping · Outputs · Audition. -->
+
+  <UserControl.Resources>
+    <!-- Both canvases in this view draw the same thing: fraction-positioned boxes over a grid. -->
+    <ControlTheme x:Key="PlacementContainer" TargetType="ContentPresenter" x:DataType="vm:PlacementBox">
+      <Setter Property="(c:Fraction.Left)" Value="{Binding Left}" />
+      <Setter Property="(c:Fraction.Top)" Value="{Binding Top}" />
+      <Setter Property="(c:Fraction.Width)" Value="{Binding Width}" />
+      <Setter Property="(c:Fraction.Height)" Value="{Binding Height}" />
+    </ControlTheme>
+
+    <DataTemplate x:Key="PlacementTemplate" x:DataType="vm:PlacementBox">
+      <Border Classes="placement"
+              Classes.a="{Binding !IsSecondary}"
+              Classes.b="{Binding IsSecondary}"
+              Classes.sel="{Binding IsSelected}">
+        <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+      </Border>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <DockPanel>
+
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Background="{StaticResource BoothPanel}">
+      <ListBox Grid.Column="0" Theme="{StaticResource SectionTabs}"
+               Background="{StaticResource BoothPanel}"
+               ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" />
+      <Border Grid.Column="1" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1">
+        <TextBlock Classes="mono dim3 micro" HorizontalAlignment="Right" VerticalAlignment="Center"
+                   Margin="10,0" Text="{Binding TabHint}" />
+      </Border>
+    </Grid>
+
+    <Panel>
+
+      <!-- ══ 09 · COMPOSITIONS ══════════════════════════════════════════════════════════════
+           A composition owns exactly size, frame rate and idle image. There is no visualizer flag:
+           a visualizer is a cue type, and the one on the Cyc canvas below is simply Q15.5's
+           placement (register item 21). -->
+      <Grid IsVisible="{Binding IsCompositionsPane}" ColumnDefinitions="*,360" Margin="7" ColumnSpacing="7">
+
+        <ScrollViewer Grid.Column="0">
+          <StackPanel Spacing="7">
+
+          <c:PanelBox Header="{Binding CycHeader}" Hint="{Binding CycHint}">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="LAYERS" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="placements belong to cues — the visualizer here is just Q15.5's placement · double-click opens the cue" />
+              </DockPanel>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <c:AspectBox Margin="10,8" VerticalAlignment="Top">
+              <Border Classes="vidcanvas">
+              <Panel>
+                <c:CanvasGrid />
+                <ItemsControl ItemsSource="{Binding CycLayers}"
+                              ItemContainerTheme="{StaticResource PlacementContainer}"
+                              ItemTemplate="{StaticResource PlacementTemplate}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                </ItemsControl>
+              </Panel>
+            </Border>
+            </c:AspectBox>
+          </c:PanelBox>
+
+          <c:PanelBox Header="{Binding PortalHeader}" Hint="{Binding PortalHint}">
+            <c:AspectBox Margin="10,8" VerticalAlignment="Top">
+              <Border Classes="vidcanvas">
+              <Panel>
+                <c:CanvasGrid />
+                <ItemsControl ItemsSource="{Binding PortalLayers}"
+                              ItemContainerTheme="{StaticResource PlacementContainer}"
+                              ItemTemplate="{StaticResource PlacementTemplate}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                </ItemsControl>
+              </Panel>
+            </Border>
+            </c:AspectBox>
+          </c:PanelBox>
+
+          </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="7">
+
+          <c:PanelBox Grid.Row="0" Header="Video outputs" Hint="what receives each composition">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Classes="tight" Content="+ LOCAL…" />
+                  <Button Classes="tight" Content="+ NDI…" />
+                  <Button Classes="tight" Content="+ RECORD…" />
+                  <Button Classes="tight" Content="+ STREAM…" />
+                </StackPanel>
+              </Border>
+            </c:PanelBox.Footer>
+
+            <DockPanel>
+              <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                      BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+                <Grid ColumnDefinitions="82,*,40,62,76" ColumnSpacing="5">
+                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="OUTPUT" />
+                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
+                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="SHOWS" />
+                  <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="MAP" />
+                  <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+                </Grid>
+              </Border>
+              <ListBox Theme="{StaticResource TableRows}"
+                       ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:VideoOutputRow">
+                    <Grid ColumnDefinitions="82,*,40,62,76" ColumnSpacing="5" Margin="8,4">
+                      <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Name}" />
+                      <TextBlock Grid.Column="1" Classes="mono dim3 small ellipsis" Text="{Binding Kind}" />
+                      <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding Shows}" />
+                      <TextBlock Grid.Column="3" Classes="mono dim3 small" Text="{Binding Map}" />
+                      <TextBlock Grid.Column="4" Classes="mono dim2 small" Text="{Binding State.Text}"
+                                 Classes.ok="{Binding State.IsGood}" Classes.err="{Binding State.IsBad}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </c:PanelBox>
+
+          <c:PanelBox Grid.Row="1" Header="Projector A" Hint="selected output">
+            <ScrollViewer>
+              <StackPanel Margin="0,6,0,8">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
+                  <ComboBox ItemsSource="{Binding Compositions}" SelectedIndex="0" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Screen">
+                  <ComboBox ItemsSource="{Binding Screens}" SelectedIndex="1" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode">
+                  <ListBox Theme="{StaticResource Segment}" SelectedIndex="0">
+                    <ListBoxItem>fullscreen</ListBoxItem>
+                    <ListBoxItem>windowed</ListBoxItem>
+                  </ListBox>
+                </HeaderedContentControl>
+                <!-- Idle images exist at both levels; the composition's wins when it has one
+                     (register item 23). -->
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fallback">
+                  <TextBox Classes="ro" Text="venue-logo.png · used when comp has no idle" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Mapping">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                    <ListBox Grid.Column="0" Theme="{StaticResource Segment}" SelectedIndex="0">
+                      <ListBoxItem>on</ListBoxItem>
+                      <ListBoxItem>clean</ListBoxItem>
+                    </ListBox>
+                    <Button Grid.Column="1" Classes="tight" Content="EDIT ›" Click="OnEditMapping" />
+                  </Grid>
+                </HeaderedContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <TextBlock Classes="mono dim3 small" TextWrapping="Wrap"
+                             Text="mapping is per output — Lobby TV shows the same Cyc clean, no warp" />
+                </ContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <Button Classes="block" Content="IDENTIFY — FLASH OUTPUT NAME ON SCREEN" />
+                </ContentControl>
+              </StackPanel>
+            </ScrollViewer>
+          </c:PanelBox>
+
+          <c:PanelBox Grid.Row="2" Header="Selected composition · Cyc">
+            <StackPanel Margin="0,6,0,8">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Size / rate">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Classes="short" Text="1920×1080" />
+                  <TextBox Grid.Column="1" Text="29.97" />
+                </Grid>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle image">
+                <ComboBox ItemsSource="{Binding IdleImages}" SelectedIndex="0" />
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <Button Classes="block" Content="+ ADD COMPOSITION…" />
+              </ContentControl>
+            </StackPanel>
+          </c:PanelBox>
+        </Grid>
+      </Grid>
+
+      <!-- ══ 10 · MAPPING ═══════════════════════════════════════════════════════════════════
+           Always the mapping OF ONE OUTPUT, which is why the header carries an output picker: the
+           same Cyc is warped for Projector A and clean for the lobby TV. -->
+      <Grid IsVisible="{Binding IsMappingPane}" ColumnDefinitions="200,*,*" Margin="7" ColumnSpacing="7">
+
+        <c:PanelBox Grid.Column="0" Header="Sections">
+          <ScrollViewer>
+            <StackPanel Margin="0,6,0,8">
+              <ItemsControl ItemsSource="{Binding Sections}" Margin="10,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="sys:String">
+                    <TextBlock Classes="mono" FontSize="10.5" Margin="0,3" Text="{Binding}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <Border Classes="chain" Margin="0,6,0,0">
+                <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="6">
+                  <Button Classes="tight" Content="+ ADD" />
+                  <Button Classes="tight" Content="DUPLICATE" />
+                  <Button Classes="tight" Content="DELETE" />
+                </WrapPanel>
+              </Border>
+
+              <ContentControl Theme="{StaticResource Subhead}" Content="Section 1" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Rotation">
+                <TextBox Classes="short" Text="0.0°" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity">
+                <TextBox Classes="short" Text="100 %" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Brightness">
+                <TextBox Classes="short" Text="0.92" />
+              </HeaderedContentControl>
+              <!-- Mesh warp first; corner-pin stays reserved in the model (register item 22). -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Warp">
+                <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding WarpModes}"
+                         SelectedIndex="1" />
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
+                           Text="drag with the mouse · numeric x/y/w/h · arrow-key nudge of the last-clicked point" />
+              </ContentControl>
+            </StackPanel>
+          </ScrollViewer>
+        </c:PanelBox>
+
+        <c:PanelBox Grid.Column="1" Header="Source · Cyc" Hint="what each section samples">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <Border Classes="badge"><TextBlock Text="OVERLAP" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                           Text="sections 1+2 overlap 4 % for edge blend" />
+              </StackPanel>
+            </Border>
+          </c:PanelBox.Footer>
+          <c:AspectBox Margin="10,8" VerticalAlignment="Top">
+            <Border Classes="vidcanvas">
+            <Panel>
+              <c:CanvasGrid />
+              <ItemsControl ItemsSource="{Binding MappingSource}"
+                            ItemContainerTheme="{StaticResource PlacementContainer}"
+                            ItemTemplate="{StaticResource PlacementTemplate}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+              </ItemsControl>
+            </Panel>
+          </Border>
+            </c:AspectBox>
+        </c:PanelBox>
+
+        <c:PanelBox Grid.Column="2" Header="Output · Projector A" Hint="where it lands · warp handles live">
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge good"><TextBlock Text="ON DEVICE" /></Border>
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                           Text="edits render straight to the projector — the canvas here is a mirror, the wall is the truth" />
+              </DockPanel>
+            </Border>
+          </c:PanelBox.Footer>
+          <c:AspectBox Margin="10,8" VerticalAlignment="Top">
+            <Border Classes="vidcanvas">
+            <Panel>
+              <ItemsControl ItemsSource="{Binding MappingOutput}"
+                            ItemContainerTheme="{StaticResource PlacementContainer}"
+                            ItemTemplate="{StaticResource PlacementTemplate}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+              </ItemsControl>
+            </Panel>
+          </Border>
+            </c:AspectBox>
+        </c:PanelBox>
+      </Grid>
+
+      <!-- ══ OUTPUTS (the same table, given the whole width) ════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsOutputsPane}" Margin="7">
+        <c:PanelBox Header="Video outputs" Hint="composition · mapping · state, per output">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Background="{StaticResource BoothPanel2}"
+                    BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
+              <Grid ColumnDefinitions="140,*,120,140,140" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="OUTPUT" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="SHOWS" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="MAP" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+              </Grid>
+            </Border>
+            <ListBox Theme="{StaticResource TableRows}"
+                     ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:VideoOutputRow">
+                  <Grid ColumnDefinitions="140,*,120,140,140" ColumnSpacing="8" Margin="8,5">
+                    <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Name}" />
+                    <TextBlock Grid.Column="1" Classes="mono dim3 small ellipsis" Text="{Binding Kind}" />
+                    <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding Shows}" />
+                    <TextBlock Grid.Column="3" Classes="mono dim3 small" Text="{Binding Map}" />
+                    <TextBlock Grid.Column="4" Classes="mono dim2 small" Text="{Binding State.Text}"
+                               Classes.ok="{Binding State.IsGood}" Classes.err="{Binding State.IsBad}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </c:PanelBox>
+      </Grid>
+
+      <Panel IsVisible="{Binding IsAuditionPane}">
+        <v:AuditionPane DataContext="{Binding Audition}" />
+      </Panel>
+
+    </Panel>
+  </DockPanel>
+</UserControl>

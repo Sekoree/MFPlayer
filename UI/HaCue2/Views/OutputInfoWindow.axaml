@@ -1,0 +1,91 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.OutputInfoWindow"
+        x:DataType="vm:OutputInfoViewModel"
+        Title="HaCue2 — Output info"
+        Width="1020" Height="140"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- The drawer, popped out for a second monitor (screen 02b, round-2 decision). Same content, no
+       toggle of its own — closing the window is how it goes away, and the shell's drawer is closed
+       while this exists so the same meters are never live in two places. -->
+
+  <Grid ColumnDefinitions="Auto,Auto,*" Background="{StaticResource BoothPanel}">
+
+    <Border Grid.Column="0" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+            Padding="11,8">
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <TextBlock Classes="caps" VerticalAlignment="Center" Text="PROGRAM" />
+        <ItemsControl ItemsSource="{Binding Meters}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:ProgramMeter">
+              <StackPanel Spacing="4" Width="24">
+                <c:LevelMeter HorizontalAlignment="Center" Height="44"
+                              Level="{Binding Level}" Peak="{Binding Peak}"
+                              IsClipping="{Binding IsClipping}" />
+                <TextBlock Classes="caps" HorizontalAlignment="Center"
+                           Classes.err="{Binding IsClipping}" Text="{Binding Caption}" />
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Column="1" BorderBrush="{StaticResource BoothRule}" BorderThickness="0,0,1,0"
+            Padding="11,8">
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <TextBlock Classes="caps" VerticalAlignment="Center" Text="LINES" />
+        <ItemsControl ItemsSource="{Binding Lines}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:OutputLineChip">
+              <Border Classes="lchip"
+                      Classes.ok="{Binding IsOk}"
+                      Classes.warn="{Binding IsWarn}"
+                      Classes.err="{Binding IsError}"
+                      VerticalAlignment="Center">
+                <StackPanel Spacing="1">
+                  <StackPanel Orientation="Horizontal" Spacing="5">
+                    <Ellipse Classes="led"
+                             Classes.ok="{Binding IsOk}"
+                             Classes.warn="{Binding IsWarn}"
+                             Classes.err="{Binding IsError}" />
+                    <TextBlock Classes="mono" FontSize="{StaticResource FontSizeMono}" Text="{Binding Name}" />
+                    <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding HasSuffix}" Text="{Binding Suffix}" />
+                  </StackPanel>
+                  <TextBlock Classes="mono dim3" FontSize="{StaticResource FontSizeNano}"
+                             Classes.warn="{Binding IsWarn}" Classes.err="{Binding IsError}"
+                             Text="{Binding Detail}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Column="2" Padding="11,8">
+      <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <TextBlock Classes="caps" VerticalAlignment="Center" Text="BAY" />
+        <StackPanel Spacing="1" VerticalAlignment="Center">
+          <TextBlock Classes="mono dim2 small" Text="{Binding BaySummary}" />
+          <TextBlock Classes="mono dim3 small" Text="{Binding BayClock}" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>

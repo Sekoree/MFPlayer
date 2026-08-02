@@ -1,0 +1,95 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.CurveEditorWindow"
+        x:DataType="vm:CurveEditorViewModel"
+        Title="Fade curve"
+        Width="700" Height="340"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7">
+    <DockPanel>
+
+      <!-- The picker and the editor are the same strip: choosing "custom" is just selecting the last
+           thumbnail, so there is never a mode the operator has to find. -->
+      <ListBox DockPanel.Dock="Top" Theme="{StaticResource CurveOptions}" Classes="curves"
+               Margin="10,4" SelectedIndex="4"
+               ItemsSource="{Binding Curves}">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:CurveOption">
+            <StackPanel Spacing="2" HorizontalAlignment="Center">
+              <Path Data="{Binding Shape}" StrokeThickness="1.4" Width="44" Height="26"
+                    Stretch="Uniform" />
+              <TextBlock Classes="mono" FontSize="{StaticResource FontSizeNano}"
+                         HorizontalAlignment="Center" LetterSpacing="0.4" Text="{Binding Name}" />
+            </StackPanel>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <Grid ColumnDefinitions="*,220" ColumnSpacing="7" Margin="10,2,10,10">
+
+        <Border Grid.Column="0" Classes="vidcanvas">
+          <Panel>
+            <c:CanvasGrid Columns="10" Rows="4" />
+            <Path Data="{Binding Curve}" Stroke="{StaticResource GelCongo}" StrokeThickness="1"
+                  Stretch="Fill" Margin="6" />
+            <ItemsControl ItemsSource="{Binding Points}" Margin="6">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemContainerTheme>
+                <ControlTheme TargetType="ContentPresenter" x:DataType="vm:CurvePoint">
+                  <Setter Property="(c:Fraction.Left)" Value="{Binding X}" />
+                  <Setter Property="(c:Fraction.Top)" Value="{Binding Y}" />
+                </ControlTheme>
+              </ItemsControl.ItemContainerTheme>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:CurvePoint">
+                  <!-- The selected point is amber so it matches the numeric fields beside the canvas;
+                       every other point stays congo like the curve it belongs to. -->
+                  <Ellipse Width="7" Height="7" Margin="-3.5"
+                           Fill="{StaticResource GelCongo}"
+                           Classes.warn="{Binding IsSelected}">
+                    <Ellipse.Styles>
+                      <Style Selector="Ellipse.warn">
+                        <Setter Property="Fill" Value="{StaticResource GelAmber}" />
+                      </Style>
+                    </Ellipse.Styles>
+                  </Ellipse>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Panel>
+        </Border>
+
+        <StackPanel Grid.Column="1" Spacing="4">
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Point 3">
+            <TextBox Text="{Binding SelectedPoint}" />
+          </HeaderedContentControl>
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Scale">
+            <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Scales}"
+                     SelectedItem="{Binding Scale}" />
+          </HeaderedContentControl>
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Segment">
+            <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Segments}"
+                     SelectedItem="{Binding Segment}" />
+          </HeaderedContentControl>
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Save as">
+            <TextBox Text="{Binding PresetName}" />
+          </HeaderedContentControl>
+          <TextBlock Margin="10,4" Classes="mono dim3 micro" TextWrapping="Wrap"
+                     Text="{Binding EditHint}" />
+          <ContentControl Theme="{StaticResource FieldWide}">
+            <Button Classes="primary block" Content="DONE" Click="OnDone" />
+          </ContentControl>
+        </StackPanel>
+      </Grid>
+    </DockPanel>
+  </c:PanelBox>
+</Window>

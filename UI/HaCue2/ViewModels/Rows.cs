@@ -58,6 +58,9 @@ public sealed record CueRow
     public string Level { get; init; } = "—";
     public IReadOnlyList<Badge> Badges { get; init; } = [];
 
+    /// <summary>The Note tab's content — one tab on every kind, and the whole of a comment cue.</summary>
+    public string Note { get; init; } = "";
+
     /// <summary>Indent level; the mockup only ever draws one, but groups nest in the real model.</summary>
     public int Depth { get; init; }
 
@@ -290,6 +293,13 @@ public sealed record RecentProjectRow
 
 /// <summary>Screen 13 — one app setting this project defeats.</summary>
 public sealed record OverrideRow(string Setting, string AppValue, string ProjectValue);
+
+/// <summary>Screen 12 — one row of the hotkey grid: a command, its gesture, and any project override.</summary>
+public sealed record HotkeyRow(string Command, string Gesture, string Group, string ProjectOverride)
+{
+    public bool HasOverride => ProjectOverride.Length > 0;
+    public string OverrideText => HasOverride ? ProjectOverride : "—";
+}
 
 /// <summary>Screen 02b — a line chip in the Output info drawer.</summary>
 public sealed record OutputLineChip
