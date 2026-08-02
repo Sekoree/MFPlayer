@@ -1,0 +1,43 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Controls.PlacementCanvas"
+             x:DataType="c:PlacementCanvas"
+             x:CompileBindings="True">
+
+  <!-- The canvas every fraction-positioned box is drawn on: composition layers (screen 09), the
+       inspector's placement preview, and both halves of the mapping editor (screen 10). One control so
+       the drag, the resize handles and the arrow-key nudge behave identically wherever a box appears —
+       an operator who learns the gesture on a composition must find it true on a mapping section. -->
+
+  <Border Classes="vidcanvas">
+    <Panel>
+      <c:CanvasGrid IsVisible="{Binding ShowGrid, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}" />
+
+      <ItemsControl ItemsSource="{Binding Boxes, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemContainerTheme>
+          <ControlTheme TargetType="ContentPresenter" x:DataType="vm:PlacementBox">
+            <Setter Property="(c:Fraction.Left)" Value="{Binding Left}" />
+            <Setter Property="(c:Fraction.Top)" Value="{Binding Top}" />
+            <Setter Property="(c:Fraction.Width)" Value="{Binding Width}" />
+            <Setter Property="(c:Fraction.Height)" Value="{Binding Height}" />
+          </ControlTheme>
+        </ItemsControl.ItemContainerTheme>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:PlacementBox">
+            <Border Classes="placement"
+                    Classes.a="{Binding !IsSecondary}"
+                    Classes.b="{Binding IsSecondary}"
+                    Classes.sel="{Binding IsSelected}">
+              <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Panel>
+  </Border>
+</UserControl>

@@ -232,6 +232,12 @@ public sealed record VideoOutputRow
 /// <summary>A layer or mapping section drawn on a canvas, positioned in fractions of the frame.</summary>
 public sealed record PlacementBox
 {
+    /// <summary>The cue or mapping section this box is — how a drag names what it moved.</summary>
+    public Guid SubjectId { get; init; }
+
+    /// <summary>Stacking order on the canvas. Mapping sections all sit at 0; only layers stack.</summary>
+    public int LayerIndex { get; init; }
+
     public required string Label { get; init; }
     public double Left { get; init; }
     public double Top { get; init; }

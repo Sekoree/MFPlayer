@@ -37,7 +37,7 @@ public partial class ShellViewModel : ObservableObject
 
         Cues = new CuesViewModel(Journal, Runtime);
         Audio = new AudioViewModel(Journal, Runtime);
-        Video = new VideoViewModel(project, Runtime);
+        Video = new VideoViewModel(project, Runtime, Journal);
         Targets = new TargetsViewModel(project, Runtime);
         OutputInfo = new OutputInfoViewModel(Runtime);
 
@@ -178,6 +178,7 @@ public partial class ShellViewModel : ObservableObject
         Cues.Refresh();
         // One journal, every view: an undo made in the patch has to reach the cue tree too.
         Audio.Refresh();
+        Video.Refresh();
     }
 
     private IEnumerable<StatusCheck> OutputChecks() =>

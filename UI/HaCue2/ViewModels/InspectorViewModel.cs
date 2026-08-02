@@ -30,6 +30,9 @@ public partial class InspectorViewModel : ObservableObject
     private const string Mixed = "—";
 
     private readonly ProjectJournal _journal;
+
+    /// <summary>Open for the duration of one canvas drag, so the gesture is a single undo step.</summary>
+    private IDisposable? _drag;
     private readonly Dictionary<CueKind, string> _rememberedTab = [];
     private IReadOnlyList<Guid> _selection = [];
 
@@ -139,6 +142,12 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(SendRows));
         OnPropertyChanged(nameof(RouteChain));
         OnPropertyChanged(nameof(Placements));
+        OnPropertyChanged(nameof(HasPlacement));
+        OnPropertyChanged(nameof(PlacementCompositions));
+        OnPropertyChanged(nameof(PlacementCompositionIndex));
+        OnPropertyChanged(nameof(LayerValue));
+        OnPropertyChanged(nameof(FitIndex));
+        OnPropertyChanged(nameof(PlacementOpacityValue));
         OnPropertyChanged(nameof(EffectLanes));
     }
 
@@ -332,6 +341,148 @@ public partial class InspectorViewModel : ObservableObject
 
             return composition is null ? [] : VideoPresentation.Layers(Project, composition, Cue?.Id);
         }
+    }
+
+    private LayerPlacement? Placement => Cue switch
+    {
+        MediaCueNode media => media.Placement,
+        VisualizerCueNode visualizer => visualizer.Placement,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Whether this cue is on a canvas at all.
+    /// </summary>
+    /// <remarks>
+    /// A media cue always OFFERS the Video tab, because putting one on a canvas is a thing you do to
+    /// an existing cue. Without this the pane draws an empty canvas and four fields describing a
+    /// placement that does not exist, which reads exactly like a layer sized to nothing.
+    /// </remarks>
+    public bool HasPlacement => Placement is not null;
+
+    public IReadOnlyList<string> PlacementCompositions =>
+        [.. Project.Compositions.Select(composition =>
+            $"{composition.Name} · {composition.Width}×{composition.Height}")];
+
+    public int PlacementCompositionIndex
+    {
+        get => Placement is { } placement
+            ? Project.Compositions.FindIndex(composition => composition.Id == placement.CompositionId)
+            : -1;
+        set
+        {
+            if (Placement is not { } placement || value < 0 || value >= Project.Compositions.Count)
+                return;
+
+            var composition = Project.Compositions[value];
+            if (composition.Id == placement.CompositionId)
+                return;
+
+            Edit("composition", "video",
+                () => placement.CompositionId, id => placement.CompositionId = id, composition.Id,
+                $"move to {composition.Name}");
+        }
+    }
+
+    public string LayerValue
+    {
+        get => Placement is { } placement ? placement.LayerIndex.ToString(CultureInfo.CurrentCulture) : "—";
+        set
+        {
+            if (Placement is not { } placement
+                || !int.TryParse(value, NumberStyles.Integer, CultureInfo.CurrentCulture, out var layer))
+                return;
+
+            Edit("layer", "video",
+                () => placement.LayerIndex, index => placement.LayerIndex = Math.Max(0, index), layer,
+                "set layer");
+        }
+    }
+
+    public IReadOnlyList<string> FitModes { get; } = ["contain", "cover", "stretch"];
+
+    public int FitIndex
+    {
+        get => Placement is { } placement ? (int)placement.Fit : -1;
+        set
+        {
+            if (Placement is not { } placement || value < 0 || (LayerFit)value == placement.Fit)
+                return;
+
+            Edit("fit", "video",
+                () => placement.Fit, fit => placement.Fit = fit, (LayerFit)value,
+                $"set fit {FitModes[value]}");
+        }
+    }
+
+    public string PlacementOpacityValue
+    {
+        get => Placement is { } placement ? $"{placement.Opacity * 100:0.#} %" : "—";
+        set
+        {
+            if (Placement is not { } placement
+                || !double.TryParse(
+                    new string([.. value.Where(c => char.IsDigit(c) || c is '.' or ',')]),
+                    NumberStyles.Float, CultureInfo.CurrentCulture, out var typed))
+                return;
+
+            Edit("opacity", "video",
+                () => placement.Opacity, opacity => placement.Opacity = opacity,
+                Math.Clamp(typed / 100, 0, 1), "set layer opacity");
+        }
+    }
+
+    private void Edit<T>(
+        string property, string domain, Func<T> read, Action<T> write, T value, string description)
+    {
+        if (Cue is not { } cue)
+            return;
+
+        _journal.Do(new SetValueCommand<T>(cue.Id, property, domain, read, write, value, description));
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    /// <summary>
+    /// A drag on the inspector's placement preview.
+    /// </summary>
+    /// <remarks>
+    /// The preview shows the WHOLE composition, not just the selected cue, so a drag here can move any
+    /// layer on it — which is the point of showing the neighbours at all. The command is the same one
+    /// the Video view builds, keyed to the cue, so the two canvases share one undo step rather than
+    /// producing two that disagree.
+    /// </remarks>
+    public void ApplyPlacementGesture(PlacementGesture gesture)
+    {
+        if (Project.FindCue(gesture.SubjectId) is not { } cue)
+            return;
+
+        var placement = cue switch
+        {
+            MediaCueNode media => media.Placement,
+            VisualizerCueNode visualizer => visualizer.Placement,
+            _ => null,
+        };
+
+        if (placement is null)
+            return;
+
+        _drag ??= _journal.Composite("move layer", "video");
+        _journal.Do(RectEdits.Placement(cue, placement, gesture.Rect));
+        OnPropertyChanged(nameof(Placements));
+        OnPropertyChanged(nameof(HasPlacement));
+        OnPropertyChanged(nameof(PlacementCompositions));
+        OnPropertyChanged(nameof(PlacementCompositionIndex));
+        OnPropertyChanged(nameof(LayerValue));
+        OnPropertyChanged(nameof(FitIndex));
+        OnPropertyChanged(nameof(PlacementOpacityValue));
+    }
+
+    /// <summary>Closes the drag's undo step. Called when the pointer is released or a nudge lands.</summary>
+    public void EndPlacementGesture()
+    {
+        _drag?.Dispose();
+        _drag = null;
     }
 
     // ── the Effects pane (register item 18: lanes, hidden until added) ────────────────────────

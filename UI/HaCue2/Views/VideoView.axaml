@@ -9,25 +9,6 @@
 
   <!-- Screens 09–10: Compositions · Mapping · Outputs · Audition. -->
 
-  <UserControl.Resources>
-    <!-- Both canvases in this view draw the same thing: fraction-positioned boxes over a grid. -->
-    <ControlTheme x:Key="PlacementContainer" TargetType="ContentPresenter" x:DataType="vm:PlacementBox">
-      <Setter Property="(c:Fraction.Left)" Value="{Binding Left}" />
-      <Setter Property="(c:Fraction.Top)" Value="{Binding Top}" />
-      <Setter Property="(c:Fraction.Width)" Value="{Binding Width}" />
-      <Setter Property="(c:Fraction.Height)" Value="{Binding Height}" />
-    </ControlTheme>
-
-    <DataTemplate x:Key="PlacementTemplate" x:DataType="vm:PlacementBox">
-      <Border Classes="placement"
-              Classes.a="{Binding !IsSecondary}"
-              Classes.b="{Binding IsSecondary}"
-              Classes.sel="{Binding IsSelected}">
-        <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-      </Border>
-    </DataTemplate>
-  </UserControl.Resources>
-
   <DockPanel>
 
     <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Background="{StaticResource BoothPanel}">
@@ -59,18 +40,9 @@
               <DataTemplate x:DataType="vm:CompositionPaneViewModel">
                 <c:PanelBox Header="{Binding Name}" Hint="{Binding Hint}">
                   <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
-                    <Border Classes="vidcanvas">
-                      <Panel>
-                        <c:CanvasGrid />
-                        <ItemsControl ItemsSource="{Binding Layers}"
-                                      ItemContainerTheme="{StaticResource PlacementContainer}"
-                                      ItemTemplate="{StaticResource PlacementTemplate}">
-                          <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-                          </ItemsControl.ItemsPanel>
-                        </ItemsControl>
-                      </Panel>
-                    </Border>
+                    <c:PlacementCanvas Boxes="{Binding Layers}"
+                                       Gesture="OnLayerGesture"
+                                       GestureCompleted="OnGestureCompleted" />
                   </c:AspectBox>
                 </c:PanelBox>
               </DataTemplate>
@@ -183,7 +155,7 @@
       <!-- ══ 10 · MAPPING ═══════════════════════════════════════════════════════════════════
            Always the mapping OF ONE OUTPUT, which is why the header carries an output picker: the
            same Cyc is warped for Projector A and clean for the lobby TV. -->
-      <Grid IsVisible="{Binding IsMappingPane}" ColumnDefinitions="200,*,*" Margin="7" ColumnSpacing="7">
+      <Grid IsVisible="{Binding IsMappingPane}" ColumnDefinitions="252,*,*" Margin="7" ColumnSpacing="7">
 
         <c:PanelBox Grid.Column="0" Header="Sections">
           <ScrollViewer>
@@ -204,24 +176,52 @@
                 </WrapPanel>
               </Border>
 
-              <ContentControl Theme="{StaticResource Subhead}" Content="Section 1" />
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Rotation">
-                <TextBox Classes="short" Text="0.0°" />
+              <ContentControl Theme="{StaticResource Subhead}" Content="{Binding SectionHeader}" />
+
+              <!-- The numeric half of register item 22. The canvases move the same eight numbers;
+                   these are how you hit exactly 50 %, which is what an edge blend is made of. -->
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Source x / y" IsEnabled="{Binding HasSection}">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="{Binding SourceXValue}" LostFocus="OnSectionFieldCommitted" />
+                  <TextBox Grid.Column="1" Text="{Binding SourceYValue}" LostFocus="OnSectionFieldCommitted" />
+                </Grid>
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity">
-                <TextBox Classes="short" Text="100 %" />
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Source w / h" IsEnabled="{Binding HasSection}">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="{Binding SourceWidthValue}" LostFocus="OnSectionFieldCommitted" />
+                  <TextBox Grid.Column="1" Text="{Binding SourceHeightValue}" LostFocus="OnSectionFieldCommitted" />
+                </Grid>
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Brightness">
-                <TextBox Classes="short" Text="0.92" />
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Output x / y" IsEnabled="{Binding HasSection}">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="{Binding TargetXValue}" LostFocus="OnSectionFieldCommitted" />
+                  <TextBox Grid.Column="1" Text="{Binding TargetYValue}" LostFocus="OnSectionFieldCommitted" />
+                </Grid>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Output w / h" IsEnabled="{Binding HasSection}">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="{Binding TargetWidthValue}" LostFocus="OnSectionFieldCommitted" />
+                  <TextBox Grid.Column="1" Text="{Binding TargetHeightValue}" LostFocus="OnSectionFieldCommitted" />
+                </Grid>
+              </HeaderedContentControl>
+
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Rotation" IsEnabled="{Binding HasSection}">
+                <TextBox Classes="short" Text="{Binding RotationValue}" LostFocus="OnSectionFieldCommitted" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity" IsEnabled="{Binding HasSection}">
+                <TextBox Classes="short" Text="{Binding OpacityValue}" LostFocus="OnSectionFieldCommitted" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Brightness" IsEnabled="{Binding HasSection}">
+                <TextBox Classes="short" Text="{Binding BrightnessValue}" LostFocus="OnSectionFieldCommitted" />
               </HeaderedContentControl>
               <!-- Mesh warp first; corner-pin stays reserved in the model (register item 22). -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Warp">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Warp" IsEnabled="{Binding HasSection}">
                 <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding WarpModes}"
-                         SelectedIndex="1" />
+                         SelectedIndex="{Binding WarpIndex}" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
                 <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
-                           Text="drag with the mouse · numeric x/y/w/h · arrow-key nudge of the last-clicked point" />
+                           Text="drag with the mouse · numeric x/y/w/h · arrow-key nudge of the selected box" />
               </ContentControl>
             </StackPanel>
           </ScrollViewer>
@@ -238,19 +238,11 @@
             </Border>
           </c:PanelBox.Footer>
           <c:AspectBox Margin="10,8" VerticalAlignment="Top">
-            <Border Classes="vidcanvas">
-            <Panel>
-              <c:CanvasGrid />
-              <ItemsControl ItemsSource="{Binding MappingSource}"
-                            ItemContainerTheme="{StaticResource PlacementContainer}"
-                            ItemTemplate="{StaticResource PlacementTemplate}">
-                <ItemsControl.ItemsPanel>
-                  <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-              </ItemsControl>
-            </Panel>
-          </Border>
-            </c:AspectBox>
+            <c:PlacementCanvas Boxes="{Binding MappingSource}"
+                               Gesture="OnMappingSourceGesture"
+                               GestureCompleted="OnGestureCompleted"
+                               BoxSelected="OnSectionSelected" />
+          </c:AspectBox>
         </c:PanelBox>
 
         <c:PanelBox Grid.Column="2" Header="Output · Projector A" Hint="where it lands · warp handles live">
@@ -264,18 +256,12 @@
             </Border>
           </c:PanelBox.Footer>
           <c:AspectBox Margin="10,8" VerticalAlignment="Top">
-            <Border Classes="vidcanvas">
-            <Panel>
-              <ItemsControl ItemsSource="{Binding MappingTarget}"
-                            ItemContainerTheme="{StaticResource PlacementContainer}"
-                            ItemTemplate="{StaticResource PlacementTemplate}">
-                <ItemsControl.ItemsPanel>
-                  <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-              </ItemsControl>
-            </Panel>
-          </Border>
-            </c:AspectBox>
+            <!-- No grid on the output half: the reference here is the wall, not a nominal frame. -->
+            <c:PlacementCanvas Boxes="{Binding MappingTarget}" ShowGrid="False"
+                               Gesture="OnMappingTargetGesture"
+                               GestureCompleted="OnGestureCompleted"
+                               BoxSelected="OnSectionSelected" />
+          </c:AspectBox>
         </c:PanelBox>
       </Grid>
 

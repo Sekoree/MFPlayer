@@ -12,6 +12,18 @@ public partial class InspectorPane : UserControl
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
+    private void OnPlacementGesture(object? sender, Controls.PlacementGesture gesture)
+    {
+        if (DataContext is InspectorViewModel inspector)
+            inspector.ApplyPlacementGesture(gesture);
+    }
+
+    private void OnPlacementGestureCompleted(object? sender, EventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector)
+            inspector.EndPlacementGesture();
+    }
+
     private void OnSendGesture(object? sender, Controls.MatrixGesture gesture)
     {
         if (DataContext is InspectorViewModel inspector)

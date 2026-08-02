@@ -50,6 +50,32 @@
       </Setter>
     </ControlTheme>
 
+    <!-- The same row with a narrower label, for a side column where a 96 px header would leave the
+         value nothing: a field whose number is cut off is worse than a field with a terser name. -->
+    <ControlTheme x:Key="FieldTight" TargetType="HeaderedContentControl" BasedOn="{StaticResource Field}">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Grid ColumnDefinitions="66,*" Margin="10,3" VerticalAlignment="Center">
+            <ContentPresenter Grid.Column="0"
+                              VerticalAlignment="Center"
+                              Content="{Binding Header, RelativeSource={RelativeSource TemplatedParent},
+                                                Converter={x:Static conv:UpperCaseConverter.Instance}}"
+                              TextElement.FontFamily="{StaticResource MonoFont}"
+                              TextElement.FontSize="{StaticResource FontSizeMonoSmall}"
+                              TextElement.Foreground="{StaticResource BoothInk3}"
+                              TextBlock.TextWrapping="Wrap"
+                              TextElement.LetterSpacing="0.85" />
+            <ContentPresenter Grid.Column="1"
+                              Margin="9,0,0,0"
+                              VerticalAlignment="Center"
+                              HorizontalContentAlignment="Stretch"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}" />
+          </Grid>
+        </ControlTemplate>
+      </Setter>
+    </ControlTheme>
+
     <!-- Full-bleed row: a value that needs the whole width, or a block button. -->
     <ControlTheme x:Key="FieldWide" TargetType="ContentControl">
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />

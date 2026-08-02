@@ -130,66 +130,52 @@
 
           <!-- ══ VIDEO ═════════════════════════════════════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsVideoPane}" Margin="0,6,0,8">
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
-              <ComboBox SelectedIndex="0">
-                <ComboBoxItem>Cyc · 1920×1080</ComboBoxItem>
-                <ComboBoxItem>Portal · 1280×720</ComboBoxItem>
-              </ComboBox>
-            </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Layer">
-              <TextBox Classes="short" Text="2" />
-            </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Fit">
-              <ComboBox SelectedIndex="1">
-                <ComboBoxItem>contain</ComboBoxItem>
-                <ComboBoxItem>cover</ComboBoxItem>
-                <ComboBoxItem>stretch</ComboBoxItem>
-              </ComboBox>
-            </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity">
-              <TextBox Classes="short" Text="100 %" />
-            </HeaderedContentControl>
+            <!-- A cue with no placement is not on any canvas. Saying so beats four fields and an
+                 empty frame, which read as a layer sized to nothing. -->
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding !HasPlacement}">
+              <Border Classes="chain">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <Border Classes="badge"><TextBlock Text="NOT PLACED" /></Border>
+                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="this cue is on no composition — add it to one to give it a canvas" />
+                </StackPanel>
+              </Border>
+            </ContentControl>
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding !HasPlacement}">
+              <Button Classes="block" Content="PLACE ON A COMPOSITION…" />
+            </ContentControl>
 
-            <c:AspectBox Margin="10,6" VerticalAlignment="Top">
-              <Border Classes="vidcanvas">
-              <Panel>
-                <c:CanvasGrid />
-                <ItemsControl ItemsSource="{Binding Placements}">
-                  <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-                  </ItemsControl.ItemsPanel>
-                  <ItemsControl.ItemContainerTheme>
-                    <ControlTheme TargetType="ContentPresenter" x:DataType="vm:PlacementBox">
-                      <Setter Property="(c:Fraction.Left)" Value="{Binding Left}" />
-                      <Setter Property="(c:Fraction.Top)" Value="{Binding Top}" />
-                      <Setter Property="(c:Fraction.Width)" Value="{Binding Width}" />
-                      <Setter Property="(c:Fraction.Height)" Value="{Binding Height}" />
-                    </ControlTheme>
-                  </ItemsControl.ItemContainerTheme>
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:PlacementBox">
-                      <Border Classes="placement"
-                              Classes.a="{Binding !IsSecondary}"
-                              Classes.b="{Binding IsSecondary}"
-                              Classes.sel="{Binding IsSelected}">
-                        <TextBlock Text="{Binding Label}" />
-                      </Border>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </Panel>
-            </Border>
-            </c:AspectBox>
+            <StackPanel IsVisible="{Binding HasPlacement}">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
+                <ComboBox ItemsSource="{Binding PlacementCompositions}"
+                          SelectedIndex="{Binding PlacementCompositionIndex}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Layer">
+                <TextBox Classes="short" Text="{Binding LayerValue}" LostFocus="OnFieldCommitted" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Fit">
+                <ComboBox ItemsSource="{Binding FitModes}" SelectedIndex="{Binding FitIndex}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity">
+                <TextBox Classes="short" Text="{Binding PlacementOpacityValue}" LostFocus="OnFieldCommitted" />
+              </HeaderedContentControl>
 
-            <!-- The canvas is a second editor for the same cue data, under the same undo journal —
-                 rough here, precise in the Video view. -->
-            <Border Classes="chain">
-              <StackPanel Orientation="Horizontal" Spacing="7">
-                <Border Classes="badge"><TextBlock Text="PLACEMENT" /></Border>
-                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                           Text="drag here for rough · Video view for precision" />
-              </StackPanel>
-            </Border>
+              <c:AspectBox Margin="10,6" VerticalAlignment="Top">
+                <c:PlacementCanvas Boxes="{Binding Placements}"
+                                   Gesture="OnPlacementGesture"
+                                   GestureCompleted="OnPlacementGestureCompleted" />
+              </c:AspectBox>
+
+              <!-- The canvas is a second editor for the same cue data, under the same undo journal —
+                   rough here, precise in the Video view. -->
+              <Border Classes="chain">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <Border Classes="badge"><TextBlock Text="PLACEMENT" /></Border>
+                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                             Text="drag here for rough · Video view for precision" />
+                </StackPanel>
+              </Border>
+            </StackPanel>
           </StackPanel>
 
           <!-- ══ EFFECTS — lanes, hidden until added (register item 18) ═════════════════════ -->

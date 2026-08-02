@@ -463,3 +463,131 @@ public sealed class SetCueSendCommand : ICoalescingCommand
         public static SendState Unrouted { get; } = new(false, 0, false, -1);
     }
 }
+
+/// <summary>A rectangle in fractions of whatever contains it — a composition, or an output.</summary>
+/// <remarks>
+/// Fractions rather than pixels so a placement survives a composition being resized, and so the
+/// document never has to know what a canvas is currently drawn at.
+/// </remarks>
+public readonly record struct NormalizedRect(double X, double Y, double Width, double Height)
+{
+    /// <summary>
+    /// Keeps a box on the canvas and big enough to grab again.
+    /// </summary>
+    /// <remarks>
+    /// The minimum is the important half: a drag that could take a placement to zero size would let
+    /// somebody lose a layer with one slip and have nothing left to click on to get it back.
+    /// </remarks>
+    public NormalizedRect Clamped(double minimum = 0.02)
+    {
+        var width = Math.Clamp(Width, minimum, 1);
+        var height = Math.Clamp(Height, minimum, 1);
+
+        return new NormalizedRect(
+            Math.Clamp(X, 0, 1 - width),
+            Math.Clamp(Y, 0, 1 - height),
+            width,
+            height);
+    }
+}
+
+/// <summary>
+/// Moves or resizes one rectangle — a layer placement, or a mapping section's source or target.
+/// </summary>
+/// <remarks>
+/// One command for all four numbers, with one coalesce key, because a drag changes them together and
+/// splitting them would make a single gesture four undo steps that can be walked back into a shape the
+/// operator never saw.
+/// </remarks>
+public sealed class SetRectCommand : ICoalescingCommand
+{
+    private readonly Func<NormalizedRect> _read;
+    private readonly Action<NormalizedRect> _write;
+    private readonly NormalizedRect _before;
+    private NormalizedRect _after;
+
+    public SetRectCommand(
+        Guid subject,
+        string property,
+        string domain,
+        Func<NormalizedRect> read,
+        Action<NormalizedRect> write,
+        NormalizedRect value,
+        string description)
+    {
+        _read = read;
+        _write = write;
+        _before = read();
+        _after = value.Clamped();
+        Key = new CoalesceKey(subject, property);
+        Domain = domain;
+        Description = description;
+    }
+
+    public CoalesceKey Key { get; }
+    public string Domain { get; }
+    public string Description { get; }
+
+    public NormalizedRect Current => _read();
+
+    public void Apply(HaCueProject project) => _write(_after);
+
+    public void Revert(HaCueProject project) => _write(_before);
+
+    public void MergeFrom(ICoalescingCommand newer)
+    {
+        if (newer is SetRectCommand other)
+            _after = other._after;
+    }
+}
+
+/// <summary>
+/// The three rectangles a canvas drag can be editing, each as one command.
+/// </summary>
+/// <remarks>
+/// Kept together because the three read almost identically and the differences are the interesting
+/// part: a layer placement is a property of the CUE (register item 21), so its coalesce subject is the
+/// cue — undoing a move undoes it wherever that cue is looked at. A mapping section's source and target
+/// are two rectangles on one object, so they take the same subject and different property names, and a
+/// drag on the left canvas never merges into a drag on the right.
+/// </remarks>
+public static class RectEdits
+{
+    public static SetRectCommand Placement(CueNode cue, LayerPlacement placement, NormalizedRect rect) =>
+        new(cue.Id, "placement", "video",
+            () => new NormalizedRect(placement.X, placement.Y, placement.Width, placement.Height),
+            value =>
+            {
+                placement.X = value.X;
+                placement.Y = value.Y;
+                placement.Width = value.Width;
+                placement.Height = value.Height;
+            },
+            rect, "move layer");
+
+    public static SetRectCommand MappingSource(MappingSection section, NormalizedRect rect) =>
+        new(section.Id, "source", "mapping",
+            () => new NormalizedRect(
+                section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight),
+            value =>
+            {
+                section.SourceX = value.X;
+                section.SourceY = value.Y;
+                section.SourceWidth = value.Width;
+                section.SourceHeight = value.Height;
+            },
+            rect, "move source region");
+
+    public static SetRectCommand MappingTarget(MappingSection section, NormalizedRect rect) =>
+        new(section.Id, "target", "mapping",
+            () => new NormalizedRect(
+                section.TargetX, section.TargetY, section.TargetWidth, section.TargetHeight),
+            value =>
+            {
+                section.TargetX = value.X;
+                section.TargetY = value.Y;
+                section.TargetWidth = value.Width;
+                section.TargetHeight = value.Height;
+            },
+            rect, "move output region");
+}

@@ -34,6 +34,8 @@ public static class VideoPresentation
 
             boxes.Add(new PlacementBox
             {
+                SubjectId = cue.Id,
+                LayerIndex = placement.LayerIndex,
                 Label = $"Q{CuePresentation.Number(cue.Number)} {cue.Label} · L{placement.LayerIndex}",
                 Left = placement.X,
                 Top = placement.Y,
@@ -46,7 +48,10 @@ public static class VideoPresentation
             });
         }
 
-        return [.. boxes.OrderBy(box => box.Label)];
+        // Drawn in LAYER order, lowest first, so the box painted last is the one actually on top —
+        // and so a click, which searches back to front, grabs what the operator sees on top. Cue order
+        // would have an L1 covering an L2 whenever the L1 cue happened to come later in the list.
+        return [.. boxes.OrderBy(box => box.LayerIndex)];
     }
 
     public static IReadOnlyList<VideoOutputRow> Outputs(HaCueProject project, ShowRuntime runtime) =>
@@ -73,6 +78,7 @@ public static class VideoPresentation
     [
         .. output.Mapping.Select((section, index) => new PlacementBox
         {
+            SubjectId = section.Id,
             Label = $"{index + 1} · {section.Name}",
             Left = section.SourceX, Top = section.SourceY,
             Width = section.SourceWidth, Height = section.SourceHeight,
@@ -86,6 +92,7 @@ public static class VideoPresentation
     [
         .. output.Mapping.Select((section, index) => new PlacementBox
         {
+            SubjectId = section.Id,
             Label = section.WarpGrid > 0
                 ? $"{index + 1} · warp {section.WarpGrid}×{section.WarpGrid}"
                 : $"{index + 1}",
