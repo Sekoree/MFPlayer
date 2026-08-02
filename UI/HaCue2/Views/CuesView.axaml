@@ -46,20 +46,43 @@
     </Border>
 
     <Border Classes="transport second" DockPanel.Dock="Top">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="7">
-        <Button Grid.Column="0" Content="+ ADD ▾" />
-        <Button Grid.Column="1" Content="SELECTION ▾" />
-        <Button Grid.Column="2" Content="REMOVE" />
-        <Button Grid.Column="3" Classes="icon" Content="RENUMBER…" Click="OnRenumber" />
-        <TextBlock Grid.Column="5" Classes="mono dim3 small" VerticalAlignment="Center"
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="7">
+        <!-- Media first and separate: picking files IS how a show gets built, and burying it in a
+             menu behind six cue kinds nobody adds by hand would be the wrong shape. -->
+        <Button Grid.Column="0" Content="+ MEDIA…" Click="OnAddMedia" />
+        <Button Grid.Column="1" Content="+ ADD ▾">
+          <Button.Flyout>
+            <MenuFlyout>
+              <MenuItem Header="Group" Click="OnAddCue" Tag="Group" />
+              <MenuItem Header="Action" Click="OnAddCue" Tag="Action" />
+              <MenuItem Header="Fade" Click="OnAddCue" Tag="Fade" />
+              <MenuItem Header="Jump" Click="OnAddCue" Tag="Jump" />
+              <MenuItem Header="Patch" Click="OnAddCue" Tag="Patch" />
+              <MenuItem Header="Visualizer" Click="OnAddCue" Tag="Visualizer" />
+              <Separator />
+              <MenuItem Header="Comment" Click="OnAddCue" Tag="Comment" />
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
+        <Button Grid.Column="2" Content="DUPLICATE" Click="OnDuplicate" />
+        <Button Grid.Column="3" Content="REMOVE" Click="OnRemove" />
+        <Button Grid.Column="4" Classes="icon" Content="RENUMBER…" Click="OnRenumber" />
+        <TextBlock Grid.Column="6" Classes="mono dim3 small" VerticalAlignment="Center"
                    Text="GO always works — editing never blocks playback" />
       </Grid>
     </Border>
 
-    <!-- ══ timeline sheet (screen 05) ═══════════════════════════════════════════════════════ -->
-    <v:TimelineSheet DockPanel.Dock="Bottom"
-                     DataContext="{Binding Timeline}"
-                     IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).IsTimelineOpen}" />
+    <!-- ══ timeline sheet (screen 05) ═══════════════════════════════════════════════════════
+         In a Grid rather than docked, so the split above it can be dragged: how much of the screen
+         the sheet takes against the cue list is the same kind of per-show decision as the other two
+         splits. Both the sheet and the splitter disappear together when it is closed or undocked. -->
+    <Grid DockPanel.Dock="Bottom"
+          RowDefinitions="4,Auto"
+          IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).IsTimelineOpen}">
+      <GridSplitter Grid.Row="0" Height="4" HorizontalAlignment="Stretch"
+                    Background="Transparent" ResizeDirection="Rows" />
+      <v:TimelineSheet Grid.Row="1" MinHeight="140" DataContext="{Binding Timeline}" />
+    </Grid>
 
     <!-- ══ tree · active · right column ════════════════════════════════════════════════════ -->
     <!-- Both splits are draggable: how much of the screen the cue list gets against the Active panel,

@@ -34,11 +34,45 @@ public partial class TimelineSheet : UserControl
     /// The BED is the selected cue, not a separate pick: the operator is looking at the lane they want
     /// pushed down, and asking them to choose it again in a dialog is a question they already answered.
     /// </remarks>
+    /// <summary>
+    /// Moves the sheet between the bottom of the Cues view and a window of its own.
+    /// </summary>
+    /// <remarks>
+    /// The same view-model in both, so an edit made in one is already in the other — there is one
+    /// timeline, and two ways to look at it. The window closing docks it again rather than leaving a
+    /// sheet nobody can see: a "close" that hides a panel with no way back is how a feature goes
+    /// missing.
+    /// </remarks>
+    private void OnUndock(object? sender, RoutedEventArgs e)
+    {
+        if (Timeline is not { Owner: { } cues } timeline)
+            return;
+
+        if (timeline.IsUndocked)
+        {
+            // The floating window owns itself; docking IS its Close, and the handler below puts the
+            // sheet back. There is no CuesView above this control any more, which is exactly why the
+            // view-model carries its owner.
+            this.FindAncestorOfType<Window>()?.Close();
+            return;
+        }
+
+        timeline.IsUndocked = true;
+        cues.IsTimelineOpen = false;
+
+        var window = new TimelineWindow { DataContext = timeline };
+        window.Closed += (_, _) =>
+        {
+            timeline.IsUndocked = false;
+            cues.IsTimelineOpen = true;
+        };
+
+        window.Show(this.FindAncestorOfType<Window>()!);
+    }
+
     private void OnDuck(object? sender, RoutedEventArgs e)
     {
-        if (Timeline is not { } timeline
-            || this.FindAncestorOfType<CuesView>()?.DataContext is not CuesViewModel cues
-            || cues.SelectedCue is not { } selected)
+        if (Timeline is not { Owner: { SelectedCue: { } selected } } timeline)
             return;
 
         PromptWindow.Show(this, timeline.Duck(selected.Id), timeline.Refresh);

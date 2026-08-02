@@ -39,7 +39,7 @@ public partial class CuesViewModel : ObservableObject
         _selectedScope = Scopes.FirstOrDefault(scope => scope.IsList && scope.Name == "Act 1")
                          ?? Scopes.FirstOrDefault();
 
-        Timeline = new TimelineViewModel(Project, runtime, journal);
+        Timeline = new TimelineViewModel(Project, runtime, journal) { Owner = this };
 
         Cues = [];
         ActiveCues = [.. runtime.ActiveCues];
@@ -247,6 +247,190 @@ public partial class CuesViewModel : ObservableObject
         _journal.CloseGroup();
 
         Refresh();
+    }
+
+    // ── building a show ───────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Adds a cue of the given kind after the selection.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// AFTER the selected cue rather than at the end: an operator adding a cue is almost always adding
+    /// it where they are looking. Inside the selected group when a group is selected, for the same
+    /// reason.
+    /// </para>
+    /// <para>
+    /// Numbered by <see cref="AutoNumber"/>, which honours the project's auto-renumber setting
+    /// (register item 20) — the new cue lands between its neighbours rather than at 0.
+    /// </para>
+    /// </remarks>
+    public CueNode? AddCue(CueKind kind, string mediaPath = "")
+    {
+        if (ScopedList is not { } list)
+            return null;
+
+        CueNode cue = kind switch
+        {
+            CueKind.Group => new GroupCueNode { Label = "Group" },
+            CueKind.Action => new ActionCueNode { Label = "Action" },
+            CueKind.Fade => new FadeCueNode { Label = "Fade" },
+            CueKind.Jump => new JumpCueNode { Label = "Jump" },
+            CueKind.Patch => new PatchCueNode { Label = "Patch" },
+            CueKind.Visualizer => new VisualizerCueNode { Label = "Visualizer" },
+            CueKind.Comment => new CommentCueNode { Label = "" },
+            _ => new MediaCueNode
+            {
+                Label = mediaPath.Length > 0
+                    ? Path.GetFileNameWithoutExtension(mediaPath)
+                    : "Media",
+                MediaPath = mediaPath,
+            },
+        };
+
+        var (siblings, at) = InsertionPoint(list);
+        cue.Number = AutoNumber(siblings, at);
+
+        _journal.Do(new AddItemCommand<CueNode>(
+            siblings, cue, at, "cues", $"add {kind.ToString().ToLowerInvariant()} cue"));
+        _journal.CloseGroup();
+
+        Refresh();
+        SelectedCue = AllRows.FirstOrDefault(row => row.Id == cue.Id);
+        return cue;
+    }
+
+    /// <summary>Adds one media cue per file, as one undo step.</summary>
+    public void AddMedia(IReadOnlyList<string> paths)
+    {
+        if (paths.Count == 0 || ScopedList is null)
+            return;
+
+        using (_journal.Composite(
+            paths.Count == 1 ? "add media cue" : $"add {paths.Count} media cues", "cues"))
+        {
+            foreach (var path in paths)
+                AddCue(CueKind.Media, path);
+        }
+
+        Refresh();
+    }
+
+    /// <summary>Removes every selected cue — a group takes its children with it.</summary>
+    public void RemoveSelected()
+    {
+        var selected = Inspector.Selected;
+        if (selected.Count == 0 || ScopedList is not { } list)
+            return;
+
+        using (_journal.Composite(
+            selected.Count == 1 ? "remove cue" : $"remove {selected.Count} cues", "cues"))
+        {
+            foreach (var cue in selected)
+            {
+                if (Owner(list.Cues, cue.Id) is { } owner)
+                    _journal.Do(new RemoveItemCommand<CueNode>(owner, cue, "cues", "remove cue"));
+            }
+        }
+
+        Refresh();
+    }
+
+    /// <summary>
+    /// Copies the selected cues in place.
+    /// </summary>
+    /// <remarks>
+    /// New IDS all the way down — a duplicated group whose children kept their ids would be two cues
+    /// claiming to be the same cue, and every reference to one would reach both.
+    /// </remarks>
+    public void DuplicateSelected()
+    {
+        var selected = Inspector.Selected;
+        if (selected.Count == 0 || ScopedList is not { } list)
+            return;
+
+        using (_journal.Composite(
+            selected.Count == 1 ? "duplicate cue" : $"duplicate {selected.Count} cues", "cues"))
+        {
+            foreach (var cue in selected)
+            {
+                if (Owner(list.Cues, cue.Id) is not { } owner)
+                    continue;
+
+                var at = owner.IndexOf(cue) + 1;
+                var copy = Copy(cue);
+                copy.Number = AutoNumber(owner, at);
+
+                _journal.Do(new AddItemCommand<CueNode>(
+                    owner, copy, at, "cues", $"duplicate {cue.Label}"));
+            }
+        }
+
+        Refresh();
+    }
+
+    /// <summary>Where a new cue goes: inside the selected group, or after the selected cue.</summary>
+    private (List<CueNode> Siblings, int At) InsertionPoint(CueList list)
+    {
+        if (SelectedCue is not { } row || Project.FindCue(row.Id) is not { } selected)
+            return (list.Cues, list.Cues.Count);
+
+        if (selected is GroupCueNode group)
+            return (group.Children, group.Children.Count);
+
+        var owner = Owner(list.Cues, selected.Id) ?? list.Cues;
+        return (owner, owner.IndexOf(selected) + 1);
+    }
+
+    /// <summary>The list a cue actually lives in, at whatever depth.</summary>
+    private static List<CueNode>? Owner(List<CueNode> cues, Guid id)
+    {
+        if (cues.Any(cue => cue.Id == id))
+            return cues;
+
+        foreach (var group in cues.OfType<GroupCueNode>())
+        {
+            if (Owner(group.Children, id) is { } found)
+                return found;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// A number that sits where the cue was inserted.
+    /// </summary>
+    /// <remarks>
+    /// Between its neighbours when there is room (12 and 13 → 12.5), otherwise one past the one
+    /// before. A new cue numbered 0 at the bottom of the list is the thing auto-renumber exists to
+    /// prevent (register item 20).
+    /// </remarks>
+    private static CueNumber AutoNumber(IReadOnlyList<CueNode> siblings, int at)
+    {
+        var before = at > 0 && at - 1 < siblings.Count ? siblings[at - 1].Number : CueNumber.Empty;
+        var after = at < siblings.Count ? siblings[at].Number : CueNumber.Empty;
+
+        if (before.IsEmpty)
+            return after.IsEmpty ? new CueNumber("1") : after.Child(1);
+
+        // Room between them: take a decimal step down from the one before.
+        if (!after.IsEmpty && before.CompareTo(after) < 0)
+            return before.Child(1) < after ? before.Child(1) : before;
+
+        var segments = before.Text.Split('.');
+        return int.TryParse(segments[^1], out var last)
+            ? new CueNumber(string.Join('.', segments[..^1].Append((last + 1).ToString())))
+            : before.Child(1);
+    }
+
+    private static CueNode Copy(CueNode cue)
+    {
+        var copy = cue with { Id = Guid.NewGuid() };
+
+        if (copy is GroupCueNode group)
+            group.Children = [.. group.Children.Select(Copy)];
+
+        return copy;
     }
 
     /// <summary>
@@ -561,6 +745,30 @@ public sealed partial class TimelineViewModel : ObservableObject
 
     [ObservableProperty]
     private string _hint = "";
+
+    /// <summary>
+    /// Whether the sheet is in its own window.
+    /// </summary>
+    /// <remarks>
+    /// Lives on the view-model rather than the window so the button's label is right in BOTH places:
+    /// the docked sheet offers "undock" and the floating one offers "dock", and they are the same
+    /// view-model, so the label has to come from the state rather than from which XAML is showing.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DockLabel))]
+    private bool _isUndocked;
+
+    public string DockLabel => IsUndocked ? "DOCK ↙" : "UNDOCK ↗";
+
+    /// <summary>
+    /// The cue view this sheet belongs to.
+    /// </summary>
+    /// <remarks>
+    /// A back-reference rather than an ancestor walk, because once the sheet is UNDOCKED there is no
+    /// CuesView above it — and "which cue is selected" and "put me back" are both questions only the
+    /// cue view can answer.
+    /// </remarks>
+    public CuesViewModel? Owner { get; init; }
     [ObservableProperty]
     private IReadOnlyList<string> _ruler = [];
 

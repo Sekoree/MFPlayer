@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Platform.Storage;
 using Avalonia.Interactivity;
 using HaCue2.ViewModels;
 using Avalonia.Markup.Xaml;
@@ -18,6 +19,41 @@ public partial class CuesView : UserControl
     public CuesView() => InitializeComponent();
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+
+    /// <summary>
+    /// Picks media files and makes a cue of each.
+    /// </summary>
+    /// <remarks>
+    /// This is how a show actually gets built, so it is a button of its own rather than one entry in
+    /// a menu of cue kinds. Several files at once, in the order they were chosen, as ONE undo step.
+    /// </remarks>
+    private async void OnAddMedia(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuesViewModel cues || TopLevel.GetTopLevel(this) is not { } top)
+            return;
+
+        var files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Add media cues",
+            AllowMultiple = true,
+        });
+
+        cues.AddMedia([.. files.Select(file => file.TryGetLocalPath()).OfType<string>()]);
+    }
+
+    private void OnAddCue(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is CuesViewModel cues
+            && (sender as Control)?.Tag as string is { } tag
+            && Enum.TryParse<CueKind>(tag, out var kind))
+            cues.AddCue(kind);
+    }
+
+    private void OnDuplicate(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.DuplicateSelected();
+
+    private void OnRemove(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.RemoveSelected();
 
     private void OnOpenTimeline(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.OpenTimeline();
