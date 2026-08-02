@@ -36,7 +36,7 @@ public partial class ShellViewModel : ObservableObject
         Environment = new RuntimeEnvironment(Runtime, project);
 
         Cues = new CuesViewModel(Journal, Runtime);
-        Audio = new AudioViewModel(project, Runtime);
+        Audio = new AudioViewModel(Journal, Runtime);
         Video = new VideoViewModel(project, Runtime);
         Targets = new TargetsViewModel(project, Runtime);
         OutputInfo = new OutputInfoViewModel(Runtime);
@@ -176,6 +176,8 @@ public partial class ShellViewModel : ObservableObject
         OnPropertyChanged(nameof(CanUndo));
         OnPropertyChanged(nameof(CanRedo));
         Cues.Refresh();
+        // One journal, every view: an undo made in the patch has to reach the cue tree too.
+        Audio.Refresh();
     }
 
     private IEnumerable<StatusCheck> OutputChecks() =>

@@ -135,6 +135,56 @@ public sealed class JournalTests
         Assert.All(cues, cue => Assert.Equal(CueTrigger.Manual, cue.Trigger));
     }
 
+    /// <summary>
+    /// A composite opened inside another joins it. Callers compose — a group-linked patch nudge inside
+    /// a drag, a delete-with-cleanup inside a multi-selection edit — and the OUTER scope is what the
+    /// operator did, so it is what one undo takes back.
+    /// </summary>
+    [Fact]
+    public void ANestedCompositeJoinsTheOpenOneRatherThanThrowing()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var before = HaCueProjectFile.Serialize(fixture.Project);
+
+        using (journal.Composite("outer", "cues"))
+        {
+            journal.Do(LevelEdit(fixture.Track, -3));
+
+            using (journal.Composite("inner", "outputs"))
+                ProjectEdits.DeleteLogicalChannel(journal, fixture.FoldR.Id);
+        }
+
+        Assert.Single(journal.Log);
+        Assert.Equal("outer", journal.NextUndo!.Description);
+
+        journal.Undo();
+
+        Assert.Equal(before, HaCueProjectFile.Serialize(fixture.Project));
+    }
+
+    /// <summary>
+    /// Coalescing applies inside a composite too — otherwise a drag wrapped in one keeps every
+    /// intermediate value alive for as long as the undo entry exists.
+    /// </summary>
+    [Fact]
+    public void AStreamOfEditsInsideACompositeCollapsesToOneCommand()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+
+        using (journal.Composite("drag", "cues"))
+            foreach (var level in new double[] { -7, -8, -9, -10 })
+                journal.Do(LevelEdit(fixture.Track, level));
+
+        var composite = Assert.IsType<CompositeCommand>(journal.NextUndo);
+        Assert.Single(composite.Commands);
+        Assert.Equal(-10, fixture.Track.LevelDb);
+
+        journal.Undo();
+        Assert.Equal(-6, fixture.Track.LevelDb);
+    }
+
     [Fact]
     public void AnEmptyCompositeIsNotAnUndoStep()
     {

@@ -93,8 +93,13 @@
             <ContentControl Theme="{StaticResource Subhead}" Content="Sends → logical outputs" />
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
                           Margin="10,2,10,0">
+              <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
+                   must find it true on the other. -->
               <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"
-                            RowHeaderWidth="44" />
+                            RowHeaderWidth="44"
+                            Gesture="OnSendGesture"
+                            PointerReleased="OnSendGestureEnded"
+                            ToolTip.Tip="Click routes at unity · drag adjusts gain · right-click mutes." />
             </ScrollViewer>
 
             <Border Classes="chain flush">

@@ -75,7 +75,8 @@ public static class AudioPresentation
                 Abbreviate(channel.Name),
                 // A grouped column is marked because linked-delta editing applies to it: the operator
                 // has to know before they drag a cell, not after.
-                project.AudioPatch.GroupOf(channel.Id) is not null)),
+                project.AudioPatch.GroupOf(channel.Id) is not null,
+                channel.Id)),
     ];
 
     public static IReadOnlyList<MatrixRow> PatchRows(HaCueProject project, ShowRuntime runtime)
@@ -89,39 +90,41 @@ public static class AudioPresentation
             // empty band across the matrix.
             for (var channel = 0; channel < line.Channels; channel++)
             {
+                var index = rows.Count;
                 var cells = channels
-                    .Select(logical => Cell(project, logical.Id, line.Id, channel))
+                    .Select((logical, column) => Cell(project, logical.Id, line.Id, channel, index, column))
                     .ToList();
 
-                // A line's unused channels are still rows — the patch sheet is about the DEVICE, and
-                // hiding its spare outputs is how somebody patches into one twice.
-                if (cells.All(cell => cell == MatrixCell.Empty) && !line.Required)
-                    continue;
-
+                // Every channel of every line gets a row, unused ones included. The patch sheet is
+                // about the DEVICE: hiding spare outputs is how somebody patches into one twice, and
+                // a row that vanished when its last cell was un-routed could never be clicked again.
                 rows.Add(new MatrixRow(
                     $"{line.Name} · Out {channel + 1}",
                     cells,
-                    runtime.AbsentLines.Contains(line.Id)));
+                    runtime.AbsentLines.Contains(line.Id),
+                    line.Id,
+                    channel));
             }
         }
 
         return rows;
     }
 
-    private static MatrixCell Cell(HaCueProject project, Guid channelId, Guid lineId, int lineChannel)
+    private static MatrixCell Cell(
+        HaCueProject project, Guid channelId, Guid lineId, int lineChannel, int row, int column)
     {
         var cell = project.AudioPatch.Cells
             .FirstOrDefault(item => item.Matches(channelId, lineId, lineChannel));
 
         if (cell is null)
-            return MatrixCell.Empty;
+            return MatrixCell.Empty(row, column);
 
         if (cell.Muted)
-            return MatrixCell.Mute;
+            return MatrixCell.Mute(row, column);
 
         return cell.GainDb == 0
-            ? MatrixCell.Unity
-            : MatrixCell.Gain(CuePresentation.Db(cell.GainDb));
+            ? MatrixCell.Unity(row, column)
+            : MatrixCell.Gain(row, column, CuePresentation.Db(cell.GainDb));
     }
 
     // ── a cue's N×V sends (the inspector's Audio tab) ─────────────────────────────────────────
@@ -136,22 +139,23 @@ public static class AudioPresentation
 
         for (var source = 0; source < sourceCount; source++)
         {
-            var cells = channels.Select(channel =>
+            var row = source;
+            var cells = channels.Select((channel, column) =>
             {
                 var send = cue.Sends.FirstOrDefault(item =>
-                    item.SourceChannel == source && item.LogicalChannelId == channel.Id);
+                    item.SourceChannel == row && item.LogicalChannelId == channel.Id);
 
                 if (send is null)
-                    return MatrixCell.Empty;
+                    return MatrixCell.Empty(row, column);
                 if (send.Muted)
-                    return MatrixCell.Mute;
+                    return MatrixCell.Mute(row, column);
 
                 return send.GainDb == 0
-                    ? MatrixCell.Unity
-                    : MatrixCell.Gain(CuePresentation.Db(send.GainDb), picked == source);
+                    ? MatrixCell.Unity(row, column)
+                    : MatrixCell.Gain(row, column, CuePresentation.Db(send.GainDb), picked == row);
             }).ToList();
 
-            rows.Add(new MatrixRow(Source(source), cells));
+            rows.Add(new MatrixRow(Source(source), cells, LineChannel: source));
         }
 
         return rows;

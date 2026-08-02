@@ -155,8 +155,17 @@ public sealed record LogicalOutputRow
 }
 
 /// <summary>One cell of the patch or per-cue send matrix.</summary>
+/// <remarks>
+/// Every cell carries its own <see cref="Row"/> and <see cref="Column"/>. Without them a pointer
+/// gesture would have to find the cell in the bound lists, and since this is a record with structural
+/// equality, two empty cells in a row are indistinguishable — a click on the last column would edit
+/// the first. The coordinates make the lookup unnecessary as well as unambiguous.
+/// </remarks>
 public sealed record MatrixCell
 {
+    public int Row { get; init; }
+    public int Column { get; init; }
+
     public string Text { get; init; } = "";
     public bool IsOn { get; init; }
     public bool IsUnity { get; init; }
@@ -165,18 +174,34 @@ public sealed record MatrixCell
     /// <summary>The cell the effective-route strip underneath is currently explaining.</summary>
     public bool IsPicked { get; init; }
 
-    public static MatrixCell Empty { get; } = new();
-    public static MatrixCell Unity { get; } = new() { Text = "0.0", IsOn = true, IsUnity = true };
-    public static MatrixCell Gain(string db, bool picked = false)
-        => new() { Text = db, IsOn = true, IsPicked = picked };
-    public static MatrixCell Mute { get; } = new() { Text = "off", IsMuted = true };
+    /// <summary>Not routed — which is not the same as muted, and is why this is a distinct state.</summary>
+    public bool IsEmpty => !IsOn && !IsMuted;
+
+    public static MatrixCell Empty(int row, int column) => new() { Row = row, Column = column };
+
+    public static MatrixCell Unity(int row, int column) =>
+        new() { Row = row, Column = column, Text = "0.0", IsOn = true, IsUnity = true };
+
+    public static MatrixCell Gain(int row, int column, string db, bool picked = false) =>
+        new() { Row = row, Column = column, Text = db, IsOn = true, IsPicked = picked };
+
+    public static MatrixCell Mute(int row, int column) =>
+        new() { Row = row, Column = column, Text = "off", IsMuted = true };
 }
 
 /// <summary>A matrix row: a label plus its cells, one per column.</summary>
-public sealed record MatrixRow(string Header, IReadOnlyList<MatrixCell> Cells, bool IsAbsent = false);
+/// <param name="LineId">The device line this row is a channel of; empty for a cue's send rows.</param>
+/// <param name="LineChannel">That line's channel, or the cue's source channel.</param>
+public sealed record MatrixRow(
+    string Header,
+    IReadOnlyList<MatrixCell> Cells,
+    bool IsAbsent = false,
+    Guid LineId = default,
+    int LineChannel = 0);
 
 /// <summary>A matrix column head; <paramref name="IsGrouped"/> marks Output-Group membership.</summary>
-public sealed record MatrixColumn(string Header, bool IsGrouped = false);
+/// <param name="ChannelId">The logical output this column is, so a gesture can name it.</param>
+public sealed record MatrixColumn(string Header, bool IsGrouped = false, Guid ChannelId = default);
 
 /// <summary>Screen 08 — a machine-side audio line, project-owned and possibly absent here.</summary>
 public sealed record AudioLineRow

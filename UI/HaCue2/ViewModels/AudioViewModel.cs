@@ -1,5 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
+using HaCue2.Controls;
 using HaCue2.Presentation;
 using HaCue2.Sample;
 using HaCue2.Session;
@@ -9,13 +11,14 @@ namespace HaCue2.ViewModels;
 /// <summary>Screens 06–08b — Logical outputs · Patch · Devices · Audition, all from the document.</summary>
 public partial class AudioViewModel : ObservableObject
 {
-    private readonly HaCueProject _project;
+    private readonly ProjectJournal _journal;
     private readonly ShowRuntime _runtime;
 
-    public AudioViewModel(HaCueProject project, ShowRuntime runtime)
+    public AudioViewModel(ProjectJournal journal, ShowRuntime runtime)
     {
-        _project = project;
+        _journal = journal;
         _runtime = runtime;
+        var project = journal.Project;
 
         // The counts in the tab labels are the real ones: add a logical output and the tab says so.
         OutputsTab = $"LOGICAL OUTPUTS · {project.AudioPatch.LogicalChannels.Count}";
@@ -57,13 +60,15 @@ public partial class AudioViewModel : ObservableObject
         _ => $"mix {_project.AudioPatch.MixSampleRate:N0} Hz · clock master {ClockMasterName} · edits apply live",
     };
 
+    private HaCueProject _project => _journal.Project;
+
     private string ClockMasterName =>
         _project.AudioPatch.ClockMasterLineId is { } id
             ? _project.FindLine(id)?.Name ?? "none"
             : "none";
 
     // ── 06 · logical outputs ──────────────────────────────────────────────────────────────────
-    public IReadOnlyList<LogicalOutputRow> Outputs { get; }
+    public IReadOnlyList<LogicalOutputRow> Outputs { get; private set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Senders))]
@@ -95,7 +100,7 @@ public partial class AudioViewModel : ObservableObject
     ];
 
     // ── 08 · devices ──────────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<AudioLineRow> Lines { get; }
+    public IReadOnlyList<AudioLineRow> Lines { get; private set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedLineName))]
@@ -109,6 +114,90 @@ public partial class AudioViewModel : ObservableObject
 
     public IReadOnlyList<string> ClockMasters =>
         [.. _project.AudioLines.Select(line => line.Name)];
+
+    // ── editing the patch (register item 13) ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies one pointer gesture to the patch.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Click toggles at unity, drag adjusts the gain, right-click mutes — the interaction the register
+    /// specifies, and the same one the cue-sends matrix uses.
+    /// </para>
+    /// <para>
+    /// A DRAG goes through <see cref="ProjectEdits.NudgeGroupGain"/> rather than writing the cell
+    /// directly, so a member of an Output Group carries its partners with it by the same delta
+    /// (register item 9). Toggling and muting stay per-cell: routing one side of a stereo pair
+    /// somewhere is a deliberate act, not something to mirror behind the operator's back.
+    /// </para>
+    /// </remarks>
+    public void ApplyPatchGesture(MatrixGesture gesture)
+    {
+        if (gesture.Row >= PatchRows.Count || gesture.Column >= PatchColumns.Count)
+            return;
+
+        var row = PatchRows[gesture.Row];
+        var channelId = PatchColumns[gesture.Column].ChannelId;
+        var patch = _project.AudioPatch;
+        var existing = patch.Cells.FirstOrDefault(
+            cell => cell.Matches(channelId, row.LineId, row.LineChannel));
+
+        switch (gesture.Kind)
+        {
+            case MatrixGestureKind.Toggle:
+                _journal.Do(new SetPatchCellCommand(
+                    patch, channelId, row.LineId, row.LineChannel,
+                    existing is null ? 0 : null,
+                    existing is null ? false : null,
+                    existing is null ? "route at unity" : "un-route cell"));
+                // A click is a complete gesture, so it closes its own group; otherwise two clicks on
+                // the same cell would collapse into one undo step.
+                _journal.CloseGroup();
+                break;
+
+            case MatrixGestureKind.Adjust:
+                _drag ??= _journal.Composite("adjust patch gain", "patch");
+                ProjectEdits.NudgeGroupGain(
+                    _journal, channelId, row.LineId, row.LineChannel, gesture.DeltaDb);
+                break;
+
+            case MatrixGestureKind.Mute when existing is not null:
+                _journal.Do(new SetPatchCellCommand(
+                    patch, channelId, row.LineId, row.LineChannel, existing.GainDb, !existing.Muted,
+                    existing.Muted ? "unmute cell" : "mute cell"));
+                _journal.CloseGroup();
+                break;
+        }
+
+        Refresh();
+    }
+
+    /// <summary>Closes the drag, making the whole of it one undo step.</summary>
+    public void EndPatchGesture()
+    {
+        _drag?.Dispose();
+        _drag = null;
+        _journal.CloseGroup();
+        Refresh();
+    }
+
+    /// <summary>The open drag, if one is in progress. Null between gestures.</summary>
+    private IDisposable? _drag;
+
+    /// <summary>Re-reads the document after an edit here, or an undo from anywhere.</summary>
+    public void Refresh()
+    {
+        Outputs = AudioPresentation.LogicalOutputs(_project, _runtime);
+        Lines = AudioPresentation.Lines(_project, _runtime);
+
+        OnPropertyChanged(nameof(Outputs));
+        OnPropertyChanged(nameof(Lines));
+        OnPropertyChanged(nameof(PatchRows));
+        OnPropertyChanged(nameof(PatchColumns));
+        OnPropertyChanged(nameof(Senders));
+        OnPropertyChanged(nameof(Snapshots));
+    }
 
     // ── 08b · audition ────────────────────────────────────────────────────────────────────────
     public AuditionViewModel Audition { get; } = new();

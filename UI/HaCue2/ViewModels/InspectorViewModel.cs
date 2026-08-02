@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
+using HaCue2.Controls;
 using HaCue2.Presentation;
 using HaCue2.Sample;
 
@@ -262,6 +263,54 @@ public partial class InspectorViewModel : ObservableObject
         : [];
 
     public bool HasRoute => RouteChain.Count > 0;
+
+    /// <summary>
+    /// Applies one pointer gesture to this cue's sends — the same click/drag/right-click as the patch.
+    /// </summary>
+    /// <remarks>
+    /// No group linking here. An Output Group links the PATCH, where a stereo pair's two cells are the
+    /// same trim on the same speaker system; a cue's sends are where the operator decides what goes
+    /// where, and mirroring one into its partner would undo that decision.
+    /// </remarks>
+    public void ApplySendGesture(MatrixGesture gesture)
+    {
+        if (Cue is not MediaCueNode cue
+            || gesture.Row >= SendRows.Count
+            || gesture.Column >= SendColumns.Count)
+            return;
+
+        var source = SendRows[gesture.Row].LineChannel;
+        var channelId = SendColumns[gesture.Column].ChannelId;
+        var existing = cue.Sends.FirstOrDefault(
+            send => send.SourceChannel == source && send.LogicalChannelId == channelId);
+
+        switch (gesture.Kind)
+        {
+            case MatrixGestureKind.Toggle:
+                _journal.Do(new SetCueSendCommand(
+                    cue, source, channelId,
+                    existing is null ? 0 : null,
+                    existing is null ? false : null,
+                    existing is null ? "route send at unity" : "remove send"));
+                _journal.CloseGroup();
+                break;
+
+            case MatrixGestureKind.Adjust when existing is not null:
+                _journal.Do(new SetCueSendCommand(
+                    cue, source, channelId, existing.GainDb + gesture.DeltaDb, existing.Muted,
+                    "set send gain"));
+                break;
+
+            case MatrixGestureKind.Mute when existing is not null:
+                _journal.Do(new SetCueSendCommand(
+                    cue, source, channelId, existing.GainDb, !existing.Muted,
+                    existing.Muted ? "unmute send" : "mute send"));
+                _journal.CloseGroup();
+                break;
+        }
+
+        Reload();
+    }
 
     // ── the Video pane ────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<PlacementBox> Placements

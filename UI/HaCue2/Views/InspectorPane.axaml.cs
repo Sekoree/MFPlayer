@@ -12,6 +12,18 @@ public partial class InspectorPane : UserControl
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
+    private void OnSendGesture(object? sender, Controls.MatrixGesture gesture)
+    {
+        if (DataContext is InspectorViewModel inspector)
+            inspector.ApplySendGesture(gesture);
+    }
+
+    private void OnSendGestureEnded(object? sender, Avalonia.Input.PointerReleasedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector)
+            inspector.EndEdit();
+    }
+
     /// <summary>
     /// Ends the coalescing group when a field loses focus.
     /// </summary>

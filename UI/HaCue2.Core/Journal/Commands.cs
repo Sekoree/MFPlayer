@@ -359,3 +359,107 @@ public static class ProjectEdits
             $"set cell gain {gain:0.0} dB");
     }
 }
+
+/// <summary>
+/// Sets, adds or removes one N×V send: a cue's source channel into a logical output.
+/// </summary>
+/// <remarks>
+/// The twin of <see cref="SetPatchCellCommand"/>, and deliberately shaped the same way — the two
+/// matrices are the same grid read at two levels, and an operator who learns "click routes, drag
+/// adjusts, right-click mutes" on one must find it true on the other.
+/// </remarks>
+public sealed class SetCueSendCommand : ICoalescingCommand
+{
+    private readonly MediaCueNode _cue;
+    private readonly int _sourceChannel;
+    private readonly Guid _channelId;
+    private readonly SendState _before;
+    private SendState _after;
+
+    public SetCueSendCommand(
+        MediaCueNode cue,
+        int sourceChannel,
+        Guid channelId,
+        double? gainDb,
+        bool? muted,
+        string description)
+    {
+        _cue = cue;
+        _sourceChannel = sourceChannel;
+        _channelId = channelId;
+        _before = Read();
+        _after = gainDb is null && muted is null
+            ? SendState.Unrouted
+            : new SendState(
+                true,
+                gainDb ?? _before.GainDb,
+                muted ?? _before.Muted,
+                _before.Routed ? _before.Index : cue.Sends.Count);
+
+        Key = new CoalesceKey(cue.Id, $"send:{sourceChannel}:{channelId}");
+        Domain = "cues";
+        Description = description;
+    }
+
+    public CoalesceKey Key { get; }
+    public string Domain { get; }
+    public string Description { get; }
+
+    public void Apply(HaCueProject project) => Write(_after);
+
+    public void Revert(HaCueProject project) => Write(_before);
+
+    public void MergeFrom(ICoalescingCommand newer)
+    {
+        if (newer is SetCueSendCommand other)
+            _after = other._after;
+    }
+
+    private SendState Read()
+    {
+        var send = Find();
+        return send is null
+            ? SendState.Unrouted
+            : new SendState(true, send.GainDb, send.Muted, _cue.Sends.IndexOf(send));
+    }
+
+    private void Write(SendState state)
+    {
+        var send = Find();
+
+        if (!state.Routed)
+        {
+            if (send is not null)
+                _cue.Sends.Remove(send);
+            return;
+        }
+
+        if (send is null)
+        {
+            // Back at its original index for the same reason a patch cell is: order is document state,
+            // and an undo that reordered the sends would produce a file that diffs for no visible reason.
+            _cue.Sends.Insert(
+                Math.Clamp(state.Index, 0, _cue.Sends.Count),
+                new CueAudioSend
+                {
+                    SourceChannel = _sourceChannel,
+                    LogicalChannelId = _channelId,
+                    GainDb = state.GainDb,
+                    Muted = state.Muted,
+                });
+            return;
+        }
+
+        send.GainDb = state.GainDb;
+        send.Muted = state.Muted;
+    }
+
+    private CueAudioSend? Find() =>
+        _cue.Sends.FirstOrDefault(send =>
+            send.SourceChannel == _sourceChannel && send.LogicalChannelId == _channelId);
+
+    private readonly record struct SendState(bool Routed, double GainDb, bool Muted, int Index)
+    {
+        public static SendState Unrouted { get; } = new(false, 0, false, -1);
+    }
+}

@@ -64,7 +64,8 @@ public sealed class ProjectJournal
         if (_scope is { } scope)
         {
             // Inside a composite the individual steps are not undo entries of their own; the scope
-            // pushes exactly one when it closes.
+            // pushes exactly one when it closes. Coalescing applies inside a scope too, so a drag that
+            // emits a step per motion event stays a handful of commands rather than hundreds.
             scope.Add(command);
             Changed?.Invoke();
             return;
@@ -107,8 +108,11 @@ public sealed class ProjectJournal
     /// </remarks>
     public IDisposable Composite(string description, string domain)
     {
+        // A nested composite JOINS the open one rather than throwing. Callers compose: a group-linked
+        // patch nudge inside a drag, a delete-with-cleanup inside a multi-selection edit. The outer
+        // scope is what the operator did, so it is what one undo should take back.
         if (_scope is not null)
-            throw new InvalidOperationException("A composite edit is already open.");
+            return NestedScope.Instance;
 
         CloseGroup();
         var scope = new CompositeScope(this, description, domain);
@@ -196,6 +200,16 @@ public sealed class ProjectJournal
         Changed?.Invoke();
     }
 
+    /// <summary>A composite opened inside another: it owns nothing and closes nothing.</summary>
+    private sealed class NestedScope : IDisposable
+    {
+        public static NestedScope Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
+    }
+
     private sealed class CompositeScope(ProjectJournal journal, string description, string domain)
         : IDisposable
     {
@@ -203,7 +217,21 @@ public sealed class ProjectJournal
         public string Domain { get; } = domain;
         public List<IProjectCommand> Commands { get; } = [];
 
-        public void Add(IProjectCommand command) => Commands.Add(command);
+        public void Add(IProjectCommand command)
+        {
+            // Same rule as the top-level stack: consecutive edits to one property of one subject are
+            // one edit. Without it a drag inside a composite keeps every intermediate value alive.
+            if (command is ICoalescingCommand incoming
+                && Commands.Count > 0
+                && Commands[^1] is ICoalescingCommand open
+                && open.Key == incoming.Key)
+            {
+                open.MergeFrom(incoming);
+                return;
+            }
+
+            Commands.Add(command);
+        }
 
         public void Dispose() => journal.CloseScope(this);
     }

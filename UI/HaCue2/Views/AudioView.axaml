@@ -158,8 +158,12 @@
           </c:PanelBox.Footer>
 
           <ScrollViewer HorizontalScrollBarVisibility="Auto" Padding="9,7">
+            <!-- Register item 13: click toggles at unity, drag adjusts gain, right-click mutes. -->
             <c:MatrixView Columns="{Binding PatchColumns}" Rows="{Binding PatchRows}"
-                          RowHeaderWidth="104" />
+                          RowHeaderWidth="118"
+                          Gesture="OnPatchGesture"
+                          PointerReleased="OnPatchGestureEnded"
+                          ToolTip.Tip="Click routes at unity · drag adjusts gain · right-click mutes. A grouped column carries its partners by the same delta." />
           </ScrollViewer>
         </c:PanelBox>
 
