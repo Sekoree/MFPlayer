@@ -52,6 +52,60 @@ public sealed class RemoteApiDispatcherTests
         ]);
 
     [Fact]
+    public void Endpoints_DescribesTheApi_AndIsAGet()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, _, _, _) = CreateDispatcher();
+
+            var result = Execute(dispatcher, "/api/v1/endpoints", method: "GET");
+
+            Assert.Equal(200, result.Status);
+            Assert.Contains("/api/v1/cues/{cue}/go|stop", result.Body, StringComparison.Ordinal);
+            Assert.Equal("GET, OPTIONS", RemoteApiDispatcher.AllowedMethodsFor("/api/v1/endpoints"));
+        });
+    }
+
+    [Fact]
+    public void EveryDocumentedDomain_IsOneTheDispatcherActuallyHandles()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, _, _, _) = CreateDispatcher();
+
+            // The point of a table over a class comment: this can be checked. A documented domain that
+            // 404s as "unknown endpoint" is the drift a comment would have hidden.
+            foreach (var domain in RemoteApiRoutes.Domains)
+            {
+                var probe = Execute(dispatcher, $"/api/v1/{domain}",
+                    method: RemoteApiRoutes.MethodFor(domain, 0));
+                Assert.False(
+                    probe.Status == 404 && probe.Body.Contains("Unknown endpoint", StringComparison.Ordinal),
+                    $"documented domain '{domain}' is not routed");
+            }
+        });
+    }
+
+    [Fact]
+    public void Counters_SeparateHandledRequestsFromRefusedOnes()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, cues, _, _) = CreateDispatcher();
+            TwoLists(cues);
+
+            Execute(dispatcher, "/api/v1/lists", method: "GET");          // handled
+            Execute(dispatcher, "/api/v1/lists/Nope/cues/1/go");           // refused (404)
+
+            var body = Execute(dispatcher, "/api/v1/endpoints", method: "GET").Body;
+
+            // "Did the controller reach us at all" is the question counters exist to answer - so a refused
+            // request must still be counted, not dropped.
+            Assert.Contains("\"domain\":\"lists\",\"requests\":2,\"failures\":1", body, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public void ListInventory_EnumeratesLoadedLists_AndIsAGet()
     {
         DispatchUi(static () =>

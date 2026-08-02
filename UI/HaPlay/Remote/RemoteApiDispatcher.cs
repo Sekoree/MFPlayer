@@ -28,6 +28,7 @@ public readonly record struct RemoteApiResult(int Status, string Body, string? A
 ///
 /// URL scheme (all indices 1-based, matching the UI labels; status is GET, mutations are POST):
 ///   /api/v1/status
+///   /api/v1/endpoints                  (GET: the route table + per-domain counters)
 ///   /api/v1/cues/go|pause|resume|stop|panic
 ///   /api/v1/cues/{cue}/go|stop
 ///   /api/v1/lists                      (GET: the loaded cue lists)
@@ -54,6 +55,9 @@ public sealed class RemoteApiDispatcher
     private readonly Func<IReadOnlyList<MediaPlayerViewModel>> _players;
     private readonly SoundboardWorkspaceViewModel _soundboard;
     private readonly ControlWorkspaceViewModel? _control;
+
+    /// <summary>Per-domain request/failure totals, surfaced by <c>GET /api/v1/endpoints</c>.</summary>
+    private readonly RemoteApiCounters _counters = new();
 
     public RemoteApiDispatcher(
         CuePlayerViewModel cuePlayer,
@@ -94,11 +98,21 @@ public sealed class RemoteApiDispatcher
 
         // VM access has UI-thread affinity; tests already run on the headless UI thread.
         if (Dispatcher.UIThread.CheckAccess())
-            return Handle(domain, rest, query);
-        return await Dispatcher.UIThread.InvokeAsync(
+            return Counted(domain, Handle(domain, rest, query));
+        return Counted(domain, await Dispatcher.UIThread.InvokeAsync(
             () => Handle(domain, rest, query),
             DispatcherPriority.Normal,
-            cancellationToken);
+            cancellationToken));
+    }
+
+    /// <summary>Records a dispatched request against its domain and passes the result through.</summary>
+    /// <remarks>Wraps the RESULT rather than the call so both the on-thread and marshalled paths count
+    /// identically - and so a 404/405 is counted as a failure, which is the case an operator is trying to
+    /// diagnose when a controller "does nothing".</remarks>
+    private RemoteApiResult Counted(string domain, RemoteApiResult result)
+    {
+        _counters.Record(domain, result.Status);
+        return result;
     }
 
     /// <summary>Value for HTTP <c>Allow</c>: the one legal application method plus OPTIONS.</summary>
@@ -115,26 +129,16 @@ public sealed class RemoteApiDispatcher
         return ApplicationMethodFor(domain, rest) + ", OPTIONS";
     }
 
-    /// <summary>
-    /// The one legal application method for a request, used BOTH by the request gate and by
-    /// <see cref="AllowedMethodsFor"/>.
-    /// </summary>
-    /// <remarks>
-    /// Shared deliberately: these were two copies of the same rule, and adding <c>/lists</c> to one of them
-    /// produced a route that advertised <c>GET</c> in its <c>Allow</c> header and then answered 405 to a GET.
-    /// </remarks>
-    private static string ApplicationMethodFor(string domain, int restSegments) => domain switch
-    {
-        "status" => "GET",
-        // The bare inventory reads; anything addressed under a list is a command.
-        "lists" when restSegments == 0 => "GET",
-        _ => "POST",
-    };
+    /// <summary>The one legal application method - delegated to the route table, which is the single
+    /// source of truth for both the request gate and the <c>Allow</c> header.</summary>
+    private static string ApplicationMethodFor(string domain, int restSegments) =>
+        RemoteApiRoutes.MethodFor(domain, restSegments);
 
     private RemoteApiResult Handle(string domain, string[] rest, IReadOnlyDictionary<string, string> query) =>
         domain switch
         {
             "status" => HandleStatus(),
+            "endpoints" => HandleEndpoints(),
             "cues" => HandleCues(rest),
             "lists" => HandleLists(rest),
             "players" => HandlePlayers(rest, query),
@@ -151,6 +155,25 @@ public sealed class RemoteApiDispatcher
         var auth = TokenConfigured ? "token" : "open";
         return new RemoteApiResult(200,
             $"{{\"ok\":true,\"app\":\"HaPlay\",\"players\":{players},\"soundboards\":{boards},\"lan\":{lan},\"auth\":\"{auth}\"}}");
+    }
+
+    /// <summary>
+    /// <c>GET /api/v1/endpoints</c> - the route table and per-domain counters.
+    /// </summary>
+    /// <remarks>
+    /// The API could not describe itself: dispatch is a nested switch over string literals and the only
+    /// statement of the surface was a class comment. A controller had to be written against documentation
+    /// that nothing checked. The counters answer the other question an operator actually asks when a cue
+    /// does not fire - whether the request arrived at all.
+    /// </remarks>
+    private RemoteApiResult HandleEndpoints()
+    {
+        var routes = RemoteApiRoutes.All.Select(r =>
+            $"{{\"method\":\"{r.Method}\",\"path\":{Quote(r.Pattern)},\"summary\":{Quote(r.Summary)}}}");
+        var counters = _counters.Snapshot().Select(c =>
+            $"{{\"domain\":{Quote(c.Domain)},\"requests\":{c.Requests},\"failures\":{c.Failures}}}");
+        return new RemoteApiResult(200,
+            $"{{\"ok\":true,\"routes\":[{string.Join(",", routes)}],\"counters\":[{string.Join(",", counters)}]}}");
     }
 
     private RemoteApiResult HandleCues(string[] rest)
