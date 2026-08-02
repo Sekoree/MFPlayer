@@ -1,0 +1,121 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.LauncherWindow"
+        x:DataType="vm:LauncherViewModel"
+        Title="HaCue2"
+        Width="900" Height="560"
+        MinWidth="820" MinHeight="480"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BoothBg}"
+        Foreground="{StaticResource BoothInk}"
+        FontSize="{StaticResource FontSizeBase}">
+
+  <!-- Screen 01. Recovery is inline above the recents rather than a modal, because the answer
+       ("recover or discard") is only meaningful next to the project it is about. "This machine" runs
+       the cheap device checks before any project is chosen, so a missing interface is known before it
+       becomes a missing cue. -->
+
+  <DockPanel>
+
+    <Border Classes="titlebar" DockPanel.Dock="Top">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+        <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
+                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
+                   Text="no project open" VerticalAlignment="Center" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="SETTINGS"
+                Click="OnSettings" />
+      </Grid>
+    </Border>
+
+    <Border Classes="statusbar" DockPanel.Dock="Bottom">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0" Classes="mono dim3 small" Text="HaCue2 0.1 · framework 2026.07" />
+        <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="projects open in editing mode" />
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="*,250" Margin="7" ColumnSpacing="7">
+
+      <c:PanelBox Grid.Column="0" Header="Recent projects" Hint="⏎ opens · editing mode">
+        <DockPanel>
+
+          <!-- Inline recovery. Amber, not red: an autosave newer than the file is a question, not a
+               fault, and the show still opens either way. -->
+          <Border DockPanel.Dock="Top"
+                  Background="{StaticResource RecoveryBannerBg}"
+                  BorderBrush="{StaticResource BoothRule}"
+                  BorderThickness="0,0,0,1"
+                  Padding="10,8"
+                  IsVisible="{Binding HasRecovery}">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+              <Border Grid.Column="0" Classes="badge clock"><TextBlock Text="RECOVERY" /></Border>
+              <TextBlock Grid.Column="1" Classes="dim2 small" VerticalAlignment="Center"
+                         TextWrapping="Wrap" Text="{Binding RecoveryNotice}" />
+              <Button Grid.Column="2" Classes="tight" Content="RECOVER" />
+              <Button Grid.Column="3" Classes="tight" Content="DISCARD" />
+            </Grid>
+          </Border>
+
+          <ListBox ItemsSource="{Binding Recents}"
+                   SelectedItem="{Binding SelectedRecent}"
+                   ItemContainerTheme="{StaticResource TableRowItem}"
+                   DoubleTapped="OnRecentActivated">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:RecentProjectRow">
+                <Grid ColumnDefinitions="3,*,180,110" ColumnSpacing="10" MinHeight="34">
+                  <!-- The stripe is the same left-edge state marker the cue tree uses: congo for the
+                       project you were last in, red for one whose file has gone. -->
+                  <Border Grid.Column="0" Classes="stripe"
+                          Classes.is-sel="{Binding IsCurrent}"
+                          Classes.is-broke="{Binding IsMissing}" />
+                  <StackPanel Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Center">
+                    <TextBlock FontSize="11.5" FontWeight="Medium" Text="{Binding Name}" />
+                    <TextBlock Classes="mono dim3 micro ellipsis" Text="{Binding Path}"
+                               Classes.err="{Binding IsMissing}" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" Classes="mono dim3 small" TextAlignment="Right"
+                             VerticalAlignment="Center" Text="{Binding Contents}" />
+                  <TextBlock Grid.Column="3" Classes="mono dim3 small" TextAlignment="Right"
+                             VerticalAlignment="Center" Margin="0,0,10,0" Text="{Binding Opened}" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </c:PanelBox>
+
+      <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
+
+        <c:PanelBox Grid.Row="0" Header="Start">
+          <StackPanel Margin="0,8,0,8">
+            <ContentControl Theme="{StaticResource FieldWide}">
+              <Button Classes="primary block" Content="NEW PROJECT…" />
+            </ContentControl>
+            <ContentControl Theme="{StaticResource FieldWide}">
+              <Button Classes="block" Content="OPEN…" Click="OnOpenExisting" />
+            </ContentControl>
+            <TextBlock Margin="10,5,10,0" FontSize="10.5" TextWrapping="Wrap"
+                       Classes="dim3" Text="{Binding SeedNote}" />
+          </StackPanel>
+        </c:PanelBox>
+
+        <c:PanelBox Grid.Row="1" Header="This machine">
+          <ItemsControl ItemsSource="{Binding MachineChecks}" Margin="10,8">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:LogLine">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Classes="mono dim3 small" Width="38" Text="{Binding Category}" />
+                  <TextBlock Classes="mono dim2 small" Text="{Binding Message}" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </c:PanelBox>
+
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

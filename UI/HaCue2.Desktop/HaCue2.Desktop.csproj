@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Desktop head for HaCue2. A composition root and nothing else: it references its app library and
+         supplies the platform bootstrap. See UI/HaCue2/HaCue2.csproj for why no framework references
+         exist yet. -->
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+        <RootNamespace>HaCue2.Desktop</RootNamespace>
+        <!-- Not "HaCue2" (collides with the HaCue2 library's HaCue2.dll on case-insensitive filesystems)
+             and not the "HaCue2.Desktop" project default (file managers mistake a *.Desktop binary for an
+             XDG desktop entry — same rationale as HaPlay.Desktop → HaPlayer, HaViz.Desktop → HaVizBox).
+             The plan's `hacue2` check CLI verb (D9, still draft) is a separate question from this
+             binary's name. -->
+        <AssemblyName>HaCue2Desktop</AssemblyName>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia.Desktop"/>
+        <PackageReference Include="Avalonia.Fonts.Inter"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2\HaCue2.csproj"/>
+    </ItemGroup>
+
+</Project>

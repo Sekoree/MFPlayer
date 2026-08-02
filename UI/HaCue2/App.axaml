@@ -1,0 +1,18 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="HaCue2.App"
+             RequestedThemeVariant="Dark">
+
+  <!-- Dark is requested rather than followed from the system: the booth skin is fixed, and the one
+       thing the variant still decides is what Simple's plumbing (popup shadows, adorners) resolves to.
+       Letting that follow a light desktop would put a white flyout over a black cue list. -->
+
+  <Application.Styles>
+    <!-- Slot 0 — infrastructure only; see HaCue2.csproj for why Simple is here at all. Anything it
+         supplies for a control HaCue2 actually shows is overridden by the bundle below, because
+         Avalonia resolves a resource by walking Application.Styles from LAST to first. -->
+    <SimpleTheme />
+    <StyleInclude Source="avares://HaCue2/Themes/BoothDark.axaml" />
+  </Application.Styles>
+
+</Application>

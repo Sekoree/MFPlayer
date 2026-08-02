@@ -115,7 +115,14 @@ public sealed class ArchitectureTests
             // Shared app-support libraries, as they land (HaCue2 extraction phase 2).
             "HaOutput", "HaSource", "HaControl.Input", "HaStrings",
         ],
+        // HaCue2 is the cue player leaving HaPlay. It is currently the rev-3 UI SHELL ONLY — sample
+        // data, no engine — so its allow-list is deliberately EMPTY: a framework reference appearing
+        // here before Phase 5 means the shell has started depending on something by accident. Phase 5
+        // fills this in with the same layers HaPlay consumes; the entry that must never appear is
+        // "HaPlay", which NoAppReferencesAnotherApp asserts separately.
+        ["HaCue2"] = [],
         // A desktop head is a composition root: it references its app and nothing else.
+        ["HaCue2.Desktop"] = ["HaCue2"],
         ["HaPlay.Desktop"] = ["HaPlay"],
         ["HaViz.Desktop"] =
         [

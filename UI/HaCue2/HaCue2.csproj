@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- HaCue2 — the cue player leaving HaPlay and becoming its own application.
+         Design source of truth: Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html (rev 3)
+         and the 30-item decision register in Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md.
+
+         STATUS: this project is the UI SHELL ONLY. It deliberately references NO framework project —
+         every view is fed by hand-written sample data (the fictional "midsummer-2026" show from the
+         mockup) so the layout and the theme can be reviewed before any engine is wired in. Phase 5 of
+         the extraction plan adds the real references; until then a missing ProjectReference is a
+         feature, and the arch-test UiAllowed map records the (empty) allow-list to keep it that way. -->
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+        <RootNamespace>HaCue2</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <AvaloniaResource Include="Assets\**"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia"/>
+        <!-- Infrastructure base ONLY. The visible controls all carry a from-scratch HaCue2 ControlTheme
+             (Themes/Controls/*.axaml) that overrides whatever Simple would have supplied; Simple is kept
+             underneath for the non-visual plumbing a theme must provide — PopupRoot, OverlayPopupHost,
+             AdornerLayer, EmbeddableControlRoot, WindowNotificationManager — which have no design in the
+             mockup and would leave popups/flyouts unrendered if absent. It also means a control added
+             later without a HaCue2 theme degrades to "plain" rather than to "invisible", which is the
+             failure mode that cost a day in the first extraction attempt. -->
+        <PackageReference Include="Avalonia.Themes.Simple"/>
+        <PackageReference Include="Avalonia.Fonts.Inter"/>
+        <PackageReference Include="CommunityToolkit.Mvvm"/>
+    </ItemGroup>
+
+</Project>

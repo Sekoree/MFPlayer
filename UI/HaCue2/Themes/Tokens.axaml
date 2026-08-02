@@ -1,0 +1,176 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ══════════════════════════════════════════════════════════════════════════════════════════
+       HaCue2 booth-dark tokens.
+
+       Straight transcription of the `.screen` skin in
+       Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html. The mockup's palette is semantic,
+       not decorative: the five "gels" are the booth's vocabulary (congo = chrome/selection,
+       amber = standby/warning, green = running/healthy, red = fault, steel = monitor/preview) and
+       nothing in the app should introduce a sixth accent.
+
+       CSS `color-mix()` has no Avalonia equivalent, so every mix in the mockup is PRE-COMPUTED here
+       and the arithmetic is written next to it. Two kinds appear:
+         · "over transparent" → the gel with an alpha channel (#AARRGGBB), so it tints whatever it
+           sits on. Used for row washes that must work over both panel and panel-2.
+         · "over <surface>"   → a flat opaque colour, because the mockup mixed against a known
+           surface. Used where a translucent fill would double up against a neighbouring wash.
+       ══════════════════════════════════════════════════════════════════════════════════════════ -->
+
+  <!-- ── surfaces ─────────────────────────────────────────────────────────────────────────── -->
+  <Color x:Key="BoothBgColor">#0B0E13</Color>
+  <Color x:Key="BoothPanelColor">#12161D</Color>
+  <Color x:Key="BoothPanel2Color">#181D26</Color>
+  <Color x:Key="BoothRuleColor">#232935</Color>
+  <Color x:Key="BoothRule2Color">#303845</Color>
+
+  <SolidColorBrush x:Key="BoothBg" Color="{StaticResource BoothBgColor}" />
+  <SolidColorBrush x:Key="BoothPanel" Color="{StaticResource BoothPanelColor}" />
+  <SolidColorBrush x:Key="BoothPanel2" Color="{StaticResource BoothPanel2Color}" />
+  <SolidColorBrush x:Key="BoothRule" Color="{StaticResource BoothRuleColor}" />
+  <SolidColorBrush x:Key="BoothRule2" Color="{StaticResource BoothRule2Color}" />
+  <!-- rule @ 55 % — the softer separator between rows inside a panel -->
+  <SolidColorBrush x:Key="BoothRuleSoft" Color="#8C232935" />
+
+  <!-- ── ink ──────────────────────────────────────────────────────────────────────────────── -->
+  <Color x:Key="BoothInkColor">#E4E8F0</Color>
+  <Color x:Key="BoothInk2Color">#939DB1</Color>
+  <Color x:Key="BoothInk3Color">#626B7D</Color>
+
+  <SolidColorBrush x:Key="BoothInk" Color="{StaticResource BoothInkColor}" />
+  <SolidColorBrush x:Key="BoothInk2" Color="{StaticResource BoothInk2Color}" />
+  <SolidColorBrush x:Key="BoothInk3" Color="{StaticResource BoothInk3Color}" />
+
+  <!-- ── gels ─────────────────────────────────────────────────────────────────────────────── -->
+  <Color x:Key="GelCongoColor">#7D8CEA</Color>
+  <Color x:Key="GelAmberColor">#E0A85C</Color>
+  <Color x:Key="GelGreenColor">#52B788</Color>
+  <Color x:Key="GelRedColor">#E46B78</Color>
+  <Color x:Key="GelSteelColor">#5EC8CF</Color>
+
+  <SolidColorBrush x:Key="GelCongo" Color="{StaticResource GelCongoColor}" />
+  <SolidColorBrush x:Key="GelAmber" Color="{StaticResource GelAmberColor}" />
+  <SolidColorBrush x:Key="GelGreen" Color="{StaticResource GelGreenColor}" />
+  <SolidColorBrush x:Key="GelRed" Color="{StaticResource GelRedColor}" />
+  <SolidColorBrush x:Key="GelSteel" Color="{StaticResource GelSteelColor}" />
+
+  <!-- ── cue-row live-state washes (gel over transparent) ─────────────────────────────────── -->
+  <SolidColorBrush x:Key="CueGoWash" Color="#1752B788" />   <!-- green  @  9 % -->
+  <SolidColorBrush x:Key="CueStandbyWash" Color="#1AE0A85C" />   <!-- amber  @ 10 % -->
+  <SolidColorBrush x:Key="CueSelectedWash" Color="#247D8CEA" />  <!-- congo  @ 14 % -->
+  <SolidColorBrush x:Key="ActiveGroupWash" Color="#147D8CEA" />  <!-- congo  @  8 % -->
+  <SolidColorBrush x:Key="LaneGroupWash" Color="#0F7D8CEA" />    <!-- congo  @  6 % -->
+
+  <!-- ── buttons (mixed over the panel: a translucent fill would show the row wash through) ── -->
+  <!-- green @22 % over #12161D → (0.22·82+0.78·18, 0.22·183+0.78·22, 0.22·136+0.78·29) -->
+  <SolidColorBrush x:Key="GoButtonBg" Color="#203935" />
+  <SolidColorBrush x:Key="GoButtonBorder" Color="#9952B788" />
+  <SolidColorBrush x:Key="GoButtonFg" Color="#D9F5E6" />
+  <!-- congo @24 % over #12161D → (0.24·125+0.76·18, 0.24·140+0.76·22, 0.24·234+0.76·29) -->
+  <SolidColorBrush x:Key="PrimaryButtonBg" Color="#2C324E" />
+  <SolidColorBrush x:Key="PrimaryButtonBorder" Color="#8C7D8CEA" />
+  <!-- hover/press for the ordinary flat button -->
+  <SolidColorBrush x:Key="ButtonHoverBg" Color="#20262F" />
+  <SolidColorBrush x:Key="ButtonPressBg" Color="#0E1219" />
+
+  <!-- ── segmented control (the mockup's `.seg`) ──────────────────────────────────────────── -->
+  <SolidColorBrush x:Key="SegmentOnBg" Color="#3D7D8CEA" />      <!-- congo @ 24 % -->
+  <SolidColorBrush x:Key="SegmentOnBorder" Color="#8C7D8CEA" />  <!-- congo @ 55 % -->
+
+  <!-- ── chips (title-bar latches) ────────────────────────────────────────────────────────── -->
+  <SolidColorBrush x:Key="ChipLiveBg" Color="#1C52B788" />
+  <SolidColorBrush x:Key="ChipLiveBorder" Color="#7352B788" />
+  <SolidColorBrush x:Key="ChipEditBg" Color="#1C7D8CEA" />
+  <SolidColorBrush x:Key="ChipEditBorder" Color="#737D8CEA" />
+  <SolidColorBrush x:Key="ChipWarnBorder" Color="#73E0A85C" />
+  <SolidColorBrush x:Key="ChipErrBorder" Color="#73E46B78" />
+
+  <!-- ── badges (per-row tags) ────────────────────────────────────────────────────────────── -->
+  <SolidColorBrush x:Key="BadgeCongoBorder" Color="#667D8CEA" />
+  <SolidColorBrush x:Key="BadgeSteelBorder" Color="#665EC8CF" />
+  <SolidColorBrush x:Key="BadgeAmberBorder" Color="#66E0A85C" />
+  <SolidColorBrush x:Key="BadgeRedBorder" Color="#73E46B78" />
+  <SolidColorBrush x:Key="BadgeGreenBorder" Color="#7352B788" />
+
+  <!-- ── patch / send matrix cells (mixed over the panel — cells butt against each other) ─── -->
+  <SolidColorBrush x:Key="MatrixOnBg" Color="#2E3552" />     <!-- congo @ 26 % -->
+  <SolidColorBrush x:Key="MatrixUnityBg" Color="#3D456F" />  <!-- congo @ 40 % -->
+  <SolidColorBrush x:Key="MatrixMuteBg" Color="#3C272F" />   <!-- red   @ 20 % -->
+
+  <!-- ── timeline clips ───────────────────────────────────────────────────────────────────── -->
+  <SolidColorBrush x:Key="ClipAudioBg" Color="#1C302E" />
+  <SolidColorBrush x:Key="ClipAudioBorder" Color="#7352B788" />
+  <SolidColorBrush x:Key="ClipVideoBg" Color="#1E3239" />
+  <SolidColorBrush x:Key="ClipVideoBorder" Color="#735EC8CF" />
+  <SolidColorBrush x:Key="ClipActionBg" Color="#252B42" />
+  <SolidColorBrush x:Key="ClipActionBorder" Color="#807D8CEA" />
+  <SolidColorBrush x:Key="ClipGroupBg" Color="#1D2232" />
+  <SolidColorBrush x:Key="ClipGroupBorder" Color="#597D8CEA" />
+
+  <!-- ── video canvases ───────────────────────────────────────────────────────────────────── -->
+  <SolidColorBrush x:Key="CanvasBg" Color="#05070A" />
+  <SolidColorBrush x:Key="CanvasGridLine" Color="#8C232935" />
+  <SolidColorBrush x:Key="PlacementABorder" Color="#B35EC8CF" />
+  <SolidColorBrush x:Key="PlacementABg" Color="#1A5EC8CF" />
+  <SolidColorBrush x:Key="PlacementBBorder" Color="#B37D8CEA" />
+  <SolidColorBrush x:Key="PlacementBBg" Color="#1A7D8CEA" />
+
+  <!-- ── settings nav + line chips ────────────────────────────────────────────────────────── -->
+  <SolidColorBrush x:Key="NavSelectedBg" Color="#267D8CEA" />
+  <SolidColorBrush x:Key="LineChipOkBorder" Color="#6652B788" />
+  <SolidColorBrush x:Key="LineChipWarnBorder" Color="#73E0A85C" />
+  <SolidColorBrush x:Key="LineChipErrBorder" Color="#80E46B78" />
+  <SolidColorBrush x:Key="LineChipErrBg" Color="#1AE46B78" />
+  <!-- amber @ 9 % over panel-2 — the launcher's recovery banner -->
+  <SolidColorBrush x:Key="RecoveryBannerBg" Color="#2A2A2B" />
+
+  <!-- meter fill: green to the top of the safe zone, amber shoulder, red at the ceiling.
+       GradientStops run bottom-up because the meter is drawn upwards. -->
+  <LinearGradientBrush x:Key="MeterFill" StartPoint="0%,100%" EndPoint="0%,0%">
+    <GradientStop Offset="0.0" Color="{StaticResource GelGreenColor}" />
+    <GradientStop Offset="0.6" Color="{StaticResource GelGreenColor}" />
+    <GradientStop Offset="0.84" Color="{StaticResource GelAmberColor}" />
+    <GradientStop Offset="1.0" Color="{StaticResource GelRedColor}" />
+  </LinearGradientBrush>
+
+  <!-- Diagonal hatch for a cue disabled for this performance. The mockup uses a repeating-linear-
+       gradient; Avalonia's equivalent is a tiled DrawingBrush with an ABSOLUTE tile rect (a
+       RelativeRect without % is absolute, so the 6 px cell stays 6 px at any clip width). Hatching is
+       the deliberate choice over ghosting: on a dim booth screen, "faded out" reads as a render fault.
+       -->
+  <DrawingBrush x:Key="DisabledHatch" TileMode="Tile" Stretch="None"
+                SourceRect="0,0,6,6" DestinationRect="0,0,6,6">
+    <DrawingBrush.Drawing>
+      <GeometryDrawing Brush="#303845" Geometry="M0,6 L6,0 L6,2.2 L2.2,6 Z" />
+    </DrawingBrush.Drawing>
+  </DrawingBrush>
+
+  <!-- ── type ─────────────────────────────────────────────────────────────────────────────── -->
+  <!-- The mockup's mono stack, in Avalonia's comma-separated fallback form. Inter (registered by the
+       desktop head's .WithInterFont()) is the sans face and is simply the inherited default, so no
+       resource is needed for it. -->
+  <FontFamily x:Key="MonoFont">Noto Sans Mono, DejaVu Sans Mono, Liberation Mono, JetBrains Mono, Consolas, monospace</FontFamily>
+
+  <x:Double x:Key="FontSizeBase">12</x:Double>
+  <x:Double x:Key="FontSizeSmall">11</x:Double>
+  <x:Double x:Key="FontSizeMono">10</x:Double>
+  <x:Double x:Key="FontSizeMonoSmall">9.5</x:Double>
+  <x:Double x:Key="FontSizeMicro">9</x:Double>
+  <x:Double x:Key="FontSizeNano">8.5</x:Double>
+
+  <!-- Uppercase mono labels are tracked out in the mockup (0.08–0.16 em). Avalonia LetterSpacing is
+       in DIPs, so these are the em values resolved against the size they are used at. -->
+  <x:Double x:Key="TrackTight">0.7</x:Double>
+  <x:Double x:Key="TrackNormal">1.2</x:Double>
+  <x:Double x:Key="TrackWide">1.5</x:Double>
+
+  <!-- ── metrics ──────────────────────────────────────────────────────────────────────────── -->
+  <CornerRadius x:Key="BoothCorner">2</CornerRadius>
+  <CornerRadius x:Key="PanelCorner">3</CornerRadius>
+  <Thickness x:Key="HairlineBottom">0,0,0,1</Thickness>
+  <x:Double x:Key="ControlHeight">22</x:Double>
+  <x:Double x:Key="CueRowHeight">26</x:Double>
+  <x:Double x:Key="ActiveRowHeight">25</x:Double>
+
+</ResourceDictionary>
