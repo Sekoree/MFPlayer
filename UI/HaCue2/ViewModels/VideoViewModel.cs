@@ -1,29 +1,45 @@
 using CommunityToolkit.Mvvm.ComponentModel;
-using HaCue2.Sample;
+using HaCue2.Core.Model;
+using HaCue2.Presentation;
+using HaCue2.Session;
 
 namespace HaCue2.ViewModels;
 
 /// <summary>
-/// Screens 09–10 — Compositions · Mapping · Outputs · Audition.
+/// Screens 09–10 — Compositions · Mapping · Outputs · Audition, projected from the document.
 /// </summary>
 /// <remarks>
 /// Tab order is Compositions · Mapping · Outputs because mapping is the stage BETWEEN the two
-/// (register item 22), and mapping is a property of an output binding, not of a composition: the same
-/// Cyc renders warped to the projector and clean to the lobby TV.
-/// <para>
-/// A composition owns exactly size, frame rate and idle image. There is deliberately no visualizer
-/// flag — that was HaPlay residue; a visualizer is purely a cue type whose canvas presence is an
-/// ordinary placement (register item 21).
-/// </para>
+/// (register item 22), and mapping belongs to an output binding rather than to a composition: the same
+/// canvas renders warped to a projector and clean to a TV. A composition owns exactly size, frame rate
+/// and idle image — there is deliberately no visualizer flag anywhere in this view.
 /// </remarks>
 public partial class VideoViewModel : ObservableObject
 {
-    public const string CompositionsTab = "COMPOSITIONS · 2";
+    private readonly HaCueProject _project;
+    private readonly ShowRuntime _runtime;
+
+    public VideoViewModel(HaCueProject project, ShowRuntime runtime)
+    {
+        _project = project;
+        _runtime = runtime;
+
+        CompositionsTab = $"COMPOSITIONS · {project.Compositions.Count}";
+        OutputsTab = $"OUTPUTS · {project.VideoOutputs.Count}";
+        Tabs = [CompositionsTab, MappingTab, OutputsTab, AuditionTab];
+        _selectedTab = CompositionsTab;
+
+        Outputs = VideoPresentation.Outputs(project, runtime);
+        // The mapped output is the interesting one to land on: a clean feed has nothing to show here.
+        _selectedOutput = Outputs.FirstOrDefault(row => row.Map != "clean") ?? Outputs.FirstOrDefault();
+    }
+
     public const string MappingTab = "MAPPING";
-    public const string OutputsTab = "OUTPUTS · 3";
     public const string AuditionTab = "AUDITION";
 
-    public IReadOnlyList<string> Tabs { get; } = [CompositionsTab, MappingTab, OutputsTab, AuditionTab];
+    public string CompositionsTab { get; }
+    public string OutputsTab { get; }
+    public IReadOnlyList<string> Tabs { get; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCompositionsPane))]
@@ -31,7 +47,7 @@ public partial class VideoViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsOutputsPane))]
     [NotifyPropertyChangedFor(nameof(IsAuditionPane))]
     [NotifyPropertyChangedFor(nameof(TabHint))]
-    private string _selectedTab = CompositionsTab;
+    private string _selectedTab;
 
     public bool IsCompositionsPane => SelectedTab == CompositionsTab;
     public bool IsMappingPane => SelectedTab == MappingTab;
@@ -40,35 +56,86 @@ public partial class VideoViewModel : ObservableObject
 
     public string TabHint => SelectedTab switch
     {
-        MappingTab => "output: Projector A ▾ · source: Cyc 1920×1080",
+        MappingTab => $"output: {SelectedOutput?.Name ?? "none"} ▾ · source: {MappedCompositionLabel}",
         AuditionTab => "same pane appears in Audio · one audition rig",
         _ => "canvas thumbnails are live when the show runs",
     };
 
     // ── 09 · compositions ─────────────────────────────────────────────────────────────────────
-    public string CycHeader { get; } = "Cyc";
-    public string CycHint { get; } = "1920×1080 · 29.97 · idle: black";
-    public IReadOnlyList<PlacementBox> CycLayers { get; } = SampleShow.CycLayers;
+    public IReadOnlyList<CompositionPaneViewModel> Compositions =>
+    [
+        .. _project.Compositions.Select(composition => new CompositionPaneViewModel(
+            composition.Name,
+            $"{composition.Width}×{composition.Height} · {composition.FramesPerSecond:0.##} · idle: "
+            + (composition.IdleImagePath.Length == 0 ? "black" : Path.GetFileName(composition.IdleImagePath)),
+            (double)composition.Width / composition.Height,
+            VideoPresentation.Layers(_project, composition))),
+    ];
 
-    public string PortalHeader { get; } = "Portal";
-    public string PortalHint { get; } = "1280×720 · 30 · idle: logo.png";
-    public IReadOnlyList<PlacementBox> PortalLayers { get; } = SampleShow.PortalLayers;
-
-    public IReadOnlyList<VideoOutputRow> Outputs { get; } = SampleShow.VideoOutputs;
+    public IReadOnlyList<VideoOutputRow> Outputs { get; }
 
     [ObservableProperty]
-    private VideoOutputRow? _selectedOutput = SampleShow.VideoOutputs[0];
+    [NotifyPropertyChangedFor(nameof(MappingSource))]
+    [NotifyPropertyChangedFor(nameof(MappingTarget))]
+    [NotifyPropertyChangedFor(nameof(Sections))]
+    [NotifyPropertyChangedFor(nameof(TabHint))]
+    [NotifyPropertyChangedFor(nameof(SelectedOutputName))]
+    private VideoOutputRow? _selectedOutput;
 
-    public IReadOnlyList<string> Compositions { get; } = ["Cyc", "Portal"];
-    public IReadOnlyList<string> Screens { get; } = ["1 · 2560×1440", "2 · 1920×1080", "3 · 1920×1080"];
+    public string SelectedOutputName => SelectedOutput?.Name ?? "no output selected";
+
+    public IReadOnlyList<string> CompositionNames =>
+        [.. _project.Compositions.Select(composition => composition.Name)];
+
     public IReadOnlyList<string> IdleImages { get; } = ["black", "logo.png", "venue-logo.png"];
 
+    /// <summary>
+    /// Screens this machine has — a MACHINE fact, so it will come from the runtime seam once screen
+    /// enumeration is real. Listed here meanwhile so the picker has something to offer.
+    /// </summary>
+    public IReadOnlyList<string> Screens { get; } = ["1 · 2560×1440", "2 · 1920×1080", "3 · 1920×1080"];
+
     // ── 10 · mapping ──────────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<string> Sections { get; } = SampleShow.MappingSections;
-    public IReadOnlyList<PlacementBox> MappingSource { get; } = SampleShow.MappingSource;
-    public IReadOnlyList<PlacementBox> MappingOutput { get; } = SampleShow.MappingOutput;
+    private VideoOutputDefinition? MappedOutput =>
+        SelectedOutput is null
+            ? null
+            : _project.VideoOutputs.FirstOrDefault(output => output.Id == SelectedOutput.Id);
+
+    private string MappedCompositionLabel
+    {
+        get
+        {
+            var composition = MappedOutput?.CompositionId is { } id
+                ? _project.Compositions.FirstOrDefault(item => item.Id == id)
+                : null;
+
+            return composition is null ? "none" : $"{composition.Name} {composition.Width}×{composition.Height}";
+        }
+    }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MappingSource))]
+    [NotifyPropertyChangedFor(nameof(MappingTarget))]
+    private int _selectedSection;
+
+    public IReadOnlyList<string> Sections =>
+        MappedOutput is null ? [] : VideoPresentation.SectionLabels(MappedOutput);
+
+    public IReadOnlyList<PlacementBox> MappingSource =>
+        MappedOutput is null ? [] : VideoPresentation.MappingSource(MappedOutput, SelectedSection);
+
+    public IReadOnlyList<PlacementBox> MappingTarget =>
+        MappedOutput is null ? [] : VideoPresentation.MappingTarget(MappedOutput, SelectedSection);
+
     public IReadOnlyList<string> WarpModes { get; } = ["off", "3×3", "5×5"];
-    public IReadOnlyList<string> MappingOutputs { get; } = ["Projector A", "Lobby TV", "NDI Prog"];
 
     public AuditionViewModel Audition { get; } = new();
 }
+
+/// <summary>One composition's canvas: its header, its aspect ratio, and the cues placed on it.</summary>
+/// <param name="Aspect">
+/// Width ÷ height, so the canvas is drawn at the FRAME's shape. A placement checked on a canvas of the
+/// wrong aspect does not tell you what will hit the wall.
+/// </param>
+public sealed record CompositionPaneViewModel(
+    string Name, string Hint, double Aspect, IReadOnlyList<PlacementBox> Layers);

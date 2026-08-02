@@ -1,5 +1,8 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Core.Model;
+using HaCue2.Presentation;
 using HaCue2.Sample;
+using HaCue2.Session;
 
 namespace HaCue2.ViewModels;
 
@@ -8,23 +11,45 @@ namespace HaCue2.ViewModels;
 /// </summary>
 /// <remarks>
 /// The wire monitor appears on every tab, filtered to that tab's direction, because "did it actually
-/// send / did it actually arrive" is the question on all three and splitting it into one shared panel
-/// somewhere else would mean reading a mixed stream to answer a single-direction question.
+/// send / did it actually arrive" is the question on all three.
 /// </remarks>
 public partial class TargetsViewModel : ObservableObject
 {
-    public const string EndpointsTab = "ACTION ENDPOINTS · 3";
-    public const string TriggersTab = "TRIGGER INPUTS · 3";
+    private readonly HaCueProject _project;
+
+    public TargetsViewModel(HaCueProject project, ShowRuntime runtime)
+    {
+        _project = project;
+
+        EndpointsTab = $"ACTION ENDPOINTS · {project.ActionEndpoints.Count}";
+        TriggersTab = $"TRIGGER INPUTS · {project.TriggerInputs.Count}";
+        Tabs = [EndpointsTab, TriggersTab, RemoteTab];
+        _selectedTab = TriggersTab;
+
+        Endpoints = TargetPresentation.Endpoints(project, runtime);
+        _selectedEndpoint = Endpoints.FirstOrDefault();
+        Sources = TargetPresentation.Sources(project, runtime);
+        _selectedSource = Sources.FirstOrDefault();
+        Monitor = runtime.TriggerMonitor;
+
+        _testMessage = project.ActionEndpoints.FirstOrDefault()?.TestMessage ?? "";
+        _port = (project.Settings.RemoteApi?.Port ?? 8420).ToString();
+        _serverState = project.Settings.RemoteApi?.Enabled == true ? "on" : "off";
+        _lanMode = project.Settings.RemoteApi?.LanAllowed == true ? "allowed" : "local only";
+    }
+
     public const string RemoteTab = "REMOTE API";
 
-    public IReadOnlyList<string> Tabs { get; } = [EndpointsTab, TriggersTab, RemoteTab];
+    public string EndpointsTab { get; }
+    public string TriggersTab { get; }
+    public IReadOnlyList<string> Tabs { get; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsEndpointsPane))]
     [NotifyPropertyChangedFor(nameof(IsTriggersPane))]
     [NotifyPropertyChangedFor(nameof(IsRemotePane))]
     [NotifyPropertyChangedFor(nameof(MonitorHint))]
-    private string _selectedTab = TriggersTab;
+    private string _selectedTab;
 
     public bool IsEndpointsPane => SelectedTab == EndpointsTab;
     public bool IsTriggersPane => SelectedTab == TriggersTab;
@@ -32,35 +57,61 @@ public partial class TargetsViewModel : ObservableObject
 
     public string MonitorHint => SelectedTab switch
     {
-        EndpointsTab => "outbound only on this tab",
+        var tab when tab == EndpointsTab => "outbound only on this tab",
         RemoteTab => "remote calls only on this tab",
         _ => "inbound only on this tab",
     };
 
     // ── action endpoints ──────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<TriggerSourceRow> Endpoints { get; } = SampleShow.ActionEndpoints;
+    public IReadOnlyList<TriggerSourceRow> Endpoints { get; }
 
     [ObservableProperty]
-    private TriggerSourceRow? _selectedEndpoint = SampleShow.ActionEndpoints[0];
+    [NotifyPropertyChangedFor(nameof(SelectedEndpointName))]
+    [NotifyPropertyChangedFor(nameof(EndpointHost))]
+    [NotifyPropertyChangedFor(nameof(EndpointPort))]
+    private TriggerSourceRow? _selectedEndpoint;
+
+    private ActionEndpoint? Endpoint => SelectedEndpoint is null
+        ? null
+        : _project.ActionEndpoints.FirstOrDefault(item => item.Id == SelectedEndpoint.Id);
+
+    public string SelectedEndpointName => Endpoint?.Name ?? "no endpoint selected";
+    public string EndpointHost => Endpoint?.Host ?? "—";
+    public string EndpointPort => Endpoint?.Port.ToString() ?? "—";
 
     /// <summary>Register item 24 — each endpoint stores its own test payload.</summary>
     [ObservableProperty]
-    private string _testMessage = "/eos/cue/1/fire";
+    private string _testMessage;
 
     // ── trigger inputs ────────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<TriggerSourceRow> Sources { get; } = SampleShow.TriggerSources;
+    public IReadOnlyList<TriggerSourceRow> Sources { get; }
 
     [ObservableProperty]
-    private TriggerSourceRow? _selectedSource = SampleShow.TriggerSources[0];
+    [NotifyPropertyChangedFor(nameof(Bindings))]
+    [NotifyPropertyChangedFor(nameof(BindingsHeader))]
+    private TriggerSourceRow? _selectedSource;
 
-    public IReadOnlyList<BindingRow> Bindings { get; } = SampleShow.ApcBindings;
-    public IReadOnlyList<LogLine> Monitor { get; } = SampleShow.TriggerMonitor;
+    public string BindingsHeader => $"Bindings on {SelectedSource?.Name ?? "—"}";
+
+    public IReadOnlyList<BindingRow> Bindings
+    {
+        get
+        {
+            var input = SelectedSource is null
+                ? null
+                : _project.TriggerInputs.FirstOrDefault(item => item.Id == SelectedSource.Id);
+
+            return input is null ? [] : TargetPresentation.Bindings(_project, input);
+        }
+    }
+
+    public IReadOnlyList<LogLine> Monitor { get; }
 
     /// <summary>The Learn pane's listening latch — amber while it waits for any device to speak.</summary>
     [ObservableProperty]
     private bool _isLearning = true;
 
-    public string LearnTarget { get; } = "binding Q16 · Loop to 12 if held";
+    public string LearnTarget => Bindings.Count > 0 ? $"binding {Bindings[0].Fires}" : "no binding selected";
     public string LearnCaught { get; } = "APC mini · note-on 3 · ch 1";
 
     // ── remote API ────────────────────────────────────────────────────────────────────────────
@@ -68,14 +119,9 @@ public partial class TargetsViewModel : ObservableObject
     public IReadOnlyList<string> ServerStates { get; } = ["on", "off"];
     public IReadOnlyList<string> LanModes { get; } = ["allowed", "local only"];
 
-    [ObservableProperty]
-    private string _serverState = "on";
-
-    [ObservableProperty]
-    private string _lanMode = "allowed";
-
-    [ObservableProperty]
-    private string _port = "8420";
+    [ObservableProperty] private string _serverState;
+    [ObservableProperty] private string _lanMode;
+    [ObservableProperty] private string _port;
 
     public string LastCall { get; } = "POST /cues/go · 10.0.1.7 · 13:58";
     public string ServedAt { get; } = "served at http://10.0.1.5:8420";

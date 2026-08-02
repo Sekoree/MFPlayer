@@ -49,6 +49,9 @@ public sealed record Badge(string Text, Gel Gel = Gel.Neutral)
 /// <summary>One row of the cue tree (screens 02 and 03).</summary>
 public sealed record CueRow
 {
+    /// <summary>The document id this row stands for; how a selection names an editable thing.</summary>
+    public Guid Id { get; init; }
+
     public required string Number { get; init; }
     public required string Label { get; init; }
     public CueKind Kind { get; init; } = CueKind.Media;
@@ -93,7 +96,7 @@ public sealed record CueRow
     };
 
     /// <summary>Left padding of the number column, in the mockup's 20 px-per-level steps.</summary>
-    public Thickness NumberIndent => new(8 + (Depth * 12), 0, 0, 0);
+    public Thickness NumberIndent => new(6 + (Depth * 9), 0, 0, 0);
 }
 
 /// <summary>One row of the Active panel — everything sounding, in or out of the current scope.</summary>
@@ -131,6 +134,8 @@ public sealed record Status(string Text, Gel Gel = Gel.Neutral)
 /// <summary>Screen 06 — a project-owned audio channel; the only destination a cue can name.</summary>
 public sealed record LogicalOutputRow
 {
+    public Guid Id { get; init; }
+
     public required string Name { get; init; }
 
     /// <summary>Named Output Group (register item 9); a stereo pair is a two-member group.</summary>
@@ -176,6 +181,8 @@ public sealed record MatrixColumn(string Header, bool IsGrouped = false);
 /// <summary>Screen 08 — a machine-side audio line, project-owned and possibly absent here.</summary>
 public sealed record AudioLineRow
 {
+    public Guid Id { get; init; }
+
     public required string Name { get; init; }
     public required string Kind { get; init; }
     public string Channels { get; init; } = "—";
@@ -188,6 +195,8 @@ public sealed record AudioLineRow
 /// <summary>Screen 09 — a video output and what it currently shows.</summary>
 public sealed record VideoOutputRow
 {
+    public Guid Id { get; init; }
+
     public required string Name { get; init; }
     public required string Kind { get; init; }
     public string Shows { get; init; } = "—";
@@ -213,6 +222,8 @@ public sealed record PlacementBox
 /// <summary>Screen 11 — an inbound trigger source.</summary>
 public sealed record TriggerSourceRow
 {
+    public Guid Id { get; init; }
+
     public required string Name { get; init; }
     public required string Kind { get; init; }
     public string Bindings { get; init; } = "—";

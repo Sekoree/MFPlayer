@@ -1,3 +1,4 @@
+using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using HaCue2.ViewModels;
@@ -24,6 +25,6 @@ public partial class CuesView : UserControl
         if (sender is not ListBox list || DataContext is not CuesViewModel cues)
             return;
 
-        cues.Inspector.Show([.. list.SelectedItems?.OfType<CueRow>() ?? []]);
+        cues.Inspector.Show([.. list.SelectedItems?.OfType<CueRow>().Select(row => row.Id) ?? []]);
     }
 }

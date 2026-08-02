@@ -120,7 +120,10 @@ public sealed class ArchitectureTests
         // here before Phase 5 means the shell has started depending on something by accident. Phase 5
         // fills this in with the same layers HaPlay consumes; the entry that must never appear is
         // "HaPlay", which NoAppReferencesAnotherApp asserts separately.
-        ["HaCue2"] = [],
+        // The shell sees the project model and nothing else yet. The ENGINE reference lands in Phase 5,
+        // when `Session/ShowRuntime` stops being a stand-in; until then its absence here is what proves
+        // the shell is projecting a document rather than quietly depending on a session.
+        ["HaCue2"] = ["HaCue2.Core"],
         // The project model: document, journal, validation, patch operations. It may see the session
         // layer (it reuses ShowValidationIssue and CustomFadeCurve, and the compiler that turns a
         // HaCueProject into a ShowDocument lands here) but nothing above it, and no UI toolkit — this

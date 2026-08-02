@@ -1,5 +1,8 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Core.Model;
+using HaCue2.Core.Validation;
 using HaCue2.Sample;
+using HaCue2.Session;
 
 namespace HaCue2.ViewModels;
 
@@ -68,10 +71,49 @@ public partial class CurveEditorViewModel : ObservableObject
 /// <summary>Screens 12 and 13 — application scope (not journaled) and project scope (journaled).</summary>
 public partial class SettingsViewModel : ObservableObject
 {
-    public SettingsViewModel() => _selectedPane = ApplicationPanes[0];
+    private readonly ProjectSettings _settings;
+
+    public SettingsViewModel() : this(SampleProject.Create())
+    {
+    }
+
+    public SettingsViewModel(HaCueProject project)
+    {
+        _settings = project.Settings;
+        _selectedPane = ApplicationPanes[0];
+
+        // The PROJECT half of this screen reads the document. The application half does not, and
+        // cannot: a show that carried the operator's font size to the next venue would be carrying
+        // the wrong thing.
+        ProjectPanes =
+        [
+            new() { Name = "Show behaviour" },
+            new() { Name = "Authoring defaults" },
+            new() { Name = "Overrides", Tally = _settings.RemoteApi is null ? "1 active" : "2 active" },
+            new() { Name = "Save, autosave & recovery" },
+            new() { Name = "Project status" },
+        ];
+
+        _openMode = _settings.OpenLocked ? "locked" : "editing";
+        _listEndPolicy = _settings.AtListEnd.ToString().ToLowerInvariant();
+        _runChecksOnOpen = _settings.RunStatusChecksOnOpen;
+        _externalInputOffOnOpen = _settings.ExternalInputOffOnOpen;
+        _clickMovesStandby = _settings.ClickMovesStandby;
+        _triggerMode = _settings.NewCueTrigger.ToString().ToLowerInvariant();
+        _autoRenumber = _settings.AutoRenumberOnInsert;
+        _autosaveCadence = $"{_settings.AutosaveSeconds} s";
+        _recoveryCopies = _settings.RecoveryCopies.ToString();
+        _saveOnGo = _settings.SaveOnGo;
+        _outsideMediaPolicy = _settings.OutsideMedia switch
+        {
+            Core.Model.OutsideMediaPolicy.MoveToRoot => "move to root",
+            Core.Model.OutsideMediaPolicy.CopyToRoot => "copy to root",
+            _ => "keep in place",
+        };
+    }
 
     public IReadOnlyList<SettingsPane> ApplicationPanes { get; } = SampleShow.ApplicationPanes;
-    public IReadOnlyList<SettingsPane> ProjectPanes { get; } = SampleShow.ProjectPanes;
+    public IReadOnlyList<SettingsPane> ProjectPanes { get; }
     public IReadOnlyList<OverrideRow> Overrides { get; } = SampleShow.Overrides;
 
     [ObservableProperty]
@@ -215,24 +257,73 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _autoRenumber = true;
 }
 
-/// <summary>Screen 14 — the renamed Preflight: errors and warnings, each with its fix attached.</summary>
+/// <summary>
+/// Screen 14 — the renamed Preflight, running the real pass over the loaded document.
+/// </summary>
+/// <remarks>
+/// Nothing on this screen is authored any more: the rows, their severities and the summary all come
+/// from <see cref="ProjectStatus"/>, which is the same code <c>hacue2-check</c> runs. A status view
+/// that listed its own findings could disagree with the CLI, and the first time it did nobody would
+/// know which to believe.
+/// </remarks>
 public partial class ProjectStatusViewModel : ObservableObject
 {
-    public IReadOnlyList<CheckRow> Checks { get; } = SampleShow.Checks;
+    public ProjectStatusViewModel(HaCueProject project, IProjectEnvironment? environment = null)
+    {
+        Report = ProjectStatus.Run(project, environment: environment);
+        Title = $"Project status — {project.Title}";
 
-    public string Title { get; } = $"Project status — {SampleShow.ProjectName}";
-    public string Summary { get; } = "2 errors · 2 warnings · 9 passed · 0.4 s";
+        Checks =
+        [
+            .. Report.Checks.Select(check => new CheckRow
+            {
+                Check = check.Name,
+                Result = new Status(Result(check), Gel(check.Outcome)),
+                Detail = check.Issues.Count > 0 ? check.Issues[0].Message : check.Detail,
+                Fix = check.Fix,
+            }),
+        ];
 
-    /// <summary>The headless twin is <c>hacue2 --check</c>, exit 1 while errors remain (register item 25).</summary>
-    public string HeadlessNote { get; } = "hacue2 --check exits 1 while errors remain";
+        // The relink pane offers the first missing file, because that is the one the operator is
+        // looking at when they arrive here.
+        _missingFile = Report.Checks
+            .FirstOrDefault(check => check.Name == "Media files")?.Issues
+            .FirstOrDefault()?.Message ?? "nothing missing";
+    }
 
-    public string ErrorNote { get; } = "2 errors keep the status token red";
+    public ProjectStatusReport Report { get; }
+    public IReadOnlyList<CheckRow> Checks { get; }
+    public string Title { get; }
 
-    [ObservableProperty] private string _missingFile = "interval.wav";
+    public string Summary => Report.Summary;
+
+    public string ErrorNote => Report.Errors == 0
+        ? "no errors — the status token is green"
+        : $"{Report.Errors} error{(Report.Errors == 1 ? "" : "s")} keep the status token red";
+
+    /// <summary>The headless twin is <c>hacue2-check</c>, exit 1 while errors remain (register item 25).</summary>
+    public string HeadlessNote { get; } = "hacue2-check exits 1 while errors remain";
+
+    [ObservableProperty] private string _missingFile;
     [ObservableProperty] private string _consolidateInto = "~/shows/midsummer-tour/";
     [ObservableProperty] private bool _copyMedia = true;
     [ObservableProperty] private bool _includeReport = true;
     [ObservableProperty] private bool _zipWhenDone;
+
+    private static string Result(StatusCheck check) => check.Outcome switch
+    {
+        CheckOutcome.Passed => "ok",
+        CheckOutcome.NotChecked => "not checked",
+        _ => check.Detail,
+    };
+
+    private static Gel Gel(CheckOutcome outcome) => outcome switch
+    {
+        CheckOutcome.Passed => ViewModels.Gel.Green,
+        CheckOutcome.Warning => ViewModels.Gel.Amber,
+        CheckOutcome.Failed => ViewModels.Gel.Red,
+        _ => ViewModels.Gel.Neutral,
+    };
 }
 
 /// <summary>Screen 15 — bay counters, composition telemetry, and a level-filtered log tail.</summary>
@@ -241,19 +332,18 @@ public partial class ProjectStatusViewModel : ObservableObject
 /// minimum level — the same sink the file log uses (register item 27). One logging system, two readers;
 /// a second event collector would drift from the archive the moment either changed.
 /// </remarks>
-public partial class DiagnosticsViewModel : ObservableObject
+public partial class DiagnosticsViewModel(ShowRuntime runtime) : ObservableObject
 {
-    public IReadOnlyList<BayRow> BayRows { get; } = SampleShow.BayRows;
-    public IReadOnlyList<CompositionStatsRow> Compositions { get; } = SampleShow.CompositionStats;
-    public IReadOnlyList<LogLine> Log { get; } = SampleShow.LogTail;
+    public IReadOnlyList<BayRow> BayRows { get; } = runtime.BayRows;
+    public IReadOnlyList<CompositionStatsRow> Compositions { get; } = runtime.CompositionStats;
+    public IReadOnlyList<LogLine> Log { get; } = runtime.Log;
 
     public IReadOnlyList<string> Levels { get; } = ["Trace", "Debug", "Information", "Warning", "Error"];
 
     [ObservableProperty]
     private string _minimumLevel = "Warning";
 
-    public string BayHeader { get; } =
-        "48 000 Hz · 480-sample chunks · 12 logical · passes: 5 voices + 4 terminals";
+    public string BayHeader { get; } = runtime.BaySummary + " · 480-sample chunks";
 
     public string BayWarning { get; } =
         "7 of 8 chunks in flight, 12 dropped — the encoder is not draining. Recording will gap before it fails.";

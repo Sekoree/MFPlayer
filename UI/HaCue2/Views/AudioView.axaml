@@ -89,7 +89,8 @@
           </DockPanel>
         </c:PanelBox>
 
-        <c:PanelBox Grid.Column="1" Header="Lobby" Hint="logical output · stereo pair">
+        <c:PanelBox Grid.Column="1" Header="{Binding SelectedOutputName}"
+                    Hint="{Binding SelectedOutputHint}">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <DockPanel LastChildFill="True">
@@ -103,7 +104,7 @@
           <ScrollViewer>
             <StackPanel Margin="0,6,0,8">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
-                <TextBox Text="Lobby" />
+                <TextBox Text="{Binding SelectedOutputName}" />
               </HeaderedContentControl>
               <!-- With the permanent strip gone, this flag picks what appears in the Output info
                    drawer's compact row and in the status-bar health token. -->
@@ -114,8 +115,8 @@
                 </ListBox>
               </HeaderedContentControl>
 
-              <ContentControl Theme="{StaticResource Subhead}" Content="Fed by · 2 cues" />
-              <ItemsControl ItemsSource="{Binding LobbySenders}" Margin="10,2">
+              <ContentControl Theme="{StaticResource Subhead}" Content="Fed by" />
+              <ItemsControl ItemsSource="{Binding Senders}" Margin="10,2">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="sys:String">
                     <TextBlock Classes="mono dim2" FontSize="{StaticResource FontSizeMono}"
@@ -124,12 +125,12 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
-              <ContentControl Theme="{StaticResource Subhead}" Content="Patched to · nothing" />
+              <ContentControl Theme="{StaticResource Subhead}" Content="Patched to" />
               <TextBlock Margin="10,4,10,8" FontSize="{StaticResource FontSizeSmall}" TextWrapping="Wrap"
-                         Classes="err"
+                         Classes="err" IsVisible="{Binding IsSelectedOutputUnpatched}"
                          Text="No device channel receives Lobby on this machine. Cues sending here run silent — never redirected to a default device." />
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="primary block" Content="PATCH LOBBY → PICK DEVICE CHANNELS…" />
+                <Button Classes="primary block" Content="PATCH → PICK DEVICE CHANNELS…" />
               </ContentControl>
             </StackPanel>
           </ScrollViewer>
@@ -276,7 +277,7 @@
             </StackPanel>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="1" Header="Record" Hint="selected line">
+          <c:PanelBox Grid.Row="1" Header="{Binding SelectedLineName}" Hint="selected line">
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <DockPanel LastChildFill="True">

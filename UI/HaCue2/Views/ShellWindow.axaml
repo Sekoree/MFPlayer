@@ -69,6 +69,11 @@
         <!-- The issue count is the doorway to Project status; it is the only red thing on the bar. -->
         <Button Grid.Column="2" Theme="{StaticResource LinkButton}" Foreground="{StaticResource GelRed}"
                 Content="{Binding IssueSummary}" Click="OnProjectStatus" />
+        <!-- The undo toast names the DOMAIN as well as the edit ("undo: patch — Fold L → Out 3 gain"):
+             with one journal across every view, ⌘Z can otherwise change a screen nobody is looking at. -->
+        <TextBlock Grid.Column="3" Classes="mono dim3 small" VerticalAlignment="Center"
+                   HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"
+                   IsVisible="{Binding CanUndo}" Text="{Binding UndoSummary}" />
         <TextBlock Grid.Column="4" Classes="mono dim3 small" VerticalAlignment="Center"
                    Text="{Binding UnsavedSummary}" />
         <TextBlock Grid.Column="5" Classes="mono ok small" VerticalAlignment="Center"

@@ -67,6 +67,17 @@ public abstract record CueNode
     public CueTrigger Trigger { get; set; } = CueTrigger.Manual;
     public int PreWaitMs { get; set; }
     public int PostWaitMs { get; set; }
+
+    /// <summary>
+    /// Where this cue starts inside a TIMELINE group, in milliseconds from the group's own start.
+    /// </summary>
+    /// <remarks>
+    /// Meaningless outside one — a playlist child follows its predecessor and an all-together child
+    /// starts with the group — but it lives on the base because a cue can be dragged into and out of a
+    /// timeline group without changing kind, and losing its position on the way in would be a data
+    /// loss the operator did not ask for.
+    /// </remarks>
+    public int StartOffsetMs { get; set; }
 }
 
 public enum CueTrigger

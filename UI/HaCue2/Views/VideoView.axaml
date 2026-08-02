@@ -48,54 +48,34 @@
            placement (register item 21). -->
       <Grid IsVisible="{Binding IsCompositionsPane}" ColumnDefinitions="*,360" Margin="7" ColumnSpacing="7">
 
+        <!-- One pane per composition, at the composition's own aspect ratio. Two hard-coded panels
+             would stop agreeing with the document the first time somebody added a third canvas. -->
         <ScrollViewer Grid.Column="0">
-          <StackPanel Spacing="7">
-
-          <c:PanelBox Header="{Binding CycHeader}" Hint="{Binding CycHint}">
-            <c:PanelBox.Footer>
-              <Border Classes="chain">
-                <DockPanel LastChildFill="True">
-                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="LAYERS" /></Border>
-                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                             Text="placements belong to cues — the visualizer here is just Q15.5's placement · double-click opens the cue" />
-              </DockPanel>
-              </Border>
-            </c:PanelBox.Footer>
-
-            <c:AspectBox Margin="10,8" VerticalAlignment="Top">
-              <Border Classes="vidcanvas">
-              <Panel>
-                <c:CanvasGrid />
-                <ItemsControl ItemsSource="{Binding CycLayers}"
-                              ItemContainerTheme="{StaticResource PlacementContainer}"
-                              ItemTemplate="{StaticResource PlacementTemplate}">
-                  <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-                  </ItemsControl.ItemsPanel>
-                </ItemsControl>
-              </Panel>
-            </Border>
-            </c:AspectBox>
-          </c:PanelBox>
-
-          <c:PanelBox Header="{Binding PortalHeader}" Hint="{Binding PortalHint}">
-            <c:AspectBox Margin="10,8" VerticalAlignment="Top">
-              <Border Classes="vidcanvas">
-              <Panel>
-                <c:CanvasGrid />
-                <ItemsControl ItemsSource="{Binding PortalLayers}"
-                              ItemContainerTheme="{StaticResource PlacementContainer}"
-                              ItemTemplate="{StaticResource PlacementTemplate}">
-                  <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-                  </ItemsControl.ItemsPanel>
-                </ItemsControl>
-              </Panel>
-            </Border>
-            </c:AspectBox>
-          </c:PanelBox>
-
-          </StackPanel>
+          <ItemsControl ItemsSource="{Binding Compositions}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><StackPanel Spacing="7" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:CompositionPaneViewModel">
+                <c:PanelBox Header="{Binding Name}" Hint="{Binding Hint}">
+                  <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
+                    <Border Classes="vidcanvas">
+                      <Panel>
+                        <c:CanvasGrid />
+                        <ItemsControl ItemsSource="{Binding Layers}"
+                                      ItemContainerTheme="{StaticResource PlacementContainer}"
+                                      ItemTemplate="{StaticResource PlacementTemplate}">
+                          <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+                          </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                      </Panel>
+                    </Border>
+                  </c:AspectBox>
+                </c:PanelBox>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
         </ScrollViewer>
 
         <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="7">
@@ -141,11 +121,11 @@
             </DockPanel>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="1" Header="Projector A" Hint="selected output">
+          <c:PanelBox Grid.Row="1" Header="{Binding SelectedOutputName}" Hint="selected output">
             <ScrollViewer>
               <StackPanel Margin="0,6,0,8">
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
-                  <ComboBox ItemsSource="{Binding Compositions}" SelectedIndex="0" />
+                  <ComboBox ItemsSource="{Binding CompositionNames}" SelectedIndex="0" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Screen">
                   <ComboBox ItemsSource="{Binding Screens}" SelectedIndex="1" />
@@ -181,7 +161,7 @@
             </ScrollViewer>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="2" Header="Selected composition · Cyc">
+          <c:PanelBox Grid.Row="2" Header="Selected composition">
             <StackPanel Margin="0,6,0,8">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Size / rate">
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
@@ -286,7 +266,7 @@
           <c:AspectBox Margin="10,8" VerticalAlignment="Top">
             <Border Classes="vidcanvas">
             <Panel>
-              <ItemsControl ItemsSource="{Binding MappingOutput}"
+              <ItemsControl ItemsSource="{Binding MappingTarget}"
                             ItemContainerTheme="{StaticResource PlacementContainer}"
                             ItemTemplate="{StaticResource PlacementTemplate}">
                 <ItemsControl.ItemsPanel>

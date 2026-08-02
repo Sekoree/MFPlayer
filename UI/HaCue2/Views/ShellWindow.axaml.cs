@@ -15,6 +15,9 @@ public partial class ShellWindow : Window
 
     public ShellWindow() => InitializeComponent();
 
+    private ShellViewModel Shell =>
+        DataContext as ShellViewModel ?? throw new InvalidOperationException("The shell has no view-model.");
+
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
     /// <summary>
@@ -23,11 +26,36 @@ public partial class ShellWindow : Window
     /// </summary>
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.Key == Key.F9 && DataContext is ShellViewModel shell)
+        if (DataContext is not ShellViewModel shell)
         {
-            shell.IsOutputInfoOpen = !shell.IsOutputInfoOpen;
-            e.Handled = true;
+            base.OnKeyDown(e);
             return;
+        }
+
+        // Undo is a WINDOW-level key with ONE journal behind it, across every view. That is the whole
+        // point of a single journal: ⌘Z means the same thing whether the last edit was a cue label or
+        // a patch cell, and the toast says which surface it changed so an undo cannot silently alter a
+        // screen the operator is not looking at.
+        var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+
+        switch (e.Key)
+        {
+            case Key.F9:
+                shell.IsOutputInfoOpen = !shell.IsOutputInfoOpen;
+                e.Handled = true;
+                return;
+
+            case Key.Z when control && !shift:
+                shell.Undo();
+                e.Handled = true;
+                return;
+
+            case Key.Z when control && shift:
+            case Key.Y when control:
+                shell.Redo();
+                e.Handled = true;
+                return;
         }
 
         base.OnKeyDown(e);
@@ -51,13 +79,13 @@ public partial class ShellWindow : Window
     }
 
     private void OnSettings(object? sender, RoutedEventArgs e)
-        => _settings = Reopen(_settings, () => new SettingsWindow { DataContext = new SettingsViewModel() });
+        => _settings = Reopen(_settings, () => new SettingsWindow { DataContext = new SettingsViewModel(Shell.Project) });
 
     private void OnDiagnostics(object? sender, RoutedEventArgs e)
-        => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = new DiagnosticsViewModel() });
+        => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = new DiagnosticsViewModel(Shell.Runtime) });
 
     private void OnProjectStatus(object? sender, RoutedEventArgs e)
-        => _projectStatus = Reopen(_projectStatus, () => new ProjectStatusWindow { DataContext = new ProjectStatusViewModel() });
+        => _projectStatus = Reopen(_projectStatus, () => new ProjectStatusWindow { DataContext = new ProjectStatusViewModel(Shell.Project, Shell.Environment) });
 
     /// <summary>
     /// Bring an already-open auxiliary window forward instead of stacking a second copy. Diagnostics

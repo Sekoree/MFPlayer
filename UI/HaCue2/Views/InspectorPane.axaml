@@ -41,10 +41,10 @@
           <!-- ══ GENERAL ═══════════════════════════════════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsGeneralPane}" Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Number">
-              <TextBox Text="{Binding NumberValue}" />
+              <TextBox Text="{Binding NumberValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Label">
-              <TextBox Text="{Binding LabelValue}" />
+              <TextBox Text="{Binding LabelValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Trigger">
               <ListBox Theme="{StaticResource Segment}" SelectedIndex="0">
@@ -61,17 +61,18 @@
             </HeaderedContentControl>
             <!-- A disabled cue stays visible and is skipped by GO and by auto-follow — deleting a cue
                  to drop it for one performance is how shows lose cues. -->
-            <CheckBox Margin="10,6,10,0" IsChecked="True" Content="Enabled — GO and auto-follow include this cue" />
+            <CheckBox Margin="10,6,10,0" IsChecked="{Binding IsEnabled}"
+                      Content="Enabled — GO and auto-follow include this cue" />
           </StackPanel>
 
           <!-- ══ AUDIO ═════════════════════════════════════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsAudioPane}" Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
-              <TextBox Classes="short" Text="{Binding LevelValue}" />
+              <TextBox Classes="short" Text="{Binding LevelValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade in">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
-                <TextBox Grid.Column="0" Text="{Binding FadeValue}" />
+                <TextBox Grid.Column="0" Text="{Binding FadeValue}" LostFocus="OnFieldCommitted" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding Curves}" SelectedIndex="3"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
@@ -207,7 +208,8 @@
           <!-- ══ NOTE — one tab on every kind; stays writable under Lock ════════════════════ -->
           <DockPanel IsVisible="{Binding IsNotePane}" Margin="10,8">
             <TextBox AcceptsReturn="True" TextWrapping="Wrap" MinHeight="160"
-                     Text="{Binding Cue.Note}"
+                     Text="{Binding NoteValue}"
+                     LostFocus="OnFieldCommitted"
                      PlaceholderText="Notes stay writable under Lock."
                      VerticalContentAlignment="Top" />
           </DockPanel>

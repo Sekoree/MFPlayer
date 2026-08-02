@@ -72,7 +72,7 @@
           <DockPanel>
             <Border DockPanel.Dock="Top" BorderBrush="{StaticResource BoothRule}"
                     BorderThickness="0,0,0,1" Padding="0,4">
-              <Grid ColumnDefinitions="3,50,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
+              <Grid ColumnDefinitions="3,64,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
                 <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="CUE" />
                 <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="LABEL" />
                 <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="SOURCE / TARGET" />
@@ -103,7 +103,7 @@
                           Classes.is-broke="{Binding IsBroken}"
                           Classes.is-off="{Binding IsDisabled}"
                           Classes.grp="{Binding IsGroup}">
-                    <Grid ColumnDefinitions="3,50,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
+                    <Grid ColumnDefinitions="3,64,18,*,148,50,50,44,62" ColumnSpacing="9" Margin="0,0,10,0">
                       <Border Grid.Column="0" Classes="stripe"
                               Classes.is-stby="{Binding IsStandby}"
                               Classes.is-go="{Binding IsRunning}"

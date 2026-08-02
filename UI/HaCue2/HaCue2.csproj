@@ -4,11 +4,12 @@
          Design source of truth: Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html (rev 3)
          and the 30-item decision register in Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md.
 
-         STATUS: this project is the UI SHELL ONLY. It deliberately references NO framework project —
-         every view is fed by hand-written sample data (the fictional "midsummer-2026" show from the
-         mockup) so the layout and the theme can be reviewed before any engine is wired in. Phase 5 of
-         the extraction plan adds the real references; until then a missing ProjectReference is a
-         feature, and the arch-test UiAllowed map records the (empty) allow-list to keep it that way. -->
+         STATUS: the shell binds to the PROJECT MODEL (HaCue2.Core) but not yet to the ENGINE. Views are
+         projected from a real HaCueProject and edited through the undo journal; anything that is a
+         runtime fact rather than a document one — which cues are sounding, meters, bay counters —
+         comes from `Session/ShowRuntime`, the explicit stand-in for what ShowSession will supply.
+         Phase 5 replaces that seam; until then a framework ProjectReference here would be premature,
+         and the arch-test UiAllowed map records the allow-list to keep it that way. -->
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
@@ -35,6 +36,10 @@
         <PackageReference Include="Avalonia.Themes.Simple"/>
         <PackageReference Include="Avalonia.Fonts.Inter"/>
         <PackageReference Include="CommunityToolkit.Mvvm"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj"/>
     </ItemGroup>
 
 </Project>

@@ -1,5 +1,8 @@
 using CommunityToolkit.Mvvm.ComponentModel;
-using HaCue2.Sample;
+using HaCue2.Core.Journal;
+using HaCue2.Core.Model;
+using HaCue2.Presentation;
+using HaCue2.Session;
 
 namespace HaCue2.ViewModels;
 
@@ -9,22 +12,34 @@ public partial class CuesViewModel : ObservableObject
     public const string PropertiesTab = "CUE PROPERTIES";
     public const string ListsTab = "LISTS & GROUPS";
 
-    public CuesViewModel()
+    private readonly ProjectJournal _journal;
+    private readonly ShowRuntime _runtime;
+
+    public CuesViewModel(ProjectJournal journal, ShowRuntime runtime)
     {
-        Scopes = [.. SampleShow.CueListScopes, .. SampleShow.GroupScopes];
-        // The show root, not a group: the app opens showing everything, and scoping is a thing the
-        // operator does on purpose (register item 7).
-        _selectedScope = SampleShow.CueListScopes[1];
-        Cues = [.. SampleShow.Act1Cues];
-        _selectedCue = SampleShow.Act1Cues[3];
-        Inspector = new InspectorViewModel(_selectedCue);
-        // The right panel's header follows whichever tab is showing, so it has to hear the inspector.
+        _journal = journal;
+        _runtime = runtime;
+
+        Inspector = new InspectorViewModel(journal);
         Inspector.PropertyChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(RightPanelHeader));
             OnPropertyChanged(nameof(RightPanelHint));
         };
+
+        Scopes = BuildScopes();
+        // The show root, not a group: the app opens showing everything, and scoping is something the
+        // operator does on purpose (register item 7).
+        _selectedScope = Scopes.FirstOrDefault(scope => scope.IsList && scope.Name == "Act 1")
+                         ?? Scopes.FirstOrDefault();
+
+        Cues = [];
+        ActiveCues = [.. runtime.ActiveCues];
+        Rebuild();
+        SelectedCue = Cues.FirstOrDefault();
     }
+
+    private HaCueProject Project => _journal.Project;
 
     // ── the tree ──────────────────────────────────────────────────────────────────────────────
     public ObservableCollection<CueRow> Cues { get; }
@@ -34,55 +49,133 @@ public partial class CuesViewModel : ObservableObject
 
     partial void OnSelectedCueChanged(CueRow? value)
     {
-        // Selecting a cue must NOT flip the right panel to Cue properties (register item 7): browsing
-        // the tree while reading Lists & groups is a real thing an operator does. The inspector still
-        // follows the selection so the tab is correct when they switch back themselves.
-        Inspector.Show(value);
+        // Selecting a cue must NOT flip the right panel to Cue properties (register item 7).
+        Inspector.Show(value is null ? [] : [value.Id]);
     }
 
-    public bool IsScoped => SelectedScope is not null && SampleShow.GroupScopes.Contains(SelectedScope);
+    /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
+    public void Refresh()
+    {
+        var selected = SelectedCue?.Id;
+        Rebuild();
+        SelectedCue = Cues.FirstOrDefault(row => row.Id == selected);
+        Inspector.Reload();
+        OnPropertyChanged(nameof(TreeHint));
+        OnPropertyChanged(nameof(Breadcrumb));
+    }
 
-    public string Breadcrumb => IsScoped
-        ? $"Act 1  ›  Songs  ›  {SelectedScope!.Name.Trim()}"
-        : "Act 1  ›  all cues";
+    private void Rebuild()
+    {
+        Cues.Clear();
 
-    public string TreeHint => IsScoped
-        ? $"{SelectedScope!.Tally} cues in scope · 84 in show"
-        : "84 cues · undo: set fade 2.0 → 3.0 on Q13.1";
+        var rows = SelectedScope switch
+        {
+            { IsList: true } scope when Project.CueLists.FirstOrDefault(l => l.Id == scope.Id) is { } list =>
+                CuePresentation.Rows(list, Project, _runtime),
+            { IsList: false } scope when Project.FindCue(scope.Id) is { } cue =>
+                CuePresentation.Subtree(cue, Project, _runtime),
+            _ => [],
+        };
+
+        foreach (var row in rows)
+            Cues.Add(row);
+    }
+
+    public bool IsScoped => SelectedScope is { IsList: false };
+
+    public string Breadcrumb => SelectedScope is null
+        ? "no list"
+        : IsScoped
+            ? $"{ListNameOf(SelectedScope.Id)}  ›  {SelectedScope.Name}"
+            : $"{SelectedScope.Name}  ›  all cues";
+
+    public string TreeHint
+    {
+        get
+        {
+            var total = Project.AllCues().Count();
+            return IsScoped
+                ? $"{Cues.Count} cues in scope · {total} in show"
+                : $"{Cues.Count} cues · {total} in show";
+        }
+    }
 
     // ── scope (right panel, Lists & groups tab) ───────────────────────────────────────────────
-    public IReadOnlyList<SettingsPane> Scopes { get; }
-    public IReadOnlyList<SettingsPane> CueLists { get; } = SampleShow.CueListScopes;
-    public IReadOnlyList<SettingsPane> Groups { get; } = SampleShow.GroupScopes;
+    public IReadOnlyList<ScopeEntry> Scopes { get; }
+
+    public IReadOnlyList<ScopeEntry> CueLists => [.. Scopes.Where(scope => scope.IsList)];
+
+    public IReadOnlyList<ScopeEntry> Groups => [.. Scopes.Where(scope => !scope.IsList)];
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsScoped))]
     [NotifyPropertyChangedFor(nameof(Breadcrumb))]
     [NotifyPropertyChangedFor(nameof(TreeHint))]
     [NotifyPropertyChangedFor(nameof(ActivePanelHint))]
-    private SettingsPane? _selectedScope;
+    private ScopeEntry? _selectedScope;
 
-    partial void OnSelectedScopeChanged(SettingsPane? value)
+    partial void OnSelectedScopeChanged(ScopeEntry? value)
     {
-        Cues.Clear();
-        foreach (var cue in IsScoped ? SampleShow.ScopedCues : SampleShow.Act1Cues)
-            Cues.Add(cue);
-
-        ActiveCues.Clear();
-        foreach (var active in IsScoped ? SampleShow.ScopedActiveCues : SampleShow.ActiveCues)
-            ActiveCues.Add(active);
-
+        Rebuild();
         SelectedCue = null;
+        OnPropertyChanged(nameof(TreeHint));
     }
 
+    /// <summary>
+    /// Every list and every group, as scope roots.
+    /// </summary>
+    /// <remarks>
+    /// The tallies are counts of the real subtree, so a group that gains a cue gains a number here
+    /// without anyone updating a string. Groups are indented by depth for the same reason the tree is.
+    /// </remarks>
+    private IReadOnlyList<ScopeEntry> BuildScopes()
+    {
+        var entries = new List<ScopeEntry>();
+
+        foreach (var list in Project.CueLists)
+        {
+            entries.Add(new ScopeEntry(list.Id, list.Name, list.Flatten().Count(), IsList: true, 0));
+
+            foreach (var (group, depth) in GroupsIn(list.Cues, 0))
+                entries.Add(new ScopeEntry(
+                    group.Id,
+                    $"{CuePresentation.Number(group.Number)} · {group.Label}",
+                    CountIn(group),
+                    IsList: false,
+                    depth));
+        }
+
+        return entries;
+    }
+
+    private static IEnumerable<(GroupCueNode Group, int Depth)> GroupsIn(
+        IEnumerable<CueNode> cues, int depth)
+    {
+        foreach (var cue in cues)
+        {
+            if (cue is not GroupCueNode group)
+                continue;
+
+            yield return (group, depth);
+            foreach (var nested in GroupsIn(group.Children, depth + 1))
+                yield return nested;
+        }
+    }
+
+    private static int CountIn(GroupCueNode group) =>
+        group.Children.Count + group.Children.OfType<GroupCueNode>().Sum(CountIn);
+
+    private string ListNameOf(Guid groupId) =>
+        Project.CueLists.FirstOrDefault(list => list.Flatten().Any(cue => cue.Id == groupId))?.Name
+        ?? "show";
+
     // ── the Active panel ──────────────────────────────────────────────────────────────────────
-    // Scope is a view filter, never a transport boundary: this list always shows everything sounding,
-    // in or out of scope, and says which list an out-of-scope cue belongs to.
-    public ObservableCollection<ActiveCueRow> ActiveCues { get; } = [.. SampleShow.ActiveCues];
+    // Scope is a view filter, never a transport boundary: this list always shows everything sounding.
+    public ObservableCollection<ActiveCueRow> ActiveCues { get; }
 
     public string ActivePanelHint => IsScoped
         ? "includes cues outside the scope"
-        : "5 sounding · 1 fading · scope never hides these";
+        : $"{ActiveCues.Count} sounding · scope never hides these";
 
     // ── the right column ──────────────────────────────────────────────────────────────────────
     public IReadOnlyList<string> RightTabs { get; } = [PropertiesTab, ListsTab];
@@ -97,29 +190,76 @@ public partial class CuesViewModel : ObservableObject
 
     public string RightPanelHeader => IsPropertiesTab ? Inspector.Title : "Lists & groups";
 
-    public string RightPanelHint => IsPropertiesTab
-        ? Inspector.KindLabel
-        : "pick a root to scope the tree";
+    public string RightPanelHint =>
+        IsPropertiesTab ? Inspector.KindLabel : "pick a root to scope the tree";
 
     public InspectorViewModel Inspector { get; }
 
     // ── the transport row ─────────────────────────────────────────────────────────────────────
-    public string ListSelector { get; } = "Act 1 · merged 3 lists ▾";
-    public string ChaseReadout { get; } = "MTC 01:12:44:07";
+
+    /// <summary>
+    /// Multi-list transport is v1 (register item 5): the transport acts on the SELECTED list, and each
+    /// list keeps its own standby.
+    /// </summary>
+    public string ListSelector
+    {
+        get
+        {
+            var list = SelectedScope is { IsList: true } scope
+                ? Project.CueLists.FirstOrDefault(item => item.Id == scope.Id)
+                : Project.CueLists.FirstOrDefault();
+
+            var standby = list?.StandbyCueId is { } id ? Project.FindCue(id) : null;
+            return standby is null
+                ? $"{list?.Name ?? "no list"} · at top ▾"
+                : $"{list!.Name} · stby Q{CuePresentation.Number(standby.Number)} ▾";
+        }
+    }
+
+    public string ChaseReadout => _runtime.ChaseReadout;
 
     /// <summary>Register item 18 — a bottom sheet by default, undockable to its own window.</summary>
     [ObservableProperty]
     private bool _isTimelineOpen;
 
-    public TimelineViewModel Timeline { get; } = new();
+    public TimelineViewModel Timeline => new(Project, _runtime);
 }
 
-/// <summary>Screen 05 — the timeline sheet.</summary>
+/// <summary>A scope root: a cue list, or a group inside one.</summary>
+/// <param name="Depth">Nesting, so a song inside "Songs" is indented under it.</param>
+public sealed record ScopeEntry(Guid Id, string Name, int Count, bool IsList, int Depth)
+{
+    public string Tally => Count.ToString();
+    public Thickness Indent => new(12 + (Depth * 12), 0, 0, 0);
+}
+
+/// <summary>Screen 05 — the timeline sheet over whichever group is open.</summary>
 public sealed class TimelineViewModel
 {
-    public string Title { get; } = "Timeline · Q13 Act 1 · Opening sequence";
-    public string Hint { get; } = "snap 0.5 s · zoom fit";
-    public IReadOnlyList<string> Ruler { get; } = SampleShow.TimelineRuler;
-    public IReadOnlyList<TimelineLane> Lanes { get; } = SampleShow.TimelineLanes;
-    public double Playhead { get; } = SampleShow.TimelinePlayhead;
+    public TimelineViewModel(HaCueProject project, ShowRuntime runtime)
+    {
+        // The first timeline group in the show: what the sheet opens onto until a cue is chosen.
+        var group = project.AllCues().OfType<GroupCueNode>()
+            .FirstOrDefault(candidate => candidate.FireMode == GroupFireMode.Timeline);
+
+        if (group is null)
+        {
+            Title = "Timeline";
+            Hint = "no timeline group in this show";
+            return;
+        }
+
+        Title = $"Timeline · Q{CuePresentation.Number(group.Number)} {group.Label}";
+        Hint = $"{group.Children.Count} cues · snap 0.5 s · zoom fit";
+        Ruler = TimelinePresentation.Ruler(group, runtime);
+        Lanes = TimelinePresentation.Lanes(group, project, runtime);
+    }
+
+    public string Title { get; }
+    public string Hint { get; }
+    public IReadOnlyList<string> Ruler { get; } = [];
+    public IReadOnlyList<TimelineLane> Lanes { get; } = [];
+
+    /// <summary>Where the transport is inside the group — a runtime fact, so zero until one exists.</summary>
+    public double Playhead { get; }
 }
