@@ -25,6 +25,19 @@ public partial class InspectorPane : UserControl
             inspector.Reload);
     }
 
+    /// <summary>
+    /// Opens the timeline sheet on the selected group.
+    /// </summary>
+    /// <remarks>
+    /// The sheet had no way in at all: it existed and drew the first timeline group in the show, but
+    /// nothing opened it and nothing pointed it at a group the operator had chosen.
+    /// </remarks>
+    private void OnOpenTimeline(object? sender, RoutedEventArgs e)
+    {
+        if (this.FindAncestorOfType<CuesView>()?.DataContext is CuesViewModel cues)
+            cues.OpenTimeline();
+    }
+
     private void OnChooseSubtitles(object? sender, RoutedEventArgs e)
     {
         if (this.FindAncestorOfType<Window>() is not { } owner

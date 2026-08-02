@@ -160,8 +160,16 @@ public sealed record MediaCueNode : CueNode
     /// <summary>The N×V half: which source channel feeds which logical output, at what gain.</summary>
     public List<CueAudioSend> Sends { get; set; } = [];
 
-    /// <summary>Null for an audio-only cue.</summary>
-    public LayerPlacement? Placement { get; set; }
+    /// <summary>
+    /// Where this cue's video appears. Empty for an audio-only cue.
+    /// </summary>
+    /// <remarks>
+    /// A LIST, because one cue can appear in several places at once — the same feed mirrored to a
+    /// second canvas, or two regions of one canvas — and the engine fans ONE decoded source to all of
+    /// them (<c>ShowClipBinding.ExtraPlacements</c>: "decoded once"). Playing the file twice to get a
+    /// mirror would double the decode cost and drift the two copies apart.
+    /// </remarks>
+    public List<LayerPlacement> Placements { get; set; } = [];
 
     public List<EffectLane> EffectLanes { get; set; } = [];
 }
@@ -243,7 +251,10 @@ public sealed record VisualizerCueNode : CueNode
     public int HoldMs { get; set; } = 24_000;
     public int BlendMs { get; set; } = 3_000;
     public bool LockPreset { get; set; }
-    public LayerPlacement? Placement { get; set; }
+
+    /// <summary>Where the visualizer appears. A list, for the same reason a media cue's is.</summary>
+    public List<LayerPlacement> Placements { get; set; } = [];
+
     public List<EffectLane> EffectLanes { get; set; } = [];
 }
 
@@ -304,6 +315,26 @@ public sealed record SubtitleSelection
 
     /// <summary>What the chosen track was, for the same re-mux reason as the audio one.</summary>
     public string Signature { get; set; } = "";
+}
+
+/// <summary>Reading a cue's placements without caring which kind it is.</summary>
+public static class CuePlacements
+{
+    /// <summary>Every canvas this cue appears on. Empty for a cue with no video.</summary>
+    public static IReadOnlyList<LayerPlacement> Of(CueNode cue) => cue switch
+    {
+        MediaCueNode media => media.Placements,
+        VisualizerCueNode visualizer => visualizer.Placements,
+        _ => [],
+    };
+
+    /// <summary>The mutable list, for an edit. Null for a cue that cannot be placed at all.</summary>
+    public static List<LayerPlacement>? ListOf(CueNode cue) => cue switch
+    {
+        MediaCueNode media => media.Placements,
+        VisualizerCueNode visualizer => visualizer.Placements,
+        _ => null,
+    };
 }
 
 public enum LayerFit

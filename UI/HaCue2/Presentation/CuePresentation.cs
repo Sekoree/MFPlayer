@@ -95,7 +95,7 @@ public static class CuePresentation
     /// </remarks>
     public static CueKind KindOf(CueNode cue) => cue switch
     {
-        MediaCueNode { Placement: not null } => ViewModels.CueKind.Video,
+        MediaCueNode { Placements.Count: > 0 } => ViewModels.CueKind.Video,
         MediaCueNode => ViewModels.CueKind.Media,
         GroupCueNode => ViewModels.CueKind.Group,
         ActionCueNode => ViewModels.CueKind.Action,
@@ -200,7 +200,7 @@ public static class CuePresentation
             case MediaCueNode media:
                 if (media.Loop)
                     badges.Add(new Badge("loop"));
-                if (media.Placement is { } placement)
+                foreach (var placement in media.Placements)
                     badges.Add(new Badge(CompositionName(project, placement)));
                 foreach (var lane in media.EffectLanes)
                     badges.Add(LaneBadge(lane));
@@ -218,8 +218,8 @@ public static class CuePresentation
                 break;
 
             case VisualizerCueNode visualizer:
-                if (visualizer.Placement is { } visualizerPlacement)
-                    badges.Add(new Badge(CompositionName(project, visualizerPlacement)));
+                foreach (var placement in visualizer.Placements)
+                    badges.Add(new Badge(CompositionName(project, placement)));
                 break;
 
             case PatchCueNode:

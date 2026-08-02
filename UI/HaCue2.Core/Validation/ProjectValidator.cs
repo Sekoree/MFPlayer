@@ -281,7 +281,8 @@ public static class ProjectValidator
                     ValidateGain(send.GainDb, "cue", id, $"Q{cue.Number} send", issues);
                 }
 
-                ValidatePlacement(project, media.Placement, cue, issues);
+                foreach (var placement in media.Placements)
+                    ValidatePlacement(project, placement, cue, issues);
                 ValidateLanes(media.EffectLanes, cue, issues);
                 ValidateCurve(project, media.FadeInCurve, cue, issues);
                 ValidateCurve(project, media.FadeOutCurve, cue, issues);
@@ -319,7 +320,8 @@ public static class ProjectValidator
                 break;
 
             case VisualizerCueNode visualizer:
-                ValidatePlacement(project, visualizer.Placement, cue, issues);
+                foreach (var placement in visualizer.Placements)
+                    ValidatePlacement(project, placement, cue, issues);
                 ValidateLanes(visualizer.EffectLanes, cue, issues);
                 break;
 

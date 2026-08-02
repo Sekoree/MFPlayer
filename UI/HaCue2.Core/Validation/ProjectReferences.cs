@@ -131,14 +131,7 @@ public static class ProjectReferences
 
         foreach (var cue in project.AllCues())
         {
-            var placement = cue switch
-            {
-                MediaCueNode media => media.Placement,
-                VisualizerCueNode visualizer => visualizer.Placement,
-                _ => null,
-            };
-
-            if (placement?.CompositionId == id)
+            if (CuePlacements.Of(cue).Any(placement => placement.CompositionId == id))
                 found.Add(CueRef(cue, "is placed on it"));
         }
 

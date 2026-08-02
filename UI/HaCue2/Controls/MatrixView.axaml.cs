@@ -57,6 +57,16 @@ public partial class MatrixView : UserControl
     /// labelled "Src L", the project patch is labelled "18i20 · Out 3" — the plan requires the patch
     /// label to carry BOTH the stable line alias and the real channel number, which needs the room.
     /// </summary>
+    /// <summary>The resource the row templates read the header width from.</summary>
+    /// <remarks>
+    /// A resource rather than a <c>RelativeSource AncestorType</c> binding from inside the item
+    /// template. An ancestor lookup runs while a container is still detached — during realisation and
+    /// again while recycling — and Avalonia reports "Ancestor not found" every time, which fills the
+    /// debug output with errors for something that is merely not-yet-attached. A DynamicResource
+    /// resolves through the same tree but DEFERS instead of failing.
+    /// </remarks>
+    public const string RowHeaderWidthKey = "MatrixRowHeaderWidth";
+
     public static readonly StyledProperty<double> RowHeaderWidthProperty =
         AvaloniaProperty.Register<MatrixView, double>(nameof(RowHeaderWidth), 96d);
 
@@ -72,7 +82,19 @@ public partial class MatrixView : UserControl
         AddHandler(PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Tunnel);
     }
 
-    private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+    private void InitializeComponent()
+    {
+        AvaloniaXamlLoader.Load(this);
+        Resources[RowHeaderWidthKey] = RowHeaderWidth;
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+
+        if (change.Property == RowHeaderWidthProperty)
+            Resources[RowHeaderWidthKey] = RowHeaderWidth;
+    }
 
     /// <summary>Raised for every cell edit; the view-model decides what it means.</summary>
     public event EventHandler<MatrixGesture>? Gesture;

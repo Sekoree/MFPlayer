@@ -454,6 +454,12 @@ public sealed record CurveOption(string Name, string PathData)
 /// <param name="IsHold">Flat until the next point. Drawn as a square rather than a circle.</param>
 public sealed record CurvePoint(double X, double Y, bool IsSelected = false, bool IsHold = false);
 
+/// <summary>
+/// One source-to-hardware route, as the inspector's chain draws it.
+/// </summary>
+/// <param name="Gain">The COMPOSED gain — the cue's send plus the patch cell, which is what is heard.</param>
+public sealed record RouteHop(string Source, string Logical, string Line, string Gain, bool IsMuted);
+
 /// <summary>A named settings pane in the nav (screens 12/13).</summary>
 public sealed record SettingsPane : INavRow
 {

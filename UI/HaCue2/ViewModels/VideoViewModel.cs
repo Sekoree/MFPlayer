@@ -407,14 +407,10 @@ public partial class VideoViewModel : ObservableObject
         if (_project.FindCue(gesture.SubjectId) is not { } cue)
             return;
 
-        var placement = cue switch
-        {
-            MediaCueNode media => media.Placement,
-            VisualizerCueNode visualizer => visualizer.Placement,
-            _ => null,
-        };
-
-        if (placement is null)
+        // By LAYER as well as by cue: a cue on two canvases has two rectangles, and the id alone
+        // would move whichever came first.
+        if (CuePlacements.Of(cue).FirstOrDefault(item => item.LayerIndex == gesture.Layer)
+            is not { } placement)
             return;
 
         _drag ??= _journal.Composite("move layer", "video");

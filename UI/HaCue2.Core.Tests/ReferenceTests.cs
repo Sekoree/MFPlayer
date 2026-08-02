@@ -104,7 +104,7 @@ public sealed class ReferenceTests
     public void PlacementsAndVideoOutputsBothReferenceAComposition()
     {
         var fixture = new TestProject();
-        fixture.Track.Placement = new LayerPlacement { CompositionId = fixture.Cyc.Id };
+        fixture.Track.Placements = [new LayerPlacement { CompositionId = fixture.Cyc.Id }];
         fixture.Project.VideoOutputs.Add(new VideoOutputDefinition
         {
             Name = "Projector A", CompositionId = fixture.Cyc.Id,

@@ -111,7 +111,7 @@ public static class SampleProject
             // much of the file it uses are decisions somebody made, so the timeline can draw them
             // before any media has been opened.
             TimelineOffsetMs = 4_000, TrimOutMs = 48_000,
-            Placement = Place(cyc, layer: 2, 0.06, 0.08, 0.58, 0.78),
+            Placements = [Place(cyc, layer: 2, 0.06, 0.08, 0.58, 0.78)],
             EffectLanes =
             [
                 new EffectLane
@@ -164,7 +164,7 @@ public static class SampleProject
         var visualizer = new VisualizerCueNode
         {
             Number = "15.5", Label = "Interval visualizer", PresetPack = "preset pack A",
-            Placement = Place(cyc, layer: 1, 0.60, 0.40, 0.36, 0.55),
+            Placements = [Place(cyc, layer: 1, 0.60, 0.40, 0.36, 0.55)],
         };
 
         var loopBack = new JumpCueNode
@@ -426,11 +426,14 @@ public static class SampleProject
                     Number = number.Child(4), Label = "Projection · silhouettes",
                     MediaPath = "video/silhouette.mov", FadeInMs = 2_000,
                     TimelineOffsetMs = 30_000, TrimOutMs = 96_000,
-                    Placement = new LayerPlacement
-                    {
-                        CompositionId = composition.Id, LayerIndex = 1,
-                        X = 0.1, Y = 0.1, Width = 0.8, Height = 0.8,
-                    },
+                    Placements =
+                    [
+                        new LayerPlacement
+                        {
+                            CompositionId = composition.Id, LayerIndex = 1,
+                            X = 0.1, Y = 0.1, Width = 0.8, Height = 0.8,
+                        },
+                    ],
                 },
             ],
         };

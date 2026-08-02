@@ -152,7 +152,11 @@ public static class ShowCompiler
 
     private static ShowClipBinding Clip(HaCueProject project, MediaCueNode media)
     {
-        var placement = media.Placement;
+        // The FIRST placement is the primary; the rest ride along as ExtraPlacements, which is how the
+        // engine fans one DECODED source to several canvases. Playing the file again for a mirror
+        // would double the decode cost and let the two copies drift apart.
+        var placements = media.Placements.OrderBy(item => item.LayerIndex).ToList();
+        var placement = placements.FirstOrDefault();
 
         return new ShowClipBinding(
             ClipId: media.Id.ToString(),
@@ -178,6 +182,12 @@ public static class ShowCompiler
             FadeOutCurve = media.FadeOutCurve.Law,
             Loop = media.Loop,
             Placement = placement is null ? null : Placement(placement),
+            ExtraPlacements = placements.Count < 2
+                ? null
+                : [.. placements.Skip(1).Select(extra => new ShowClipPlacement(
+                    extra.CompositionId.ToString(),
+                    extra.LayerIndex,
+                    Placement(extra)))],
             LogicalSends = [.. Sends(media)],
             VolumeEnvelope = Envelope(media, EffectLaneKind.Volume),
             OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity),

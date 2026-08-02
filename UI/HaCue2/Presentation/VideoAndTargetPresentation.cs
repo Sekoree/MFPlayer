@@ -21,15 +21,9 @@ public static class VideoPresentation
         var boxes = new List<PlacementBox>();
 
         foreach (var cue in project.AllCues())
+        foreach (var placement in CuePlacements.Of(cue))
         {
-            var placement = cue switch
-            {
-                MediaCueNode media => media.Placement,
-                VisualizerCueNode visualizer => visualizer.Placement,
-                _ => null,
-            };
-
-            if (placement is null || placement.CompositionId != composition.Id)
+            if (placement.CompositionId != composition.Id)
                 continue;
 
             boxes.Add(new PlacementBox

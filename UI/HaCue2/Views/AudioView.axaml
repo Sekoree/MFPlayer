@@ -157,7 +157,9 @@
             </Border>
           </c:PanelBox.Footer>
 
-          <ScrollViewer HorizontalScrollBarVisibility="Auto" Padding="9,7">
+          <!-- The bottom padding is for the horizontal scrollbar, which is an overlay and would
+               otherwise sit on the last row of cells. -->
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" Padding="9,7,9,16">
             <!-- Register item 13: click toggles at unity, drag adjusts gain, right-click mutes. -->
             <c:MatrixView Columns="{Binding PatchColumns}" Rows="{Binding PatchRows}"
                           RowHeaderWidth="118"

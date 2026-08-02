@@ -19,6 +19,15 @@ public partial class CuesView : UserControl
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
+    private void OnOpenTimeline(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.OpenTimeline();
+
+    private void OnStandbyHere(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.StandbyHere();
+
+    private void OnToggleEnabled(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.ToggleEnabled();
+
     /// <summary>Renumbers the list the tree is scoped to, as one undo step.</summary>
     private void OnRenumber(object? sender, RoutedEventArgs e)
     {

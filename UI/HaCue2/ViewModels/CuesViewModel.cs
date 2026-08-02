@@ -249,6 +249,36 @@ public partial class CuesViewModel : ObservableObject
         Refresh();
     }
 
+    /// <summary>
+    /// Disables or re-enables the selected cues for this performance.
+    /// </summary>
+    /// <remarks>
+    /// A disabled cue stays VISIBLE and struck through, and GO steps over it. Deleting a cue to drop
+    /// it for one night is how shows lose cues.
+    /// </remarks>
+    public void ToggleEnabled()
+    {
+        var selected = Inspector.Selected;
+        if (selected.Count == 0)
+            return;
+
+        var enable = selected.Any(cue => !cue.Enabled);
+
+        using (_journal.Composite(enable ? "enable cues" : "disable cues", "cues"))
+        {
+            foreach (var cue in selected)
+            {
+                var target = cue;
+                _journal.Do(new SetValueCommand<bool>(
+                    target.Id, "enabled", "cues",
+                    () => target.Enabled, value => target.Enabled = value, enable,
+                    enable ? "enable" : "disable for this performance"));
+            }
+        }
+
+        Refresh();
+    }
+
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
     public void Refresh()
     {
@@ -430,6 +460,25 @@ public partial class CuesViewModel : ObservableObject
     [ObservableProperty]
     private bool _isTimelineOpen;
 
+    /// <summary>Whether the selected cue is a group the timeline sheet can show.</summary>
+    public bool CanOpenTimeline =>
+        SelectedCue is { } row && Project.FindCue(row.Id) is GroupCueNode { FireMode: GroupFireMode.Timeline };
+
+    /// <summary>
+    /// Opens the sheet on the SELECTED group.
+    /// </summary>
+    /// <remarks>
+    /// It used to draw whichever timeline group came first in the show, whoever was looking at what.
+    /// A sheet that shows a different group from the one selected is worse than no sheet.
+    /// </remarks>
+    public void OpenTimeline()
+    {
+        if (SelectedCue is { } row && Project.FindCue(row.Id) is GroupCueNode group)
+            Timeline.Show(group);
+
+        IsTimelineOpen = true;
+    }
+
     public TimelineViewModel Timeline { get; }
 }
 
@@ -456,7 +505,8 @@ public sealed partial class TimelineViewModel : ObservableObject
     private readonly HaCueProject _project;
     private readonly ShowRuntime _runtime;
     private readonly ProjectJournal? _journal;
-    private readonly GroupCueNode? _group;
+    /// <summary>Which group the sheet is showing. Settable so the operator can point it somewhere.</summary>
+    private GroupCueNode? _group;
     private IDisposable? _drag;
 
     /// <summary>
@@ -476,24 +526,41 @@ public sealed partial class TimelineViewModel : ObservableObject
         _journal = journal;
 
         // The first timeline group in the show: what the sheet opens onto until a cue is chosen.
-        _group = project.AllCues().OfType<GroupCueNode>()
-            .FirstOrDefault(candidate => candidate.FireMode == GroupFireMode.Timeline);
+        Show(project.AllCues().OfType<GroupCueNode>()
+            .FirstOrDefault(candidate => candidate.FireMode == GroupFireMode.Timeline));
+    }
 
-        if (_group is null)
+    /// <summary>
+    /// Points the sheet at a group, or at nothing.
+    /// </summary>
+    /// <remarks>
+    /// It used to draw whichever timeline group came first in the show, whoever was looking at what —
+    /// and nothing could change that. A sheet showing a different group from the selected one is worse
+    /// than no sheet.
+    /// </remarks>
+    public void Show(GroupCueNode? group)
+    {
+        _group = group;
+
+        if (group is null)
         {
             Title = "Timeline";
             Hint = "no timeline group in this show";
+            Lanes = [];
+            Ruler = [];
             return;
         }
 
-        Title = $"Timeline · Q{CuePresentation.Number(_group.Number)} {_group.Label}";
-        Hint = $"{_group.Children.Count} cues · snap {SnapMs / 1000d:0.#} s · zoom fit";
-        _ruler = TimelinePresentation.Ruler(_group, runtime);
-        _lanes = TimelinePresentation.Lanes(_group, project, runtime);
+        Title = $"Timeline · Q{CuePresentation.Number(group.Number)} {group.Label}";
+        Hint = $"{group.Children.Count} cues · snap {SnapMs / 1000d:0.#} s · zoom fit";
+        Refresh();
     }
 
-    public string Title { get; }
-    public string Hint { get; }
+    [ObservableProperty]
+    private string _title = "Timeline";
+
+    [ObservableProperty]
+    private string _hint = "";
     [ObservableProperty]
     private IReadOnlyList<string> _ruler = [];
 

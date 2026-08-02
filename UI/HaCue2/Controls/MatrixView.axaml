@@ -15,7 +15,7 @@
 
     <!-- column heads -->
     <StackPanel Orientation="Horizontal">
-      <Border Classes="mxhead" Width="{Binding RowHeaderWidth, RelativeSource={RelativeSource AncestorType=c:MatrixView}}" />
+      <Border Classes="mxhead" Width="{DynamicResource MatrixRowHeaderWidth}" />
       <ItemsControl ItemsSource="{Binding Columns, RelativeSource={RelativeSource AncestorType=c:MatrixView}}">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
@@ -38,7 +38,7 @@
         <DataTemplate x:DataType="vm:MatrixRow">
           <StackPanel Orientation="Horizontal">
             <Border Classes="mxhead rowhead" Classes.bad="{Binding IsAbsent}"
-                    Width="{Binding RowHeaderWidth, RelativeSource={RelativeSource AncestorType=c:MatrixView}}">
+                    Width="{DynamicResource MatrixRowHeaderWidth}">
               <TextBlock Text="{Binding Header}" HorizontalAlignment="Right" />
             </Border>
             <ItemsControl ItemsSource="{Binding Cells}">

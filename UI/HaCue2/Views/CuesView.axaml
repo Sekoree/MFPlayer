@@ -62,9 +62,13 @@
                      IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).IsTimelineOpen}" />
 
     <!-- ══ tree · active · right column ════════════════════════════════════════════════════ -->
-    <Grid ColumnDefinitions="*,316" Margin="7" ColumnSpacing="7">
+    <!-- Both splits are draggable: how much of the screen the cue list gets against the Active panel,
+         and how wide the right column is, are decisions that change per show and per operator. The
+         minimums stop either side being dragged to nothing, which is the one way a splitter can lose
+         a panel for good. -->
+    <Grid ColumnDefinitions="*,4,316" Margin="7">
 
-      <Grid Grid.Column="0" RowDefinitions="2*,Auto" RowSpacing="7">
+      <Grid Grid.Column="0" RowDefinitions="2*,4,Auto" MinWidth="420">
 
         <!-- ── the cue tree ─────────────────────────────────────────────────────────────── -->
         <c:PanelBox Grid.Row="0" MinHeight="240"
@@ -166,10 +170,13 @@
           </Panel>
         </c:PanelBox>
 
+        <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch"
+                      Background="Transparent" ResizeDirection="Rows" />
+
         <!-- ── the Active panel ─────────────────────────────────────────────────────────────
              Nothing about the current scope can hide a sounding cue: groups aggregate their sounding
              children and cues from another list carry that list's name. -->
-        <c:PanelBox Grid.Row="1" MaxHeight="220"
+        <c:PanelBox Grid.Row="2" MinHeight="120"
                     Header="Active" Subhead="{Binding ActiveCues.Count}"
                     Hint="{Binding ActivePanelHint}">
           <ListBox ItemsSource="{Binding ActiveCues}" ItemContainerTheme="{StaticResource ReadonlyRowItem}">
@@ -205,8 +212,11 @@
         </c:PanelBox>
       </Grid>
 
+      <GridSplitter Grid.Column="1" Width="4" VerticalAlignment="Stretch"
+                    Background="Transparent" ResizeDirection="Columns" />
+
       <!-- ── right column: Cue properties | Lists & groups, tabs on the BOTTOM edge ───────── -->
-      <c:PanelBox Grid.Column="1"
+      <c:PanelBox Grid.Column="2" MinWidth="240"
                   Header="{Binding RightPanelHeader}" Hint="{Binding RightPanelHint}">
         <c:PanelBox.Footer>
           <ListBox Theme="{StaticResource BottomTabs}"

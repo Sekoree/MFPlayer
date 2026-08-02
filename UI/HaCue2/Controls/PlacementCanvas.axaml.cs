@@ -21,8 +21,12 @@ public enum ResizeEdges
 /// <summary>One move or resize, in fractions of the canvas.</summary>
 /// <param name="Index">Which box, by its position in <see cref="PlacementCanvas.Boxes"/>.</param>
 /// <param name="SubjectId">The document object it stands for — a cue, or a mapping section.</param>
+/// <param name="Layer">
+/// Which of the subject's placements. A cue can appear on several canvases at once, so the cue id
+/// alone does not say which rectangle was dragged.
+/// </param>
 /// <param name="Rect">Where the box should end up.</param>
-public sealed record PlacementGesture(int Index, Guid SubjectId, NormalizedRect Rect);
+public sealed record PlacementGesture(int Index, Guid SubjectId, int Layer, NormalizedRect Rect);
 
 /// <summary>
 /// Draws fraction-positioned boxes on a canvas and turns drags on them into rectangle edits.
@@ -151,6 +155,7 @@ public partial class PlacementCanvas : UserControl
         Gesture?.Invoke(this, new PlacementGesture(
             _draggedIndex,
             Boxes[_draggedIndex].SubjectId,
+            Boxes[_draggedIndex].LayerIndex,
             Resize(_grabbedRect, _edges, dx, dy)));
         e.Handled = true;
     }
@@ -204,6 +209,7 @@ public partial class PlacementCanvas : UserControl
         Gesture?.Invoke(this, new PlacementGesture(
             selected,
             Boxes[selected].SubjectId,
+            Boxes[selected].LayerIndex,
             new NormalizedRect(rect.X + dx, rect.Y + dy, rect.Width, rect.Height)));
 
         // Each keypress is its own gesture: holding an arrow key should still collapse into one undo

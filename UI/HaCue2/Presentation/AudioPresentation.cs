@@ -168,19 +168,28 @@ public static class AudioPresentation
     /// Read from the middle, which is the only reading that answers "why is this silent" without
     /// mentally multiplying two matrices.
     /// </remarks>
-    public static IReadOnlyList<string> RouteChain(
+    /// <summary>
+    /// The effective route for one source channel, as the chain the inspector draws.
+    /// </summary>
+    /// <remarks>
+    /// Structured rather than pre-formatted strings, and VARIABLE length: a source channel can reach
+    /// no outputs, one, or six, and the view was previously indexing four fixed slots with the gains
+    /// typed in beside them — so it bound past the end of the list on every cue that did not happen to
+    /// have exactly four routes, and showed invented decibels on the ones that did.
+    /// </remarks>
+    public static IReadOnlyList<RouteHop> RouteChain(
         HaCueProject project, MediaCueNode cue, int sourceChannel)
     {
         var routes = PatchOperations.EffectiveRoutes(project, cue, sourceChannel);
-        if (routes.Count == 0)
-            return [$"{Source(sourceChannel)} → nothing"];
 
         return
         [
-            .. routes.Select(route =>
-                $"{Source(route.SourceChannel)} → {route.LogicalName} → {route.LineName} · "
-                + $"{route.LineChannel + 1} · {CuePresentation.Db(route.GainDb)}"
-                + (route.Muted ? " · muted" : "")),
+            .. routes.Select(route => new RouteHop(
+                Source(route.SourceChannel),
+                route.LogicalName,
+                $"{route.LineName} · {route.LineChannel + 1}",
+                CuePresentation.Db(route.GainDb),
+                route.Muted)),
         ];
     }
 

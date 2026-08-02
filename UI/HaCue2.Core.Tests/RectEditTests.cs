@@ -117,17 +117,20 @@ public sealed class RectEditTests
 
     private static LayerPlacement Placed(TestProject fixture)
     {
-        fixture.Track.Placement = new LayerPlacement
-        {
-            CompositionId = fixture.Cyc.Id,
-            LayerIndex = 1,
-            X = 0.1,
-            Y = 0.1,
-            Width = 0.5,
-            Height = 0.5,
-        };
+        fixture.Track.Placements =
+        [
+            new LayerPlacement
+            {
+                CompositionId = fixture.Cyc.Id,
+                LayerIndex = 1,
+                X = 0.1,
+                Y = 0.1,
+                Width = 0.5,
+                Height = 0.5,
+            },
+        ];
 
-        return fixture.Track.Placement;
+        return fixture.Track.Placements[0];
     }
 
     private static MappingSection Sectioned(TestProject fixture)

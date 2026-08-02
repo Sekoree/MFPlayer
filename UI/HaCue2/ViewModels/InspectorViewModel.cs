@@ -148,6 +148,9 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(RouteChain));
         OnPropertyChanged(nameof(Placements));
         OnPropertyChanged(nameof(HasPlacement));
+        OnPropertyChanged(nameof(PlacementList));
+        OnPropertyChanged(nameof(PlacementNames));
+        OnPropertyChanged(nameof(HasSeveralPlacements));
         OnPropertyChanged(nameof(PlacementCompositions));
         OnPropertyChanged(nameof(PlacementCompositionIndex));
         OnPropertyChanged(nameof(LayerValue));
@@ -168,6 +171,14 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(IsCoverArtOnly));
         OnPropertyChanged(nameof(CanBePlaced));
         OnPropertyChanged(nameof(CanChooseSubtitles));
+        OnPropertyChanged(nameof(FireModeIndex));
+        OnPropertyChanged(nameof(IsTimelineGroup));
+        OnPropertyChanged(nameof(IsPlaylistGroup));
+        OnPropertyChanged(nameof(ChildCount));
+        OnPropertyChanged(nameof(ShuffleValue));
+        OnPropertyChanged(nameof(ReshuffleValue));
+        OnPropertyChanged(nameof(CrossfadeValue));
+        OnPropertyChanged(nameof(AtEndIndex));
         OnPropertyChanged(nameof(SubtitlePicker));
     }
 
@@ -289,7 +300,7 @@ public partial class InspectorViewModel : ObservableObject
     /// This is the answer to "why is this silent" and to "why is it coming out twice", and it is
     /// computed from the two matrices rather than described — so it cannot disagree with them.
     /// </remarks>
-    public IReadOnlyList<string> RouteChain => Cue is MediaCueNode media
+    public IReadOnlyList<RouteHop> RouteChain => Cue is MediaCueNode media
         ? AudioPresentation.RouteChain(Project, media, sourceChannel: 1)
         : [];
 
@@ -348,14 +359,9 @@ public partial class InspectorViewModel : ObservableObject
     {
         get
         {
-            var placement = Cue switch
-            {
-                MediaCueNode media => media.Placement,
-                VisualizerCueNode visualizer => visualizer.Placement,
-                _ => null,
-            };
-
-            if (placement is null)
+            // The canvas the SELECTED placement is on — a cue can be on several at once, and the
+            // preview shows the one being edited.
+            if (Placement is not { } placement)
                 return [];
 
             var composition = Project.Compositions
@@ -365,12 +371,18 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
-    private LayerPlacement? Placement => Cue switch
-    {
-        MediaCueNode media => media.Placement,
-        VisualizerCueNode visualizer => visualizer.Placement,
-        _ => null,
-    };
+    /// <summary>Every canvas the cue appears on.</summary>
+    public IReadOnlyList<LayerPlacement> PlacementList =>
+        Cue is null ? [] : CuePlacements.Of(Cue);
+
+    /// <summary>Which one the fields edit. A cue can be on several canvases at once.</summary>
+    [ObservableProperty]
+    private int _selectedPlacement;
+
+    private LayerPlacement? Placement =>
+        SelectedPlacement >= 0 && SelectedPlacement < PlacementList.Count
+            ? PlacementList[SelectedPlacement]
+            : PlacementList.FirstOrDefault();
 
     /// <summary>
     /// Whether this cue is on a canvas at all.
@@ -479,20 +491,17 @@ public partial class InspectorViewModel : ObservableObject
         if (Project.FindCue(gesture.SubjectId) is not { } cue)
             return;
 
-        var placement = cue switch
-        {
-            MediaCueNode media => media.Placement,
-            VisualizerCueNode visualizer => visualizer.Placement,
-            _ => null,
-        };
-
-        if (placement is null)
+        if (CuePlacements.Of(cue).FirstOrDefault(item => item.LayerIndex == gesture.Layer)
+            is not { } placement)
             return;
 
         _drag ??= _journal.Composite("move layer", "video");
         _journal.Do(RectEdits.Placement(cue, placement, gesture.Rect));
         OnPropertyChanged(nameof(Placements));
         OnPropertyChanged(nameof(HasPlacement));
+        OnPropertyChanged(nameof(PlacementList));
+        OnPropertyChanged(nameof(PlacementNames));
+        OnPropertyChanged(nameof(HasSeveralPlacements));
         OnPropertyChanged(nameof(PlacementCompositions));
         OnPropertyChanged(nameof(PlacementCompositionIndex));
         OnPropertyChanged(nameof(LayerValue));
@@ -505,6 +514,93 @@ public partial class InspectorViewModel : ObservableObject
     {
         _drag?.Dispose();
         _drag = null;
+    }
+
+    // ── the Group pane ────────────────────────────────────────────────────────────────────────
+
+    private GroupCueNode? Group => Cue as GroupCueNode;
+
+    public IReadOnlyList<string> FireModes { get; } = ["all together", "playlist", "timeline"];
+
+    /// <summary>
+    /// How this group fires. Was a hard-coded index, so a timeline group read "playlist".
+    /// </summary>
+    public int FireModeIndex
+    {
+        get => Group is { } group ? (int)group.FireMode : -1;
+        set
+        {
+            if (Group is not { } group || value < 0 || (GroupFireMode)value == group.FireMode)
+                return;
+
+            Edit("fireMode", "cues",
+                () => group.FireMode, mode => group.FireMode = mode, (GroupFireMode)value,
+                $"fire {FireModes[value]}");
+        }
+    }
+
+    public bool IsTimelineGroup => Group is { FireMode: GroupFireMode.Timeline };
+
+    /// <summary>Playlist-only options; a timeline group has no "next item" to cross into.</summary>
+    public bool IsPlaylistGroup => Group is { FireMode: GroupFireMode.Playlist };
+
+    public string ChildCount => Group is { } group
+        ? $"{group.Children.Count} cue{(group.Children.Count == 1 ? "" : "s")}"
+        : "—";
+
+    public bool ShuffleValue
+    {
+        get => Group is { Shuffle: true };
+        set
+        {
+            if (Group is { } group && value != group.Shuffle)
+                Edit("shuffle", "cues", () => group.Shuffle, on => group.Shuffle = on, value,
+                    value ? "shuffle" : "play in order");
+        }
+    }
+
+    public bool ReshuffleValue
+    {
+        get => Group is { ReshuffleEachPass: true };
+        set
+        {
+            if (Group is { } group && value != group.ReshuffleEachPass)
+                Edit("reshuffle", "cues",
+                    () => group.ReshuffleEachPass, on => group.ReshuffleEachPass = on, value,
+                    "reshuffle each pass");
+        }
+    }
+
+    public string CrossfadeValue
+    {
+        get => Group is { } group ? $"{group.CrossfadeMs / 1000d:0.##} s" : "—";
+        set
+        {
+            if (Group is not { } group
+                || !double.TryParse(
+                    new string([.. value.Where(c => char.IsAsciiDigit(c) || c is '.' or ',')]),
+                    NumberStyles.Float, CultureInfo.CurrentCulture, out var seconds))
+                return;
+
+            Edit("crossfade", "cues",
+                () => group.CrossfadeMs, ms => group.CrossfadeMs = ms,
+                (int)Math.Clamp(seconds * 1000, 0, 60_000), "set crossfade");
+        }
+    }
+
+    public IReadOnlyList<string> AtEndOptions { get; } = ["hold last", "loop", "next list"];
+
+    public int AtEndIndex
+    {
+        get => Group is { } group ? (int)group.AtEnd : -1;
+        set
+        {
+            if (Group is not { } group || value < 0 || (AtListEnd)value == group.AtEnd)
+                return;
+
+            Edit("atEnd", "cues", () => group.AtEnd, at => group.AtEnd = at, (AtListEnd)value,
+                $"at end: {AtEndOptions[value]}");
+        }
     }
 
     // ── media tracks ──────────────────────────────────────────────────────────────────────────
@@ -564,22 +660,28 @@ public partial class InspectorViewModel : ObservableObject
 
         var composition = Project.Compositions[PlacementTarget];
         var cue = Cue;
+        var list = CuePlacements.ListOf(cue);
         var still = Facts is { IsCoverArtOnly: true } ? Facts.PlaceableVideoTrack : null;
+
+        if (list is null)
+            return;
 
         using (_journal.Composite($"place on {composition.Name}", "video"))
         {
-            _journal.Do(new SetValueCommand<LayerPlacement?>(
-                cue.Id, "placement", "video",
-                () => PlacementOf(cue),
-                placement => SetPlacement(cue, placement),
+            // APPENDED, not assigned: a cue can be on several canvases at once and the engine fans one
+            // decoded source to all of them. Replacing would silently drop the mirror somebody added.
+            _journal.Do(new AddItemCommand<LayerPlacement>(
+                list,
                 new LayerPlacement
                 {
                     CompositionId = composition.Id,
                     LayerIndex = NextLayer(composition),
                 },
+                list.Count,
+                "video",
                 $"place on {composition.Name}"));
 
-            if (still is { } track && cue is MediaCueNode media)
+            if (still is { } track && cue is MediaCueNode media && media.VideoTrackIndex is null)
             {
                 _journal.Do(new SetValueCommand<int?>(
                     cue.Id, "videoTrack", "video",
@@ -594,55 +696,49 @@ public partial class InspectorViewModel : ObservableObject
             }
         }
 
+        SelectedPlacement = list.Count - 1;
         Reload();
     }
 
-    /// <summary>Removes the cue from its canvas, and the still-image choice that came with it.</summary>
+    /// <summary>Removes the SELECTED placement — the cue may still appear on other canvases.</summary>
     public void RemovePlacement()
     {
-        if (Cue is not { } cue || PlacementOf(cue) is null)
+        if (Cue is not { } cue
+            || CuePlacements.ListOf(cue) is not { } list
+            || Placement is not { } placement)
             return;
 
-        using (_journal.Composite("remove from composition", "video"))
-        {
-            _journal.Do(new SetValueCommand<LayerPlacement?>(
-                cue.Id, "placement", "video",
-                () => PlacementOf(cue), placement => SetPlacement(cue, placement), null,
-                "remove from composition"));
-        }
+        _journal.Do(new RemoveItemCommand<LayerPlacement>(
+            list, placement, "video", "remove from composition"));
+        _journal.CloseGroup();
 
+        SelectedPlacement = Math.Clamp(SelectedPlacement, 0, Math.Max(0, list.Count - 1));
         Reload();
     }
 
     /// <summary>One above whatever is already there, so a new layer lands on top rather than under.</summary>
     private int NextLayer(CompositionDefinition composition) =>
         Project.AllCues()
-            .Select(PlacementOf)
-            .OfType<LayerPlacement>()
+            .SelectMany(CuePlacements.Of)
             .Where(placement => placement.CompositionId == composition.Id)
             .Select(placement => placement.LayerIndex + 1)
             .DefaultIfEmpty(0)
             .Max();
 
-    private static LayerPlacement? PlacementOf(CueNode cue) => cue switch
-    {
-        MediaCueNode media => media.Placement,
-        VisualizerCueNode visualizer => visualizer.Placement,
-        _ => null,
-    };
+    /// <summary>The canvases this cue is on, as the picker beside the preview lists them.</summary>
+    public IReadOnlyList<string> PlacementNames =>
+    [
+        .. PlacementList.Select(placement =>
+            (Project.Compositions.FirstOrDefault(c => c.Id == placement.CompositionId)?.Name ?? "?")
+            + $" · L{placement.LayerIndex}"),
+    ];
 
-    private static void SetPlacement(CueNode cue, LayerPlacement? placement)
-    {
-        switch (cue)
-        {
-            case MediaCueNode media:
-                media.Placement = placement;
-                break;
-            case VisualizerCueNode visualizer:
-                visualizer.Placement = placement;
-                break;
-        }
-    }
+    /// <summary>More than one canvas: the picker only earns its space then.</summary>
+    public bool HasSeveralPlacements => PlacementList.Count > 1;
+
+
+
+
 
     /// <summary>The subtitle tracks in the file, as the picker lists them.</summary>
     public IReadOnlyList<string> SubtitleTracks =>

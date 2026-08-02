@@ -118,7 +118,7 @@ public sealed class MediaTrackTests
         // The rule this exists for: the decoder's automatic election SKIPS attached pictures. A cue
         // placed with no explicit index would put an empty layer on the canvas and give the operator
         // no reason for it, so whatever creates a placement has to name the track.
-        fixture.Track.Placement = new LayerPlacement { CompositionId = fixture.Cyc.Id };
+        fixture.Track.Placements = [new LayerPlacement { CompositionId = fixture.Cyc.Id }];
         fixture.Track.VideoTrackIndex = facts.PlaceableVideoTrack!.Value.Index;
 
         var clip = ShowCompiler.Compile(fixture.Project).Clips

@@ -200,7 +200,7 @@ public sealed class ValidationTests
     public void APlacementOnADeletedCompositionIsAnError()
     {
         var fixture = new TestProject();
-        fixture.Track.Placement = new LayerPlacement { CompositionId = Guid.NewGuid() };
+        fixture.Track.Placements = [new LayerPlacement { CompositionId = Guid.NewGuid() }];
 
         var issues = ProjectValidator.Validate(fixture.Project);
 

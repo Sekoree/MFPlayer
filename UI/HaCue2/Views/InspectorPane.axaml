@@ -114,8 +114,10 @@
             </HeaderedContentControl>
 
             <ContentControl Theme="{StaticResource Subhead}" Content="Sends → logical outputs" />
+            <!-- The bottom padding is for the horizontal scrollbar: it is an overlay, so without room
+                 of its own it sits on top of the last row of cells and hides the gain there. -->
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                          Margin="10,2,10,0">
+                          Margin="10,2,10,0" Padding="0,0,0,12">
               <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
                    must find it true on the other. -->
               <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"
@@ -136,18 +138,28 @@
             <!-- The effective route for the picked cell, read from the middle: this is the answer to
                  "why is this silent" and to "why is it coming out twice". -->
             <Border Classes="chain">
-              <WrapPanel Orientation="Horizontal" ItemSpacing="7" LineSpacing="4">
-                <Border Classes="node src"><TextBlock Text="{Binding RouteChain[0]}" /></Border>
-                <TextBlock Classes="mono dim3" VerticalAlignment="Center" Text="→" />
-                <Border Classes="node log"><TextBlock Text="{Binding RouteChain[1]}" /></Border>
-                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="−3.0" />
-                <TextBlock Classes="mono dim3" VerticalAlignment="Center" Text="→" />
-                <Border Classes="node phy"><TextBlock Text="{Binding RouteChain[2]}" /></Border>
-                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="0.0" />
-                <TextBlock Classes="mono dim3" VerticalAlignment="Center" Text="+" />
-                <Border Classes="node phy"><TextBlock Text="{Binding RouteChain[3]}" /></Border>
-                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="−6.0" />
-              </WrapPanel>
+              <StackPanel Spacing="4">
+                <TextBlock Classes="mono dim3 small" IsVisible="{Binding !HasRoute}"
+                           Text="this channel reaches nothing — no send, or nothing patched under it" />
+                <ItemsControl ItemsSource="{Binding RouteChain}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:RouteHop">
+                      <WrapPanel Orientation="Horizontal" ItemSpacing="7" LineSpacing="4" Margin="0,2">
+                        <Border Classes="node src"><TextBlock Text="{Binding Source}" /></Border>
+                        <TextBlock Classes="mono dim3" VerticalAlignment="Center" Text="→" />
+                        <Border Classes="node log"><TextBlock Text="{Binding Logical}" /></Border>
+                        <TextBlock Classes="mono dim3" VerticalAlignment="Center" Text="→" />
+                        <Border Classes="node phy"><TextBlock Text="{Binding Line}" /></Border>
+                        <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                                   Text="{Binding Gain}" />
+                        <Border Classes="badge bad" IsVisible="{Binding IsMuted}">
+                          <TextBlock Text="MUTED" />
+                        </Border>
+                      </WrapPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
             </Border>
           </StackPanel>
 
@@ -215,6 +227,15 @@
             </HeaderedContentControl>
 
             <StackPanel IsVisible="{Binding HasPlacement}">
+              <!-- A cue can be on several canvases at once — a mirror to a second wall, or two regions
+                   of one. The engine fans ONE decoded source to all of them, so this costs nothing
+                   beyond the compositing; playing the file twice would double the decode and let the
+                   copies drift. The picker only appears when there is more than one to choose. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Placement"
+                                      IsVisible="{Binding HasSeveralPlacements}">
+                <ComboBox ItemsSource="{Binding PlacementNames}"
+                          SelectedIndex="{Binding SelectedPlacement}" />
+              </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
                 <ComboBox ItemsSource="{Binding PlacementCompositions}"
                           SelectedIndex="{Binding PlacementCompositionIndex}" />
@@ -240,6 +261,9 @@
               <Border Classes="chain">
                 <DockPanel LastChildFill="True">
                   <Button DockPanel.Dock="Right" Classes="tight" Content="REMOVE" Click="OnRemovePlacement" />
+                  <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
+                          Content="+ ANOTHER" Click="OnPlace"
+                          ToolTip.Tip="Show this cue on another composition — one decode, several canvases." />
                   <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge">
                     <TextBlock Text="PLACEMENT" />
                   </Border>
@@ -288,41 +312,41 @@
 
           <!-- ══ GROUP — playlist crossfades (register item 17) ═════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsGroupPane}" Margin="0,6,0,8">
+            <!-- All of this was hard-coded markup: fire mode was pinned to "playlist", so a timeline
+                 group described itself as one. Bound to the cue now. -->
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fire mode">
-              <ComboBox SelectedIndex="1">
-                <ComboBoxItem>all together</ComboBoxItem>
-                <ComboBoxItem>playlist</ComboBoxItem>
-                <ComboBoxItem>timeline</ComboBoxItem>
-              </ComboBox>
+              <ComboBox ItemsSource="{Binding FireModes}" SelectedIndex="{Binding FireModeIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Children">
-              <TextBox Classes="ro" Text="20 songs" />
+              <TextBox Classes="ro" IsReadOnly="True" Text="{Binding ChildCount}" />
             </HeaderedContentControl>
-            <CheckBox Margin="10,3" IsChecked="True" Content="Shuffle, avoid immediate repeat" />
-            <CheckBox Margin="10,3" Content="Reshuffle each pass" />
 
-            <ContentControl Theme="{StaticResource Subhead}" Content="Crossfade between items" />
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Default">
-              <ListBox Theme="{StaticResource Segment}" SelectedIndex="2">
-                <ListBoxItem>cut</ListBoxItem>
-                <ListBoxItem>0.5 s</ListBoxItem>
-                <ListBoxItem>2 s</ListBoxItem>
-                <ListBoxItem>4 s</ListBoxItem>
-                <ListBoxItem>…</ListBoxItem>
-              </ListBox>
-            </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Curve">
-              <ComboBox ItemsSource="{Binding CrossfadeCurve.Curves}"
-                        SelectedIndex="{Binding CrossfadeCurve.SelectedIndex}"
-                        ItemTemplate="{StaticResource CurveItemTemplate}"
-                        SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
-            </HeaderedContentControl>
+            <!-- A timeline group has authored offsets, so it opens the sheet instead of shuffling. -->
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding IsTimelineGroup}">
+              <Button Classes="block" Content="OPEN TIMELINE ›" Click="OnOpenTimeline" />
+            </ContentControl>
+
+            <StackPanel IsVisible="{Binding IsPlaylistGroup}">
+              <CheckBox Margin="10,3" IsChecked="{Binding ShuffleValue}"
+                        Content="Shuffle, avoid immediate repeat" />
+              <CheckBox Margin="10,3" IsChecked="{Binding ReshuffleValue}"
+                        Content="Reshuffle each pass" />
+
+              <ContentControl Theme="{StaticResource Subhead}" Content="Crossfade between items" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Default">
+                <TextBox Classes="short" Text="{Binding CrossfadeValue}" LostFocus="OnFieldCommitted" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Curve">
+                <ComboBox ItemsSource="{Binding CrossfadeCurve.Curves}"
+                          SelectedIndex="{Binding CrossfadeCurve.SelectedIndex}"
+                          ItemTemplate="{StaticResource CurveItemTemplate}"
+                          SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
+              </HeaderedContentControl>
+            </StackPanel>
+
             <HeaderedContentControl Theme="{StaticResource Field}" Header="At end">
-              <ComboBox SelectedIndex="0">
-                <ComboBoxItem>hold last</ComboBoxItem>
-                <ComboBoxItem>loop</ComboBoxItem>
-                <ComboBoxItem>stop</ComboBoxItem>
-              </ComboBox>
+              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding AtEndOptions}"
+                       SelectedIndex="{Binding AtEndIndex}" />
             </HeaderedContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small"
                        Text="per-transition overrides: set on a child's General tab · 2 set" />
