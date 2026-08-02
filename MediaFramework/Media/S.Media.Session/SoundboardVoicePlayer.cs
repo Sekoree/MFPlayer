@@ -1,47 +1,38 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
-using S.Media.Compositor;
 
 namespace S.Media.Session;
 
 /// <summary>
-/// The session's independent-players surface: soundboard voices (polyphonic keyed one-shots, each a fresh
-/// player on an output) and the single cue preview (a loaded cue auditioned on a separate device) - playback
-/// that is deliberately OUTSIDE the transport groups. Owns the voice/preview registries and their end
-/// monitors; state is dispatcher-confined exactly like the session's (every mutation marshals through
-/// <see cref="ShowSession.InvokeAsync{T}"/>), and media opens run OFF the dispatcher with a published claim
-/// CTS so a stop / re-fire / dispose preempts them (NXT-19). Split out of <see cref="ShowSession"/> along its
-/// ownership seam (review Part-5 #2); the session's public voice/preview API delegates here.
+/// Soundboard voices: polyphonic keyed one-shots, each a fresh player on its own output, deliberately
+/// OUTSIDE the transport groups.
 /// </summary>
-internal sealed class VoicePlayer
+/// <remarks>
+/// <para>
+/// Split from the cue preview (2026-08-02) because the two shared a class and nothing else. A voice takes a
+/// raw media path and a device id; it touches no document, no cue, no transport group and no composition,
+/// so an app that wants the playback engine should not have to inherit a soundboard along with it. What it
+/// genuinely shares with the rest of the session is stated by <see cref="ISessionVoiceHost"/> and nothing
+/// wider: the serial dispatcher, the level/stop bus, the completion tick and the master trim.
+/// </para>
+/// <para>
+/// State is dispatcher-confined exactly like the session's (every mutation marshals through
+/// <see cref="ISessionVoiceHost.InvokeAsync{T}"/>), and media opens run OFF the dispatcher with a published
+/// claim CTS so a stop / re-fire / dispose preempts them (NXT-19).
+/// </para>
+/// </remarks>
+internal sealed class SoundboardVoicePlayer
 {
-    private readonly ShowSession _session;
+    private readonly ISessionVoiceHost _host;
     private readonly ClipStandbyEngine _standby;
     private readonly IAudioBackend? _audioBackend;
-    // The preview's monitoring seam (HaCue plan: preview/audition IS monitoring). When present, the
-    // preview auditions through a target-owned monitor line - never a device open of its own, so a
-    // patched line is never double-opened. Null = the legacy direct device open below (HaPlay).
-    private readonly IShowProgramAudioTarget? _programAudio;
     // Device-dependence fix #3: the fallback device is resolved fresh at each use (through the session's
     // 5 s device cache), never a construction-time snapshot - hot-plugged hardware becomes the fallback.
     private readonly Func<string?> _resolveFallbackDeviceId;
-    // Spec builders stay on the session (they read _clipsByCue / the registry / the device-rate cache); both
-    // run inside a dispatcher work item, so they may read dispatcher-confined session state.
-    private readonly Func<string, ClipSpec?> _buildPreviewSpec;
+    // The spec builder stays on the session (it reads the registry / the device-rate cache); it runs inside
+    // a dispatcher work item, so it may read dispatcher-confined session state.
     private readonly Func<string, string, string?, ClipSpec> _buildVoiceSpec;
 
-    // Preview playback (a loaded cue auditioned on a separate device, independent of the transport groups).
-    private IArmedClip? _previewClip;
-    private IReadOnlyList<PreviewSink> _previewOutputs = [];
-
-    /// <summary>The audition-canvas layers this preview placed, if the rig was up when it started.</summary>
-    private IReadOnlyList<ClipCompositionRuntime.IPlacedClipLayer> _previewLayers = [];
-    private CancellationTokenSource? _previewCts;
-    private PreviewMonitor? _previewMonitor;
-    // The preview's entry on the session's level/stop bus. MONITORING, by the owner's 2026-07-29 decision:
-    // the audition path is how the operator hears what they are about to fire, so the master fader must not
-    // duck it and stop-all/Panic must not kill it. Empty when no preview is up.
-    private Guid _previewSoundingId;
     // Soundboard voices (task #10): polyphonic one-shots, each a fresh MediaPlayer on an output, keyed by a
     // host id (the GUI's soundboard tile). Owned by the dispatcher.
     private readonly Dictionary<string, VoiceHandle> _voices = new(StringComparer.Ordinal);
@@ -50,9 +41,6 @@ internal sealed class VoicePlayer
     // the open flow that created the CTS is the one that disposes it (the blocked open still holds its token).
     private readonly Dictionary<string, CancellationTokenSource> _pendingVoiceOpens = new(StringComparer.Ordinal);
 
-    /// <summary>One running soundboard voice. <see cref="Level"/> is its slice of the session's ONE level
-    /// composition - the tile volume (Source), any fade ramp (Fade) and the session master trim - so the
-    /// three can no longer overwrite each other on the route.</summary>
     private sealed class VoiceHandle(
         IArmedClip clip,
         IReadOnlyList<IAudioOutput> outputs,
@@ -93,14 +81,6 @@ internal sealed class VoicePlayer
         public void CancelStop() => StopClaim.Cancel();
     }
 
-    private sealed record PreviewMonitor(
-        string CueId, S.Media.Players.MediaPlayer Player, CancellationToken CancellationToken);
-
-    /// <summary>One preview sink and how to let it go: a non-null <see cref="Release"/> is a BORROWED
-    /// monitoring lease (run the hook, never dispose the output); null means the preview owns the
-    /// backend-created device output and disposes it.</summary>
-    private readonly record struct PreviewSink(IAudioOutput Output, Action? Release);
-
     // Lock-free query view (NXT-16 residue): the current voices (id + player), republished on the dispatcher
     // whenever a voice commits or releases, so the soundboard's 200 ms progress poll and the is-playing query
     // never round-trip the dispatcher - a parked loop must not freeze the tiles.
@@ -112,209 +92,23 @@ internal sealed class VoicePlayer
     private void PublishVoiceViews() =>
         _voiceViews = _voices.Select(kv => new VoiceView(kv.Key, kv.Value.Clip.Player)).ToArray();
 
+
     /// <summary>Raised (with the voice id) when a voice ends on its own. Raised from the session dispatcher;
     /// <see cref="ShowSession"/> forwards it to its public event.</summary>
     public event Action<string>? VoiceEnded;
 
-    /// <summary>Raised (with the cue id) when a preview ends on its own. Raised from the session dispatcher;
-    /// <see cref="ShowSession"/> forwards it to its public event.</summary>
-    public event Action<string>? PreviewEnded;
-
-    public VoicePlayer(
-        ShowSession session,
+    public SoundboardVoicePlayer(
+        ISessionVoiceHost host,
         ClipStandbyEngine standby,
         IAudioBackend? audioBackend,
-        IShowProgramAudioTarget? programAudio,
         Func<string?> resolveFallbackDeviceId,
-        Func<string, ClipSpec?> buildPreviewSpec,
         Func<string, string, string?, ClipSpec> buildVoiceSpec)
     {
-        _session = session;
+        _host = host;
         _standby = standby;
         _audioBackend = audioBackend;
-        _programAudio = programAudio;
         _resolveFallbackDeviceId = resolveFallbackDeviceId;
-        _buildPreviewSpec = buildPreviewSpec;
         _buildVoiceSpec = buildVoiceSpec;
-    }
-
-    // --- preview ------------------------------------------------------------------------------------
-
-    /// <summary>See <see cref="ShowSession.PreviewCueAsync"/> (the public doc lives there).</summary>
-    public async Task<bool> PreviewCueAsync(string cueId, string? previewDeviceId)
-    {
-        // --- SETUP (dispatcher): stop any current preview / pending preview open, resolve the binding, claim.
-        var setup = await _session.InvokeAsync<(ClipSpec Spec, CancellationTokenSource Cts)?>(async () =>
-        {
-            await ReleasePreviewAsync().ConfigureAwait(false);
-            if (_buildPreviewSpec(cueId) is not { } spec)
-                return null;
-            var claim = new CancellationTokenSource();
-            _previewCts = claim; // published: ReleasePreviewAsync cancels it to preempt the open
-            return (spec, claim);
-        }).ConfigureAwait(false);
-        if (setup is not { } s)
-            return false;
-
-        // --- OPEN (OFF the dispatcher): the long part - the loop stays free throughout (NXT-19).
-        IArmedClip armed;
-        try
-        {
-            armed = await _standby.ArmAsync(s.Spec, s.Cts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return false; // preempted by StopPreview / a replacing preview / dispose - not an error
-        }
-
-        // --- COMMIT (dispatcher): only if our claim is still the current preview.
-        try
-        {
-            return await CommitPreviewAsync().ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            // Disposed between the open completing and the commit - release the orphaned clip directly.
-            await armed.ReleaseAsync().ConfigureAwait(false);
-            return false;
-        }
-
-        // D8: the audition rig is an output like any other, so its width is whatever the selected device
-        // is - never a hardcoded stereo. Hardcoding it did not merely mis-place a multichannel preview: a
-        // device whose driver only accepts its native width refuses a 2-channel open outright, so audition
-        // failed on exactly the interfaces a show is most likely to be run through.
-        int AuditionChannels(string? deviceId)
-        {
-            if (_audioBackend is null)
-                return 2;
-            try
-            {
-                var devices = _audioBackend.EnumerateOutputDevices();
-                var device = deviceId is { Length: > 0 }
-                    ? devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))
-                    : devices.FirstOrDefault(d => d.IsDefault);
-                // An unknown id is a stale saved setting, not a reason to refuse to audition: stereo is the
-                // safe floor, and the open below reports the real failure if even that is wrong.
-                return device is { MaxChannels: > 0 } ? device.MaxChannels : 2;
-            }
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogWarning(
-                    "VoicePlayer: could not read the audition device's channel count ({0}); using stereo.",
-                    ex.Message);
-                return 2;
-            }
-        }
-
-        Task<bool> CommitPreviewAsync() => _session.InvokeAsync(async () =>
-        {
-            if (!ReferenceEquals(_previewCts, s.Cts) || s.Cts.IsCancellationRequested || _session.IsDisposed)
-            {
-                await armed.ReleaseAsync().ConfigureAwait(false);
-                return false;
-            }
-
-            var player = armed.Player;
-            var outputs = new List<PreviewSink>();
-            try
-            {
-                if (player.AudioRouter is not null && (_programAudio is not null || _audioBackend is not null))
-                {
-                    var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-                    if (_programAudio is { } monitorTarget)
-                    {
-                        // The monitoring seam: audition through a target-owned line (previewDeviceId
-                        // names the endpoint; null = the target's default monitor line). Tracked
-                        // BEFORE the attach so the symmetric teardown below releases the lease even
-                        // when the attach itself faults.
-                        var lease = monitorTarget.AcquireMonitorOutput(
-                            previewDeviceId, new AudioFormat(rate, AuditionChannels(previewDeviceId)));
-                        outputs.Add(new PreviewSink(lease.Output, lease.Dispose));
-                        player.AttachAudioOutput(lease.Output, "_preview");
-                    }
-                    else
-                    {
-                        var auditionDevice = previewDeviceId ?? _resolveFallbackDeviceId();
-                        var output = _audioBackend!.CreateOutput(
-                            auditionDevice, new AudioFormat(rate, AuditionChannels(auditionDevice)));
-                        outputs.Add(new PreviewSink(output, null));
-                        player.AttachAudioOutput(output, "_preview");
-                    }
-                }
-
-                // Video half of the audition rig: place the previewed clip onto the hidden audition canvas
-                // so the monitor shows it composited - placement, fit, effects, mapping - rather than as a
-                // bare source-resolution picture. Skipped silently when the rig is off, which is the common
-                // case and must cost nothing.
-                var layers = new List<ClipCompositionRuntime.IPlacedClipLayer>();
-                if (_session.AuditionComposition is { } audition && player.VideoSource is { } previewVideo)
-                {
-                    var slot = audition.AddLayer(
-                        previewVideo.Format,
-                        new VideoPlacementSpec(ShowSession.AuditionCompositionId, 0, Placement: "fit"),
-                        // Latest-wins, NOT master-aligned: a preview claims no transport timeline, so the
-                        // canvas has no master clock to align PTS against and every frame would look
-                        // equidistant - the monitor would freeze on the first one.
-                        SlotKeepPolicy.Latest);
-                    layers.Add(slot);
-                    player.AttachVideoOutput(slot.Output, id: "_audition");
-                }
-
-                armed.Start();
-                _previewClip = armed;
-                _previewOutputs = outputs;
-                _previewLayers = layers;
-                _previewMonitor = new PreviewMonitor(cueId, player, s.Cts.Token);
-                _previewSoundingId = _session.SoundingSources.RegisterMonitoring(
-                    $"preview:{cueId}", () => _previewClip is not null, () => 1f);
-                _session.NotifyCompletionWorkAvailable();
-                return true;
-            }
-            catch
-            {
-                // ONE symmetric teardown: adopt whatever this commit had already wired and run the normal
-                // release, so a fault anywhere in here (a device that vanished between resolve and attach)
-                // cannot leave a bus registration, a monitor entry or a claim behind pointing at a released
-                // player. Assigning the fields first is what makes the single teardown cover them.
-                _previewClip = armed;
-                _previewOutputs = outputs;
-                await ReleasePreviewAsync().ConfigureAwait(false);
-                throw;
-            }
-        });
-    }
-
-    /// <summary>Stops the current preview, if any - including one still opening (NXT-19).</summary>
-    public Task StopPreviewAsync() => _session.InvokeAsync(() => ReleasePreviewAsync().AsTask());
-
-    /// <summary>Releases the preview clip/outputs and preempts a pending preview open. Call on the dispatcher.</summary>
-    public async ValueTask ReleasePreviewAsync()
-    {
-        // Cancel only - never Dispose the CTS here: a preempted preview open (NXT-19) may still hold its token
-        // off-dispatcher. A cancelled CTS with no timer holds no unmanaged state, so GC reclaims it.
-        _previewCts?.Cancel();
-        _previewCts = null;
-        _previewMonitor = null;
-        _session.SoundingSources.Unregister(_previewSoundingId);
-        _previewSoundingId = Guid.Empty;
-        var clip = _previewClip;
-        var outputs = _previewOutputs;
-        var layers = _previewLayers;
-        _previewClip = null;
-        _previewOutputs = [];
-        _previewLayers = [];
-        // Before the clip release: the layers hold the video outputs the player is still fanning to.
-        foreach (var layer in layers)
-            layer.Dispose();
-        if (clip is not null)
-            await clip.ReleaseAsync().ConfigureAwait(false);
-        foreach (var sink in outputs)
-        {
-            if (sink.Release is { } release)
-                release(); // borrowed monitoring lease - the hook detaches it, the target owns the line
-            else
-                (sink.Output as IDisposable)?.Dispose();
-        }
     }
 
     // --- soundboard voices ----------------------------------------------------------------------------
@@ -325,7 +119,7 @@ internal sealed class VoicePlayer
         var outputId = $"voice:{voiceId}";
 
         // --- SETUP (dispatcher): replace any prior voice / pending open and claim this open.
-        var (spec, cts) = await _session.InvokeAsync(async () =>
+        var (spec, cts) = await _host.InvokeAsync(async () =>
         {
             await ReleaseVoiceAsync(voiceId).ConfigureAwait(false); // re-trigger replaces the prior voice
             var clipSpec = _buildVoiceSpec(outputId, mediaPath, deviceId);
@@ -345,7 +139,7 @@ internal sealed class VoicePlayer
             var cancelled = ex is OperationCanceledException;
             try
             {
-                await _session.InvokeAsync(() =>
+                await _host.InvokeAsync(() =>
                 {
                     if (_pendingVoiceOpens.TryGetValue(voiceId, out var current) && ReferenceEquals(current, cts))
                         _pendingVoiceOpens.Remove(voiceId);
@@ -375,12 +169,12 @@ internal sealed class VoicePlayer
             await armed.ReleaseAsync().ConfigureAwait(false);
         }
 
-        Task CommitVoiceAsync() => _session.InvokeAsync(async () =>
+        Task CommitVoiceAsync() => _host.InvokeAsync(async () =>
         {
             var current = _pendingVoiceOpens.TryGetValue(voiceId, out var pending) && ReferenceEquals(pending, cts);
             if (current)
                 _pendingVoiceOpens.Remove(voiceId);
-            if (!current || cts.IsCancellationRequested || _session.IsDisposed)
+            if (!current || cts.IsCancellationRequested || _host.IsDisposed)
             {
                 cts.Dispose();
                 await armed.ReleaseAsync().ConfigureAwait(false);
@@ -392,7 +186,7 @@ internal sealed class VoicePlayer
             // A soundboard voice is PROGRAM audio: it inherits the live master trim at fire time exactly as
             // a transport clip does, and it attaches at the composed level so no untrimmed buffer can reach
             // the device before the first level write.
-            var level = new SoundingLevel { Source = volume, Master = _session.MasterTrim };
+            var level = new SoundingLevel { Source = volume, Master = _host.MasterTrim };
             // Declared OUTSIDE the try so the failure path can tell "nothing was published yet" (release what
             // this commit wired, by hand) from "the voice is already in _voices and on the bus" (one symmetric
             // teardown through ReleaseVoiceAsync, which un-publishes both).
@@ -414,7 +208,7 @@ internal sealed class VoicePlayer
                 var committed = new VoiceHandle(armed, outputs, outputId, cts, level);
                 handle = committed;
                 _voices[voiceId] = committed;
-                committed.SoundingId = _session.SoundingSources.RegisterProgram(
+                committed.SoundingId = _host.SoundingSources.RegisterProgram(
                     $"voice:{voiceId}",
                     // What a stop failure names to the operator: the soundboard tile, not the bus label (the
                     // host resolves ids to names and shows the raw string when it cannot).
@@ -432,7 +226,7 @@ internal sealed class VoicePlayer
                     },
                     stop: request => StopVoiceForBusAsync(voiceId, committed, request));
                 PublishVoiceViews();
-                _session.NotifyCompletionWorkAvailable();
+                _host.NotifyCompletionWorkAvailable();
             }
             catch
             {
@@ -457,10 +251,10 @@ internal sealed class VoicePlayer
     }
 
     /// <summary>Stops one soundboard voice (no <see cref="VoiceEnded"/>).</summary>
-    public Task StopVoiceAsync(string voiceId) => _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId).AsTask());
+    public Task StopVoiceAsync(string voiceId) => _host.InvokeAsync(() => ReleaseVoiceAsync(voiceId).AsTask());
 
     /// <summary>Stops every soundboard voice - including any still opening (NXT-19).</summary>
-    public Task StopAllVoicesAsync() => _session.InvokeAsync(() => ReleaseAllVoicesAsync().AsTask());
+    public Task StopAllVoicesAsync() => _host.InvokeAsync(() => ReleaseAllVoicesAsync().AsTask());
 
     /// <summary>Preempts every soundboard voice whose media is still OPENING (NXT-19) - stop-all/Panic's
     /// "and nothing new starts" half, the voice analogue of the in-flight cue-fire cancellation. A pending
@@ -478,7 +272,7 @@ internal sealed class VoicePlayer
     /// fade instead of replacing them (it used to write the raw volume straight onto the route, silently
     /// un-trimming the voice for the rest of its life).</summary>
     public Task SetVoiceVolumeAsync(string voiceId, float volume) =>
-        _session.InvokeAsync(() =>
+        _host.InvokeAsync(() =>
         {
             if (_voices.TryGetValue(voiceId, out var v))
             {
@@ -508,7 +302,7 @@ internal sealed class VoicePlayer
     /// <summary>Fades a voice's gain to silence over <paramref name="duration"/>, then stops it. No
     /// <see cref="VoiceEnded"/>. A zero/negative duration stops immediately.</summary>
     public Task FadeVoiceAsync(string voiceId, TimeSpan duration) =>
-        _session.InvokeAsync(() =>
+        _host.InvokeAsync(() =>
         {
             // A bus stop owns a claimed voice's levels AND its release, so a tile fade must not start a second
             // ramp fighting the show stop's (nor release the voice out from under it).
@@ -550,13 +344,9 @@ internal sealed class VoicePlayer
     public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync() =>
         Task.FromResult(GetVoiceProgress());
 
-    /// <summary>Releases the preview and every voice (running or still opening) - the session's disposal
-    /// teardown. Call on the dispatcher (disposal runs there directly, not through InvokeAsync).</summary>
-    public async ValueTask ReleaseAllAsync()
-    {
-        await ReleasePreviewAsync().ConfigureAwait(false);
-        await ReleaseAllVoicesAsync().ConfigureAwait(false);
-    }
+    /// <summary>Releases every voice (running or still opening) - the session's disposal teardown. Call on
+    /// the dispatcher (disposal runs there directly, not through InvokeAsync).</summary>
+    public ValueTask ReleaseAllAsync() => ReleaseAllVoicesAsync();
 
     private async ValueTask ReleaseAllVoicesAsync()
     {
@@ -582,7 +372,7 @@ internal sealed class VoicePlayer
             return;
         // Off the level/stop bus BEFORE the player goes away: a released voice must never be enumerated by a
         // trim or a stop again.
-        _session.SoundingSources.Unregister(v.SoundingId);
+        _host.SoundingSources.Unregister(v.SoundingId);
         PublishVoiceViews();
         v.CancelStop(); // any in-flight stop ramp ends here - nothing may write a released voice's levels
         v.Cts.Cancel();
@@ -607,21 +397,6 @@ internal sealed class VoicePlayer
     /// Call on the session dispatcher.</summary>
     public async ValueTask<bool> PollCompletionsAsync()
     {
-        if (_previewMonitor is { } preview)
-        {
-            if (preview.CancellationToken.IsCancellationRequested
-                || !ReferenceEquals(_previewClip?.Player, preview.Player))
-            {
-                _previewMonitor = null;
-            }
-            else if (!preview.Player.IsRunning && preview.Player.Position > TimeSpan.Zero)
-            {
-                var cueId = preview.CueId;
-                await ReleasePreviewAsync().ConfigureAwait(false);
-                PreviewEnded?.Invoke(cueId);
-            }
-        }
-
         foreach (var (voiceId, handle) in _voices.ToArray())
         {
             if (handle.Cts.IsCancellationRequested)
@@ -634,7 +409,7 @@ internal sealed class VoicePlayer
             VoiceEnded?.Invoke(voiceId);
         }
 
-        return _previewMonitor is not null || _voices.Count > 0;
+        return _voices.Count > 0;
     }
 
     /// <summary>Ramps a voice's FADE factor to 0 over <paramref name="duration"/> then releases it - a
@@ -646,7 +421,7 @@ internal sealed class VoicePlayer
         var start = voice.Level.Fade;
         FadeRamp.Start(
             FadeRamp.DefaultStepInterval, ct,
-            step: elapsed => _session.InvokeAsync<bool>(() =>
+            step: elapsed => _host.InvokeAsync<bool>(() =>
             {
                 // A stop-all/Panic claim preempts this ramp: the bus stop owns the voice's levels and its
                 // release from the claim on (the Active slot's TryBeginFadeOut rule, for voices).
@@ -656,7 +431,7 @@ internal sealed class VoicePlayer
                 ApplyVoiceLevel(voice);
                 return Task.FromResult(voice.Level.Fade <= 0f);
             }),
-            onCompleted: () => _session.InvokeAsync(() =>
+            onCompleted: () => _host.InvokeAsync(() =>
                 // The claim check has to be REPEATED here, exactly as the transport release ramp repeats it
                 // (ShowSession.StartVoiceReleaseRamp): the step above ends the moment a bus stop claims the
                 // voice, and releasing it anyway would tear it down at whatever level this fade had reached
@@ -681,7 +456,7 @@ internal sealed class VoicePlayer
     private async Task StopVoiceForBusAsync(string voiceId, VoiceHandle voice, SoundingStopRequest request)
     {
         var deadline = DateTime.UtcNow + (request.Fade ? request.FadeDuration : TimeSpan.Zero);
-        var claim = await _session.InvokeAsync(() => Task.FromResult(
+        var claim = await _host.InvokeAsync(() => Task.FromResult(
             IsCurrent(voiceId, voice) && voice.TryClaimStop(deadline) is { } token
                 ? ((CancellationToken Token, float Start)?)(token, voice.Level.Fade)
                 : null)).ConfigureAwait(false);
@@ -699,7 +474,7 @@ internal sealed class VoicePlayer
             {
                 await FadeRamp.RunAsync(
                     FadeRamp.DefaultStepInterval, stop.Token,
-                    elapsed => _session.InvokeAsync(() =>
+                    elapsed => _host.InvokeAsync(() =>
                     {
                         if (!IsCurrent(voiceId, voice))
                             return Task.FromResult(true); // ended on its own mid-ramp
@@ -723,7 +498,7 @@ internal sealed class VoicePlayer
             return;
         }
 
-        await _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()).ConfigureAwait(false);
+        await _host.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()).ConfigureAwait(false);
     }
 
     /// <summary>Waits for the stop that OWNS <paramref name="voice"/>'s release to finish it - the losing
@@ -732,5 +507,6 @@ internal sealed class VoicePlayer
     /// adds is what a SOUNDBOARD voice's fallback release actually is.</summary>
     private Task AwaitReleaseAsync(string voiceId, VoiceHandle voice, DateTime deadline) =>
         voice.StopClaim.AwaitReleaseAsync(deadline, "voice", voiceId, () =>
-            _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()));
+            _host.InvokeAsync(() => ReleaseVoiceAsync(voiceId, voice).AsTask()));
 }
+

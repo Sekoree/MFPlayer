@@ -194,6 +194,55 @@ public sealed class ArchitectureTests
             "An app references another app:\n  " + string.Join("\n  ", violations));
     }
 
+    /// <summary>
+    /// The soundboard is neutral one-shot playback and must stay that way: no cue, no document, no
+    /// transport group, no composition.
+    /// </summary>
+    /// <remarks>
+    /// This is the engine/cue-semantics seam stated as a rule rather than an intention. The soundboard and
+    /// the cue preview used to share one class holding a whole <c>ShowSession</c>, which is how an app
+    /// adopting the playback engine ended up inheriting soundboard responsibilities. A source-text check is
+    /// crude, but it fails on the way the coupling actually comes back - someone reaching for the session to
+    /// get "just one thing" - and it fails at the moment it is written rather than a release later.
+    /// </remarks>
+    [Fact]
+    public void TheSoundboardDoesNotReachIntoCueOrDocumentConcerns()
+    {
+        var path = Path.Combine(
+            RepoRoot(), "MediaFramework", "Media", "S.Media.Session", "SoundboardVoicePlayer.cs");
+        Assert.True(File.Exists(path), $"expected the soundboard player at {path}");
+        var source = File.ReadAllText(path);
+
+        string[] forbidden =
+        [
+            "ShowSession",      // the whole point: it takes ISessionVoiceHost, not the session
+            "ShowDocument",
+            "CueGraph",
+            "CueDefinition",
+            "ShowClipBinding",
+            "TransportGroup",
+            "TransportVoice",
+            "ClipCompositionRuntime",
+        ];
+
+        // Comments are stripped first: the rule is about what the CODE depends on, and the file
+        // legitimately points at ShowSession in prose ("the session forwards this event", "identical to
+        // TransportVoice.StopClaim"). Those references are documentation of a relationship, not a use of it.
+        var code = string.Join("\n", source
+            .Split('\n')
+            .Select(line =>
+            {
+                var slashes = line.IndexOf("//", StringComparison.Ordinal);
+                return slashes >= 0 ? line[..slashes] : line;
+            }));
+
+        var found = forbidden.Where(t => code.Contains(t, StringComparison.Ordinal)).ToArray();
+
+        Assert.True(
+            found.Length == 0,
+            $"SoundboardVoicePlayer must not depend on cue/document/composition concerns; found: {string.Join(", ", found)}");
+    }
+
     private static string RepoRoot()  // repo root = the directory holding MFPlayer.sln
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

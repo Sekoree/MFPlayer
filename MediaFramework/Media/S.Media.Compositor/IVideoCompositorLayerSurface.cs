@@ -42,8 +42,9 @@ public interface IVideoCompositorGlResource
 
 /// <summary>
 /// A layer-surface placed in a composite: the GL-rendering <see cref="IVideoCompositorLayerSurface"/> plus
-/// its destination <see cref="Transform"/> and <see cref="Opacity"/>. Surface layers render on top of the
-/// frame layers, in list order, directly into the compositor's canvas (no intermediate frame) - unless
+/// its destination <see cref="Transform"/> and <see cref="Opacity"/>. Surface layers render directly into
+/// the compositor's canvas (no intermediate frame), interleaved with the frame layers according to
+/// <see cref="DrawAfterFrameLayers"/> and in list order among themselves - unless
 /// <see cref="Effects"/> is non-empty, in which case the host renders the surface into an intermediate
 /// canvas-sized texture and composites that through the per-layer effect chain (chroma key etc.), the
 /// same shader path frame layers use.
@@ -71,6 +72,28 @@ public readonly record struct CompositorSurfaceLayer(
     /// </para>
     /// </summary>
     public TimeSpan? RenderTime { get; init; }
+
+    /// <summary>
+    /// How many frame layers render UNDERNEATH this surface. Null (the default) means "after all of them" -
+    /// the historical surfaces-on-top behaviour, byte for byte.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what makes a visualizer an ordinary layer rather than a permanent overlay: with a value of
+    /// N, the host draws the first N frame layers, then this surface, then carries on. A clip authored
+    /// above a visualizer now actually covers it.
+    /// </para>
+    /// <para>
+    /// Deliberately expressed as a COUNT of frame layers rather than a global z index. The host is handed
+    /// two flat lists and knows nothing about layer indices or which composition they came from; a count is
+    /// the only ordering it can act on without being told the caller's whole model. It also degrades
+    /// safely - a compositor that ignores this field keeps rendering surfaces on top, which is exactly what
+    /// it did before, so nothing has to be updated in lockstep.
+    /// </para>
+    /// <para>Values are clamped by the host: past the end means "on top", below zero means "underneath
+    /// everything". Ties between surfaces keep list order.</para>
+    /// </remarks>
+    public int? DrawAfterFrameLayers { get; init; }
 }
 
 /// <summary>
@@ -85,11 +108,18 @@ public readonly record struct CompositorSurfaceLayer(
 public interface IVideoCompositorSurfaceHost : IVideoCompositor
 {
     /// <summary>
-    /// Composite <paramref name="frameLayers"/> (back-to-front), then render
-    /// <paramref name="surfaceLayers"/> on top (list order) directly into the canvas, and return the
-    /// finished frame at <paramref name="presentationTime"/>. Each surface renders at
-    /// <paramref name="presentationTime"/> unless its placement carries a
+    /// Composite <paramref name="frameLayers"/> (back-to-front) and render <paramref name="surfaceLayers"/>
+    /// into the same canvas, returning the finished frame at <paramref name="presentationTime"/>.
+    /// <para>
+    /// A surface is placed by its <see cref="CompositorSurfaceLayer.DrawAfterFrameLayers"/> count: with a
+    /// value of N it renders once the first N frame layers are down, so surfaces and frame layers
+    /// interleave freely. Surfaces that leave it null render on top of everything, in list order - the
+    /// historical behaviour, and what an implementation that ignores the field will do.
+    /// </para>
+    /// <para>
+    /// Each surface renders at <paramref name="presentationTime"/> unless its placement carries a
     /// <see cref="CompositorSurfaceLayer.RenderTime"/>, which overrides it for that placement only.
+    /// </para>
     /// </summary>
     VideoFrame CompositeWithSurfaces(
         IReadOnlyList<CompositorLayer> frameLayers,

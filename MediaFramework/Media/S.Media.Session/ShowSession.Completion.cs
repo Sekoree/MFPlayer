@@ -70,7 +70,10 @@ public sealed partial class ShowSession
                 group.ClearEndMonitor(monitor);
         }
 
-        var voicesRemain = await _voicePlayer.PollCompletionsAsync().ConfigureAwait(false);
+        // Both surfaces tick here: they finish independently, and either one still up keeps the monitor
+        // running. Ordered so a preview that ends in the same tick as its own re-fire is seen first.
+        var previewRemains = await _previewPlayer.PollCompletionsAsync().ConfigureAwait(false);
+        var voicesRemain = await _voicePlayer.PollCompletionsAsync().ConfigureAwait(false) || previewRemains;
         return voicesRemain || _groups.Values.Any(g => g.EndMonitor is not null);
     }
 

@@ -1527,25 +1527,25 @@ HaCue2 tax.
 
 ---
 
-## Implementation progress (updated 2026-08-01)
+## Implementation progress (updated 2026-08-02)
 
 Rows marked ✅ in the register below are in the tree. Counting only the register rows that represent
 *work* (the ~40 rows that were ABSENT, PARTIAL or archived-but-not-recovered — the ~20 EXISTS rows
 needed nothing), the state is:
 
-| Area | Work rows | Landed |
-|---|---|---|
-| Audio (framework) | 10 | **9** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at, per-lease input counters, clock/latency telemetry, terminal state vocabulary |
-| Session | 6 | **3** — the non-destructive document load, tolerant versioning, dead-code removal; plus D7 (`MaxReleasingVoices`) |
-| Control | 9 | **3** — the LTC decoder, transport-neutral chase ingestion, cc→parameter bindings |
-| Automation | 4 | **1** — the outbound OSC/MIDI ramp runner (D3) |
-| Fades | 3 | **1** — custom point-list curves as data |
-| Diagnostics | 3 | **2** — the in-memory log sink, "Copy report" |
-| Video | 9 | **5** — per-output telemetry, target fps, per-output test pattern, idle frames, N visualizers (D5) |
-| Build | 4 | **1** — arch-test `UI/` scope |
-| Everything else (status, remote, app-support) | ~8 | 0 |
+| Area | Work rows | Landed | Remaining |
+|---|---|---|---|
+| Audio (framework) | 11 | **10** | raw-terminal (exclusive) line acquisition — half app-side (§7.1) |
+| Video | 9 | **8** | GL-backend surfacing in a host UI (app-side) |
+| Control | 9 | **4** | external-input gate; per-endpoint test message; session lifecycle glue + learn (app-side) |
+| Session | 6 | **4** | engine/cue-semantics seam (CueId→ClipId rename, cue-runner lift, document split); per-list standby pointer |
+| Automation | 4 | **2** | group-level lanes (RESOLVED: flatten in the mapper, no framework work) |
+| Diagnostics | 3 | **2** | validator severity levels |
+| Fades | 3 | **1** | — the other two were re-scoped into the landed curve work |
+| Build | 4 | **1** | second AOT head + CI gates; per-app settings roots (both app-side) |
+| Everything else (status, remote, app-support) | ~8 | 0 | all Phase-2 app-side |
 
-So roughly **31 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **32 of ~41 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1588,6 +1588,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Video | Per-output mapping (warp vs clean) | **EXISTS, fully wired** | §4.1 |
 | Video | Visualizer off compositions | EXISTS (flag is dead code) | §4.2 |
 | Video | N visualizer cues per composition | ✅ **LANDED** (D5) — slots keyed by (composition, visualizerId); one surface per source preserved | §4.2 |
+| Video | Visualizer z-order freely orderable | ✅ **LANDED** — one `(LayerIndex, Sequence)` order across frame+surface layers; `CompositorSurfaceLayer.DrawAfterFrameLayers` interleaves in the GL compositor | §4.2 |
 | Video | Idle image usable during a show | ✅ **LANDED** — composition idle (+ per-output fallback), shown by the pump whenever the canvas is empty | §4.3 |
 | Video | Per-output test pattern / Identify | ✅ **LANDED** — `SetOutputTestPatternAsync`, substituted upstream of that output's mapping so the grid is warped | §4.4 |
 | Video | Audition video surface | ✅ **LANDED (composed)** — `AuditionCompositionSpec` + enable/disable/attach/detach on `ShowSession`; preview places onto it | §4.5 |
@@ -1622,7 +1623,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Session | `ShowDocument` as a shared engine contract | EXISTS — two mappers already target it (cue + deck); only 1 of 6 members is cue-shaped | §10.1 |
 | Session | Engine / cue-semantics seam | ABSENT (fused; the deck invents a cue named `"player"` to reach the engine) | §10.2 |
 | Session | Soundboard→cue-session coupling | Wiring only — the soundboard VM never references `ShowSession` | §10.1 |
-| Session | `VoicePlayer` voice/preview split | Separable now (~430 voice lines, zero cue dependency) | §10.4 |
+| Session | `VoicePlayer` voice/preview split | ✅ **LANDED** — `SoundboardVoicePlayer` + `CuePreviewPlayer` on narrow `ISessionVoiceHost`/`ISessionPreviewHost`; arch-test guards the seam | §10.4 |
 | Session | Dead code in the session layer | ✅ **LANDED** — both deleted; `SoundboardQuantization` split out | §10.1 |
 | Session | Additive-nullable document evolution | EXISTS as a proven precedent (`LogicalSends`, no version bump) | §10.3 |
 | Session | Tolerant document versioning | ✅ **LANDED** — `MinimumSupportedVersion`..`CurrentVersion`, tolerant below / closed above | §10.3 |

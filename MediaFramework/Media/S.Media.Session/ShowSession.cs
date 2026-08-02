@@ -69,7 +69,7 @@ public readonly record struct VoiceProgress(string VoiceId, TimeSpan Position, T
 ///   <c>TransportGroup</c> model itself (§A).</description></item>
 /// </list>
 /// </summary>
-public sealed partial class ShowSession : IAsyncDisposable
+public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost
 {
     /// <summary>The implicit group cues fall into when <see cref="CueDefinition.GroupId"/> is null.</summary>
     public const string DefaultGroup = "main";
@@ -136,7 +136,16 @@ public sealed partial class ShowSession : IAsyncDisposable
     // Soundboard voices + the cue preview - playback outside the transport groups, split along its ownership
     // seam (review Part-5 #2). Owns the voice/preview registries and monitors; this session's public
     // voice/preview API delegates to it.
-    private readonly VoicePlayer _voicePlayer;
+    private readonly SoundboardVoicePlayer _voicePlayer;
+    private readonly CuePreviewPlayer _previewPlayer;
+
+    // ISessionVoiceHost / ISessionPreviewHost, explicitly: these members are internal to the assembly and
+    // stay that way - the interface exists to narrow what the independent-player surfaces can reach, not to
+    // widen the session's public API. (InvokeAsync and MasterTrim are already public and bind implicitly.)
+    SoundingSourceRegistry ISessionVoiceHost.SoundingSources => _sounding;
+    void ISessionVoiceHost.NotifyCompletionWorkAvailable() => NotifyCompletionWorkAvailable();
+    bool ISessionVoiceHost.IsDisposed => IsDisposed;
+    ClipCompositionRuntime? ISessionPreviewHost.AuditionComposition => _auditionComposition;
     private readonly ShowSessionMetadataPublisher _metadataPublisher;
     private readonly SessionCompletionMonitor _completionMonitor;
     // The level/stop bus: every sounding source registers with its program/monitoring classification, and
@@ -403,10 +412,15 @@ public sealed partial class ShowSession : IAsyncDisposable
         _visualizers = new ShowSessionVisualizerService(
             RegisterVisualizerTap, RemoveTapFromActiveClips, ReleaseVisualizerTapRegistration, MetadataHub);
         _fires = new CueFireOrchestrator(this);
-        _voicePlayer = new VoicePlayer(
-            this, _standby, audioBackend, programAudioTarget, ResolveFallbackOutputDeviceId, BuildPreviewSpec, BuildVoiceSpec);
+        // Two independent surfaces, not one class with two halves: a voice is a raw path with no cue,
+        // document or canvas anywhere in reach, and saying so in the constructor signatures is what stops
+        // a soundboard from quietly becoming part of what "the playback engine" means.
+        _voicePlayer = new SoundboardVoicePlayer(
+            this, _standby, audioBackend, ResolveFallbackOutputDeviceId, BuildVoiceSpec);
+        _previewPlayer = new CuePreviewPlayer(
+            this, _standby, audioBackend, programAudioTarget, ResolveFallbackOutputDeviceId, BuildPreviewSpec);
         _voicePlayer.VoiceEnded += id => VoiceEnded?.Invoke(id);
-        _voicePlayer.PreviewEnded += id => PreviewEnded?.Invoke(id);
+        _previewPlayer.PreviewEnded += id => PreviewEnded?.Invoke(id);
         _completionMonitor = new SessionCompletionMonitor(
             EndMonitorPollInterval, PollCompletionWorkFromBackgroundAsync);
     }
@@ -1178,12 +1192,12 @@ public sealed partial class ShowSession : IAsyncDisposable
     public Task<bool> PreviewCueAsync(string cueId, string? previewDeviceId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return _voicePlayer.PreviewCueAsync(cueId, previewDeviceId);
+        return _previewPlayer.PreviewCueAsync(cueId, previewDeviceId);
     }
 
     /// <summary>Stops the current preview, if any (the GUI's <c>StopPreview</c>) - including one still opening
     /// (NXT-19). Does not raise <see cref="PreviewEnded"/>.</summary>
-    public Task StopPreviewAsync() => _voicePlayer.StopPreviewAsync();
+    public Task StopPreviewAsync() => _previewPlayer.StopPreviewAsync();
 
     // --- soundboard voices (task #10) --------------------------------------------------------------
 
@@ -1380,6 +1394,7 @@ public sealed partial class ShowSession : IAsyncDisposable
     private async Task DisposeStateAsync()
     {
         _metadataPublisher.Dispose();
+        await _previewPlayer.ReleaseAllAsync().ConfigureAwait(false);
         await _voicePlayer.ReleaseAllAsync().ConfigureAwait(false);
         await DisposeGroupsAsync().ConfigureAwait(false);
         _testPatternSlots.Clear(); // slots are owned by their compositions (disposed below); drop stale refs

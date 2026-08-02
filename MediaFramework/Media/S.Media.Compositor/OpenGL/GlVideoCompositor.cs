@@ -598,7 +598,36 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
 
         try
         {
-            RenderLayersToCanvas(frameLayers, savedScissor);
+            // ONE clear for the whole composite; frame layers are then drawn in runs with surfaces
+            // spliced between them (see BeginCanvasPass - clearing per run would erase the run before).
+            BeginCanvasPass(savedScissor);
+
+            // Surfaces are handed to us already ordered among themselves; each carries the number of frame
+            // layers that belong underneath it. Walking them in order and draining frame layers up to each
+            // count interleaves the two lists in one pass, with no sorting here and no knowledge of the
+            // caller's layer indices. A null count means "on top of everything", which is where surfaces
+            // used to live unconditionally.
+            var framesDrawn = 0;
+            // Tracks whether a surface has rendered since the canvas state was last established. Keying the
+            // re-bind off "have we drawn frame layers yet" instead would miss the case that matters most
+            // here: a surface at the very bottom (nothing underneath it) renders FIRST, leaves its own
+            // framebuffer and program bound, and the first frame-layer run would then draw into whatever
+            // the surface left current.
+            var canvasStateLost = false;
+
+            void DrawFrameLayersUpTo(int target)
+            {
+                var clamped = Math.Clamp(target, 0, frameLayers.Count);
+                if (clamped <= framesDrawn)
+                    return;
+                if (canvasStateLost)
+                {
+                    ResumeCanvasPass(); // re-bind WITHOUT clearing
+                    canvasStateLost = false;
+                }
+                DrawLayerRun(frameLayers, framesDrawn, clamped - framesDrawn);
+                framesDrawn = clamped;
+            }
 
             // Surfaces get DEFAULT pixel-store state: the layer uploads above set GL_UNPACK_ROW_LENGTH
             // to each frame's stride, and a surface that uploads its own textures during ConfigureGl
@@ -608,12 +637,17 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
             _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
 
-            // Surface layers render on top of the frame layers, directly into the canvas FBO, each in the
-            // compositor's GL context/thread (the "3D object layer" seam, Doc 04 §5).
+            // Surface layers render directly into the canvas FBO, each in the compositor's GL
+            // context/thread (the "3D object layer" seam, Doc 04 §5).
             for (var i = 0; i < surfaceLayers.Count; i++)
             {
                 var surfaceLayer = surfaceLayers[i];
                 ArgumentNullException.ThrowIfNull(surfaceLayer.Surface);
+
+                // Before the opacity skip: an invisible surface must not swallow the frame layers that sit
+                // below it, and its own placement still says where those layers stop.
+                DrawFrameLayersUpTo(surfaceLayer.DrawAfterFrameLayers ?? frameLayers.Count);
+
                 var opacity = Math.Clamp(surfaceLayer.Opacity, 0f, 1f);
                 if (opacity <= 0f)
                     continue;
@@ -639,13 +673,19 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                 if (surfaceLayer.Effects is { Count: > 0 } || surfaceLayer.MappingSections is not null)
                 {
                     DrawSurfaceLayerIndirect(surfaceLayer, opacity, surfaceTime);
+                    canvasStateLost = true;
                     continue;
                 }
 
                 _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
                 _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
                 surfaceLayer.Surface.Render(_gl, _fbo, surfaceTime, surfaceLayer.Transform, opacity);
+                canvasStateLost = true;
             }
+
+            // Anything above the topmost surface - and every frame layer when no surface asked to be
+            // interleaved at all.
+            DrawFrameLayersUpTo(frameLayers.Count);
 
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
             return ReadCurrentFramebufferPipelined(_output, _output.Width, _output.Height, _outputStride, _outputByteCount, presentationTime);
@@ -975,7 +1015,22 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
 
     private void RenderLayersToCanvas(IReadOnlyList<CompositorLayer> layersBackToFront, bool savedScissor)
     {
-        // --- Bind compositor state. ---
+        BeginCanvasPass(savedScissor);
+        DrawLayerRun(layersBackToFront, 0, layersBackToFront.Count);
+    }
+
+    /// <summary>
+    /// Binds the canvas FBO, installs the layer program and CLEARS to transparent black. Exactly once per
+    /// composite - a second call mid-composite erases everything already drawn.
+    /// </summary>
+    /// <remarks>
+    /// Split out of <see cref="RenderLayersToCanvas"/> for the interleaved surface path, which draws frame
+    /// layers in several runs with surfaces between them. Folding the clear into a per-run helper is the
+    /// obvious mistake there and a quiet one: only the final run survives, which reads like a placement or
+    /// z-order bug rather than a clear.
+    /// </remarks>
+    private void BeginCanvasPass(bool savedScissor)
+    {
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
         if (savedScissor) _gl.Disable(EnableCap.ScissorTest);
@@ -984,11 +1039,27 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.Uniform1(_uLayerLoc, 0);
 
-        // Clear to transparent black.
         _gl.ClearColor(0f, 0f, 0f, 0f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
+    }
 
-        for (var i = 0; i < layersBackToFront.Count; i++)
+    /// <summary>Re-binds the canvas and layer program without clearing - for resuming frame layers after a
+    /// surface has rendered (a surface may leave any FBO/program bound).</summary>
+    private void ResumeCanvasPass()
+    {
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+        _gl.UseProgram(_program);
+        _gl.BindVertexArray(_vao);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.Uniform1(_uLayerLoc, 0);
+    }
+
+    /// <summary>Draws <paramref name="count"/> layers starting at <paramref name="start"/> into the already
+    /// bound-and-cleared canvas.</summary>
+    private void DrawLayerRun(IReadOnlyList<CompositorLayer> layersBackToFront, int start, int count)
+    {
+        for (var i = start; i < start + count; i++)
         {
             var layer = layersBackToFront[i];
             var fmt = layer.Frame.Format.PixelFormat;

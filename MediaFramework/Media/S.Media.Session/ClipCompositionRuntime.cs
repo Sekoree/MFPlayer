@@ -769,8 +769,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (_disposed) return;
             _slots.Remove(layer);
             _mixer.RemoveSlot(layer.RawSlot.Id);
-            if (_slots.Count > 0)
-                SortLayersLocked();
+            // Unconditional: losing the LAST frame layer still changes every surface's z (they all drop to
+            // "nothing underneath"), so an early-out here would strand stale counts.
+            RecomputeLayerOrderLocked();
         }
     }
 
@@ -830,19 +831,11 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (_disposed) return;
             _surfaceLayers.Remove(layer);
             _mixer.RemoveSurfaceSlot(layer.RawSlot);
+            RecomputeLayerOrderLocked();
         }
     }
 
-    private void SortSurfaceLayersLocked()
-    {
-        _surfaceLayers.Sort(static (a, b) =>
-        {
-            var byIndex = a.LayerIndex.CompareTo(b.LayerIndex);
-            return byIndex != 0 ? byIndex : a.Sequence.CompareTo(b.Sequence);
-        });
-        var order = _surfaceLayers.Select(l => l.RawSlot).ToList();
-        _mixer.SortSurfaceSlots((a, b) => order.IndexOf(a).CompareTo(order.IndexOf(b)));
-    }
+    private void SortSurfaceLayersLocked() => RecomputeLayerOrderLocked();
 
     /// <summary>
     /// Attaches a subtitle/overlay source as a full-canvas, top-z-order layer. Each frame the runtime renders the
@@ -1443,9 +1436,35 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
     }
 
-    private void SortLayersLocked()
+    private void SortLayersLocked() => RecomputeLayerOrderLocked();
+
+    /// <summary>
+    /// Re-establishes ONE z-order across frame layers and surface layers together, by
+    /// <c>(LayerIndex, Sequence)</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The two kinds used to be ordered independently, which is why a visualizer always sat on top however
+    /// it was authored: the compositor was handed two lists and told "frames, then surfaces". Ordering them
+    /// against each other and handing each surface the number of frame layers below it lets a clip authored
+    /// above a visualizer actually cover it.
+    /// </para>
+    /// <para>
+    /// Sequence breaks ties, matching what frame layers have always done among themselves: two layers
+    /// authored at the same index stack in attach order, so firing a second cue onto an occupied index puts
+    /// it on top - which is what an operator sees happen and therefore expects.
+    /// </para>
+    /// <para>Must run whenever EITHER list changes, including when the last frame layer leaves: every
+    /// surface's count depends on the frame layers around it, not just on its own placement.</para>
+    /// </remarks>
+    private void RecomputeLayerOrderLocked()
     {
         _slots.Sort(static (a, b) =>
+        {
+            var cmp = a.LayerIndex.CompareTo(b.LayerIndex);
+            return cmp != 0 ? cmp : a.Sequence.CompareTo(b.Sequence);
+        });
+        _surfaceLayers.Sort(static (a, b) =>
         {
             var cmp = a.LayerIndex.CompareTo(b.LayerIndex);
             return cmp != 0 ? cmp : a.Sequence.CompareTo(b.Sequence);
@@ -1461,6 +1480,35 @@ public sealed class ClipCompositionRuntime : IDisposable
             var bi = order.TryGetValue(b.Id, out var bv) ? bv : int.MaxValue;
             return ai.CompareTo(bi);
         });
+
+        if (_surfaceLayers.Count > 0)
+        {
+            var surfaceOrder = new Dictionary<VideoCompositorSource.SurfaceSlot, int>();
+            for (var i = 0; i < _surfaceLayers.Count; i++)
+                surfaceOrder[_surfaceLayers[i].RawSlot] = i;
+            _mixer.SortSurfaceSlots((a, b) =>
+            {
+                var ai = surfaceOrder.TryGetValue(a, out var av) ? av : int.MaxValue;
+                var bi = surfaceOrder.TryGetValue(b, out var bv) ? bv : int.MaxValue;
+                return ai.CompareTo(bi);
+            });
+
+            // Both lists are sorted on the same key, so one forward walk assigns every surface the number
+            // of frame layers that sort below it.
+            var frameIndex = 0;
+            foreach (var surface in _surfaceLayers)
+            {
+                while (frameIndex < _slots.Count && Below(_slots[frameIndex], surface))
+                    frameIndex++;
+                surface.RawSlot.DrawAfterFrameLayers = frameIndex;
+            }
+        }
+
+        static bool Below(LayerSlot frame, SurfaceLayerSlot surface)
+        {
+            var cmp = frame.LayerIndex.CompareTo(surface.LayerIndex);
+            return cmp != 0 ? cmp < 0 : frame.Sequence < surface.Sequence;
+        }
     }
 
     internal void RaiseOutputPumpPressure(string outputId, string outputName, long droppedTotal, long droppedSinceLastReport)

@@ -572,11 +572,30 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         /// </summary>
         public Func<TimeSpan>? RenderTimeSource { get; set; }
 
+        /// <summary>
+        /// How many frame layers render underneath this surface; null = on top of all of them.
+        /// </summary>
+        /// <remarks>
+        /// Set by whoever owns the composition's z-order (it is the only party that knows how the frame
+        /// slots and surface slots interleave). Lock-free for the same reason as
+        /// <see cref="RenderTimeSource"/>: written from a control thread, read once per composite, and an
+        /// int assignment is atomic - a composite either sees the old placement or the new one, never a
+        /// torn z.
+        /// </remarks>
+        public int? DrawAfterFrameLayers { get; set; }
+
         /// <summary>Atomic placement snapshot for the composite thread. <see cref="RenderTimeSource"/> is
         /// deliberately NOT sampled here - the mixer resolves it outside every lock.</summary>
         internal CompositorSurfaceLayer Placement
         {
-            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity, _effects, _mappingSections); }
+            get
+            {
+                lock (_gate)
+                    return new CompositorSurfaceLayer(Surface, _transform, _opacity, _effects, _mappingSections)
+                    {
+                        DrawAfterFrameLayers = DrawAfterFrameLayers,
+                    };
+            }
         }
     }
 
