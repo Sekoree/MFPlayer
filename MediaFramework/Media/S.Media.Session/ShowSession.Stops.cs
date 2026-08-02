@@ -204,7 +204,7 @@ public sealed partial class ShowSession
                         duration,
                         clipFadeWins ? voice.Binding.FadeOutCurve : curve,
                         voice.ClipLevel,
-                        voice.CaptureLayerOpacities(),
+                        voice.CaptureLayerFadeLevels(),
                         voice.RouteTargets,
                         claim);
 
@@ -314,7 +314,7 @@ public sealed partial class ShowSession
         IReadOnlyList<AudioRouteTarget> RouteTargets,
         float StartLevel,
         IReadOnlyList<float> StartLayerOpacities,
-        IReadOnlyList<float> BaseLayerOpacities,
+        IReadOnlyList<float> BaseLayerFadeLevels,
         CancellationToken Token);
 
     /// <summary>Interpolates one fade-cue step between two arbitrary levels - the shared

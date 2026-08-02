@@ -247,6 +247,14 @@ public sealed record ShowClipBinding(
     /// restarts on every loop pass. The envelope factor MULTIPLIES the fade level (fade-in/out, fade
     /// cue, stop fade) - it never replaces it. Null/empty = no automation (and no runner started).</summary>
     public IReadOnlyList<ShowEnvelopePoint>? VolumeEnvelope { get; init; }
+
+    /// <summary>Opacity-automation keyframes for this clip's video layers, sorted by time. Times are CLIP
+    /// positions on the same basis as <see cref="VolumeEnvelope"/>, and the factor composes the same way:
+    /// it MULTIPLIES each layer's authored opacity and whatever a fade has reached, so automation, fades
+    /// and live placement edits coexist instead of overwriting one another.
+    /// <para>Levels are clamped to [0, 1] - unlike gain there is no headroom above full, so a point above
+    /// 1 is a clamp rather than an error. Null/empty = no automation (and no runner started).</para></summary>
+    public IReadOnlyList<ShowEnvelopePoint>? OpacityEnvelope { get; init; }
 }
 
 /// <summary>One volume-envelope keyframe: the clip-relative <paramref name="Time"/>, the LINEAR gain

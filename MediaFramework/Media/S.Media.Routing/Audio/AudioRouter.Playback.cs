@@ -83,8 +83,13 @@ public sealed partial class AudioRouter
         // capacity waits when its inner is clocked (otherwise WaitForCapacity returns "always ready").
         // Promoting such a wrapper to primary would slave the router to a fake clock - and adaptive
         // wrappers are only applied to NON-master outputs anyway - so never promote one.
+        // A RESAMPLING wrapper (IRateAdaptedOutput) is refused for the same reason: it implements the
+        // clock interfaces faithfully, so it looks like a fine candidate, but it reports the device's
+        // latency and not the converter's own buffered delay - pacing the programme from it would time
+        // everything against a clock that is silently early, surfacing as A/V drift with no visible cause.
         if (!AutoWirePrimary || _primaryOutputId is not null
-            || output is not IClockedOutput || output is IAdaptiveRateWrappedOutput)
+            || output is not IClockedOutput
+            || output is IAdaptiveRateWrappedOutput or IRateAdaptedOutput)
             return;
 
         // Promotion re-slaves the router pacing clock (SlaveTo) AND re-masters the attached MediaClock

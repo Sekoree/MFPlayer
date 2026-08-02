@@ -130,7 +130,7 @@ public class ResamplingAudioOutput
     private class ClockedResamplingAudioOutput(
         IAudioOutput inner,
         AudioFormat routerFormat,
-        IClockedOutput clocked) : ResamplingAudioOutput(inner, routerFormat), IClockedOutput
+        IClockedOutput clocked) : ResamplingAudioOutput(inner, routerFormat), IClockedOutput, IRateAdaptedOutput
     {
         public bool WaitForCapacity(int chunkSamples, CancellationToken token)
         {

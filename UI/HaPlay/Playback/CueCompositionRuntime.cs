@@ -326,11 +326,16 @@ internal sealed class CueCompositionRuntime : IDisposable
 
         public int LayerIndex => _inner.LayerIndex;
 
-        public float Opacity
+        /// <summary>The fade component of this layer's opacity - what ramps move. The placement's authored
+        /// opacity multiplies underneath it; see <see cref="EffectiveOpacity"/> for what renders.</summary>
+        public float FadeLevel
         {
-            get => _inner.Opacity;
-            set => _inner.Opacity = value;
+            get => _inner.FadeLevel;
+            set => _inner.FadeLevel = value;
         }
+
+        /// <summary>The composed opacity actually handed to the compositor.</summary>
+        public float EffectiveOpacity => _inner.EffectiveOpacity;
 
         public long Sequence => _inner.Sequence;
 

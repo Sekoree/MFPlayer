@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using ProjectMLib;
 using S.Media.Compositor;
+using S.Media.Gpu.Diagnostics;
 using Silk.NET.OpenGL;
 
 namespace S.Media.Visualizer.ProjectM;
@@ -199,9 +200,14 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
             // routes through a driver swizzle (measurably slower on mobile) and every Android
             // consumer (NDI) takes RGBA directly. Desktop GL keeps BGRA (native there, and the
             // composition blit path historically expects it).
-            var glVersion = gl.GetStringS(StringName.Version) ?? string.Empty;
-            var isGles = glVersion.StartsWith("OpenGL ES", StringComparison.Ordinal);
-            PublishedPixelFormat = isGles ? S.Media.Core.Video.PixelFormat.Rgba32 : S.Media.Core.Video.PixelFormat.Bgra32;
+            // Capture here as well as in the compositor: a visualizer host (HaViz) can bring a GL
+            // context up without any composition existing, and an unattributable renderer is exactly
+            // what makes a driver-level hang on this thread so expensive to diagnose.
+            var device = GraphicsDeviceIdentity.Capture(gl);
+            var glVersion = device.Version;
+            PublishedPixelFormat = device.IsEmbeddedProfile
+                ? S.Media.Core.Video.PixelFormat.Rgba32
+                : S.Media.Core.Video.PixelFormat.Bgra32;
             // One-shot markers around the first iteration: a driver-level hang (seen on mobile GLES)
             // freezes this thread silently - these pin down WHERE without a debugger on the device.
             Trace.LogInformation("renderer FBO ready on '{Version}' (publish={Format})", glVersion, PublishedPixelFormat);
@@ -293,7 +299,7 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
                 gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
                 gl.PixelStore(PixelStoreParameter.PackRowLength, 0);
-                var readFormat = isGles ? GLEnum.Rgba : GLEnum.Bgra;
+                var readFormat = device.IsEmbeddedProfile ? GLEnum.Rgba : GLEnum.Bgra;
                 var readbackStarted = Stopwatch.GetTimestamp();
                 var framePublishable = true;
                 if (usePbo)

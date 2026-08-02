@@ -97,6 +97,43 @@ public sealed class ShowDocumentTests
     }
 
     [Fact]
+    public void ToJson_FromJson_RoundTripsBothAutomationLanes()
+    {
+        // The two lanes are independent: a clip may automate volume, opacity, both, or neither, and the
+        // opacity lane must survive a save/load on its own rather than riding on the volume lane's presence.
+        var doc = ShowDocument.Empty with
+        {
+            Clips =
+            [
+                new ShowClipBinding("cue1", "/video/a.mp4")
+                {
+                    OpacityEnvelope =
+                    [
+                        new ShowEnvelopePoint(TimeSpan.Zero, 0f, FadeCurve.SCurve),
+                        new ShowEnvelopePoint(TimeSpan.FromSeconds(2), 1f),
+                    ],
+                },
+                new ShowClipBinding("cue2", "/audio/b.wav")
+                {
+                    VolumeEnvelope = [new ShowEnvelopePoint(TimeSpan.Zero, 0.5f)],
+                },
+            ],
+        };
+
+        var reloaded = ShowDocument.FromJson(doc.ToJson());
+
+        var lane = reloaded.Clips[0].OpacityEnvelope;
+        Assert.NotNull(lane);
+        Assert.Equal(2, lane.Count);
+        Assert.Equal(0f, lane[0].Level);
+        Assert.Equal(TimeSpan.FromSeconds(2), lane[1].Time);
+        Assert.Equal(FadeCurve.SCurve, lane[0].CurveToNext);
+        Assert.Null(reloaded.Clips[0].VolumeEnvelope);
+        Assert.Null(reloaded.Clips[1].OpacityEnvelope);
+        Assert.NotNull(reloaded.Clips[1].VolumeEnvelope);
+    }
+
+    [Fact]
     public void ToJson_FromJson_RoundTripsNoneOneManySubtitleSelection()
     {
         var doc = ShowDocument.Empty with

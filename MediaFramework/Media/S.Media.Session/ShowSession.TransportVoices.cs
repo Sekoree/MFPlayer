@@ -84,7 +84,7 @@ public sealed partial class ShowSession
 
         /// <summary>The authored full-level opacity of each composition layer, captured when the clip
         /// committed - what a fade UP ramps toward (opacity at level 1).</summary>
-        public IReadOnlyList<float> BaseLayerOpacities { get; private set; } = [];
+        public IReadOnlyList<float> BaseLayerFadeLevels { get; private set; } = [];
 
         /// <summary>The clip's persistent current fade level, default 1. Full level is always audio scale 1
         /// (route TargetGains carry the authored gains), so the audio scale doubles as the level every fade
@@ -259,24 +259,28 @@ public sealed partial class ShowSession
 
         // --- levels --------------------------------------------------------------------------------
 
-        /// <summary>Records what the fade paths need after the clip commits. <paramref name="baseLayerOpacities"/>
-        /// carries the authored full-level opacities when the layers were attached BLACK for a fade-in
-        /// (capturing them from the slots would record the zeroed values and break fade cues' upward ramps);
-        /// null captures the slots as they stand.</summary>
+        /// <summary>Records what the fade paths need after the clip commits.
+        /// <paramref name="baseLayerFadeLevels"/> carries the fade levels a ramp should treat as "full" when
+        /// the layers were attached BLACK for a fade-in (capturing them from the slots would record the
+        /// zeroed levels and break fade cues' upward ramps); null captures the slots as they stand.
+        /// <para>These are FADE components, not rendered opacities: each layer's authored opacity lives on
+        /// its slot as <c>BaseOpacity</c> and multiplies underneath, so a live placement edit changes what
+        /// the layer looks like without disturbing a ramp in flight.</para></summary>
         public void SetFadeMetadata(
             IReadOnlyList<AudioRouteTarget> routeTargets,
             float initialAudioScale,
-            IReadOnlyList<float>? baseLayerOpacities)
+            IReadOnlyList<float>? baseLayerFadeLevels)
         {
             SetRouteTargets(routeTargets);
             Level.Fade = Math.Clamp(initialAudioScale, 0f, 1f);
-            BaseLayerOpacities = baseLayerOpacities ?? CaptureLayerOpacities();
+            BaseLayerFadeLevels = baseLayerFadeLevels ?? CaptureLayerFadeLevels();
         }
 
-        /// <summary>Captures every placement's own opacity. A cue may deliberately use different opacities
-        /// on different compositions, so a stop fade must scale each from its own value rather than snapping
-        /// all layers to the first placement's opacity on the first ramp step.</summary>
-        public IReadOnlyList<float> CaptureLayerOpacities() => [.. Layers.Select(placed => placed.Slot.Opacity)];
+        /// <summary>Captures every placement's current fade level. A stop fade must scale each layer from
+        /// wherever its own ramp had reached rather than snapping them all to the first layer's value on the
+        /// first step. (Authored per-composition opacity differences are handled underneath by each slot's
+        /// <c>BaseOpacity</c>, so they no longer need capturing here.)</summary>
+        public IReadOnlyList<float> CaptureLayerFadeLevels() => [.. Layers.Select(placed => placed.Slot.FadeLevel)];
 
         /// <summary>The ONE place this voice's route gains are computed: master × source × fade × envelope
         /// (the authored per-route gain rides on top). Every fade path (fade-in, fade cue, natural/stop fade,
@@ -303,12 +307,13 @@ public sealed partial class ShowSession
         }
 
         /// <summary>Applies one ramp step: the audio level scales from <paramref name="startAudioScale"/> and
-        /// each layer's opacity from its own captured start. The ONE ramp shape - fade-in, natural fade-out,
-        /// stop fade and the crossfade release all use it, on the active voice and on a tail alike.</summary>
+        /// each layer's FADE component from its own captured start (the authored opacity multiplies
+        /// underneath). The ONE ramp shape - fade-in, natural fade-out, stop fade and the crossfade release
+        /// all use it, on the active voice and on a tail alike.</summary>
         public void ApplyFadeLevel(
             IReadOnlyList<AudioRouteTarget> routeTargets,
             float startAudioScale,
-            IReadOnlyList<float> startLayerOpacities,
+            IReadOnlyList<float> startLayerFadeLevels,
             float scale)
         {
             if (State == VoiceState.Retired)
@@ -318,13 +323,15 @@ public sealed partial class ShowSession
             // All placements share the timing ramp but retain their individual authored/live-edited opacity.
             for (var i = 0; i < Layers.Count; i++)
             {
-                var startOpacity = i < startLayerOpacities.Count ? startLayerOpacities[i] : 0f;
-                Layers[i].Slot.Opacity = startOpacity * scale;
+                var startOpacity = i < startLayerFadeLevels.Count ? startLayerFadeLevels[i] : 0f;
+                Layers[i].Slot.FadeLevel = startOpacity * scale;
             }
         }
 
         /// <summary>Applies one fade-cue step: the absolute audio level (which writes through
-        /// <see cref="ClipLevel"/>) plus optional absolute per-layer opacities (null = audio-only fade).</summary>
+        /// <see cref="ClipLevel"/>) plus optional per-layer fade levels (null = audio-only fade).
+        /// <para>A fade cue's "50%" means half of what the layer was authored at, exactly as the audio side's
+        /// level composes over the clip's own gain - not an absolute opacity that would discard it.</para></summary>
         public void ApplyClipFadeLevel(
             IReadOnlyList<AudioRouteTarget> routeTargets, float audioLevel, IReadOnlyList<float>? layerOpacities)
         {
@@ -332,7 +339,19 @@ public sealed partial class ShowSession
                 return;
             ApplyAudioScale(routeTargets, audioLevel);
             for (var i = 0; layerOpacities is not null && i < Layers.Count && i < layerOpacities.Count; i++)
-                Layers[i].Slot.Opacity = Math.Clamp(layerOpacities[i], 0f, 1f);
+                Layers[i].Slot.FadeLevel = Math.Clamp(layerOpacities[i], 0f, 1f);
+        }
+
+        /// <summary>Applies one opacity-automation step: stores the factor on each layer's level and lets the
+        /// slot recompose <c>authored x fade x automation</c>. Nothing else in the chain is touched, which is
+        /// the entire point - a lane, a fade and a live placement edit can all be in flight at once.</summary>
+        public void ApplyOpacityAutomation(float level)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            level = Math.Clamp(level, 0f, 1f);
+            foreach (var placed in Layers)
+                placed.Slot.AutomationLevel = level;
         }
 
         /// <summary>Applies one envelope-automation step: stores the factor and rewrites the route gains

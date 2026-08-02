@@ -360,26 +360,16 @@ void main()
         if (Interlocked.Exchange(ref _interopUnavailableLogged, 1) != 0)
             return;
 
-        string vendor = "?", renderer = "?", version = "?";
-        try
-        {
-            vendor = _gl.GetStringS(StringName.Vendor) ?? "?";
-            renderer = _gl.GetStringS(StringName.Renderer) ?? "?";
-            version = _gl.GetStringS(StringName.Version) ?? "?";
-        }
-        catch
-        {
-            /* GL string query best-effort */
-        }
+        var device = GraphicsDeviceIdentity.Capture(_gl);
 
         MediaDiagnostics.LogWarning(
             "{0}: zero-copy WGL_NV_DX_interop unavailable - using the slower D3D11 staging CPU upload path. " +
             "Reason: {1} | GL_VENDOR='{2}' GL_RENDERER='{3}' GL_VERSION='{4}'.",
             nameof(Nv12Win32SharedHandleGpuUploader),
             reason,
-            vendor,
-            renderer,
-            version);
+            device.Vendor,
+            device.Renderer,
+            device.Version);
     }
 
     private bool EnsureInteropPrograms()

@@ -1,5 +1,6 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
+using S.Media.Compositor;
 
 namespace S.Media.Session;
 
@@ -32,6 +33,9 @@ internal sealed class VoicePlayer
     // Preview playback (a loaded cue auditioned on a separate device, independent of the transport groups).
     private IArmedClip? _previewClip;
     private IReadOnlyList<PreviewSink> _previewOutputs = [];
+
+    /// <summary>The audition-canvas layers this preview placed, if the rig was up when it started.</summary>
+    private IReadOnlyList<ClipCompositionRuntime.IPlacedClipLayer> _previewLayers = [];
     private CancellationTokenSource? _previewCts;
     private PreviewMonitor? _previewMonitor;
     // The preview's entry on the session's level/stop bus. MONITORING, by the owner's 2026-07-29 decision:
@@ -175,6 +179,33 @@ internal sealed class VoicePlayer
             return false;
         }
 
+        // D8: the audition rig is an output like any other, so its width is whatever the selected device
+        // is - never a hardcoded stereo. Hardcoding it did not merely mis-place a multichannel preview: a
+        // device whose driver only accepts its native width refuses a 2-channel open outright, so audition
+        // failed on exactly the interfaces a show is most likely to be run through.
+        int AuditionChannels(string? deviceId)
+        {
+            if (_audioBackend is null)
+                return 2;
+            try
+            {
+                var devices = _audioBackend.EnumerateOutputDevices();
+                var device = deviceId is { Length: > 0 }
+                    ? devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))
+                    : devices.FirstOrDefault(d => d.IsDefault);
+                // An unknown id is a stale saved setting, not a reason to refuse to audition: stereo is the
+                // safe floor, and the open below reports the real failure if even that is wrong.
+                return device is { MaxChannels: > 0 } ? device.MaxChannels : 2;
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning(
+                    "VoicePlayer: could not read the audition device's channel count ({0}); using stereo.",
+                    ex.Message);
+                return 2;
+            }
+        }
+
         Task<bool> CommitPreviewAsync() => _session.InvokeAsync(async () =>
         {
             if (!ReferenceEquals(_previewCts, s.Cts) || s.Cts.IsCancellationRequested || _session.IsDisposed)
@@ -196,21 +227,43 @@ internal sealed class VoicePlayer
                         // names the endpoint; null = the target's default monitor line). Tracked
                         // BEFORE the attach so the symmetric teardown below releases the lease even
                         // when the attach itself faults.
-                        var lease = monitorTarget.AcquireMonitorOutput(previewDeviceId, new AudioFormat(rate, 2));
+                        var lease = monitorTarget.AcquireMonitorOutput(
+                            previewDeviceId, new AudioFormat(rate, AuditionChannels(previewDeviceId)));
                         outputs.Add(new PreviewSink(lease.Output, lease.Dispose));
                         player.AttachAudioOutput(lease.Output, "_preview");
                     }
                     else
                     {
-                        var output = _audioBackend!.CreateOutput(previewDeviceId ?? _resolveFallbackDeviceId(), new AudioFormat(rate, 2));
+                        var auditionDevice = previewDeviceId ?? _resolveFallbackDeviceId();
+                        var output = _audioBackend!.CreateOutput(
+                            auditionDevice, new AudioFormat(rate, AuditionChannels(auditionDevice)));
                         outputs.Add(new PreviewSink(output, null));
                         player.AttachAudioOutput(output, "_preview");
                     }
                 }
 
+                // Video half of the audition rig: place the previewed clip onto the hidden audition canvas
+                // so the monitor shows it composited - placement, fit, effects, mapping - rather than as a
+                // bare source-resolution picture. Skipped silently when the rig is off, which is the common
+                // case and must cost nothing.
+                var layers = new List<ClipCompositionRuntime.IPlacedClipLayer>();
+                if (_session.AuditionComposition is { } audition && player.VideoSource is { } previewVideo)
+                {
+                    var slot = audition.AddLayer(
+                        previewVideo.Format,
+                        new VideoPlacementSpec(ShowSession.AuditionCompositionId, 0, Placement: "fit"),
+                        // Latest-wins, NOT master-aligned: a preview claims no transport timeline, so the
+                        // canvas has no master clock to align PTS against and every frame would look
+                        // equidistant - the monitor would freeze on the first one.
+                        SlotKeepPolicy.Latest);
+                    layers.Add(slot);
+                    player.AttachVideoOutput(slot.Output, id: "_audition");
+                }
+
                 armed.Start();
                 _previewClip = armed;
                 _previewOutputs = outputs;
+                _previewLayers = layers;
                 _previewMonitor = new PreviewMonitor(cueId, player, s.Cts.Token);
                 _previewSoundingId = _session.SoundingSources.RegisterMonitoring(
                     $"preview:{cueId}", () => _previewClip is not null, () => 1f);
@@ -246,8 +299,13 @@ internal sealed class VoicePlayer
         _previewSoundingId = Guid.Empty;
         var clip = _previewClip;
         var outputs = _previewOutputs;
+        var layers = _previewLayers;
         _previewClip = null;
         _previewOutputs = [];
+        _previewLayers = [];
+        // Before the clip release: the layers hold the video outputs the player is still fanning to.
+        foreach (var layer in layers)
+            layer.Dispose();
         if (clip is not null)
             await clip.ReleaseAsync().ConfigureAwait(false);
         foreach (var sink in outputs)
@@ -344,6 +402,8 @@ internal sealed class VoicePlayer
                 if (_audioBackend is not null && player.AudioRouter is not null)
                 {
                     var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
+                    // Left at stereo deliberately: a soundboard voice is PROGRAM audio, so its width is a
+                    // routing decision (D8 covers the audition rig, which has no route to inherit from).
                     var output = _audioBackend.CreateOutput(deviceId ?? _resolveFallbackDeviceId(), new AudioFormat(rate, 2));
                     player.AttachAudioOutput(output, outputId, gain: level.Effective);
                     outputs.Add(output);

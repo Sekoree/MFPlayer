@@ -38,7 +38,7 @@ internal sealed class ShowSessionVisualizerService
 
     /// <summary>Fade snapshot: slot identity makes the final detach safe when a new visualizer is
     /// fired onto the same composition while the old one is fading.</summary>
-    internal sealed record FadeCapture(SlotKey Key, Slot Captured, IReadOnlyList<float> StartOpacities);
+    internal sealed record FadeCapture(SlotKey Key, Slot Captured, IReadOnlyList<float> StartFadeLevels);
 
     internal sealed record Reattachment(SlotKey Key, Slot Captured, ClipCompositionRuntime Replacement);
 
@@ -56,6 +56,17 @@ internal sealed class ShowSessionVisualizerService
 
     /// <summary>Id used when a caller attaches without naming its visualizer - the single-slot case.</summary>
     public const string DefaultVisualizerId = "default";
+
+    /// <summary>
+    /// How many visualizers one composition may host before it is worth warning about.
+    /// </summary>
+    /// <remarks>
+    /// A SOFT cap (owner decision): attaching more still works, because a legitimate heavy rig should not
+    /// hit a wall the framework invented. But each visualizer is a projectM renderer sharing that
+    /// composition's single GL thread, so the ceiling is real - and an operator should learn about it from
+    /// a log line while building the show, not from dropped frames during a get-in.
+    /// </remarks>
+    public const int SoftVisualizerLimitPerComposition = 4;
 
     private readonly Dictionary<SlotKey, Slot> _slots = [];
     private readonly Func<IAudioVisualSource, Func<string, bool>?, Guid> _registerTap;
@@ -147,6 +158,17 @@ internal sealed class ShowSessionVisualizerService
                 ? existing with { DisposeSource = false }
                 : existing);
 
+        var liveOnComposition = _slots.Keys.Count(k =>
+            string.Equals(k.CompositionId, compositionId, StringComparison.Ordinal)) + 1;
+        if (liveOnComposition > SoftVisualizerLimitPerComposition)
+        {
+            MediaDiagnostics.LogWarning(
+                "ShowSession: composition '{0}' now hosts {1} visualizers (soft limit {2}). Each one is a "
+                + "renderer on this composition's single GL thread, so expect the canvas to fall behind "
+                + "its frame rate.",
+                compositionId, liveOnComposition, SoftVisualizerLimitPerComposition);
+        }
+
         var tapId = _registerTap(source, audioFeedFilter);
         if (source is IBusMetadataSink sink)
             _metadataHub.Attach(sink);
@@ -179,7 +201,7 @@ internal sealed class ShowSessionVisualizerService
                            || string.Equals(pair.Key.CompositionId, compositionId, StringComparison.Ordinal))
             .Select(pair => new FadeCapture(
                 pair.Key, pair.Value,
-                pair.Value.Layers.Select(l => l.Slot.Opacity).ToArray()))
+                pair.Value.Layers.Select(l => l.Slot.FadeLevel).ToArray()))
             .ToArray();
 
     /// <summary>Applies one fade level to every captured slot that is still the live one. Returns
@@ -193,7 +215,7 @@ internal sealed class ShowSessionVisualizerService
                 || !ReferenceEquals(current, fade.Captured))
                 continue;
             for (var i = 0; i < fade.Captured.Layers.Count; i++)
-                fade.Captured.Layers[i].Slot.Opacity = fade.StartOpacities[i] * level;
+                fade.Captured.Layers[i].Slot.FadeLevel = fade.StartFadeLevels[i] * level;
             applied = true;
         }
 

@@ -944,16 +944,27 @@ public sealed partial class ShowSession : IAsyncDisposable
             }
 
             // Video half of a fade-in (and of a crossfade's incoming voice): like the audio routes attach
-            // silent (gain 0) below, the layers attach BLACK (opacity 0) so no full-opacity frame can
-            // composite before the ramp's first step - StartFadeIn lifts them to the authored opacities,
-            // which are preserved as the group's BaseLayerOpacities anchor (the commit capture would
-            // otherwise record the zeroed values and break fade cues' upward ramps).
-            IReadOnlyList<float>? authoredLayerOpacities = null;
+            // silent (gain 0) below, the layers attach BLACK (fade 0) so no full-opacity frame can composite
+            // before the ramp's first step - StartFadeIn lifts them back to full, which is preserved as the
+            // group's BaseLayerFadeLevels anchor (the commit capture would otherwise record the zeroed
+            // levels and break fade cues' upward ramps). Only the FADE component is zeroed; each layer's
+            // authored opacity stays on its slot and multiplies underneath.
+            // Seed the opacity lane before anything composites - the runner's first step does not land until
+            // the end of the commit, so a clip whose lane opens below full would flash at full until then
+            // (the video twin of the envelope seeding below, and the same clip-relative time basis).
+            if (binding.OpacityEnvelope is { Count: > 0 } seedLane && layers.Count > 0)
+            {
+                var seed = Math.Clamp(VolumeEnvelopes.Sample(seedLane, binding.StartOffset), 0f, 1f);
+                foreach (var placed in layers)
+                    placed.Slot.AutomationLevel = seed;
+            }
+
+            IReadOnlyList<float>? fadeInFullLevels = null;
             if (fadeIn && layers.Count > 0)
             {
-                authoredLayerOpacities = layers.Select(placed => placed.Slot.Opacity).ToArray();
+                fadeInFullLevels = layers.Select(placed => placed.Slot.FadeLevel).ToArray();
                 foreach (var placed in layers)
-                    placed.Slot.Opacity = 0f;
+                    placed.Slot.FadeLevel = 0f;
             }
 
             // Program-audio sends need no session backend (a HaCue host's bay owns the devices); the
@@ -1057,7 +1068,7 @@ public sealed partial class ShowSession : IAsyncDisposable
             // butt-spliced away, and this voice becomes the group's Active.
             await CommitVoiceAsync(groupId, group, voice, crossfade).ConfigureAwait(false);
             PostCommitFault?.Invoke(groupId);
-            voice.SetFadeMetadata(routeTargets, fadeIn ? 0f : 1f, authoredLayerOpacities);
+            voice.SetFadeMetadata(routeTargets, fadeIn ? 0f : 1f, fadeInFullLevels);
             // One composition pass over the committed targets. The routes already attached AT this level, so
             // it is value-identical by construction - it is here so the level composition, not the attach
             // site, stays the authority (the same reason the live re-apply and the hot rebuild end with it).
@@ -1078,7 +1089,8 @@ public sealed partial class ShowSession : IAsyncDisposable
                 && player.Duration > TimeSpan.Zero
                 && end > binding.StartOffset;
             var hasEnvelope = binding.VolumeEnvelope is { Count: > 0 } && routeTargets.Count > 0;
-            if (fadeIn || endHandling || hasEnvelope)
+            var hasOpacityLane = binding.OpacityEnvelope is { Count: > 0 } && layers.Count > 0;
+            if (fadeIn || endHandling || hasEnvelope || hasOpacityLane)
             {
                 var clipCts = new CancellationTokenSource();
                 voice.SetClipWorkCts(clipCts);
@@ -1088,6 +1100,8 @@ public sealed partial class ShowSession : IAsyncDisposable
                         fadesVideo: layers.Count > 0, clipCts.Token);
                 if (hasEnvelope)
                     StartEnvelopeRunner(groupId, voice, binding.VolumeEnvelope!, clipCts.Token);
+                if (hasOpacityLane)
+                    StartOpacityLaneRunner(groupId, voice, binding.OpacityEnvelope!, clipCts.Token);
                 if (endHandling)
                     StartEndMonitor(groupId, voice, end, clipCts.Token);
             }
@@ -1376,6 +1390,9 @@ public sealed partial class ShowSession : IAsyncDisposable
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
+        // The audition canvas outlives document loads by design, so nothing else has retired it by now.
+        _auditionComposition?.Dispose();
+        _auditionComposition = null;
         PublishCompositionsView(); // drop the health-poll view's references to the retired compositions
         await _standby.DisposeAsync().ConfigureAwait(false);
     }

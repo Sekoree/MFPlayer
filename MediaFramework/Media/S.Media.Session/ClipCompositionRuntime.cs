@@ -918,13 +918,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "ClipCompositionRuntime: subtitle render failed for {Composition}", CompositionName);
-            feed.Layer.Opacity = 0f;
+            feed.Layer.FadeLevel = 0f;
             return;
         }
 
         if (overlay is null)
         {
-            feed.Layer.Opacity = 0f;
+            feed.Layer.FadeLevel = 0f;
             return;
         }
 
@@ -942,12 +942,12 @@ public sealed class ClipCompositionRuntime : IDisposable
                 owned.Dispose();
                 throw;
             }
-            feed.Layer.Opacity = 1f;
+            feed.Layer.FadeLevel = 1f;
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "ClipCompositionRuntime: subtitle push failed for {Composition}", CompositionName);
-            feed.Layer.Opacity = 0f;
+            feed.Layer.FadeLevel = 0f;
         }
     }
 
@@ -1931,10 +1931,60 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// The session's fade rides, live placement edits, and teardown all go through this contract, so a
     /// surface-backed clip behaves exactly like a frame-backed one for transport purposes.
     /// </summary>
+    /// <summary>
+    /// The ONE opacity composition for a placed layer: <c>authored x fade x automation</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Video's counterpart to <c>SoundingLevel</c>, and it exists for the same reason: three mechanisms
+    /// write a layer's opacity and, without a composition, whichever wrote last simply erased the others.
+    /// The concrete defect was that a live placement edit re-applied the AUTHORED opacity straight onto
+    /// the slot, so editing a placement mid-fade snapped the layer to full and the fade then ramped from
+    /// a value nothing had asked for.
+    /// </para>
+    /// <para>
+    /// Each component has exactly one writer - placement applies own <see cref="Base"/>, fade paths own
+    /// <see cref="Fade"/>, the automation lane owns <see cref="Automation"/> - so they compose by
+    /// construction. Writes race only in the sense that two owners can recompute the product in either
+    /// order; both land on the same value once both have written, and the worst case is one frame at a
+    /// stale product.
+    /// </para>
+    /// </remarks>
+    internal sealed class VisualLevel
+    {
+        /// <summary>The placement's authored opacity. Re-applied on every placement update.</summary>
+        public float Base { get; set; } = 1f;
+
+        /// <summary>What fade-ins, fade cues, stop ramps and crossfade tails ramp. The only component a
+        /// ramp may capture as its start - capturing the effective product instead would re-apply the
+        /// authored opacity on every step and darken the layer geometrically.</summary>
+        public float Fade { get; set; } = 1f;
+
+        /// <summary>The opacity-lane factor (1 = no automation).</summary>
+        public float Automation { get; set; } = 1f;
+
+        /// <summary>What actually renders.</summary>
+        public float Effective => Math.Clamp(Base * Fade * Automation, 0f, 1f);
+    }
+
     public interface IPlacedClipLayer : IDisposable
     {
         int LayerIndex { get; }
-        float Opacity { get; set; }
+
+        /// <summary>The placement's own authored opacity, underneath every ramp. Read-only here: it
+        /// changes through <see cref="UpdatePlacement"/>, which is where a placement is authored.</summary>
+        float BaseOpacity { get; }
+
+        /// <summary>The fade component - what every ramp in the session reads and writes. NOT the
+        /// opacity that renders; see <see cref="EffectiveOpacity"/>.</summary>
+        float FadeLevel { get; set; }
+
+        /// <summary>The opacity-automation component, driven by an opacity lane. 1 = no automation.</summary>
+        float AutomationLevel { get; set; }
+
+        /// <summary>The composed opacity actually handed to the compositor.</summary>
+        float EffectiveOpacity { get; }
+
         void UpdatePlacement(VideoPlacementSpec placement);
 
         /// <summary>
@@ -1997,11 +2047,31 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         public long Sequence { get; }
 
-        public float Opacity
+        private readonly VisualLevel _level = new();
+
+        public float BaseOpacity => _level.Base;
+
+        public float FadeLevel
         {
-            get => RawSlot.Opacity;
-            set => RawSlot.Opacity = value;
+            get => _level.Fade;
+            set
+            {
+                _level.Fade = Math.Clamp(value, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+            }
         }
+
+        public float AutomationLevel
+        {
+            get => _level.Automation;
+            set
+            {
+                _level.Automation = Math.Clamp(value, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+            }
+        }
+
+        public float EffectiveOpacity => _level.Effective;
 
         public void UpdatePlacement(VideoPlacementSpec placement)
         {
@@ -2056,7 +2126,8 @@ public sealed class ClipCompositionRuntime : IDisposable
 
             RawSlot.MappingSections = null;
             RawSlot.Transform = transform;
-            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            RawSlot.Opacity = _level.Effective;
             // Same color-stage chain as frame layers (chroma key first, then brightness/contrast) -
             // a visualizer placement's Effects-tab settings apply to the surface like any clip layer.
             RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
@@ -2097,7 +2168,8 @@ public sealed class ClipCompositionRuntime : IDisposable
 
             RawSlot.MappingSections = sections;
             RawSlot.Transform = LayerTransform2D.Identity;
-            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            RawSlot.Opacity = _level.Effective;
             RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
         }
 
@@ -2154,11 +2226,31 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         public int LayerIndex => _placement.LayerIndex;
 
-        public float Opacity
+        private readonly VisualLevel _level = new();
+
+        public float BaseOpacity => _level.Base;
+
+        public float FadeLevel
         {
-            get => RawSlot.Opacity;
-            set => RawSlot.Opacity = Math.Clamp(value, 0f, 1f);
+            get => _level.Fade;
+            set
+            {
+                _level.Fade = Math.Clamp(value, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+            }
         }
+
+        public float AutomationLevel
+        {
+            get => _level.Automation;
+            set
+            {
+                _level.Automation = Math.Clamp(value, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+            }
+        }
+
+        public float EffectiveOpacity => _level.Effective;
 
         public long Sequence { get; }
 
@@ -2226,7 +2318,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.MappingSections = null;
             RawSlot.Transform = transform;
             RawSlot.SourceCrop = crop;
-            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            RawSlot.Opacity = _level.Effective;
             RawSlot.BlendMode = BlendMode.SourceOver;
             RawSlot.Effects = BuildLayerEffects(_placement);
         }
@@ -2294,7 +2387,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.MappingSections = sections;
             RawSlot.Transform = LayerTransform2D.Identity;
             RawSlot.SourceCrop = RectNormalized.Full;
-            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            RawSlot.Opacity = _level.Effective;
             RawSlot.BlendMode = BlendMode.SourceOver;
             RawSlot.Effects = BuildLayerEffects(_placement);
         }

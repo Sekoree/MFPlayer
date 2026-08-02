@@ -425,6 +425,16 @@ seeks and loops) → `TransportVoice.ApplyEnvelopeLevel` (`ShowSession.Transport
 seeded pre-attach so a quiet start never bursts (`ShowSession.cs:743`). It is **audio-only by explicit
 design** — "Audio-only - layer opacities belong to the fades" (`ShowSession.TransportVoices.cs:341`).
 
+- **Opacity lane: ✅ LANDED (2026-08-02).** The deliverable named below - a video level-composition chain -
+  now exists as `ClipCompositionRuntime.VisualLevel`: `Base` (authored, rewritten by every placement apply)
+  x `Fade` (every session ramp) x `Automation` (the lane), composed by the slot and clamped once. Both slot
+  kinds carry it, `IPlacedClipLayer` exposes the three components plus `EffectiveOpacity`, and the trap is
+  closed by construction - a live placement edit writes `Base` and leaves a ramp in flight untouched.
+  `ShowClipBinding.OpacityEnvelope` + `StartOpacityLaneRunner` (the video twin of the volume runner, same
+  25 ms step, same clip-relative time basis, seeded pre-attach) drive the third component. **Semantic note:**
+  a fade cue's per-layer level is now a FACTOR over the authored opacity, exactly as the audio side's level
+  composes over a clip's own gain - it is no longer an absolute opacity that discarded the authoring.
+  Original finding, for the record:
 - **Opacity lane: ABSENT, and the obvious route is a trap.** Layer opacity is written only by fade ramps
   (`ApplyFadeLevel :308`, `ApplyClipFadeLevel :328`) and by whole-placement live edits
   (`ShowSession.LiveEdits.cs:22`). A live placement write does **not** refresh `BaseLayerOpacities`
@@ -605,7 +615,22 @@ nearest equivalent **lights up the TV while you calibrate the projector**. Cheap
 `ClipCompositionRuntime` + `ShowSession`, applied *after* that output's mapping stage. Identify is the
 same mechanism with a text-rendered frame (`S.Media.Source.Text` exists) plus a timer.
 
-### 4.5 Audition video surface (register item 15) — ABSENT, but the plumbing is cheap
+### 4.5 Audition video surface (register item 15) — ✅ LANDED 2026-08-02
+
+**Option (a) was chosen and built** (owner: "Composed — accurate, costs a GL thread"). `ShowSession` gained
+an audition canvas held OUTSIDE `_compositions` so it survives document loads and never appears among the
+show's own compositions: `EnableAuditionCompositionAsync(AuditionCompositionSpec)` (opt-in; same-spec
+re-enable is a no-op so a settings save cannot flicker the monitor), `DisableAuditionCompositionAsync`,
+`AttachAuditionOutputAsync` / `DetachAuditionOutputAsync`, `GetAuditionCompositionStatsAsync`.
+`VoicePlayer.PreviewCueAsync` places the previewed clip onto it as a `SlotKeepPolicy.Latest` layer (a
+preview claims no transport timeline, so a master-aligned slot would freeze on the first frame), released
+symmetrically before the clip. **D8 also landed**: the audition audio width now follows the selected
+device's `MaxChannels` instead of a hardcoded stereo — which was not merely a mis-placement, it made
+audition fail outright on interfaces whose driver only accepts their native width. 8 tests.
+
+Original finding, for the record:
+
+### 4.5a Audition video surface — the original ABSENT analysis
 
 The whole audition path is audio: `VoicePlayer.PreviewCueAsync` attaches only an audio output and never
 touches `VideoSource` (`S.Media.Session/VoicePlayer.cs:126-205`); the UI side is device selection plus a
@@ -1510,7 +1535,7 @@ needed nothing), the state is:
 
 | Area | Work rows | Landed |
 |---|---|---|
-| Audio (framework) | 10 | **8** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at, per-lease input counters, clock/latency telemetry, terminal state vocabulary |
+| Audio (framework) | 10 | **9** — bay + program bus + leases + monitor, non-master quarantine, pacing-master survival (D2), level metering, the summing node to meter at, per-lease input counters, clock/latency telemetry, terminal state vocabulary |
 | Session | 6 | **3** — the non-destructive document load, tolerant versioning, dead-code removal; plus D7 (`MaxReleasingVoices`) |
 | Control | 9 | **3** — the LTC decoder, transport-neutral chase ingestion, cc→parameter bindings |
 | Automation | 4 | **1** — the outbound OSC/MIDI ramp runner (D3) |
@@ -1520,7 +1545,7 @@ needed nothing), the state is:
 | Build | 4 | **1** — arch-test `UI/` scope |
 | Everything else (status, remote, app-support) | ~8 | 0 |
 
-So roughly **25 of ~40 work items**, but that understates the weight: the recovered bay is the single
+So roughly **31 of ~40 work items**, but that understates the weight: the recovered bay is the single
 largest piece of framework work in the plan (~3,300 lines with ~1,100 lines of tests), and with the
 non-destructive load now landed alongside it, **Phase 3's major framework items are complete** —
 recovery, the clock-master watchdog, per-logical-output metering, and the load path. What remains in
@@ -1540,7 +1565,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Audio | Wedged non-master terminal quarantine/hot-swap | ✅ **LANDED** (recovered) | §1.3 |
 | Audio | Wedged **pacing master** survival | ✅ **LANDED** — `ClockMasterWatchdog` + `PromoteClockMaster` (D2) | §1.3 |
 | Audio | Resampler factory injection | EXISTS (`IMediaRegistry.CreateResamplingOutput`) | §1.1 |
-| Audio | Marker to stop a resampled terminal becoming clock master | **ABSENT** | §1.2 |
+| Audio | Marker to stop a resampled terminal becoming clock master | ✅ **LANDED** — `IRateAdaptedOutput`; auto-promotion refuses it | §1.2 |
 | Audio | Raw-terminal (exclusive) line acquisition | **ABSENT** | §1.4, §7.1 |
 | Audio | Per-lease input health counters on the router | ✅ **LANDED** — `ProducerDiagnostics` rows (buffered / overflow / underrun / latency / epoch) | §1.4, §6.2 |
 | Audio | Output pump counters / health | EXISTS | §1.1, §6.2 |
@@ -1557,7 +1582,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Fades | Custom (point-list) curves as data | ✅ **LANDED** — `CustomFadeCurve` + `FadeShape`, additive nullable document fields (no enum extension) | §3.1 |
 | Fades | Per-transition playlist crossfade | EXISTS (per-fire args) — app-only work | §3.3 |
 | Automation | Volume envelope | EXISTS | §3.2 |
-| Automation | Layer-opacity lane | ABSENT (needs a video level-composition chain) | §3.2 |
+| Automation | Layer-opacity lane | ✅ **LANDED** — `VisualLevel` (authored x fade x automation) on both slot kinds + `ShowClipBinding.OpacityEnvelope` + `StartOpacityLaneRunner` | §3.2 |
 | Automation | Outbound OSC/MIDI ramps | ✅ **LANDED** — `OutboundRampRunner` (explicit rate, lands on final value incl. on interrupt, coalesces) | §3.2 |
 | Automation | Group-level lanes | No document home (flatten in the mapper) | §3.2 |
 | Video | Per-output mapping (warp vs clean) | **EXISTS, fully wired** | §4.1 |
@@ -1565,10 +1590,10 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Video | N visualizer cues per composition | ✅ **LANDED** (D5) — slots keyed by (composition, visualizerId); one surface per source preserved | §4.2 |
 | Video | Idle image usable during a show | ✅ **LANDED** — composition idle (+ per-output fallback), shown by the pump whenever the canvas is empty | §4.3 |
 | Video | Per-output test pattern / Identify | ✅ **LANDED** — `SetOutputTestPatternAsync`, substituted upstream of that output's mapping so the grid is warped | §4.4 |
-| Video | Audition video surface | ABSENT (composition mirroring is free) | §4.5 |
+| Video | Audition video surface | ✅ **LANDED (composed)** — `AuditionCompositionSpec` + enable/disable/attach/detach on `ShowSession`; preview places onto it | §4.5 |
 | Video | Per-output telemetry | ✅ **LANDED** — `ClipCompositionOutputStats` rows (submitted / refused / failures / queue depth / mapped) | §6.3 |
 | Video | Composition fps field | ✅ **LANDED** — `TargetFramesPerSecond`; achieved fps stays a caller-side delta | §6.3 |
-| Video | GPU/GL backend identity | ABSENT (captured only for a one-shot warning) | §6.3 |
+| Video | GPU/GL backend identity | ✅ **LANDED** — `GraphicsDeviceIdentity` (vendor/renderer/version/GLSL/GLES/max-texture), captured at GL compositor + projectM renderer init | §6.3 |
 | Diagnostics | MEL pipeline, single factory | EXISTS and consistent | §6.4 |
 | Diagnostics | In-memory subscribable log sink + level switch | ✅ **LANDED** — `LogRingProvider` (structured entries, volatile level, drop count, EntryCaptured) | §6.4 |
 | Diagnostics | "Copy report" serialization | ✅ **LANDED** — `AudioPatchBayReport.Render`, invariant-formatted plain text | §6.5 |
@@ -1582,7 +1607,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Control | Audio input capture (LTC prerequisite) | EXISTS (`PortAudioInput`, `padev:` scheme) | §5.4a |
 | Control | LTC decoder | ✅ **LANDED** — `LinearTimecodeDecoder`, biphase-mark, polarity/amplitude independent | §5.4a |
 | Control | Transport-neutral chase contract | ✅ **LANDED** — `MidiTimecodeChaseClock.FeedFrame(value)` ingests whole frames from any transport | §5.4a |
-| Control | LTC generation | ABSENT — depends on the bay (must derive from the master clock) | §5.4a |
+| Control | LTC generation | ✅ **LANDED** — `LinearTimecodeGenerator`, pull-based, exact-rational frame length; round-trips through the decoder at all 4 rates | §5.4a |
 | Remote | Route table / self-documentation / counters | ABSENT (hand-written switch) | §5.5 |
 | Remote | `POST /lists/{id}/go` | Blocked on per-list standby, not on routing | §5.5 |
 | Endpoints | Per-endpoint configurable test message | ABSENT (probes hardcoded; MIDI sends nothing) | §5.6 |

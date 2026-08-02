@@ -18,7 +18,7 @@ public sealed partial class ShowSession
     /// (the clip was attached silent). The ramp fraction multiplies each route's <c>TargetGain</c>, so a route
     /// set below or above unity fades up to exactly that level rather than to a hardcoded 1.0 (NXT-07).
     /// With <paramref name="fadesVideo"/> the clip's composition layers ride the SAME ramp from black
-    /// (they attached at opacity 0) up to their authored opacities (<see cref="TransportGroup.BaseLayerOpacities"/>)
+    /// (they attached at opacity 0) up to their authored opacities (<see cref="TransportGroup.BaseLayerFadeLevels"/>)
     /// - the incoming half of a dual-voice crossfade, and parity with every downward fade (stop, natural,
     /// outgoing tail), which always ramped opacity alongside audio; a plain per-cue FadeIn on a placed clip
     /// gets the same audio+video ramp (the audio-only behavior before this was an omission, not a choice -
@@ -54,7 +54,7 @@ public sealed partial class ShowSession
             var frac = FadeRamp.LevelUp(elapsed, duration, curve);
             // Audio leg = ApplyAudioScale(frac), exactly as before; the opacity leg ramps each layer
             // from 0 toward its authored value (base × frac) - the mirror of the stop fade's ramp down.
-            voice.ApplyFadeLevel(routes, 1f, voice.BaseLayerOpacities, frac);
+            voice.ApplyFadeLevel(routes, 1f, voice.BaseLayerFadeLevels, frac);
             if (frac < 1f)
                 return Task.FromResult(false);
             voice.EndClipFade(slotToken);
@@ -90,6 +90,31 @@ public sealed partial class ShowSession
             var clipPosition = group.Timeline.GetSnapshot().CueTime;
             voice.ApplyEnvelopeLevel(VolumeEnvelopes.Sample(envelope, clipPosition));
             return Task.FromResult(false); // no target to reach - the envelope rides the clip until release
+        }));
+    }
+
+    /// <summary>Per-clip opacity-lane runner: the video twin of <see cref="StartEnvelopeRunner"/>, sharing
+    /// its step rate, its clip-relative time basis and its active-voice guard, so a show whose audio and
+    /// video automation are drawn against the same timeline stays sample-for-frame aligned.
+    /// <para>Kept as a separate loop rather than folded into the volume runner because the two lanes are
+    /// independently optional: most clips automate neither, many automate exactly one, and a clip with only
+    /// an opacity lane must not pay for envelope sampling (nor be blocked by the volume runner's
+    /// <c>AudioSourceId</c> requirement - a silent video clip has no audio source at all).</para></summary>
+    private void StartOpacityLaneRunner(
+        string groupId,
+        TransportVoice voice,
+        IReadOnlyList<ShowEnvelopePoint> lane,
+        CancellationToken ct)
+    {
+        FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
+        {
+            if (ct.IsCancellationRequested ||
+                _groups.GetValueOrDefault(groupId) is not { } group ||
+                !ReferenceEquals(group.ActiveVoice, voice))
+                return Task.FromResult(true);
+            var clipPosition = group.Timeline.GetSnapshot().CueTime;
+            voice.ApplyOpacityAutomation(VolumeEnvelopes.Sample(lane, clipPosition));
+            return Task.FromResult(false);
         }));
     }
 
@@ -177,7 +202,7 @@ public sealed partial class ShowSession
                         continue;
                     list.Add(new ClipFade(
                         group, voice, voice.RouteTargets, voice.ClipLevel,
-                        voice.CaptureLayerOpacities(), voice.BaseLayerOpacities, voice.BeginClipFade()));
+                        voice.CaptureLayerFadeLevels(), voice.BaseLayerFadeLevels, voice.BeginClipFade()));
                 }
 
                 return Task.FromResult<IReadOnlyList<ClipFade>>(list);
@@ -209,7 +234,7 @@ public sealed partial class ShowSession
                         opacities = new float[fade.StartLayerOpacities.Count];
                         for (var i = 0; i < opacities.Length; i++)
                         {
-                            var baseOpacity = i < fade.BaseLayerOpacities.Count ? fade.BaseLayerOpacities[i] : 0f;
+                            var baseOpacity = i < fade.BaseLayerFadeLevels.Count ? fade.BaseLayerFadeLevels[i] : 0f;
                             opacities[i] = LevelBetween(
                                 fade.StartLayerOpacities[i], baseOpacity * targetLevel, elapsed, duration, curve);
                         }

@@ -8,6 +8,7 @@ using S.Media.Core.Video.Effects;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Gpu;
+using S.Media.Gpu.Diagnostics;
 using Silk.NET.OpenGL;
 using GlPixelFormat = Silk.NET.OpenGL.PixelFormat;
 using GlPixelType = Silk.NET.OpenGL.PixelType;
@@ -227,6 +228,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     {
         ArgumentNullException.ThrowIfNull(gl);
         _gl = gl;
+        GraphicsDeviceIdentity.Capture(gl);
         _outputPrecision = outputPrecision;
         BuildPipeline();
         Configure(output);
