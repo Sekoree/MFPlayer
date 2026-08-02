@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
+using HaCue2.Machine;
 using HaCue2.Presentation;
 using HaCue2.Session;
 
@@ -49,6 +50,7 @@ public partial class CuesViewModel : ObservableObject
             // The tree is the authority on what is selected — SelectedCue follows it rather than the
             // other way round, so a click, a keyboard move and a programmatic set all take one path.
             SetProperty(ref _selectedCue, CueSource.RowSelection.SelectedItem, nameof(SelectedCue));
+            Inspector.Facts = FactsFor(CueSource.RowSelection.SelectedItem);
             Inspector.Show([.. CueSource.RowSelection.SelectedItems.OfType<CueRow>().Select(row => row.Id)]);
         };
 
@@ -151,6 +153,14 @@ public partial class CuesViewModel : ObservableObject
         return Search(Cues, target, default);
     }
 
+    /// <summary>Where the track lists come from. Null until the shell supplies one.</summary>
+    public Func<MediaCueNode, MediaFacts?>? MediaFacts { get; set; }
+
+    private MediaFacts? FactsFor(CueRow? row) =>
+        row is not null && MediaFacts is { } lookup && Project.FindCue(row.Id) is MediaCueNode media
+            ? lookup(media)
+            : null;
+
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
     public void Refresh()
     {
@@ -159,6 +169,7 @@ public partial class CuesViewModel : ObservableObject
         // By ID, not by reference: Rebuild replaces every row object, so the old instance is gone even
         // though the cue it stood for is still there.
         SelectedCue = AllRows.FirstOrDefault(row => row.Id == selected);
+        Inspector.Facts = FactsFor(SelectedCue);
         Inspector.Reload();
         Timeline.Refresh();
         OnPropertyChanged(nameof(TreeHint));

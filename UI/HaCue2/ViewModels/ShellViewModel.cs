@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
+using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
 using HaCue2.Core.Validation;
@@ -47,7 +48,13 @@ public partial class ShellViewModel : ObservableObject
 
         Environment = machine.Environment ?? new RuntimeEnvironment(Runtime, project);
 
-        Cues = new CuesViewModel(Journal, Runtime);
+        Cues = new CuesViewModel(Journal, Runtime)
+        {
+            // The inspector's track lists come from the probe. A cue whose file has not been looked at
+            // yet still shows the choice it already holds — opening a show on a machine without the
+            // media must not look like the choice was lost.
+            MediaFacts = media => machine.Media.Facts(MediaPaths.Resolve(project, media.MediaPath, null)),
+        };
         Audio = new AudioViewModel(Journal, Runtime);
         Video = new VideoViewModel(project, Runtime, Journal);
         Targets = new TargetsViewModel(project, Runtime);

@@ -67,6 +67,27 @@
 
           <!-- ══ AUDIO ═════════════════════════════════════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsAudioPane}" Margin="0,6,0,8">
+            <!-- A concert capture routinely carries several audio tracks — a stereo mix, an isolated
+                 vocal, a room pair. Which one this cue plays is an authoring decision, and the sends
+                 below are the channels OF THAT TRACK. -->
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Track"
+                                    IsEnabled="{Binding AudioTrack.HasMedia}">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding AudioTrack.Options}"
+                          SelectedIndex="{Binding AudioTrack.SelectedIndex}" />
+                <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
+                           Text="{Binding AudioTrack.Hint}" />
+              </Grid>
+            </HeaderedContentControl>
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding AudioTrack.HasMoved}">
+              <Border Classes="chain">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <Border Classes="badge bad"><TextBlock Text="TRACK MOVED" /></Border>
+                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="{Binding AudioTrack.MovedNote}" />
+                </StackPanel>
+              </Border>
+            </ContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
               <TextBox Classes="short" Text="{Binding LevelValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
@@ -146,6 +167,35 @@
             <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding !HasPlacement}">
               <Button Classes="block" Content="PLACE ON A COMPOSITION…" />
             </ContentControl>
+
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Video track"
+                                    IsEnabled="{Binding VideoTrack.HasMedia}">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding VideoTrack.Options}"
+                          SelectedIndex="{Binding VideoTrack.SelectedIndex}" />
+                <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
+                           Text="{Binding VideoTrack.Hint}" />
+              </Grid>
+            </HeaderedContentControl>
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding VideoTrack.HasMoved}">
+              <Border Classes="chain">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <Border Classes="badge bad"><TextBlock Text="TRACK MOVED" /></Border>
+                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="{Binding VideoTrack.MovedNote}" />
+                </StackPanel>
+              </Border>
+            </ContentControl>
+
+            <!-- Subtitles are a LIST: a show routinely uses an embedded track for one language and a
+                 hand-corrected sidecar for another. Never on by default. -->
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Subtitles">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                <TextBox Grid.Column="0" Classes="ro" IsReadOnly="True" Text="{Binding SubtitleSummary}" />
+                <Button Grid.Column="1" Classes="tight" Content="CHOOSE…"
+                        IsEnabled="{Binding HasSubtitleTracks}" />
+              </Grid>
+            </HeaderedContentControl>
 
             <StackPanel IsVisible="{Binding HasPlacement}">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">

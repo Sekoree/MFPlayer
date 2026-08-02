@@ -128,6 +128,35 @@ public sealed record MediaCueNode : CueNode
     public int FadeOutMs { get; set; }
     public CurveSpec FadeOutCurve { get; set; } = new();
 
+    /// <summary>
+    /// Which audio track to play, or null to let the decoder elect one.
+    /// </summary>
+    /// <remarks>
+    /// A concert capture routinely carries several — a stereo mix, an isolated vocal, a room pair —
+    /// and which one a cue plays is an authoring decision, not something to guess. Null is the honest
+    /// default: "whatever the file says is the main one".
+    /// </remarks>
+    public int? AudioTrackIndex { get; set; }
+
+    /// <summary>
+    /// What the chosen audio track WAS, so a re-mux cannot silently swap it.
+    /// </summary>
+    /// <remarks>
+    /// Stream indices are positional. Re-muxing a file keeps its tracks and can renumber them, and a
+    /// stored index would then point at a different one — the commentary instead of the music, with
+    /// nothing on screen to say so. The signature is compared on load and a mismatch falls back to
+    /// automatic election, which is obviously automatic rather than quietly wrong.
+    /// </remarks>
+    public string AudioTrackSignature { get; set; } = "";
+
+    /// <summary>Which video track; null elects one, −1 means play no video at all.</summary>
+    public int? VideoTrackIndex { get; set; }
+
+    public string VideoTrackSignature { get; set; } = "";
+
+    /// <summary>Subtitle tracks to show. Empty means none — subtitles are never on by default.</summary>
+    public List<SubtitleSelection> Subtitles { get; set; } = [];
+
     /// <summary>The N×V half: which source channel feeds which logical output, at what gain.</summary>
     public List<CueAudioSend> Sends { get; set; } = [];
 
@@ -255,6 +284,26 @@ public sealed record LayerPlacement
 
     /// <summary>The AUTHORED opacity. Fades and automation multiply over it; they never replace it.</summary>
     public double Opacity { get; set; } = 1;
+}
+
+/// <summary>
+/// One subtitle track a cue shows.
+/// </summary>
+/// <remarks>
+/// Either a track inside the media (<see cref="StreamIndex"/>) or a sidecar file
+/// (<see cref="Path"/>) — a show routinely uses both, an embedded track for one language and a
+/// hand-corrected .srt for another, so this is a list rather than a single choice.
+/// </remarks>
+public sealed record SubtitleSelection
+{
+    /// <summary>A sidecar file, or empty for a track inside the media.</summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>The container stream index; −1 selects the best track the decoder can find.</summary>
+    public int StreamIndex { get; set; } = -1;
+
+    /// <summary>What the chosen track was, for the same re-mux reason as the audio one.</summary>
+    public string Signature { get; set; } = "";
 }
 
 public enum LayerFit

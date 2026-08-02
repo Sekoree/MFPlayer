@@ -158,8 +158,15 @@ public static class ShowCompiler
             ClipId: media.Id.ToString(),
             MediaPath: media.MediaPath,
             CompositionId: placement?.CompositionId.ToString(),
-            LayerIndex: placement?.LayerIndex ?? 0)
+            LayerIndex: placement?.LayerIndex ?? 0,
+            // Null means "elect one", which is also what the document's null means, so an unmade
+            // choice stays unmade all the way down rather than being frozen into an index here.
+            AudioStreamIndex: media.AudioTrackIndex,
+            Subtitles: Subtitles(media))
         {
+            // −1 is "no video", which is a real choice and not the same as electing one; the engine
+            // reads it exactly that way.
+            VideoStreamIndex = media.VideoTrackIndex,
             StartOffset = TimeSpan.FromMilliseconds(media.TrimInMs),
             // The document's EndOffset is measured from the SOURCE END; the project stores an absolute
             // out-point, and only a probe knows the length. Zero — "through to the end" — is the
@@ -176,6 +183,20 @@ public static class ShowCompiler
             OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity),
         };
     }
+
+    /// <summary>
+    /// The subtitle tracks a cue shows, or null when it shows none.
+    /// </summary>
+    /// <remarks>
+    /// Null rather than an empty list: <see cref="ShowClipBinding.GetSubtitleSelections"/> treats an
+    /// empty list and a null the same, and null is the shape that says "this cue never had any".
+    /// </remarks>
+    private static IReadOnlyList<ShowSubtitleSelection>? Subtitles(MediaCueNode media) =>
+        media.Subtitles.Count == 0
+            ? null
+            : [.. media.Subtitles.Select(selection => new ShowSubtitleSelection(
+                selection.Path.Length > 0 ? selection.Path : null,
+                selection.StreamIndex))];
 
     /// <summary>
     /// The clip's N×V matrix: which source channel feeds which logical output, at what gain.

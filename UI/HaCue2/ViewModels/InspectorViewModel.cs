@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
+using HaCue2.Machine;
 using HaCue2.Controls;
 using HaCue2.Presentation;
 using HaCue2.Sample;
@@ -155,6 +156,11 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CrossfadeCurve));
         OnPropertyChanged(nameof(FadeCurve));
         OnPropertyChanged(nameof(PatchCurve));
+        OnPropertyChanged(nameof(AudioTrack));
+        OnPropertyChanged(nameof(VideoTrack));
+        OnPropertyChanged(nameof(SubtitleTracks));
+        OnPropertyChanged(nameof(HasSubtitleTracks));
+        OnPropertyChanged(nameof(SubtitleSummary));
     }
 
     private CueKind KindOf() => Cue is null ? CueKind.Comment : CuePresentation.KindOf(Cue);
@@ -492,6 +498,33 @@ public partial class InspectorViewModel : ObservableObject
         _drag?.Dispose();
         _drag = null;
     }
+
+    // ── media tracks ──────────────────────────────────────────────────────────────────────────
+    // The options are a MACHINE fact and the choice is a DOCUMENT one, so the picker takes both: the
+    // probe's track list and the cue it writes to.
+
+    /// <summary>What the selected cue's file turned out to contain. Set by the shell as probes land.</summary>
+    public MediaFacts? Facts { get; set; }
+
+    public TrackPickerViewModel AudioTrack => Track(TrackKind.Audio);
+    public TrackPickerViewModel VideoTrack => Track(TrackKind.Video);
+
+    private TrackPickerViewModel Track(TrackKind kind) =>
+        new(_journal, Cue as MediaCueNode, kind, Facts, Reload);
+
+    /// <summary>The subtitle tracks in the file, as the picker lists them.</summary>
+    public IReadOnlyList<string> SubtitleTracks =>
+        Facts is null ? [] : [.. Facts.SubtitleTracks.Select(track => track.Label)];
+
+    public bool HasSubtitleTracks => SubtitleTracks.Count > 0;
+
+    /// <summary>What the cue currently shows — empty is the default, subtitles are never on by accident.</summary>
+    public string SubtitleSummary => Cue is MediaCueNode { Subtitles.Count: > 0 } media
+        ? string.Join(" · ", media.Subtitles.Select(Describe))
+        : "none";
+
+    private static string Describe(SubtitleSelection selection) =>
+        selection.Path.Length > 0 ? Path.GetFileName(selection.Path) : $"track #{selection.StreamIndex}";
 
     // ── curve pickers ─────────────────────────────────────────────────────────────────────────
     // One per curve a cue can carry. Built on demand from the same (which, cue) lookup the editor
