@@ -6,6 +6,7 @@ using HaCue2.Core.Patch;
 using HaCue2.Controls;
 using HaCue2.Presentation;
 using HaCue2.Sample;
+using S.Media.Session;
 
 namespace HaCue2.ViewModels;
 
@@ -149,6 +150,11 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(FitIndex));
         OnPropertyChanged(nameof(PlacementOpacityValue));
         OnPropertyChanged(nameof(EffectLanes));
+        OnPropertyChanged(nameof(FadeInCurve));
+        OnPropertyChanged(nameof(FadeOutCurve));
+        OnPropertyChanged(nameof(CrossfadeCurve));
+        OnPropertyChanged(nameof(FadeCurve));
+        OnPropertyChanged(nameof(PatchCurve));
     }
 
     private CueKind KindOf() => Cue is null ? CueKind.Comment : CuePresentation.KindOf(Cue);
@@ -487,6 +493,29 @@ public partial class InspectorViewModel : ObservableObject
         _drag = null;
     }
 
+    // ── curve pickers ─────────────────────────────────────────────────────────────────────────
+    // One per curve a cue can carry. Built on demand from the same (which, cue) lookup the editor
+    // uses, so a picker and the "✎" beside it can never address different curves.
+
+    public CurvePickerViewModel FadeInCurve => Picker("fadeIn");
+    public CurvePickerViewModel FadeOutCurve => Picker("fadeOut");
+    public CurvePickerViewModel CrossfadeCurve => Picker("crossfade");
+    public CurvePickerViewModel FadeCurve => Picker("fade");
+    public CurvePickerViewModel PatchCurve => Picker("patch");
+
+    private CurvePickerViewModel Picker(string which) =>
+        new(_journal, Cue, SpecOf(which).Spec, Reload);
+
+    private (CurveSpec? Spec, string Label) SpecOf(string which) => (which, Cue) switch
+    {
+        ("fadeIn", MediaCueNode media) => (media.FadeInCurve, "fade in"),
+        ("fadeOut", MediaCueNode media) => (media.FadeOutCurve, "fade out"),
+        ("crossfade", GroupCueNode group) => (group.CrossfadeCurve, "crossfade"),
+        ("fade", FadeCueNode fade) => (fade.Curve, "fade"),
+        ("patch", PatchCueNode patch) => (patch.FadeCurve, "patch ramp"),
+        _ => (null, ""),
+    };
+
     /// <summary>
     /// The editor for one of this cue's curves, or null when the cue has none of that name.
     /// </summary>
@@ -500,15 +529,7 @@ public partial class InspectorViewModel : ObservableObject
         if (Cue is not { } cue)
             return null;
 
-        var (spec, label) = (which, cue) switch
-        {
-            ("fadeIn", MediaCueNode media) => (media.FadeInCurve, "fade in"),
-            ("fadeOut", MediaCueNode media) => (media.FadeOutCurve, "fade out"),
-            ("crossfade", GroupCueNode group) => (group.CrossfadeCurve, "crossfade"),
-            ("fade", FadeCueNode fade) => (fade.Curve, "fade"),
-            ("patch", PatchCueNode patch) => (patch.FadeCurve, "patch ramp"),
-            _ => (null, ""),
-        };
+        var (spec, label) = SpecOf(which);
 
         if (spec is null)
             return null;
@@ -599,4 +620,59 @@ public partial class InspectorViewModel : ObservableObject
             NumberStyles.Float,
             CultureInfo.InvariantCulture,
             out value);
+}
+
+/// <summary>
+/// One curve picker: the four built-in laws, plus "custom" for a shape somebody drew.
+/// </summary>
+/// <remarks>
+/// "custom" is not a fifth law — it is what the list reads when an INLINE POINT LIST exists, because
+/// <see cref="CurveSpec.Resolve"/> prefers those points over the law. Which is also why choosing a law
+/// has to clear them: without that, picking "linear" over a drawn curve would change the reading and
+/// nothing else, and the picker would be describing a fade that does not happen.
+/// </remarks>
+public sealed class CurvePickerViewModel(
+    ProjectJournal journal, CueNode? cue, CurveSpec? spec, Action reload)
+{
+    /// <summary>The index the list shows for a drawn shape — one past the last law.</summary>
+    public const int CustomIndex = 4;
+
+    public IReadOnlyList<CurveOption> Curves { get; } = SampleShow.FadeCurves;
+
+    public bool HasCurve => spec is not null && cue is not null;
+
+    public int SelectedIndex
+    {
+        get => spec is null
+            ? -1
+            : spec.Points is { Count: > 1 }
+                ? CustomIndex
+                : (int)spec.Law;
+
+        set
+        {
+            // Selecting "custom" is not an edit: it is where the ✎ lives, and the shape arrives when
+            // the editor is used. Choosing it without drawing anything would store a straight line.
+            if (spec is null || cue is null || value is < 0 or >= CustomIndex || value == SelectedIndex)
+                return;
+
+            using (journal.Composite("set fade curve", "cues"))
+            {
+                journal.Do(new SetValueCommand<FadeCurve>(
+                    cue.Id, "curveLaw", "cues",
+                    () => spec.Law, law => spec.Law = law, (FadeCurve)value,
+                    $"set curve {Curves[value].Name}"));
+
+                if (spec.Points is { Count: > 1 })
+                {
+                    journal.Do(new SetValueCommand<List<FadeCurvePoint>?>(
+                        cue.Id, "curvePoints", "cues",
+                        () => spec.Points, points => spec.Points = points, null,
+                        "drop the custom shape"));
+                }
+            }
+
+            reload();
+        }
+    }
 }

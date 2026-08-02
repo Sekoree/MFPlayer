@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using HaCue2.Core.Compile;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using S.Media.Session;
@@ -122,6 +123,7 @@ public static class ProjectStatus
             CheckMedia(project, projectPath, environment),
             CheckAudioLines(project, environment),
             CheckVideoOutputs(project, environment, documentIssues),
+            CheckCompiles(project),
         };
 
         checks.AddRange(DocumentChecks(documentIssues));
@@ -183,6 +185,51 @@ public static class ProjectStatus
 
         return Summarise("Audio devices", issues, unchecked_, project.AudioLines.Count,
             "Relink ›", "line");
+    }
+
+    /// <summary>
+    /// Whether the engine will actually take this show.
+    /// </summary>
+    /// <remarks>
+    /// The last check and the most literal one: it compiles the project and runs the ENGINE's own
+    /// validator over the result. Everything above answers "is the authoring sound"; this answers
+    /// "will it load", which is a different question and the only one whose answer is not ours to
+    /// decide. A compiler that threw would otherwise surface as a crash at showtime.
+    /// </remarks>
+    private static StatusCheck CheckCompiles(HaCueProject project)
+    {
+        IReadOnlyList<ShowValidationIssue> issues;
+
+        try
+        {
+            issues =
+            [
+                .. ShowDocumentValidator.Validate(ShowCompiler.Compile(project))
+                    .Where(issue => issue.Severity == ShowValidationSeverity.Error),
+            ];
+        }
+        catch (Exception failure) when (failure is ArgumentException or InvalidOperationException)
+        {
+            // A throw IS the finding. Reporting it as a row beats letting it escape into whatever was
+            // asking — the status pass is where an operator looks to find out if the show is sound.
+            return new StatusCheck(
+                "Compiles",
+                CheckOutcome.Failed,
+                "the show could not be compiled",
+                "report this — a project should never fail to compile",
+                [new ShowValidationIssue(ShowValidationSeverity.Error, failure.Message, "project", "")]);
+        }
+
+        var cues = project.CueLists.Sum(list => list.Flatten().Count());
+
+        return issues.Count == 0
+            ? new StatusCheck("Compiles", CheckOutcome.Passed, $"{cues} cues → playable show", "", [])
+            : new StatusCheck(
+                "Compiles",
+                CheckOutcome.Failed,
+                $"{issues.Count} the engine will refuse",
+                "fix the reported cues, then run the checks again",
+                issues);
     }
 
     private static StatusCheck CheckVideoOutputs(

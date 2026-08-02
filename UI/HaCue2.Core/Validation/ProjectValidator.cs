@@ -246,6 +246,12 @@ public static class ProjectValidator
                     issues.Add(Error("cue", id,
                         $"“{list.Name}” has more than one cue numbered {cue.Number}."));
 
+                // A media cue with no file is an unfinished cue, not a broken one — it is how every
+                // cue starts. A warning, so it is visible without failing the checks, and named here
+                // rather than left to the engine, which can only say "a clip had no path".
+                if (cue is MediaCueNode { MediaPath.Length: 0 })
+                    issues.Add(Warn("cue", id, $"Q{cue.Number} has no media file yet."));
+
                 // A warning, matching the engine: a show with an unlabelled cue should open.
                 if (string.IsNullOrWhiteSpace(cue.Label) && cue is not CommentCueNode)
                     issues.Add(Warn("cue", id, $"Q{cue.Number} has no label."));
