@@ -57,7 +57,18 @@ public partial class InspectorPane : UserControl
     /// </summary>
     private void OnEditCurve(object? sender, RoutedEventArgs e)
     {
-        if (this.FindAncestorOfType<Window>() is { } owner)
-            new CurveEditorWindow().ShowDialog(owner);
+        if (this.FindAncestorOfType<Window>() is not { } owner
+            || DataContext is not InspectorViewModel inspector
+            || (sender as Control)?.Tag as string is not { } which)
+            return;
+
+        // No editor for a cue that has no curve of that name: opening one on a stand-in would let an
+        // operator draw a shape that goes nowhere.
+        if (inspector.CurveEditor(which) is not { } editor)
+            return;
+
+        var window = new CurveEditorWindow(editor);
+        window.Closed += (_, _) => inspector.Reload();
+        window.ShowDialog(owner);
     }
 }

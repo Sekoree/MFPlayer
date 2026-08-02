@@ -34,53 +34,28 @@
 
       <Grid ColumnDefinitions="*,220" ColumnSpacing="7" Margin="10,2,10,10">
 
-        <Border Grid.Column="0" Classes="vidcanvas">
-          <Panel>
-            <c:CanvasGrid Columns="10" Rows="4" />
-            <Path Data="{Binding Curve}" Stroke="{StaticResource GelCongo}" StrokeThickness="1"
-                  Stretch="Fill" Margin="6" />
-            <ItemsControl ItemsSource="{Binding Points}" Margin="6">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemContainerTheme>
-                <ControlTheme TargetType="ContentPresenter" x:DataType="vm:CurvePoint">
-                  <Setter Property="(c:Fraction.Left)" Value="{Binding X}" />
-                  <Setter Property="(c:Fraction.Top)" Value="{Binding Y}" />
-                </ControlTheme>
-              </ItemsControl.ItemContainerTheme>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:CurvePoint">
-                  <!-- The selected point is amber so it matches the numeric fields beside the canvas;
-                       every other point stays congo like the curve it belongs to. -->
-                  <Ellipse Width="7" Height="7" Margin="-3.5"
-                           Fill="{StaticResource GelCongo}"
-                           Classes.warn="{Binding IsSelected}">
-                    <Ellipse.Styles>
-                      <Style Selector="Ellipse.warn">
-                        <Setter Property="Fill" Value="{StaticResource GelAmber}" />
-                      </Style>
-                    </Ellipse.Styles>
-                  </Ellipse>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </Panel>
-        </Border>
+        <c:CurveCanvas Grid.Column="0"
+                       Points="{Binding Points}"
+                       Shape="{Binding Shape}"
+                       Gesture="OnCurveGesture"
+                       GestureCompleted="OnCurveGestureCompleted"
+                       HoldToggled="OnHoldToggled" />
 
         <StackPanel Grid.Column="1" Spacing="4">
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Point 3">
-            <TextBox Text="{Binding SelectedPoint}" />
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Point">
+            <TextBox Classes="ro" IsReadOnly="True" Text="{Binding SelectedPoint}" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Scale">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Scale">
             <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Scales}"
                      SelectedItem="{Binding Scale}" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Segment">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Segment"
+                                  IsEnabled="{Binding HasSelection}"
+                                  IsVisible="{Binding SupportsHold}">
             <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Segments}"
                      SelectedItem="{Binding Segment}" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Save as">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Save as">
             <TextBox Text="{Binding PresetName}" />
           </HeaderedContentControl>
           <TextBlock Margin="10,4" Classes="mono dim3 micro" TextWrapping="Wrap"

@@ -1,0 +1,50 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Controls.CurveCanvas"
+             x:DataType="c:CurveCanvas"
+             x:CompileBindings="True">
+
+  <!-- The curve editor's canvas: the shape, and a grab handle on every point. Drawing and dragging
+       live together here for the same reason they do on PlacementCanvas — the gesture and the picture
+       have to agree about where a point is. -->
+
+  <Border Classes="vidcanvas">
+    <Panel Margin="6">
+      <c:CanvasGrid Columns="10" Rows="4" />
+
+      <!-- A polyline over the fractions, not a stretched geometry: Stretch="Fill" maps the geometry's
+           BOUNDING BOX, so a curve that never reaches 1 would be drawn as if it did. -->
+      <c:EnvelopeGraph Points="{Binding Shape, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
+                       Stroke="{StaticResource GelCongo}" StrokeThickness="1.4" />
+
+      <ItemsControl ItemsSource="{Binding Points, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemContainerTheme>
+          <ControlTheme TargetType="ContentPresenter" x:DataType="vm:CurvePoint">
+            <Setter Property="(c:Fraction.Left)" Value="{Binding X}" />
+            <Setter Property="(c:Fraction.Top)" Value="{Binding Y}" />
+          </ControlTheme>
+        </ItemsControl.ItemContainerTheme>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:CurvePoint">
+            <!-- The selected point is amber so it matches the numeric fields beside the canvas;
+                 every other point stays congo like the curve it belongs to. A held point is a square,
+                 because "flat until the next point" is a different KIND of thing, not a shade of one. -->
+            <Panel Margin="-4">
+              <Ellipse Width="8" Height="8" IsVisible="{Binding !IsHold}"
+                       Fill="{StaticResource GelCongo}"
+                       Classes.warn="{Binding IsSelected}" />
+              <Rectangle Width="8" Height="8" IsVisible="{Binding IsHold}"
+                         Fill="{StaticResource GelCongo}"
+                         Classes.warn="{Binding IsSelected}" />
+            </Panel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Panel>
+  </Border>
+</UserControl>

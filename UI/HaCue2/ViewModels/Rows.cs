@@ -451,7 +451,8 @@ public sealed record CurveOption(string Name, string PathData)
 }
 
 /// <summary>A draggable point on the custom-curve editor, in fractions of the canvas.</summary>
-public sealed record CurvePoint(double X, double Y, bool IsSelected = false);
+/// <param name="IsHold">Flat until the next point. Drawn as a square rather than a circle.</param>
+public sealed record CurvePoint(double X, double Y, bool IsSelected = false, bool IsHold = false);
 
 /// <summary>A named settings pane in the nav (screens 12/13).</summary>
 public sealed record SettingsPane : INavRow

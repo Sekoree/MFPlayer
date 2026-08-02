@@ -1,4 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Controls;
+using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Core.Validation;
 using HaCue2.Sample;
@@ -49,23 +51,181 @@ public partial class LauncherViewModel : ObservableObject
 /// </remarks>
 public partial class CurveEditorViewModel : ObservableObject
 {
-    public string Title { get; } = "Fade curve · Q13.1 fade out";
-    public string Hint { get; } = "same control everywhere a curve is picked";
+    private readonly ProjectJournal? _journal;
+    private readonly ICurveTarget? _target;
+    private IDisposable? _drag;
+
+    /// <summary>The dummy editor, for a preview with no document behind it.</summary>
+    public CurveEditorViewModel()
+    {
+        Title = "Fade curve";
+        Hint = "same control everywhere a curve is picked";
+        _knots = [new CurveKnot(0, 1), new CurveKnot(0.35, 0.55), new CurveKnot(1, 0)];
+    }
+
+    public CurveEditorViewModel(ProjectJournal journal, ICurveTarget target, string title)
+    {
+        _journal = journal;
+        _target = target;
+        Title = title;
+        Hint = "same control everywhere a curve is picked";
+        _knots = target.Read();
+        _supportsHold = target.SupportsHold;
+    }
+
+    public string Title { get; }
+    public string Hint { get; }
+
+    private IReadOnlyList<CurveKnot> _knots;
+    private readonly bool _supportsHold = true;
 
     public IReadOnlyList<CurveOption> Curves { get; } = SampleShow.FadeCurves;
-    public Avalonia.Media.Geometry Curve { get; } = SampleShow.CustomCurve;
-    public IReadOnlyList<CurvePoint> Points { get; } = SampleShow.CustomCurvePoints;
+
+    /// <summary>
+    /// The handles, in CANVAS space: y is flipped, because a level of 1 is drawn at the top.
+    /// </summary>
+    /// <remarks>
+    /// Flipped here rather than in the control, which knows nothing about levels — the same split the
+    /// timeline's effect lanes already make.
+    /// </remarks>
+    public IReadOnlyList<CurvePoint> Points =>
+    [
+        .. _knots.Select((knot, index) => new CurvePoint(
+            knot.X, 1 - knot.Y, index == SelectedIndex, knot.Hold)),
+    ];
+
+    /// <summary>
+    /// The polyline. A held point gets a corner the point list does not contain.
+    /// </summary>
+    /// <remarks>
+    /// Without the extra corner a hold would be drawn as the ramp it explicitly is not — the picture
+    /// would show the operator a fade that the engine will not play.
+    /// </remarks>
+    public IReadOnlyList<CurvePoint> Shape
+    {
+        get
+        {
+            var shape = new List<CurvePoint>();
+
+            for (var index = 0; index < _knots.Count; index++)
+            {
+                var knot = _knots[index];
+                shape.Add(new CurvePoint(knot.X, 1 - knot.Y));
+
+                if (knot.Hold && index + 1 < _knots.Count)
+                    shape.Add(new CurvePoint(_knots[index + 1].X, 1 - knot.Y));
+            }
+
+            return shape;
+        }
+    }
 
     public IReadOnlyList<string> Scales { get; } = ["dB", "linear"];
     public IReadOnlyList<string> Segments { get; } = ["smooth", "hold"];
 
     [ObservableProperty] private string _scale = "dB";
-    [ObservableProperty] private string _segment = "smooth";
-    [ObservableProperty] private string _selectedPoint = "48 % · −14.2 dB";
-    [ObservableProperty] private string _presetName = "“slow tail” · project preset";
+    [ObservableProperty] private int _selectedIndex = -1;
+    [ObservableProperty] private string _presetName = "";
 
-    public string EditHint { get; } =
-        "double-click adds a point · drag off the canvas removes · audition plays the fade on the cue's preview";
+    public bool HasSelection => SelectedIndex >= 0 && SelectedIndex < _knots.Count;
+
+    public bool SupportsHold => _supportsHold;
+
+    /// <summary>The selected point's position, as the numeric route onto the same edit.</summary>
+    public string SelectedPoint => HasSelection
+        ? $"{_knots[SelectedIndex].X * 100:0.#} % · {_knots[SelectedIndex].Y * 100:0.#} %"
+        : "—";
+
+    /// <summary>Whether the selected point holds. Bound to the smooth/hold segment picker.</summary>
+    public string Segment
+    {
+        get => HasSelection && _knots[SelectedIndex].Hold ? "hold" : "smooth";
+        set
+        {
+            if (_target is null || _journal is null || !HasSelection)
+                return;
+
+            if (CurveEdits.SetHold(_target, SelectedIndex, value == "hold") is { } command)
+            {
+                _journal.Do(command);
+                _journal.CloseGroup();
+                Reload();
+            }
+        }
+    }
+
+    public string EditHint =>
+        "double-click adds a point · drag off the canvas removes · right-click holds the segment";
+
+    /// <summary>A drag, a nudge, an add or a remove — every route ends in one command.</summary>
+    public void Apply(CurveGesture gesture)
+    {
+        if (_target is null || _journal is null)
+            return;
+
+        if (gesture.Kind == CurveGestureKind.Select)
+        {
+            SelectedIndex = gesture.Index;
+            return;
+        }
+
+        // The gesture arrives in canvas space; the document stores levels, so y flips back here.
+        var x = gesture.X;
+        var y = 1 - gesture.Y;
+
+        var command = gesture.Kind switch
+        {
+            CurveGestureKind.Move => CurveEdits.Move(_target, gesture.Index, x, y),
+            CurveGestureKind.Add when !CurveEdits.HasPointNear(_target, x) => CurveEdits.Add(_target, x, y),
+            CurveGestureKind.Remove => CurveEdits.Remove(_target, gesture.Index),
+            _ => null,
+        };
+
+        if (command is null)
+            return;
+
+        _drag ??= _journal.Composite(command.Description, "cues");
+        _journal.Do(command);
+
+        if (gesture.Kind == CurveGestureKind.Remove)
+            SelectedIndex = -1;
+
+        Reload();
+    }
+
+    public void ToggleHold(int index)
+    {
+        SelectedIndex = index;
+        Segment = HasSelection && _knots[index].Hold ? "smooth" : "hold";
+    }
+
+    /// <summary>Ends the gesture, closing its undo step.</summary>
+    public void EndGesture()
+    {
+        _drag?.Dispose();
+        _drag = null;
+    }
+
+    /// <summary>Re-reads the curve from the document — after an edit here, or an undo anywhere.</summary>
+    public void Reload()
+    {
+        if (_target is not null)
+            _knots = _target.Read();
+
+        OnPropertyChanged(nameof(Points));
+        OnPropertyChanged(nameof(Shape));
+        OnPropertyChanged(nameof(SelectedPoint));
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(Segment));
+    }
+
+    partial void OnSelectedIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(Points));
+        OnPropertyChanged(nameof(SelectedPoint));
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(Segment));
+    }
 }
 
 /// <summary>Screens 12 and 13 — application scope (not journaled) and project scope (journaled).</summary>

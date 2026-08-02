@@ -76,7 +76,7 @@
                 <ComboBox Grid.Column="1" ItemsSource="{Binding Curves}" SelectedIndex="3"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
-                <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve"
+                <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fadeIn"
                         ToolTip.Tip="Custom curve editor — drag points, smooth/hold segments, dB ⇄ linear" />
               </Grid>
             </HeaderedContentControl>
@@ -86,7 +86,7 @@
                 <ComboBox Grid.Column="1" ItemsSource="{Binding Curves}" SelectedIndex="4"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
-                <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" />
+                <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fadeOut" />
               </Grid>
             </HeaderedContentControl>
 
@@ -308,7 +308,7 @@
                 <ComboBox Grid.Column="1" ItemsSource="{Binding Curves}" SelectedIndex="1"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
-                <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" />
+                <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fade" />
               </Grid>
             </HeaderedContentControl>
             <CheckBox Margin="10,4" Content="Fade everything currently sounding" />

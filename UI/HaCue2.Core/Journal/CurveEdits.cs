@@ -1,0 +1,251 @@
+using HaCue2.Core.Model;
+using S.Media.Session;
+
+namespace HaCue2.Core.Journal;
+
+/// <summary>One point of an editable curve, in normalized space.</summary>
+/// <param name="Hold">Flat until the next point instead of ramping toward it. Curves only.</param>
+public readonly record struct CurveKnot(double X, double Y, bool Hold = false);
+
+/// <summary>
+/// Something the curve editor can edit.
+/// </summary>
+/// <remarks>
+/// A fade curve and an automation lane are the same object with different names — a sorted list of
+/// normalized points — which is why the plan insists on one editor for both. They differ in exactly
+/// two ways, both captured here: a lane's points have no hold flag, and the two live on different
+/// document types. Everything else, including every edit below, is shared.
+/// </remarks>
+public interface ICurveTarget
+{
+    /// <summary>What an undo entry is ABOUT — the cue, or the preset.</summary>
+    Guid Subject { get; }
+
+    /// <summary>Distinguishes two curves on one subject, e.g. a cue's fade-in from its fade-out.</summary>
+    string Property { get; }
+
+    bool SupportsHold { get; }
+
+    /// <summary>
+    /// Whether the document actually HOLDS a curve, as opposed to <see cref="Read"/> inventing the
+    /// straight line an untouched editor opens on.
+    /// </summary>
+    bool HasStored { get; }
+
+    IReadOnlyList<CurveKnot> Read();
+
+    void Write(IReadOnlyList<CurveKnot> knots);
+
+    /// <summary>
+    /// Puts the document back to having no curve at all.
+    /// </summary>
+    /// <remarks>
+    /// Needed because undoing the FIRST edit of an untouched curve must restore absence, not the line
+    /// the editor opened on. A stored straight line is not the same document: an inline point list
+    /// beats the chosen law, so the undo would have quietly replaced equal-power with linear.
+    /// </remarks>
+    void Clear();
+}
+
+/// <summary>A cue's fade curve, held inline on its <see cref="CurveSpec"/>.</summary>
+public sealed class CurveSpecTarget(Guid subject, string property, CurveSpec spec) : ICurveTarget
+{
+    public Guid Subject { get; } = subject;
+    public string Property { get; } = property;
+    public bool SupportsHold => true;
+    public bool HasStored => spec.Points is { Count: > 1 };
+
+    public IReadOnlyList<CurveKnot> Read() =>
+        spec.Points is { Count: > 1 } points
+            ? [.. points.Select(point => new CurveKnot(point.Progress, point.Level, point.Hold))]
+            // A spec that has never been drawn on opens as the straight line between the ends, so the
+            // editor always has something to grab. Nothing is written until an edit happens.
+            : [new CurveKnot(0, 0), new CurveKnot(1, 1)];
+
+    public void Write(IReadOnlyList<CurveKnot> knots) =>
+        spec.Points = [.. knots.Select(knot => new FadeCurvePoint(knot.X, knot.Y, knot.Hold))];
+
+    public void Clear() => spec.Points = null;
+}
+
+/// <summary>A named project curve preset.</summary>
+public sealed class CurvePresetTarget(CurvePreset preset) : ICurveTarget
+{
+    public Guid Subject { get; } = preset.Id;
+    public string Property => "preset";
+    public bool SupportsHold => true;
+    public bool HasStored => preset.Points.Count > 1;
+
+    public IReadOnlyList<CurveKnot> Read() =>
+        preset.Points is { Count: > 1 }
+            ? [.. preset.Points.Select(point => new CurveKnot(point.Progress, point.Level, point.Hold))]
+            : [new CurveKnot(0, 0), new CurveKnot(1, 1)];
+
+    public void Write(IReadOnlyList<CurveKnot> knots) =>
+        preset.Points = [.. knots.Select(knot => new FadeCurvePoint(knot.X, knot.Y, knot.Hold))];
+
+    public void Clear() => preset.Points = [];
+}
+
+/// <summary>An automation lane on a cue (register item 18).</summary>
+public sealed class EffectLaneTarget(Guid subject, EffectLane lane) : ICurveTarget
+{
+    public Guid Subject { get; } = subject;
+    public string Property { get; } = $"lane:{lane.Id}";
+
+    /// <summary>A lane ramps continuously; there is no step in the model to write a hold into.</summary>
+    public bool SupportsHold => false;
+
+    public bool HasStored => lane.Points.Count > 1;
+
+    public IReadOnlyList<CurveKnot> Read() =>
+        lane.Points is { Count: > 1 }
+            ? [.. lane.Points.Select(point => new CurveKnot(point.X, point.Y))]
+            : [new CurveKnot(0, 1), new CurveKnot(1, 1)];
+
+    public void Write(IReadOnlyList<CurveKnot> knots) =>
+        lane.Points = [.. knots.Select(knot => new LanePoint(knot.X, knot.Y))];
+
+    public void Clear() => lane.Points = [];
+}
+
+/// <summary>
+/// Replaces a curve's whole point list as one undoable step.
+/// </summary>
+/// <remarks>
+/// Whole-list rather than per-point, unlike most commands here, because the list's SHAPE is what
+/// changes: adding a point renumbers everything after it, and dragging one past its neighbour re-sorts
+/// them. A per-index command would have to describe that renumbering, and an undo that replayed it in
+/// the wrong order would leave a curve nobody drew. The lists are a handful of points.
+/// </remarks>
+public sealed class SetCurveCommand : ICoalescingCommand
+{
+    private readonly ICurveTarget _target;
+    private readonly IReadOnlyList<CurveKnot> _before;
+
+    /// <summary>Whether there WAS a curve before this command — see <see cref="ICurveTarget.Clear"/>.</summary>
+    private readonly bool _existed;
+
+    private IReadOnlyList<CurveKnot> _after;
+
+    public SetCurveCommand(ICurveTarget target, IReadOnlyList<CurveKnot> knots, string description)
+    {
+        _target = target;
+        _existed = target.HasStored;
+        _before = target.Read();
+        _after = knots;
+        Key = new CoalesceKey(target.Subject, target.Property);
+        Description = description;
+    }
+
+    public CoalesceKey Key { get; }
+    public string Domain => "cues";
+    public string Description { get; }
+
+    public void Apply(HaCueProject project) => _target.Write(_after);
+
+    public void Revert(HaCueProject project)
+    {
+        if (_existed)
+            _target.Write(_before);
+        else
+            _target.Clear();
+    }
+
+    public void MergeFrom(ICoalescingCommand newer)
+    {
+        if (newer is SetCurveCommand other)
+            _after = other._after;
+    }
+}
+
+/// <summary>The edits a curve editor makes: move a point, add one, remove one, toggle its hold.</summary>
+public static class CurveEdits
+{
+    /// <summary>Two is the fewest a curve can have and still be a shape.</summary>
+    public const int MinimumPoints = 2;
+
+    /// <summary>How close counts as the same point when adding — in fractions of the canvas.</summary>
+    private const double SamePointDistance = 0.01;
+
+    public static SetCurveCommand Move(ICurveTarget target, int index, double x, double y)
+    {
+        var knots = target.Read().ToList();
+        if (index < 0 || index >= knots.Count)
+            return new SetCurveCommand(target, Normalize(knots), "move curve point");
+
+        knots[index] = knots[index] with { X = x, Y = y };
+        return new SetCurveCommand(target, Normalize(knots), "move curve point");
+    }
+
+    public static SetCurveCommand Add(ICurveTarget target, double x, double y)
+    {
+        var knots = target.Read().ToList();
+        knots.Add(new CurveKnot(x, y));
+        return new SetCurveCommand(target, Normalize(knots), "add curve point");
+    }
+
+    /// <summary>
+    /// Removes a point, unless it is one of the last two.
+    /// </summary>
+    /// <remarks>
+    /// Refusing rather than allowing-and-repairing: the engine's <c>CustomFadeCurve</c> throws on
+    /// fewer than two points, and a curve that threw when the show ran would be a fade that did not
+    /// happen. The gesture that reaches here is "drag a point off the canvas", which is easy to do by
+    /// accident.
+    /// </remarks>
+    public static SetCurveCommand? Remove(ICurveTarget target, int index)
+    {
+        var knots = target.Read().ToList();
+        if (index < 0 || index >= knots.Count || knots.Count <= MinimumPoints)
+            return null;
+
+        knots.RemoveAt(index);
+        return new SetCurveCommand(target, Normalize(knots), "remove curve point");
+    }
+
+    public static SetCurveCommand? SetHold(ICurveTarget target, int index, bool hold)
+    {
+        if (!target.SupportsHold)
+            return null;
+
+        var knots = target.Read().ToList();
+        if (index < 0 || index >= knots.Count)
+            return null;
+
+        knots[index] = knots[index] with { Hold = hold };
+        return new SetCurveCommand(target, Normalize(knots), hold ? "hold segment" : "ramp segment");
+    }
+
+    /// <summary>
+    /// Clamps every point into the canvas and puts them back in order.
+    /// </summary>
+    /// <remarks>
+    /// Sorting here rather than forbidding a drag past a neighbour: dragging one point across another
+    /// is a normal way to reshape a curve, and a drag that stuck at a neighbour would feel broken. The
+    /// engine requires the list sorted, so it is sorted on the way in rather than checked on the way
+    /// out. The sort is STABLE, so two points at the same x keep the order they were drawn in.
+    /// </remarks>
+    private static IReadOnlyList<CurveKnot> Normalize(List<CurveKnot> knots) =>
+    [
+        .. knots
+            .Select(knot => knot with { X = Fraction(knot.X), Y = Fraction(knot.Y) })
+            .OrderBy(knot => knot.X),
+    ];
+
+    /// <summary>
+    /// A number into 0..1, treating anything non-finite as 0.
+    /// </summary>
+    /// <remarks>
+    /// <c>Math.Clamp(NaN, 0, 1)</c> returns NaN, so clamping alone is not enough — and a lane measured
+    /// before it has been laid out divides by a zero width, which is exactly where a NaN comes from.
+    /// <c>CustomFadeCurve</c> rejects non-finite points, so one reaching the document would be a fade
+    /// that threw when the show ran rather than when it was drawn.
+    /// </remarks>
+    private static double Fraction(double value) =>
+        double.IsFinite(value) ? Math.Clamp(value, 0, 1) : 0;
+
+    /// <summary>Whether a point already sits where one is about to be added.</summary>
+    public static bool HasPointNear(ICurveTarget target, double x) =>
+        target.Read().Any(knot => Math.Abs(knot.X - x) < SamePointDistance);
+}

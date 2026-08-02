@@ -487,6 +487,38 @@ public partial class InspectorViewModel : ObservableObject
         _drag = null;
     }
 
+    /// <summary>
+    /// The editor for one of this cue's curves, or null when the cue has none of that name.
+    /// </summary>
+    /// <remarks>
+    /// Register item 16 — one editor for fades, crossfades and patch-cue ramps alike. Building the
+    /// TARGET here rather than handing the window a cue is what makes that possible: the window knows
+    /// only "a curve", so a lane or a preset can use it unchanged.
+    /// </remarks>
+    public CurveEditorViewModel? CurveEditor(string which)
+    {
+        if (Cue is not { } cue)
+            return null;
+
+        var (spec, label) = (which, cue) switch
+        {
+            ("fadeIn", MediaCueNode media) => (media.FadeInCurve, "fade in"),
+            ("fadeOut", MediaCueNode media) => (media.FadeOutCurve, "fade out"),
+            ("crossfade", GroupCueNode group) => (group.CrossfadeCurve, "crossfade"),
+            ("fade", FadeCueNode fade) => (fade.Curve, "fade"),
+            ("patch", PatchCueNode patch) => (patch.FadeCurve, "patch ramp"),
+            _ => (null, ""),
+        };
+
+        if (spec is null)
+            return null;
+
+        return new CurveEditorViewModel(
+            _journal,
+            new CurveSpecTarget(cue.Id, which, spec),
+            $"Q{CuePresentation.Number(cue.Number)} · {label}");
+    }
+
     // ── the Effects pane (register item 18: lanes, hidden until added) ────────────────────────
     public IReadOnlyList<string> EffectLanes
     {
