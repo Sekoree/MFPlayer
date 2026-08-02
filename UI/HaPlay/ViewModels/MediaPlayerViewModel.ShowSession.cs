@@ -519,7 +519,7 @@ public partial class MediaPlayerViewModel
                 var hookedSession = _playerShowSession;
                 hookedSession.ClipNaturallyEnded += cueId =>
                 {
-                    if (!string.Equals(cueId, MediaPlayerShowMapper.PlayerCueId, StringComparison.Ordinal))
+                    if (!string.Equals(cueId, MediaPlayerShowMapper.PlayerClipId, StringComparison.Ordinal))
                         return;
                     var generationAtRaise = ReadNaturalEndGeneration(ref _naturalEndGenerationState);
                     Dispatcher.UIThread.Post(() =>
@@ -690,7 +690,12 @@ public partial class MediaPlayerViewModel
                     // has something to render onto (the clip itself stays audio-only).
                     includeCanvas: canvasDeclared),
                 preserveMatchingCompositions: preserveVisualizerComposition).ConfigureAwait(true);
-            await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
+            // No cue involved: the deck plays its one clip on the default group. Replacement ordering is the
+            // group's (TransportGroup.OpenSequence), so a rapid track change lands on the track asked for last
+            // rather than on whichever happened to open fastest.
+            await _playerShowSession
+                .PlayClipAsync(MediaPlayerShowMapper.PlayerClipId, ShowSession.DefaultGroup)
+                .ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
 
@@ -1171,7 +1176,7 @@ public partial class MediaPlayerViewModel
     {
         try
         {
-            await session.ApplyActiveAudioRoutesAsync(MediaPlayerShowMapper.PlayerCueId, routes).ConfigureAwait(true);
+            await session.ApplyActiveAudioRoutesAsync(MediaPlayerShowMapper.PlayerClipId, routes).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -1284,7 +1289,7 @@ public partial class MediaPlayerViewModel
         var routes = BuildDeckShowAudioRoutes(SelectedOutputLines());
         try
         {
-            await session.RebuildActiveClipAudioOutputsAsync(MediaPlayerShowMapper.PlayerCueId, routes)
+            await session.RebuildActiveClipAudioOutputsAsync(MediaPlayerShowMapper.PlayerClipId, routes)
                 .ConfigureAwait(true);
         }
         catch (Exception ex)

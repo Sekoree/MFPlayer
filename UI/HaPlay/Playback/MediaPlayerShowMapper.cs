@@ -10,13 +10,22 @@ namespace HaPlay.Playback;
 /// video output lines, with audio on its <see cref="ShowClipAudioRoute"/>s.
 /// </summary>
 /// <remarks>
-/// File-core slice: a file/URI source → one cue. Live-input flags (NDI/PortAudio), logo fallback, and
+/// File-core slice: a file/URI source → one clip. Live-input flags (NDI/PortAudio), logo fallback, and
 /// hold-frames are layered on by the player VM in later slices - see the convergence memory.
 /// </remarks>
 public static class MediaPlayerShowMapper
 {
-    /// <summary>The single cue id of a player's show (one player ⇒ one cue).</summary>
-    public const string PlayerCueId = "player";
+    /// <summary>
+    /// The single clip id of a player's show (one player ⇒ one clip).
+    /// </summary>
+    /// <remarks>
+    /// The deck has no cues and never did. It used to emit a synthetic <c>CueDefinition</c> named "player"
+    /// purely because the engine could not be reached without one - the document validator required every
+    /// clip to name a cue, and the only way to start playback was <c>FireCueAsync</c>. Both of those are gone
+    /// (the core validates clips on their own and <c>ShowSession.PlayClipAsync</c> plays one by id), so the
+    /// deck now says what it means: one clip, played on one group.
+    /// </remarks>
+    public const string PlayerClipId = "player";
 
     /// <summary>The player canvas composition id (present only when the source has video).</summary>
     public const string PlayerCompositionId = "player-canvas";
@@ -52,11 +61,10 @@ public static class MediaPlayerShowMapper
 
         return ShowDocument.Empty with
         {
-            Cues = [new CueDefinition(PlayerCueId, 1, "Player")],
             Clips =
             [
                 new ShowClipBinding(
-                    PlayerCueId,
+                    PlayerClipId,
                     mediaPath,
                     CompositionId: hasVideo ? PlayerCompositionId : null,
                     LayerIndex: 0,

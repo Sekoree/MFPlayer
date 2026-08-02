@@ -1616,7 +1616,7 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Control | Transport-neutral chase contract | ✅ **LANDED** — `MidiTimecodeChaseClock.FeedFrame(value)` ingests whole frames from any transport | §5.4a |
 | Control | LTC generation | ✅ **LANDED** — `LinearTimecodeGenerator`, pull-based, exact-rational frame length; round-trips through the decoder at all 4 rates | §5.4a |
 | Remote | Route table / self-documentation / counters | ABSENT (hand-written switch) | §5.5 |
-| Remote | `POST /lists/{id}/go` | **UNBLOCKED** — per-list standby landed; remains app-side routing work | §5.5 |
+| Remote | `POST /lists/{id}/go` | **PARTIAL** — list-scoped cue addressing landed (`GET /lists`, `/lists/{list}/cues/{cue}/go\|stop`). The BARE `/lists/{id}/go` still needs per-list standby in the VM (10 `StandbyCueNode` write sites to mirror) — a feature, not a route | §5.5 |
 | Endpoints | Per-endpoint configurable test message | **ABSENT — APP-SIDE** (`ActionEndpoint*` are all `UI/HaPlay/`) | §5.6 |
 | App support | `HaOutput` engine | EXISTS, 8 couplings to invert | §7.1 |
 | App support | `IOutputRuntimeCatalog` | ABSENT (6 extraction sites) | §7.1 |

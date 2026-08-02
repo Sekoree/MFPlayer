@@ -42,6 +42,85 @@ public sealed class RemoteApiDispatcherTests
         Dictionary<string, string>? query = null) =>
         dispatcher.ExecuteAsync(method, path, query).GetAwaiter().GetResult();
 
+    /// <summary>Two loaded lists that both number their first cue "1" - the ambiguity list scoping exists
+    /// to resolve.</summary>
+    private static void TwoLists(CuePlayerViewModel cues) =>
+        cues.ApplyCueLists(
+        [
+            new CueList { Name = "Act One", Nodes = { new MediaCueNode { Number = "1", Label = "Opening" } } },
+            new CueList { Name = "Act Two", Nodes = { new MediaCueNode { Number = "1", Label = "Reprise" } } },
+        ]);
+
+    [Fact]
+    public void ListInventory_EnumeratesLoadedLists_AndIsAGet()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, cues, _, _) = CreateDispatcher();
+            TwoLists(cues);
+
+            var result = Execute(dispatcher, "/api/v1/lists", method: "GET");
+
+            Assert.Equal(200, result.Status);
+            Assert.Contains("Act One", result.Body, StringComparison.Ordinal);
+            Assert.Contains("Act Two", result.Body, StringComparison.Ordinal);
+            // The one mixed domain: the inventory reads, everything under it commands.
+            Assert.Equal("GET, OPTIONS", RemoteApiDispatcher.AllowedMethodsFor("/api/v1/lists"));
+            Assert.Equal("POST, OPTIONS",
+                RemoteApiDispatcher.AllowedMethodsFor("/api/v1/lists/Act One/cues/1/go"));
+        });
+    }
+
+    [Fact]
+    public void ListScopedCue_AddressesTheNamedListNotTheSelectedOne()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, cues, _, _) = CreateDispatcher();
+            TwoLists(cues);
+
+            // Both lists have a cue "1". Bare /cues/1 resolves in the SELECTED list first, so a
+            // show-control system addressing "Act Two" must be able to say so.
+            var result = Execute(dispatcher, "/api/v1/lists/Act Two/cues/1/go");
+
+            Assert.Equal(200, result.Status);
+        });
+    }
+
+    [Fact]
+    public void ListScopedCue_SeparatesUnknownListFromUnknownCue()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, cues, _, _) = CreateDispatcher();
+            TwoLists(cues);
+
+            // Different fixes, so different messages - one 404 covering both sends the caller looking in
+            // the wrong place.
+            var noList = Execute(dispatcher, "/api/v1/lists/Act Nine/cues/1/go");
+            Assert.Equal(404, noList.Status);
+            Assert.Contains("Act Nine", noList.Body, StringComparison.Ordinal);
+
+            var noCue = Execute(dispatcher, "/api/v1/lists/Act One/cues/99/go");
+            Assert.Equal(404, noCue.Status);
+            Assert.Contains("99", noCue.Body, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void ListScopedCue_RejectsAMalformedPath()
+    {
+        DispatchUi(static () =>
+        {
+            var (dispatcher, cues, _, _) = CreateDispatcher();
+            TwoLists(cues);
+
+            Assert.Equal(404, Execute(dispatcher, "/api/v1/lists/Act One/go").Status);
+            Assert.Equal(404, Execute(dispatcher, "/api/v1/lists/Act One/cues/1").Status);
+            Assert.Equal(404, Execute(dispatcher, "/api/v1/lists/Act One/nodes/1/go").Status);
+        });
+    }
+
     [Fact]
     public void UnknownEndpoint_Returns404_AndBadMethod405()
     {

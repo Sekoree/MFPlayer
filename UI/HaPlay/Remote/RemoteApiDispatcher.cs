@@ -30,6 +30,8 @@ public readonly record struct RemoteApiResult(int Status, string Body, string? A
 ///   /api/v1/status
 ///   /api/v1/cues/go|pause|resume|stop|panic
 ///   /api/v1/cues/{cue}/go|stop
+///   /api/v1/lists                      (GET: the loaded cue lists)
+///   /api/v1/lists/{list}/cues/{cue}/go|stop
 ///   /api/v1/players/{player}/play|pause|toggle|stop|next|prev
 ///   /api/v1/players/{player}/volume?db=-10
 ///   /api/v1/players/{player}/hold[?on=true|false]
@@ -84,7 +86,7 @@ public sealed class RemoteApiDispatcher
         var rest = segments[(index + 1)..];
         query ??= new Dictionary<string, string>();
 
-        var allow = domain == "status" ? "GET" : "POST";
+        var allow = ApplicationMethodFor(domain, rest.Length);
         if (!string.Equals(method, allow, StringComparison.OrdinalIgnoreCase))
             return RemoteApiResult.MethodNotAllowed(allow);
 
@@ -108,18 +110,33 @@ public sealed class RemoteApiDispatcher
             index++;
         if (index < segments.Length && segments[index].Equals("v1", StringComparison.OrdinalIgnoreCase))
             index++;
-        var domain = index < segments.Length ? segments[index] : null;
-        // Only /api/v1/status is read-only; all command domains are mutations.
-        return string.Equals(domain, "status", StringComparison.OrdinalIgnoreCase)
-            ? "GET, OPTIONS"
-            : "POST, OPTIONS";
+        var domain = index < segments.Length ? segments[index].ToLowerInvariant() : string.Empty;
+        var rest = index + 1 < segments.Length ? segments.Length - index - 1 : 0;
+        return ApplicationMethodFor(domain, rest) + ", OPTIONS";
     }
+
+    /// <summary>
+    /// The one legal application method for a request, used BOTH by the request gate and by
+    /// <see cref="AllowedMethodsFor"/>.
+    /// </summary>
+    /// <remarks>
+    /// Shared deliberately: these were two copies of the same rule, and adding <c>/lists</c> to one of them
+    /// produced a route that advertised <c>GET</c> in its <c>Allow</c> header and then answered 405 to a GET.
+    /// </remarks>
+    private static string ApplicationMethodFor(string domain, int restSegments) => domain switch
+    {
+        "status" => "GET",
+        // The bare inventory reads; anything addressed under a list is a command.
+        "lists" when restSegments == 0 => "GET",
+        _ => "POST",
+    };
 
     private RemoteApiResult Handle(string domain, string[] rest, IReadOnlyDictionary<string, string> query) =>
         domain switch
         {
             "status" => HandleStatus(),
             "cues" => HandleCues(rest),
+            "lists" => HandleLists(rest),
             "players" => HandlePlayers(rest, query),
             "soundboards" => HandleSoundboards(rest),
             "control" => HandleControl(rest),
@@ -193,14 +210,69 @@ public sealed class RemoteApiDispatcher
             return RemoteApiResult.Fail(404,
                 $"Unknown cue '{cueRef}' - no cue number or id matches in any loaded cue list.");
 
+        return FireOrStopCue(cue, cueRef, verb);
+    }
+
+    /// <summary>
+    /// List-scoped addressing: <c>/lists</c> enumerates the loaded cue lists, and
+    /// <c>/lists/{list}/cues/{cue}/go|stop</c> addresses a cue <em>within</em> one of them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The unambiguous counterpart to <c>/cues/{cue}</c>. That one resolves a bare cue number in the
+    /// operator's SELECTED list first and only then in the others, which means the same request can hit a
+    /// different cue after the operator clicks another tab. Fine for a person at the desk; not fine for a
+    /// show-control system, which knows which list it means.
+    /// </para>
+    /// <para>
+    /// <c>POST /lists/{list}/go</c> - "fire whatever is next in that list" - is deliberately NOT here. It
+    /// needs a standby pointer per list, and HaPlay keeps exactly one (for the selected list) written from
+    /// ten places across the visible transport. That is a feature, not a route, and guessing its semantics
+    /// (does a remote GO move the pointer the operator later sees?) would be worse than not shipping it.
+    /// </para>
+    /// </remarks>
+    private RemoteApiResult HandleLists(string[] rest)
+    {
+        if (rest.Length == 0)
+            return ListInventory();
+
+        // {list}/cues/{cue}/{verb}
+        if (rest.Length != 4 || !string.Equals(rest[1], "cues", StringComparison.OrdinalIgnoreCase))
+            return RemoteApiResult.Fail(404, "List endpoint: /lists or /lists/{list}/cues/{cue}/go|stop.");
+
+        if (_cuePlayer.FindCueListByReference(rest[0]) is null)
+            return RemoteApiResult.Fail(404, $"Unknown cue list '{rest[0]}'.");
+
+        // Split the two 404s: "no such list" and "no such cue in that list" are different fixes, and one
+        // message covering both sends the caller looking in the wrong place.
+        var cue = _cuePlayer.FindCueInList(rest[0], rest[2]);
+        if (cue is null)
+            return RemoteApiResult.Fail(404, $"Cue list '{rest[0]}' has no cue '{rest[2]}'.");
+
+        return FireOrStopCue(cue, rest[2], rest[3]);
+    }
+
+    /// <summary>The loaded cue lists, so a caller can discover what it may address.</summary>
+    private RemoteApiResult ListInventory()
+    {
+        var rows = _cuePlayer.CueLists.Select(list =>
+            $"{{\"name\":{Quote(list.Name)},\"id\":\"{list.RuntimeId}\",\"cues\":{list.Nodes.Count}}}");
+        return new RemoteApiResult(200, $"{{\"ok\":true,\"lists\":[{string.Join(",", rows)}]}}");
+    }
+
+    private static string Quote(string? value) =>
+        "\"" + (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+
+    /// <summary>The shared go/stop tail of both cue-addressing forms, so they cannot drift apart.</summary>
+    private RemoteApiResult FireOrStopCue(CueNodeViewModel cue, string cueRef, string verb)
+    {
         switch (verb.ToLowerInvariant())
         {
             case "go":
                 if (!_cuePlayer.CanFireCue(cue))
                     return RemoteApiResult.Fail(409,
                         $"Cue '{cueRef}' has nothing to fire (an empty group, or a playlist group with no items).");
-                _ = _cuePlayer.FireTriggeredCueSafeAsync(
-                    cue, nameof(Strings.CueRemoteFiredStatusFormat));
+                _ = _cuePlayer.FireTriggeredCueSafeAsync(cue, nameof(Strings.CueRemoteFiredStatusFormat));
                 return RemoteApiResult.Ok($"go {DescribeCue(cue)}");
             case "stop":
                 return _cuePlayer.TryStopCue(cue)

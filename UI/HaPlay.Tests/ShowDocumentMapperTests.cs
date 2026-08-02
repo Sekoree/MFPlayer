@@ -478,9 +478,11 @@ public class ShowDocumentMapperTests
         var doc = MediaPlayerShowMapper.ToShowDocument(
             "/m/clip.mp4", hasVideo: true, audioRoutes: [new ShowClipAudioRoute(DeviceId: "hw:0")]);
 
-        var cue = Assert.Single(doc.Cues);
-        Assert.Equal(MediaPlayerShowMapper.PlayerCueId, cue.Id);
+        // The deck emits NO cues - it plays its clip by id. A synthetic cue existed only to satisfy the
+        // engine's old "every clip binds a cue" rule.
+        Assert.Empty(doc.Cues);
         var clip = Assert.Single(doc.Clips);
+        Assert.Equal(MediaPlayerShowMapper.PlayerClipId, clip.ClipId);
         Assert.Equal("/m/clip.mp4", clip.MediaPath);
         Assert.Equal(MediaPlayerShowMapper.PlayerCompositionId, clip.CompositionId);
         Assert.Equal("hw:0", Assert.Single(clip.AudioRoutes!).DeviceId);

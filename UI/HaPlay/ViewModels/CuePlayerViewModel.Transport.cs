@@ -222,6 +222,43 @@ public partial class CuePlayerViewModel
     /// win), then the cue's Guid id in ANY loaded list, then a number in the other loaded lists (list
     /// order). Everything past the first step exists because the cross-list merged session makes cues
     /// in non-selected lists fireable too. Null when nothing matches.</summary>
+    /// <summary>
+    /// Resolves a cue reference within ONE named list - the remote API's <c>/lists/{list}/cues/{cue}</c>.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FindCueByReference"/> searches the selected list first and then every other loaded one, so
+    /// a bare number is whichever list happens to win. That is right for an operator typing at their own
+    /// desk and wrong for a show-control system, which knows exactly which list it means and must not have
+    /// its cue silently resolve into a different one after the operator clicks another tab.
+    /// </remarks>
+    /// <param name="listRef">List name (case-insensitive) or its runtime id.</param>
+    /// <returns>Null when no list matches, or the list has no such cue.</returns>
+    public CueNodeViewModel? FindCueInList(string listRef, string cueRef)
+    {
+        if (FindCueListByReference(listRef) is not { } list || string.IsNullOrWhiteSpace(cueRef))
+            return null;
+
+        var trimmed = cueRef.Trim();
+        if (Guid.TryParse(trimmed, out var id))
+            return EnumerateAllCueNodes(list.Nodes).FirstOrDefault(cue => cue.Id == id);
+
+        return EnumerateAllCueNodes(list.Nodes).FirstOrDefault(
+            cue => string.Equals(cue.Number?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Resolves a loaded cue list by name (case-insensitive) or runtime id.</summary>
+    public CueListEditorViewModel? FindCueListByReference(string listRef)
+    {
+        if (string.IsNullOrWhiteSpace(listRef))
+            return null;
+        var trimmed = listRef.Trim();
+        if (Guid.TryParse(trimmed, out var runtimeId)
+            && CueLists.FirstOrDefault(l => l.RuntimeId == runtimeId) is { } byId)
+            return byId;
+        return CueLists.FirstOrDefault(
+            l => string.Equals(l.Name?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
     public CueNodeViewModel? FindCueByReference(string cueRef)
     {
         if (string.IsNullOrWhiteSpace(cueRef))
