@@ -78,25 +78,6 @@ public static class ShowDocumentValidator
                 $"{MinimumSupportedVersion}..{CurrentVersion}).");
         }
 
-        // Cues: non-empty unique ids, and unique numbers (GO advances by number, so duplicates break the cursor).
-        var cueIds = new HashSet<string>(StringComparer.Ordinal);
-        var cueNumbers = new HashSet<int>();
-        foreach (var cue in document.Cues ?? [])
-        {
-            if (string.IsNullOrEmpty(cue.Id))
-                errors.Add("a cue has an empty id.");
-            else if (!cueIds.Add(cue.Id))
-                errors.Add($"duplicate cue id '{cue.Id}'.");
-            if (string.IsNullOrEmpty(cue.Label))
-                errors.Add($"cue '{cue.Id}' has an empty label.");
-            if (!cueNumbers.Add(cue.Number))
-                errors.Add($"duplicate cue number {cue.Number} - GO uses the number as its cursor, so it must be unique.");
-            if (!CueFaultPolicySupport.IsSupported(cue.FaultPolicy))
-                errors.Add(
-                    $"cue '{cue.Id}' uses unsupported fault policy {CueFaultPolicySupport.Display(cue.FaultPolicy)}; "
-                    + $"this runtime supports only {CueFaultPolicy.StopShow} and {CueFaultPolicy.Continue}.");
-        }
-
         // Compositions: unique ids, positive dimensions and frame rate.
         var compIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var comp in document.Compositions ?? [])
@@ -207,13 +188,7 @@ public static class ShowDocumentValidator
             }
         }
 
-        ValidateFollowOn(document.Cues ?? [], cueIds, errors);
-
-        // Stop targets must reference existing cues.
-        foreach (var cue in document.Cues ?? [])
-            foreach (var target in cue.StopTargetIds ?? [])
-                if (!cueIds.Contains(target))
-                    errors.Add($"cue '{cue.Id}' lists unknown stop-target cue '{target}'.");
+        errors.AddRange(CueListValidator.Validate(document.Cues ?? []));
 
         // Audio outputs: unique ids. Routes: an enabled route's SourceId is a cue id and its OutputId must be a
         // declared audio output or the implicit master - a dangling route otherwise silently never matches at
@@ -233,8 +208,11 @@ public static class ShowDocumentValidator
         {
             if (!route.Enabled)
                 continue;
-            if (!cueIds.Contains(route.SourceId))
-                errors.Add($"route '{route.SourceId}' → '{route.OutputId}' references an unknown cue.");
+            // SourceId is matched against a CLIP id at play time (ResolveOutputChannelMap compares it to
+            // ShowClipBinding.ClipId). Validating it against cue ids only ever worked because the two were
+            // the same string; in a document with no cues it rejected perfectly good routes.
+            if (!clipIds.Contains(route.SourceId))
+                errors.Add($"route '{route.SourceId}' → '{route.OutputId}' references an unknown clip.");
             if (!string.Equals(route.OutputId, ShowSession.MasterOutputId, StringComparison.Ordinal)
                 && !audioOutputIds.Contains(route.OutputId))
                 errors.Add($"route '{route.SourceId}' → '{route.OutputId}' references an undeclared audio output.");
@@ -295,42 +273,5 @@ public static class ShowDocumentValidator
             throw new ShowDocumentValidationException(errors);
     }
 
-    /// <summary>Checks that follow-on links resolve, and that the <em>auto-continue</em> subgraph (the only one
-    /// that recurses in <see cref="CueGraph"/>) is acyclic - a cycle would auto-continue forever.</summary>
-    private static void ValidateFollowOn(IReadOnlyList<CueDefinition> cues, HashSet<string> cueIds, List<string> errors)
-    {
-        // Out-degree ≤ 1 functional graph over auto-continue follow-on edges.
-        var next = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var cue in cues)
-        {
-            if (cue.FollowOnCueId is not { } follow)
-                continue;
-            if (!cueIds.Contains(follow))
-                errors.Add($"cue '{cue.Id}' has an unknown follow-on cue '{follow}'.");
-            else if (cue.AutoContinue && !string.IsNullOrEmpty(cue.Id))
-                next[cue.Id] = follow; // only auto-continue links recurse; a plain follow-on is a GO target
-        }
 
-        var settled = new HashSet<string>(StringComparer.Ordinal); // walked already, proven cycle-free
-        var reported = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var start in next.Keys)
-        {
-            if (settled.Contains(start))
-                continue;
-            var path = new HashSet<string>(StringComparer.Ordinal);
-            var node = start;
-            while (node is not null && !settled.Contains(node))
-            {
-                if (!path.Add(node))
-                {
-                    if (reported.Add(node))
-                        errors.Add($"the auto-continue follow-on chain through cue '{node}' contains a cycle (it would never terminate).");
-                    break;
-                }
-                node = next.GetValueOrDefault(node);
-            }
-            foreach (var n in path)
-                settled.Add(n);
-        }
-    }
 }
