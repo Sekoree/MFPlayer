@@ -82,6 +82,45 @@ public sealed class MediaTrackTests
     }
 
     [Fact]
+    public void CoverArtIsAVideoStreamButNotVideo()
+    {
+        // Every container that carries album art carries it as a video stream. A FLAC with cover art
+        // probes as "1 video track", and treating that as video would put a still image on the wall.
+        var art = new MediaTrack(1, "#1 mjpeg 700×700 (cover art)", "Video:mjpeg::0:0:700x700",
+            null, 0, 700, 700, false, IsAttachedPicture: true, true);
+
+        var facts = new MediaFacts { AudioTracks = [Mix], VideoTracks = [art] };
+
+        Assert.False(facts.HasVideo);
+        Assert.Empty(facts.MovingVideoTracks);
+        // Still LISTED, because automatic election skips it and choosing it explicitly is the only
+        // way to show one.
+        Assert.Single(facts.VideoTracks);
+    }
+
+    [Fact]
+    public async Task AMacResourceForkIsNotMedia()
+    {
+        var directory = Directory.CreateTempSubdirectory("hacue2-probe");
+
+        try
+        {
+            // Any drive that has been through a Mac is full of these: a few KB of metadata with a
+            // media extension, sitting beside the real file.
+            var stub = Path.Combine(directory.FullName, "._Concert.mp4");
+            await File.WriteAllBytesAsync(stub, new byte[4096]);
+
+            var facts = await MediaProbe.ProbeAsync(stub);
+
+            Assert.False(facts.IsKnown);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public void ACuesTrackChoicesReachTheEngine()
     {
         var fixture = new TestProject();

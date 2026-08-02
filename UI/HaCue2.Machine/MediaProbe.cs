@@ -49,8 +49,18 @@ public sealed record MediaFacts
 
     public bool HasAudio => AudioTracks.Count > 0;
 
-    /// <summary>Video that is actually moving — cover art alone is not a video track worth showing.</summary>
-    public bool HasVideo => VideoTracks.Any(track => !track.IsAttachedPicture);
+    /// <summary>
+    /// Video that is actually moving.
+    /// </summary>
+    /// <remarks>
+    /// Cover art is a video stream in every container that carries it — a FLAC with album art probes
+    /// as "1 video track", and treating that as a video file would put a still image on the wall.
+    /// </remarks>
+    public bool HasVideo => MovingVideoTracks.Count > 0;
+
+    /// <summary>Video tracks that are not cover art.</summary>
+    public IReadOnlyList<MediaTrack> MovingVideoTracks =>
+        [.. VideoTracks.Where(track => !track.IsAttachedPicture)];
 
     /// <summary>Whether anything was learned at all. False is "nobody could open it".</summary>
     public bool IsKnown => Duration is not null || AudioTracks.Count > 0 || VideoTracks.Count > 0;
@@ -105,7 +115,7 @@ public static class MediaProbe
     /// <summary>Probes one file. Returns <see cref="MediaFacts.Unknown"/> for anything unreadable.</summary>
     public static async Task<MediaFacts> ProbeAsync(string path, CancellationToken cancellation = default)
     {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) || IsResourceFork(path))
             return MediaFacts.Unknown;
 
         try
@@ -119,6 +129,18 @@ public static class MediaProbe
             return MediaFacts.Unknown;
         }
     }
+
+    /// <summary>
+    /// A macOS AppleDouble stub — a resource fork sitting beside the real file.
+    /// </summary>
+    /// <remarks>
+    /// Any drive that has been through a Mac is full of these: <c>._Concert.mp4</c> beside
+    /// <c>Concert.mp4</c>, a few KB of metadata with a media extension. They are not media and never
+    /// were, so recognising them here saves opening one, failing, and logging a decoder error that
+    /// looks like a fault in the real file next to it.
+    /// </remarks>
+    private static bool IsResourceFork(string path) =>
+        Path.GetFileName(path).StartsWith("._", StringComparison.Ordinal);
 
     private static MediaFacts Read(string path)
     {

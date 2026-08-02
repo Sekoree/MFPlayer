@@ -36,6 +36,7 @@ public sealed partial class TrackPickerViewModel : ObservableObject
     private readonly MediaCueNode? _cue;
     private readonly TrackKind _kind;
     private readonly IReadOnlyList<MediaTrack> _tracks;
+    private readonly int _coverArt;
     private readonly Action _reload;
 
     public TrackPickerViewModel(
@@ -52,6 +53,11 @@ public sealed partial class TrackPickerViewModel : ObservableObject
         _tracks = facts is null
             ? []
             : kind == TrackKind.Audio ? facts.AudioTracks : facts.VideoTracks;
+
+        // Cover art is a video stream in every container that carries it, so a FLAC with album art
+        // probes as one video track. It stays SELECTABLE — automatic election skips it, and choosing
+        // it explicitly is the only way to show one — but it is not counted as video the cue has.
+        _coverArt = _tracks.Count(track => track.IsAttachedPicture);
 
         Options =
         [
@@ -70,15 +76,28 @@ public sealed partial class TrackPickerViewModel : ObservableObject
     public bool IsProbed => _tracks.Count > 0;
 
     /// <summary>How many tracks were found — what makes a multi-track file worth noticing.</summary>
-    public int Count => _tracks.Count;
+    public int Count => _tracks.Count - _coverArt;
 
-    public string Hint => !HasMedia
-        ? "no media"
-        : !IsProbed
-            ? "not probed yet"
-            : Count == 1
-                ? "one track"
-                : $"{Count} tracks";
+    public string Hint
+    {
+        get
+        {
+            if (!HasMedia)
+                return "no media";
+
+            if (!IsProbed)
+                return "not probed yet";
+
+            var cover = _coverArt == 0 ? "" : _coverArt == _tracks.Count ? "cover art only" : " · cover art";
+
+            return Count switch
+            {
+                0 => cover.Length > 0 ? cover.TrimStart(' ', '·', ' ') : "no tracks",
+                1 => $"one track{cover}",
+                _ => $"{Count} tracks{cover}",
+            };
+        }
+    }
 
     /// <summary>
     /// True when the cue's stored index no longer names the track it was chosen for.
