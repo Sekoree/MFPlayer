@@ -73,8 +73,7 @@ public static class CuePresentation
     /// Invariant-formatted: a cue number is an identifier an operator calls over comms, and "13,1" on a
     /// German machine is a different thing to say out loud than "13.1".
     /// </remarks>
-    public static string Number(decimal number) =>
-        number.ToString("0.###", CultureInfo.InvariantCulture);
+    public static string Number(CueNumber number) => number.Text;
 
     /// <summary>
     /// A media cue carrying a placement IS the mockup's video cue.
@@ -115,7 +114,7 @@ public static class CuePresentation
 
         JumpCueNode { TargetCueIds.Count: 0 } => "no target",
         JumpCueNode jump =>
-            $"→ Q{Number(project.FindCue(jump.TargetCueIds[0])?.Number ?? 0)}"
+            $"→ Q{Number(project.FindCue(jump.TargetCueIds[0])?.Number ?? CueNumber.Empty)}"
             + (jump.Condition == JumpCondition.WhileTriggerHeld ? " · while held" : ""),
 
         VisualizerCueNode visualizer => $"projectM · {visualizer.PresetPack}",

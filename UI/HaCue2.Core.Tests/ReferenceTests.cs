@@ -46,7 +46,7 @@ public sealed class ReferenceTests
         var fixture = new TestProject();
         var patchCue = new PatchCueNode
         {
-            Number = 4,
+            Number = "4",
             Label = "Foldback up",
             Levels = [new PatchLevelChange { LogicalChannelId = fixture.FoldL.Id, GainDb = 0 }],
         };
@@ -90,7 +90,7 @@ public sealed class ReferenceTests
         var fixture = new TestProject();
         fixture.List.Cues.Add(new PatchCueNode
         {
-            Number = 4, Label = "Act 1 patch", SnapshotId = fixture.Snapshot.Id,
+            Number = "4", Label = "Act 1 patch", SnapshotId = fixture.Snapshot.Id,
         });
 
         var references = ProjectReferences.To(

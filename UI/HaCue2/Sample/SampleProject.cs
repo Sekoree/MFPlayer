@@ -72,21 +72,23 @@ public static class SampleProject
         // ── cues ───────────────────────────────────────────────────────────────────────────────
         var preshowBed = new MediaCueNode
         {
-            Number = 12m, Label = "Preshow bed", MediaPath = "audio/preshow-loop.wav",
+            Number = "12", Label = "Preshow bed", MediaPath = "audio/preshow-loop.wav",
             LevelDb = -6, FadeInMs = 3_000, Loop = true,
             Sends = [Send(0, mainL), Send(1, mainR)],
         };
 
         var houseToHalf = new ActionCueNode
         {
-            Number = 12.5m, Label = "House to half", EndpointId = eos.Id, Address = "/eos/cue/2/fire",
+            Number = "12.5", Label = "House to half", EndpointId = eos.Id, Address = "/eos/cue/2/fire",
             Trigger = CueTrigger.Follow,
         };
 
         var stormBed = new MediaCueNode
         {
-            Number = 13.1m, Label = "Storm bed", MediaPath = "sfx/storm-bed.flac",
+            Number = "13.1", Label = "Storm bed", MediaPath = "sfx/storm-bed.flac",
             LevelDb = -3, FadeInMs = 3_000, FadeOutMs = 4_000,
+            // Runs under the whole sequence, so it starts at zero and is the longest thing in the group.
+            TrimOutMs = 134_000,
             Sends = [Send(0, mainL), Send(1, mainR, -3), Send(0, foldL, -6), Send(1, foldR, -6)],
             Note = "Storm bed runs under the whole opening. Do not stop it on the scene change — "
                  + "Q14 rides the foldback instead.",
@@ -103,8 +105,12 @@ public static class SampleProject
 
         var rain = new MediaCueNode
         {
-            Number = 13.2m, Label = "Projection · rain", MediaPath = "video/rain-loop.mov",
+            Number = "13.2", Label = "Projection · rain", MediaPath = "video/rain-loop.mov",
             FadeInMs = 1_500,
+            // Authored positions and lengths, not probed ones: where a clip sits in its group and how
+            // much of the file it uses are decisions somebody made, so the timeline can draw them
+            // before any media has been opened.
+            TimelineOffsetMs = 4_000, TrimOutMs = 48_000,
             Placement = Place(cyc, layer: 2, 0.06, 0.08, 0.58, 0.78),
             EffectLanes =
             [
@@ -118,13 +124,14 @@ public static class SampleProject
 
         var thunder = new MediaCueNode
         {
-            Number = 13.3m, Label = "Thunder crack (cut for previews)", MediaPath = "sfx/thunder-03.wav",
+            Number = "13.3", Label = "Thunder crack (cut for previews)", MediaPath = "sfx/thunder-03.wav",
             LevelDb = 2, Enabled = false, Sends = [Send(0, mainL), Send(1, mainR)],
+            TimelineOffsetMs = 26_500, TrimInMs = 1_000, TrimOutMs = 4_500,
         };
 
         var opening = new GroupCueNode
         {
-            Number = 13m, Label = "Act 1 · Opening sequence", FireMode = GroupFireMode.Timeline,
+            Number = "13", Label = "Act 1 · Opening sequence", FireMode = GroupFireMode.Timeline,
             Children = [stormBed, rain, thunder],
         };
 
@@ -141,7 +148,7 @@ public static class SampleProject
 
         var foldbackUp = new PatchCueNode
         {
-            Number = 14m, Label = "Patch · Act 1 foldback up", SnapshotId = actOneSnapshot.Id,
+            Number = "14", Label = "Patch · Act 1 foldback up", SnapshotId = actOneSnapshot.Id,
             FadeMs = 4_000,
         };
 
@@ -149,46 +156,46 @@ public static class SampleProject
         // something to find, or nobody ever sees Project status do its job.
         var intervalMusic = new MediaCueNode
         {
-            Number = 15m, Label = "Interval music", MediaPath = "audio/interval.wav",
+            Number = "15", Label = "Interval music", MediaPath = "audio/interval.wav",
             LevelDb = -9, FadeInMs = 6_000, Sends = [Send(0, lobbyL, -10), Send(1, lobbyR, -10)],
             Note = "Relink before the get-in. Last seen on the USB stick in the road case.",
         };
 
         var visualizer = new VisualizerCueNode
         {
-            Number = 15.5m, Label = "Interval visualizer", PresetPack = "preset pack A",
+            Number = "15.5", Label = "Interval visualizer", PresetPack = "preset pack A",
             Placement = Place(cyc, layer: 1, 0.60, 0.40, 0.36, 0.55),
         };
 
         var loopBack = new JumpCueNode
         {
-            Number = 16m, Label = "Loop to 12 if held", TargetCueIds = [preshowBed.Id],
+            Number = "16", Label = "Loop to 12 if held", TargetCueIds = [preshowBed.Id],
             Condition = JumpCondition.WhileTriggerHeld,
         };
 
         var fadeMics = new FadeCueNode
         {
-            Number = 17m, Label = "Fade band mics down",
+            Number = "17", Label = "Fade band mics down",
             TargetChannelIds = [mainL.Id, mainR.Id, foldL.Id, foldR.Id],
             DurationMs = 4_000,
         };
 
         var actTwoMarker = new CommentCueNode
         {
-            Number = 18m, Label = "— Act 2 begins —",
+            Number = "18", Label = "— Act 2 begins —",
             Note = "House lights to half on the band's cue, not on a count. Stage manager calls it; "
                  + "we follow. If the call is late, hold — Q19 has a 6 s pre-wait to absorb it.",
         };
 
         var songs = new GroupCueNode
         {
-            Number = 7m, Label = "Songs", FireMode = GroupFireMode.Playlist,
+            Number = "7", Label = "Songs", FireMode = GroupFireMode.Playlist,
             CrossfadeMs = 2_000, Shuffle = true,
             Children =
             [
-                Song(5m, "Killer Queen", mainL, mainR, cyc),
-                Song(6m, "Somebody to Love", mainL, mainR, cyc),
-                Song(7.5m, "Bohemian Rhapsody", mainL, mainR, cyc),
+                Song("5", "Killer Queen", mainL, mainR, cyc),
+                Song("6", "Somebody to Love", mainL, mainR, cyc),
+                Song("7.5", "Bohemian Rhapsody", mainL, mainR, cyc),
             ],
         };
 
@@ -210,17 +217,17 @@ public static class SampleProject
             [
                 new MediaCueNode
                 {
-                    Number = 1m, Label = "Haze loop", MediaPath = "audio/haze.wav", Loop = true,
+                    Number = "1", Label = "Haze loop", MediaPath = "audio/haze.wav", Loop = true,
                     Sends = [Send(0, mainL), Send(1, mainR)],
                 },
                 new MediaCueNode
                 {
-                    Number = 2m, Label = "Walk-in music", MediaPath = "audio/walk-in.flac",
+                    Number = "2", Label = "Walk-in music", MediaPath = "audio/walk-in.flac",
                     LevelDb = -8, FadeInMs = 2_000, Sends = [Send(0, mainL), Send(1, mainR)],
                 },
                 new ActionCueNode
                 {
-                    Number = 3m, Label = "House to full", EndpointId = eos.Id, Address = "/eos/cue/1/fire",
+                    Number = "3", Label = "House to full", EndpointId = eos.Id, Address = "/eos/cue/1/fire",
                 },
             ],
         };
@@ -232,7 +239,7 @@ public static class SampleProject
             [
                 new MediaCueNode
                 {
-                    Number = 41m, Label = "Interval walk-out", MediaPath = "audio/walk-out.flac",
+                    Number = "41", Label = "Interval walk-out", MediaPath = "audio/walk-out.flac",
                     LevelDb = -10, Sends = [Send(0, lobbyL, -10), Send(1, lobbyR, -10)],
                 },
             ],
@@ -391,7 +398,7 @@ public static class SampleProject
     /// real subtrees to narrow to and the tallies beside them are counts rather than decoration.
     /// </summary>
     private static GroupCueNode Song(
-        decimal number, string title, LogicalAudioChannel left, LogicalAudioChannel right,
+        CueNumber number, string title, LogicalAudioChannel left, LogicalAudioChannel right,
         CompositionDefinition composition) =>
         new()
         {
@@ -400,22 +407,25 @@ public static class SampleProject
             [
                 new MediaCueNode
                 {
-                    Number = number + 0.1m, Label = "Track",
+                    Number = number.Child(1), Label = "Track", TrimOutMs = 214_000,
                     MediaPath = $"songs/{title.ToLowerInvariant().Replace(' ', '-')}.flac",
                     LevelDb = -4, FadeInMs = 1_000, Sends = [Send(0, left), Send(1, right, -0)],
                 },
                 new ActionCueNode
                 {
-                    Number = number + 0.2m, Label = "Ballad look", Address = $"/eos/cue/{number}.2",
+                    Number = number.Child(2), Label = "Ballad look", Address = $"/eos/cue/{number}.2",
+                    TimelineOffsetMs = 18_000,
                 },
                 new ActionCueNode
                 {
-                    Number = number + 0.3m, Label = "Chorus — full rig", Address = $"/eos/cue/{number}.3",
+                    Number = number.Child(3), Label = "Chorus — full rig", Address = $"/eos/cue/{number}.3",
+                    TimelineOffsetMs = 61_500,
                 },
                 new MediaCueNode
                 {
-                    Number = number + 0.4m, Label = "Projection · silhouettes",
+                    Number = number.Child(4), Label = "Projection · silhouettes",
                     MediaPath = "video/silhouette.mov", FadeInMs = 2_000,
+                    TimelineOffsetMs = 30_000, TrimOutMs = 96_000,
                     Placement = new LayerPlacement
                     {
                         CompositionId = composition.Id, LayerIndex = 1,

@@ -20,12 +20,12 @@ public static class SampleRuntime
     public static ShowRuntime For(HaCueProject project)
     {
         var act1 = project.CueLists.First(list => list.Name == "Act 1");
-        var preshowBed = Find(act1, 12m);
-        var opening = Find(act1, 13m);
-        var stormBed = Find(act1, 13.1m);
-        var rain = Find(act1, 13.2m);
-        var intervalMusic = Find(act1, 15m);
-        var walkIn = Find(project.CueLists.First(list => list.Name == "Preshow"), 2m);
+        var preshowBed = Find(act1, "12");
+        var opening = Find(act1, "13");
+        var stormBed = Find(act1, "13.1");
+        var rain = Find(act1, "13.2");
+        var intervalMusic = Find(act1, "15");
+        var walkIn = Find(project.CueLists.First(list => list.Name == "Preshow"), "2");
 
         var wedge = project.AudioLines.First(line => line.Name == "Wedge");
         var lobbyTv = project.VideoOutputs.First(output => output.Name == "Lobby TV");
@@ -151,6 +151,6 @@ public static class SampleRuntime
         }),
     ];
 
-    private static Guid Find(CueList list, decimal number) =>
+    private static Guid Find(CueList list, CueNumber number) =>
         list.Flatten().First(cue => cue.Number == number).Id;
 }

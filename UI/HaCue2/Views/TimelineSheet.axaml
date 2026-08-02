@@ -89,30 +89,10 @@
                                            Stroke="{StaticResource GelAmber}" StrokeThickness="1"
                                            Margin="0,4" />
 
-                          <ItemsControl ItemsSource="{Binding Clips}">
-                            <ItemsControl.ItemsPanel>
-                              <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemContainerTheme>
-                              <ControlTheme TargetType="ContentPresenter" x:DataType="vm:TimelineClip">
-                                <Setter Property="(c:Fraction.Left)" Value="{Binding Left}" />
-                                <Setter Property="(c:Fraction.Width)" Value="{Binding Width}" />
-                                <Setter Property="(c:Fraction.Height)" Value="1" />
-                              </ControlTheme>
-                            </ItemsControl.ItemContainerTheme>
-                            <ItemsControl.ItemTemplate>
-                              <DataTemplate x:DataType="vm:TimelineClip">
-                                <Border Classes="tlclip"
-                                        Classes.au="{Binding IsAudio}"
-                                        Classes.vi="{Binding IsVideo}"
-                                        Classes.ac="{Binding IsAction}"
-                                        Classes.gr="{Binding IsGroup}"
-                                        Classes.off="{Binding IsDisabled}">
-                                  <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                                </Border>
-                              </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                          </ItemsControl>
+                          <c:ClipLane Clips="{Binding Clips}"
+                                      IsEditable="{Binding IsEditable}"
+                                      Gesture="OnClipGesture"
+                                      GestureCompleted="OnClipGestureCompleted" />
                         </Panel>
                       </Grid>
                     </Border>

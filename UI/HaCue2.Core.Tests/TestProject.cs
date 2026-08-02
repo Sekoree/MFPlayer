@@ -29,7 +29,7 @@ internal sealed class TestProject
 
         Track = new MediaCueNode
         {
-            Number = 1,
+            Number = "1",
             Label = "Preshow bed",
             MediaPath = "preshow-loop.wav",
             LevelDb = -6,
@@ -40,8 +40,8 @@ internal sealed class TestProject
             ],
         };
 
-        Jump = new JumpCueNode { Number = 2, Label = "Loop to 1", TargetCueIds = [Track.Id] };
-        Fade = new FadeCueNode { Number = 3, Label = "Fade band mics", TargetCueIds = [Track.Id] };
+        Jump = new JumpCueNode { Number = "2", Label = "Loop to 1", TargetCueIds = [Track.Id] };
+        Fade = new FadeCueNode { Number = "3", Label = "Fade band mics", TargetCueIds = [Track.Id] };
 
         Snapshot = new PatchSnapshot
         {

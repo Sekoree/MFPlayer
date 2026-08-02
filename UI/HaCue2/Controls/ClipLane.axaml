@@ -1,0 +1,36 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:HaCue2.Controls"
+             xmlns:vm="using:HaCue2.ViewModels"
+             x:Class="HaCue2.Controls.ClipLane"
+             x:DataType="c:ClipLane"
+             x:CompileBindings="True">
+
+  <!-- One timeline lane's clips. Drawing and dragging live together for the same reason they do on
+       PlacementCanvas: the gesture and the picture have to agree about where a clip's edges are. -->
+
+  <ItemsControl ItemsSource="{Binding Clips, RelativeSource={RelativeSource AncestorType=c:ClipLane}}">
+    <ItemsControl.ItemsPanel>
+      <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
+    </ItemsControl.ItemsPanel>
+    <ItemsControl.ItemContainerTheme>
+      <ControlTheme TargetType="ContentPresenter" x:DataType="vm:TimelineClip">
+        <Setter Property="(c:Fraction.Left)" Value="{Binding Left}" />
+        <Setter Property="(c:Fraction.Width)" Value="{Binding Width}" />
+        <Setter Property="(c:Fraction.Height)" Value="1" />
+      </ControlTheme>
+    </ItemsControl.ItemContainerTheme>
+    <ItemsControl.ItemTemplate>
+      <DataTemplate x:DataType="vm:TimelineClip">
+        <Border Classes="tlclip"
+                Classes.au="{Binding IsAudio}"
+                Classes.vi="{Binding IsVideo}"
+                Classes.ac="{Binding IsAction}"
+                Classes.gr="{Binding IsGroup}"
+                Classes.off="{Binding IsDisabled}">
+          <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+        </Border>
+      </DataTemplate>
+    </ItemsControl.ItemTemplate>
+  </ItemsControl>
+</UserControl>

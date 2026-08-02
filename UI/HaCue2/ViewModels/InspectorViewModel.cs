@@ -197,7 +197,9 @@ public partial class InspectorViewModel : ObservableObject
         get => Shared(cue => CuePresentation.Number(cue.Number));
         set
         {
-            if (decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var number))
+            // A number that is not dot-separated digits is REFUSED, not coerced: the field keeps
+            // showing the old value, which is the one the running order on paper still says.
+            if (CueNumber.TryParse(value, out var number))
                 Edit("number", cue => cue.Number, (cue, parsed) => cue.Number = parsed, number);
         }
     }

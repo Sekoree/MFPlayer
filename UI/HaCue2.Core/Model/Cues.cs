@@ -34,11 +34,10 @@ public sealed record CueList
 /// Base of every cue kind. The discriminator is written as <c>kind</c>.
 /// </summary>
 /// <remarks>
-/// <see cref="Number"/> is a <see cref="decimal"/>, not an <see cref="int"/>: the show's own numbering
-/// is "12, 12.5, 13, 13.1" and an operator inserts between two cues by naming the gap. Decimal also
-/// compares exactly, so 13.1 sorts after 13 without the rounding surprises a double would bring to a
-/// renumber. (The engine's <c>CueDefinition.Number</c> is an int; mapping the two is the compiler's
-/// job, not the document's.)
+/// <see cref="Number"/> is a <see cref="CueNumber"/> — dot-separated segments, stored as written and
+/// compared numerically. It was a <c>decimal</c> until real HaPlay projects showed three-level numbers
+/// (1.1.1, 1.2.1) throughout, which a decimal cannot represent and which would have made the app
+/// unable to open a project from the app it replaces. See that type for the rest of the reasoning.
 /// </remarks>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(MediaCueNode), "media")]
@@ -52,7 +51,7 @@ public sealed record CueList
 public abstract record CueNode
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public decimal Number { get; set; }
+    public CueNumber Number { get; set; }
     public string Label { get; set; } = "";
 
     /// <summary>One Note per cue — and the whole of a comment cue. Stays writable under Lock.</summary>
@@ -76,8 +75,13 @@ public abstract record CueNode
     /// starts with the group — but it lives on the base because a cue can be dragged into and out of a
     /// timeline group without changing kind, and losing its position on the way in would be a data
     /// loss the operator did not ask for.
+    /// <para>
+    /// NOT called StartOffsetMs: HaPlay uses that name on a media cue for the trim INTO THE FILE
+    /// (<see cref="MediaCueNode.TrimInMs"/>), and an importer that read one as the other would put
+    /// every clip in the wrong place while trimming nothing.
+    /// </para>
     /// </remarks>
-    public int StartOffsetMs { get; set; }
+    public int TimelineOffsetMs { get; set; }
 }
 
 public enum CueTrigger
@@ -93,6 +97,31 @@ public sealed record MediaCueNode : CueNode
     public string MediaPath { get; set; } = "";
     public double LevelDb { get; set; }
     public bool Loop { get; set; }
+
+    /// <summary>
+    /// Where playback starts inside the file, in milliseconds. HaPlay's <c>startOffsetMs</c>.
+    /// </summary>
+    public int TrimInMs { get; set; }
+
+    /// <summary>
+    /// Where playback stops inside the file, in milliseconds; 0 means play to the end.
+    /// </summary>
+    /// <remarks>
+    /// Zero rather than null for "to the end", matching HaPlay's <c>endOffsetMs</c> — a file cannot
+    /// usefully end at 0 ms, so the sentinel costs nothing and keeps the two documents the same shape.
+    /// </remarks>
+    public int TrimOutMs { get; set; }
+
+    /// <summary>The trimmed length, given what the file turned out to be. Null until something probed.</summary>
+    public TimeSpan? TrimmedLength(TimeSpan? fileLength)
+    {
+        if (TrimOutMs > TrimInMs)
+            return TimeSpan.FromMilliseconds(TrimOutMs - TrimInMs);
+
+        return fileLength is { } length
+            ? length - TimeSpan.FromMilliseconds(TrimInMs)
+            : null;
+    }
 
     public int FadeInMs { get; set; }
     public CurveSpec FadeInCurve { get; set; } = new();

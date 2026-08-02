@@ -116,7 +116,7 @@ public sealed class MediaEditTests
     {
         var fixture = new TestProject();
         fixture.Track.MediaPath = "/a/loop.wav";
-        var second = new MediaCueNode { Number = 9, Label = "Second", MediaPath = "/b/loop.wav" };
+        var second = new MediaCueNode { Number = "9", Label = "Second", MediaPath = "/b/loop.wav" };
         fixture.List.Cues.Add(second);
         var store = new FakeStore { "/a/loop.wav", "/b/loop.wav" };
         var journal = new ProjectJournal(fixture.Project);

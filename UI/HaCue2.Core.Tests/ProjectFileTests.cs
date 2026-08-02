@@ -29,14 +29,14 @@ public sealed class ProjectFileTests
                     Name = "All kinds",
                     Cues =
                     [
-                        new MediaCueNode { Number = 1, Label = "media" },
-                        new GroupCueNode { Number = 2, Label = "group" },
-                        new ActionCueNode { Number = 3, Label = "action" },
-                        new FadeCueNode { Number = 4, Label = "fade" },
-                        new JumpCueNode { Number = 5, Label = "jump" },
-                        new VisualizerCueNode { Number = 6, Label = "visualizer" },
-                        new PatchCueNode { Number = 7, Label = "patch" },
-                        new CommentCueNode { Number = 8, Label = "comment" },
+                        new MediaCueNode { Number = "1", Label = "media" },
+                        new GroupCueNode { Number = "2", Label = "group" },
+                        new ActionCueNode { Number = "3", Label = "action" },
+                        new FadeCueNode { Number = "4", Label = "fade" },
+                        new JumpCueNode { Number = "5", Label = "jump" },
+                        new VisualizerCueNode { Number = "6", Label = "visualizer" },
+                        new PatchCueNode { Number = "7", Label = "patch" },
+                        new CommentCueNode { Number = "8", Label = "comment" },
                     ],
                 },
             ],
@@ -64,7 +64,7 @@ public sealed class ProjectFileTests
     {
         var project = new HaCueProject
         {
-            CueLists = [new CueList { Name = "Act 1", Cues = [new MediaCueNode { Number = 1, Enabled = false }] }],
+            CueLists = [new CueList { Name = "Act 1", Cues = [new MediaCueNode { Number = "1", Enabled = false }] }],
         };
 
         var restored = HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(project));

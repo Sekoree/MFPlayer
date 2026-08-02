@@ -10,7 +10,7 @@ namespace HaCue2.Presentation;
 /// <remarks>
 /// <para>
 /// Every position here is a FRACTION of the group's span, computed from each child's
-/// <see cref="CueNode.StartOffsetMs"/> and its media duration. That is why the timeline needed a start
+/// <see cref="CueNode.TimelineOffsetMs"/> and its media duration. That is why the timeline needed a start
 /// offset on the model at all: without one the shell could only draw clips where somebody had typed
 /// pixel positions, and the drawing would stop agreeing with the show the first time a cue moved.
 /// </para>
@@ -30,7 +30,7 @@ public static class TimelinePresentation
 
         foreach (var child in group.Children)
         {
-            var start = child.StartOffsetMs / span;
+            var start = child.TimelineOffsetMs / span;
             var width = Duration(child, runtime) / span;
 
             lanes.Add(new TimelineLane
@@ -42,6 +42,7 @@ public static class TimelinePresentation
                 [
                     new TimelineClip
                     {
+                        SubjectId = child.Id,
                         Label = ClipLabel(child, project),
                         Left = Math.Clamp(start, 0, 1),
                         Width = Math.Clamp(width, 0.01, 1 - Math.Clamp(start, 0, 1)),
@@ -101,22 +102,38 @@ public static class TimelinePresentation
     /// Never zero — a group whose media nobody has probed still has to draw, and dividing by its span
     /// must not produce infinities. One minute is an arbitrary but harmless floor for an empty group.
     /// </remarks>
+    public static double SpanMs(GroupCueNode group, ShowRuntime runtime) => Span(group, runtime);
+
     private static double Span(GroupCueNode group, ShowRuntime runtime)
     {
         var furthest = group.Children
-            .Select(child => child.StartOffsetMs + Duration(child, runtime))
+            .Select(child => child.TimelineOffsetMs + Duration(child, runtime))
             .DefaultIfEmpty(0)
             .Max();
 
         return furthest <= 0 ? 60_000 : furthest;
     }
 
-    private static double Duration(CueNode cue, ShowRuntime runtime) =>
-        runtime.MediaDurations.TryGetValue(cue.Id, out var duration)
-            ? duration.TotalMilliseconds
-            // An unprobed cue gets a nominal width so it is visible and obviously not measured, rather
-            // than collapsing to a hairline that reads as a rendering fault.
-            : 8_000;
+    /// <summary>
+    /// How long a child occupies the timeline: its TRIMMED length, not the file's.
+    /// </summary>
+    /// <remarks>
+    /// A clip drawn at the file's full length after somebody trimmed it is a picture of a show that
+    /// will not happen. Probing is a machine fact, so an unprobed cue with no explicit trim-out gets a
+    /// nominal width — visible and obviously not measured, rather than a hairline that reads as a
+    /// rendering fault.
+    /// </remarks>
+    private static double Duration(CueNode cue, ShowRuntime runtime)
+    {
+        var probed = runtime.MediaDurations.TryGetValue(cue.Id, out var duration)
+            ? duration
+            : (TimeSpan?)null;
+
+        if (cue is MediaCueNode media)
+            return media.TrimmedLength(probed)?.TotalMilliseconds ?? 8_000;
+
+        return probed?.TotalMilliseconds ?? 8_000;
+    }
 
     private static IReadOnlyList<EffectLane> EffectLanes(CueNode cue) => cue switch
     {

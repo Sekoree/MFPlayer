@@ -234,7 +234,7 @@ public static class ProjectValidator
             if (string.IsNullOrWhiteSpace(list.Name))
                 issues.Add(Error("cueList", list.Id.ToString(), "A cue list has no name."));
 
-            var numbers = new HashSet<decimal>();
+            var numbers = new HashSet<CueNumber>();
             foreach (var cue in list.Flatten())
             {
                 var id = cue.Id.ToString();
@@ -242,7 +242,7 @@ public static class ProjectValidator
                 if (!seenIds.Add(cue.Id))
                     issues.Add(Error("cue", id, $"Duplicate cue id {cue.Id}."));
 
-                if (!numbers.Add(cue.Number))
+                if (!cue.Number.IsEmpty && !numbers.Add(cue.Number))
                     issues.Add(Error("cue", id,
                         $"“{list.Name}” has more than one cue numbered {cue.Number}."));
 

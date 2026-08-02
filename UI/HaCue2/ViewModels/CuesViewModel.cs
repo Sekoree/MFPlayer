@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Presentation;
@@ -33,6 +34,8 @@ public partial class CuesViewModel : ObservableObject
         _selectedScope = Scopes.FirstOrDefault(scope => scope.IsList && scope.Name == "Act 1")
                          ?? Scopes.FirstOrDefault();
 
+        Timeline = new TimelineViewModel(Project, runtime, journal);
+
         Cues = [];
         ActiveCues = [.. runtime.ActiveCues];
         Rebuild();
@@ -60,6 +63,7 @@ public partial class CuesViewModel : ObservableObject
         Rebuild();
         SelectedCue = Cues.FirstOrDefault(row => row.Id == selected);
         Inspector.Reload();
+        Timeline.Refresh();
         OnPropertyChanged(nameof(TreeHint));
         OnPropertyChanged(nameof(Breadcrumb));
     }
@@ -222,7 +226,7 @@ public partial class CuesViewModel : ObservableObject
     [ObservableProperty]
     private bool _isTimelineOpen;
 
-    public TimelineViewModel Timeline => new(Project, _runtime);
+    public TimelineViewModel Timeline { get; }
 }
 
 /// <summary>A scope root: a cue list, or a group inside one.</summary>
@@ -234,32 +238,146 @@ public sealed record ScopeEntry(Guid Id, string Name, int Count, bool IsList, in
 }
 
 /// <summary>Screen 05 — the timeline sheet over whichever group is open.</summary>
-public sealed class TimelineViewModel
+public sealed partial class TimelineViewModel : ObservableObject
 {
-    public TimelineViewModel(HaCueProject project, ShowRuntime runtime)
+    /// <summary>The snap the sheet's own hint promises, in milliseconds.</summary>
+    private const int SnapMs = 500;
+
+    private readonly HaCueProject _project;
+    private readonly ShowRuntime _runtime;
+    private readonly ProjectJournal? _journal;
+    private readonly GroupCueNode? _group;
+    private IDisposable? _drag;
+
+    /// <summary>
+    /// The group's length as it was when the drag started, held for the whole gesture.
+    /// </summary>
+    /// <remarks>
+    /// The span is the furthest any child reaches, so dragging a clip to the right EXTENDS it — and if
+    /// each motion event divided by the new span, the lane would rescale under the pointer and the clip
+    /// would never catch up with it. Fractions are read against the picture the operator grabbed.
+    /// </remarks>
+    private double _dragSpan;
+
+    public TimelineViewModel(HaCueProject project, ShowRuntime runtime, ProjectJournal? journal = null)
     {
+        _project = project;
+        _runtime = runtime;
+        _journal = journal;
+
         // The first timeline group in the show: what the sheet opens onto until a cue is chosen.
-        var group = project.AllCues().OfType<GroupCueNode>()
+        _group = project.AllCues().OfType<GroupCueNode>()
             .FirstOrDefault(candidate => candidate.FireMode == GroupFireMode.Timeline);
 
-        if (group is null)
+        if (_group is null)
         {
             Title = "Timeline";
             Hint = "no timeline group in this show";
             return;
         }
 
-        Title = $"Timeline · Q{CuePresentation.Number(group.Number)} {group.Label}";
-        Hint = $"{group.Children.Count} cues · snap 0.5 s · zoom fit";
-        Ruler = TimelinePresentation.Ruler(group, runtime);
-        Lanes = TimelinePresentation.Lanes(group, project, runtime);
+        Title = $"Timeline · Q{CuePresentation.Number(_group.Number)} {_group.Label}";
+        Hint = $"{_group.Children.Count} cues · snap {SnapMs / 1000d:0.#} s · zoom fit";
+        _ruler = TimelinePresentation.Ruler(_group, runtime);
+        _lanes = TimelinePresentation.Lanes(_group, project, runtime);
     }
 
     public string Title { get; }
     public string Hint { get; }
-    public IReadOnlyList<string> Ruler { get; } = [];
-    public IReadOnlyList<TimelineLane> Lanes { get; } = [];
+    [ObservableProperty]
+    private IReadOnlyList<string> _ruler = [];
+
+    [ObservableProperty]
+    private IReadOnlyList<TimelineLane> _lanes = [];
 
     /// <summary>Where the transport is inside the group — a runtime fact, so zero until one exists.</summary>
     public double Playhead { get; }
+
+    /// <summary>
+    /// A drag on a clip: moves it, or trims either end.
+    /// </summary>
+    /// <remarks>
+    /// Dragging the LEFT edge moves the clip and trims the same amount into the file, so the frame
+    /// under the cursor does not slide — the behaviour every timeline editor has, and the reason
+    /// position and trim are separate numbers on the model.
+    /// </remarks>
+    public void ApplyClipGesture(ClipGesture gesture)
+    {
+        if (_group is null || _journal is null || _project.FindCue(gesture.SubjectId) is not { } cue)
+            return;
+
+        if (_drag is null)
+        {
+            _dragSpan = TimelinePresentation.SpanMs(_group, _runtime);
+            _drag = _journal.Composite(
+                gesture.Edge == ClipEdge.Body ? "move clip" : "trim clip", "cues");
+        }
+
+        var left = Snap(Math.Max(0, gesture.Left) * _dragSpan);
+        var width = Snap(Math.Max(0, gesture.Width) * _dragSpan);
+
+        switch (gesture.Edge)
+        {
+            case ClipEdge.Body:
+                SetOffset(cue, left);
+                break;
+
+            case ClipEdge.Start when cue is MediaCueNode media:
+                // The clip's left edge and the media's in-point move together by the same amount.
+                var moved = left - cue.TimelineOffsetMs;
+                SetOffset(cue, left);
+                SetTrim(media, "trimIn", () => media.TrimInMs, value => media.TrimInMs = value,
+                    (int)Math.Max(0, media.TrimInMs + moved), "trim clip start");
+                break;
+
+            case ClipEdge.End when cue is MediaCueNode media2:
+                SetTrim(media2, "trimOut", () => media2.TrimOutMs, value => media2.TrimOutMs = value,
+                    (int)Math.Max(SnapMs, media2.TrimInMs + width), "trim clip end");
+                break;
+
+            // A group or an action cue has no file to trim, so an edge drag on one moves it instead of
+            // silently doing nothing.
+            default:
+                SetOffset(cue, left);
+                break;
+        }
+
+        Refresh();
+    }
+
+    /// <summary>Ends the gesture, closing its undo step.</summary>
+    public void EndGesture()
+    {
+        _drag?.Dispose();
+        _drag = null;
+    }
+
+    /// <summary>Re-reads the lanes and the ruler from the document.</summary>
+    public void Refresh()
+    {
+        if (_group is null)
+            return;
+
+        Lanes = TimelinePresentation.Lanes(_group, _project, _runtime);
+
+        // The ruler too: a clip dragged past the old end makes the group longer, and a ruler that kept
+        // its old ticks would label the new part with times it does not have.
+        Ruler = TimelinePresentation.Ruler(_group, _runtime);
+    }
+
+    private void SetOffset(CueNode cue, double milliseconds) =>
+        _journal!.Do(new SetValueCommand<int>(
+            cue.Id, "timelineOffset", "cues",
+            () => cue.TimelineOffsetMs, value => cue.TimelineOffsetMs = value,
+            (int)Math.Max(0, milliseconds), "move clip"));
+
+    private void SetTrim(
+        MediaCueNode media, string property, Func<int> read, Action<int> write,
+        int value, string description) =>
+        _journal!.Do(new SetValueCommand<int>(
+            media.Id, property, "cues", read, write, value, description));
+
+    /// <summary>Rounds to the snap grid. Sub-snap moves would make the hint above the sheet a lie.</summary>
+    private static double Snap(double milliseconds) =>
+        Math.Round(milliseconds / SnapMs) * SnapMs;
 }

@@ -366,6 +366,9 @@ public sealed record TimelineLane
     public required string Name { get; init; }
     public IReadOnlyList<TimelineClip> Clips { get; init; } = [];
 
+    /// <summary>Only clip lanes are draggable; an effect lane's points are edited in the curve editor.</summary>
+    public bool IsEditable => !IsEffect;
+
     /// <summary>An effect lane (volume / opacity / OSC ramp), drawn shorter and indented.</summary>
     public bool IsEffect { get; init; }
 
@@ -388,6 +391,9 @@ public sealed record TimelineLane
 /// <summary>A clip drawn on a timeline lane, positioned in fractions of the visible range.</summary>
 public sealed record TimelineClip
 {
+    /// <summary>The cue this clip draws — how a drag names what it moved.</summary>
+    public Guid SubjectId { get; init; }
+
     public required string Label { get; init; }
     public double Left { get; init; }
     public double Width { get; init; }

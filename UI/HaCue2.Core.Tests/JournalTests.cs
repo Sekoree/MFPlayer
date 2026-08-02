@@ -32,7 +32,7 @@ public sealed class JournalTests
 
         journal.Do(LevelEdit(fixture.Track, -12));
         journal.Do(new AddItemCommand<CueNode>(
-            fixture.List.Cues, new CommentCueNode { Number = 9 }, 3, "cues", "add comment"));
+            fixture.List.Cues, new CommentCueNode { Number = "9" }, 3, "cues", "add comment"));
         journal.Do(new RemoveItemCommand<CueNode>(fixture.List.Cues, fixture.Jump, "cues", "remove jump"));
         journal.Do(new SetPatchCellCommand(
             fixture.Project.AudioPatch, fixture.MainL.Id, fixture.Interface.Id, 0, -6, null, "trim"));
