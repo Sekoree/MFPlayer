@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- What HaCue2 can find out about THIS MACHINE: which audio devices exist, and what a media file
+         actually contains.
+
+         A separate library from HaCue2.Core on purpose. Core answers questions about the DOCUMENT and
+         must stay runnable where there is no audio backend and no window system — that is what lets
+         `hacue2-check` run in CI over a fixture project. Everything here needs real hardware or a real
+         decoder, so it lives one layer out and is composed in by the app. -->
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>HaCue2.Machine</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
+    </ItemGroup>
+
+</Project>

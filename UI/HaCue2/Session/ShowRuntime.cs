@@ -15,7 +15,15 @@ namespace HaCue2.Session;
 /// <para>
 /// It exists as a separate seam because the alternative is worse: with document and runtime facts
 /// mixed into one bag of sample data, nobody reading the shell can tell which values are real and
-/// which are invented. Anything reached through here is invented, by construction.
+/// which are invented.
+/// </para>
+/// <para>
+/// <b>Three members are now REAL:</b> <see cref="MediaDurations"/> and <see cref="Broken"/> are filled
+/// by <c>MediaFactsCache</c> from an actual probe, and <see cref="AbsentLines"/> by real device
+/// enumeration. Everything else here is still invented, and each
+/// one stops being so as Phase 5 lands. They are settable rather than init-only for exactly that
+/// reason — an answer that arrives after the views were built has to reach the instance they already
+/// hold, and replacing the object would leave every view-model looking at the old one.
 /// </para>
 /// </remarks>
 public sealed class ShowRuntime
@@ -24,7 +32,7 @@ public sealed class ShowRuntime
     public HashSet<Guid> Sounding { get; init; } = [];
 
     /// <summary>Cues whose media the document names but which cannot be resolved on this machine.</summary>
-    public HashSet<Guid> Broken { get; init; } = [];
+    public HashSet<Guid> Broken { get; set; } = [];
 
     /// <summary>
     /// How long each cue's media runs, by document id.
@@ -34,7 +42,7 @@ public sealed class ShowRuntime
     /// in the document. A cue whose media nobody has looked at shows "—" in the Len column, which is
     /// the truthful answer and not a rendering gap.
     /// </remarks>
-    public Dictionary<Guid, TimeSpan> MediaDurations { get; init; } = [];
+    public Dictionary<Guid, TimeSpan> MediaDurations { get; set; } = [];
 
     /// <summary>
     /// Per-logical-output levels, by document id. Absent means NO TELEMETRY, which is why the meter
@@ -44,7 +52,7 @@ public sealed class ShowRuntime
     public Dictionary<Guid, OutputLevel> Levels { get; init; } = [];
 
     /// <summary>Audio lines this machine does not have. A machine fact, never a document one.</summary>
-    public HashSet<Guid> AbsentLines { get; init; } = [];
+    public HashSet<Guid> AbsentLines { get; set; } = [];
 
     /// <summary>Video outputs this machine does not have.</summary>
     public HashSet<Guid> AbsentVideoOutputs { get; init; } = [];

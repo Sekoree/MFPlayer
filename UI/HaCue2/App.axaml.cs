@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using HaCue2.Sample;
+using HaCue2.Session;
 using HaCue2.ViewModels;
 using HaCue2.Views;
 
@@ -48,5 +50,17 @@ public partial class App : Application
         return window;
     }
 
-    private static ShellWindow OpenShell() => new() { DataContext = new ShellViewModel() };
+    private static ShellWindow OpenShell() =>
+        new() { DataContext = new ShellViewModel(SampleProject.Create(), Machine) };
+
+    /// <summary>
+    /// What this box has, asked once.
+    /// </summary>
+    /// <remarks>
+    /// Set by the desktop head before the app starts, because WHICH audio backend to enumerate is a
+    /// composition-root decision — PortAudio and miniaudio see different devices on the same machine.
+    /// Left at <see cref="MachineFacts.Nothing"/> for a preview or a headless capture, which probes
+    /// files (no hardware needed) and reports every device as Unknown rather than inventing one.
+    /// </remarks>
+    public static MachineFacts Machine { get; set; } = MachineFacts.Nothing;
 }

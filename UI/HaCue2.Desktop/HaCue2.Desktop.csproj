@@ -27,6 +27,9 @@
 
     <ItemGroup>
         <ProjectReference Include="..\HaCue2\HaCue2.csproj"/>
+        <!-- The composition root chooses the audio backend: PortAudio and miniaudio see different
+             devices on the same box, and which one a show is checked against is this layer's call. -->
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.PortAudio\S.Media.Audio.PortAudio.csproj"/>
     </ItemGroup>
 
 </Project>

@@ -21,6 +21,9 @@
 
     <ItemGroup>
         <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
+        <!-- The machine layer too: its device-matching rules are the ones that must never turn
+             "nobody looked" into "absent", and they are testable with a fake backend. -->
+        <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj" />
     </ItemGroup>
 
 </Project>

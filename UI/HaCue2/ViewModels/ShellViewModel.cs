@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
@@ -25,15 +26,26 @@ public partial class ShellViewModel : ObservableObject
     public const string VideoView = "VIDEO";
     public const string TargetsView = "TARGETS";
 
-    public ShellViewModel() : this(SampleProject.Create())
+    public ShellViewModel() : this(SampleProject.Create(), MachineFacts.Nothing)
     {
     }
 
-    public ShellViewModel(HaCueProject project)
+    public ShellViewModel(HaCueProject project) : this(project, MachineFacts.Nothing)
+    {
+    }
+
+    public ShellViewModel(HaCueProject project, MachineFacts machine)
     {
         Journal = new ProjectJournal(project);
+        Machine = machine;
+
+        // Real answers where this machine can give one, invented ones where it cannot — yet. Media
+        // durations and broken files come from the PROBE now; sounding cues, meters and the bay still
+        // come from the sample, because those need a running session and there is not one.
         Runtime = SampleRuntime.For(project);
-        Environment = new RuntimeEnvironment(Runtime, project);
+        AdoptProbeResults();
+
+        Environment = machine.Environment ?? new RuntimeEnvironment(Runtime, project);
 
         Cues = new CuesViewModel(Journal, Runtime);
         Audio = new AudioViewModel(Journal, Runtime);
@@ -47,6 +59,51 @@ public partial class ShellViewModel : ObservableObject
         Journal.Changed += OnJournalChanged;
 
         _status = ProjectStatus.Run(project, environment: Environment);
+
+        // Fire and forget: the views draw now and the answers arrive later. Until a file has been
+        // looked at its length reads "—", which is the truth rather than a guess.
+        machine.Media.Changed += OnProbesLanded;
+        machine.Media.Refresh(project);
+    }
+
+    /// <summary>The machine seam: what this box has, and what its files turned out to be.</summary>
+    public MachineFacts Machine { get; }
+
+    private void OnProbesLanded()
+    {
+        // A probe finishes on a worker; everything below touches view-models bound to the UI.
+        Dispatcher.UIThread.Post(() =>
+        {
+            AdoptProbeResults();
+            Status = ProjectStatus.Run(Project, environment: Environment);
+            Refresh();
+        });
+    }
+
+    /// <summary>
+    /// Copies what the probe now knows into the runtime the views already hold.
+    /// </summary>
+    /// <remarks>
+    /// Mutated in place rather than replaced: every view-model captured this instance when it was
+    /// built, so a new object would leave all of them reading the old answers.
+    /// </remarks>
+    private void AdoptProbeResults()
+    {
+        Runtime.MediaDurations = new Dictionary<Guid, TimeSpan>(Machine.Media.DurationsIn(Project, null));
+        Runtime.Broken = [.. Machine.Media.BrokenIn(Project, null)];
+
+        // Only a DEFINITE absence counts. A line whose devices nobody could enumerate stays present
+        // here and is reported as unchecked by the status pass — a red row nobody verified is the
+        // failure this seam exists to avoid.
+        if (Machine.Environment is { } environment)
+        {
+            Runtime.AbsentLines =
+            [
+                .. Project.AudioLines
+                    .Where(line => environment.AudioLine(line) == DeviceAvailability.Absent)
+                    .Select(line => line.Id),
+            ];
+        }
     }
 
     public ProjectJournal Journal { get; }
