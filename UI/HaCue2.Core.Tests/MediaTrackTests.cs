@@ -82,6 +82,57 @@ public sealed class MediaTrackTests
     }
 
     [Fact]
+    public void CoverArtIsPlaceableEvenThoughItIsNotVideo()
+    {
+        var art = CoverArt();
+        var facts = new MediaFacts { AudioTracks = [Mix], VideoTracks = [art] };
+
+        // Not "video" — a placement of it will not move...
+        Assert.False(facts.HasVideo);
+        // ...but it IS placeable, and that is the whole point: an audio cue can put the album art on
+        // a canvas for the length of the track, the same as HaPlay's cue player.
+        Assert.True(facts.HasPlaceableVideo);
+        Assert.True(facts.IsCoverArtOnly);
+        Assert.Equal(art.Index, facts.PlaceableVideoTrack!.Value.Index);
+    }
+
+    [Fact]
+    public void MovingVideoWinsOverCoverArtForAPlacement()
+    {
+        var moving = new MediaTrack(0, "#0 h264", "Video:h264::0:0:1920x1080", "eng", 0, 1920, 1080,
+            true, IsAttachedPicture: false, true);
+
+        var facts = new MediaFacts { VideoTracks = [CoverArt(), moving] };
+
+        // A file with both: the placement shows the film, not the thumbnail beside it.
+        Assert.False(facts.IsCoverArtOnly);
+        Assert.Equal(moving.Index, facts.PlaceableVideoTrack!.Value.Index);
+    }
+
+    [Fact]
+    public void APlacementOfCoverArtMustNameTheStream()
+    {
+        var facts = new MediaFacts { AudioTracks = [Mix], VideoTracks = [CoverArt()] };
+        var fixture = new TestProject();
+
+        // The rule this exists for: the decoder's automatic election SKIPS attached pictures. A cue
+        // placed with no explicit index would put an empty layer on the canvas and give the operator
+        // no reason for it, so whatever creates a placement has to name the track.
+        fixture.Track.Placement = new LayerPlacement { CompositionId = fixture.Cyc.Id };
+        fixture.Track.VideoTrackIndex = facts.PlaceableVideoTrack!.Value.Index;
+
+        var clip = ShowCompiler.Compile(fixture.Project).Clips
+            .Single(candidate => candidate.ClipId == fixture.Track.Id.ToString());
+
+        Assert.Equal(fixture.Cyc.Id.ToString(), clip.CompositionId);
+        Assert.Equal(facts.PlaceableVideoTrack!.Value.Index, clip.VideoStreamIndex);
+    }
+
+    private static MediaTrack CoverArt() =>
+        new(1, "#1 mjpeg 700×700 (cover art)", "Video:mjpeg::0:0:700x700",
+            null, 0, 700, 700, false, IsAttachedPicture: true, true);
+
+    [Fact]
     public void CoverArtIsAVideoStreamButNotVideo()
     {
         // Every container that carries album art carries it as a video stream. A FLAC with cover art

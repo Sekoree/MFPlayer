@@ -62,6 +62,33 @@ public sealed record MediaFacts
     public IReadOnlyList<MediaTrack> MovingVideoTracks =>
         [.. VideoTracks.Where(track => !track.IsAttachedPicture)];
 
+    /// <summary>
+    /// Whether this file has anything a composition can show — moving video OR cover art.
+    /// </summary>
+    /// <remarks>
+    /// Cover art is a still image and it is perfectly placeable: an audio cue can put the album art on
+    /// a canvas for the length of the track, which is a normal thing to want. So the Video tab is
+    /// gated on THIS, not on <see cref="HasVideo"/>.
+    /// </remarks>
+    public bool HasPlaceableVideo => VideoTracks.Count > 0;
+
+    /// <summary>The only video is cover art — placements will show a still frame.</summary>
+    public bool IsCoverArtOnly => VideoTracks.Count > 0 && MovingVideoTracks.Count == 0;
+
+    /// <summary>
+    /// The track a placement should use: the first moving video, or the cover art if that is all
+    /// there is.
+    /// </summary>
+    /// <remarks>
+    /// Cover art has to be selected EXPLICITLY — the decoder's automatic election deliberately skips
+    /// attached pictures, so a cue placed on a canvas with no explicit index would show nothing at
+    /// all. Naming the track here is what makes "place it and it appears" true for an MP3.
+    /// </remarks>
+    public MediaTrack? PlaceableVideoTrack =>
+        MovingVideoTracks.Count > 0
+            ? MovingVideoTracks[0]
+            : VideoTracks.Count > 0 ? VideoTracks[0] : null;
+
     /// <summary>Whether anything was learned at all. False is "nobody could open it".</summary>
     public bool IsKnown => Duration is not null || AudioTracks.Count > 0 || VideoTracks.Count > 0;
 

@@ -161,6 +161,9 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(SubtitleTracks));
         OnPropertyChanged(nameof(HasSubtitleTracks));
         OnPropertyChanged(nameof(SubtitleSummary));
+        OnPropertyChanged(nameof(CanBePlaced));
+        OnPropertyChanged(nameof(IsCoverArtOnly));
+        OnPropertyChanged(nameof(CanBePlaced));
     }
 
     private CueKind KindOf() => Cue is null ? CueKind.Comment : CuePresentation.KindOf(Cue);
@@ -511,6 +514,130 @@ public partial class InspectorViewModel : ObservableObject
 
     private TrackPickerViewModel Track(TrackKind kind) =>
         new(_journal, Cue as MediaCueNode, kind, Facts, Reload);
+
+    /// <summary>
+    /// Whether this cue has anything a composition could show.
+    /// </summary>
+    /// <remarks>
+    /// True for cover art as well as moving video: an audio cue putting the album art on a canvas for
+    /// the length of the track is a normal thing to want, and the Video tab is where that is done.
+    /// </remarks>
+    public bool CanBePlaced => Facts is { HasPlaceableVideo: true };
+
+    /// <summary>The only video is a still frame — worth saying before somebody places it.</summary>
+    public bool IsCoverArtOnly => Facts is { IsCoverArtOnly: true };
+
+    public string CoverArtNote =>
+        "this file's only video is cover art — a placement shows that still frame for the cue's length";
+
+    /// <summary>Which composition a new placement would go on. Index into <see cref="PlacementCompositions"/>.</summary>
+    [ObservableProperty]
+    private int _placementTarget;
+
+    /// <summary>
+    /// Puts this cue on a composition.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Full-canvas at the next free layer, which is what somebody placing a cue almost always wants
+    /// and is trivial to drag from. The canvas is right there to adjust it on.
+    /// </para>
+    /// <para>
+    /// <b>Cover art is selected explicitly here.</b> The decoder's automatic election deliberately
+    /// SKIPS attached pictures, so an MP3 placed with no video-track choice would put nothing on the
+    /// canvas — the operator would see an empty layer and no reason for it. Naming the stream is what
+    /// makes "place it and the album art appears" true.
+    /// </para>
+    /// </remarks>
+    public void PlaceOnComposition()
+    {
+        if (Cue is not MediaCueNode and not VisualizerCueNode
+            || Cue is null
+            || PlacementTarget < 0
+            || PlacementTarget >= Project.Compositions.Count)
+            return;
+
+        var composition = Project.Compositions[PlacementTarget];
+        var cue = Cue;
+        var still = Facts is { IsCoverArtOnly: true } ? Facts.PlaceableVideoTrack : null;
+
+        using (_journal.Composite($"place on {composition.Name}", "video"))
+        {
+            _journal.Do(new SetValueCommand<LayerPlacement?>(
+                cue.Id, "placement", "video",
+                () => PlacementOf(cue),
+                placement => SetPlacement(cue, placement),
+                new LayerPlacement
+                {
+                    CompositionId = composition.Id,
+                    LayerIndex = NextLayer(composition),
+                },
+                $"place on {composition.Name}"));
+
+            if (still is { } track && cue is MediaCueNode media)
+            {
+                _journal.Do(new SetValueCommand<int?>(
+                    cue.Id, "videoTrack", "video",
+                    () => media.VideoTrackIndex, index => media.VideoTrackIndex = index, track.Index,
+                    "show the cover art"));
+
+                _journal.Do(new SetValueCommand<string>(
+                    cue.Id, "videoSignature", "video",
+                    () => media.VideoTrackSignature,
+                    signature => media.VideoTrackSignature = signature, track.Signature,
+                    "remember which track"));
+            }
+        }
+
+        Reload();
+    }
+
+    /// <summary>Removes the cue from its canvas, and the still-image choice that came with it.</summary>
+    public void RemovePlacement()
+    {
+        if (Cue is not { } cue || PlacementOf(cue) is null)
+            return;
+
+        using (_journal.Composite("remove from composition", "video"))
+        {
+            _journal.Do(new SetValueCommand<LayerPlacement?>(
+                cue.Id, "placement", "video",
+                () => PlacementOf(cue), placement => SetPlacement(cue, placement), null,
+                "remove from composition"));
+        }
+
+        Reload();
+    }
+
+    /// <summary>One above whatever is already there, so a new layer lands on top rather than under.</summary>
+    private int NextLayer(CompositionDefinition composition) =>
+        Project.AllCues()
+            .Select(PlacementOf)
+            .OfType<LayerPlacement>()
+            .Where(placement => placement.CompositionId == composition.Id)
+            .Select(placement => placement.LayerIndex + 1)
+            .DefaultIfEmpty(0)
+            .Max();
+
+    private static LayerPlacement? PlacementOf(CueNode cue) => cue switch
+    {
+        MediaCueNode media => media.Placement,
+        VisualizerCueNode visualizer => visualizer.Placement,
+        _ => null,
+    };
+
+    private static void SetPlacement(CueNode cue, LayerPlacement? placement)
+    {
+        switch (cue)
+        {
+            case MediaCueNode media:
+                media.Placement = placement;
+                break;
+            case VisualizerCueNode visualizer:
+                visualizer.Placement = placement;
+                break;
+        }
+    }
 
     /// <summary>The subtitle tracks in the file, as the picker lists them.</summary>
     public IReadOnlyList<string> SubtitleTracks =>

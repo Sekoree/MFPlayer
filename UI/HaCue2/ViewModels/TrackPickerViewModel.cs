@@ -88,14 +88,14 @@ public sealed partial class TrackPickerViewModel : ObservableObject
             if (!IsProbed)
                 return "not probed yet";
 
-            var cover = _coverArt == 0 ? "" : _coverArt == _tracks.Count ? "cover art only" : " · cover art";
+            // Cover art is a STILL that can be placed, not a missing video track — saying "no tracks"
+            // over an MP3 with album art would hide something the operator can legitimately put on a
+            // canvas.
+            if (Count == 0)
+                return _coverArt > 0 ? "cover art · still image" : "no tracks";
 
-            return Count switch
-            {
-                0 => cover.Length > 0 ? cover.TrimStart(' ', '·', ' ') : "no tracks",
-                1 => $"one track{cover}",
-                _ => $"{Count} tracks{cover}",
-            };
+            var cover = _coverArt == 0 ? "" : " · cover art";
+            return Count == 1 ? $"one track{cover}" : $"{Count} tracks{cover}";
         }
     }
 

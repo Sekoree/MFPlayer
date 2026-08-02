@@ -164,10 +164,27 @@
                 </StackPanel>
               </Border>
             </ContentControl>
-            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding !HasPlacement}">
-              <Button Classes="block" Content="PLACE ON A COMPOSITION…" />
-            </ContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Place on"
+                                    IsVisible="{Binding !HasPlacement}">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding PlacementCompositions}"
+                          SelectedIndex="{Binding PlacementTarget}" />
+                <Button Grid.Column="1" Classes="tight" Content="PLACE" Click="OnPlace" />
+              </Grid>
+            </HeaderedContentControl>
 
+            <!-- Cover art is a still image and it is placeable: an audio cue can put the album art on
+                 a canvas for the length of the track. Saying so before somebody places it is the
+                 difference between "why is it not moving" and a deliberate choice. -->
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding IsCoverArtOnly}">
+              <Border Classes="chain">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <Border Classes="badge"><TextBlock Text="STILL IMAGE" /></Border>
+                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                             Text="{Binding CoverArtNote}" />
+                </StackPanel>
+              </Border>
+            </ContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Video track"
                                     IsEnabled="{Binding VideoTrack.HasMedia}">
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -221,11 +238,14 @@
               <!-- The canvas is a second editor for the same cue data, under the same undo journal —
                    rough here, precise in the Video view. -->
               <Border Classes="chain">
-                <StackPanel Orientation="Horizontal" Spacing="7">
-                  <Border Classes="badge"><TextBlock Text="PLACEMENT" /></Border>
+                <DockPanel LastChildFill="True">
+                  <Button DockPanel.Dock="Right" Classes="tight" Content="REMOVE" Click="OnRemovePlacement" />
+                  <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge">
+                    <TextBlock Text="PLACEMENT" />
+                  </Border>
                   <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
                              Text="drag here for rough · Video view for precision" />
-                </StackPanel>
+                </DockPanel>
               </Border>
             </StackPanel>
           </StackPanel>

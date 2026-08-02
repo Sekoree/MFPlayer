@@ -12,6 +12,18 @@ public partial class InspectorPane : UserControl
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
+    private void OnPlace(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector)
+            inspector.PlaceOnComposition();
+    }
+
+    private void OnRemovePlacement(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector)
+            inspector.RemovePlacement();
+    }
+
     private void OnPlacementGesture(object? sender, Controls.PlacementGesture gesture)
     {
         if (DataContext is InspectorViewModel inspector)
