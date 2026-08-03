@@ -14,18 +14,22 @@ namespace HaCue2.Engine;
 /// and opening one per cue fire would burn a source port on every GO.
 /// </para>
 /// <para>
-/// <b>MIDI out is not implemented and says so.</b> It needs the control-device layer
-/// (<c>S.Control</c>) that HaCue2 has not adopted yet, and the one thing an action cue must never do is
-/// report success for a message that went nowhere — an operator who sees no error assumes the desk got
-/// it. The refusal is returned, surfaced on the transport, and reported by Project status.
+/// <b>Both protocols, one entry point.</b> OSC is a datagram this class sends itself; MIDI is a port
+/// <see cref="MidiOut"/> holds over S.Control's device layer. A cue does not care which it is, and the
+/// one thing an action cue must never do is report success for a message that went nowhere — so both
+/// return their refusal, which is surfaced on the transport and reported by Project status.
 /// </para>
 /// </remarks>
 public sealed class ActionSender : IDisposable
 {
     private readonly Dictionary<Guid, OSCClient> _clients = [];
     private readonly Dictionary<Guid, string> _sent = [];
+    private readonly MidiOut _midi = new();
     private readonly Lock _gate = new();
     private bool _disposed;
+
+    /// <summary>Adopts the show's MIDI endpoints. Called on every reload, cheap when nothing changed.</summary>
+    public void Adopt(HaCueProject project) => _midi.Adopt(project);
 
     /// <summary>
     /// What each endpoint was last sent, and when — the Targets screen's "Last seen" column.
@@ -56,11 +60,17 @@ public sealed class ActionSender : IDisposable
         if (endpoint is null)
             return $"“{cue.Label}” names no endpoint";
 
-        if (endpoint.Kind == EndpointKind.MidiOut)
-            return $"“{endpoint.Name}” is a MIDI endpoint — MIDI output is not implemented yet";
-
         if (cue.Address.Length == 0)
             return $"“{cue.Label}” has no address to send to";
+
+        if (endpoint.Kind == EndpointKind.MidiOut)
+        {
+            if (_midi.Send(cue, endpoint) is { } refused)
+                return refused;
+
+            Remember(endpoint, cue.Address);
+            return null;
+        }
 
         OSCClient client;
 
@@ -77,17 +87,26 @@ public sealed class ActionSender : IDisposable
         {
             await client.SendMessageAsync(cue.Address, Arguments(cue.Arguments)).ConfigureAwait(false);
 
-            // The ADDRESS rather than the cue label: an operator watching this column is checking what
-            // the desk was told, and two cues sending the same address is a normal way to build a show.
-            lock (_gate)
-                _sent[endpoint.Id] = $"{cue.Address} · {DateTime.Now:HH:mm:ss}";
-
+            Remember(endpoint, cue.Address);
             return null;
         }
         catch (Exception failure) when (failure is SocketException or ObjectDisposedException or IOException)
         {
             return $"“{cue.Label}” → {endpoint.Name} failed — {failure.Message}";
         }
+    }
+
+    /// <summary>
+    /// Notes what an endpoint was last sent.
+    /// </summary>
+    /// <remarks>
+    /// The ADDRESS rather than the cue label: an operator watching this column is checking what the
+    /// desk was told, and two cues sending the same address is a normal way to build a show.
+    /// </remarks>
+    private void Remember(ActionEndpoint endpoint, string address)
+    {
+        lock (_gate)
+            _sent[endpoint.Id] = $"{address} · {DateTime.Now:HH:mm:ss}";
     }
 
     private OSCClient ClientFor(ActionEndpoint endpoint)
@@ -147,5 +166,7 @@ public sealed class ActionSender : IDisposable
 
         foreach (var client in clients)
             client.Dispose();
+
+        _midi.Dispose();
     }
 }

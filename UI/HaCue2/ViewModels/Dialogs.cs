@@ -267,8 +267,21 @@ public static class Dialogs
             "somewhere action cues send to",
             [
                 new PromptField { Label = "Name", Value = osc ? "Lighting desk" : "MIDI out" },
-                new PromptField { Label = "Host", Value = osc ? "127.0.0.1" : "", Hint = osc ? "" : "device name" },
-                new PromptField { Label = "Port", Kind = PromptFieldKind.Number, Value = osc ? "8000" : "0" },
+                // A MIDI endpoint has no host and no port: it has a device NAME, matched the way an
+                // audio line's is, because ports are not stable across reboots let alone machines.
+                new PromptField
+                {
+                    Label = "Host",
+                    Value = osc ? "127.0.0.1" : "",
+                    Hint = osc ? "" : "MIDI device name — matched as a hint, like an audio line",
+                },
+                new PromptField
+                {
+                    Label = "Port",
+                    Kind = PromptFieldKind.Number,
+                    Value = osc ? "8000" : "0",
+                    Hint = osc ? "" : "not used by MIDI",
+                },
                 new PromptField
                 {
                     Label = "Test",
@@ -298,32 +311,52 @@ public static class Dialogs
     {
         var project = journal.Project;
 
+        // A schedule and a timecode source open no device, so the two device boxes have nothing to
+        // ask them. Offering them anyway would suggest there is a port to get wrong.
+        var wired = kind is TriggerInputKind.MidiIn or TriggerInputKind.OscIn;
+
         return new PromptViewModel(
-            kind == TriggerInputKind.OscIn ? "Add OSC listener" : "Add MIDI input",
-            "external input never gates GO (register item 3)",
-            [
-                new PromptField { Label = "Name", Value = "" },
-                new PromptField
-                {
-                    Label = "Device",
-                    Value = "",
-                    Hint = kind == TriggerInputKind.OscIn ? "any sender" : "matched by name",
-                },
-                new PromptField
-                {
-                    Label = "Port",
-                    Kind = PromptFieldKind.Number,
-                    Value = kind == TriggerInputKind.OscIn ? "9000" : "0",
-                },
-            ],
+            kind switch
+            {
+                TriggerInputKind.OscIn => "Add OSC listener",
+                TriggerInputKind.Schedule => "Add schedule",
+                TriggerInputKind.Timecode => "Add timecode",
+                _ => "Add MIDI input",
+            },
+            kind switch
+            {
+                TriggerInputKind.Schedule =>
+                    "fires on the wall clock · " + TriggerTimes.ScheduleSyntax,
+                TriggerInputKind.Timecode =>
+                    "fires on incoming MTC · " + TriggerTimes.TimecodeSyntax,
+                _ => "external input never gates GO (register item 3)",
+            },
+            wired
+                ?
+                [
+                    new PromptField { Label = "Name", Value = "" },
+                    new PromptField
+                    {
+                        Label = "Device",
+                        Value = "",
+                        Hint = kind == TriggerInputKind.OscIn ? "any sender" : "matched by name",
+                    },
+                    new PromptField
+                    {
+                        Label = "Port",
+                        Kind = PromptFieldKind.Number,
+                        Value = kind == TriggerInputKind.OscIn ? "9000" : "0",
+                    },
+                ]
+                : [new PromptField { Label = "Name", Value = "" }],
             prompt => journal.Do(new AddItemCommand<TriggerInputDefinition>(
                 project.TriggerInputs,
                 new TriggerInputDefinition
                 {
                     Name = prompt["Name"].Value.Trim(),
                     Kind = kind,
-                    DeviceHint = prompt["Device"].Value.Trim(),
-                    Port = Math.Clamp(prompt["Port"].Number(), 0, 65535),
+                    DeviceHint = wired ? prompt["Device"].Value.Trim() : "",
+                    Port = wired ? Math.Clamp(prompt["Port"].Number(), 0, 65535) : 0,
                 },
                 project.TriggerInputs.Count,
                 "targets",

@@ -41,7 +41,12 @@ public sealed class TriggerInputs : IAsyncDisposable
     private HaCueProject _project;
     private bool _enabled;
 
-    public TriggerInputs(HaCueProject project) => _project = project;
+    public TriggerInputs(HaCueProject project)
+    {
+        _project = project;
+        Clocks = new TriggerClocks(project, Chase);
+        Clocks.Triggered += action => Triggered?.Invoke(action);
+    }
 
     /// <summary>Raised when an inbound message matched a binding. Off the I/O thread's back — the
     /// handler marshals; this must not block a UDP receive or a PortMIDI poll.</summary>
@@ -63,6 +68,16 @@ public sealed class TriggerInputs : IAsyncDisposable
     /// software then could not use.
     /// </remarks>
     public TimecodeChase Chase { get; } = new();
+
+    /// <summary>
+    /// The clock-driven sources: wall-clock schedules and timecode.
+    /// </summary>
+    /// <remarks>
+    /// Behind the SAME master gate as the wires, which is the whole point of collapsing HaPlay's three
+    /// arms into one toggle — an operator has a single answer to "can anything fire this show without
+    /// me?". Constructed here rather than in the host so that answer cannot drift into two switches.
+    /// </remarks>
+    public TriggerClocks Clocks { get; private set; }
 
     /// <summary>Whether external input is live. False when a project opens (register item 3).</summary>
     public bool IsEnabled
@@ -92,6 +107,10 @@ public sealed class TriggerInputs : IAsyncDisposable
             _enabled = enabled;
         }
 
+        // Before the ports: a schedule needs nothing opened, so an interface that refuses to open must
+        // not take the wall clock down with it.
+        Clocks.SetEnabled(enabled);
+
         if (enabled)
             await OpenAsync().ConfigureAwait(false);
         else
@@ -110,6 +129,7 @@ public sealed class TriggerInputs : IAsyncDisposable
 
         var before = Describe(_project);
         _project = project;
+        Clocks.Adopt(project);
 
         if (IsEnabled && before != Describe(project))
         {
@@ -123,13 +143,19 @@ public sealed class TriggerInputs : IAsyncDisposable
         string.Join(
             "|",
             project.TriggerInputs
-                .Where(input => input.Enabled)
+                .Where(input => input.Enabled && Opens(input.Kind))
                 .OrderBy(input => input.Id)
                 .Select(input => $"{input.Kind}:{input.DeviceHint}:{input.Port}"));
 
+    /// <summary>Whether a source kind holds a DEVICE. A clock does not, and neither does a hotkey.</summary>
+    private static bool Opens(TriggerInputKind kind) =>
+        kind is TriggerInputKind.MidiIn or TriggerInputKind.OscIn;
+
     private async Task OpenAsync()
     {
-        var sources = _project.TriggerInputs.Where(input => input.Enabled).ToList();
+        var sources = _project.TriggerInputs
+            .Where(input => input.Enabled && Opens(input.Kind))
+            .ToList();
 
         if (sources.Count == 0)
             return;
@@ -322,5 +348,9 @@ public sealed class TriggerInputs : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync() => await CloseAsync().ConfigureAwait(false);
+    public async ValueTask DisposeAsync()
+    {
+        Clocks.Dispose();
+        await CloseAsync().ConfigureAwait(false);
+    }
 }

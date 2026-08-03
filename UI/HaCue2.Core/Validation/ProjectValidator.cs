@@ -298,6 +298,16 @@ public static class ProjectValidator
                 issues.Add(Error("cue", id, $"Q{cue.Number} sends to an endpoint that no longer exists."));
                 break;
 
+            // A MIDI message that will not parse is found HERE, on a laptop with no interface in it,
+            // rather than at the moment the cue fires — which is the one moment nobody can act on it.
+            case ActionCueNode action when action.EndpointId is { } endpointId
+                                           && project.ActionEndpoints.FirstOrDefault(e => e.Id == endpointId)
+                                               is { Kind: EndpointKind.MidiOut }
+                                           && MidiActions.TryParse(
+                                               action.Address, action.Arguments, out _) is { } wrong:
+                issues.Add(Error("cue", id, $"Q{cue.Number} sends {wrong}"));
+                break;
+
             case FadeCueNode fade:
                 foreach (var targetId in fade.TargetCueIds.Where(target => !cueIds.Contains(target)))
                     issues.Add(Error("cue", id, $"Q{cue.Number} fades a cue that is no longer in the show."));
@@ -401,6 +411,13 @@ public static class ProjectValidator
         foreach (var input in project.TriggerInputs)
             foreach (var binding in input.Bindings)
             {
+                // A clock binding whose time will not parse is a cue that can never fire, and unlike a
+                // wire binding there is no device to blame for it — so it is found here, while the show
+                // is being written, rather than by its absence on the night.
+                if (TriggerTimes.Refuse(input.Kind, binding.Input) is { } wrong)
+                    issues.Add(Error("triggerInput", input.Id.ToString(),
+                        $"“{input.Name}” has a binding on {wrong}"));
+
                 if (binding.Target != TriggerTarget.Cue)
                     continue;
 

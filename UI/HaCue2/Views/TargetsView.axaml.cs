@@ -24,6 +24,8 @@ public partial class TargetsView : UserControl
         {
             "in:midi" => Dialogs.AddTriggerInput(journal, TriggerInputKind.MidiIn),
             "in:osc" => Dialogs.AddTriggerInput(journal, TriggerInputKind.OscIn),
+            "in:clock" => Dialogs.AddTriggerInput(journal, TriggerInputKind.Schedule),
+            "in:mtc" => Dialogs.AddTriggerInput(journal, TriggerInputKind.Timecode),
             "end:osc" => Dialogs.AddEndpoint(journal, EndpointKind.OscOut),
             "end:midi" => Dialogs.AddEndpoint(journal, EndpointKind.MidiOut),
             _ => null,

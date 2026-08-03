@@ -75,6 +75,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
     private readonly TriggerInputs _triggers;
     private readonly ParameterRegistry _parameters;
     private readonly ProjectRecorders _recorders;
+    private readonly ProjectVisualizers _visualizers;
 
     private readonly List<string> _runtimeProblems = [];
     private readonly Lock _gate = new();
@@ -107,6 +108,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
         _triggers = new TriggerInputs(project);
         _recorders = new ProjectRecorders(
             project, bay, screens.Recorders, StoragePaths.RecordingRoot);
+        _visualizers = new ProjectVisualizers(session);
 
         // The registry holds delegates, so a fader always compares itself against what is true NOW.
         // A cached value would latch against something the show had already moved past.
@@ -196,6 +198,16 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
 
     /// <summary>The show's recorders and streams — what is armed, where it is writing, and how it fares.</summary>
     public ProjectRecorders Recorders => _recorders;
+
+    /// <summary>
+    /// The visualizer cues that are rendering.
+    /// </summary>
+    /// <remarks>
+    /// Exposed because "is projectM even on this machine" is a question the Project status pass asks
+    /// before any cue has fired, and answering it from a running host beats a second probe that could
+    /// disagree with the one the engine uses.
+    /// </remarks>
+    public ProjectVisualizers Visualizers => _visualizers;
 
     /// <summary>
     /// Video outputs that are not showing anything on this machine.
@@ -347,8 +359,10 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
                 Report(failure);
 
             await AttachScreensAsync().ConfigureAwait(false);
+            await RetireDeletedVisualizersAsync(project).ConfigureAwait(false);
             await _triggers.ReloadAsync(project).ConfigureAwait(false);
             _recorders.Adopt(project);
+            _actions.Adopt(project);
         }
         finally
         {
@@ -387,6 +401,31 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
             Report($"“{lease.DisplayName}” could not be attached to its composition");
         }
 
+    }
+
+    /// <summary>
+    /// Takes down visualizers whose cue the operator has deleted.
+    /// </summary>
+    /// <remarks>
+    /// A visualizer holds a renderer rather than a voice, so none of the session's preservation rules
+    /// reach it: deleting the cue would otherwise leave projectM rendering onto a canvas with nothing
+    /// in the show pointing at it, and no way to stop it short of restarting.
+    /// <para>
+    /// A visualizer whose cue still exists is left alone, even when its placements or preset pack have
+    /// been edited. Restarting a running visualizer on every keystroke would be visible on the canvas;
+    /// the edit takes effect on the next fire, which is the same rule the preset pack follows.
+    /// </para>
+    /// </remarks>
+    private async Task RetireDeletedVisualizersAsync(HaCueProject project)
+    {
+        foreach (var cueId in _visualizers.Running)
+        {
+            if (project.FindCue(cueId) is not VisualizerCueNode)
+            {
+                await _visualizers.StopAsync(cueId).ConfigureAwait(false);
+                Forget(cueId.ToString());
+            }
+        }
     }
 
     /// <summary>
@@ -438,6 +477,10 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
 
         // Before the session: a trigger arriving mid-teardown would reach for a disposed transport.
         await _triggers.DisposeAsync().ConfigureAwait(false);
+
+        // Before the session they are attached to: taking a visualizer down is a call ON the session,
+        // and a renderer detached after it had gone would leak a GL thread.
+        await _visualizers.DisposeAsync().ConfigureAwait(false);
 
         // Before the bay and the session that feed them: disarming flushes each encoder and writes the
         // file's trailer, and a recording finalized after its audio terminal had gone would be short its

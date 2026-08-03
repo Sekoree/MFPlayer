@@ -155,13 +155,25 @@ public static class TargetPresentation
             {
                 TriggerInputKind.MidiIn => "MIDI in",
                 TriggerInputKind.OscIn => $"OSC in · :{input.Port}",
+                TriggerInputKind.Schedule => "wall clock",
+                TriggerInputKind.Timecode => "MTC",
                 _ => "keyboard",
             },
             Bindings = $"{input.Bindings.Count} cue{(input.Bindings.Count == 1 ? "" : "s")}",
             LastSeen = runtime.LastSeen.GetValueOrDefault(input.Id, "—"),
-            State = input.Kind == TriggerInputKind.Keyboard
-                ? new Status("always")
-                : new Status(input.Kind == TriggerInputKind.OscIn ? "listening" : "open", Gel.Green),
+            State = input.Kind switch
+            {
+                // A hotkey is not gated by external input at all, so it is never "off".
+                TriggerInputKind.Keyboard => new Status("always"),
+                TriggerInputKind.OscIn => new Status("listening", Gel.Green),
+                // A clock is not a port: it is neither open nor closed, it is simply watched. Saying
+                // "open" would invite somebody to go looking for the device it is open ON.
+                TriggerInputKind.Schedule => new Status("watching", Gel.Green),
+                // The chase readout in the transport row is the honest answer to whether timecode is
+                // arriving; this column only says the source is armed to act on it.
+                TriggerInputKind.Timecode => new Status("watching", Gel.Green),
+                _ => new Status("open", Gel.Green),
+            },
         }),
     ];
 

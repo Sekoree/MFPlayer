@@ -43,7 +43,12 @@ public sealed partial class ShowHost
     Task ICueExecutionHost.SetStandbyAsync(CueList list, Guid? cueId) =>
         _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
 
-    Task ICueExecutionHost.StopCueAsync(Guid cueId) => _session.StopCueAsync(cueId.ToString());
+    /// <summary>The executor's route to a stop. Same two halves as the operator's, for the same reason.</summary>
+    async Task ICueExecutionHost.StopCueAsync(Guid cueId)
+    {
+        await _visualizers.StopAsync(cueId).ConfigureAwait(false);
+        await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
+    }
 
     Task<string?> ICueExecutionHost.SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint) =>
         _actions.SendAsync(action, endpoint);
@@ -62,9 +67,32 @@ public sealed partial class ShowHost
         }
     }
 
-    /// <summary>Hands a playable cue to the session and starts its clock.</summary>
+    /// <summary>
+    /// Hands a playable cue to the session and starts its clock.
+    /// </summary>
+    /// <remarks>
+    /// A VISUALIZER is playable but is not a clip: it has nothing to decode and nothing to seek, so it
+    /// takes the composition-visualizer seam instead. It still counts as sounding — it is holding a
+    /// canvas, it appears in the Active panel, and STOP has to be able to take it down.
+    /// </remarks>
     async Task<bool> ICueExecutionHost.PlayAsync(CueNode cue, CueList? list)
     {
+        if (cue is VisualizerCueNode visualizer)
+        {
+            var problem = await _visualizers.FireAsync(_project, visualizer).ConfigureAwait(false);
+
+            if (problem is not null)
+                Report(problem);
+
+            // A partial start is still a start: the canvases that came up are showing something, and
+            // the ones that did not have just been reported by name.
+            if (!_visualizers.Running.Contains(cue.Id))
+                return false;
+
+            Remember(cue.Id, list?.Id ?? Guid.Empty);
+            return true;
+        }
+
         var status = await _session.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
 
         if (status != CueExecutionStatus.Fired)

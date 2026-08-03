@@ -66,6 +66,10 @@ public sealed partial class ShowHost
     public async Task StopCueAsync(Guid cueId)
     {
         MarkFading(cueId);
+
+        // A visualizer holds a renderer rather than a voice, so the session has nothing to stop for it
+        // — asking anyway would silently do nothing and leave the canvas lit.
+        await _visualizers.StopAsync(cueId).ConfigureAwait(false);
         await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
         Forget(cueId.ToString());
     }
@@ -94,6 +98,9 @@ public sealed partial class ShowHost
                 _sounding[id] = _sounding[id] with { IsFading = true };
         }
 
+        // Visualizers do not fade: a projectM renderer has no level, and holding a canvas lit for the
+        // stop fade while everything audible came down would read as a rig that had not stopped.
+        await _visualizers.StopAllAsync().ConfigureAwait(false);
         await _session.StopAllAsync(fade).ConfigureAwait(false);
 
         lock (_gate)

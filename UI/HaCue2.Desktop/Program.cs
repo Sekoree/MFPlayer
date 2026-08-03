@@ -22,6 +22,14 @@ internal static class Program
         HaCue2.App.Machine = new MachineFacts(new AudioDevices(backend));
         HaCue2.App.Backend = backend;
 
+        // Visualizer cues render projectM on their own offscreen GL context, which keeps preset loads
+        // off the composition's pump and lets a renderer survive a composition rebuild. It is an
+        // OPTIONAL improvement: when the context cannot be created the frame-blit surface falls back
+        // to the compositor's own GL thread, so this is set unconditionally rather than gated on a
+        // probe that would only tell us the same thing later.
+        S.Media.Visualizer.ProjectM.ProjectMVisualSource.OffscreenGlContextFactory =
+            S.Media.Present.SDL3.SDL3OffscreenGlContext.TryCreate;
+
         return Build();
     }
 

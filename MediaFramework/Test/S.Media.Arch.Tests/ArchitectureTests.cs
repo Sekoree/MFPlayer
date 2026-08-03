@@ -143,6 +143,10 @@ public sealed class ArchitectureTests
         ["HaCue2.Engine"] =
         [
             "HaCue2.Core", "HaCue2.Machine", "S.Media.Session", "S.Media.Routing",
+            // Visualizer cues attach a projectM renderer to a composition. The library is optional at
+            // runtime and the engine reports a machine without it, so this is a reference the app can
+            // survive not resolving natively.
+            "S.Media.Visualizer.ProjectM",
             "S.Media.Decode.FFmpeg", "S.Media.Core", "S.Media.Time", "S.Media.Players",
             "S.Media.Compositor", "S.Media.Gpu",
             // Action cues send OSC from here, beside the transport that fires them.
@@ -181,14 +185,15 @@ public sealed class ArchitectureTests
         // The headless status runner: the project model and nothing else, which is what lets it run
         // where no audio backend or window system exists.
         ["HaCue2.Check"] = ["HaCue2.Core"],
-        // A desktop head is a composition root: it references its app and nothing else.
         // A desktop head is a composition root: it references its app, plus the audio backend it
-        // chooses to enumerate against — which backend is exactly the kind of decision a head makes.
+        // chooses to enumerate against and the offscreen GL context it gives projectM — which backend
+        // and which context are exactly the kind of decision a head makes.
         ["HaCue2.Desktop"] =
         [
             "HaCue2", "HaCue2.Core", "HaCue2.Machine", "HaCue2.Engine", "S.Media.Audio.PortAudio",
             "S.Media.Decode.FFmpeg", "S.Media.Session", "S.Media.Core", "S.Media.Time",
             "S.Media.Routing", "S.Media.Players", "S.Media.Compositor", "S.Media.Gpu",
+            "S.Media.Present.SDL3", "S.Media.Present.SDL3.Compositor", "S.Media.Visualizer.ProjectM",
         ],
         ["HaPlay.Desktop"] = ["HaPlay"],
         ["HaViz.Desktop"] =

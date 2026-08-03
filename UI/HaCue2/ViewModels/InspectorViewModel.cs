@@ -1082,16 +1082,35 @@ public partial class InspectorViewModel : ObservableObject
                 return "no endpoint — this cue will do nothing";
 
             if (endpoint.Kind == EndpointKind.MidiOut)
-                return "MIDI output is not implemented yet — this cue will report a failure when fired";
+            {
+                // The parser's own verdict rather than a description of the syntax: an operator who has
+                // typed something wrong wants to know WHAT is wrong, and the same check runs in the
+                // status pass, so the two can never disagree about whether this cue will send.
+                return MidiActions.TryParse(action.Address, action.Arguments, out var message) is { } wrong
+                    ? wrong
+                    : $"sends {Describe(message)} · channels are 1–16, values 0–127";
+            }
 
             return action.Address.Length == 0
                 ? "no address — this cue will do nothing"
-                : $"arguments are whitespace-separated and typed by shape: 3 is an int, 3.0 a float";
+                : "arguments are whitespace-separated and typed by shape: 3 is an int, 3.0 a float";
         }
     }
 
     private static string Describe(EndpointKind kind) =>
         kind == EndpointKind.MidiOut ? "MIDI out" : "OSC out";
+
+    /// <summary>A parsed MIDI message in the words a desk's manual uses.</summary>
+    private static string Describe(MidiAction message) => message.Kind switch
+    {
+        MidiActionKind.ControlChange =>
+            $"CC {message.Number} = {message.Value} on ch {message.Channel}",
+        MidiActionKind.ProgramChange =>
+            $"program {message.Number} on ch {message.Channel}",
+        MidiActionKind.NoteOff =>
+            $"note {message.Number} off on ch {message.Channel}",
+        _ => $"note {message.Number} on ch {message.Channel} at velocity {message.Value}",
+    };
 
     // ── PATCH ─────────────────────────────────────────────────────────────────────────────────
 
@@ -1223,9 +1242,20 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
-    /// <summary>Visualizer cues do not run yet, and the editor says so rather than implying they do.</summary>
+    /// <summary>
+    /// What a visualizer cue will actually do on THIS machine.
+    /// </summary>
+    /// <remarks>
+    /// projectM is a native library a booth box may not have, and the settings above are perfectly
+    /// editable without it — so the honest hint is the machine's answer, not a fixed sentence. A cue
+    /// authored on a laptop with no library still travels and still runs at the venue.
+    /// </remarks>
     public string VisualizerHint =>
-        "the visualizer runtime is not wired yet — these settings are stored but nothing renders them";
+        HaCue2.Engine.ProjectVisualizers.IsAvailable
+            ? "renders onto every composition this cue is placed on · fires and stops like any other cue"
+            : "projectM is not available on this machine — "
+              + (HaCue2.Engine.ProjectVisualizers.UnavailableReason ?? "the library was not found")
+              + " · the settings still travel with the show";
 
     // ── media tracks ──────────────────────────────────────────────────────────────────────────
     // The options are a MACHINE fact and the choice is a DOCUMENT one, so the picker takes both: the

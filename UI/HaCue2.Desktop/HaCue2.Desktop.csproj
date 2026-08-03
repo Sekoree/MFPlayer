@@ -30,6 +30,10 @@
         <!-- The composition root chooses the audio backend: PortAudio and miniaudio see different
              devices on the same box, and which one a show is checked against is this layer's call. -->
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.PortAudio\S.Media.Audio.PortAudio.csproj"/>
+        <!-- The offscreen GL context projectM renders on. A head's choice, like the audio backend:
+             the engine asks for a context factory and does not care which windowing system provides
+             it, and without one the frame-blit surface falls back to the compositor's own GL thread. -->
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Present.SDL3.Compositor\S.Media.Present.SDL3.Compositor.csproj"/>
     </ItemGroup>
 
 </Project>

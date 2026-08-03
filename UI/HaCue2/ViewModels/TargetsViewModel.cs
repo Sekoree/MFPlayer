@@ -63,6 +63,9 @@ public partial class TargetsViewModel : ObservableObject
         OnPropertyChanged(nameof(LearnTargets));
         OnPropertyChanged(nameof(LearnTarget));
         OnPropertyChanged(nameof(CanBind));
+        OnPropertyChanged(nameof(CanLearn));
+        OnPropertyChanged(nameof(IsTyped));
+        OnPropertyChanged(nameof(LearnState));
         OnPropertyChanged(nameof(LearnConflict));
         OnPropertyChanged(nameof(Bindings));
         OnPropertyChanged(nameof(HasBindings));
@@ -206,6 +209,14 @@ public partial class TargetsViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Bindings))]
     [NotifyPropertyChangedFor(nameof(BindingsHeader))]
+    // Picking a clock source turns the Caught box from a readout into a field, so the whole learn
+    // pane has to re-read itself — a stale "press LEARN" over a wall clock is an instruction that
+    // cannot be followed.
+    [NotifyPropertyChangedFor(nameof(IsTyped))]
+    [NotifyPropertyChangedFor(nameof(CanLearn))]
+    [NotifyPropertyChangedFor(nameof(CanBind))]
+    [NotifyPropertyChangedFor(nameof(LearnState))]
+    [NotifyPropertyChangedFor(nameof(LearnConflict))]
     private TriggerSourceRow? _selectedSource;
 
     public string BindingsHeader => $"Bindings on {SelectedSource?.Name ?? "—"}";
@@ -241,7 +252,12 @@ public partial class TargetsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(LearnState))]
     private bool _isLearning;
 
-    /// <summary>What was caught while listening, frozen so a later message does not move the target.</summary>
+    /// <summary>
+    /// What was caught while listening — or, for a clock source, what the operator typed.
+    /// </summary>
+    /// <remarks>
+    /// Frozen once caught, so a later message does not move the target under the operator's hand.
+    /// </remarks>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanBind))]
     [NotifyPropertyChangedFor(nameof(LearnConflict))]
@@ -273,11 +289,23 @@ public partial class TargetsViewModel : ObservableObject
     public string RemoteTokenMask =>
         _project.Settings.RemoteApi is null ? "machine setting · see Settings" : "•••••••• · see Settings";
 
-    public string LearnState => IsLearning
-        ? "● waiting for input — press something on any device"
-        : LearnCaught.Length > 0
-            ? "caught — press BIND to keep it"
-            : "idle — press LEARN, then a button on your controller";
+    public string LearnState
+    {
+        get
+        {
+            if (Input?.Kind == TriggerInputKind.Schedule)
+                return $"type {TriggerTimes.ScheduleSyntax}, then press BIND";
+
+            if (Input?.Kind == TriggerInputKind.Timecode)
+                return $"type {TriggerTimes.TimecodeSyntax}, then press BIND";
+
+            return IsLearning
+                ? "● waiting for input — press something on any device"
+                : LearnCaught.Length > 0
+                    ? "caught — press BIND to keep it"
+                    : "idle — press LEARN, then a button on your controller";
+        }
+    }
 
     /// <summary>Starts listening. The next message that arrives is the candidate.</summary>
     public void BeginLearn()
@@ -343,7 +371,27 @@ public partial class TargetsViewModel : ObservableObject
         : "select a source first";
 
     public bool CanBind =>
-        _journal is not null && SelectedSource is not null && LearnCaught.Length > 0;
+        _journal is not null && SelectedSource is not null && LearnCaught.Length > 0
+        && TimeRefusal is null;
+
+    /// <summary>
+    /// Whether the selected source is a CLOCK, so the input is typed rather than caught.
+    /// </summary>
+    /// <remarks>
+    /// There is nothing to learn from a wall clock: half past ten does not arrive on a wire, it simply
+    /// happens. The Caught box becomes typable and LEARN has nothing to do, which is why it is disabled
+    /// rather than left as a button that silently waits for a message that will never come.
+    /// </remarks>
+    public bool IsTyped =>
+        Input?.Kind is TriggerInputKind.Schedule or TriggerInputKind.Timecode;
+
+    public bool CanLearn => SelectedSource is not null && !IsTyped;
+
+    /// <summary>What is wrong with a typed time, or null. Always null for a source that is learned.</summary>
+    private string? TimeRefusal =>
+        Input is { } input && LearnCaught.Length > 0
+            ? TriggerTimes.Refuse(input.Kind, LearnCaught)
+            : null;
 
     /// <summary>
     /// Whether the caught input already fires something on this source.
@@ -358,6 +406,11 @@ public partial class TargetsViewModel : ObservableObject
         {
             if (LearnCaught.Length == 0 || Input is not { } input)
                 return "";
+
+            // A time that will not parse is the thing to say, before anything about conflicts: a
+            // binding on "22:3o" would sit in the list looking exactly like one that works.
+            if (TimeRefusal is { } wrong)
+                return wrong;
 
             var clash = input.Bindings.FirstOrDefault(binding =>
                 string.Equals(binding.Input, LearnCaught, StringComparison.OrdinalIgnoreCase));

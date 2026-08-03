@@ -112,6 +112,9 @@
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <Button Classes="tight" Content="+ MIDI IN…" Click="OnDialog" Tag="in:midi" />
                   <Button Classes="tight" Content="+ OSC LISTENER…" Click="OnDialog" Tag="in:osc" />
+                  <!-- The other two ways a cue fires with nobody at the desk. Same master gate. -->
+                  <Button Classes="tight" Content="+ SCHEDULE…" Click="OnDialog" Tag="in:clock" />
+                  <Button Classes="tight" Content="+ TIMECODE…" Click="OnDialog" Tag="in:mtc" />
                 </StackPanel>
               </Border>
             </c:PanelBox.Footer>
@@ -178,7 +181,9 @@
                 <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="6">
                   <Button Grid.Column="0" Classes="primary tight" Content="BIND" Click="OnBind"
                           IsEnabled="{Binding CanBind}" />
-                  <Button Grid.Column="1" Classes="tight" Content="LEARN" Click="OnLearn" />
+                  <!-- Nothing to learn from a wall clock: half past ten does not arrive on a wire. -->
+                  <Button Grid.Column="1" Classes="tight" Content="LEARN" Click="OnLearn"
+                          IsEnabled="{Binding CanLearn}" />
                   <!-- Conflicts are shown BEFORE the bind, not after: rebinding a note that already
                        fires something is how a show loses a cue silently. -->
                   <TextBlock Grid.Column="2" Classes="mono dim3 small" HorizontalAlignment="Right"
@@ -191,8 +196,11 @@
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Listening">
                 <TextBox Classes="ro" Classes.warn="{Binding IsLearning}" Text="{Binding LearnState}" />
               </HeaderedContentControl>
+              <!-- Read-only for a wire, typable for a clock: the same field, because it holds the
+                   same thing — the pattern the binding will carry. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Caught">
-                <TextBox Classes="ro" Text="{Binding LearnCaught}" />
+                <TextBox Classes.ro="{Binding !IsTyped}" IsReadOnly="{Binding !IsTyped}"
+                         Text="{Binding LearnCaught}" />
               </HeaderedContentControl>
               <!-- The target is chosen BEFORE the bind, so one gesture produces a working binding
                    rather than one that has to be edited afterwards. -->

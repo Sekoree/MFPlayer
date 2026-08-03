@@ -2231,11 +2231,25 @@ cannot silently grow.
 
 ### Subsystems
 
-- **MIDI output** — action cues refuse a MIDI endpoint out loud rather than failing quietly
-  (`ActionSender`). OSC out works.
-- **Visualizer runtime** — visualizer cues compile and are addressable; nothing renders them.
-- **Wall-clock schedules** and **MTC chase** — the two remaining ways a cue can fire without a keypress.
-  The External-input master toggle (register item 3) already gates all three.
+**All four landed 2026-08-03.** What each one turned out to be:
+
+- **MIDI output** — `MidiOut` over S.Control's device layer. An endpoint's Host field is a device NAME
+  HINT, matched the way an audio line's is; ports open on FIRST SEND, so the app never holds a port it
+  is not using. The message is parsed from the cue's two boxes read as one token stream (`cc 1 7` +
+  `100` ≡ `cc 1 7 100`), by `MidiActions` in **HaCue2.Core** — so the status pass refuses an
+  unparseable message on a laptop with no interface in it, rather than at the moment the cue fires.
+- **Visualizer runtime** — `ProjectVisualizers` attaches a projectM renderer per composition (not per
+  placement: the framework creates a source's layer surface at most once, and one-per-section crashed
+  projectM in HaPlay). Fires and stops like any cue, counts as sounding, retires when its cue is
+  deleted, and reports a machine without the native library instead of leaving a canvas black.
+- **Wall-clock schedules** and **MTC chase** — both are `TriggerInputKind`s with ordinary bindings, so
+  every existing rule (target cue/transport, per-source enable, the one External-input master gate)
+  applies unchanged. `TriggerClocks` fires on CROSSINGS, not equalities; a relocate re-anchors via the
+  chase clock's generation counter rather than sweeping every target behind it; a stall freezes; a
+  machine that was suspended does not fire what it missed.
+
+Still open on this line: nothing FIRES from a `TimecodeChase` reading other than through a Timecode
+source's bindings — there is no per-cue "start at this timecode" field, and none is planned.
 
 ### Tested-around, not tested
 

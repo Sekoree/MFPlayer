@@ -155,6 +155,12 @@ public enum TriggerInputKind
     MidiIn,
     OscIn,
     Keyboard,
+
+    /// <summary>The wall clock. A binding's input is a time of day: "22:30" or "22:30:00".</summary>
+    Schedule,
+
+    /// <summary>Incoming MIDI timecode. A binding's input is a label: "01:12:44:07".</summary>
+    Timecode,
 }
 
 /// <summary>
