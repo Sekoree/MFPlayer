@@ -23,8 +23,27 @@ namespace HaCue2.Engine;
 public sealed class ActionSender : IDisposable
 {
     private readonly Dictionary<Guid, OSCClient> _clients = [];
+    private readonly Dictionary<Guid, string> _sent = [];
     private readonly Lock _gate = new();
     private bool _disposed;
+
+    /// <summary>
+    /// What each endpoint was last sent, and when — the Targets screen's "Last seen" column.
+    /// </summary>
+    /// <remarks>
+    /// <b>Successes only.</b> A send that threw did not reach the desk, and recording it here would
+    /// tell an operator checking why a console is not responding that the app had just talked to it.
+    /// Failures already travel the other way, through <c>Problems</c>, which is where a reader looking
+    /// for a fault expects to find one.
+    /// </remarks>
+    public IReadOnlyDictionary<Guid, string> LastSent
+    {
+        get
+        {
+            lock (_gate)
+                return new Dictionary<Guid, string>(_sent);
+        }
+    }
 
     /// <summary>
     /// Sends one action cue, or explains why it could not.
@@ -57,6 +76,12 @@ public sealed class ActionSender : IDisposable
         try
         {
             await client.SendMessageAsync(cue.Address, Arguments(cue.Arguments)).ConfigureAwait(false);
+
+            // The ADDRESS rather than the cue label: an operator watching this column is checking what
+            // the desk was told, and two cues sending the same address is a normal way to build a show.
+            lock (_gate)
+                _sent[endpoint.Id] = $"{cue.Address} · {DateTime.Now:HH:mm:ss}";
+
             return null;
         }
         catch (Exception failure) when (failure is SocketException or ObjectDisposedException or IOException)

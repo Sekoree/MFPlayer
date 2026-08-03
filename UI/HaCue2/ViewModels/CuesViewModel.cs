@@ -951,7 +951,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         }
 
         Title = $"Timeline · Q{CuePresentation.Number(group.Number)} {group.Label}";
-        Hint = $"{group.Children.Count} cues · snap {SnapMs / 1000d:0.#} s · zoom fit";
+        Hint = HintFor(group);
         Refresh();
     }
 
@@ -992,6 +992,35 @@ public sealed partial class TimelineViewModel : ObservableObject
 
     /// <summary>Where the transport is inside the group — a runtime fact, so zero until one exists.</summary>
     public double Playhead { get; }
+
+    /// <summary>The snap/free segment picker in the transport row.</summary>
+    public IReadOnlyList<string> SnapModes { get; } = ["snap", "free"];
+
+    /// <summary>
+    /// Whether drags land on the grid.
+    /// </summary>
+    /// <remarks>
+    /// A VIEW setting, not a document one: it is how somebody is working right now, and carrying it to
+    /// the next venue inside a show file would be carrying the wrong thing. Same reasoning as the
+    /// appearance pane, and the reason it is not journaled either — undoing back through "I turned
+    /// snapping off" would bury the edits the operator actually wants back.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSnapping))]
+    private string _snapMode = "snap";
+
+    public bool IsSnapping => SnapMode != "free";
+
+    /// <summary>The sheet's hint reads what the grid is doing, so turning it off has to rewrite it.</summary>
+    partial void OnSnapModeChanged(string value)
+    {
+        if (_group is { } group)
+            Hint = HintFor(group);
+    }
+
+    private string HintFor(GroupCueNode group) =>
+        $"{group.Children.Count} cues · "
+        + (IsSnapping ? $"snap {SnapMs / 1000d:0.#} s" : "free") + " · zoom fit";
 
     /// <summary>
     /// A drag on a clip: moves it, or trims either end.
@@ -1170,7 +1199,14 @@ public sealed partial class TimelineViewModel : ObservableObject
         _journal!.Do(new SetValueCommand<int>(
             media.Id, property, "cues", read, write, value, description));
 
-    /// <summary>Rounds to the snap grid. Sub-snap moves would make the hint above the sheet a lie.</summary>
-    private static double Snap(double milliseconds) =>
-        Math.Round(milliseconds / SnapMs) * SnapMs;
+    /// <summary>
+    /// Rounds to the snap grid, unless the operator has turned snapping off.
+    /// </summary>
+    /// <remarks>
+    /// Half a second is the right grid for laying a show out and the wrong one for landing a stab on a
+    /// frame, which is why the toggle exists rather than a smaller constant: a grid fine enough for the
+    /// second case does not help with the first.
+    /// </remarks>
+    private double Snap(double milliseconds) =>
+        IsSnapping ? Math.Round(milliseconds / SnapMs) * SnapMs : Math.Round(milliseconds);
 }

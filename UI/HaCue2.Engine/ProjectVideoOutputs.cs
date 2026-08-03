@@ -45,6 +45,17 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// <summary>What could not be opened, and why — joined into the host's problem list.</summary>
     public IReadOnlyList<string> Failures { get; private init; } = [];
 
+    /// <summary>
+    /// The outputs that are not showing anything, by document id.
+    /// </summary>
+    /// <remarks>
+    /// The same events as <see cref="Failures"/>, addressed rather than described: a sentence is what
+    /// the Problems list wants and an id is what the Video screen and the status pass want, and
+    /// deriving one from the other means parsing prose. An output that names no composition is in here
+    /// too — it opened nothing and shows nothing, which is what the row has to say.
+    /// </remarks>
+    public IReadOnlySet<Guid> Unopened { get; private init; } = new HashSet<Guid>();
+
     internal IReadOnlyList<OpenVideoOutput> Open => _open;
 
     /// <summary>The record and stream outputs, for <see cref="ProjectRecorders"/> to arm.</summary>
@@ -63,6 +74,7 @@ public sealed class ProjectVideoOutputs : IDisposable
         ArgumentNullException.ThrowIfNull(project);
 
         var failures = new List<string>();
+        var unopened = new HashSet<Guid>();
         var opened = new List<OpenVideoOutput>();
         var recorders = new Dictionary<Guid, RecordVideoOutput>();
         var senders = new List<NDIOutput>();
@@ -73,6 +85,7 @@ public sealed class ProjectVideoOutputs : IDisposable
                 || project.Compositions.All(item => item.Id != compositionId))
             {
                 failures.Add($"“{output.Name}” shows no composition");
+                unopened.Add(output.Id);
                 continue;
             }
 
@@ -103,6 +116,7 @@ public sealed class ProjectVideoOutputs : IDisposable
                 {
                     // Reported, not thrown: an NDI runtime this machine lacks must not stop the show.
                     failures.Add($"“{output.Name}”: {failure.Message}");
+                    unopened.Add(output.Id);
                 }
 
                 continue;
@@ -111,6 +125,7 @@ public sealed class ProjectVideoOutputs : IDisposable
             if (headless)
             {
                 failures.Add($"“{output.Name}” not opened — no display");
+                unopened.Add(output.Id);
                 continue;
             }
 
@@ -141,10 +156,11 @@ public sealed class ProjectVideoOutputs : IDisposable
             {
                 // Reported, not thrown: one screen that will not open must not take the show down.
                 failures.Add($"“{output.Name}”: {failure.Message}");
+                unopened.Add(output.Id);
             }
         }
 
-        var result = new ProjectVideoOutputs { Failures = failures };
+        var result = new ProjectVideoOutputs { Failures = failures, Unopened = unopened };
         result._open.AddRange(opened);
 
         foreach (var (id, recorder) in recorders)

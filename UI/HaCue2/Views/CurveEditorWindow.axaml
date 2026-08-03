@@ -18,7 +18,8 @@
       <!-- The picker and the editor are the same strip: choosing "custom" is just selecting the last
            thumbnail, so there is never a mode the operator has to find. -->
       <ListBox DockPanel.Dock="Top" Theme="{StaticResource CurveOptions}" Classes="curves"
-               Margin="10,4" SelectedIndex="4"
+               Margin="10,4" SelectedIndex="{Binding SelectedCurve}"
+               IsEnabled="{Binding CanPickLaw}"
                ItemsSource="{Binding Curves}">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:CurveOption">

@@ -163,4 +163,114 @@ public sealed class CurveEditTests
         // Same subject, different property: editing a cue's fade must not swallow a drag on its lane.
         Assert.Equal(2, journal.Log.Count);
     }
+
+    // ── the curve picker (register: choosing a curve, not only drawing one) ────────────────────
+
+    [Fact]
+    public void PickingALawClearsTheDrawnPointsThatWouldHaveBeatenIt()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
+
+        journal.Do(CurveEdits.Move(target, 0, 0.2, 0.6));
+        journal.CloseGroup();
+        Assert.NotNull(fixture.Track.FadeInCurve.Points);
+
+        journal.Do(CurveEdits.PickLaw(target, FadeCurve.SCurve)!);
+        journal.CloseGroup();
+
+        // CurveSpec.Resolve follows preset → points → law. Setting the law and leaving the points
+        // would be a picker that changes the highlight and nothing an operator can hear.
+        Assert.Equal(FadeCurve.SCurve, fixture.Track.FadeInCurve.Law);
+        Assert.Null(fixture.Track.FadeInCurve.Points);
+    }
+
+    [Fact]
+    public void UndoingAPickPutsBackBothTheLawAndTheShape()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
+
+        fixture.Track.FadeInCurve.Law = FadeCurve.Exponential;
+        journal.Do(CurveEdits.Move(target, 0, 0.2, 0.6));
+        journal.CloseGroup();
+        var drawn = target.Read();
+
+        journal.Do(CurveEdits.PickLaw(target, FadeCurve.Linear)!);
+        journal.CloseGroup();
+        journal.Undo();
+
+        // One step, both halves. Restoring the shape under the new law — or the law under the old
+        // shape — would leave a curve nobody drew and nobody chose.
+        Assert.Equal(FadeCurve.Exponential, fixture.Track.FadeInCurve.Law);
+        Assert.Equal(drawn, target.Read());
+    }
+
+    [Fact]
+    public void UndoingAPickOnAnUntouchedCurveRestoresAbsence()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
+
+        journal.Do(CurveEdits.PickLaw(target, FadeCurve.SCurve)!);
+        journal.CloseGroup();
+        journal.Undo();
+
+        // The same trap Clear() exists for: writing the straight line the editor opens on would leave
+        // an inline list that beats the law being restored.
+        Assert.Null(fixture.Track.FadeInCurve.Points);
+        Assert.Equal(FadeCurve.EqualPower, fixture.Track.FadeInCurve.Law);
+    }
+
+    [Fact]
+    public void RepickingTheLawAlreadyInForceIsNotAnEdit()
+    {
+        var fixture = new TestProject();
+        var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
+
+        // The picker is rebuilt whenever the editor reloads, which re-selects the current entry. An
+        // undo step for that would bury the operator's real edits under their own scrolling.
+        Assert.Null(CurveEdits.PickLaw(target, FadeCurve.EqualPower));
+    }
+
+    [Fact]
+    public void RepickingTheCurrentLawOVERDrawnPointsIsStillAnEdit()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
+
+        journal.Do(CurveEdits.Move(target, 0, 0.2, 0.6));
+        journal.CloseGroup();
+
+        // "Give me plain equal power back" is a real request when a custom shape is drawn over it, and
+        // the law field alone cannot tell the two states apart.
+        Assert.NotNull(CurveEdits.PickLaw(target, FadeCurve.EqualPower));
+    }
+
+    [Fact]
+    public void APresetAndALaneHaveNoLawToPick()
+    {
+        var fixture = new TestProject();
+        var preset = new CurvePresetTarget(new CurvePreset { Name = "slow tail" });
+        var lane = new EffectLaneTarget(fixture.Track.Id, new EffectLane());
+
+        // They ARE the drawn shape, so the picker is disabled over them rather than offering four
+        // choices that would do nothing.
+        Assert.Null(preset.Law);
+        Assert.Null(lane.Law);
+        Assert.Null(CurveEdits.PickLaw(preset, FadeCurve.Linear));
+        Assert.Null(CurveEdits.PickLaw(lane, FadeCurve.Linear));
+    }
+
+    [Fact]
+    public void EveryPickerThumbnailNamesTheLawItDraws() =>
+        // The thumbnails are drawings of these. Out of step, the picker's pictures and its effects
+        // would disagree — the one failure nobody would think to look for.
+        Assert.All(
+            CurveEdits.Laws,
+            law => Assert.Equal(law, CurveEdits.Laws[CurveEdits.LawIndex(law)]));
 }

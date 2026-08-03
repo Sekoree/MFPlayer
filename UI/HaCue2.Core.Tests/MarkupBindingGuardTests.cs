@@ -34,10 +34,9 @@ public class MarkupBindingGuardTests
     /// </remarks>
     private static readonly Dictionary<string, string> Unimplemented = new(StringComparer.Ordinal)
     {
-        ["CurveEditorWindow.axaml:ListBox"] =
-            "the curve picker selects the custom thumbnail; choosing a curve is not wired to a document field yet",
-        ["TimelineSheet.axaml:ListBox"] =
-            "snap/free belongs to the timeline transport row, which is drawn and unimplemented in full",
+        // EMPTY, and that is a result rather than a stub: every input control in the app now writes
+        // somewhere. The last two out were the curve picker (it sets the fade law and clears the drawn
+        // points that would have beaten it) and the timeline's snap/free toggle.
     };
 
     /// <summary>Every view and control markup file in the app.</summary>

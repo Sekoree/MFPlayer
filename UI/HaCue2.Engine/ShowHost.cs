@@ -54,8 +54,17 @@ public sealed record ShowState(
 /// anything to play. Groups, jumps, fades, patches, actions and comments are resolved by this class
 /// when they fire — the session has no vocabulary for them and should not grow one.
 /// </para>
+/// <para>
+/// <b>Split across partials by what each part TALKS TO</b>, not by size: this file owns the lifecycle
+/// (devices in, document in, everything back out again), <c>Transport</c> the operator's verbs and
+/// what is sounding, <c>Execution</c> the <see cref="ICueExecutionHost"/> surface the executor drives,
+/// <c>Audition</c> the monitor rig, and <c>Triggers</c> the external-input side. They are one class
+/// because they are one object's worth of state — a session, a bay and a set of windows that have to
+/// be opened and closed together — and separate files because a reader arriving with a question about
+/// one of them should not have to walk the other four.
+/// </para>
 /// </remarks>
-public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
+public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
 {
     private readonly MediaRegistry _registry;
     private readonly ProjectPatchBay _bay;
@@ -67,10 +76,6 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
     private readonly ParameterRegistry _parameters;
     private readonly ProjectRecorders _recorders;
 
-    /// <summary>One binding object per parameter, so soft takeover has somewhere to keep its latch.</summary>
-    private readonly Dictionary<string, ContinuousBinding> _continuous = [];
-    private double _masterTrimDb;
-    private readonly Dictionary<Guid, Sounding> _sounding = [];
     private readonly List<string> _runtimeProblems = [];
     private readonly Lock _gate = new();
 
@@ -86,10 +91,6 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
     private readonly SemaphoreSlim _reloading = new(1, 1);
     private readonly CancellationTokenSource _life = new();
     private HaCueProject _project;
-    private bool _paused;
-
-    /// <summary>A cue that is holding a voice: when it started, and where it came from.</summary>
-    private readonly record struct Sounding(long StartedTicks, Guid ListId, bool IsFading);
 
     private ShowHost(
         MediaRegistry registry,
@@ -148,111 +149,6 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
     /// </remarks>
     public TriggerInputs Triggers => _triggers;
 
-    /// <summary>Carries out what a trigger asked for.</summary>
-    /// <remarks>
-    /// Deliberately the same methods the UI calls. A trigger that had its own fire path would be a
-    /// second implementation of "what GO means", and the two would eventually disagree in front of an
-    /// audience.
-    /// </remarks>
-    private async Task ApplyAsync(TriggerAction action)
-    {
-        switch (action.Target)
-        {
-            case TriggerTarget.Cue when action.CueId is { } cueId:
-                await FireAsync(cueId).ConfigureAwait(false);
-                break;
-
-            case TriggerTarget.Transport:
-                await TransportAsync(action.ParameterId).ConfigureAwait(false);
-                break;
-
-            case TriggerTarget.Parameter when action.Value is { } value:
-                ApplyParameter(action.ParameterId, value);
-                break;
-
-            case TriggerTarget.Parameter:
-                // A note-on bound to a fader-shaped parameter. Reported rather than dropped, because a
-                // binding that quietly does nothing reads as a dead controller.
-                Report($"“{action.Describe}” carries no value to write");
-                break;
-        }
-    }
-
-    /// <summary>
-    /// Rides one parameter from a control surface.
-    /// </summary>
-    /// <remarks>
-    /// <b>Soft takeover, by default.</b> A physical fader has its own position, and after a cue or the
-    /// mouse has moved a parameter the two disagree — applying the fader's value on its first move
-    /// would jump the level audibly, mid-show. The binding ignores the control until it passes close to
-    /// the current value and only then latches on. The binding object is kept per parameter because the
-    /// latch is state: rebuilt per message, it would never latch at all.
-    /// </remarks>
-    private void ApplyParameter(string parameterId, double value)
-    {
-        if (!_parameters.TryGetTarget(parameterId, out var target))
-        {
-            Report($"“{parameterId}” is not a parameter this show offers");
-            return;
-        }
-
-        ContinuousBinding binding;
-
-        lock (_gate)
-        {
-            if (!_continuous.TryGetValue(parameterId, out var existing))
-            {
-                // The trigger layer has already scaled into the binding's own range, so the spec's
-                // input range is that range rather than a raw 0..127.
-                existing = new ContinuousBinding(
-                    new ContinuousBindingSpec(
-                        parameterId,
-                        InputMin: target.Minimum,
-                        InputMax: target.Maximum,
-                        SoftTakeover: true),
-                    _parameters);
-
-                _continuous[parameterId] = existing;
-            }
-
-            binding = existing;
-        }
-
-        binding.Apply(value);
-    }
-
-    /// <summary>The transport verbs a trigger can name. Unknown names are reported, never guessed.</summary>
-    private async Task TransportAsync(string verb)
-    {
-        switch (verb.Trim().ToLowerInvariant())
-        {
-            case "go":
-                foreach (var list in _project.CueLists)
-                {
-                    await GoAsync(list).ConfigureAwait(false);
-                    break;
-                }
-
-                break;
-
-            case "stop":
-                await StopAllAsync().ConfigureAwait(false);
-                break;
-
-            case "panic":
-                await PanicAsync().ConfigureAwait(false);
-                break;
-
-            case "pause":
-                await SetPausedAsync(!IsPaused).ConfigureAwait(false);
-                break;
-
-            default:
-                Report($"“{verb}” is not a transport verb — try go, stop, pause or panic");
-                break;
-        }
-    }
-
     /// <summary>
     /// Lines that would not open, and anything else the operator should be told.
     /// </summary>
@@ -300,6 +196,30 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
 
     /// <summary>The show's recorders and streams — what is armed, where it is writing, and how it fares.</summary>
     public ProjectRecorders Recorders => _recorders;
+
+    /// <summary>
+    /// Video outputs that are not showing anything on this machine.
+    /// </summary>
+    /// <remarks>
+    /// Fixed at start-up, because that is when the windows are opened. An output added by an edit is
+    /// therefore not in here until the show is restarted — which is the truth: nothing opened a window
+    /// for it either.
+    /// </remarks>
+    public IReadOnlySet<Guid> AbsentVideoOutputs => _screens.Unopened;
+
+    /// <summary>What each action endpoint was last successfully sent, and when.</summary>
+    public IReadOnlyDictionary<Guid, string> LastSent => _actions.LastSent;
+
+    /// <summary>
+    /// Per-composition render telemetry — frames, layers, lateness.
+    /// </summary>
+    /// <remarks>
+    /// Lock-free and safe to call on the UI sweep. The ACHIEVED frame rate is deliberately not in here:
+    /// it is a delta of <c>FramesComposited</c> over wall time, and only the caller knows how long it
+    /// has been since it last looked.
+    /// </remarks>
+    public IReadOnlyList<ClipCompositionRuntimeStats> CompositionStats() =>
+        _session.GetAllCompositionStats();
 
     /// <summary>The whole bay as plain text — what "Copy report" puts on the clipboard.</summary>
     public string Report() =>
@@ -494,475 +414,6 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
         }
     }
 
-
-    // ── transport ─────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Fires the standby cue of a list and advances its cursor.
-    /// </summary>
-    /// <remarks>
-    /// The cursor is read BEFORE anything fires, because firing is what moves it. The cue is then
-    /// resolved by kind here rather than handed to <c>ShowSession.GoAsync</c>: the session would fire a
-    /// jump cue as a clip with nothing to play and call that success.
-    /// </remarks>
-    public async Task<Guid?> GoAsync(CueList list)
-    {
-        ArgumentNullException.ThrowIfNull(list);
-
-        var standby = await _session.GetStandbyCueAsync(ShowCompiler.GroupId(list)).ConfigureAwait(false);
-
-        if (standby is null || !Guid.TryParse(standby.Id, out var id))
-            return null;
-
-        await Executor.AdvanceAsync(list, id).ConfigureAwait(false);
-        await Executor.FireAsync(id).ConfigureAwait(false);
-        return id;
-    }
-
-    /// <summary>Puts a list's cursor on a cue without firing it.</summary>
-    public Task<bool> StandbyAsync(CueList list, Guid? cueId)
-    {
-        ArgumentNullException.ThrowIfNull(list);
-        return _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
-    }
-
-    /// <summary>Fires one cue by id, whatever the cursor is doing.</summary>
-    public Task<bool> FireAsync(Guid cueId) => Executor.FireAsync(cueId);
-
-    /// <summary>
-    /// Fires one cue, resolved by what kind of cue it is.
-    /// </summary>
-    /// <param name="depth">
-    /// How many cues deep into one operator GO this is. Auto-continue and jump-on-arrival both recurse
-    /// through here, and <see cref="MaxChainDepth"/> is what stops an authored loop becoming a hang.
-    /// </param>
-    /// <summary>
-    /// What firing a cue means, for every kind — extracted so it can be tested without devices.
-    /// </summary>
-    /// <remarks>
-    /// This class stays the DEVICE half: it owns the session, the bay, the sockets and the windows,
-    /// and implements <see cref="ICueExecutionHost"/> over them. The decisions live in
-    /// <see cref="CueExecutor"/>, which is the code with the most at stake and had no test behind it
-    /// while it could only be reached through a running session.
-    /// </remarks>
-    private CueExecutor Executor => _executor ??= new CueExecutor(this);
-
-    private CueExecutor? _executor;
-
-    // ── ICueExecutionHost ─────────────────────────────────────────────────────────────────────
-
-    HaCueProject ICueExecutionHost.Project => _project;
-
-    IReadOnlyList<Guid> ICueExecutionHost.Sounding => SoundingIds();
-
-    void ICueExecutionHost.Report(string problem) => Report(problem);
-
-    void ICueExecutionHost.MarkFading(Guid cueId) => MarkFading(cueId);
-
-    void ICueExecutionHost.Forget(Guid cueId) => Forget(cueId.ToString());
-
-    Task ICueExecutionHost.SetStandbyAsync(CueList list, Guid? cueId) =>
-        _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
-
-    Task ICueExecutionHost.StopCueAsync(Guid cueId) => _session.StopCueAsync(cueId.ToString());
-
-    Task<string?> ICueExecutionHost.SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint) =>
-        _actions.SendAsync(action, endpoint);
-
-    /// <summary>A wait that reports whether it completed, so a cancelled show stops its chains.</summary>
-    async Task<bool> ICueExecutionHost.DelayAsync(TimeSpan duration)
-    {
-        try
-        {
-            await Task.Delay(duration, _life.Token).ConfigureAwait(false);
-            return true;
-        }
-        catch (OperationCanceledException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>Hands a playable cue to the session and starts its clock.</summary>
-    async Task<bool> ICueExecutionHost.PlayAsync(CueNode cue, CueList? list)
-    {
-        var status = await _session.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
-
-        if (status != CueExecutionStatus.Fired)
-        {
-            if (status == CueExecutionStatus.Failed)
-                Report($"“{cue.Label}” did not fire");
-
-            return false;
-        }
-
-        Remember(cue.Id, list?.Id ?? Guid.Empty);
-        return true;
-    }
-
-    /// <summary>
-    /// Rewrites a sounding cue's send gains to a new level.
-    /// </summary>
-    /// <remarks>
-    /// This is the live send path, so it changes what a voice is doing without reopening it. The cue's
-    /// authored per-send gains are kept as the SHAPE — the fade moves the whole cue, so a send trimmed
-    /// 6 dB below its neighbour stays 6 dB below it.
-    /// </remarks>
-    async Task ICueExecutionHost.SetCueLevelAsync(Guid cueId, double levelDb)
-    {
-        if (_project.FindCue(cueId) is not MediaCueNode media)
-            return;
-
-        var sends = media.Sends
-            .Select(send => new ShowClipLogicalSend(
-                send.SourceChannel,
-                send.LogicalChannelId.ToString(),
-                send.Muted || levelDb <= GainRange.SilenceFloorDb
-                    ? 0f
-                    : (float)Math.Pow(10, (send.GainDb + levelDb) / 20)))
-            .ToList();
-
-        await _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends).ConfigureAwait(false);
-    }
-
-    /// <summary>Feeds the bay a series of intermediate patches, landing exactly on the destination.</summary>
-    async Task ICueExecutionHost.ApplyPatchAsync(
-        IReadOnlyList<PatchCell> origin, IReadOnlyList<PatchCell> destination, TimeSpan duration)
-    {
-        DocumentChangedByCue?.Invoke();
-
-        var steps = PatchRamp.StepsFor(duration);
-
-        for (var step = 1; step <= steps; step++)
-        {
-            // The LAST step pushes the destination itself rather than a blend at progress 1, so the
-            // live patch is bit-for-bit what the document says however the arithmetic rounded.
-            var cells = step == steps
-                ? destination
-                : PatchRamp.Blend(origin, destination, (double)step / steps);
-
-            foreach (var failure in _bay.Apply(_project, cells))
-                Report(failure);
-
-            if (step == steps)
-                break;
-
-            try
-            {
-                await Task.Delay(PatchRamp.Step, _life.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-        }
-    }
-
-    /// <summary>Runs a cue later, on the show's own clock. Cancelled with the show.</summary>
-    void ICueExecutionHost.Schedule(Guid cueId, TimeSpan when, int depth)
-    {
-        if (when <= TimeSpan.Zero)
-        {
-            _ = Executor.FireAsync(cueId, depth + 1);
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(when, _life.Token).ConfigureAwait(false);
-                await Executor.FireAsync(cueId, depth + 1).ConfigureAwait(false);
-            }
-            catch (Exception failure) when (failure is OperationCanceledException or ObjectDisposedException)
-            {
-                // The show stopped before this cue's moment arrived. Nothing to report.
-            }
-        });
-    }
-
-    // ── audition (register item 15) ────────────────────────────────────────────────────────────
-
-    private Guid _previewing;
-    private IVideoOutput? _auditionWindow;
-
-    /// <summary>The cue currently being auditioned, or null.</summary>
-    /// <remarks>
-    /// A preview is deliberately NOT in <see cref="ShowState.Sounding"/> and never appears in the
-    /// Active list: it is monitoring, not program. An operator glancing at Active during a show must
-    /// see what the audience can hear, and nothing else.
-    /// </remarks>
-    public Guid? Previewing
-    {
-        get
-        {
-            lock (_gate)
-                return _previewing == Guid.Empty ? null : _previewing;
-        }
-    }
-
-    /// <summary>
-    /// Auditions a cue through the rig, replacing whatever was previewing.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The endpoint is the rig's LINE, so the preview takes that line's own channel count — never a
-    /// hardcoded stereo pair (D8). Null names the bay's default monitor terminal, which is what makes
-    /// audition work on a one-interface rig nobody has configured.
-    /// </para>
-    /// <para>
-    /// One at a time by construction: the framework's preview player replaces the current preview, and
-    /// an operator auditioning two cues at once is hearing neither.
-    /// </para>
-    /// </remarks>
-    public async Task<bool> PreviewAsync(Guid cueId)
-    {
-        if (_project.FindCue(cueId) is not MediaCueNode media)
-            return false;
-
-        if (media.MediaPath.Length == 0)
-        {
-            Report($"“{media.Label}” has no media to audition");
-            return false;
-        }
-
-        await EnsureAuditionSurfaceAsync().ConfigureAwait(false);
-
-        var endpoint = _project.Audition.AudioLineId?.ToString();
-
-        try
-        {
-            if (!await _session.PreviewCueAsync(cueId.ToString(), endpoint).ConfigureAwait(false))
-            {
-                Report($"“{media.Label}” could not be auditioned");
-                return false;
-            }
-        }
-        catch (Exception failure) when (failure is ArgumentException or InvalidOperationException)
-        {
-            // A rig pointing at a line this machine did not open. Reported by name rather than thrown:
-            // the operator can pick another line, and the show is unaffected either way.
-            Report($"the audition rig could not be reached — {failure.Message}");
-            return false;
-        }
-
-        lock (_gate)
-            _previewing = cueId;
-
-        return true;
-    }
-
-    /// <summary>Stops the audition. Never touches the program — that is the whole point of the rig.</summary>
-    public async Task StopPreviewAsync()
-    {
-        await _session.StopPreviewAsync().ConfigureAwait(false);
-
-        lock (_gate)
-            _previewing = Guid.Empty;
-    }
-
-    /// <summary>
-    /// Brings the audition canvas up, or takes it down, to match the rig.
-    /// </summary>
-    /// <remarks>
-    /// Done lazily on the first audition rather than at start-up: a video surface costs a window, most
-    /// cues are audio, and an operator who never previews a video cue should never see one appear.
-    /// </remarks>
-    private async Task EnsureAuditionSurfaceAsync()
-    {
-        var rig = _project.Audition;
-
-        if (rig.Surface == AuditionSurface.None)
-        {
-            if (_auditionWindow is not null)
-                await TearDownAuditionSurfaceAsync().ConfigureAwait(false);
-
-            return;
-        }
-
-        if (_auditionWindow is not null)
-            return;
-
-        // Sized to the rig, or to the biggest composition in the show — the monitor should not be
-        // smaller than the thing it is monitoring.
-        var width = rig.SurfaceWidth > 0
-            ? rig.SurfaceWidth
-            : _project.Compositions.Select(item => item.Width).DefaultIfEmpty(1280).Max();
-
-        var height = rig.SurfaceHeight > 0
-            ? rig.SurfaceHeight
-            : _project.Compositions.Select(item => item.Height).DefaultIfEmpty(720).Max();
-
-        try
-        {
-            await _session.EnableAuditionCompositionAsync(
-                new AuditionCompositionSpec(width, height)).ConfigureAwait(false);
-
-            var window = new SDL3GLVideoOutput("HaCue2 · Audition", width, height);
-
-            if (await _session.AttachAuditionOutputAsync(window).ConfigureAwait(false))
-            {
-                _auditionWindow = window;
-            }
-            else
-            {
-                window.Dispose();
-                Report("the audition surface could not be attached");
-            }
-        }
-        catch (Exception failure) when (failure is not OutOfMemoryException)
-        {
-            // No display, no GL, no window manager. Audio auditioning still works, which is the half
-            // that matters most — so this is reported and stepped past, not thrown.
-            Report($"the audition surface could not be opened — {failure.Message}");
-        }
-    }
-
-    private async Task TearDownAuditionSurfaceAsync()
-    {
-        await _session.DetachAuditionOutputAsync().ConfigureAwait(false);
-        await _session.DisableAuditionCompositionAsync().ConfigureAwait(false);
-
-        (_auditionWindow as IDisposable)?.Dispose();
-        _auditionWindow = null;
-    }
-
-    // ── stopping ──────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Stops one cue — the bare STOP.
-    /// </summary>
-    /// <remarks>
-    /// A per-cue stop rather than a stop-all, because on a show with a music bed under a video the
-    /// operator who wants the video gone almost never wants the bed gone with it. Stop-all is a
-    /// separate, deliberate verb.
-    /// </remarks>
-    public async Task StopCueAsync(Guid cueId)
-    {
-        MarkFading(cueId);
-        await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
-        Forget(cueId.ToString());
-    }
-
-    /// <summary>Stops everything, fading over the project's stop fade.</summary>
-    public Task StopAllAsync() =>
-        StopEverythingAsync(TimeSpan.FromMilliseconds(_project.Settings.StopFadeMs));
-
-    /// <summary>
-    /// PANIC: stops everything over the project's panic fade.
-    /// </summary>
-    /// <remarks>
-    /// A fade rather than a cut, and a SHORT one — the setting defaults to 250 ms. A true hard cut
-    /// through a big PA is a thump that can damage drivers, so "as fast as is safe" is the honest
-    /// reading of panic, and the number stays the operator's to set.
-    /// </remarks>
-    public Task PanicAsync() =>
-        StopEverythingAsync(TimeSpan.FromMilliseconds(
-            _project.Settings.EffectivePanicFadeMs(MachinePanicFadeMs)));
-
-    private async Task StopEverythingAsync(TimeSpan fade)
-    {
-        lock (_gate)
-        {
-            foreach (var id in _sounding.Keys.ToList())
-                _sounding[id] = _sounding[id] with { IsFading = true };
-        }
-
-        await _session.StopAllAsync(fade).ConfigureAwait(false);
-
-        lock (_gate)
-            _sounding.Clear();
-    }
-
-    /// <summary>Pauses or resumes the show.</summary>
-    public async Task SetPausedAsync(bool paused)
-    {
-        await _session.SetPausedAsync(paused).ConfigureAwait(false);
-
-        lock (_gate)
-            _paused = paused;
-    }
-
-    public bool IsPaused
-    {
-        get
-        {
-            lock (_gate)
-                return _paused;
-        }
-    }
-
-    // ── what is sounding ──────────────────────────────────────────────────────────────────────
-
-    private void Remember(Guid cueId, Guid listId)
-    {
-        lock (_gate)
-            _sounding[cueId] = new Sounding(Stopwatch.GetTimestamp(), listId, IsFading: false);
-    }
-
-    private void MarkFading(Guid cueId)
-    {
-        lock (_gate)
-        {
-            if (_sounding.TryGetValue(cueId, out var entry))
-                _sounding[cueId] = entry with { IsFading = true };
-        }
-    }
-
-    private void Forget(string cueId)
-    {
-        if (!Guid.TryParse(cueId, out var id))
-            return;
-
-        lock (_gate)
-            _sounding.Remove(id);
-    }
-
-    private List<Guid> SoundingIds()
-    {
-        lock (_gate)
-            return [.. _sounding.Keys];
-    }
-
-    /// <summary>
-    /// What the show is doing, for the views.
-    /// </summary>
-    /// <remarks>
-    /// Pulled rather than pushed: the session raises events on its own thread and the UI wants a
-    /// consistent picture at a moment of its choosing, not a stream of edges to reassemble.
-    /// </remarks>
-    public async Task<ShowState> SnapshotAsync()
-    {
-        List<ActiveCueState> active;
-        HashSet<Guid> sounding;
-        bool paused;
-
-        lock (_gate)
-        {
-            sounding = [.. _sounding.Keys];
-            paused = _paused;
-            active =
-            [
-                .. _sounding.Select(entry => new ActiveCueState(
-                    entry.Key,
-                    entry.Value.ListId,
-                    Stopwatch.GetElapsedTime(entry.Value.StartedTicks),
-                    entry.Value.IsFading)),
-            ];
-        }
-
-        var standby = new Dictionary<Guid, Guid>();
-
-        foreach (var list in _project.CueLists)
-        {
-            var cue = await _session.GetStandbyCueAsync(ShowCompiler.GroupId(list)).ConfigureAwait(false);
-
-            if (cue is not null && Guid.TryParse(cue.Id, out var id))
-                standby[list.Id] = id;
-        }
-
-        return new ShowState(sounding, standby, active, paused, Problems);
-    }
 
     public async ValueTask DisposeAsync()
     {

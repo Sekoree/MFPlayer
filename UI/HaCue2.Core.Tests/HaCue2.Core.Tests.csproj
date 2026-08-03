@@ -28,6 +28,13 @@
              ramp behind a patch cue's fade is arithmetic with real edge cases (dB interpolation, a
              cell with no prior value, mute at the end of a ramp down) and belongs under test. -->
         <ProjectReference Include="..\HaCue2.Engine\HaCue2.Engine.csproj" />
+        <!-- And the app's PRESENTATION layer. Everything under HaCue2/Presentation turns measured
+             telemetry into rows, chips and readouts; it is pure and it is exactly where a silent
+             mistake lives (a chip that reads "fine" over an absent device, an fps divided by an
+             interval of nearly zero). It pulls Avalonia in transitively, but nothing here constructs
+             a control — the row types are plain records. The VIEWS are still tested from disk, by
+             MarkupBindingGuardTests, which needs the .axaml text rather than the types. -->
+        <ProjectReference Include="..\HaCue2\HaCue2.csproj" />
     </ItemGroup>
 
 </Project>

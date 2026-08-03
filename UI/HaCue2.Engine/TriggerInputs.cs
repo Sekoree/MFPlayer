@@ -53,6 +53,17 @@ public sealed class TriggerInputs : IAsyncDisposable
     /// <summary>Raised when a source could not be opened, or a binding could not be resolved.</summary>
     public event Action<string>? Problem;
 
+    /// <summary>
+    /// Where the incoming MIDI timecode says the show is.
+    /// </summary>
+    /// <remarks>
+    /// Fed from the same records bindings are matched against, because that is how it arrives: a
+    /// quarter-frame is a MIDI message on an input port this class already has open. A second port
+    /// opened just for timecode would be a second thing to configure and a port somebody else's
+    /// software then could not use.
+    /// </remarks>
+    public TimecodeChase Chase { get; } = new();
+
     /// <summary>Whether external input is live. False when a project opens (register item 3).</summary>
     public bool IsEnabled
     {
@@ -186,6 +197,10 @@ public sealed class TriggerInputs : IAsyncDisposable
             _session = null;
         }
 
+        // Whether or not a session was open: a chip still showing the last label a now-disconnected
+        // sender reached reads as a live chase over a dead cable.
+        Chase.Reset();
+
         if (session is null)
             return;
 
@@ -213,6 +228,12 @@ public sealed class TriggerInputs : IAsyncDisposable
     private void OnObserved(ControlMonitorRecord record)
     {
         var sourceId = record.DeviceInstanceId ?? record.ListenerId ?? Guid.Empty;
+
+        // Before the binding match and before the enabled gate: timecode is not a trigger, and a chip
+        // that stopped moving because nothing happened to be bound to that port would be a lie about
+        // the sender rather than about the show.
+        if (Chase.Feed(record))
+            return;
 
         if (TriggerMatching.Read(record, sourceId) is not { } signal)
             return;

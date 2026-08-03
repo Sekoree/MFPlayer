@@ -40,11 +40,18 @@ public sealed class EngineRuntime : IAsyncDisposable
 
     private readonly List<LogLine> _monitor = [];
 
+    /// <summary>Frame counts across ticks, which is the only way an achieved frame rate exists.</summary>
+    private readonly CompositionRates _rates = new();
+
     public EngineRuntime(ShowHost host, ShowRuntime runtime, HaCueProject project)
     {
         _host = host;
         _runtime = runtime;
         _project = project;
+
+        // Fixed for the life of the show: these are the windows that did not open when it started, and
+        // an output added by a later edit has no window either — which is what the row then says.
+        runtime.AbsentVideoOutputs = [.. host.AbsentVideoOutputs];
 
         // Every inbound message, matched or not. Raised on the I/O thread, so nothing here does more
         // than append — a PortMIDI poll that blocks is a poll that drops messages.
@@ -138,6 +145,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     private void AdoptBay()
     {
         var bay = _host.Diagnostics();
+        var compositions = _host.CompositionStats();
 
         _runtime.BayRows = BayPresentation.Rows(_project, bay);
         _runtime.Meters = BayPresentation.Meters(_project, bay);
@@ -145,6 +153,15 @@ public sealed class EngineRuntime : IAsyncDisposable
         _runtime.BaySummary = BayPresentation.Summary(bay);
         _runtime.BayClock = BayPresentation.Clock(_project, bay);
         _runtime.Recorders = _host.Recorders.Status();
+
+        // The video half of the same picture. Sampled here rather than on its own timer because the
+        // achieved frame rate is a delta and two clocks measuring it would report two different rates.
+        _runtime.CompositionStats =
+            OutputPresentation.Compositions(_project, compositions, _rates.Sample(compositions));
+        _runtime.LineChips = OutputPresentation.Chips(_project, bay, _runtime, compositions);
+        _runtime.ChaseReadout =
+            OutputPresentation.Chase(_host.Triggers.Chase.Read(), _host.Triggers.IsEnabled);
+        _runtime.LastSent = _host.LastSent;
     }
 
     private bool StandbyChanged(ShowState state) =>

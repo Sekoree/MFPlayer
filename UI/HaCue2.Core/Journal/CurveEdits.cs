@@ -32,6 +32,20 @@ public interface ICurveTarget
     /// </summary>
     bool HasStored { get; }
 
+    /// <summary>
+    /// The named law beside the points, when this target has one.
+    /// </summary>
+    /// <remarks>
+    /// Null for a preset and for an automation lane, and the difference is real rather than an
+    /// omission: a preset IS a drawn shape and a lane IS a drawn shape, so "equal power" is not
+    /// something either of them can be. Only a cue's <c>CurveSpec</c> carries a law that the drawn
+    /// points then override, which is why picking a named curve there has to CLEAR them.
+    /// </remarks>
+    FadeCurve? Law { get; }
+
+    /// <summary>Writes the named law. Only reached when <see cref="Law"/> is not null.</summary>
+    void WriteLaw(FadeCurve law);
+
     IReadOnlyList<CurveKnot> Read();
 
     void Write(IReadOnlyList<CurveKnot> knots);
@@ -66,6 +80,10 @@ public sealed class CurveSpecTarget(Guid subject, string property, CurveSpec spe
         spec.Points = [.. knots.Select(knot => new FadeCurvePoint(knot.X, knot.Y, knot.Hold))];
 
     public void Clear() => spec.Points = null;
+
+    public FadeCurve? Law => spec.Law;
+
+    public void WriteLaw(FadeCurve law) => spec.Law = law;
 }
 
 /// <summary>A named project curve preset.</summary>
@@ -85,6 +103,11 @@ public sealed class CurvePresetTarget(CurvePreset preset) : ICurveTarget
         preset.Points = [.. knots.Select(knot => new FadeCurvePoint(knot.X, knot.Y, knot.Hold))];
 
     public void Clear() => preset.Points = [];
+
+    /// <summary>A preset IS the drawn shape. There is no law for a named curve to fall back to.</summary>
+    public FadeCurve? Law => null;
+
+    public void WriteLaw(FadeCurve law) => throw new NotSupportedException("a preset has no law");
 }
 
 /// <summary>An automation lane on a cue (register item 18).</summary>
@@ -107,6 +130,11 @@ public sealed class EffectLaneTarget(Guid subject, EffectLane lane) : ICurveTarg
         lane.Points = [.. knots.Select(knot => new LanePoint(knot.X, knot.Y))];
 
     public void Clear() => lane.Points = [];
+
+    /// <summary>A lane is drawn, not chosen. Same reason a preset has no law.</summary>
+    public FadeCurve? Law => null;
+
+    public void WriteLaw(FadeCurve law) => throw new NotSupportedException("a lane has no law");
 }
 
 /// <summary>
@@ -159,6 +187,57 @@ public sealed class SetCurveCommand : ICoalescingCommand
     }
 }
 
+/// <summary>
+/// Picks a named law, and drops the drawn points that would otherwise beat it.
+/// </summary>
+/// <remarks>
+/// <b>Both halves, or neither.</b> <c>CurveSpec.Resolve</c> follows preset → inline points → law, so
+/// setting the law while an inline list survives changes nothing an operator can hear: they would pick
+/// "linear", watch the canvas keep their custom shape, and reasonably conclude the control is broken.
+/// Undo restores both, which is the whole reason this is one command rather than two.
+/// </remarks>
+public sealed class SetCurveLawCommand : IProjectCommand
+{
+    private readonly ICurveTarget _target;
+    private readonly FadeCurve _before;
+    private readonly IReadOnlyList<CurveKnot> _points;
+    private readonly bool _existed;
+    private readonly FadeCurve _after;
+
+    public SetCurveLawCommand(ICurveTarget target, FadeCurve law, string description)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        _target = target;
+        _before = target.Law ?? law;
+        _existed = target.HasStored;
+        _points = target.Read();
+        _after = law;
+        Description = description;
+    }
+
+    public string Domain => "cues";
+    public string Description { get; }
+
+    public void Apply(HaCueProject project)
+    {
+        _target.WriteLaw(_after);
+        _target.Clear();
+    }
+
+    public void Revert(HaCueProject project)
+    {
+        _target.WriteLaw(_before);
+
+        // Only if there WAS a drawn curve. Writing the straight line the editor opens on would leave
+        // an inline list that beats the law we just restored — the same trap Clear() exists for.
+        if (_existed)
+            _target.Write(_points);
+        else
+            _target.Clear();
+    }
+}
+
 /// <summary>The edits a curve editor makes: move a point, add one, remove one, toggle its hold.</summary>
 public static class CurveEdits
 {
@@ -203,6 +282,59 @@ public static class CurveEdits
         knots.RemoveAt(index);
         return new SetCurveCommand(target, Normalize(knots), "remove curve point");
     }
+
+    /// <summary>
+    /// The named laws the picker offers, in the order it draws them.
+    /// </summary>
+    /// <remarks>
+    /// Here rather than beside the thumbnails, because this is the list that has to agree with the
+    /// DOCUMENT. The thumbnails are drawings of these; getting them out of step would be a picker whose
+    /// pictures and effects disagree, which is the one failure nobody would look for.
+    /// </remarks>
+    public static IReadOnlyList<FadeCurve> Laws { get; } =
+        [FadeCurve.Linear, FadeCurve.EqualPower, FadeCurve.Exponential, FadeCurve.SCurve];
+
+    /// <summary>
+    /// Picks a named law for a target that has one, or refuses.
+    /// </summary>
+    /// <remarks>
+    /// Null for a preset or a lane, which have no law to set — see <see cref="ICurveTarget.Law"/>. Also
+    /// null when the law is ALREADY the one asked for and nothing is drawn over it: re-selecting the
+    /// current entry is what happens when the picker is rebuilt, and it must not push an undo step
+    /// nobody performed.
+    /// </remarks>
+    public static SetCurveLawCommand? PickLaw(ICurveTarget target, FadeCurve law)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        if (target.Law is not { } current)
+            return null;
+
+        return current == law && !target.HasStored
+            ? null
+            : new SetCurveLawCommand(target, law, $"use the {Name(law)} curve");
+    }
+
+    /// <summary>Where a law sits in <see cref="Laws"/>, or −1 for one the picker does not offer.</summary>
+    public static int LawIndex(FadeCurve law)
+    {
+        for (var index = 0; index < Laws.Count; index++)
+        {
+            if (Laws[index] == law)
+                return index;
+        }
+
+        return -1;
+    }
+
+    /// <summary>The operator-facing name of a law, matching the picker's captions.</summary>
+    public static string Name(FadeCurve law) => law switch
+    {
+        FadeCurve.Linear => "linear",
+        FadeCurve.Exponential => "expo",
+        FadeCurve.SCurve => "s-curve",
+        _ => "eq-power",
+    };
 
     public static SetCurveCommand? SetHold(ICurveTarget target, int index, bool hold)
     {

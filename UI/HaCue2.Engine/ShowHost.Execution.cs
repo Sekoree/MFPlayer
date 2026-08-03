@@ -1,0 +1,162 @@
+using HaCue2.Core.Compile;
+using HaCue2.Core.Model;
+using HaCue2.Core.Patch;
+using S.Media.Core.Audio;
+using S.Media.Session;
+
+namespace HaCue2.Engine;
+
+/// <summary>
+/// The <see cref="ICueExecutionHost"/> surface: everything firing a cue can ask the rig to do.
+/// </summary>
+/// <remarks>
+/// This is the DEVICE half of firing a cue, and it is deliberately dumb — play this, send that, wait,
+/// write these sends. What a cue MEANS lives in <see cref="CueExecutor"/>, which is the code with the
+/// most at stake and can be tested against a fake host because this interface is the only thing it
+/// touches.
+/// </remarks>
+public sealed partial class ShowHost
+{
+    /// <summary>
+    /// What firing a cue means, for every kind — extracted so it can be tested without devices.
+    /// </summary>
+    /// <remarks>
+    /// This class stays the DEVICE half: it owns the session, the bay, the sockets and the windows,
+    /// and implements <see cref="ICueExecutionHost"/> over them. The decisions live in
+    /// <see cref="CueExecutor"/>, which is the code with the most at stake and had no test behind it
+    /// while it could only be reached through a running session.
+    /// </remarks>
+    private CueExecutor Executor => _executor ??= new CueExecutor(this);
+
+    private CueExecutor? _executor;
+
+    HaCueProject ICueExecutionHost.Project => _project;
+
+    IReadOnlyList<Guid> ICueExecutionHost.Sounding => SoundingIds();
+
+    void ICueExecutionHost.Report(string problem) => Report(problem);
+
+    void ICueExecutionHost.MarkFading(Guid cueId) => MarkFading(cueId);
+
+    void ICueExecutionHost.Forget(Guid cueId) => Forget(cueId.ToString());
+
+    Task ICueExecutionHost.SetStandbyAsync(CueList list, Guid? cueId) =>
+        _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
+
+    Task ICueExecutionHost.StopCueAsync(Guid cueId) => _session.StopCueAsync(cueId.ToString());
+
+    Task<string?> ICueExecutionHost.SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint) =>
+        _actions.SendAsync(action, endpoint);
+
+    /// <summary>A wait that reports whether it completed, so a cancelled show stops its chains.</summary>
+    async Task<bool> ICueExecutionHost.DelayAsync(TimeSpan duration)
+    {
+        try
+        {
+            await Task.Delay(duration, _life.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Hands a playable cue to the session and starts its clock.</summary>
+    async Task<bool> ICueExecutionHost.PlayAsync(CueNode cue, CueList? list)
+    {
+        var status = await _session.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
+
+        if (status != CueExecutionStatus.Fired)
+        {
+            if (status == CueExecutionStatus.Failed)
+                Report($"“{cue.Label}” did not fire");
+
+            return false;
+        }
+
+        Remember(cue.Id, list?.Id ?? Guid.Empty);
+        return true;
+    }
+
+    /// <summary>
+    /// Rewrites a sounding cue's send gains to a new level.
+    /// </summary>
+    /// <remarks>
+    /// This is the live send path, so it changes what a voice is doing without reopening it. The cue's
+    /// authored per-send gains are kept as the SHAPE — the fade moves the whole cue, so a send trimmed
+    /// 6 dB below its neighbour stays 6 dB below it.
+    /// </remarks>
+    async Task ICueExecutionHost.SetCueLevelAsync(Guid cueId, double levelDb)
+    {
+        if (_project.FindCue(cueId) is not MediaCueNode media)
+            return;
+
+        var sends = media.Sends
+            .Select(send => new ShowClipLogicalSend(
+                send.SourceChannel,
+                send.LogicalChannelId.ToString(),
+                send.Muted || levelDb <= GainRange.SilenceFloorDb
+                    ? 0f
+                    : (float)Math.Pow(10, (send.GainDb + levelDb) / 20)))
+            .ToList();
+
+        await _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends).ConfigureAwait(false);
+    }
+
+    /// <summary>Feeds the bay a series of intermediate patches, landing exactly on the destination.</summary>
+    async Task ICueExecutionHost.ApplyPatchAsync(
+        IReadOnlyList<PatchCell> origin, IReadOnlyList<PatchCell> destination, TimeSpan duration)
+    {
+        DocumentChangedByCue?.Invoke();
+
+        var steps = PatchRamp.StepsFor(duration);
+
+        for (var step = 1; step <= steps; step++)
+        {
+            // The LAST step pushes the destination itself rather than a blend at progress 1, so the
+            // live patch is bit-for-bit what the document says however the arithmetic rounded.
+            var cells = step == steps
+                ? destination
+                : PatchRamp.Blend(origin, destination, (double)step / steps);
+
+            foreach (var failure in _bay.Apply(_project, cells))
+                Report(failure);
+
+            if (step == steps)
+                break;
+
+            try
+            {
+                await Task.Delay(PatchRamp.Step, _life.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>Runs a cue later, on the show's own clock. Cancelled with the show.</summary>
+    void ICueExecutionHost.Schedule(Guid cueId, TimeSpan when, int depth)
+    {
+        if (when <= TimeSpan.Zero)
+        {
+            _ = Executor.FireAsync(cueId, depth + 1);
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(when, _life.Token).ConfigureAwait(false);
+                await Executor.FireAsync(cueId, depth + 1).ConfigureAwait(false);
+            }
+            catch (Exception failure) when (failure is OperationCanceledException or ObjectDisposedException)
+            {
+                // The show stopped before this cue's moment arrived. Nothing to report.
+            }
+        });
+    }
+}

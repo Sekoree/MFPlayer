@@ -11,9 +11,9 @@ namespace HaCue2.Sample;
 /// </summary>
 /// <remarks>
 /// Every value here is INVENTED, and that is the whole reason this class is separate from
-/// <see cref="SampleProject"/>. Phase 5 replaces it with real telemetry from <c>ShowSession</c>; until
-/// then, anything the shell shows that comes through here is a picture of a show rather than a fact
-/// about one, and a reader can tell which is which by where it came from.
+/// <see cref="SampleProject"/>. It seeds the DESIGN-TIME picture only — the shell's previews and the
+/// sample show — and is guarded so that no real project can reach it. Once a session is running,
+/// <c>EngineRuntime</c> overwrites all of it with measured telemetry.
 /// </remarks>
 public static class SampleRuntime
 {
@@ -133,7 +133,7 @@ public static class SampleRuntime
                     [project.ActionEndpoints[0].Id] = "/eos/cue/7.2 · 14:01",
                     [project.ActionEndpoints[1].Id] = "/ch/01/mix/fader · 13:52",
                 }
-                : [],
+                : new Dictionary<Guid, string>(),
 
             CompositionStats = CompositionStats(project),
         };

@@ -34,10 +34,8 @@
           <Button Grid.Column="2" Classes="icon" Content="ZOOM −" />
           <Button Grid.Column="3" Classes="icon" Content="ZOOM +" />
           <Button Grid.Column="4" Classes="icon" Content="FIT" />
-          <ListBox Grid.Column="5" Theme="{StaticResource Segment}" SelectedIndex="0">
-            <ListBoxItem>snap</ListBoxItem>
-            <ListBoxItem>free</ListBoxItem>
-          </ListBox>
+          <ListBox Grid.Column="5" Theme="{StaticResource Segment}"
+                   ItemsSource="{Binding SnapModes}" SelectedItem="{Binding SnapMode}" />
           <Button Grid.Column="6" Content="DUCK UNDER…" Click="OnDuck" />
           <Button Grid.Column="8" Classes="icon" Content="{Binding DockLabel}" Click="OnUndock" />
           <Button Grid.Column="9" Classes="icon" Content="CLOSE ⎋" Click="OnClose" />

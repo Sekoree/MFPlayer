@@ -250,6 +250,62 @@ public partial class CurveEditorViewModel : ObservableObject
 
     public IReadOnlyList<CurveOption> Curves { get; } = CurveLibrary.Curves;
 
+    /// <summary>The index the picker's last entry sits at — "custom ✎".</summary>
+    private static int CustomIndex => CurveLibrary.Curves.Count - 1;
+
+    /// <summary>
+    /// Which curve the picker is showing, and picking one is what CHOOSES it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Drawn points beat the named law — <c>CurveSpec.Resolve</c> follows preset → points → law — so a
+    /// target with anything drawn on it reads as "custom" whatever its law says, and picking a named
+    /// entry has to drop those points. Both halves travel as ONE undo step, or an undo would leave the
+    /// law of one curve under the shape of another.
+    /// </para>
+    /// <para>
+    /// A preset and an automation lane have no law at all: they ARE the drawn shape. The picker parks
+    /// on "custom" for them and <see cref="CanPickLaw"/> turns it off, rather than offering four
+    /// choices that would do nothing.
+    /// </para>
+    /// </remarks>
+    public int SelectedCurve
+    {
+        get
+        {
+            if (_target is not { } target || target.HasStored || target.Law is not { } law)
+                return CustomIndex;
+
+            var index = CurveEdits.LawIndex(law);
+            return index < 0 ? CustomIndex : index;
+        }
+        set
+        {
+            if (_target is null || _journal is null || value < 0 || value > CustomIndex)
+                return;
+
+            // "custom ✎" is not a law — it is the decision to start drawing. It stores what the canvas
+            // is already showing, so the shape does not jump and the next drag edits rather than
+            // replaces. Without this the picker would bounce straight back off the last thumbnail.
+            IProjectCommand? command = value == CustomIndex
+                ? _target.HasStored
+                    ? null
+                    : new SetCurveCommand(_target, _target.Read(), "draw a custom curve")
+                : CurveEdits.PickLaw(_target, CurveEdits.Laws[value]);
+
+            if (command is null)
+                return;
+
+            _journal.Do(command);
+            _journal.CloseGroup();
+            SelectedIndex = -1;
+            Reload();
+        }
+    }
+
+    /// <summary>Whether there is a named law to pick. False for a preset and for an automation lane.</summary>
+    public bool CanPickLaw => _target?.Law is not null;
+
     /// <summary>
     /// The handles, in CANVAS space: y is flipped, because a level of 1 is drawn at the top.
     /// </summary>
@@ -386,6 +442,10 @@ public partial class CurveEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedPoint));
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(Segment));
+        // Drawing on the canvas moves the picker to "custom" on its own: the drawn points are now what
+        // the engine will play, and a picker still highlighting "eq-power" would be describing a curve
+        // the show no longer has.
+        OnPropertyChanged(nameof(SelectedCurve));
     }
 
     partial void OnSelectedIndexChanged(int value)
