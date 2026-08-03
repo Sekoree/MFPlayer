@@ -9,6 +9,7 @@ using HaCue2.Machine;
 using HaCue2.Presentation;
 using HaCue2.Sample;
 using HaCue2.Session;
+using S.Media.Core.Diagnostics;
 
 namespace HaCue2.ViewModels;
 
@@ -1090,12 +1091,85 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
     // wrong yet.
     public IReadOnlyList<BayRow> BayRows => runtime.BayRows;
     public IReadOnlyList<CompositionStatsRow> Compositions => runtime.CompositionStats;
-    public IReadOnlyList<LogLine> Log => runtime.Log;
+
+    /// <summary>
+    /// The live tail of the app's ONE logging pipeline (register item 27).
+    /// </summary>
+    /// <remarks>
+    /// Read straight off the ring rather than copied through the runtime, because the ring already is
+    /// the bounded window this panel wants — a second buffer would be a second thing to keep in step.
+    /// The FILTER is applied here rather than at the sink so turning it down shows what has already
+    /// been captured, instead of only what arrives afterwards. A fault that reproduces once is the
+    /// reason that distinction matters.
+    /// </remarks>
+    public IReadOnlyList<LogLine> Log =>
+        AppLogging.Current is not { } logging
+            ? []
+            : [.. logging.Ring.Snapshot()
+                .Where(entry => entry.Level >= Threshold)
+                .OrderByDescending(entry => entry.Timestamp)
+                .Select(Line)];
 
     public IReadOnlyList<string> Levels { get; } = ["Trace", "Debug", "Information", "Warning", "Error"];
 
     [ObservableProperty]
-    private string _minimumLevel = "Warning";
+    [NotifyPropertyChangedFor(nameof(Log))]
+    [NotifyPropertyChangedFor(nameof(LogSummary))]
+    private string _minimumLevel = "Information";
+
+    private Microsoft.Extensions.Logging.LogLevel Threshold => MinimumLevel switch
+    {
+        "Trace" => Microsoft.Extensions.Logging.LogLevel.Trace,
+        "Debug" => Microsoft.Extensions.Logging.LogLevel.Debug,
+        "Warning" => Microsoft.Extensions.Logging.LogLevel.Warning,
+        "Error" => Microsoft.Extensions.Logging.LogLevel.Error,
+        _ => Microsoft.Extensions.Logging.LogLevel.Information,
+    };
+
+    /// <summary>How much of the window is being shown, and what the ring had to drop.</summary>
+    /// <remarks>
+    /// The drop count is worth surfacing: a burst that overflowed the ring means the interesting line
+    /// may already be gone, and an operator reading a tail that silently lost records would draw the
+    /// wrong conclusion from what is left.
+    /// </remarks>
+    public string LogSummary
+    {
+        get
+        {
+            if (AppLogging.Current is not { } logging)
+                return "no logging pipeline";
+
+            var dropped = logging.Ring.DroppedCount;
+            var shown = Log.Count;
+
+            return dropped == 0
+                ? $"{shown} line(s) at {MinimumLevel} and above"
+                : $"{shown} line(s) · {dropped} older line(s) dropped from the ring";
+        }
+    }
+
+    private static LogLine Line(LogRingEntry entry) => new(
+        entry.Timestamp.ToLocalTime().ToString("HH:mm:ss"),
+        entry.Level switch
+        {
+            Microsoft.Extensions.Logging.LogLevel.Trace => "TRACE",
+            Microsoft.Extensions.Logging.LogLevel.Debug => "DEBUG",
+            Microsoft.Extensions.Logging.LogLevel.Warning => "WARN",
+            Microsoft.Extensions.Logging.LogLevel.Error => "ERROR",
+            Microsoft.Extensions.Logging.LogLevel.Critical => "CRIT",
+            _ => "INFO",
+        },
+        // Short category: "S.Media.Routing.AudioRouter" is a column nobody can read at that width, and
+        // the last segment is the part that identifies the source.
+        entry.Category.Split('.') is { Length: > 0 } parts ? parts[^1] : entry.Category,
+        entry.Exception is null ? entry.Message : $"{entry.Message} — {entry.Exception.Message}",
+        entry.Level switch
+        {
+            Microsoft.Extensions.Logging.LogLevel.Warning => Gel.Amber,
+            >= Microsoft.Extensions.Logging.LogLevel.Error => Gel.Red,
+            Microsoft.Extensions.Logging.LogLevel.Debug or Microsoft.Extensions.Logging.LogLevel.Trace => Gel.Steel,
+            _ => Gel.Neutral,
+        });
 
     public string BayHeader => runtime.BaySummary.Length > 0 ? runtime.BaySummary : "no session";
 
@@ -1134,6 +1208,7 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
         OnPropertyChanged(nameof(BayRows));
         OnPropertyChanged(nameof(Compositions));
         OnPropertyChanged(nameof(Log));
+        OnPropertyChanged(nameof(LogSummary));
         OnPropertyChanged(nameof(BayHeader));
         OnPropertyChanged(nameof(BayWarning));
         OnPropertyChanged(nameof(HasWarning));
@@ -1143,6 +1218,7 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
     public void ResetCounters()
     {
         host?.ClearProblems();
+        AppLogging.Current?.Ring.Clear();
         Refresh();
     }
 

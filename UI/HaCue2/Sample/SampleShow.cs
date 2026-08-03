@@ -19,8 +19,7 @@ namespace HaCue2.Sample;
 /// </para>
 /// <para>
 /// Remaining, with what each is waiting for: <see cref="Overrides"/> needs the project override
-/// ledger, <see cref="RemoteEndpoints"/> needs the remote API server, <see cref="LogTail"/> needs the
-/// log ring provider wired up, and external input's wire monitor is now live.
+/// ledger, <see cref="RemoteEndpoints"/> needs the remote API server, and the log tail is now a live read of the MEL pipeline.
 /// </para>
 /// </remarks>
 public static class SampleShow
@@ -49,13 +48,4 @@ public static class SampleShow
     // ── screen 15 · telemetry the engine will supply ──────────────────────────────────────────
     // Reached only through ShowRuntime, never bound directly: invented numbers standing in for
     // AudioPatchBay.SnapshotDiagnostics() and the log ring.
-
-    public static IReadOnlyList<LogLine> LogTail { get; } =
-    [
-        new("14:02:11", "WARN", "S.Media.Routing", "OutputPump Record: Submit took 118 ms", Gel.Amber),
-        new("13:58:40", "ERROR", "HaCue2.Audio", "logical output Lobby unpatched — 2 senders routed silent", Gel.Red),
-        new("13:58:40", "WARN", "HaCue2.Status", "project status: 2 errors, 2 warnings", Gel.Amber),
-        new("13:44:02", "INFO", "S.Media.Session", "clock master 18i20 epoch 7 · 48 000 native"),
-    ];
-
 }

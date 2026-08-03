@@ -41,9 +41,11 @@
 
       <c:PanelBox Grid.Row="0" Header="Audio bay" Hint="{Binding BayHeader}">
         <c:PanelBox.Footer>
-          <Border Classes="chain">
+          <!-- Only when there IS something wrong. A standing "RECORD BEHIND" badge over an empty
+               line was on screen whatever the bay was doing, which teaches an operator to ignore it. -->
+          <Border Classes="chain" IsVisible="{Binding HasWarning}">
             <DockPanel LastChildFill="True">
-                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge bad"><TextBlock Text="RECORD BEHIND" /></Border>
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge bad"><TextBlock Text="ATTENTION" /></Border>
                 <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" TextWrapping="Wrap"
                          Text="{Binding BayWarning}" />
               </DockPanel>
@@ -138,7 +140,7 @@
 
         <!-- Not a second event collector: a level-filtered tail of the SAME Microsoft.Extensions.Logging
              pipeline the file log uses (register item 27). One logging system, two readers. -->
-        <c:PanelBox Grid.Column="1" Header="Log tail" Hint="MS logging pipeline · follows the file log">
+        <c:PanelBox Grid.Column="1" Header="Log tail" Hint="{Binding LogSummary}">
           <DockPanel>
             <Border DockPanel.Dock="Top" Classes="chain flush" Padding="10,5">
               <StackPanel Orientation="Horizontal" Spacing="8">

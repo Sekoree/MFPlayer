@@ -42,6 +42,9 @@
              Themes/Controls/Tree.axaml restates the templates on the booth-dark palette instead. -->
         <PackageReference Include="TreeDataGrid.Avalonia"/>
         <PackageReference Include="CommunityToolkit.Mvvm"/>
+        <!-- Register item 27: the Diagnostics tail is a reader over the MEL pipeline, not a second
+             event-collection system. The app installs one factory and the framework logs into it. -->
+        <PackageReference Include="Microsoft.Extensions.Logging"/>
     </ItemGroup>
 
     <ItemGroup>

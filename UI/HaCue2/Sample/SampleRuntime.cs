@@ -136,7 +136,6 @@ public static class SampleRuntime
                 : [],
 
             CompositionStats = CompositionStats(project),
-            Log = SampleShow.LogTail,
         };
     }
 

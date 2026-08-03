@@ -1938,3 +1938,18 @@ A new lane opens on two points at unity: an editor over an empty list has no han
 at unity changes nothing until dragged, so adding one is safe mid-show. Each row says what the lane
 will actually DO — "needs at least two points", "no endpoint, so nothing is sent" — rather than a point
 count that implies it reaches the engine when it does not.
+
+**The log tail (same day).** Register item 27's premise held but the app had **no logging wired at
+all** — not merely a sample list on the panel, but a `MediaDiagnostics.LoggerFactory` still set to the
+null factory, so the framework's own logs went nowhere. `Session/AppLogging` now installs one
+`LoggerFactory` carrying a `LogRingProvider` and hands it to `MediaDiagnostics` at startup, before
+anything logs; that hand-off is what makes the session, the router and the patch bay appear in the
+panel, which is the interesting half — a wedged output pump reports itself from inside the routing
+layer.
+
+The ring captures at Debug regardless of what the panel shows, and the FILTER is applied on read. So
+turning the level down reveals what was already captured rather than only what arrives afterwards,
+which is what a fault that reproduces once needs. The panel reports the ring's drop count, because a
+tail that silently lost records invites the wrong conclusion from what is left. `SampleShow.LogTail`
+is retired; the file is down to 51 lines and two members (the override ledger and the remote API
+route table).

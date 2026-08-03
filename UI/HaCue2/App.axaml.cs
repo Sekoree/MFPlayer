@@ -29,6 +29,11 @@ public partial class App : Application
     {
         Settings = AppSettingsStore.Load();
 
+        // Before anything that logs, and before the framework is touched: MediaDiagnostics resolves
+        // per-category loggers from whatever factory is installed at the moment it is asked, so a
+        // session started before this ran would log into a null sink for its whole life.
+        AppLogging.Install(Settings);
+
         // Before any window: the override dictionary has to be on the application for the first
         // layout, or the app visibly re-flows on the operator's first look at it.
         Appearance.Current.Attach(this);
