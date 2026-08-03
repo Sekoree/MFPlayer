@@ -63,6 +63,16 @@ public sealed record AppSettings
     public string ConfirmStopAll { get; set; } = "3 cues";
     public bool StandbyFollowsClick { get; set; }
 
+    /// <summary>
+    /// The machine's panic fade, in milliseconds. A project may override it (register item 26).
+    /// </summary>
+    /// <remarks>
+    /// A fade rather than a cut even here: a true hard cut through a big PA is a thump that can damage
+    /// drivers, so "as fast as is safe" is the honest reading of panic and the number stays the
+    /// operator's to set.
+    /// </remarks>
+    public int PanicFadeMs { get; set; } = 250;
+
     // ── new project defaults (register item 20) ───────────────────────────────────────────────
     public bool AutoRenumberDefault { get; set; } = true;
 

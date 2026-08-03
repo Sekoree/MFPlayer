@@ -2001,3 +2001,21 @@ parameter, because the latch is state that would never form if it were rebuilt p
 
 A parameter binding carries the target's own range and **no repeat filter**: a fader sends a stream,
 and the 250 ms filter that stops a button bouncing would make one lurch.
+
+**The override ledger (same day) — and the end of the sample data.** Register item 26's ledger needed
+a model change first: `ProjectSettings.PanicFadeMs` was a plain int with a default, which cannot
+express "this project does not care", so every project silently pinned whatever value it was created
+with and the ledger had nothing real to show. It is `int?` now, with the machine default on
+`AppSettings` and the engine taking it from the shell — a session that read machine preferences itself
+would make the two scopes one.
+
+Every row is derived from the two scopes, so the ledger cannot claim an override the document does not
+hold. Both values are shown side by side, because a project override always wins and must always be
+visible: somebody reading the application pane has to be able to see that the number in front of them
+is not the one in force. `revert ×` clears it, journaled — removing an override changes what the show
+DOES.
+
+With that, **`SampleShow` is deleted.** Every value the shell displays now comes from the document,
+the machine, or a running session. `Sample/` holds only `SampleProject` (a demo document, reachable
+via `HACUE2_START=main`) and `SampleRuntime` (guarded so any project but the demo gets an idle
+runtime).

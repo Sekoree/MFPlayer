@@ -113,7 +113,22 @@ public sealed record ProjectSettings
 
     public int StopFadeMs { get; set; } = 750;
     public CurveSpec StopFadeCurve { get; set; } = new();
-    public int PanicFadeMs { get; set; } = 250;
+
+    /// <summary>
+    /// A project override of the machine's panic fade, or null to inherit it.
+    /// </summary>
+    /// <remarks>
+    /// Nullable is what makes it an OVERRIDE rather than a copy (register item 26). A plain int with a
+    /// default cannot express "this project does not care", so every project would silently pin the
+    /// value it happened to be created with and the ledger would have nothing to show.
+    /// </remarks>
+    public int? PanicFadeMs { get; set; }
+
+    /// <summary>The machine default when a project does not override it.</summary>
+    public const int DefaultPanicFadeMs = 250;
+
+    /// <summary>The panic fade this project actually uses, given the machine's own default.</summary>
+    public int EffectivePanicFadeMs(int machineDefault) => PanicFadeMs ?? machineDefault;
 
     /// <summary>
     /// Register item 3: external input is off when a project opens. A show that starts answering MIDI

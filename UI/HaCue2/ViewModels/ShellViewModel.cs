@@ -185,6 +185,7 @@ public partial class ShellViewModel : ObservableObject
             await Host.Triggers.SetEnabledAsync(true).ConfigureAwait(true);
         Cues.Engine = Host;
         Targets.Host = Host;
+        Host.MachinePanicFadeMs = Settings.PanicFadeMs;
         Audio.NoteAudioStarted();
 
         _engine = new EngineRuntime(Host, Runtime, Project);

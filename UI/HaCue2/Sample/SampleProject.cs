@@ -252,7 +252,6 @@ public static class SampleProject
             {
                 MediaRoot = "~/shows/midsummer-media",
                 StopFadeMs = 750,
-                PanicFadeMs = 250,
                 RemoteApi = new RemoteApiOverride { Enabled = true, Port = 8420, LanAllowed = true },
             },
             AudioLines = [interface18i20, ndi, record, stream, wedge],

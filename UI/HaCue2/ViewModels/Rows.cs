@@ -7,7 +7,7 @@ namespace HaCue2.ViewModels;
 /// </summary>
 /// <remarks>
 /// They are immutable records rather than observable objects on purpose. A row in this shell never
-/// changes after it is created — the data comes from <see cref="Sample.SampleShow"/> — and making them
+/// changes after it is created — a row is built from the document or the runtime and replaced, never mutated — and making them
 /// observable now would invent a change-notification design before there is a document to notify about.
 /// When the engine lands, the rows that genuinely tick (active cues, meters, diagnostics counters)
 /// become observables and the rest stay exactly as they are.

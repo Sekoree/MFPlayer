@@ -372,7 +372,7 @@
                 <DockPanel LastChildFill="True">
                 <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="RULE" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                             Text="a project override always wins and is always visible in both scopes — never a silent winner" />
+                             Text="{Binding OverrideNote}" />
               </DockPanel>
               </Border>
             </c:PanelBox.Footer>
@@ -387,14 +387,20 @@
                   <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="" />
                 </Grid>
               </Border>
-              <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Overrides}">
+              <c:EmptyState IsVisible="{Binding !HasOverrides}"
+                            Headline="This project overrides nothing"
+                            Detail="Every setting on the application pages is the one in force." />
+              <ListBox Theme="{StaticResource TableRows}" IsVisible="{Binding HasOverrides}"
+                       ItemsSource="{Binding Overrides}">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:OverrideRow">
                     <Grid ColumnDefinitions="200,180,*,80" ColumnSpacing="8" Margin="8,4">
                       <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Setting}" />
                       <TextBlock Grid.Column="1" Classes="mono dim3 small" Text="{Binding AppValue}" />
                       <TextBlock Grid.Column="2" Classes="mono dim2 small" Text="{Binding ProjectValue}" />
-                      <Button Grid.Column="3" Theme="{StaticResource LinkButton}" Content="revert ×" />
+                      <Button Grid.Column="3" Theme="{StaticResource LinkButton}" Content="revert ×"
+                              Click="OnRevertOverride" Tag="{Binding Setting}"
+                              ToolTip.Tip="Inherit the machine's value again" />
                     </Grid>
                   </DataTemplate>
                 </ListBox.ItemTemplate>

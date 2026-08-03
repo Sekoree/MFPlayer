@@ -452,7 +452,7 @@ public partial class SettingsViewModel : ObservableObject
         [
             new() { Name = "Show behaviour" },
             new() { Name = "Authoring defaults" },
-            new() { Name = "Overrides", Tally = _settings.RemoteApi is null ? "1 active" : "2 active" },
+            new() { Name = "Overrides", Tally = OverrideTally(_settings) },
             new() { Name = "Save, autosave & recovery" },
             new() { Name = "Project status" },
         ];
@@ -639,7 +639,90 @@ public partial class SettingsViewModel : ObservableObject
     public IReadOnlyList<SettingsPane> ApplicationPanes { get; }
 
     public IReadOnlyList<SettingsPane> ProjectPanes { get; }
-    public IReadOnlyList<OverrideRow> Overrides { get; } = SampleShow.Overrides;
+
+    /// <summary>
+    /// What this project defeats about the machine (register item 26).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The overridable set is frozen at panic fade, remote API and hotkeys. Each row is derived from
+    /// the two scopes rather than authored, so the ledger cannot claim an override the document does
+    /// not hold — which is exactly what the sample version did, permanently listing two.
+    /// </para>
+    /// <para>
+    /// A project override always WINS and is always VISIBLE in both scopes, which is why the row shows
+    /// the app value beside it: an operator looking at the application pane has to be able to see that
+    /// the number in front of them is not the one in force.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<OverrideRow> Overrides =>
+    [
+        .. new[]
+        {
+            _settings.PanicFadeMs is { } panic
+                ? new OverrideRow("Panic fade", Seconds(_app.PanicFadeMs), Seconds(panic))
+                : null,
+
+            _settings.RemoteApi is { } remote
+                ? new OverrideRow(
+                    "Remote API",
+                    _app.RemoteDefault == "on" ? $"on · port {_app.RemotePort}" : "off",
+                    remote.Enabled ? $"on · port {remote.Port}" : "off")
+                : null,
+        }.OfType<OverrideRow>(),
+    ];
+
+    public bool HasOverrides => Overrides.Count > 0;
+
+    /// <summary>Said out loud rather than left as an empty table nobody can interpret.</summary>
+    public string OverrideNote => HasOverrides
+        ? "A project override always wins, and is shown in both scopes."
+        : "This project overrides nothing — every setting here is the machine's.";
+
+    /// <summary>
+    /// Clears one override, so the project inherits the machine's value again.
+    /// </summary>
+    /// <remarks>
+    /// Journaled, because removing an override changes what the show DOES: a project that had pinned a
+    /// 150 ms panic fade and now inherits 250 ms behaves differently, and that is exactly the sort of
+    /// change somebody needs to be able to take back.
+    /// </remarks>
+    public void RevertOverride(string setting)
+    {
+        if (_journal is null)
+            return;
+
+        switch (setting)
+        {
+            case "Panic fade":
+                Write("panicFade", () => _settings.PanicFadeMs, value => _settings.PanicFadeMs = value,
+                    (int?)null, "inherit the machine's panic fade");
+                break;
+
+            case "Remote API":
+                Write("remoteApi", () => _settings.RemoteApi, value => _settings.RemoteApi = value,
+                    (RemoteApiOverride?)null, "inherit the machine's remote API setting");
+                break;
+
+            default:
+                return;
+        }
+
+        OnPropertyChanged(nameof(Overrides));
+        OnPropertyChanged(nameof(HasOverrides));
+        OnPropertyChanged(nameof(OverrideNote));
+        OnPropertyChanged(nameof(ApplicationPanes));
+    }
+
+    /// <summary>How many overrides this project actually holds — nothing when it holds none.</summary>
+    private static string OverrideTally(ProjectSettings settings)
+    {
+        var count = (settings.PanicFadeMs is null ? 0 : 1) + (settings.RemoteApi is null ? 0 : 1);
+        return count == 0 ? "" : $"{count} active";
+    }
+
+    private static string Seconds(int milliseconds) =>
+        (milliseconds / 1000d).ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) + " s";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsAppearancePane))]

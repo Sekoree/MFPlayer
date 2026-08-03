@@ -126,6 +126,15 @@ public sealed class ShowHost : IAsyncDisposable
     public ParameterRegistry Parameters => _parameters;
 
     /// <summary>
+    /// The machine's own panic fade, used when the project does not override it.
+    /// </summary>
+    /// <remarks>
+    /// Set by the shell from app settings. The engine cannot read them itself — machine preferences
+    /// are the app's, and a session that reached for them would make the two scopes one.
+    /// </remarks>
+    public int MachinePanicFadeMs { get; set; } = ProjectSettings.DefaultPanicFadeMs;
+
+    /// <summary>
     /// The external-input sources, and the one master gate over them (register item 3).
     /// </summary>
     /// <remarks>
@@ -1055,7 +1064,8 @@ public sealed class ShowHost : IAsyncDisposable
     /// reading of panic, and the number stays the operator's to set.
     /// </remarks>
     public Task PanicAsync() =>
-        StopEverythingAsync(TimeSpan.FromMilliseconds(_project.Settings.PanicFadeMs));
+        StopEverythingAsync(TimeSpan.FromMilliseconds(
+            _project.Settings.EffectivePanicFadeMs(MachinePanicFadeMs)));
 
     private async Task StopEverythingAsync(TimeSpan fade)
     {
