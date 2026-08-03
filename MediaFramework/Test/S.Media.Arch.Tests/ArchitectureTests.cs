@@ -147,9 +147,14 @@ public sealed class ArchitectureTests
             "S.Media.Compositor", "S.Media.Gpu",
             // Action cues send OSC from here, beside the transport that fires them.
             "OSCLib",
-            // Local-screen video outputs, opened directly until HaOutput's HaPlay couplings are
-            // inverted and both apps can share one output engine (gap analysis §7.1).
+            // Local-screen video outputs, opened directly: HaOutput is not on this branch, so there
+            // is no shared output engine here to consume (gap analysis §7.1 describes one that lives
+            // on next-fix-enhance-round).
             "S.Media.Present.SDL3",
+            // External input. S.Control owns MIDI/OSC discovery, name matching and hot-plug; HaCue2
+            // adds only the binding half. HaControl.Input, which the plan names for this, is likewise
+            // not on this branch.
+            "S.Control", "S.Control.Abstractions",
         ],
         // Machine facts: what this box has and what a file turned out to be. Separate from
         // HaCue2.Core because everything here needs real hardware or a real decoder, and Core has to

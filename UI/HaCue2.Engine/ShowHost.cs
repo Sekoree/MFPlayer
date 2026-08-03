@@ -71,6 +71,7 @@ public sealed class ShowHost : IAsyncDisposable
     private readonly ShowSession _session;
     private readonly HashSet<string> _attached = [];
     private readonly ActionSender _actions = new();
+    private readonly TriggerInputs _triggers;
     private readonly Dictionary<Guid, Sounding> _sounding = [];
     private readonly List<string> _runtimeProblems = [];
     private readonly Lock _gate = new();
@@ -93,6 +94,75 @@ public sealed class ShowHost : IAsyncDisposable
         _screens = screens;
         _session = session;
         _project = project;
+        _triggers = new TriggerInputs(project);
+    }
+
+    /// <summary>
+    /// The external-input sources, and the one master gate over them (register item 3).
+    /// </summary>
+    /// <remarks>
+    /// Exposed rather than hidden because the toggle lives in the transport bar and the wire monitor
+    /// lives in Targets — both are the app's, and neither belongs behind a transport verb.
+    /// </remarks>
+    public TriggerInputs Triggers => _triggers;
+
+    /// <summary>Carries out what a trigger asked for.</summary>
+    /// <remarks>
+    /// Deliberately the same methods the UI calls. A trigger that had its own fire path would be a
+    /// second implementation of "what GO means", and the two would eventually disagree in front of an
+    /// audience.
+    /// </remarks>
+    private async Task ApplyAsync(TriggerAction action)
+    {
+        switch (action.Target)
+        {
+            case TriggerTarget.Cue when action.CueId is { } cueId:
+                await FireAsync(cueId).ConfigureAwait(false);
+                break;
+
+            case TriggerTarget.Transport:
+                await TransportAsync(action.ParameterId).ConfigureAwait(false);
+                break;
+
+            case TriggerTarget.Parameter:
+                // The parameter registry is not wired yet: cc → master trim needs a registry of
+                // writable parameters, which is its own piece of work. Reported rather than dropped,
+                // so a binding that does nothing says so instead of looking like a dead controller.
+                Report($"“{action.Describe}” — parameter bindings are not implemented yet");
+                break;
+        }
+    }
+
+    /// <summary>The transport verbs a trigger can name. Unknown names are reported, never guessed.</summary>
+    private async Task TransportAsync(string verb)
+    {
+        switch (verb.Trim().ToLowerInvariant())
+        {
+            case "go":
+                foreach (var list in _project.CueLists)
+                {
+                    await GoAsync(list).ConfigureAwait(false);
+                    break;
+                }
+
+                break;
+
+            case "stop":
+                await StopAllAsync().ConfigureAwait(false);
+                break;
+
+            case "panic":
+                await PanicAsync().ConfigureAwait(false);
+                break;
+
+            case "pause":
+                await SetPausedAsync(!IsPaused).ConfigureAwait(false);
+                break;
+
+            default:
+                Report($"“{verb}” is not a transport verb — try go, stop, pause or panic");
+                break;
+        }
     }
 
     /// <summary>
@@ -191,6 +261,11 @@ public sealed class ShowHost : IAsyncDisposable
         var session = new ShowSession(registry, backend, programAudioTarget: target);
         var host = new ShowHost(registry, bay, screens, session, project);
 
+        // External input drives the show through the SAME verbs the buttons do — a triggered GO is a
+        // GO, not a second code path that can drift from the one an operator tested with.
+        host._triggers.Triggered += action => _ = host.ApplyAsync(action);
+        host._triggers.Problem += host.Report;
+
         foreach (var failure in screens.Failures)
             host.Report(failure);
 
@@ -249,6 +324,7 @@ public sealed class ShowHost : IAsyncDisposable
             Report(failure);
 
         await AttachScreensAsync().ConfigureAwait(false);
+        await _triggers.ReloadAsync(project).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1031,6 +1107,9 @@ public sealed class ShowHost : IAsyncDisposable
                 _auditionWindow = null;
             }
         }
+
+        // Before the session: a trigger arriving mid-teardown would reach for a disposed transport.
+        await _triggers.DisposeAsync().ConfigureAwait(false);
 
         await _session.DisposeAsync().ConfigureAwait(false);
         _actions.Dispose();

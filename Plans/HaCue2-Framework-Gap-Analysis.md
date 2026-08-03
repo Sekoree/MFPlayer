@@ -1718,3 +1718,21 @@ Worth recording because both were silent and both are the kind that reappear:
 - **`CueList.Flatten` is depth-first**, so "the next cue after a group" is the group's first CHILD
   unless the subtree is skipped. Auto-continue on a group therefore fired that child twice. The rule
   now lives once, in `HaCue2.Core.Model.CueOrder`, shared by the engine and the editor's no-session GO.
+
+
+### Correction (2026-08-03) — three libraries this document assumes are not on this branch
+
+`§7.1 HaOutput`, `§7.2 HaSource` and `§5.1 HaControl.Input` are described here as existing in the
+tree. **They exist only on `next-fix-enhance-round`.** `git ls-tree` on `cue-separation` has never
+carried `UI/HaOutput`, `UI/HaSource` or `UI/HaControl.Input`; the arch map's entries for them are
+allowances for libraries that would exist, not evidence that they do.
+
+Two things follow, and both are already decided in the tree:
+
+- **§7.1's "eight couplings to invert" is not a live task on this branch** — there is no shared output
+  engine here to consume, so HaCue2 opening its own `SDL3GLVideoOutput`s duplicates nothing that
+  exists alongside it. The merge question belongs to whenever the branches meet.
+- **External input could not be built on `HaControl.Input`.** It is built on **`S.Control`** instead,
+  which is framework-clean (Core, Session, Abstractions, PMLib, OSCLib, Mond) and already owns MIDI/OSC
+  discovery, name matching and hot-plug. HaCue2 adds only the binding half — `TriggerMatching` (pure,
+  24 tests) and `TriggerInputs` (device ownership + the master gate).

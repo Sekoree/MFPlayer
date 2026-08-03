@@ -32,6 +32,11 @@
              which HaCue2 cannot reference; until that engine's HaPlay couplings are inverted, this
              opens its own windows. -->
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Present.SDL3\S.Media.Present.SDL3.csproj" />
+        <!-- External input (register item 3). S.Control already owns MIDI/OSC device discovery,
+             matching and hot-plug — the fiddly half — and is framework-clean, so HaCue2 consumes it
+             rather than re-deriving a second device layer. HaControl.Input, which the plan names for
+             this, lives on next-fix-enhance-round and is not on this branch. -->
+        <ProjectReference Include="..\..\MediaFramework\Control\S.Control\S.Control.csproj" />
     </ItemGroup>
 
 </Project>

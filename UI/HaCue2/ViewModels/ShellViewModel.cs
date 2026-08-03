@@ -176,6 +176,13 @@ public partial class ShellViewModel : ObservableObject
 
         _backend = backend;
         Host = await ShowHost.StartAsync(Project, backend, Runtime.MediaDurations).ConfigureAwait(true);
+
+        // Register item 3: external input is OFF when a project opens, unless the show says otherwise.
+        // A show that starts answering MIDI the instant it loads fires cues during a get-in.
+        IsExternalInputEnabled = !Project.Settings.ExternalInputOffOnOpen;
+
+        if (IsExternalInputEnabled)
+            await Host.Triggers.SetEnabledAsync(true).ConfigureAwait(true);
         Cues.Engine = Host;
         Audio.NoteAudioStarted();
 
@@ -453,6 +460,20 @@ public partial class ShellViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     private bool _isExternalInputEnabled;
+
+    /// <summary>
+    /// Opens or closes the input devices to match the toggle.
+    /// </summary>
+    /// <remarks>
+    /// The devices are opened only while the toggle is on rather than opened once and filtered: an app
+    /// holding a MIDI port it is deliberately ignoring is a port another program cannot use, which is
+    /// a rude thing to do to somebody's rig during a get-in.
+    /// </remarks>
+    partial void OnIsExternalInputEnabledChanged(bool value)
+    {
+        if (Host is { } host)
+            _ = host.Triggers.SetEnabledAsync(value);
+    }
 
     /// <summary>Register item 4 — hidden by default, F9 or the status-bar toggle summons it.</summary>
     [ObservableProperty]

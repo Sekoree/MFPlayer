@@ -1891,3 +1891,25 @@ is in `HaCue2.Core.Tests`, which now also reaches `HaCue2.Engine`'s pure parts.
 - **§7.1's eight `HaOutput` couplings became a decision rather than a task.** HaCue2 needed video
   outputs before they could be inverted, so it opens its own. Whether the two apps end up sharing one
   output engine is now a Phase 6 question, when HaPlay's side is being dismantled anyway.
+
+
+### Phase 5 progress — 2026-08-03 (continued)
+
+**Audition rig.** `AuditionRig` on the project: the audio side names a project LINE rather than a raw
+device, which is D8 taken literally — the rig takes that line's channel count, travels with the show,
+goes absent elsewhere, relinks on arrival. Null means the bay's default monitor terminal, which is why
+audition works before anybody configures it. `ShowHost.PreviewAsync` goes through the framework's
+monitoring seam, so a preview never reaches the program mix and never appears in the Active list. The
+video surface opens lazily on first use. Ctrl+P, the cue context menu, a transport readout, and a new
+"Audition rig" status check (a warning, never an error — preview falls back).
+
+**External input.** Built on **`S.Control`**, not `HaControl.Input`, which is not on this branch (see
+the gap analysis correction). `TriggerInputs` owns a `ControlInputSession` and the master gate;
+`TriggerMatching` is the pure half — patterns written the way the wire monitor prints them, so an
+operator can copy a line they can see into a binding. Register item 3 holds: one toggle, off when a
+project opens unless the show says otherwise, and it never gates GO. Devices are opened only while the
+toggle is on rather than opened and filtered — holding a MIDI port the app is ignoring takes it from
+somebody else's rig.
+
+Still open on external input: the parameter registry (cc → master trim is refused out loud rather than
+guessed), wall-clock schedules, MTC chase, and a Learn button.
