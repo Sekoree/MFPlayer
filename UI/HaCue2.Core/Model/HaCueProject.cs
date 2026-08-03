@@ -57,6 +57,16 @@ public sealed record HaCueProject
     /// <summary>Named partial patch states, recalled by patch cues or by hand.</summary>
     public List<PatchSnapshot> PatchSnapshots { get; set; } = [];
 
+    /// <summary>
+    /// The audition rig — where preview is heard and seen (register item 15).
+    /// </summary>
+    /// <remarks>
+    /// Always present rather than nullable: a rig with no line named is a valid, working configuration
+    /// (it monitors through the bay's default terminal), so "absent" and "unconfigured" would be the
+    /// same state expressed two ways.
+    /// </remarks>
+    public AuditionRig Audition { get; set; } = new();
+
     public List<CompositionDefinition> Compositions { get; set; } = [];
     public List<VideoOutputDefinition> VideoOutputs { get; set; } = [];
     public List<ActionEndpoint> ActionEndpoints { get; set; } = [];

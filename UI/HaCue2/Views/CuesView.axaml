@@ -83,7 +83,12 @@
         <Button Grid.Column="3" Content="REMOVE" Click="OnRemove" />
         <Button Grid.Column="4" Classes="icon" Content="RENUMBER…" Click="OnRenumber" />
         <TextBlock Grid.Column="6" Classes="mono dim3 small" VerticalAlignment="Center"
+                   IsVisible="{Binding !IsPreviewing}"
                    Text="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).TransportHint}" />
+        <!-- An audition is inaudible in the room, so the only way an operator knows it is running is
+             to be told. Shown in place of the hint, which is advice they have already read. -->
+        <TextBlock Grid.Column="6" Classes="mono small" VerticalAlignment="Center"
+                   IsVisible="{Binding IsPreviewing}" Text="{Binding PreviewHint}" />
       </Grid>
     </Border>
 
@@ -127,6 +132,7 @@
             <TreeDataGrid.ContextMenu>
               <ContextMenu>
                 <MenuItem Header="Fire this cue now" Click="OnFireSelected" />
+                <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" Click="OnPreview" />
                 <MenuItem Header="Move standby here" Click="OnStandbyHere" />
                 <Separator />
                 <MenuItem Header="Open timeline" Click="OnOpenTimeline" />

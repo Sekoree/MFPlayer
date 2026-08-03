@@ -304,6 +304,38 @@ public partial class CuesViewModel : ObservableObject
 
     public string PauseLabel => IsPaused ? "RESUME" : "PAUSE";
 
+    /// <summary>
+    /// Auditions the selected cue — "Preview on audition outputs" (register item 15).
+    /// </summary>
+    /// <remarks>
+    /// Monitoring, never program: it enters the bay as a monitor input, so it cannot be heard by the
+    /// audience and never appears in the Active list. That is what makes it safe to press mid-show,
+    /// and why it is offered on every cue's context menu rather than hidden behind a mode.
+    /// </remarks>
+    public void PreviewSelected()
+    {
+        if (Engine is { } host && SelectedCue is { } row)
+            _ = host.PreviewAsync(row.Id);
+    }
+
+    public void StopPreview() => _ = Engine?.StopPreviewAsync();
+
+    /// <summary>Whether anything is being auditioned, for the transport's own readout.</summary>
+    public bool IsPreviewing => Engine?.Previewing is not null;
+
+    public string PreviewHint
+    {
+        get
+        {
+            if (Engine?.Previewing is not { } id)
+                return "";
+
+            return _journal.Project.FindCue(id) is { } cue
+                ? $"auditioning Q{CuePresentation.Number(cue.Number)} · {cue.Label}"
+                : "auditioning";
+        }
+    }
+
     /// <summary>Fires the selected cue directly, whatever the cursor is doing.</summary>
     public void FireSelected()
     {
@@ -594,6 +626,8 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(ActivePanelHint));
         OnPropertyChanged(nameof(IsPaused));
         OnPropertyChanged(nameof(PauseLabel));
+        OnPropertyChanged(nameof(IsPreviewing));
+        OnPropertyChanged(nameof(PreviewHint));
     }
 
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>

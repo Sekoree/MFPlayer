@@ -78,6 +78,10 @@ public partial class CuesView : UserControl
     private void OnFireSelected(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.FireSelected();
 
+    /// <summary>Auditions the selected cue. Monitoring only — it never reaches the program mix.</summary>
+    private void OnPreview(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.PreviewSelected();
+
     /// <summary>
     /// PANIC is HELD, not clicked.
     /// </summary>

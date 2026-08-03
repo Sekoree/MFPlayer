@@ -32,6 +32,10 @@ public partial class AudioViewModel : ObservableObject
         Lines = AudioPresentation.Lines(project, runtime);
         _selectedLine = Lines.FirstOrDefault(row => row.Kind.StartsWith("File", StringComparison.Ordinal))
                         ?? Lines.FirstOrDefault();
+
+        // One rig object, shared with the Video view's copy of the pane: it is a single thing, and two
+        // view-models over it would drift the moment either was edited.
+        Audition = new AuditionViewModel(journal);
     }
 
     public const string PatchTab = "PATCH";
@@ -483,30 +487,207 @@ public partial class AudioViewModel : ObservableObject
         OnPropertyChanged(nameof(PatchColumns));
         OnPropertyChanged(nameof(Senders));
         OnPropertyChanged(nameof(Snapshots));
+        Audition.Refresh();
     }
 
     // ── 08b · audition ────────────────────────────────────────────────────────────────────────
-    public AuditionViewModel Audition { get; } = new();
+    public AuditionViewModel Audition { get; }
 }
 
 /// <summary>One stored snapshot, as the pane lists it. The id is what RECALL and UPDATE act on.</summary>
 public sealed record SnapshotRow(Guid Id, string Text);
 
-/// <summary>The audition rig — an audio device plus a video surface, shared by the Audio and Video views.</summary>
+/// <summary>
+/// The audition rig — one audio line plus one video surface, shared by the Audio and Video views.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The audio side lists the project's own LINES rather than raw devices (D8): the rig is an output
+/// like any other, so it takes that line's channel count, travels with the show, and goes absent on a
+/// machine that lacks it. Its settings are journaled like any other project edit.
+/// </para>
+/// <para>
+/// Every field here was a hardcoded string until the rig existed in the model — the pane described a
+/// booth that only appeared in the mockup.
+/// </para>
+/// </remarks>
 public partial class AuditionViewModel : ObservableObject
 {
-    public IReadOnlyList<string> Devices { get; } =
-        ["built-in headphones", "18i20 · Out 9/10", "Behringer UCA222"];
+    private readonly ProjectJournal? _journal;
 
-    [ObservableProperty] private string _device = "built-in headphones";
-    [ObservableProperty] private string _level = "−12.0 dB";
+    /// <summary>The preview-only rig, for a designer preview with no document behind it.</summary>
+    public AuditionViewModel()
+    {
+    }
 
-    /// <summary>Ducks the monitor while the program is sounding — the booth's own ears, not the mix.</summary>
-    [ObservableProperty] private bool _duckWhenProgramSounds = true;
+    public AuditionViewModel(ProjectJournal journal) => _journal = journal;
 
-    public IReadOnlyList<string> Surfaces { get; } = ["window", "screen 2", "none"];
+    private HaCueProject? Project => _journal?.Project;
 
-    [ObservableProperty] private string _surface = "window";
+    private AuditionRig? Rig => Project?.Audition;
 
-    public string Size { get; } = "960×540 · follows composition aspect";
+    /// <summary>
+    /// The lines the rig can monitor through, plus the bay's own default.
+    /// </summary>
+    /// <remarks>
+    /// "Default monitor line" is a real answer, not a placeholder: it is the first line the bay opened,
+    /// which on a one-interface rig is the right one and is why audition works before anybody configures
+    /// it.
+    /// </remarks>
+    public IReadOnlyList<string> Devices =>
+        Project is not { } project
+            ? ["default monitor line"]
+            : ["default monitor line", .. project.AudioLines.Select(
+                line => $"{line.Name} · {line.Channels}ch")];
+
+    public int DeviceIndex
+    {
+        get
+        {
+            if (Project is not { } project || Rig?.AudioLineId is not { } id)
+                return 0;
+
+            var at = project.AudioLines.FindIndex(line => line.Id == id);
+            return at < 0 ? 0 : at + 1;
+        }
+        set
+        {
+            if (_journal is null || Project is not { } project || Rig is not { } rig || value < 0)
+                return;
+
+            var chosen = value == 0 || value > project.AudioLines.Count
+                ? (Guid?)null
+                : project.AudioLines[value - 1].Id;
+
+            if (chosen == rig.AudioLineId)
+                return;
+
+            _journal.Do(new SetValueCommand<Guid?>(
+                Guid.Empty, "auditionLine", "audio",
+                () => rig.AudioLineId, id => rig.AudioLineId = id, chosen, "set audition line"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(DeviceIndex));
+            OnPropertyChanged(nameof(Width));
+        }
+    }
+
+    /// <summary>
+    /// How wide the audition path will be — read from the chosen line, never assumed.
+    /// </summary>
+    /// <remarks>
+    /// D8's whole point, said on screen: a rig on an 8-channel interface auditions in 8 channels. The
+    /// two candidate answers this replaced were "always stereo" and "the project's logical width",
+    /// and neither survives auditioning through a multichannel interface.
+    /// </remarks>
+    public string Width
+    {
+        get
+        {
+            if (Project is not { } project)
+                return "";
+
+            if (Rig?.AudioLineId is not { } id)
+                return "follows the bay's default monitor line";
+
+            return project.FindLine(id) is { } line
+                ? $"{line.Channels} channel(s), from the line itself"
+                : "that line is no longer in this project";
+        }
+    }
+
+    public string Level
+    {
+        get => Rig is { } rig ? CuePresentation.Db(rig.LevelDb) : "−12.0";
+        set
+        {
+            if (_journal is null || Rig is not { } rig)
+                return;
+
+            var text = value.Replace('−', '-').Replace("dB", "", StringComparison.OrdinalIgnoreCase).Trim();
+
+            if (!double.TryParse(text, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var db))
+                return;
+
+            _journal.Do(new SetValueCommand<double>(
+                Guid.Empty, "auditionLevel", "audio",
+                () => rig.LevelDb, level => rig.LevelDb = level, Math.Clamp(db, GainRange.SilenceFloorDb, 12),
+                "set audition level"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(Level));
+        }
+    }
+
+    public bool DuckWhenProgramSounds
+    {
+        get => Rig is not { DuckWhenProgramSounds: false };
+        set
+        {
+            if (_journal is null || Rig is not { } rig || value == rig.DuckWhenProgramSounds)
+                return;
+
+            _journal.Do(new SetValueCommand<bool>(
+                Guid.Empty, "auditionDuck", "audio",
+                () => rig.DuckWhenProgramSounds, on => rig.DuckWhenProgramSounds = on, value,
+                value ? "duck the monitor" : "do not duck the monitor"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(DuckWhenProgramSounds));
+        }
+    }
+
+    public IReadOnlyList<string> Surfaces { get; } = ["none", "window"];
+
+    public int SurfaceIndex
+    {
+        get => Rig is { } rig ? (int)rig.Surface : 0;
+        set
+        {
+            if (_journal is null || Rig is not { } rig || value < 0 || value >= Surfaces.Count
+                || (AuditionSurface)value == rig.Surface)
+                return;
+
+            _journal.Do(new SetValueCommand<AuditionSurface>(
+                Guid.Empty, "auditionSurface", "audio",
+                () => rig.Surface, surface => rig.Surface = surface, (AuditionSurface)value,
+                $"audition surface: {Surfaces[value]}"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(SurfaceIndex));
+            OnPropertyChanged(nameof(Size));
+        }
+    }
+
+    /// <summary>What the audition canvas will be, once one is opened.</summary>
+    public string Size
+    {
+        get
+        {
+            if (Rig is not { Surface: AuditionSurface.Window })
+                return "audio only — no window is opened";
+
+            if (Rig is { SurfaceWidth: > 0, SurfaceHeight: > 0 } sized)
+                return $"{sized.SurfaceWidth}×{sized.SurfaceHeight}";
+
+            // The monitor should not be smaller than the thing it is monitoring.
+            var width = Project?.Compositions.Select(item => item.Width).DefaultIfEmpty(1280).Max() ?? 1280;
+            var height = Project?.Compositions.Select(item => item.Height).DefaultIfEmpty(720).Max() ?? 720;
+
+            return $"{width}×{height} · follows the largest composition";
+        }
+    }
+
+    /// <summary>Re-reads the rig after an edit elsewhere, or an undo.</summary>
+    public void Refresh()
+    {
+        OnPropertyChanged(nameof(Devices));
+        OnPropertyChanged(nameof(DeviceIndex));
+        OnPropertyChanged(nameof(Width));
+        OnPropertyChanged(nameof(Level));
+        OnPropertyChanged(nameof(DuckWhenProgramSounds));
+        OnPropertyChanged(nameof(SurfaceIndex));
+        OnPropertyChanged(nameof(Size));
+    }
 }

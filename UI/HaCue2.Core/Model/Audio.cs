@@ -145,6 +145,62 @@ public sealed record PatchLevelChange
     public bool Muted { get; set; }
 }
 
+/// <summary>
+/// The audition rig: one audio line plus one video surface (register item 15).
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>One rig, not two halves.</b> Auditioning is a single thing an operator does — "let me hear and
+/// see this before I fire it" — so the pane that configures it appears in both the Audio and Video
+/// views rather than being split across them.
+/// </para>
+/// <para>
+/// <b>The audio side names a project LINE, not a device</b> (D8). The rig is an output like any other:
+/// it takes that line's own channel count rather than being hardcoded stereo, it travels with the show,
+/// it goes absent on a machine that lacks it, and it relinks on arrival — all for the same reasons
+/// register item 14 gives for every other line. Naming a raw device here would make the audition path
+/// the one output in the app that behaved differently from the rest.
+/// </para>
+/// <para>
+/// Null <see cref="AudioLineId"/> means the bay's default monitor line, which is the first line that
+/// opened. That is a real answer on a one-interface rig and the reason the rig works before anybody
+/// configures it.
+/// </para>
+/// </remarks>
+public sealed record AuditionRig
+{
+    /// <summary>The line to monitor through, or null for the bay's default monitor terminal.</summary>
+    public Guid? AudioLineId { get; set; }
+
+    public AuditionSurface Surface { get; set; } = AuditionSurface.None;
+
+    /// <summary>
+    /// Monitor trim, applied to the audition path only.
+    /// </summary>
+    /// <remarks>
+    /// Never reaches the program mix: the whole point of auditioning is that it cannot be heard by the
+    /// audience, so this gain stage is outside the composition chain the plan documents.
+    /// </remarks>
+    public double LevelDb { get; set; } = -12;
+
+    /// <summary>Ducks the monitor while the program is sounding — the booth's own ears, not the mix.</summary>
+    public bool DuckWhenProgramSounds { get; set; } = true;
+
+    /// <summary>The audition canvas size. Follows the largest composition when left at zero.</summary>
+    public int SurfaceWidth { get; set; }
+
+    public int SurfaceHeight { get; set; }
+}
+
+public enum AuditionSurface
+{
+    /// <summary>Audio only. The default: a video surface costs a window and most cues are audio.</summary>
+    None,
+
+    /// <summary>A window on the operator's own screen.</summary>
+    Window,
+}
+
 /// <summary>A cue's send from one source channel into one logical output (the N×V matrix).</summary>
 public sealed record CueAudioSend
 {

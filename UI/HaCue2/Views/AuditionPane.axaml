@@ -13,11 +13,16 @@
 
     <c:PanelBox Grid.Column="0" Header="Audition audio" VerticalAlignment="Top">
       <StackPanel Margin="0,6,0,8">
-        <HeaderedContentControl Theme="{StaticResource Field}" Header="Device">
-          <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding Device}" />
+        <!-- Lines, not raw devices (D8): the rig is an output like any other, so it takes that
+             line's own channel count and travels with the show. -->
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="Line">
+          <ComboBox ItemsSource="{Binding Devices}" SelectedIndex="{Binding DeviceIndex}" />
+        </HeaderedContentControl>
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="Width">
+          <TextBox Classes="ro" Text="{Binding Width}" />
         </HeaderedContentControl>
         <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
-          <TextBox Classes="short" Text="{Binding Level}" />
+          <TextBox Classes="short" Text="{Binding Level}" LostFocus="OnFieldCommitted" />
         </HeaderedContentControl>
         <CheckBox Margin="10,4" IsChecked="{Binding DuckWhenProgramSounds}"
                   Content="Duck audition when program is sounding" />
@@ -40,7 +45,7 @@
       <StackPanel Margin="0,6,0,8">
         <HeaderedContentControl Theme="{StaticResource Field}" Header="Surface">
           <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Surfaces}"
-                   SelectedItem="{Binding Surface}" />
+                   SelectedIndex="{Binding SurfaceIndex}" />
         </HeaderedContentControl>
         <HeaderedContentControl Theme="{StaticResource Field}" Header="Size">
           <TextBox Classes="ro" Text="{Binding Size}" />

@@ -59,7 +59,7 @@ public partial class ShellViewModel : ObservableObject
             MediaFacts = media => machine.Media.Facts(MediaPaths.Resolve(project, media.MediaPath, null)),
         };
         Audio = new AudioViewModel(Journal, Runtime);
-        Video = new VideoViewModel(project, Runtime, Journal);
+        Video = new VideoViewModel(project, Runtime, Journal) { Audition = Audio.Audition };
         Targets = new TargetsViewModel(project, Runtime, Journal);
         OutputInfo = new OutputInfoViewModel(Runtime);
 

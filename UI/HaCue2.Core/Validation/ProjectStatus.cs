@@ -123,12 +123,50 @@ public static class ProjectStatus
             CheckMedia(project, projectPath, environment),
             CheckAudioLines(project, environment),
             CheckVideoOutputs(project, environment, documentIssues),
+            CheckAudition(project),
             CheckCompiles(project),
         };
 
         checks.AddRange(DocumentChecks(documentIssues));
 
         return new ProjectStatusReport(checks, Stopwatch.GetElapsedTime(started).TotalSeconds);
+    }
+
+    /// <summary>
+    /// The audition rig points somewhere that still exists.
+    /// </summary>
+    /// <remarks>
+    /// A WARNING, never an error: a rig naming a line the show no longer has means preview falls back
+    /// to the bay's default monitor terminal, which still works. The audience hears nothing different
+    /// either way — audition is monitoring — so this must not be the thing that blocks a get-in.
+    /// </remarks>
+    private static StatusCheck CheckAudition(HaCueProject project)
+    {
+        var rig = project.Audition;
+
+        if (rig.AudioLineId is not { } id)
+            return new StatusCheck("Audition rig", CheckOutcome.Passed, "default monitor line", "", []);
+
+        if (project.FindLine(id) is { } line)
+        {
+            // The WIDTH is the interesting fact (D8): the rig takes the line's own channel count, so
+            // an operator reading this row learns what auditioning will actually sound like.
+            return new StatusCheck(
+                "Audition rig", CheckOutcome.Passed, $"{line.Name} · {line.Channels}ch", "", []);
+        }
+
+        return new StatusCheck(
+            "Audition rig",
+            CheckOutcome.Warning,
+            "the line it names is gone",
+            "pick another line on the Audition pane",
+            [
+                new ShowValidationIssue(
+                    ShowValidationSeverity.Warning,
+                    "the audition line is no longer in this project — preview falls back to the default monitor line",
+                    "audition",
+                    id.ToString()),
+            ]);
     }
 
     private static StatusCheck CheckMedia(

@@ -152,7 +152,15 @@ public partial class VideoViewModel : ObservableObject
 
     public IReadOnlyList<string> WarpModes { get; } = ["off", "3×3", "5×5"];
 
-    public AuditionViewModel Audition { get; } = new();
+    /// <summary>
+    /// The SAME rig the Audio view configures.
+    /// </summary>
+    /// <remarks>
+    /// Handed in rather than constructed here: the audition rig is one thing (register item 15), and
+    /// two view-models over it would drift the moment either was edited — the operator would set a
+    /// surface in Video and find it unset in Audio.
+    /// </remarks>
+    public AuditionViewModel Audition { get; init; } = new();
 
     /// <summary>The journal, for the dialogs the view opens.</summary>
     public ProjectJournal Journal => _journal;

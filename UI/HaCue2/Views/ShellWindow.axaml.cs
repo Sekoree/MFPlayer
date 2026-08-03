@@ -66,6 +66,18 @@ public partial class ShellWindow : Window
                 e.Handled = true;
                 return;
 
+            // Register item 15: audition is a first-class verb, not a mode. Ctrl+P so it cannot be hit
+            // instead of Space during a show.
+            case Key.P when control && !shift:
+                shell.Cues.PreviewSelected();
+                e.Handled = true;
+                return;
+
+            case Key.P when control && shift:
+                shell.Cues.StopPreview();
+                e.Handled = true;
+                return;
+
             case Key.F9:
                 shell.IsOutputInfoOpen = !shell.IsOutputInfoOpen;
                 e.Handled = true;
