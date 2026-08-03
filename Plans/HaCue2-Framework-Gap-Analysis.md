@@ -1652,3 +1652,69 @@ friends), several named `DEFECT_*`, so some appear to be deliberately-failing kn
 | Session | Dead code in the session layer | ✅ **LANDED** — both deleted; `SoundboardQuantization` split out | §10.1 |
 | Session | Additive-nullable document evolution | EXISTS as a proven precedent (`LogicalSends`, no version bump) | §10.3 |
 | Session | Tolerant document versioning | ✅ **LANDED** — `MinimumSupportedVersion`..`CurrentVersion`, tolerant below / closed above | §10.3 |
+
+---
+
+## App-side progress (updated 2026-08-03)
+
+The framework tranche closed on 2026-08-02 and the section above is still accurate about
+`MediaFramework/`. What changed since is entirely **app-side**, so the rows that section marked
+"APP-SIDE" or "PREPARED, NOT LANDED" need re-reading against this. Where the two disagree, this wins.
+
+Verified as of this entry: solution builds 0 warnings / 0 errors; `HaCue2.Core.Tests` 235 pass;
+`HaCue2.Tests` (new) 37 pass; arch 27 pass; `S.Media.Session.Tests` 347 pass; `S.Media.Core.Tests` 781
+pass.
+
+### Register rows this closes
+
+| Row (from the appendix) | Was | Now |
+|---|---|---|
+| Build · Per-app settings/recovery roots | 🟡 PREPARED, NOT LANDED FOR HaCue2 | ✅ **LANDED** — `HaCue2.Machine.StoragePaths` (`HACUE2_DATA_ROOT`/`HACUE2_SETTINGS_PATH`), `AppSettings`/`AppSettingsStore`, `RecoveryStore` |
+| Status · Missing-media / absent-device checks | ABSENT | ✅ **LANDED** — the status pass runs them; `hacue2-check` is its headless twin |
+| Session · Per-cue `Disabled` | EXISTS in framework, ABSENT in app model | ✅ **LANDED** — `CueNode.Enabled`, honoured by `CueOrder.NextEnabled` and by the transport |
+| Audio · live patch edit reaching the bay | (implied by §1) | ✅ **LANDED** — `ProjectPatchBay.Apply` → `AudioPatchBay.UpdatePatch` |
+| Audio · per-logical-output metering reaching a UI | framework LANDED, no consumer | ✅ **LANDED** — `BayPresentation` fills the drawer, Diagnostics and the summary column |
+| Diagnostics · "Copy report" | framework LANDED, no consumer | ✅ **LANDED** — Diagnostics and Project status both render it |
+| Video · per-output mapping | EXISTS, fully wired (framework) | ✅ **LANDED app-side** — `OutputMapping` + `ProjectVideoOutputs` (local screens) |
+
+### Still open, and what each is waiting for
+
+**Subsystems absent (7).** Preview/audition rig · external input (MIDI/OSC/hotkeys, schedules, MTC
+chase — needs `HaControl.Input`) · remote API server · log ring → Diagnostics tail · visualizer cues ·
+video output kinds NDI/record/stream · effect-lane editor UI (the model and compile path work; only
+the editing surface is missing).
+
+**Smaller, deferred (6).** Composition idle images — **blocked on a still-image→`VideoFrame` decoder,
+which neither this framework nor HaPlay has**; per-output test pattern + Identify; MIDI-out for action
+cues (needs `S.Control`); the project override ledger; media-cache management; the hotkeys grid
+(deliberately WIP per the round-3 decision).
+
+**Measured UI state.** 21 controls still inert (was 41); 56 fields still hardcoded (was 62). The bulk
+of the latter is the Fade/Jump/Action/Patch inspector panes, which need view-model properties rather
+than new subsystems.
+
+**Build (4).** No HaCue2 AOT-publish gate, no launch smoke, no fixture gating `hacue2-check` in CI,
+and `HaCue2.Tests` is not yet in the workflow.
+
+**Phase 6 untouched.** 41 cue-named files, including `CuePlayerView`, are still in HaPlay.
+
+### One architectural decision now live
+
+§7.1 called `HaOutput` "EXISTS, 8 couplings to invert". Those couplings are still there, and HaCue2
+needed video outputs before they could be inverted — so **HaCue2.Engine now opens its own
+`SDL3GLVideoOutput`s** (`ProjectVideoOutputs`), which is a second, much smaller output path beside
+HaPlay's `OutputManagement`. That was an owner decision (2026-08-03) taken with the trade understood:
+faster to a composition actually rendering, at the cost of a merge later if both apps are to share one
+engine. Revisit at Phase 6, when HaPlay's side is being dismantled anyway.
+
+### Two things that were wrong in the tree, not in this document
+
+Worth recording because both were silent and both are the kind that reappear:
+
+- **`MediaCueNode.TrimOutMs` defaults to 0**, so keying an effect lane's length off the trim window
+  alone dropped the lane from every *untrimmed* cue — the operator drew an envelope, the timeline drew
+  it back, and the engine never received it. `ShowCompiler.Compile` now takes a probed `durations` map;
+  without one it still omits the lane rather than guessing a length.
+- **`CueList.Flatten` is depth-first**, so "the next cue after a group" is the group's first CHILD
+  unless the subtree is skipped. Auto-continue on a group therefore fired that child twice. The rule
+  now lives once, in `HaCue2.Core.Model.CueOrder`, shared by the engine and the editor's no-session GO.

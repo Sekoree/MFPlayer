@@ -1805,3 +1805,89 @@ The redesign is complete when:
 - Full solution tests, routing/clock performance gates, NativeAOT publish, and Linux/Windows launch
   smokes pass — **including a HaCue2 AOT-publish gate**, which has no equivalent today and without which
   an AOT regression ships silently.
+
+---
+
+## Phase 5 progress — 2026-08-03
+
+Four slices, on branch `cue-separation`. `Plans/HaCue2-Framework-Gap-Analysis.md` carries the
+register-level detail; this is the phase-level view. Verified: solution 0/0, `HaCue2.Core.Tests` 235,
+`HaCue2.Tests` 37, arch 27, session 347, core 781.
+
+### Slice 1 — the transport, and the bugs under it
+
+The shell was a well-built editor over an engine that could only play media cues. Closed:
+
+- **Control-flow cues execute.** `ShowHost` resolves every kind app-side, as this plan says the
+  transport layer must: group fire modes (all-together / playlist / timeline-by-offset), jump
+  (random pick, cross-list targets, fire-on-arrival), patch (snapshot recall + inline levels, ramped
+  in dB by `PatchRamp`), fade (session stop to silence, live send-gain rewrite to a level), action
+  (OSC; a MIDI endpoint is **refused out loud** rather than reported as sent). Pre/post waits and
+  auto-continue are honoured for every kind, with a 64-deep chain bound so an authored jump loop is
+  one reported line instead of a hang.
+- **Every cue kind is now emitted into the document** with a `CueDefinition` and, for the control-flow
+  kinds, no clip. Not cosmetic: `SetStandbyCueAsync` refuses an id the document does not carry, so a
+  jump absent from it could never be made standby and GO stepped straight over it.
+- **The patch reaches a running show** — `ProjectPatchBay.Apply` → `AudioPatchBay.UpdatePatch`.
+  Adding or reordering logical outputs while live is refused with a message; the bus width is fixed
+  when the bay opens.
+- **Telemetry is measured** — `BayPresentation` over `SnapshotDiagnostics()` replaced invented rows on
+  the one screen an operator opens to ask why there is no sound.
+- Transport semantics per the round-3 decisions: bare STOP stops the selected active cue (stop-all in
+  a split menu), PAUSE toggles, PANIC holds ~400 ms.
+
+### Slice 2 — the machine store
+
+`HaCue2.Machine.StoragePaths` / `AppSettings` / `RecoveryStore`. This closes the plan's
+"per-app settings and recovery roots, one shared media cache": HaCue2 has its own resolver because the
+architecture rules correctly forbid it referencing HaPlay's. Autosave is written **beside** the show and
+never over it — recovery is an offer made at the next launch, not something that happened to the
+operator's file while they were not looking. The launcher now opens the recent that was clicked.
+
+### Slice 3 — a fixture out of real media
+
+`UI/HaCue2.Seed` + `LibrarySeeder`/`LibraryScan`. A generator rather than a committed file: a fixture
+holding absolute paths into one person's home works on one machine and goes stale immediately. It emits
+every cue kind against files that exist, and **one deliberate error** (an output fed but unpatched — the
+condition register item 25 singles out), because a fixture that passes every check teaches nothing about
+the screen that reports them.
+
+### Slice 4 — video outputs
+
+`ProjectVideoOutputs` opens one `SDL3GLVideoOutput` per local-screen output, sized to its composition;
+`OutputMapping` converts the document's destination fractions to output pixels and warp offsets to
+absolute mesh points. Leases declare `DisposeOutputOnRuntimeDispose:false` — the host owns the windows,
+and a reload must not close the operator's projector on a keystroke. `ForgetDetachedScreens` re-attaches
+after a reload rebuilds a composition, which `preserveMatchingCompositions` does on any size or
+frame-rate change.
+
+**Composition idle images are NOT done and were deliberately backed out**: nothing in this repo decodes
+a still image to a `VideoFrame`, so `SetCompositionIdleFrameAsync` has nothing to hand. Register item 23
+needs that loader first.
+
+### Against the Phase 5 exit criteria
+
+Met: independently buildable; launches into editing mode; the Lock latch and the single External-input
+toggle exist as UI; multi-list transport with per-list standby; per-cue disable; the Note tab; the curve
+editor; project status with relink and consolidate, plus its headless twin; undo on every editing
+surface that ships.
+
+Not met: usable for a show without HaPlay (no preview/audition, no external input, no remote API);
+N-visualizers-per-composition; the video shortfalls other than mapping; side-by-side comparison against
+HaPlay fixtures; NativeAOT publish and launch gates.
+
+### Testing
+
+`UI/HaCue2.Tests` now exists, with `HeadlessSessionBootstrap.cs` copied **wholesale** as this plan
+requires — a test assembly that takes the csproj but not that file reproduces a whole-run hang whose
+occurrence depends on test order. It covers the cue view's scope navigator and transport, the inspector
+fields, the audio view's project edits, both settings scopes, and the launcher. The engine's own logic
+is in `HaCue2.Core.Tests`, which now also reaches `HaCue2.Engine`'s pure parts.
+
+### Open questions this raised
+
+- **Open question 20 is now answerable and still open.** The `Ideas/*.md` documents cited by cue code
+  are still cited; the Phase 5 file move has not happened, so the re-point has not either.
+- **§7.1's eight `HaOutput` couplings became a decision rather than a task.** HaCue2 needed video
+  outputs before they could be inverted, so it opens its own. Whether the two apps end up sharing one
+  output engine is now a Phase 6 question, when HaPlay's side is being dismantled anyway.

@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The APP's tests: view-models, bindings and the surfaces that need a real Avalonia application
+         behind them. Pure model/compiler/engine work is HaCue2.Core.Tests and stays there — this
+         project exists for the half that could not be tested without a dispatcher.
+
+         The headless harness is copied WHOLESALE from HaPlay.Tests, including HeadlessSessionBootstrap:
+         a test assembly that takes the csproj but not that file reproduces a whole-run hang whose
+         occurrence depends on test order. See that file for the mechanism. -->
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <!-- Test projects opt out of the repo-wide AOT/trim analysis, as the framework's and
+             HaCue2.Core.Tests do. The app itself stays AOT-clean. -->
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia.Headless" />
+        <PackageReference Include="Microsoft.NET.Test.Sdk" />
+        <PackageReference Include="xunit" />
+        <PackageReference Include="xunit.runner.visualstudio" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2\HaCue2.csproj" />
+    </ItemGroup>
+
+</Project>
