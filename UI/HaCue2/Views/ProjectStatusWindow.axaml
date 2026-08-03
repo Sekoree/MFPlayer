@@ -28,8 +28,9 @@
                    LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
         <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
                    Text="{Binding Title}" VerticalAlignment="Center" />
-        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="RE-RUN ALL" />
-        <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="COPY REPORT" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="RE-RUN ALL" Click="OnRerun" />
+        <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="{Binding CopyLabel}"
+                Click="OnCopyReport" />
         <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="CLOSE ⎋" Click="OnClose" />
       </Grid>
     </Border>
@@ -106,12 +107,15 @@
                       Content="Include project + this report" />
             <CheckBox Margin="10,3" IsChecked="{Binding ZipWhenDone}" Content="Zip when done" />
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="primary block" Content="CONSOLIDATE — 1.8 GB" />
+              <Button Classes="primary block" Content="CONSOLIDATE" Click="OnConsolidate"
+                      IsEnabled="{Binding CanEdit}" />
             </ContentControl>
             <!-- Consolidate must report what it could NOT copy rather than quietly producing a
                  project that half-works at the venue. -->
             <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
                        Text="Anything that cannot be copied is reported, not skipped silently." />
+            <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="mono dim2" TextWrapping="Wrap"
+                       Text="{Binding ConsolidateNote}" />
           </StackPanel>
         </c:PanelBox>
       </Grid>

@@ -44,17 +44,25 @@ public sealed class ShowCompilerTests
     }
 
     [Fact]
-    public void OnlyPlayableCuesReachTheDocument()
+    public void EveryCueIsAddressableButOnlyPlayableOnesGetClips()
     {
         var fixture = new TestProject();
         var document = ShowCompiler.Compile(fixture.Project);
-        var ids = document.Cues.Select(cue => cue.Id).ToHashSet();
+        var cues = document.Cues.Select(cue => cue.Id).ToHashSet();
+        var clips = document.Clips.Select(clip => clip.ClipId).ToHashSet();
 
-        // Media is playable; a jump and a fade are decisions the transport layer makes, and putting
-        // them in the document would give the engine cues it has no way to execute.
-        Assert.Contains(fixture.Track.Id.ToString(), ids);
-        Assert.DoesNotContain(fixture.Jump.Id.ToString(), ids);
-        Assert.DoesNotContain(fixture.Fade.Id.ToString(), ids);
+        // EVERY cue gets a CueDefinition, because the session owns the GO cursor and refuses to stand
+        // on an id it does not know: a jump absent from the document could never be made standby, and
+        // GO would step straight over it as though it were not in the show.
+        Assert.Contains(fixture.Track.Id.ToString(), cues);
+        Assert.Contains(fixture.Jump.Id.ToString(), cues);
+        Assert.Contains(fixture.Fade.Id.ToString(), cues);
+
+        // Only media has anything to PLAY. A jump and a fade are decisions the transport layer makes,
+        // and a clip for either would give the engine something it has no way to open.
+        Assert.Contains(fixture.Track.Id.ToString(), clips);
+        Assert.DoesNotContain(fixture.Jump.Id.ToString(), clips);
+        Assert.DoesNotContain(fixture.Fade.Id.ToString(), clips);
     }
 
     [Fact]
@@ -67,7 +75,8 @@ public sealed class ShowCompilerTests
         var numbers = ShowCompiler.Compile(fixture.Project).Cues.Select(cue => cue.Number).ToList();
 
         // Dense from 1, in the order the tree shows — the engine's Number is a POSITION, not the
-        // dotted number the operator calls. A comment contributes nothing, so it leaves no gap.
+        // dotted number the operator calls. Every cue counts, including the comment: the cursor can
+        // stand on one, so it occupies a position like anything else.
         Assert.Equal(Enumerable.Range(1, numbers.Count), numbers);
     }
 
@@ -183,4 +192,77 @@ public sealed class ShowCompilerTests
         Assert.Empty(document.Clips);
         ShowDocumentValidator.ThrowIfInvalid(document);
     }
+
+    [Fact]
+    public void AGroupIsItsOwnCueSoTheCursorCanStandOnIt()
+    {
+        var fixture = new TestProject();
+        var group = new GroupCueNode { Number = "4", Label = "Storm", FireMode = GroupFireMode.AllTogether };
+        group.Children.Add(new MediaCueNode { Number = "4.1", Label = "Rain", MediaPath = "rain.wav" });
+        fixture.List.Cues.Add(group);
+
+        var document = ShowCompiler.Compile(fixture.Project);
+
+        // Both the group and its child. The group carries no clip — what firing it MEANS is the fire
+        // mode's business and only the app can resolve that — but it has to be addressable, or standby
+        // could never sit on it and GO would silently skip the whole group.
+        Assert.Contains(document.Cues, cue => cue.Id == group.Id.ToString());
+        Assert.DoesNotContain(document.Clips, clip => clip.ClipId == group.Id.ToString());
+        Assert.Contains(document.Clips, clip => clip.ClipId == group.Children[0].Id.ToString());
+        ShowDocumentValidator.ThrowIfInvalid(document);
+    }
+
+    [Fact]
+    public void AnEffectLaneOnAnUntrimmedCueCompilesOnceTheFileHasBeenProbed()
+    {
+        var fixture = new TestProject();
+        fixture.Track.EffectLanes.Add(new EffectLane
+        {
+            Kind = EffectLaneKind.Volume,
+            Points = [new LanePoint(0, 1), new LanePoint(1, 0)],
+        });
+
+        // TrimOutMs is zero on every untrimmed cue, so keying the lane's length off the trim window
+        // alone silently dropped it from the commonest case in the app.
+        var blind = ShowCompiler.Compile(fixture.Project);
+        Assert.Null(Clip(blind, fixture.Track).VolumeEnvelope);
+
+        var probed = ShowCompiler.Compile(
+            fixture.Project,
+            new Dictionary<Guid, TimeSpan> { [fixture.Track.Id] = TimeSpan.FromSeconds(30) });
+
+        var envelope = Clip(probed, fixture.Track).VolumeEnvelope;
+        Assert.NotNull(envelope);
+        Assert.Equal(TimeSpan.Zero, envelope[0].Time);
+        Assert.Equal(TimeSpan.FromSeconds(30), envelope[^1].Time);
+    }
+
+    [Fact]
+    public void AnOutPointBecomesAnEndOffsetCountedBackFromTheFilesEnd()
+    {
+        var fixture = new TestProject();
+        fixture.Track.TrimInMs = 2_000;
+        fixture.Track.TrimOutMs = 20_000;
+
+        var durations = new Dictionary<Guid, TimeSpan> { [fixture.Track.Id] = TimeSpan.FromSeconds(30) };
+        var clip = Clip(ShowCompiler.Compile(fixture.Project, durations), fixture.Track);
+
+        Assert.Equal(TimeSpan.FromSeconds(2), clip.StartOffset);
+        // The document counts the out-point back from the END: 30 s long, out at 20 s, so 10 s remain.
+        Assert.Equal(TimeSpan.FromSeconds(10), clip.EndOffset);
+    }
+
+    [Fact]
+    public void AnOutPointIsNotGuessedBeforeTheFileHasBeenProbed()
+    {
+        var fixture = new TestProject();
+        fixture.Track.TrimOutMs = 20_000;
+
+        // Without a length there is no honest conversion, and a guessed one would cut the cue
+        // somewhere nobody chose. Zero is "play through", which is the safe reading.
+        Assert.Equal(TimeSpan.Zero, Clip(ShowCompiler.Compile(fixture.Project), fixture.Track).EndOffset);
+    }
+
+    private static ShowClipBinding Clip(ShowDocument document, CueNode cue) =>
+        document.Clips.Single(clip => clip.ClipId == cue.Id.ToString());
 }

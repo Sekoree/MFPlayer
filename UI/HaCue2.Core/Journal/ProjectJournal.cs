@@ -52,7 +52,34 @@ public sealed class ProjectJournal
     /// <summary>Everything done since the journal was last reset, oldest first — the edit log.</summary>
     public IReadOnlyList<IProjectCommand> Log => _undo;
 
-    public bool IsDirty => !ReferenceEquals(NextUndo, _savedAt);
+    /// <summary>Set by <see cref="MarkDirty"/> — a change that will be SAVED but cannot be UNDONE.</summary>
+    private bool _dirtyOutsideTheStack;
+
+    public bool IsDirty => _dirtyOutsideTheStack || !ReferenceEquals(NextUndo, _savedAt);
+
+    /// <summary>
+    /// Records that the document changed by a route that is deliberately not undoable.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A snapshot recall and a patch cue firing both write real cell gains that travel in the file, and
+    /// neither belongs on the undo stack — "undo" means un-edit my document, never un-recall my
+    /// snapshot or un-fire my cue. But a document that differs from its file and reports itself clean
+    /// is how those changes get lost at the end of the night.
+    /// </para>
+    /// <para>
+    /// Cleared only by <see cref="MarkSaved"/>, so the flag means exactly "there is something here the
+    /// file does not have".
+    /// </para>
+    /// </remarks>
+    public void MarkDirty()
+    {
+        if (_dirtyOutsideTheStack)
+            return;
+
+        _dirtyOutsideTheStack = true;
+        Changed?.Invoke();
+    }
 
     /// <summary>
     /// Applies a command and pushes it, coalescing into the open group when it belongs to one.
@@ -162,6 +189,7 @@ public sealed class ProjectJournal
     {
         CloseGroup();
         _savedAt = NextUndo;
+        _dirtyOutsideTheStack = false;
         var hash = HaCueProjectFile.ComputeHash(Project);
         Changed?.Invoke();
         return hash;
@@ -174,6 +202,7 @@ public sealed class ProjectJournal
         _undo.Clear();
         _redo.Clear();
         _savedAt = null;
+        _dirtyOutsideTheStack = false;
         _openGroup = null;
         _scope = null;
         Changed?.Invoke();

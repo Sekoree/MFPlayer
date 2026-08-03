@@ -177,22 +177,29 @@
                 <Border Classes="chain">
                   <StackPanel Orientation="Horizontal" Spacing="6">
                     <Button Classes="tight" Content="SAVE…" Click="OnDialog" Tag="snapshot" />
-                    <Button Classes="tight" Content="RECALL" />
-                    <Button Classes="tight" Content="UPDATE" />
+                    <Button Classes="tight" Content="RECALL" Click="OnRecall"
+                            IsEnabled="{Binding HasSnapshot}" />
+                    <Button Classes="tight" Content="UPDATE" Click="OnUpdateSnapshot"
+                            IsEnabled="{Binding HasSnapshot}" />
                   </StackPanel>
                 </Border>
-                <TextBlock Margin="10,6,10,9" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                <TextBlock Margin="10,6,10,2" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
                            Text="A snapshot stores only the cells it was saved with — recalling “Interval” touches Lobby and nothing else. Used by patch cues in the list." />
+                <!-- Recall is not undoable (it is an operator action on the patch, not a document
+                     edit), so what it did has to be said out loud. -->
+                <TextBlock Margin="10,0,10,9" FontSize="10.5" Classes="mono dim2"
+                           TextWrapping="Wrap" Text="{Binding RecallNote}" />
               </StackPanel>
             </c:PanelBox.Footer>
 
-            <ItemsControl ItemsSource="{Binding Snapshots}" Margin="10,6">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="sys:String">
-                  <TextBlock Classes="mono" FontSize="10.5" Margin="0,3" Text="{Binding}" />
+            <ListBox Theme="{StaticResource TableRows}" Margin="4,6"
+                     ItemsSource="{Binding Snapshots}" SelectedItem="{Binding SelectedSnapshot}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:SnapshotRow">
+                  <TextBlock Classes="mono" FontSize="10.5" Margin="6,3" Text="{Binding Text}" />
                 </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
+              </ListBox.ItemTemplate>
+            </ListBox>
           </c:PanelBox>
 
           <c:PanelBox Grid.Row="1" Header="Selected line">
@@ -272,16 +279,19 @@
           <c:PanelBox Grid.Row="0" Header="Project mix">
             <StackPanel Margin="0,6,0,8">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Mix rate">
-                <ComboBox ItemsSource="{Binding MixRates}" SelectedIndex="1" />
+                <ComboBox ItemsSource="{Binding MixRates}" SelectedIndex="{Binding MixRateIndex}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Clock master">
-                <ComboBox ItemsSource="{Binding ClockMasters}" SelectedIndex="0" />
+                <ComboBox ItemsSource="{Binding ClockMasters}" SelectedIndex="{Binding ClockMasterIndex}" />
               </HeaderedContentControl>
               <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                         Text="The clock master must run natively at the mix rate — it is never resampled, so the show clock never drifts against it. Other lines resample as needed (amber in the list)." />
-              <!-- Register item 14: never a silent rebuild. -->
+                         Text="The clock master must run natively at the mix rate — it is never resampled, so the show clock never drifts against it. Lines that cannot be one are not offered." />
+              <!-- Register item 14: never a silent rebuild. The button only lights up when the running
+                   bay actually differs from the document, so it says something rather than sitting
+                   there inviting a restart nobody needs. -->
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="APPLY &amp; RESTART AUDIO" />
+                <Button Classes="block" Content="APPLY &amp; RESTART AUDIO"
+                        IsEnabled="{Binding NeedsAudioRestart}" Click="OnRestartAudio" />
               </ContentControl>
             </StackPanel>
           </c:PanelBox>

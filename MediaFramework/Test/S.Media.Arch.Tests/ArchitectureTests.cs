@@ -138,6 +138,8 @@ public sealed class ArchitectureTests
             "HaCue2.Core", "HaCue2.Machine", "S.Media.Session", "S.Media.Routing",
             "S.Media.Decode.FFmpeg", "S.Media.Core", "S.Media.Time", "S.Media.Players",
             "S.Media.Compositor", "S.Media.Gpu",
+            // Action cues send OSC from here, beside the transport that fires them.
+            "OSCLib",
         ],
         // Machine facts: what this box has and what a file turned out to be. Separate from
         // HaCue2.Core because everything here needs real hardware or a real decoder, and Core has to

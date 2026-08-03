@@ -49,7 +49,7 @@ public sealed class ShowRuntime
     /// column reads "—" rather than showing an empty bar: silence and "nobody is measuring" look the
     /// same on a meter and must not read the same in a table.
     /// </summary>
-    public Dictionary<Guid, OutputLevel> Levels { get; init; } = [];
+    public Dictionary<Guid, OutputLevel> Levels { get; set; } = [];
 
     /// <summary>Audio lines this machine does not have. A machine fact, never a document one.</summary>
     public HashSet<Guid> AbsentLines { get; set; } = [];
@@ -57,23 +57,33 @@ public sealed class ShowRuntime
     /// <summary>Video outputs this machine does not have.</summary>
     public HashSet<Guid> AbsentVideoOutputs { get; init; } = [];
 
-    /// <summary>The Active panel — a runtime list in its entirety.</summary>
-    public IReadOnlyList<ActiveCueRow> ActiveCues { get; init; } = [];
+    /// <summary>
+    /// The Active panel — a runtime list in its entirety.
+    /// </summary>
+    /// <remarks>
+    /// Settable, like the other members the engine fills. It was init-only, which meant
+    /// <c>EngineRuntime</c> could not write it and the panel showed the sample's five invented rows
+    /// forever — empty on any real project, however much was sounding.
+    /// </remarks>
+    public IReadOnlyList<ActiveCueRow> ActiveCues { get; set; } = [];
+
+    /// <summary>Whether the transport is paused. A runtime fact; false with no session.</summary>
+    public bool IsPaused { get; set; }
 
     /// <summary>Program meters for the Output info drawer.</summary>
-    public IReadOnlyList<ProgramMeter> Meters { get; init; } = [];
+    public IReadOnlyList<ProgramMeter> Meters { get; set; } = [];
 
     /// <summary>Line chips for the Output info drawer.</summary>
-    public IReadOnlyList<OutputLineChip> LineChips { get; init; } = [];
+    public IReadOnlyList<OutputLineChip> LineChips { get; set; } = [];
 
-    public string BaySummary { get; init; } = "";
-    public string BayClock { get; init; } = "";
+    public string BaySummary { get; set; } = "";
+    public string BayClock { get; set; } = "";
 
     /// <summary>The MTC readout in the transport row.</summary>
     public string ChaseReadout { get; init; } = "";
 
     /// <summary>Audio-bay telemetry for the Diagnostics window.</summary>
-    public IReadOnlyList<BayRow> BayRows { get; init; } = [];
+    public IReadOnlyList<BayRow> BayRows { get; set; } = [];
 
     public IReadOnlyList<CompositionStatsRow> CompositionStats { get; init; } = [];
 

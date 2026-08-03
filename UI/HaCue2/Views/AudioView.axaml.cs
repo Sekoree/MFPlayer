@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.VisualTree;
 using HaCue2.Core.Model;
 using HaCue2.Controls;
 using HaCue2.ViewModels;
@@ -46,6 +47,28 @@ public partial class AudioView : UserControl
 
         PromptWindow.Show(this, prompt, audio.Refresh);
     }
+
+    /// <summary>
+    /// Restarts the audio engine so a new mix rate or clock master takes effect.
+    /// </summary>
+    /// <remarks>
+    /// The bus width and rate are fixed when the bay opens, so this is a genuine stop and start rather
+    /// than a live change — which is exactly why it is a button the operator presses rather than
+    /// something that happens under a running show when a combo box changes.
+    /// </remarks>
+    private async void OnRestartAudio(object? sender, RoutedEventArgs e)
+    {
+        if (this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
+            return;
+
+        await shell.RestartAudioAsync();
+    }
+
+    private void OnRecall(object? sender, RoutedEventArgs e) =>
+        (DataContext as AudioViewModel)?.RecallSelected();
+
+    private void OnUpdateSnapshot(object? sender, RoutedEventArgs e) =>
+        (DataContext as AudioViewModel)?.UpdateSelected();
 
     private void OnPatchGesture(object? sender, MatrixGesture gesture)
     {

@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Interactivity;
 using HaCue2.ViewModels;
@@ -60,15 +61,40 @@ public partial class CuesView : UserControl
     private void OnGo(object? sender, RoutedEventArgs e) => (DataContext as CuesViewModel)?.Go();
 
     private void OnPause(object? sender, RoutedEventArgs e) =>
-        (DataContext as CuesViewModel)?.Pause(true);
+        (DataContext as CuesViewModel)?.TogglePause();
 
-    private void OnStop(object? sender, RoutedEventArgs e) =>
-        (DataContext as CuesViewModel)?.Panic();
+    /// <summary>Bare STOP: the selected active cue, not the show.</summary>
+    private void OnStop(object? sender, RoutedEventArgs e) => (DataContext as CuesViewModel)?.Stop();
 
-    /// <summary>PANIC and STOP are the same verb today; PANIC keeps its own button because it is the
-    /// one an operator reaches for without reading, and it must never move.</summary>
-    private void OnPanic(object? sender, RoutedEventArgs e) =>
-        (DataContext as CuesViewModel)?.Panic();
+    private void OnStopAll(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.StopAll();
+
+    private void OnStandbyUp(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.StepStandby(-1);
+
+    private void OnStandbyDown(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.StepStandby(1);
+
+    private void OnFireSelected(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.FireSelected();
+
+    /// <summary>
+    /// PANIC is HELD, not clicked.
+    /// </summary>
+    /// <remarks>
+    /// It is the one control an operator reaches for without reading, so a mis-click must not take the
+    /// show down — but it also must not be behind a confirmation dialog, because the moment somebody
+    /// needs it is the moment they have no attention left for a second decision. Holding is the
+    /// compromise: one gesture, unmistakably deliberate, and the button counts down while it happens.
+    /// </remarks>
+    private void OnPanicPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is CuesViewModel cues)
+            cues.BeginPanic();
+    }
+
+    private void OnPanicReleased(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.CancelPanic();
 
     private void OnOpenTimeline(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.OpenTimeline();

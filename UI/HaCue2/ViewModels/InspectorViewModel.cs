@@ -141,6 +141,13 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(LabelValue));
         OnPropertyChanged(nameof(LevelValue));
         OnPropertyChanged(nameof(FadeValue));
+        OnPropertyChanged(nameof(FadeOutValue));
+        OnPropertyChanged(nameof(LoopValue));
+        OnPropertyChanged(nameof(TrimInValue));
+        OnPropertyChanged(nameof(TrimOutValue));
+        OnPropertyChanged(nameof(TriggerIndex));
+        OnPropertyChanged(nameof(PreWaitValue));
+        OnPropertyChanged(nameof(PostWaitValue));
         OnPropertyChanged(nameof(NoteValue));
         OnPropertyChanged(nameof(IsEnabled));
         OnPropertyChanged(nameof(SendColumns));
@@ -268,10 +275,129 @@ public partial class InspectorViewModel : ObservableObject
         get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeInMs) : "—");
         set
         {
-            if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
-                EditMedia("fadeIn", media => media.FadeInMs,
-                    (media, ms) => media.FadeInMs = ms, (int)(seconds * 1000));
+            if (TryParseSeconds(value, out var ms))
+                EditMedia("fadeIn", media => media.FadeInMs, (media, set) => media.FadeInMs = set, ms);
         }
+    }
+
+    public string FadeOutValue
+    {
+        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeOutMs) : "—");
+        set
+        {
+            if (TryParseSeconds(value, out var ms))
+                EditMedia("fadeOut", media => media.FadeOutMs, (media, set) => media.FadeOutMs = set, ms);
+        }
+    }
+
+    /// <summary>
+    /// Whether the cue loops. A document fact the operator sets, not something the engine decides.
+    /// </summary>
+    public bool LoopValue
+    {
+        get => Cue is MediaCueNode { Loop: true };
+        set => EditMedia("loop", media => media.Loop, (media, on) => media.Loop = on, value);
+    }
+
+    public string TrimInValue
+    {
+        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.TrimInMs) : "—");
+        set
+        {
+            if (TryParseSeconds(value, out var ms))
+                EditMedia("trimIn", media => media.TrimInMs, (media, set) => media.TrimInMs = set, ms);
+        }
+    }
+
+    /// <summary>The out-point, or "end" when the cue plays through.</summary>
+    /// <remarks>
+    /// Zero means "to the end" in the model, and showing that as "0.0" would read as an out-point at
+    /// the very start — a cue that plays nothing. The word is the honest rendering.
+    /// </remarks>
+    public string TrimOutValue
+    {
+        get => Shared(cue => cue is MediaCueNode media
+            ? media.TrimOutMs <= 0 ? "end" : CuePresentation.Seconds(media.TrimOutMs)
+            : "—");
+        set
+        {
+            if (value.Trim().Equals("end", StringComparison.OrdinalIgnoreCase))
+            {
+                EditMedia("trimOut", media => media.TrimOutMs, (media, set) => media.TrimOutMs = set, 0);
+                return;
+            }
+
+            if (TryParseSeconds(value, out var ms))
+                EditMedia("trimOut", media => media.TrimOutMs, (media, set) => media.TrimOutMs = set, ms);
+        }
+    }
+
+    /// <summary>
+    /// How this cue is reached — manual, follow, or continue.
+    /// </summary>
+    /// <remarks>
+    /// On the BASE cue type, so it is offered for every kind. "Wait two seconds then tell the lighting
+    /// desk" is an ordinary thing to author onto an action cue, and the transport honours the trigger
+    /// on control-flow cues exactly as it does on media ones.
+    /// </remarks>
+    public int TriggerIndex
+    {
+        get => Cue is { } cue ? (int)cue.Trigger : -1;
+        set
+        {
+            if (value is < 0 or > 2)
+                return;
+
+            Edit("trigger", cue => cue.Trigger, (cue, mode) => cue.Trigger = mode, (CueTrigger)value);
+        }
+    }
+
+    public string PreWaitValue
+    {
+        get => Shared(cue => CuePresentation.Seconds(cue.PreWaitMs));
+        set
+        {
+            if (TryParseSeconds(value, out var ms))
+                Edit("preWait", cue => cue.PreWaitMs, (cue, set) => cue.PreWaitMs = set, ms);
+        }
+    }
+
+    public string PostWaitValue
+    {
+        get => Shared(cue => CuePresentation.Seconds(cue.PostWaitMs));
+        set
+        {
+            if (TryParseSeconds(value, out var ms))
+                Edit("postWait", cue => cue.PostWaitMs, (cue, set) => cue.PostWaitMs = set, ms);
+        }
+    }
+
+    /// <summary>
+    /// Reads a duration typed as seconds, accepting the unit the field renders.
+    /// </summary>
+    /// <remarks>
+    /// The display writes "4.0 s"; a parser that only accepted bare numbers would refuse to read back
+    /// the value it had just written, which is the commonest way a field appears not to work. Negative
+    /// durations are refused rather than clamped — the field keeps the old value so nothing silently
+    /// becomes zero.
+    /// </remarks>
+    private static bool TryParseSeconds(string text, out int milliseconds)
+    {
+        milliseconds = 0;
+
+        var cleaned = text.Replace("s", "", StringComparison.OrdinalIgnoreCase)
+            .Replace('−', '-')
+            .Trim();
+
+        if (!double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+            && !double.TryParse(cleaned, NumberStyles.Float, CultureInfo.CurrentCulture, out seconds))
+            return false;
+
+        if (seconds < 0 || double.IsNaN(seconds))
+            return false;
+
+        milliseconds = (int)Math.Round(seconds * 1000);
+        return true;
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
+using HaCue2.Core.Patch;
 using HaCue2.Controls;
 using HaCue2.Presentation;
 using HaCue2.Sample;
@@ -196,11 +197,81 @@ public partial class AudioViewModel : ObservableObject
     public IReadOnlyList<MatrixColumn> PatchColumns => AudioPresentation.PatchColumns(_project);
     public IReadOnlyList<MatrixRow> PatchRows => AudioPresentation.PatchRows(_project, _runtime);
 
-    public IReadOnlyList<string> Snapshots =>
+    public IReadOnlyList<SnapshotRow> Snapshots =>
     [
-        .. _project.PatchSnapshots.Select(snapshot =>
-            $"▸ {snapshot.Name} · {snapshot.Cells.Count} cell{(snapshot.Cells.Count == 1 ? "" : "s")}"),
+        .. _project.PatchSnapshots.Select(snapshot => new SnapshotRow(
+            snapshot.Id,
+            $"▸ {snapshot.Name} · {snapshot.Cells.Count} cell{(snapshot.Cells.Count == 1 ? "" : "s")}")),
     ];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSnapshot))]
+    private SnapshotRow? _selectedSnapshot;
+
+    public bool HasSnapshot => SelectedSnapshot is not null;
+
+    /// <summary>
+    /// Recalls the selected snapshot onto the live patch.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not journaled, and not a document edit in the undo sense</b> — the same rule a patch cue
+    /// firing follows. Recall is an operator action on the patch; "undo" means un-edit my document,
+    /// never un-recall my snapshot. What it DOES change is the document's cell values, so the project
+    /// goes dirty and the change is saved with the show.
+    /// <para>
+    /// A cell the snapshot can no longer reach is reported by name rather than slid onto a neighbour,
+    /// and the rest of the recall still lands: refusing the whole thing because one channel was
+    /// renamed would leave the operator with neither the old state nor the new one.
+    /// </para>
+    /// </remarks>
+    public void RecallSelected()
+    {
+        if (SelectedSnapshot is not { } row)
+            return;
+
+        var result = PatchOperations.Recall(_project, row.Id);
+
+        RecallNote = result.IsClean
+            ? $"recalled {result.CellsApplied} cell{(result.CellsApplied == 1 ? "" : "s")}"
+            : $"recalled {result.CellsApplied} · {result.Broken.Count} could not be applied: "
+              + string.Join("; ", result.Broken.Select(broken => broken.Reason).Distinct());
+
+        _journal.MarkDirty();
+        Refresh();
+    }
+
+    /// <summary>
+    /// Re-captures the selected snapshot from the patch as it stands now.
+    /// </summary>
+    /// <remarks>
+    /// Journaled, unlike recall: editing what a snapshot STORES is an ordinary document edit, and
+    /// overwriting somebody's stored state without an undo would be the most expensive mistake this
+    /// pane can make. Only the channels the snapshot already covers are re-captured — "update" means
+    /// this snapshot as it is now, not "make it cover the whole console".
+    /// </remarks>
+    public void UpdateSelected()
+    {
+        if (SelectedSnapshot is not { } row
+            || _project.PatchSnapshots.FirstOrDefault(item => item.Id == row.Id) is not { } snapshot)
+            return;
+
+        var covered = snapshot.Cells.Select(cell => cell.LogicalChannelId).Distinct().ToHashSet();
+        var captured = PatchOperations.Capture(_project, covered.Count > 0 ? covered : null);
+        var target = snapshot;
+
+        _journal.Do(new SetValueCommand<List<PatchCell>>(
+            snapshot.Id, "snapshotCells", "patch",
+            () => target.Cells, cells => target.Cells = cells, captured,
+            $"update snapshot “{snapshot.Name}”"));
+        _journal.CloseGroup();
+
+        RecallNote = $"stored {captured.Count} cell{(captured.Count == 1 ? "" : "s")}";
+        Refresh();
+    }
+
+    /// <summary>What the last recall or update did, for the pane's own line.</summary>
+    [ObservableProperty]
+    private string _recallNote = "";
 
     // ── 08 · devices ──────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<AudioLineRow> Lines { get; private set; }
@@ -218,8 +289,115 @@ public partial class AudioViewModel : ObservableObject
 
     public IReadOnlyList<string> MixRates { get; } = ["44 100 Hz", "48 000 Hz", "96 000 Hz"];
 
+    private static readonly int[] MixRateValues = [44_100, 48_000, 96_000];
+
+    /// <summary>
+    /// The project mix rate. Every producer submits at it and the clock master must run there natively.
+    /// </summary>
+    /// <remarks>
+    /// Journaled, and deliberately NOT applied to a running bay: the bus width and rate are fixed when
+    /// the bay opens, so this takes effect on the next start. Register item 14 makes that an explicit
+    /// "Apply &amp; restart audio" rather than a silent rebuild under a running show.
+    /// </remarks>
+    public int MixRateIndex
+    {
+        get => Array.IndexOf(MixRateValues, _project.AudioPatch.MixSampleRate);
+        set
+        {
+            if (value < 0 || value >= MixRateValues.Length
+                || MixRateValues[value] == _project.AudioPatch.MixSampleRate)
+                return;
+
+            var patch = _project.AudioPatch;
+
+            _journal.Do(new SetValueCommand<int>(
+                Guid.Empty, "mixRate", "audio",
+                () => patch.MixSampleRate, rate => patch.MixSampleRate = rate, MixRateValues[value],
+                $"set mix rate {MixRates[value]}"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(MixRateIndex));
+            OnPropertyChanged(nameof(TabHint));
+            OnPropertyChanged(nameof(NeedsAudioRestart));
+        }
+    }
+
+    /// <summary>
+    /// Lines eligible to pace the bay, plus an explicit "none".
+    /// </summary>
+    /// <remarks>
+    /// A line that does not run natively at the mix rate is excluded rather than shown and refused:
+    /// the bay wraps it in a resampler, and a resampled master would drift the show clock against
+    /// itself. "None" is a real answer — it means the wall-clock fallback, which is what a rig with no
+    /// audio interface actually has.
+    /// </remarks>
     public IReadOnlyList<string> ClockMasters =>
-        [.. _project.AudioLines.Select(line => line.Name)];
+    [
+        "none · wall clock",
+        .. EligibleMasters().Select(line => line.Name),
+    ];
+
+    private List<AudioLineDefinition> EligibleMasters() =>
+    [
+        .. _project.AudioLines.Where(line =>
+            line.Kind == AudioLineKind.PortAudio
+            && (line.SampleRate is null || line.SampleRate == _project.AudioPatch.MixSampleRate)),
+    ];
+
+    public int ClockMasterIndex
+    {
+        get
+        {
+            if (_project.AudioPatch.ClockMasterLineId is not { } id)
+                return 0;
+
+            var at = EligibleMasters().FindIndex(line => line.Id == id);
+            return at < 0 ? 0 : at + 1;
+        }
+        set
+        {
+            var eligible = EligibleMasters();
+            var chosen = value <= 0 || value > eligible.Count ? (Guid?)null : eligible[value - 1].Id;
+            var patch = _project.AudioPatch;
+
+            if (chosen == patch.ClockMasterLineId)
+                return;
+
+            _journal.Do(new SetValueCommand<Guid?>(
+                Guid.Empty, "clockMaster", "audio",
+                () => patch.ClockMasterLineId, id => patch.ClockMasterLineId = id, chosen,
+                chosen is null ? "clear clock master" : $"clock master {eligible[value - 1].Name}"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(ClockMasterIndex));
+            OnPropertyChanged(nameof(TabHint));
+            OnPropertyChanged(nameof(NeedsAudioRestart));
+        }
+    }
+
+    /// <summary>
+    /// Whether the rate or the clock master has been changed since the bay opened.
+    /// </summary>
+    /// <remarks>
+    /// Set by editing either, cleared by a restart. It drives the "Apply &amp; restart audio" button's
+    /// enabled state so the operator can see that the show is not yet running what the document says —
+    /// which is the one thing a silent deferral would hide.
+    /// </remarks>
+    public bool NeedsAudioRestart =>
+        _appliedRate is { } rate
+        && (rate != _project.AudioPatch.MixSampleRate
+            || _appliedMaster != _project.AudioPatch.ClockMasterLineId);
+
+    private int? _appliedRate;
+    private Guid? _appliedMaster;
+
+    /// <summary>Records what the running bay was opened with, so a later edit can be seen to differ.</summary>
+    public void NoteAudioStarted()
+    {
+        _appliedRate = _project.AudioPatch.MixSampleRate;
+        _appliedMaster = _project.AudioPatch.ClockMasterLineId;
+        OnPropertyChanged(nameof(NeedsAudioRestart));
+    }
 
     // ── editing the patch (register item 13) ──────────────────────────────────────────────────
 
@@ -308,6 +486,9 @@ public partial class AudioViewModel : ObservableObject
     // ── 08b · audition ────────────────────────────────────────────────────────────────────────
     public AuditionViewModel Audition { get; } = new();
 }
+
+/// <summary>One stored snapshot, as the pane lists it. The id is what RECALL and UPDATE act on.</summary>
+public sealed record SnapshotRow(Guid Id, string Text);
 
 /// <summary>The audition rig — an audio device plus a video surface, shared by the Audio and Video views.</summary>
 public partial class AuditionViewModel : ObservableObject

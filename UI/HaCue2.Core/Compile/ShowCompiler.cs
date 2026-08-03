@@ -33,7 +33,13 @@ public static class ShowCompiler
     /// per-list documents could not express a cue in Act 1 stopping something started in the Preshow.
     /// Each list becomes its own runtime GROUP, so the lists still keep separate playheads.
     /// </remarks>
-    public static ShowDocument Compile(HaCueProject project)
+    /// <param name="durations">
+    /// What the probe found each cue's media to be, by cue id. Optional, and the compiler is honest
+    /// without it: a lane or an out-point that needs a length it does not have is omitted rather than
+    /// guessed. Supplying it is what makes untrimmed cues carry their automation.
+    /// </param>
+    public static ShowDocument Compile(
+        HaCueProject project, IReadOnlyDictionary<Guid, TimeSpan>? durations = null)
     {
         ArgumentNullException.ThrowIfNull(project);
 
@@ -42,7 +48,7 @@ public static class ShowCompiler
         var number = 0;
 
         foreach (var list in project.CueLists)
-            Append(project, list, cues, clips, ref number);
+            Append(project, list, cues, clips, durations, ref number);
 
         return new ShowDocument(
             DocumentVersion,
@@ -66,6 +72,7 @@ public static class ShowCompiler
         CueList list,
         List<CueDefinition> cues,
         List<ShowClipBinding> clips,
+        IReadOnlyDictionary<Guid, TimeSpan>? durations,
         ref int number)
     {
         var listGroup = GroupId(list);
@@ -78,10 +85,13 @@ public static class ShowCompiler
                 switch (node)
                 {
                     case GroupCueNode group:
+                        // The GROUP ITSELF is a cue, so the cursor can stand on it and GO can reach it;
+                        // what firing it MEANS is the fire mode's business and is resolved app-side.
+                        cues.Add(Definition(group, ++running, groupId));
+
                         // Nested groups collapse into their OUTERMOST ancestor, as HaPlay's mapper
                         // does: the whole tree moves on one clock rather than splitting across a clock
-                        // per subgroup. WHICH children fire on GO is the fire mode's business, and the
-                        // fire mode is resolved app-side by cue id, so it needs no document shape.
+                        // per subgroup.
                         Walk(
                             group.Children,
                             groupId == listGroup ? GroupId(list, group) : groupId,
@@ -103,19 +113,27 @@ public static class ShowCompiler
                         // cue would stop the show loading in the middle of a rehearsal. The project
                         // validator reports it by name instead.
                         if (media.MediaPath.Length > 0)
-                            clips.Add(Clip(project, media) with { PreEndNotify = preEndNotify });
+                        {
+                            clips.Add(Clip(project, media, Duration(durations, media)) with
+                            {
+                                PreEndNotify = preEndNotify,
+                            });
+                        }
 
                         break;
 
-                    case VisualizerCueNode visualizer:
-                        // A visualizer has a canvas presence but no media to open, so it is a cue with
-                        // no clip: the app starts the generator and the placement rides on the cue.
-                        cues.Add(Definition(visualizer, ++running, groupId));
+                    // Every remaining kind — visualizer, action, fade, jump, patch, comment — is a cue
+                    // with NO CLIP. A visualizer has a canvas presence and no media to open; the rest
+                    // are decisions about the show rather than something to play, and the app's
+                    // transport resolves them by id when they fire.
+                    //
+                    // They are emitted rather than omitted because the cursor is the session's: a cue
+                    // absent from the document cannot be made standby (SetStandbyCueAsync refuses an
+                    // unknown id) and GO would step straight over it. A clipless CueDefinition is an
+                    // already-exercised state — an unfinished media cue is one too.
+                    default:
+                        cues.Add(Definition(node, ++running, groupId));
                         break;
-
-                    // Action, fade, jump, patch and comment cues have NO document representation.
-                    // Every one of them is a decision about the show rather than something to play,
-                    // and the transport layer is the only place that can make it.
                 }
             }
         }
@@ -150,7 +168,12 @@ public static class ShowCompiler
             GroupId: groupId,
             AutoContinue: cue.Trigger == CueTrigger.Continue);
 
-    private static ShowClipBinding Clip(HaCueProject project, MediaCueNode media)
+    /// <summary>What the probe says this cue's file runs for, or null when nobody has looked.</summary>
+    private static TimeSpan? Duration(
+        IReadOnlyDictionary<Guid, TimeSpan>? durations, MediaCueNode media) =>
+        durations is not null && durations.TryGetValue(media.Id, out var length) ? length : null;
+
+    private static ShowClipBinding Clip(HaCueProject project, MediaCueNode media, TimeSpan? fileLength)
     {
         // The FIRST placement is the primary; the rest ride along as ExtraPlacements, which is how the
         // engine fans one DECODED source to several canvases. Playing the file again for a mirror
@@ -172,10 +195,11 @@ public static class ShowCompiler
             // reads it exactly that way.
             VideoStreamIndex = media.VideoTrackIndex,
             StartOffset = TimeSpan.FromMilliseconds(media.TrimInMs),
-            // The document's EndOffset is measured from the SOURCE END; the project stores an absolute
-            // out-point, and only a probe knows the length. Zero — "through to the end" — is the
-            // honest translation until the app has probed and can convert it.
-            EndOffset = TimeSpan.Zero,
+            // The document's EndOffset is measured from the SOURCE END; the project stores an ABSOLUTE
+            // out-point, so converting one to the other needs the file's length. With a probed length
+            // the out-point is honoured; without one it stays zero — "through to the end" — because a
+            // guessed length would cut the cue somewhere nobody chose.
+            EndOffset = EndOffset(media, fileLength),
             FadeIn = TimeSpan.FromMilliseconds(media.FadeInMs),
             FadeInCurve = media.FadeInCurve.Law,
             FadeOut = TimeSpan.FromMilliseconds(media.FadeOutMs),
@@ -189,9 +213,26 @@ public static class ShowCompiler
                     extra.LayerIndex,
                     Placement(extra)))],
             LogicalSends = [.. Sends(media)],
-            VolumeEnvelope = Envelope(media, EffectLaneKind.Volume),
-            OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity),
+            VolumeEnvelope = Envelope(media, EffectLaneKind.Volume, fileLength),
+            OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity, fileLength),
         };
+    }
+
+    /// <summary>
+    /// The out-point as a distance back from the END of the file, which is how the document counts it.
+    /// </summary>
+    /// <remarks>
+    /// Zero — play through — for an untrimmed cue, for a cue whose file nobody probed, and for an
+    /// out-point at or past the end. An out-point BEFORE the in-point is treated as untrimmed rather
+    /// than as a negative window: it is a half-finished edit, not an instruction to play backwards.
+    /// </remarks>
+    private static TimeSpan EndOffset(MediaCueNode media, TimeSpan? fileLength)
+    {
+        if (media.TrimOutMs <= media.TrimInMs || fileLength is not { } length)
+            return TimeSpan.Zero;
+
+        var remainder = length - TimeSpan.FromMilliseconds(media.TrimOutMs);
+        return remainder > TimeSpan.Zero ? remainder : TimeSpan.Zero;
     }
 
     /// <summary>
@@ -244,24 +285,32 @@ public static class ShowCompiler
     /// One automation lane as engine keyframes, or null when the cue has none.
     /// </summary>
     /// <remarks>
-    /// Lane X is a fraction of the cue; the engine wants clip TIME, and only a probe knows the length.
-    /// Until the app supplies one the lane is compiled against its own trim window when there is one,
-    /// and skipped otherwise — a lane stretched over a guessed duration would automate the wrong
-    /// moments, which is worse than not automating at all.
+    /// <para>
+    /// Lane X is a fraction of the cue; the engine wants clip TIME, so the lane is compiled against the
+    /// cue's PLAYED length — its trim window when it has one, otherwise the probed file length less the
+    /// in-point.
+    /// </para>
+    /// <para>
+    /// The probed length matters more than it looks: <see cref="MediaCueNode.TrimOutMs"/> is zero on
+    /// every untrimmed cue, so keying only off the trim window silently dropped the lane from the
+    /// common case — the operator drew an envelope, the timeline drew it back, and the engine never
+    /// received it. With no length from either source the lane is still skipped, because a lane
+    /// stretched over a guessed duration automates the wrong moments.
+    /// </para>
     /// </remarks>
-    private static IReadOnlyList<ShowEnvelopePoint>? Envelope(MediaCueNode media, EffectLaneKind kind)
+    private static IReadOnlyList<ShowEnvelopePoint>? Envelope(
+        MediaCueNode media, EffectLaneKind kind, TimeSpan? fileLength)
     {
         if (media.EffectLanes.FirstOrDefault(lane => lane.Kind == kind) is not { Points.Count: > 1 } lane)
             return null;
 
-        var span = media.TrimOutMs - media.TrimInMs;
-        if (span <= 0)
+        if (media.TrimmedLength(fileLength) is not { } span || span <= TimeSpan.Zero)
             return null;
 
         return
         [
             .. lane.Points.Select(point => new ShowEnvelopePoint(
-                TimeSpan.FromMilliseconds(point.X * span),
+                point.X * span,
                 (float)Math.Clamp(point.Y, 0, 1))),
         ];
     }

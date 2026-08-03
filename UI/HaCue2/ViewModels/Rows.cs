@@ -133,6 +133,12 @@ public sealed record CueRow
 /// <summary>One row of the Active panel — everything sounding, in or out of the current scope.</summary>
 public sealed record ActiveCueRow
 {
+    /// <summary>
+    /// Which cue this row is. Needed because the row is a TARGET, not just a readout — bare STOP acts
+    /// on it, and a row that only carried its number could not be turned back into a cue to stop.
+    /// </summary>
+    public Guid CueId { get; init; }
+
     public required string Number { get; init; }
     public required string Label { get; init; }
 

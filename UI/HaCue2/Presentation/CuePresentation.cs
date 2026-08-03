@@ -1,5 +1,7 @@
 using System.Globalization;
 using HaCue2.Core.Model;
+using HaCue2.Core.Patch;
+using HaCue2.Engine;
 using HaCue2.Session;
 using HaCue2.ViewModels;
 
@@ -84,6 +86,97 @@ public static class CuePresentation
     /// German machine is a different thing to say out loud than "13.1".
     /// </remarks>
     public static string Number(CueNumber number) => number.Text;
+
+    /// <summary>
+    /// The Active panel's rows, built from what the session says is holding a voice.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every value here is a RUNTIME fact joined to a document one: the engine supplies the cue id and
+    /// its clock, the project supplies the number, label and destination. Nothing is invented — a cue
+    /// whose length nobody has probed shows its elapsed time and an empty progress bar rather than a
+    /// bar filled to a guess.
+    /// </para>
+    /// <para>
+    /// Ordered by how long each has been running, newest LAST, so a row does not jump under the
+    /// pointer when an unrelated cue ends. Scope never filters this list: a sounding cue the operator
+    /// cannot see is the one thing the Active panel exists to prevent.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<ActiveCueRow> Active(
+        HaCueProject project,
+        IReadOnlyList<ActiveCueState> states,
+        IReadOnlyDictionary<Guid, TimeSpan> durations)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(states);
+        ArgumentNullException.ThrowIfNull(durations);
+
+        var rows = new List<ActiveCueRow>();
+
+        foreach (var state in states.OrderByDescending(state => state.Elapsed))
+        {
+            if (project.FindCue(state.CueId) is not { } cue)
+                continue;
+
+            var length = cue is MediaCueNode media
+                ? media.TrimmedLength(durations.TryGetValue(cue.Id, out var probed) ? probed : null)
+                : null;
+
+            var remaining = length is { } total ? total - state.Elapsed : (TimeSpan?)null;
+
+            rows.Add(new ActiveCueRow
+            {
+                CueId = cue.Id,
+                Number = Number(cue.Number),
+                Label = cue.Label,
+                // Which list, but only when there is more than one — on a single-list show the name
+                // would be on every row and tell the operator nothing.
+                Qualifier = project.CueLists.Count > 1
+                    ? project.CueLists.FirstOrDefault(list => list.Id == state.ListId)?.Name ?? ""
+                    : "",
+                Clock = length is { } run
+                    ? $"{Clock(state.Elapsed)} / {Clock(run)}"
+                    : Clock(state.Elapsed),
+                Progress = length is { TotalMilliseconds: > 0 } span
+                    ? Math.Clamp(state.Elapsed / span, 0, 1)
+                    : 0,
+                Destination = Destination(project, cue),
+                IsChild = project.AllCues().OfType<GroupCueNode>()
+                    .Any(group => group.Children.Any(child => child.Id == cue.Id)),
+                IsFading = state.IsFading,
+                // Ten seconds, not a fraction: what matters to the person driving is how long they
+                // have, and that is the same ten seconds on a 30-second sting and a 6-minute bed.
+                IsNearEnd = remaining is { } left && left > TimeSpan.Zero && left <= TimeSpan.FromSeconds(10),
+            });
+        }
+
+        return rows;
+    }
+
+    /// <summary>Where a sounding cue is going, as the Active panel's right-hand column.</summary>
+    private static string Destination(HaCueProject project, CueNode cue)
+    {
+        if (cue is not MediaCueNode media)
+            return "—";
+
+        var names = PatchOperations.DestinationsOf(project, media)
+            .Select(channel => channel.Name)
+            .ToList();
+
+        return names.Count switch
+        {
+            0 => "not routed",
+            <= 2 => string.Join(", ", names),
+            _ => $"{names.Count} outputs",
+        };
+    }
+
+    /// <summary>mm:ss, counting past an hour rather than wrapping.</summary>
+    private static string Clock(TimeSpan value) =>
+        value.TotalHours >= 1
+            ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"
+            : $"{value.Minutes:00}:{value.Seconds:00}";
 
     /// <summary>
     /// A media cue carrying a placement IS the mockup's video cue.

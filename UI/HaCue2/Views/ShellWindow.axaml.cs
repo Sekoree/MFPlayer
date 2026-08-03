@@ -155,11 +155,21 @@ public partial class ShellWindow : Window
         _outputInfo = Reopen(_outputInfo, () => new OutputInfoWindow { DataContext = shell.OutputInfo });
     }
 
+    /// <summary>
+    /// Opens Settings with the journal behind it.
+    /// </summary>
+    /// <remarks>
+    /// The journal is what makes the project half of this screen real: without it every project-scope
+    /// setting is read once and written nowhere, so the pane describes the document rather than editing
+    /// it (register items 26 and 28 — project settings are journaled and travel in the file).
+    /// </remarks>
     private void OnSettings(object? sender, RoutedEventArgs e)
-        => _settings = Reopen(_settings, () => new SettingsWindow { DataContext = new SettingsViewModel(Shell.Project) });
+        => _settings = Reopen(
+            _settings,
+            () => new SettingsWindow { DataContext = new SettingsViewModel(Shell.Project, Shell.Journal) });
 
     private void OnDiagnostics(object? sender, RoutedEventArgs e)
-        => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = new DiagnosticsViewModel(Shell.Runtime) });
+        => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = Shell.OpenDiagnostics() });
 
     private void OnProjectStatus(object? sender, RoutedEventArgs e)
         => _projectStatus = Reopen(_projectStatus, () => new ProjectStatusWindow { DataContext = new ProjectStatusViewModel(Shell.Project, Shell.Environment, Shell.Journal) });

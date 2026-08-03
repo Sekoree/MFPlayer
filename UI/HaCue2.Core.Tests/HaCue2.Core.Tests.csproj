@@ -24,6 +24,10 @@
         <!-- The machine layer too: its device-matching rules are the ones that must never turn
              "nobody looked" into "absent", and they are testable with a fake backend. -->
         <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj" />
+        <!-- And the engine's PURE parts. ShowHost itself needs devices and a session, but the patch
+             ramp behind a patch cue's fade is arithmetic with real edge cases (dB interpolation, a
+             cell with no prior value, mute at the end of a ramp down) and belongs under test. -->
+        <ProjectReference Include="..\HaCue2.Engine\HaCue2.Engine.csproj" />
     </ItemGroup>
 
 </Project>

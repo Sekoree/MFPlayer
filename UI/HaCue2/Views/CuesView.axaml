@@ -17,11 +17,26 @@
     <Border Classes="transport" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
         <Button Grid.Column="0" Classes="go" Content="GO" Click="OnGo" />
-        <Button Grid.Column="1" Content="PAUSE" Click="OnPause" />
-        <Button Grid.Column="2" Content="STOP" Click="OnStop" />
-        <Button Grid.Column="3" Classes="panic" Content="PANIC" Click="OnPanic" />
-        <Button Grid.Column="4" Classes="icon" Content="↑ STBY" />
-        <Button Grid.Column="5" Classes="icon" Content="↓ STBY" />
+        <Button Grid.Column="1" Content="{Binding PauseLabel}" Click="OnPause" />
+        <!-- Bare STOP takes down the selected active cue; stop-all is the split menu, because a
+             single button that sometimes stops one cue and sometimes stops the show is a button
+             nobody can press with confidence during a performance. -->
+        <Button Grid.Column="2" Content="STOP ▾" Click="OnStop"
+                ToolTip.Tip="Stops the selected active cue. Right-click, or the arrow, for stop-all.">
+          <Button.ContextFlyout>
+            <MenuFlyout>
+              <MenuItem Header="Stop all" Click="OnStopAll" />
+            </MenuFlyout>
+          </Button.ContextFlyout>
+        </Button>
+        <!-- Held, not clicked (register decision: ~400 ms). The one button an operator hits without
+             reading is the one that must not fire on a mis-click. -->
+        <Button Grid.Column="3" Classes="panic" Content="{Binding PanicLabel}"
+                PointerPressed="OnPanicPressed" PointerReleased="OnPanicReleased"
+                PointerCaptureLost="OnPanicReleased"
+                ToolTip.Tip="Hold to stop everything." />
+        <Button Grid.Column="4" Classes="icon" Content="↑ STBY" Click="OnStandbyUp" />
+        <Button Grid.Column="5" Classes="icon" Content="↓ STBY" Click="OnStandbyDown" />
         <!-- Multi-list transport is v1 (register item 5): the transport acts on the selected list and
              every list keeps its own standby. -->
         <Border Grid.Column="6" Background="{DynamicResource BoothBg}"
@@ -111,11 +126,12 @@
                         CanUserSortColumns="False">
             <TreeDataGrid.ContextMenu>
               <ContextMenu>
-                <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" />
-                <MenuItem Header="Move standby here" />
+                <MenuItem Header="Fire this cue now" Click="OnFireSelected" />
+                <MenuItem Header="Move standby here" Click="OnStandbyHere" />
                 <Separator />
-                <MenuItem Header="Disable for this performance" />
-                <MenuItem Header="Renumber from here…" />
+                <MenuItem Header="Open timeline" Click="OnOpenTimeline" />
+                <MenuItem Header="Disable for this performance" Click="OnToggleEnabled" />
+                <MenuItem Header="Renumber from here…" Click="OnRenumber" />
               </ContextMenu>
             </TreeDataGrid.ContextMenu>
 

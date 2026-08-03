@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Engine;
+using HaCue2.Presentation;
 
 namespace HaCue2.Session;
 
@@ -42,8 +43,11 @@ public sealed class EngineRuntime : IAsyncDisposable
         _timer.Start();
     }
 
-    /// <summary>Raised after each poll that changed anything, so the views re-read.</summary>
+    /// <summary>Raised when what is sounding or where standby sits actually changed.</summary>
     public event Action? Changed;
+
+    /// <summary>Raised on every poll, for the surfaces whose values move continuously.</summary>
+    public event Action? Ticked;
 
     private async void Poll()
     {
@@ -58,13 +62,25 @@ public sealed class EngineRuntime : IAsyncDisposable
         {
             var state = await _host.SnapshotAsync().ConfigureAwait(true);
 
+            // The Active panel's CLOCKS move on every tick even when the cue set has not changed, so
+            // this cannot early-out on "same cues sounding" the way the tree can — a progress bar that
+            // only advanced when something started or stopped would look frozen mid-cue.
+            _runtime.ActiveCues = CuePresentation.Active(_project, state.Active, _runtime.MediaDurations);
+            _runtime.IsPaused = state.IsPaused;
+            AdoptBay();
+
             var sounding = new HashSet<Guid>(state.Sounding);
-            if (sounding.SetEquals(_runtime.Sounding) && !StandbyChanged(state))
-                return;
+            var settled = sounding.SetEquals(_runtime.Sounding) && !StandbyChanged(state);
 
             _runtime.Sounding = sounding;
             Adopt(state);
-            Changed?.Invoke();
+
+            // Two signals, because they cost different amounts. The Active panel re-reads every tick;
+            // the cue tree only when something actually started, stopped or moved.
+            Ticked?.Invoke();
+
+            if (!settled)
+                Changed?.Invoke();
         }
         catch (ObjectDisposedException)
         {
@@ -75,6 +91,26 @@ public sealed class EngineRuntime : IAsyncDisposable
         {
             _polling = false;
         }
+    }
+
+    /// <summary>
+    /// Copies the bay's own counters into the runtime the Diagnostics window and drawer read.
+    /// </summary>
+    /// <remarks>
+    /// Every one of these values used to come from <c>SampleShow</c> — invented numbers on the one
+    /// screen an operator opens to find out why there is no sound. The meters in particular have to
+    /// be read on the tick rather than on a change, because a level that only updated when a cue
+    /// started or stopped would sit still through the whole of it.
+    /// </remarks>
+    private void AdoptBay()
+    {
+        var bay = _host.Diagnostics();
+
+        _runtime.BayRows = BayPresentation.Rows(_project, bay);
+        _runtime.Meters = BayPresentation.Meters(_project, bay);
+        _runtime.Levels = BayPresentation.Levels(_project, bay);
+        _runtime.BaySummary = BayPresentation.Summary(bay);
+        _runtime.BayClock = BayPresentation.Clock(_project, bay);
     }
 
     private bool StandbyChanged(ShowState state) =>

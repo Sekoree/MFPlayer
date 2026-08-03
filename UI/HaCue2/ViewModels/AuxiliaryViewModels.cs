@@ -4,6 +4,7 @@ using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Validation;
+using HaCue2.Engine;
 using HaCue2.Sample;
 using HaCue2.Session;
 
@@ -262,14 +263,26 @@ public partial class CurveEditorViewModel : ObservableObject
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly ProjectSettings _settings;
+    private readonly ProjectJournal? _journal;
+
+    /// <summary>
+    /// True while the constructor is seeding the fields from the document.
+    /// </summary>
+    /// <remarks>
+    /// Without it every seeded value would be written straight back through the journal as an "edit",
+    /// so a project would open with a dozen undo steps nobody made and a dirty flag on an untouched
+    /// file.
+    /// </remarks>
+    private readonly bool _loading = true;
 
     public SettingsViewModel() : this(SampleProject.Create())
     {
     }
 
-    public SettingsViewModel(HaCueProject project)
+    public SettingsViewModel(HaCueProject project, ProjectJournal? journal = null)
     {
         _settings = project.Settings;
+        _journal = journal;
         _selectedPane = ApplicationPanes[0];
 
         // The PROJECT half of this screen reads the document. The application half does not, and
@@ -300,6 +313,92 @@ public partial class SettingsViewModel : ObservableObject
             Core.Model.OutsideMediaPolicy.CopyToRoot => "copy to root",
             _ => "keep in place",
         };
+
+        _loading = false;
+    }
+
+    // ── writing back (register items 26 and 28) ───────────────────────────────────────────────
+    // Project-scope settings are JOURNALED: they travel in the file and ⌘Z works on them, exactly as
+    // it does on a cue label. Application-scope ones are machine preferences and are not — they have
+    // their own store and no undo, which is what the scope split means.
+
+    /// <summary>Writes one project setting through the journal, so it is saved AND undoable.</summary>
+    private void Write<T>(string property, Func<T> read, Action<T> write, T value, string description)
+    {
+        if (_loading || _journal is null || EqualityComparer<T>.Default.Equals(read(), value))
+            return;
+
+        _journal.Do(new SetValueCommand<T>(
+            Guid.Empty, $"settings:{property}", "settings", read, write, value, description));
+        _journal.CloseGroup();
+    }
+
+    partial void OnOpenModeChanged(string value) =>
+        Write("openLocked", () => _settings.OpenLocked, locked => _settings.OpenLocked = locked,
+            value == "locked", $"open {value}");
+
+    partial void OnListEndPolicyChanged(string value) =>
+        Write("atListEnd", () => _settings.AtListEnd, at => _settings.AtListEnd = at,
+            value switch
+            {
+                "loop" => AtListEnd.Loop,
+                "next list" => AtListEnd.NextList,
+                _ => AtListEnd.Hold,
+            },
+            $"at list end: {value}");
+
+    partial void OnRunChecksOnOpenChanged(bool value) =>
+        Write("runChecks", () => _settings.RunStatusChecksOnOpen,
+            on => _settings.RunStatusChecksOnOpen = on, value, "run checks on open");
+
+    partial void OnExternalInputOffOnOpenChanged(bool value) =>
+        Write("externalInputOff", () => _settings.ExternalInputOffOnOpen,
+            on => _settings.ExternalInputOffOnOpen = on, value, "external input off on open");
+
+    partial void OnClickMovesStandbyChanged(bool value) =>
+        Write("clickMovesStandby", () => _settings.ClickMovesStandby,
+            on => _settings.ClickMovesStandby = on, value, "click moves standby");
+
+    partial void OnTriggerModeChanged(string value) =>
+        Write("newCueTrigger", () => _settings.NewCueTrigger, mode => _settings.NewCueTrigger = mode,
+            value switch
+            {
+                "follow" => CueTrigger.Follow,
+                "continue" => CueTrigger.Continue,
+                _ => CueTrigger.Manual,
+            },
+            $"new cues are {value}");
+
+    partial void OnAutoRenumberChanged(bool value) =>
+        Write("autoRenumber", () => _settings.AutoRenumberOnInsert,
+            on => _settings.AutoRenumberOnInsert = on, value, "auto-renumber on insert");
+
+    partial void OnSaveOnGoChanged(bool value) =>
+        Write("saveOnGo", () => _settings.SaveOnGo, on => _settings.SaveOnGo = on, value, "save on GO");
+
+    partial void OnOutsideMediaPolicyChanged(string value) =>
+        Write("outsideMedia", () => _settings.OutsideMedia, policy => _settings.OutsideMedia = policy,
+            value switch
+            {
+                "move to root" => Core.Model.OutsideMediaPolicy.MoveToRoot,
+                "copy to root" => Core.Model.OutsideMediaPolicy.CopyToRoot,
+                _ => Core.Model.OutsideMediaPolicy.KeepInPlace,
+            },
+            $"media outside the root: {value}");
+
+    partial void OnAutosaveCadenceChanged(string value) =>
+        Write("autosave", () => _settings.AutosaveSeconds, seconds => _settings.AutosaveSeconds = seconds,
+            Digits(value, _settings.AutosaveSeconds), "autosave cadence");
+
+    partial void OnRecoveryCopiesChanged(string value) =>
+        Write("recoveryCopies", () => _settings.RecoveryCopies, count => _settings.RecoveryCopies = count,
+            Digits(value, _settings.RecoveryCopies), "recovery copies");
+
+    /// <summary>Reads the leading number out of a field like "30 s", keeping the old value if there is none.</summary>
+    private static int Digits(string text, int fallback)
+    {
+        var digits = new string([.. text.TakeWhile(char.IsAsciiDigit)]);
+        return int.TryParse(digits, out var value) ? value : fallback;
     }
 
     public IReadOnlyList<SettingsPane> ApplicationPanes { get; } = SampleShow.ApplicationPanes;
@@ -347,7 +446,30 @@ public partial class SettingsViewModel : ObservableObject
         ? "Application settings save immediately · no undo"
         : "Project settings are journaled — ⌘Z works here";
 
-    public string ScopeFile => IsApplicationScope ? "app-settings.json" : "4 unsaved edits";
+    /// <summary>
+    /// Where the selected scope's settings live, and whether this project has unsaved ones.
+    /// </summary>
+    /// <remarks>
+    /// Read from the journal rather than authored. It used to say "4 unsaved edits" on every project
+    /// forever, which is the kind of number a reader trusts once and then stops trusting anything on
+    /// the screen.
+    /// </remarks>
+    public string ScopeFile
+    {
+        get
+        {
+            if (IsApplicationScope)
+                return "app-settings.json";
+
+            if (_journal is null)
+                return "not connected to a document";
+
+            var count = _journal.Log.Count(command => command.Domain == "settings");
+            return count == 0
+                ? "no unsaved setting changes"
+                : $"{count} setting change{(count == 1 ? "" : "s")} in this session";
+        }
+    }
 
     // ── appearance ────────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<string> Themes { get; } = Appearance.Palettes;
@@ -502,17 +624,7 @@ public partial class ProjectStatusViewModel : ObservableObject
         Project = project;
         Report = ProjectStatus.Run(project, environment: environment);
         Title = $"Project status — {project.Title}";
-
-        Checks =
-        [
-            .. Report.Checks.Select(check => new CheckRow
-            {
-                Check = check.Name,
-                Result = new Status(Result(check), Gel(check.Outcome)),
-                Detail = check.Issues.Count > 0 ? check.Issues[0].Message : check.Detail,
-                Fix = check.Fix,
-            }),
-        ];
+        Checks = RowsOf(Report);
 
         // The relink pane offers the first missing file, because that is the one the operator is
         // looking at when they arrive here.
@@ -522,8 +634,22 @@ public partial class ProjectStatusViewModel : ObservableObject
     }
 
     public ProjectStatusReport Report { get; private set; }
-    public IReadOnlyList<CheckRow> Checks { get; }
+
+    /// <summary>The check table. Rebuilt by <see cref="Rerun"/> — the rows ARE the report.</summary>
+    public IReadOnlyList<CheckRow> Checks { get; private set; }
+
     public string Title { get; }
+
+    private static IReadOnlyList<CheckRow> RowsOf(ProjectStatusReport report) =>
+    [
+        .. report.Checks.Select(check => new CheckRow
+        {
+            Check = check.Name,
+            Result = new Status(Result(check), Gel(check.Outcome)),
+            Detail = check.Issues.Count > 0 ? check.Issues[0].Message : check.Detail,
+            Fix = check.Fix,
+        }),
+    ];
 
     /// <summary>The document, for the relink actions this window offers.</summary>
     public HaCueProject Project { get; } = null!;
@@ -603,10 +729,29 @@ public partial class ProjectStatusViewModel : ObservableObject
 
     public bool HasRelinked => LastRelink is not null;
 
-    private void Rerun()
+    /// <summary>Whether the last copy landed, so the button can say so instead of doing it silently.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CopyLabel))]
+    private bool _hasCopied;
+
+    public string CopyLabel => HasCopied ? "COPIED" : "COPY REPORT";
+
+    public void NoteCopied() => HasCopied = true;
+
+    /// <summary>
+    /// Runs the checks again over the current document and machine.
+    /// </summary>
+    /// <remarks>
+    /// Public because the operator asks for it directly: they have just plugged the interface in, or
+    /// put the media back, and want to know whether that fixed it without reopening the show.
+    /// </remarks>
+    public void Rerun()
     {
+        HasCopied = false;
         Report = ProjectStatus.Run(Project, environment: _environment);
+        Checks = RowsOf(Report);
         OnPropertyChanged(nameof(Report));
+        OnPropertyChanged(nameof(Checks));
         OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(RelinkSummary));
         OnPropertyChanged(nameof(HasRelinked));
@@ -629,8 +774,39 @@ public partial class ProjectStatusViewModel : ObservableObject
     /// <summary>The headless twin is <c>hacue2-check</c>, exit 1 while errors remain (register item 25).</summary>
     public string HeadlessNote { get; } = "hacue2-check exits 1 while errors remain";
 
+    /// <summary>
+    /// Copies every referenced file into one directory and repoints the show at it.
+    /// </summary>
+    /// <remarks>
+    /// Journaled, because it rewrites paths in the document and an operator who consolidated into the
+    /// wrong directory needs a way back. What it could not copy is reported by name — a project that
+    /// looks consolidated and half-works at the venue is the worst of both outcomes.
+    /// </remarks>
+    public void Consolidate()
+    {
+        if (_journal is null || ConsolidateInto.Trim().Length == 0)
+            return;
+
+        var result = MediaEdits.Consolidate(_journal, ConsolidateInto.Trim());
+
+        ConsolidateNote = result.IsComplete
+            ? $"copied {result.Changed.Count} file{(result.Changed.Count == 1 ? "" : "s")}"
+            : $"copied {result.Changed.Count} · {result.Unresolved.Count} could not be copied: "
+              + string.Join(", ", result.Unresolved.Take(3).Select(Path.GetFileName))
+              + (result.Unresolved.Count > 3 ? " …" : "");
+
+        Rerun();
+        OnPropertyChanged(nameof(ConsolidateNote));
+    }
+
+    /// <summary>What the last consolidate did. Empty until one has run.</summary>
+    public string ConsolidateNote { get; private set; } = "";
+
+    /// <summary>Whether there is a journal behind this window — false in a preview.</summary>
+    public bool CanEdit => _journal is not null;
+
     [ObservableProperty] private string _missingFile;
-    [ObservableProperty] private string _consolidateInto = "~/shows/midsummer-tour/";
+    [ObservableProperty] private string _consolidateInto = "";
     [ObservableProperty] private bool _copyMedia = true;
     [ObservableProperty] private bool _includeReport = true;
     [ObservableProperty] private bool _zipWhenDone;
@@ -657,21 +833,69 @@ public partial class ProjectStatusViewModel : ObservableObject
 /// minimum level — the same sink the file log uses (register item 27). One logging system, two readers;
 /// a second event collector would drift from the archive the moment either changed.
 /// </remarks>
-public partial class DiagnosticsViewModel(ShowRuntime runtime) : ObservableObject
+public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = null) : ObservableObject
 {
-    public IReadOnlyList<BayRow> BayRows { get; } = runtime.BayRows;
-    public IReadOnlyList<CompositionStatsRow> Compositions { get; } = runtime.CompositionStats;
-    public IReadOnlyList<LogLine> Log { get; } = runtime.Log;
+    // Read THROUGH the runtime rather than copied out of it: this window sits open on a second monitor
+    // for a whole show, and a snapshot taken when it opened would freeze at the moment nothing was
+    // wrong yet.
+    public IReadOnlyList<BayRow> BayRows => runtime.BayRows;
+    public IReadOnlyList<CompositionStatsRow> Compositions => runtime.CompositionStats;
+    public IReadOnlyList<LogLine> Log => runtime.Log;
 
     public IReadOnlyList<string> Levels { get; } = ["Trace", "Debug", "Information", "Warning", "Error"];
 
     [ObservableProperty]
     private string _minimumLevel = "Warning";
 
-    public string BayHeader { get; } = runtime.BaySummary + " · 480-sample chunks";
+    public string BayHeader => runtime.BaySummary.Length > 0 ? runtime.BaySummary : "no session";
 
-    public string BayWarning { get; } =
-        "7 of 8 chunks in flight, 12 dropped — the encoder is not draining. Recording will gap before it fails.";
+    /// <summary>
+    /// What is actually wrong, or nothing.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the rows rather than authored. It used to be a fixed sentence about a recording
+    /// encoder that was not draining — permanently on screen, true only by coincidence.
+    /// </remarks>
+    public string BayWarning
+    {
+        get
+        {
+            var problems = host?.Problems ?? [];
 
-    public string CountersSince { get; } = "Counters since 13:44:02";
+            if (problems.Count > 0)
+                return problems[0];
+
+            var behind = runtime.BayRows.Where(row => row.State.IsWarn || row.State.IsBad).ToList();
+
+            return behind.Count == 0
+                ? ""
+                : $"{behind[0].Name}: {behind[0].State.Text}"
+                  + (behind.Count > 1 ? $" (+{behind.Count - 1} more)" : "");
+        }
+    }
+
+    public bool HasWarning => BayWarning.Length > 0;
+
+    public string CountersSince => host is null ? "no session — nothing to count" : "counters since the show started";
+
+    /// <summary>Re-reads everything. Driven by the same tick that fills the runtime.</summary>
+    public void Refresh()
+    {
+        OnPropertyChanged(nameof(BayRows));
+        OnPropertyChanged(nameof(Compositions));
+        OnPropertyChanged(nameof(Log));
+        OnPropertyChanged(nameof(BayHeader));
+        OnPropertyChanged(nameof(BayWarning));
+        OnPropertyChanged(nameof(HasWarning));
+    }
+
+    /// <summary>Forgets the accumulated problem lines. The counters themselves belong to the bay.</summary>
+    public void ResetCounters()
+    {
+        host?.ClearProblems();
+        Refresh();
+    }
+
+    /// <summary>The whole bay as plain text, for pasting to somebody who is not in the building.</summary>
+    public string Report() => host?.Report() ?? "No session is running — there is nothing to report.";
 }

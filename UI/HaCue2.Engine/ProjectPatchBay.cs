@@ -24,6 +24,14 @@ public sealed class ProjectPatchBay : IDisposable
 {
     private readonly List<IAudioOutput> _outputs = [];
 
+    /// <summary>The lines that actually opened, and how wide each one turned out to be.</summary>
+    /// <remarks>
+    /// Kept so <see cref="Apply"/> can rebuild exactly the matrices that are live. The width comes from
+    /// the LINE rather than from the document because a device may have opened at a different channel
+    /// count than the document asked for, and a matrix sized to the document would be rejected.
+    /// </remarks>
+    private readonly List<(Guid LineId, int Channels)> _open = [];
+
     private ProjectPatchBay(AudioPatchBay bay, IReadOnlyList<string> channelIds, string? monitor)
     {
         Bay = bay;
@@ -64,6 +72,7 @@ public sealed class ProjectPatchBay : IDisposable
 
         var failures = new List<string>();
         var opened = new List<IAudioOutput>();
+        var openLines = new List<(Guid, int)>();
         string? monitor = null;
 
         foreach (var line in project.AudioLines)
@@ -88,6 +97,7 @@ public sealed class ProjectPatchBay : IDisposable
                     isMaster);
 
                 opened.Add(output);
+                openLines.Add((line.Id, output.Format.Channels));
                 monitor ??= line.Id.ToString();
             }
             catch (Exception failure) when (failure is not OutOfMemoryException)
@@ -98,11 +108,89 @@ public sealed class ProjectPatchBay : IDisposable
         }
 
         if (opened.Count > 0)
+        {
+            // Metering is switched on for the life of the show rather than when a meter becomes
+            // visible: the Output info drawer is summoned exactly when something sounds wrong, and a
+            // meter that starts measuring at that moment has no history to show for the seconds that
+            // prompted it. The cost is a peak/RMS pass over a buffer the bus already has in cache.
+            bay.EnableProgramMetering();
             bay.Play();
+        }
 
         var result = new ProjectPatchBay(bay, channelIds, monitor) { Failures = failures };
         result._outputs.AddRange(opened);
+        result._open.AddRange(openLines);
         return result;
+    }
+
+    /// <summary>
+    /// Pushes the project's current V×R patch onto the live bay.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the half that makes "changing the real-output patch does not rebuild active cue
+    /// transport" true. <see cref="AudioPatchBay.UpdatePatch"/> reconciles one terminal's matrix
+    /// atomically — changed cells ramp, newly non-zero cells fade in, zeroed cells stop — and the
+    /// producers behind it are never touched, so a cell can be re-patched under a sounding cue.
+    /// </para>
+    /// <para>
+    /// <b>Adding or removing a LOGICAL output is refused while live</b> and reported rather than
+    /// applied. The bus width is fixed when the bay is built, so a matrix with a different row count
+    /// would be rejected by the terminal anyway; saying so is better than a patch that silently stops
+    /// tracking the document. Re-opening the show adopts the new width.
+    /// </para>
+    /// </remarks>
+    /// <returns>What could not be applied, for the operator. Empty when the patch is now live.</returns>
+    public IReadOnlyList<string> Apply(HaCueProject project) =>
+        Apply(project, project?.AudioPatch.Cells ?? []);
+
+    /// <summary>
+    /// Pushes an explicit set of cells onto the live bay, using the project only for its channel order.
+    /// </summary>
+    /// <remarks>
+    /// The overload a RAMP needs: a patch cue's fade pushes intermediate states that deliberately do
+    /// not exist in the document, and the document is written once with where the fade lands.
+    /// </remarks>
+    public IReadOnlyList<string> Apply(HaCueProject project, IReadOnlyList<PatchCell> cells)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(cells);
+
+        var channels = project.AudioPatch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+
+        if (channels.Count != LogicalChannelIds.Count)
+        {
+            return
+            [
+                $"the project now has {channels.Count} logical output(s) and the running bay has "
+                + $"{LogicalChannelIds.Count} — reopen the show to apply that change",
+            ];
+        }
+
+        // Order matters as much as count: the bus is addressed by POSITION, so a reordered channel
+        // list would silently send Main L down the Sub bus. Ids in bus order are the check.
+        if (!channels.Select(channel => channel.Id.ToString()).SequenceEqual(LogicalChannelIds, StringComparer.Ordinal))
+            return ["the logical outputs were reordered — reopen the show to apply that change"];
+
+        var failures = new List<string>();
+
+        foreach (var (lineId, lineChannels) in _open)
+        {
+            var forLine = cells.Where(cell => cell.LineId == lineId).ToList();
+
+            try
+            {
+                Bay.UpdatePatch(lineId.ToString(), Matrix(forLine, channels, lineChannels));
+            }
+            catch (Exception failure) when (failure is ArgumentException or InvalidOperationException)
+            {
+                // One terminal refusing its matrix must not stop the others being updated: a partly
+                // applied patch the operator is told about beats a wholly stale one they are not.
+                failures.Add($"{project.FindLine(lineId)?.Name ?? lineId.ToString()}: {failure.Message}");
+            }
+        }
+
+        return failures;
     }
 
     /// <summary>

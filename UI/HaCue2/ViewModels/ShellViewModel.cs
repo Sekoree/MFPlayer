@@ -104,8 +104,10 @@ public partial class ShellViewModel : ObservableObject
         if (Host is not null)
             return;
 
-        Host = await ShowHost.StartAsync(Project, backend).ConfigureAwait(true);
+        _backend = backend;
+        Host = await ShowHost.StartAsync(Project, backend, Runtime.MediaDurations).ConfigureAwait(true);
         Cues.Engine = Host;
+        Audio.NoteAudioStarted();
 
         _engine = new EngineRuntime(Host, Runtime, Project);
         _engine.Changed += () =>
@@ -114,9 +116,47 @@ public partial class ShellViewModel : ObservableObject
             OnPropertyChanged(nameof(TransportHint));
         };
 
-        Journal.Changed += ReloadEngine;
+        // The Active panel's clocks move continuously; the tree does not. Two signals rather than one
+        // keeps a 250 ms poll from rebuilding the cue tree under the operator's selection.
+        _engine.Ticked += Cues.Tick;
+        _engine.Ticked += OutputInfo.Refresh;
+        _engine.Ticked += () => Diagnostics?.Refresh();
+
+        // A patch or fade cue writes real cell gains that travel in the file. They are not undoable
+        // and must not be, but the title bar has to stop claiming the project matches its file.
+        Host.DocumentChangedByCue += () => Dispatcher.UIThread.Post(() =>
+        {
+            Journal.MarkDirty();
+            Audio.Refresh();
+        });
+
+        Journal.Changed += ScheduleReload;
         OnPropertyChanged(nameof(IsLive));
         OnPropertyChanged(nameof(TransportHint));
+    }
+
+    /// <summary>
+    /// Coalesces document edits into one engine reload.
+    /// </summary>
+    /// <remarks>
+    /// A reload recompiles the whole document and hands it to the session. Doing that per COMMAND meant
+    /// every keystroke in a cue label recompiled the show — the journal raises one change per character.
+    /// The timer restarts on each edit, so a burst of typing costs one reload after it stops.
+    /// </remarks>
+    private DispatcherTimer? _reload;
+
+    private static readonly TimeSpan ReloadDelay = TimeSpan.FromMilliseconds(300);
+
+    private void ScheduleReload()
+    {
+        _reload ??= new DispatcherTimer(ReloadDelay, DispatcherPriority.Background, (_, _) =>
+        {
+            _reload!.Stop();
+            ReloadEngine();
+        });
+
+        _reload.Stop();
+        _reload.Start();
     }
 
     /// <summary>Whether a session is running behind the transport buttons.</summary>
@@ -131,8 +171,39 @@ public partial class ShellViewModel : ObservableObject
     private async void ReloadEngine()
     {
         if (Host is { } host)
-            await host.ReloadAsync(Project).ConfigureAwait(true);
+        {
+            // Durations go with the document: without them the compiler cannot convert an out-point
+            // into the engine's end-offset, and an effect lane on an untrimmed cue has no length to
+            // stretch over and is dropped.
+            await host.ReloadAsync(Project, Runtime.MediaDurations).ConfigureAwait(true);
+            OnPropertyChanged(nameof(TransportHint));
+        }
     }
+
+    /// <summary>
+    /// Stops and restarts the audio engine, adopting a new mix rate or clock master.
+    /// </summary>
+    /// <remarks>
+    /// A real stop and start, because the bus width and rate are fixed when the bay is built. Anything
+    /// sounding goes silent — which is why this is a button rather than a consequence of editing a
+    /// combo box, and why the operator is told so before they press it.
+    /// </remarks>
+    public async Task RestartAudioAsync()
+    {
+        if (_backend is not { } backend || Host is null)
+        {
+            // No engine to restart: adopting the new values is all there is to do, and the button
+            // stops offering a restart that would do nothing.
+            Audio.NoteAudioStarted();
+            return;
+        }
+
+        await StopEngineAsync().ConfigureAwait(true);
+        await StartEngineAsync(backend).ConfigureAwait(true);
+    }
+
+    /// <summary>The backend the shell was started with, kept so the engine can be restarted.</summary>
+    private IAudioBackend? _backend;
 
     /// <summary>Stops the show and releases the devices.</summary>
     public async ValueTask StopEngineAsync()
@@ -140,10 +211,16 @@ public partial class ShellViewModel : ObservableObject
         if (_engine is not { } engine)
             return;
 
-        Journal.Changed -= ReloadEngine;
+        Journal.Changed -= ScheduleReload;
+        _reload?.Stop();
+        _reload = null;
         _engine = null;
         Host = null;
         Cues.Engine = null;
+
+        // Dropped rather than kept: it captured the host it was built with, and a Diagnostics window
+        // reporting a session that no longer exists is worse than one saying there is none.
+        Diagnostics = null;
 
         await engine.DisposeAsync().ConfigureAwait(true);
         OnPropertyChanged(nameof(IsLive));
@@ -157,6 +234,12 @@ public partial class ShellViewModel : ObservableObject
             AdoptProbeResults();
             Status = ProjectStatus.Run(Project, environment: Environment);
             Refresh();
+
+            // A probe that has just landed changes what the COMPILED document should say — an
+            // out-point becomes convertible and an effect lane gains the length it needs — so the
+            // engine has to be told, even though nobody edited anything.
+            if (Host is not null)
+                ScheduleReload();
         });
     }
 
@@ -196,6 +279,18 @@ public partial class ShellViewModel : ObservableObject
     public VideoViewModel Video { get; }
     public TargetsViewModel Targets { get; }
     public OutputInfoViewModel OutputInfo { get; }
+
+    /// <summary>
+    /// The Diagnostics window's view-model, once one has been opened.
+    /// </summary>
+    /// <remarks>
+    /// Held here rather than by the window so the engine tick can reach it: the window is opened and
+    /// closed at will, and its counters have to keep moving for as long as it is on screen.
+    /// </remarks>
+    public DiagnosticsViewModel? Diagnostics { get; private set; }
+
+    /// <summary>Builds the Diagnostics view-model, or hands back the one already ticking.</summary>
+    public DiagnosticsViewModel OpenDiagnostics() => Diagnostics ??= new DiagnosticsViewModel(Runtime, Host);
 
     public IReadOnlyList<string> Views { get; } = [CuesView, AudioView, VideoView, TargetsView];
 
@@ -386,10 +481,23 @@ public partial class ShellViewModel : ObservableObject
 }
 
 /// <summary>The Output info drawer's content (screen 02b) — entirely runtime facts.</summary>
-public sealed class OutputInfoViewModel(ShowRuntime runtime)
+/// <remarks>
+/// Every member reads THROUGH the runtime. Copied values would freeze at the moment the drawer was
+/// built, which for a meter is the same as not having one — and this drawer exists precisely for the
+/// "why is there no sound" moment, where a stale reading is worse than a blank one.
+/// </remarks>
+public sealed class OutputInfoViewModel(ShowRuntime runtime) : ObservableObject
 {
-    public IReadOnlyList<ProgramMeter> Meters { get; } = runtime.Meters;
-    public IReadOnlyList<OutputLineChip> Lines { get; } = runtime.LineChips;
-    public string BaySummary { get; } = runtime.BaySummary;
-    public string BayClock { get; } = runtime.BayClock;
+    public IReadOnlyList<ProgramMeter> Meters => runtime.Meters;
+    public IReadOnlyList<OutputLineChip> Lines => runtime.LineChips;
+    public string BaySummary => runtime.BaySummary.Length > 0 ? runtime.BaySummary : "no session";
+    public string BayClock => runtime.BayClock;
+
+    public void Refresh()
+    {
+        OnPropertyChanged(nameof(Meters));
+        OnPropertyChanged(nameof(Lines));
+        OnPropertyChanged(nameof(BaySummary));
+        OnPropertyChanged(nameof(BayClock));
+    }
 }

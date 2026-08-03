@@ -1,6 +1,7 @@
 using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Controls.Models.TreeDataGrid;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
@@ -34,11 +35,10 @@ public partial class CuesViewModel : ObservableObject
             OnPropertyChanged(nameof(RightPanelHint));
         };
 
-        Scopes = BuildScopes();
-        // The show root, not a group: the app opens showing everything, and scoping is something the
-        // operator does on purpose (register item 7).
-        _selectedScope = Scopes.FirstOrDefault(scope => scope.IsList && scope.Name == "Act 1")
-                         ?? Scopes.FirstOrDefault();
+        _scopes = BuildScopes();
+        // The first list, not a group: the app opens showing everything in it, and scoping is
+        // something the operator does on purpose (register item 7).
+        _selectedScope = _scopes.FirstOrDefault(scope => scope.IsList);
 
         Timeline = new TimelineViewModel(Project, runtime, journal) { Owner = this };
 
@@ -202,15 +202,9 @@ public partial class CuesViewModel : ObservableObject
             return;
         }
 
-        var order = list.Flatten().Where(cue => cue.Enabled).ToList();
-        if (order.Count == 0)
-            return;
-
-        var at = list.StandbyCueId is { } standby
-            ? order.FindIndex(cue => cue.Id == standby)
-            : -1;
-
-        SetStandby(list, at + 1 < order.Count ? order[at + 1].Id : null);
+        // The same rule the running transport uses, from the same place: a cursor that behaved one way
+        // with a session and another way without one is a rehearsal that does not match the show.
+        SetStandby(list, CueOrder.NextEnabled(list, list.StandbyCueId)?.Id);
     }
 
     /// <summary>The running show, when there is one. Set by the shell after it starts the engine.</summary>
@@ -221,10 +215,94 @@ public partial class CuesViewModel : ObservableObject
         ? "GO always works — editing never blocks playback"
         : "live · editing never blocks playback";
 
-    /// <summary>Stops everything. PANIC — and the only thing in the app that does.</summary>
-    public void Panic() => _ = Engine?.StopAsync();
+    /// <summary>
+    /// Stops the selected active cue — the bare STOP.
+    /// </summary>
+    /// <remarks>
+    /// One cue, not the show. On a night where a music bed is under a video, the operator reaching for
+    /// STOP because the video has to go almost never wants the bed to go with it — and the one who
+    /// does wants <see cref="StopAll"/>, which is a deliberate second gesture rather than the same
+    /// button meaning two things.
+    /// <para>
+    /// "Selected" is the selected cue when that cue is sounding, and otherwise the cue that has been
+    /// running longest — which is what somebody means by "stop that" when they have not clicked
+    /// anything.
+    /// </para>
+    /// </remarks>
+    public void Stop()
+    {
+        if (Engine is not { } host)
+            return;
 
-    public void Pause(bool paused) => _ = Engine?.PauseAsync(paused);
+        // The runtime's list, not the tree's: the tree is scoped and a sounding cue outside the current
+        // scope is exactly the one an operator cannot see and most needs to be able to stop.
+        var target = SelectedCue is { } row && _runtime.Sounding.Contains(row.Id)
+            ? row.Id
+            : _runtime.ActiveCues.FirstOrDefault()?.CueId;
+
+        if (target is { } cueId)
+            _ = host.StopCueAsync(cueId);
+    }
+
+    /// <summary>Stops everything, over the project's stop fade. The split-menu half of STOP.</summary>
+    public void StopAll() => _ = Engine?.StopAllAsync();
+
+    /// <summary>
+    /// Stops everything as fast as the project's panic fade allows.
+    /// </summary>
+    /// <remarks>
+    /// Reached only by HOLDING the button, because the one button an operator hits without reading is
+    /// the one that must not fire on a mis-click.
+    /// </remarks>
+    public void Panic()
+    {
+        CancelPanic();
+        _ = Engine?.PanicAsync();
+    }
+
+    /// <summary>How long PANIC must be held before it fires.</summary>
+    /// <remarks>Long enough that a brush against the button does nothing, short enough that somebody
+    /// who means it does not have to wait and wonder whether it is working.</remarks>
+    private static readonly TimeSpan PanicHold = TimeSpan.FromMilliseconds(400);
+
+    private DispatcherTimer? _panic;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PanicLabel))]
+    private bool _isPanicArming;
+
+    /// <summary>The button says what it is doing, so a hold that is working looks like one.</summary>
+    public string PanicLabel => IsPanicArming ? "HOLD…" : "PANIC";
+
+    /// <summary>Starts the hold. Fires once it completes; nothing happens if the pointer leaves first.</summary>
+    public void BeginPanic()
+    {
+        if (_panic is not null)
+            return;
+
+        IsPanicArming = true;
+        _panic = new DispatcherTimer(PanicHold, DispatcherPriority.Input, (_, _) => Panic());
+        _panic.Start();
+    }
+
+    /// <summary>Abandons a hold that was released early — a mis-click, and nothing happens.</summary>
+    public void CancelPanic()
+    {
+        _panic?.Stop();
+        _panic = null;
+        IsPanicArming = false;
+    }
+
+    /// <summary>Pauses or resumes — one button, and it reports which it would do.</summary>
+    public void TogglePause()
+    {
+        if (Engine is { } host)
+            _ = host.SetPausedAsync(!_runtime.IsPaused);
+    }
+
+    public bool IsPaused => _runtime.IsPaused;
+
+    public string PauseLabel => IsPaused ? "RESUME" : "PAUSE";
 
     /// <summary>Fires the selected cue directly, whatever the cursor is doing.</summary>
     public void FireSelected()
@@ -499,10 +577,33 @@ public partial class CuesViewModel : ObservableObject
         Refresh();
     }
 
+    /// <summary>
+    /// Re-reads only what moves continuously — the Active panel's clocks and the pause latch.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="Refresh"/> because it runs four times a second: rebuilding the whole
+    /// cue tree at that rate would drop the selection under the operator's pointer every 250 ms.
+    /// </remarks>
+    public void Tick()
+    {
+        ActiveCues.Clear();
+
+        foreach (var row in _runtime.ActiveCues)
+            ActiveCues.Add(row);
+
+        OnPropertyChanged(nameof(ActivePanelHint));
+        OnPropertyChanged(nameof(IsPaused));
+        OnPropertyChanged(nameof(PauseLabel));
+    }
+
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
     public void Refresh()
     {
         var selected = SelectedCue?.Id;
+
+        // Scopes FIRST: the rows are built for whichever scope is selected, and a scope whose group was
+        // just deleted has to be resolved before anything tries to list its contents.
+        RebuildScopes();
         Rebuild();
         // By ID, not by reference: Rebuild replaces every row object, so the old instance is gone even
         // though the cue it stood for is still there.
@@ -510,9 +611,12 @@ public partial class CuesViewModel : ObservableObject
         Inspector.Facts = FactsFor(SelectedCue);
         Inspector.Reload();
         Timeline.Refresh();
+        Tick();
         OnPropertyChanged(nameof(TreeHint));
         OnPropertyChanged(nameof(Breadcrumb));
         OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(ListSelector));
+        OnPropertyChanged(nameof(CanOpenTimeline));
     }
 
     private void Rebuild()
@@ -558,11 +662,52 @@ public partial class CuesViewModel : ObservableObject
     }
 
     // ── scope (right panel, Lists & groups tab) ───────────────────────────────────────────────
-    public IReadOnlyList<ScopeEntry> Scopes { get; }
 
-    public IReadOnlyList<ScopeEntry> CueLists => [.. Scopes.Where(scope => scope.IsList)];
+    /// <summary>
+    /// Every list and group the tree can be scoped to.
+    /// </summary>
+    /// <remarks>
+    /// Rebuilt by <see cref="Refresh"/> rather than captured once. It used to be built in the
+    /// constructor and never again, so adding, removing or renaming a group left the navigator
+    /// describing a show that no longer existed until the app was restarted.
+    /// </remarks>
+    private IReadOnlyList<ScopeEntry> _scopes;
 
-    public IReadOnlyList<ScopeEntry> Groups => [.. Scopes.Where(scope => !scope.IsList)];
+    public IReadOnlyList<ScopeEntry> Scopes => _scopes;
+
+    public IReadOnlyList<ScopeEntry> CueLists => [.. _scopes.Where(scope => scope.IsList)];
+
+    public IReadOnlyList<ScopeEntry> Groups => [.. _scopes.Where(scope => !scope.IsList)];
+
+    /// <summary>Whose groups the navigator is listing, for its own heading.</summary>
+    public string GroupsHeader =>
+        ScopedList is { } list ? $"GROUPS IN {list.Name.ToUpperInvariant()}" : "GROUPS";
+
+    /// <summary>
+    /// Re-reads the scope roots, keeping the operator where they were.
+    /// </summary>
+    /// <remarks>
+    /// Selection is restored BY ID: every entry is a new record, so the old instance no longer matches
+    /// anything even though the list or group it stood for is still there. A scope whose group was
+    /// deleted falls back to that group's list rather than to nothing, because dropping the operator at
+    /// the show root mid-edit loses their place for no reason.
+    /// </remarks>
+    private void RebuildScopes()
+    {
+        var wanted = SelectedScope?.Id;
+        _scopes = BuildScopes();
+
+        OnPropertyChanged(nameof(Scopes));
+        OnPropertyChanged(nameof(CueLists));
+        OnPropertyChanged(nameof(Groups));
+
+        // Through the property, so the tree, the breadcrumb and the hints all follow it. Assigning the
+        // backing field would leave the navigator's highlight pointing at a row nobody is looking at.
+        SelectedScope = _scopes.FirstOrDefault(scope => scope.Id == wanted)
+                        ?? _scopes.FirstOrDefault(scope => scope.IsList);
+
+        OnPropertyChanged(nameof(GroupsHeader));
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsScoped))]

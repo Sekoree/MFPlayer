@@ -28,7 +28,7 @@
                  SelectedItem="{Binding SelectedScope}"
                  ItemTemplate="{StaticResource ScopeItemTemplate}" />
 
-        <TextBlock Classes="caps" Margin="12,9,12,4" Text="GROUPS IN ACT 1" />
+        <TextBlock Classes="caps" Margin="12,9,12,4" Text="{Binding GroupsHeader}" />
         <ListBox Theme="{StaticResource NavList}"
                  ItemsSource="{Binding Groups}"
                  SelectedItem="{Binding SelectedScope}"
