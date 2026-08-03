@@ -1953,3 +1953,25 @@ which is what a fault that reproduces once needs. The panel reports the ring's d
 tail that silently lost records invites the wrong conclusion from what is left. `SampleShow.LogTail`
 is retired; the file is down to 51 lines and two members (the override ledger and the remote API
 route table).
+
+**Remote API (same day).** A third "the register says LANDED, but it landed elsewhere": the route
+table, self-documentation and counters are real, and they are in **`UI/HaPlay/Remote`** — app code an
+app may not reference, whose dispatcher targets HaPlay's view-models regardless. HaCue2 has its own:
+`RemoteApiRoutes` (enforced shapes, so an unknown path is a 404 and a known path with the wrong verb
+is a 405 — collapsing those sends people looking in the wrong place), `RemoteApiServer` over
+`HttpListener`, and source-generated payload records.
+
+**`POST /api/v1/lists/{list}/go` ships.** The register had it PARTIAL, blocked on per-list standby;
+the session owns that now, so a bare go against a list finally means something. Lists resolve by id or
+by NAME, because a show-control system is configured by a human typing into a macro editor.
+
+Local-only unless the project allows the LAN, and a machine-scope token — never in the project, since
+a token travelling in the show file is a token published to everyone the show is sent to — is required
+either way. Every route goes through the same transport verbs the buttons use, the rule external input
+already follows.
+
+The AOT gate added earlier earned its place immediately: the first draft used anonymous JSON payloads
+and the build refused them. They are named records with a source-generated context now, which an API
+contract deserved anyway.
+
+`SampleShow` is down to **34 lines and one member** — the project override ledger.

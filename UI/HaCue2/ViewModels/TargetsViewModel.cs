@@ -352,7 +352,29 @@ public partial class TargetsViewModel : ObservableObject
     public string TestResult { get; private set; } = "";
 
     // ── remote API ────────────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<EndpointRow> Routes { get; } = SampleShow.RemoteEndpoints;
+
+    /// <summary>The running server, when the project turned it on. Null otherwise.</summary>
+    public RemoteApiServer? Remote { get; set; }
+
+    /// <summary>
+    /// The API's own route table, with live call counts.
+    /// </summary>
+    /// <remarks>
+    /// Read from <see cref="RemoteApiRoutes"/> rather than authored, so the tab cannot list a route the
+    /// server does not serve — which was exactly what the sample table did, including one route that
+    /// had never existed.
+    /// </remarks>
+    public IReadOnlyList<EndpointRow> Routes =>
+    [
+        .. RemoteApiRoutes.All
+            .OrderBy(route => route.Domain, StringComparer.Ordinal)
+            .ThenBy(route => route.Pattern, StringComparer.Ordinal)
+            .Select(route => new EndpointRow(
+                route.Method,
+                route.Pattern,
+                route.Summary,
+                route.Calls.ToString(System.Globalization.CultureInfo.CurrentCulture))),
+    ];
     public IReadOnlyList<string> ServerStates { get; } = ["on", "off"];
     public IReadOnlyList<string> LanModes { get; } = ["allowed", "local only"];
 
@@ -360,6 +382,11 @@ public partial class TargetsViewModel : ObservableObject
     [ObservableProperty] private string _lanMode;
     [ObservableProperty] private string _port;
 
-    public string LastCall { get; } = "POST /cues/go · 10.0.1.7 · 13:58";
-    public string ServedAt { get; } = "served at http://10.0.1.5:8420";
+    public string LastCall => Remote?.LastCall is { Length: > 0 } call ? call : "no calls yet";
+    /// <summary>Where it is answering, or why it is not.</summary>
+    public string ServedAt => Remote is { IsRunning: true, Address: { Length: > 0 } address }
+        ? $"served at {address}"
+        : _project.Settings.RemoteApi is { Enabled: true }
+            ? "not listening — see the status bar"
+            : "off — turn it on in project settings";
 }

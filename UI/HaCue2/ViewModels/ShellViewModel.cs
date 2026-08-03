@@ -210,6 +210,17 @@ public partial class ShellViewModel : ObservableObject
             Audio.Refresh();
         });
 
+        // Register item 24: the remote API is off unless the project asks for it. A cue player that
+        // answers the network by default can be fired by anything on the venue wifi.
+        if (Project.Settings.RemoteApi is { Enabled: true } remote)
+        {
+            Remote = new RemoteApiServer(Host, () => Project, Settings.EnsureRemoteToken());
+            Remote.Problem += problem => Dispatcher.UIThread.Post(() => FileMessage = problem);
+            await Remote.StartAsync(remote.Port, remote.LanAllowed).ConfigureAwait(true);
+            Targets.Remote = Remote;
+            AppSettingsStore.Save(Settings);
+        }
+
         Journal.Changed += ScheduleReload;
         OnPropertyChanged(nameof(IsLive));
         OnPropertyChanged(nameof(TransportHint));
@@ -285,11 +296,21 @@ public partial class ShellViewModel : ObservableObject
     /// <summary>The backend the shell was started with, kept so the engine can be restarted.</summary>
     private IAudioBackend? _backend;
 
+    /// <summary>The remote API, when the project turned it on.</summary>
+    public RemoteApiServer? Remote { get; private set; }
+
     /// <summary>Stops the show and releases the devices.</summary>
     public async ValueTask StopEngineAsync()
     {
         if (_engine is not { } engine)
             return;
+
+        if (Remote is { } remote)
+        {
+            await remote.DisposeAsync().ConfigureAwait(true);
+            Remote = null;
+            Targets.Remote = null;
+        }
 
         Journal.Changed -= ScheduleReload;
         _reload?.Stop();

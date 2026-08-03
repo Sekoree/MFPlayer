@@ -20,6 +20,13 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <!-- The route table's call counters are incremented by the server and read by the UI, so the
+             increment is internal. The test suite drives it directly to prove counters are per-route
+             rather than shared, which is the property a shared static would silently break. -->
+        <InternalsVisibleTo Include="HaCue2.Core.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
         <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Session\S.Media.Session.csproj" />

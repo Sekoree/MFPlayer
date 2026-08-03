@@ -19,7 +19,7 @@ namespace HaCue2.Sample;
 /// </para>
 /// <para>
 /// Remaining, with what each is waiting for: <see cref="Overrides"/> needs the project override
-/// ledger, <see cref="RemoteEndpoints"/> needs the remote API server, and the log tail is now a live read of the MEL pipeline.
+/// ledger, and the log tail is now a live read of the MEL pipeline.
 /// </para>
 /// </remarks>
 public static class SampleShow
@@ -31,21 +31,4 @@ public static class SampleShow
         new("Panic fade", "0.15 s", "0.25 s"),
         new("Remote API", "off", "on · port 8420"),
     ];
-
-    // ── screen 11b · the app's own remote API ─────────────────────────────────────────────────
-
-    public static IReadOnlyList<EndpointRow> RemoteEndpoints { get; } =
-    [
-        new("POST", "/cues/go", "fire the standby cue", "241"),
-        new("POST", "/cues/{id}/fire", "fire a specific cue", "12"),
-        new("POST", "/transport/stop · /panic · /pause", "transport controls", "3"),
-        new("POST", "/standby/{id}", "move standby", "0"),
-        new("POST", "/lists/{id}/go", "fire the standby cue of one list", "0"),
-        new("GET", "/status", "active cues, standby, issues", "1 402"),
-        new("GET", "/lists", "cue lists + numbers/labels", "7"),
-    ];
-
-    // ── screen 15 · telemetry the engine will supply ──────────────────────────────────────────
-    // Reached only through ShowRuntime, never bound directly: invented numbers standing in for
-    // AudioPatchBay.SnapshotDiagnostics() and the log ring.
 }

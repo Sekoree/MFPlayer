@@ -71,6 +71,25 @@ public sealed record AppSettings
     public string RemotePort { get; set; } = "8420";
     public bool RemoteLanAllowed { get; set; }
 
+    /// <summary>
+    /// The shared secret every remote call must present.
+    /// </summary>
+    /// <remarks>
+    /// Machine-scope, never in the project: a token that travelled in the show file would be a token
+    /// published to everybody the show was ever sent to. Generated on first use rather than shipped
+    /// with a default, because a default token is the same as none.
+    /// </remarks>
+    public string RemoteToken { get; set; } = "";
+
+    /// <summary>The token, minting one the first time it is asked for.</summary>
+    public string EnsureRemoteToken()
+    {
+        if (RemoteToken.Length == 0)
+            RemoteToken = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+
+        return RemoteToken;
+    }
+
     // ── media cache & logging ─────────────────────────────────────────────────────────────────
 
     /// <summary>Empty means the shared framework cache root, which is the intended default.</summary>
