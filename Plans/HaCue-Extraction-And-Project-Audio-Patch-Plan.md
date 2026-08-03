@@ -1925,3 +1925,16 @@ The wire monitor is live off `TriggerInputs.Observed`, and Learn watches the sam
 operator sees printed is literally the text that gets bound. `SampleShow.TriggerMonitor` and the
 invented `LastSeen` are retired; `SampleShow` is down to 61 lines and four members (override ledger,
 remote API routes, log tail, curve preview leftovers).
+
+**Effect lanes — the authoring half (same day).** Register item 18's model, the compile path and the
+journal's own `EffectLaneTarget` had all existed for some time; `EffectLaneTarget` had never been
+constructed. So lanes reached the engine only when the fixture generator or the timeline's duck helper
+wrote one — there was no way to add a lane by hand. Closed: add per kind (one lane per kind, because a
+cue with two volume lanes has no defined level and the compiler takes the first), remove, and edit
+through the SAME curve editor a fade uses, which is what the register asks for and what
+`EffectLaneTarget` was written for.
+
+A new lane opens on two points at unity: an editor over an empty list has no handles, and a flat lane
+at unity changes nothing until dragged, so adding one is safe mid-show. Each row says what the lane
+will actually DO — "needs at least two points", "no endpoint, so nothing is sent" — rather than a point
+count that implies it reaches the engine when it does not.

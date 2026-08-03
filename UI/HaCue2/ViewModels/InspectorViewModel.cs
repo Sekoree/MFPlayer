@@ -164,6 +164,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(FitIndex));
         OnPropertyChanged(nameof(PlacementOpacityValue));
         OnPropertyChanged(nameof(EffectLanes));
+        OnPropertyChanged(nameof(HasEffectLanes));
+        OnPropertyChanged(nameof(CanCarryLanes));
         OnPropertyChanged(nameof(FadeInCurve));
         OnPropertyChanged(nameof(FadeOutCurve));
         OnPropertyChanged(nameof(CrossfadeCurve));
@@ -1437,23 +1439,135 @@ public partial class InspectorViewModel : ObservableObject
     }
 
     // ── the Effects pane (register item 18: lanes, hidden until added) ────────────────────────
-    public IReadOnlyList<string> EffectLanes
-    {
-        get
-        {
-            var lanes = Cue switch
-            {
-                MediaCueNode media => media.EffectLanes,
-                GroupCueNode group => group.EffectLanes,
-                VisualizerCueNode visualizer => visualizer.EffectLanes,
-                _ => [],
-            };
+    //
+    // The model, the compile path and the curve editor's own EffectLaneTarget all existed before this
+    // landed — what was missing was any way to ADD a lane. Lanes reached the engine only if the fixture
+    // generator or the timeline's duck helper happened to write one.
 
-            return
-            [
-                .. lanes.Select(lane => $"{lane.Kind.ToString().ToLowerInvariant()} · {lane.Points.Count} points"),
-            ];
+    /// <summary>The lanes on the selected cue, or empty for a kind that cannot carry one.</summary>
+    private List<EffectLane>? Lanes => Cue switch
+    {
+        MediaCueNode media => media.EffectLanes,
+        GroupCueNode group => group.EffectLanes,
+        VisualizerCueNode visualizer => visualizer.EffectLanes,
+        _ => null,
+    };
+
+    /// <summary>Whether this cue kind can carry automation at all.</summary>
+    public bool CanCarryLanes => Lanes is not null;
+
+    public IReadOnlyList<EffectLaneRow> EffectLanes =>
+        Lanes is not { } lanes
+            ? []
+            : [.. lanes.Select((lane, index) => new EffectLaneRow(
+                index,
+                lane.Kind.ToString().ToLowerInvariant(),
+                Describe(lane)))];
+
+    public bool HasEffectLanes => EffectLanes.Count > 0;
+
+    /// <summary>
+    /// What a lane will actually do, in a phrase.
+    /// </summary>
+    /// <remarks>
+    /// Says when a lane cannot reach the engine rather than showing a point count that implies it can:
+    /// a lane needs more than one point to be an envelope, and — because the compiler measures it
+    /// against the cue's PLAYED length — a cue whose media has not been probed yet has no length to
+    /// stretch it over.
+    /// </remarks>
+    private string Describe(EffectLane lane)
+    {
+        if (lane.Points.Count < 2)
+            return "empty — needs at least two points";
+
+        if (lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp)
+        {
+            return lane.EndpointId is null
+                ? $"{lane.Points.Count} points · no endpoint, so nothing is sent"
+                : $"{lane.Points.Count} points → {lane.Address}";
         }
+
+        return $"{lane.Points.Count} points";
+    }
+
+    public IReadOnlyList<string> LaneKinds { get; } = ["volume", "opacity", "osc ramp", "midi ramp"];
+
+    /// <summary>
+    /// Adds a lane of the given kind.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Seeded with two points at unity rather than empty, so the editor opens on something the operator
+    /// can grab — the same reason a fade curve opens on a straight line. A flat lane at unity changes
+    /// nothing until it is dragged, so adding one is safe mid-show.
+    /// </para>
+    /// <para>
+    /// One lane per kind: a cue with two volume lanes has no defined answer for what its level is, and
+    /// the compiler takes the first, so the second would be invisible.
+    /// </para>
+    /// </remarks>
+    public void AddLane(int kindIndex)
+    {
+        if (Lanes is not { } lanes || Cue is not { } cue || kindIndex < 0 || kindIndex >= LaneKinds.Count)
+            return;
+
+        var kind = (EffectLaneKind)kindIndex;
+
+        if (lanes.Any(lane => lane.Kind == kind))
+            return;
+
+        var added = new EffectLane
+        {
+            Kind = kind,
+            Points = [new LanePoint(0, 1), new LanePoint(1, 1)],
+        };
+
+        _journal.Do(new AddItemCommand<EffectLane>(
+            lanes, added, lanes.Count, "cues", $"add {LaneKinds[kindIndex]} lane"));
+        _journal.CloseGroup();
+
+        Reload();
+    }
+
+    /// <summary>Whether a kind can still be added — the picker greys out what is already there.</summary>
+    public bool CanAddLane(int kindIndex) =>
+        Lanes is { } lanes
+        && kindIndex >= 0
+        && kindIndex < LaneKinds.Count
+        && lanes.All(lane => lane.Kind != (EffectLaneKind)kindIndex);
+
+    /// <summary>Removes a lane. Undoable, like everything else this panel does.</summary>
+    public void RemoveLane(int index)
+    {
+        if (Lanes is not { } lanes || index < 0 || index >= lanes.Count)
+            return;
+
+        _journal.Do(new RemoveItemCommand<EffectLane>(
+            lanes, lanes[index], "cues", $"remove {lanes[index].Kind.ToString().ToLowerInvariant()} lane"));
+        _journal.CloseGroup();
+
+        Reload();
+    }
+
+    /// <summary>
+    /// The editor for one lane — the SAME editor a fade curve uses (register item 18).
+    /// </summary>
+    /// <remarks>
+    /// <c>EffectLaneTarget</c> has existed since the journal was written and was never constructed:
+    /// the two shapes are one sorted list of normalized points, differing only in whether a point can
+    /// hold. One editor was the plan's requirement and is what this returns.
+    /// </remarks>
+    public CurveEditorViewModel? LaneEditor(int index)
+    {
+        if (Lanes is not { } lanes || Cue is not { } cue || index < 0 || index >= lanes.Count)
+            return null;
+
+        var lane = lanes[index];
+
+        return new CurveEditorViewModel(
+            _journal,
+            new EffectLaneTarget(cue.Id, lane),
+            $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane");
     }
 
     // ── edit plumbing ─────────────────────────────────────────────────────────────────────────
@@ -1598,3 +1712,8 @@ public sealed class TargetToggle(string name, bool selected, Action<bool> apply)
         }
     }
 }
+
+
+/// <summary>One automation lane, as the Effects pane lists it.</summary>
+/// <param name="Index">Its position in the cue's lane list — what edit and remove act on.</param>
+public sealed record EffectLaneRow(int Index, string Kind, string Detail);

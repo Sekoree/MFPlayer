@@ -46,6 +46,38 @@ public partial class InspectorPane : UserControl
             cues.PreviewSelected();
     }
 
+    /// <summary>Adds a lane of the kind the menu item names.</summary>
+    private void OnAddLane(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector
+            && (sender as Control)?.Tag is string tag
+            && int.TryParse(tag, out var kind))
+            inspector.AddLane(kind);
+    }
+
+    private void OnRemoveLane(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector
+            && (sender as Control)?.Tag is int index)
+            inspector.RemoveLane(index);
+    }
+
+    /// <summary>Opens the shared curve editor over one lane's points.</summary>
+    private void OnEditLane(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not InspectorViewModel inspector
+            || (sender as Control)?.Tag is not int index
+            || inspector.LaneEditor(index) is not { } editor)
+            return;
+
+        if (this.FindAncestorOfType<Window>() is not { } owner)
+            return;
+
+        var window = new CurveEditorWindow(editor);
+        window.Closed += (_, _) => inspector.Reload();
+        window.ShowDialog(owner);
+    }
+
     private void OnOpenTimeline(object? sender, RoutedEventArgs e)
     {
         if (this.FindAncestorOfType<CuesView>()?.DataContext is CuesViewModel cues)

@@ -289,20 +289,47 @@
 
           <!-- ══ EFFECTS — lanes, hidden until added (register item 18) ═════════════════════ -->
           <StackPanel IsVisible="{Binding IsEffectsPane}" Margin="0,6,0,8">
+            <!-- Hidden until added (register item 18): a cue with no automation shows none, rather
+                 than four empty lanes implying it has some. -->
+            <TextBlock Margin="10,4" Classes="mono dim3 small" IsVisible="{Binding !HasEffectLanes}"
+                       Text="no lanes on this cue" />
+
             <ItemsControl ItemsSource="{Binding EffectLanes}">
               <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="sys:String">
+                <DataTemplate x:DataType="vm:EffectLaneRow">
                   <Border Padding="10,5" BorderBrush="{DynamicResource BoothRuleSoft}" BorderThickness="0,0,0,1">
-                    <TextBlock Classes="mono dim2 small" Text="{Binding}" />
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                      <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Classes="mono small" Text="{Binding Kind}" />
+                        <TextBlock Classes="mono dim3 micro" Text="{Binding Detail}" />
+                      </StackPanel>
+                      <!-- The SAME editor a fade curve uses: a lane and a curve are one sorted list of
+                           normalized points, which is why the plan asks for one editor. -->
+                      <Button Grid.Column="1" Classes="icon" Content="✎" Click="OnEditLane"
+                              Tag="{Binding Index}" ToolTip.Tip="Edit this lane's points" />
+                      <Button Grid.Column="2" Classes="icon" Content="×" Click="OnRemoveLane"
+                              Tag="{Binding Index}" ToolTip.Tip="Remove this lane" />
+                    </Grid>
                   </Border>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+
             <ContentControl Theme="{StaticResource FieldWide}" Margin="0,6,0,0">
-              <Button Classes="block" Content="+ ADD EFFECT LANE" />
+              <Button Classes="block" Content="+ ADD EFFECT LANE ▾" IsEnabled="{Binding CanCarryLanes}">
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="Volume" Click="OnAddLane" Tag="0" />
+                    <MenuItem Header="Opacity" Click="OnAddLane" Tag="1" />
+                    <Separator />
+                    <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="2" />
+                    <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="3" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
             </ContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
-                       Text="volume · opacity · OSC ramp · MIDI ramp. A child's lane overrides the group's same-kind lane and carries a warning badge." />
+                       Text="One lane per kind. Volume and opacity reach the engine; outbound ramps are authored but not yet sent. A child's lane overrides the group's same-kind lane." />
           </StackPanel>
 
           <!-- ══ NOTE — one tab on every kind; stays writable under Lock ════════════════════ -->
