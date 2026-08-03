@@ -242,9 +242,30 @@ public class ControlFlowPaneTests
             Address = "/note",
         });
 
-        // The sender refuses a MIDI endpoint out loud at fire time. Saying so HERE means the operator
-        // finds out while authoring rather than when the desk fails to respond.
-        Assert.Contains("not implemented", shell.Cues.Inspector.ActionHint, StringComparison.Ordinal);
+        // MIDI output exists now, so the hint is the PARSER's verdict rather than a refusal of the
+        // whole protocol: "/note" is an OSC address and not a MIDI message, and saying which is what
+        // lets the operator fix it while authoring instead of when the desk fails to respond.
+        Assert.Contains("“/note” is not a MIDI message", shell.Cues.Inspector.ActionHint, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public Task AValidMidiMessageIsDescribedBackInTheEditor() => ShellFixture.WithShell(shell =>
+    {
+        var endpoint = new ActionEndpoint { Name = "Hog wing", Kind = EndpointKind.MidiOut };
+        shell.Project.ActionEndpoints.Add(endpoint);
+
+        Add(shell, new ActionCueNode
+        {
+            Number = new CueNumber("99"),
+            Label = "Cue lights",
+            EndpointId = endpoint.Id,
+            Address = "cc 1 7",
+            Arguments = "100",
+        });
+
+        // Read back in the words a desk's manual uses, so the operator can check it against the desk
+        // rather than against the syntax they just typed.
+        Assert.Contains("CC 7 = 100 on ch 1", shell.Cues.Inspector.ActionHint, StringComparison.Ordinal);
     });
 
     // ── visualizer ────────────────────────────────────────────────────────────────────────────

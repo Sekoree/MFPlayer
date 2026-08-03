@@ -1,6 +1,7 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
+using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
 using HaCue2.Machine;
@@ -145,6 +146,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(LoopValue));
         OnPropertyChanged(nameof(TrimInValue));
         OnPropertyChanged(nameof(TrimOutValue));
+        OnPropertyChanged(nameof(TrimHint));
+        OnPropertyChanged(nameof(CanEditClip));
         OnPropertyChanged(nameof(TriggerIndex));
         OnPropertyChanged(nameof(PreWaitValue));
         OnPropertyChanged(nameof(PostWaitValue));
@@ -331,12 +334,25 @@ public partial class InspectorViewModel : ObservableObject
         set => EditMedia("loop", media => media.Loop, (media, on) => media.Loop = on, value);
     }
 
+    /// <summary>What the trim fields accept, and what the file runs for.</summary>
+    /// <remarks>
+    /// The LENGTH is the number that was missing: the out-point is stored absolute, so "ten minutes off
+    /// the end" was arithmetic against a figure the pane never showed. It shows it now, and the fields
+    /// take <c>-10:00</c> so the arithmetic is not needed either.
+    /// </remarks>
+    public string TrimHint =>
+        Facts?.Duration is { } length
+            ? $"file {ClipTimes.Format((int)length.TotalMilliseconds)} · {ClipTimes.Syntax}"
+            : $"not probed · {ClipTimes.Syntax}";
+
     public string TrimInValue
     {
-        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.TrimInMs) : "—");
+        get => Shared(cue => cue is MediaCueNode media ? ClipTimes.Format(media.TrimInMs) : "—");
         set
         {
-            if (TryParseSeconds(value, out var ms))
+            // A clock reading, seconds, or a from-the-end time. Thirty minutes was 1800.0 here until
+            // the parser learned 30:00, which is what the field exists to accept.
+            if (ClipTimes.Parse(value, Facts?.Duration) is { } ms)
                 EditMedia("trimIn", media => media.TrimInMs, (media, set) => media.TrimInMs = set, ms);
         }
     }
@@ -349,7 +365,7 @@ public partial class InspectorViewModel : ObservableObject
     public string TrimOutValue
     {
         get => Shared(cue => cue is MediaCueNode media
-            ? media.TrimOutMs <= 0 ? "end" : CuePresentation.Seconds(media.TrimOutMs)
+            ? media.TrimOutMs <= 0 ? "end" : ClipTimes.Format(media.TrimOutMs)
             : "—");
         set
         {
@@ -359,7 +375,7 @@ public partial class InspectorViewModel : ObservableObject
                 return;
             }
 
-            if (TryParseSeconds(value, out var ms))
+            if (ClipTimes.Parse(value, Facts?.Duration) is { } ms)
                 EditMedia("trimOut", media => media.TrimOutMs, (media, set) => media.TrimOutMs = set, ms);
         }
     }
@@ -1063,12 +1079,12 @@ public partial class InspectorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// What this action will actually do, including the one case that cannot work yet.
+    /// What this action will actually do — or what is wrong with it.
     /// </summary>
     /// <remarks>
-    /// MIDI output is not implemented; the sender refuses a MIDI endpoint out loud rather than
-    /// reporting success for a message that went nowhere. Saying so HERE means the operator finds out
-    /// while authoring rather than when the desk fails to respond.
+    /// For a MIDI endpoint this is the PARSER's own verdict, and the same check runs in the status
+    /// pass, so the hint and "will this show run" can never disagree. Saying it HERE means the operator
+    /// finds out while authoring rather than when the desk fails to respond.
     /// </remarks>
     public string ActionHint
     {
@@ -1263,6 +1279,30 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>What the selected cue's file turned out to contain. Set by the shell as probes land.</summary>
     public MediaFacts? Facts { get; set; }
+
+    /// <summary>Where derived files live, so the clip editor can cache a scan. Set by the shell.</summary>
+    public string CacheRoot { get; set; } = "";
+
+    /// <summary>Whether there is a file to open a clip editor on.</summary>
+    public bool CanEditClip => Cue is MediaCueNode { MediaPath.Length: > 0 };
+
+    /// <summary>
+    /// The clip editor for the selected cue, or null when there is nothing to edit.
+    /// </summary>
+    /// <remarks>
+    /// The path is RESOLVED here, against the project's own roots, because the editor opens a file and
+    /// the document stores a reference — the same resolution the engine does when it plays the cue, so
+    /// what is trimmed is what will be played.
+    /// </remarks>
+    public ClipEditorViewModel? ClipEditor() =>
+        Cue is not MediaCueNode { MediaPath.Length: > 0 } media
+            ? null
+            : new ClipEditorViewModel(
+                _journal,
+                media,
+                MediaPaths.Resolve(Project, media.MediaPath, null),
+                Facts?.Duration,
+                CacheRoot);
 
     public TrackPickerViewModel AudioTrack => Track(TrackKind.Audio);
     public TrackPickerViewModel VideoTrack => Track(TrackKind.Video);

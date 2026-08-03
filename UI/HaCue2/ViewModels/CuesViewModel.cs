@@ -28,7 +28,13 @@ public partial class CuesViewModel : ObservableObject
         _journal = journal;
         _runtime = runtime;
 
-        Inspector = new InspectorViewModel(journal);
+        Inspector = new InspectorViewModel(journal)
+        {
+            // Where a waveform scan is cached, honouring a machine's override. Set here rather than
+            // read inside the inspector: which folder derived files live in is an APP setting, and the
+            // inspector is a projection of the document.
+            CacheRoot = HaCue2.Machine.MediaCache.RootFor(App.Settings),
+        };
         Inspector.PropertyChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(RightPanelHeader));

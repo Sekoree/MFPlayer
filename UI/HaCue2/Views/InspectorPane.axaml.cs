@@ -78,6 +78,26 @@ public partial class InspectorPane : UserControl
         window.ShowDialog(owner);
     }
 
+    /// <summary>
+    /// Opens the clip editor on the selected media cue.
+    /// </summary>
+    /// <remarks>
+    /// Not a dialog: it is a window somebody sits with while they find a cut, and the show behind it
+    /// stays visible and usable. It writes through the same journal, so an undo made afterwards in the
+    /// cue list undoes the trim.
+    /// </remarks>
+    private void OnEditClip(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not InspectorViewModel inspector
+            || inspector.ClipEditor() is not { } editor
+            || this.FindAncestorOfType<Window>() is not { } owner)
+            return;
+
+        var window = new ClipEditorWindow(editor);
+        window.Closed += (_, _) => inspector.Reload();
+        window.Show(owner);
+    }
+
     private void OnOpenTimeline(object? sender, RoutedEventArgs e)
     {
         if (this.FindAncestorOfType<CuesView>()?.DataContext is CuesViewModel cues)

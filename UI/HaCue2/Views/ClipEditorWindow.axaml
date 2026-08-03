@@ -1,0 +1,79 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.ClipEditorWindow"
+        x:DataType="vm:ClipEditorViewModel"
+        Title="Clip"
+        Width="940" Height="520"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
+        FontSize="{DynamicResource FontSizeBase}">
+
+  <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7">
+    <c:PanelBox.Footer>
+      <Border Classes="chain">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="7">
+          <TextBlock Grid.Column="0" Classes="mono dim3 small" VerticalAlignment="Center"
+                     Text="{Binding KeptLabel, StringFormat='plays {0}'}" />
+          <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
+                     Text="{Binding ScanLabel}" />
+          <!-- A refusal sits beside the fields rather than in a dialog: a mistyped time is an ordinary
+               thing, and a modal for it is a modal nobody reads. -->
+          <TextBlock Grid.Column="2" Classes="mono small warn" HorizontalAlignment="Right"
+                     VerticalAlignment="Center" Text="{Binding Problem}" />
+          <Button Grid.Column="3" Classes="primary tight" Content="DONE" Click="OnDone" />
+        </Grid>
+      </Border>
+    </c:PanelBox.Footer>
+
+    <DockPanel Margin="10,6,10,10">
+
+      <Grid DockPanel.Dock="Top" ColumnDefinitions="*,*,Auto,Auto" ColumnSpacing="7" Margin="0,0,0,8">
+        <HeaderedContentControl Grid.Column="0" Theme="{StaticResource FieldTight}" Header="Trim in">
+          <TextBox Text="{Binding TrimInText}" LostFocus="OnTrimInCommitted" />
+        </HeaderedContentControl>
+        <HeaderedContentControl Grid.Column="1" Theme="{StaticResource FieldTight}" Header="Trim out">
+          <TextBox Text="{Binding TrimOutText}" LostFocus="OnTrimOutCommitted" />
+        </HeaderedContentControl>
+        <!-- The file's own length, which the inspector never showed and which every from-the-end
+             calculation was being done against. -->
+        <HeaderedContentControl Grid.Column="2" Theme="{StaticResource FieldTight}" Header="File">
+          <TextBox Classes="ro" IsReadOnly="True" Text="{Binding LengthLabel}" MinWidth="90" />
+        </HeaderedContentControl>
+        <HeaderedContentControl Grid.Column="3" Theme="{StaticResource FieldTight}" Header="Playhead">
+          <TextBox Classes="ro" IsReadOnly="True" Text="{Binding PlayheadLabel}" MinWidth="90" />
+        </HeaderedContentControl>
+      </Grid>
+
+      <!-- The picture under the playhead. Sized rather than stretched, so a portrait or a square
+           source is not distorted into a shape the show will never put on a screen. -->
+      <Border DockPanel.Dock="Bottom" Height="200" Margin="0,8,0,0"
+              Background="{DynamicResource BoothPit}"
+              BorderBrush="{DynamicResource BoothRule}" BorderThickness="1">
+        <Panel>
+          <TextBlock Classes="mono dim3 small" HorizontalAlignment="Center" VerticalAlignment="Center"
+                     IsVisible="{Binding !HasFrame}"
+                     Text="click the waveform to scrub · no picture at this point" />
+          <Image Source="{Binding Preview}" Stretch="Uniform" Margin="6"
+                 IsVisible="{Binding HasFrame}" />
+        </Panel>
+      </Border>
+
+      <Border Background="{DynamicResource BoothPit}"
+              BorderBrush="{DynamicResource BoothRule}" BorderThickness="1">
+        <c:WaveformGraph Peaks="{Binding Peaks}"
+                         TrimIn="{Binding TrimInFraction}"
+                         TrimOut="{Binding TrimOutFraction}"
+                         Playhead="{Binding Playhead}"
+                         WaveBrush="{DynamicResource GelGreen}"
+                         TrimmedBrush="{DynamicResource BoothDim2}"
+                         HandleBrush="{DynamicResource GelAmber}"
+                         PlayheadBrush="{DynamicResource BoothInk}"
+                         Gesture="OnTrimGesture"
+                         GestureCompleted="OnTrimGestureCompleted" />
+      </Border>
+    </DockPanel>
+  </c:PanelBox>
+</Window>

@@ -118,11 +118,18 @@
                  nothing. Both values reach the engine only once the file has been probed — the
                  out-point is stored absolute and the document wants it counted back from the end. -->
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Trim in / out">
-              <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+              <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="6">
                 <TextBox Grid.Column="0" Text="{Binding TrimInValue}" LostFocus="OnFieldCommitted" />
                 <TextBox Grid.Column="1" Text="{Binding TrimOutValue}" LostFocus="OnFieldCommitted" />
+                <!-- Two boxes are enough for a sting and hopeless for "half an hour off a concert",
+                     which is what the editor is for. -->
+                <Button Grid.Column="2" Classes="tight" Content="✎" Click="OnEditClip"
+                        IsEnabled="{Binding CanEditClip}" />
               </Grid>
             </HeaderedContentControl>
+            <ContentControl Theme="{StaticResource FieldWide}">
+              <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding TrimHint}" />
+            </ContentControl>
             <CheckBox Margin="10,2,10,4" IsChecked="{Binding LoopValue}"
                       Content="Loop until stopped" />
 
