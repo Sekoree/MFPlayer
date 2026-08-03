@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Builds a .hacue2proj out of real media, so the app can be exercised against files that
+         exist rather than against hand-written sample data that agrees with itself by construction.
+
+         A TOOL rather than a committed fixture file, because a fixture holding absolute paths into
+         one person's home directory works on exactly one machine and goes stale the moment their
+         library changes. Everyone runs the same command against their own media instead. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>HaCue2.Seed</RootNamespace>
+        <AssemblyName>hacue2-seed</AssemblyName>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
+        <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj" />
+    </ItemGroup>
+
+</Project>

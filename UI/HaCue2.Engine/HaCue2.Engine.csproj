@@ -28,6 +28,10 @@
         <!-- Action cues send OSC. MIDI out would need S.Control's device layer, which HaCue2 has not
              adopted yet — ActionSender refuses a MIDI endpoint out loud rather than pretending. -->
         <ProjectReference Include="..\..\MediaFramework\OSC\OSCLib\OSCLib.csproj" />
+        <!-- Local-screen video outputs. HaPlay gets its IVideoOutputs from HaOutput/OutputManagement,
+             which HaCue2 cannot reference; until that engine's HaPlay couplings are inverted, this
+             opens its own windows. -->
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Present.SDL3\S.Media.Present.SDL3.csproj" />
     </ItemGroup>
 
 </Project>

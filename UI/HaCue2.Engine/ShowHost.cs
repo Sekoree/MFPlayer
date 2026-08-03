@@ -65,7 +65,9 @@ public sealed class ShowHost : IAsyncDisposable
 
     private readonly MediaRegistry _registry;
     private readonly ProjectPatchBay _bay;
+    private readonly ProjectVideoOutputs _screens;
     private readonly ShowSession _session;
+    private readonly HashSet<string> _attached = [];
     private readonly ActionSender _actions = new();
     private readonly Dictionary<Guid, Sounding> _sounding = [];
     private readonly List<string> _runtimeProblems = [];
@@ -78,10 +80,15 @@ public sealed class ShowHost : IAsyncDisposable
     private readonly record struct Sounding(long StartedTicks, Guid ListId, bool IsFading);
 
     private ShowHost(
-        MediaRegistry registry, ProjectPatchBay bay, ShowSession session, HaCueProject project)
+        MediaRegistry registry,
+        ProjectPatchBay bay,
+        ProjectVideoOutputs screens,
+        ShowSession session,
+        HaCueProject project)
     {
         _registry = registry;
         _bay = bay;
+        _screens = screens;
         _session = session;
         _project = project;
     }
@@ -158,15 +165,21 @@ public sealed class ShowHost : IAsyncDisposable
     /// composition-root decision, and passing null gives a session that can still be driven — useful
     /// for a test, and honest on a machine with no audio at all.
     /// </remarks>
+    /// <param name="headless">
+    /// No display: video outputs are reported as unopened rather than attempted. What a CI box, a
+    /// preview and a booth machine with the projector unplugged all are.
+    /// </param>
     public static async Task<ShowHost> StartAsync(
         HaCueProject project,
         IAudioBackend? backend,
-        IReadOnlyDictionary<Guid, TimeSpan>? durations = null)
+        IReadOnlyDictionary<Guid, TimeSpan>? durations = null,
+        bool headless = false)
     {
         ArgumentNullException.ThrowIfNull(project);
 
         var registry = MediaRegistry.Build(builder => builder.Use(new FFmpegModule()));
         var bay = ProjectPatchBay.Open(project, backend);
+        var screens = ProjectVideoOutputs.OpenAll(project, headless);
 
         var target = new PatchBayShowProgramAudioTarget(
             bay.Bay,
@@ -174,7 +187,10 @@ public sealed class ShowHost : IAsyncDisposable
             defaultMonitorTerminalId: bay.MonitorTerminalId);
 
         var session = new ShowSession(registry, backend, programAudioTarget: target);
-        var host = new ShowHost(registry, bay, session, project);
+        var host = new ShowHost(registry, bay, screens, session, project);
+
+        foreach (var failure in screens.Failures)
+            host.Report(failure);
 
         // Sounding is tracked HERE rather than queried: the session's sounding bus is keyed by label,
         // and the events that matter carry the cue id. A fire adds, a natural end removes, and a stop
@@ -203,7 +219,10 @@ public sealed class ShowHost : IAsyncDisposable
         HaCueProject project, IReadOnlyDictionary<Guid, TimeSpan>? durations = null)
     {
         ArgumentNullException.ThrowIfNull(project);
+
+        var previous = _project;
         _project = project;
+        ForgetDetachedScreens(previous, project);
 
         await _session.LoadDocumentAsync(
             ShowCompiler.Compile(project, durations),
@@ -212,7 +231,68 @@ public sealed class ShowHost : IAsyncDisposable
 
         foreach (var failure in _bay.Apply(project))
             Report(failure);
+
+        await AttachScreensAsync().ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Attaches each open window to the composition it shows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called after every load, because <c>preserveMatchingCompositions</c> preserves the ones whose
+    /// definition is unchanged and rebuilds the rest — an output attached to a rebuilt composition is
+    /// no longer attached to anything, and its window would sit black for the rest of the show with
+    /// nothing to say why.
+    /// </para>
+    /// <para>
+    /// Idempotent: an output already attached to a surviving composition is skipped rather than
+    /// re-added, so an edit that touches nothing visual costs nothing here.
+    /// </para>
+    /// </remarks>
+    private async Task AttachScreensAsync()
+    {
+        foreach (var (compositionId, lease) in _screens.Leases(_project))
+        {
+            if (_attached.Contains(lease.OutputId))
+                continue;
+
+            if (await _session.AddCompositionOutputAsync(compositionId, lease).ConfigureAwait(false))
+            {
+                _attached.Add(lease.OutputId);
+                continue;
+            }
+
+            Report($"“{lease.DisplayName}” could not be attached to its composition");
+        }
+
+    }
+
+    /// <summary>
+    /// Forgets attachments whose composition the session no longer has.
+    /// </summary>
+    /// <remarks>
+    /// A reload rebuilds any composition whose definition changed, which silently detaches its
+    /// outputs. Without this the host would believe they were still attached and never re-add them —
+    /// so resizing a composition would blank its projector permanently.
+    /// </remarks>
+    private void ForgetDetachedScreens(HaCueProject previous, HaCueProject current)
+    {
+        foreach (var open in _screens.Open)
+        {
+            var before = previous.Compositions.FirstOrDefault(item => item.Id == open.CompositionId);
+            var after = current.Compositions.FirstOrDefault(item => item.Id == open.CompositionId);
+
+            // Size and rate are what the session keys "unchanged" on; a renamed composition is
+            // preserved and keeps its outputs.
+            if (before is null || after is null
+                || before.Width != after.Width
+                || before.Height != after.Height
+                || Math.Abs(before.FramesPerSecond - after.FramesPerSecond) > 0.001)
+                _attached.Remove(open.OutputId);
+        }
+    }
+
 
     // ── transport ─────────────────────────────────────────────────────────────────────────────
 
@@ -778,6 +858,9 @@ public sealed class ShowHost : IAsyncDisposable
         await _session.DisposeAsync().ConfigureAwait(false);
         _actions.Dispose();
         _bay.Dispose();
+        // After the session, because the leases declare DisposeOutputOnRuntimeDispose:false — the host
+        // owns these windows and closes them itself, once the session has stopped submitting to them.
+        _screens.Dispose();
         _registry.Dispose();
         _life.Dispose();
     }

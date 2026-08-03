@@ -133,6 +133,13 @@ public sealed class ArchitectureTests
         // joins them. Separate from HaCue2 because a session is long-lived, thread-affine and holds
         // devices — the views must not be able to reach into it by accident, and they do not: they
         // see it through `Session/ShowRuntime`, exactly as they saw the sample before it existed.
+        // The fixture generator: the project model plus the machine layer that scans for media. No
+        // session and no windowing, so it runs anywhere the CLI status check does.
+        ["HaCue2.Seed"] =
+        [
+            "HaCue2.Core", "HaCue2.Machine",
+            "S.Media.Decode.FFmpeg", "S.Media.Session", "S.Media.Core", "S.Media.Time",
+        ],
         ["HaCue2.Engine"] =
         [
             "HaCue2.Core", "HaCue2.Machine", "S.Media.Session", "S.Media.Routing",
@@ -140,6 +147,9 @@ public sealed class ArchitectureTests
             "S.Media.Compositor", "S.Media.Gpu",
             // Action cues send OSC from here, beside the transport that fires them.
             "OSCLib",
+            // Local-screen video outputs, opened directly until HaOutput's HaPlay couplings are
+            // inverted and both apps can share one output engine (gap analysis §7.1).
+            "S.Media.Present.SDL3",
         ],
         // Machine facts: what this box has and what a file turned out to be. Separate from
         // HaCue2.Core because everything here needs real hardware or a real decoder, and Core has to
