@@ -111,6 +111,32 @@ public sealed class Appearance
         Apply();
     }
 
+    /// <summary>
+    /// Adopts the operator's saved appearance in one pass.
+    /// </summary>
+    /// <remarks>
+    /// One call rather than four setters, because each of those re-applies the whole override
+    /// dictionary — doing it four times at start-up is four layout passes before the first window is
+    /// even shown. The palette is set last: it is the only one that rebuilds the theme.
+    /// </remarks>
+    public void Adopt(Machine.AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        Density = settings.Density switch
+        {
+            "compact" => Session.Density.Compact,
+            "relaxed" => Session.Density.Relaxed,
+            _ => Session.Density.Normal,
+        };
+
+        RowHeight = Math.Clamp(ParseRowHeight(settings.RowSize), 18, 56);
+        FontScale = Math.Clamp(ParseFontScale(settings.FontScale), 0.75, 1.75);
+        Apply();
+
+        Palette = settings.Theme;
+    }
+
     public void Set(Density density)
     {
         Density = density;

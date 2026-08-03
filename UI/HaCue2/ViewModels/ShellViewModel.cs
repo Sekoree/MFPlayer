@@ -6,6 +6,7 @@ using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
 using HaCue2.Core.Validation;
 using HaCue2.Engine;
+using HaCue2.Machine;
 using S.Media.Core.Audio;
 using HaCue2.Sample;
 using HaCue2.Session;
@@ -77,6 +78,75 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>The machine seam: what this box has, and what its files turned out to be.</summary>
     public MachineFacts Machine { get; }
+
+    /// <summary>The machine-scope settings, for the panes and windows that read them.</summary>
+    public AppSettings Settings { get; init; } = new();
+
+    // ── autosave and recovery ─────────────────────────────────────────────────────────────────
+
+    private DispatcherTimer? _autosave;
+
+    /// <summary>
+    /// Starts writing recovery copies on the project's own cadence.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An autosave is written BESIDE the show, never over it: the operator's file must stay exactly
+    /// what they last chose to write, and recovery is an offer made at the next launch rather than
+    /// something that happened to their show while they were not looking.
+    /// </para>
+    /// <para>
+    /// Only when the journal is dirty. A show sitting untouched through an interval would otherwise
+    /// rewrite the same bytes every thirty seconds and roll its own history off the end.
+    /// </para>
+    /// </remarks>
+    public void StartAutosave()
+    {
+        var seconds = Math.Clamp(Project.Settings.AutosaveSeconds, 5, 600);
+
+        _autosave?.Stop();
+        _autosave = new DispatcherTimer(
+            TimeSpan.FromSeconds(seconds), DispatcherPriority.Background, (_, _) => _ = AutosaveAsync());
+
+        _autosave.Start();
+    }
+
+    public void StopAutosave()
+    {
+        _autosave?.Stop();
+        _autosave = null;
+    }
+
+    private bool _autosaving;
+
+    private async Task AutosaveAsync()
+    {
+        // One at a time: a large show on a slow disk can take longer than the cadence, and stacking
+        // writes would turn a 30 s timer into an unbounded queue of them.
+        if (_autosaving || !Journal.IsDirty)
+            return;
+
+        _autosaving = true;
+
+        try
+        {
+            var written = await RecoveryStore.SaveAsync(
+                Project, Path, Journal.Log.Count, Project.Settings.RecoveryCopies, DateTimeOffset.Now)
+                .ConfigureAwait(true);
+
+            if (!written)
+            {
+                // Said once, then left alone: a read-only recovery directory fails on every tick, and
+                // repeating it every thirty seconds would bury everything else in the status bar.
+                FileMessage = "autosave could not be written — recovery is unavailable";
+                StopAutosave();
+            }
+        }
+        finally
+        {
+            _autosaving = false;
+        }
+    }
 
     /// <summary>The running show, once one has been started. Null until then, and on a machine
     /// that has no engine to start.</summary>
@@ -346,6 +416,11 @@ public partial class ShellViewModel : ObservableObject
         // Clean means "matches the file", so this is the ONE place the flag may be cleared: after a
         // write that actually happened.
         Journal.MarkSaved();
+
+        // The autosaves described a document that no longer differs from its file. Keeping them would
+        // offer a recovery at the next launch for work that is already saved, which teaches the
+        // operator to dismiss the banner without reading it.
+        RecoveryStore.Clear(Path, Project.Title);
         Refresh();
         OnPropertyChanged(nameof(Path));
         OnPropertyChanged(nameof(HasPath));

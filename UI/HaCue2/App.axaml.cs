@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using HaCue2.Core.Model;
+using HaCue2.Machine;
 using HaCue2.Sample;
 using HaCue2.Session;
 using S.Media.Core.Audio;
@@ -25,9 +27,12 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        Settings = AppSettingsStore.Load();
+
         // Before any window: the override dictionary has to be on the application for the first
         // layout, or the app visibly re-flows on the operator's first look at it.
         Appearance.Current.Attach(this);
+        Appearance.Current.Adopt(Settings);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -45,31 +50,57 @@ public partial class App : Application
 
     private static LauncherWindow OpenLauncher()
     {
-        var vm = new LauncherViewModel();
+        var vm = new LauncherViewModel(Settings, Machine);
         var window = new LauncherWindow { DataContext = vm };
 
-        vm.ProjectRequested += _ =>
-        {
-            OpenShell().Show();
-            window.Close();
-        };
-
-        // A project the launcher actually loaded or created, rather than the sample.
+        // Every route into the shell now goes through here — a recent, a recovered autosave, a file
+        // the operator picked, or a new project. There is no longer a path that opens the sample
+        // whatever was clicked.
         vm.ProjectOpened += (project, path) =>
         {
-            var shell = new ShellViewModel(project, Machine);
-
-            if (path.Length > 0)
-                shell.AdoptPath(path);
-
-            Live(shell).Show();
+            Open(project, path).Show();
             window.Close();
         };
 
         return window;
     }
 
-    private static ShellWindow OpenShell() => Live(new ShellViewModel(SampleProject.Create(), Machine));
+    /// <summary>Opens a project in the shell and records it as the most recent.</summary>
+    private static ShellWindow Open(HaCueProject project, string path)
+    {
+        var shell = new ShellViewModel(project, Machine) { Settings = Settings };
+
+        if (path.Length > 0)
+        {
+            shell.AdoptPath(path);
+            Settings.NoteOpened(path, project.Title, Summarize(project), DateTimeOffset.Now);
+            AppSettingsStore.Save(Settings);
+        }
+
+        return Live(shell);
+    }
+
+    /// <summary>The one-line contents the launcher shows without opening anything.</summary>
+    private static string Summarize(HaCueProject project)
+    {
+        var cues = project.AllCues().Count();
+        var lists = project.CueLists.Count;
+        var outs = project.AudioPatch.LogicalChannels.Count;
+
+        return $"{cues} cue{(cues == 1 ? "" : "s")} · {lists} list{(lists == 1 ? "" : "s")} "
+               + $"· {outs} logical out{(outs == 1 ? "" : "s")}";
+    }
+
+    private static ShellWindow OpenShell() => Open(SampleProject.Create(), "");
+
+    /// <summary>
+    /// The machine-scope settings, loaded once at start-up.
+    /// </summary>
+    /// <remarks>
+    /// Read before any window so the operator's theme and density are in place for the FIRST layout —
+    /// applying them afterwards makes the app visibly re-flow on the first look at it.
+    /// </remarks>
+    public static AppSettings Settings { get; private set; } = new();
 
     /// <summary>
     /// Opens a shell and starts its engine.
@@ -84,8 +115,17 @@ public partial class App : Application
     {
         var window = new ShellWindow { DataContext = shell };
 
-        window.Opened += async (_, _) => await shell.StartEngineAsync(Backend);
-        window.Closed += async (_, _) => await shell.StopEngineAsync();
+        window.Opened += async (_, _) =>
+        {
+            shell.StartAutosave();
+            await shell.StartEngineAsync(Backend);
+        };
+
+        window.Closed += async (_, _) =>
+        {
+            shell.StopAutosave();
+            await shell.StopEngineAsync();
+        };
 
         return window;
     }

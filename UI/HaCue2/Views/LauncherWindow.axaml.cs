@@ -15,11 +15,21 @@ public partial class LauncherWindow : Window
 
     /// <summary>Opening a project is a window-lifetime action, so it stays in the code-behind rather
     /// than putting window construction inside a view-model command.</summary>
-    private void OnRecentActivated(object? sender, RoutedEventArgs e)
+    private async void OnRecentActivated(object? sender, RoutedEventArgs e)
     {
         if (DataContext is LauncherViewModel vm)
-            vm.Open(vm.SelectedRecent);
+            await vm.OpenAsync(vm.SelectedRecent);
     }
+
+    /// <summary>Opens the autosave instead of the file.</summary>
+    private async void OnRecover(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is LauncherViewModel vm)
+            await vm.RecoverAsync();
+    }
+
+    private void OnDiscardRecovery(object? sender, RoutedEventArgs e) =>
+        (DataContext as LauncherViewModel)?.DiscardRecovery();
 
     /// <summary>Creates a project from the New-project prompt and hands it to the shell.</summary>
     private void OnNewProject(object? sender, RoutedEventArgs e)

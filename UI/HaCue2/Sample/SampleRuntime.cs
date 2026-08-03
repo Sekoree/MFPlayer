@@ -143,7 +143,6 @@ public static class SampleRuntime
                 }
                 : [],
 
-            BayRows = SampleShow.BayRows,
             CompositionStats = CompositionStats(project),
             Log = SampleShow.LogTail,
             TriggerMonitor = SampleShow.TriggerMonitor,

@@ -5,6 +5,8 @@ using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Validation;
 using HaCue2.Engine;
+using HaCue2.Machine;
+using HaCue2.Presentation;
 using HaCue2.Sample;
 using HaCue2.Session;
 
@@ -17,8 +19,23 @@ namespace HaCue2.ViewModels;
 /// </remarks>
 public partial class LauncherViewModel : ObservableObject
 {
-    /// <summary>Raised when a recent is opened; the App swaps the launcher for the shell.</summary>
-    public event Action<RecentProjectRow>? ProjectRequested;
+    private readonly AppSettings _settings;
+    private readonly MachineFacts _machine;
+    private IReadOnlyList<RecoveryCandidate> _recoveries = [];
+
+    public LauncherViewModel() : this(new AppSettings(), MachineFacts.Nothing)
+    {
+    }
+
+    public LauncherViewModel(AppSettings settings, MachineFacts machine)
+    {
+        _settings = settings;
+        _machine = machine;
+
+        Recents = Rows(settings);
+        _recoveries = RecoveryStore.Scan();
+        MachineChecks = Checks(machine);
+    }
 
     /// <summary>Raised with a project the launcher loaded or created, and where it came from.</summary>
     public event Action<HaCueProject, string>? ProjectOpened;
@@ -49,12 +66,23 @@ public partial class LauncherViewModel : ObservableObject
                 ""),
             confirm: "CREATE");
 
-    public IReadOnlyList<RecentProjectRow> Recents { get; } = SampleShow.Recents;
-    public IReadOnlyList<LogLine> MachineChecks { get; } = SampleShow.MachineChecks;
-    public string RecoveryNotice { get; } = SampleShow.RecoveryNotice;
+    /// <summary>What the operator has opened before, newest first, straight from app-settings.json.</summary>
+    public IReadOnlyList<RecentProjectRow> Recents { get; private set; }
 
-    [ObservableProperty]
-    private bool _hasRecovery = true;
+    public bool HasRecents => Recents.Count > 0;
+
+    /// <summary>What this box has, checked before any project is chosen.</summary>
+    public IReadOnlyList<LogLine> MachineChecks { get; }
+
+    /// <summary>Whether an autosave newer than its project file was found.</summary>
+    public bool HasRecovery => _recoveries.Count > 0;
+
+    public string RecoveryNotice => _recoveries.Count switch
+    {
+        0 => "",
+        1 => _recoveries[0].Notice,
+        var many => $"{_recoveries[0].Notice} · and {many - 1} more",
+    };
 
     [ObservableProperty]
     private RecentProjectRow? _selectedRecent;
@@ -63,13 +91,121 @@ public partial class LauncherViewModel : ObservableObject
         "New projects are seeded from your defaults (Settings · Application · New project defaults): "
         + "a Main L/R logical pair patched to the machine's default device.";
 
-    public void Open(RecentProjectRow? project)
+    /// <summary>
+    /// Opens a recent by loading its file.
+    /// </summary>
+    /// <remarks>
+    /// It used to raise an event the app answered by opening the SAMPLE show, whichever row was
+    /// clicked — the recents list looked real and did the same thing every time. Now the row's path is
+    /// what gets loaded, and a file that has since gone is reported rather than opened.
+    /// </remarks>
+    public async Task OpenAsync(RecentProjectRow? row)
     {
-        project ??= Recents[0];
-        if (project.IsMissing)
+        row ??= Recents.FirstOrDefault();
+
+        if (row is null)
             return;
-        ProjectRequested?.Invoke(project);
+
+        if (row.IsMissing)
+        {
+            OpenFailure = $"{Path.GetFileName(row.Path)} is no longer at that path.";
+            return;
+        }
+
+        var (project, result) = await ProjectFiles.OpenAsync(row.Path).ConfigureAwait(true);
+
+        if (project is null)
+        {
+            OpenFailure = result.Message;
+            return;
+        }
+
+        Adopt(project, result.Path);
     }
+
+    /// <summary>
+    /// Opens the autosave instead of the file — the RECOVER answer.
+    /// </summary>
+    /// <remarks>
+    /// The recovered document is adopted under its ORIGINAL path, so the next save writes where the
+    /// operator expects. It arrives dirty by construction: it differs from the file on disk, which is
+    /// the entire reason it was offered.
+    /// </remarks>
+    public async Task RecoverAsync()
+    {
+        if (_recoveries.FirstOrDefault() is not { } candidate)
+            return;
+
+        var (project, result) = await ProjectFiles.OpenAsync(candidate.CopyPath).ConfigureAwait(true);
+
+        if (project is null)
+        {
+            OpenFailure = result.Message;
+            return;
+        }
+
+        // The copy has served its purpose. Leaving it would offer the same recovery again at the next
+        // launch, after the operator has already answered.
+        RecoveryStore.Discard(candidate);
+        Adopt(project, candidate.OriginalPath);
+    }
+
+    /// <summary>Throws the autosave away — the operator has decided the file on disk is the truth.</summary>
+    public void DiscardRecovery()
+    {
+        foreach (var candidate in _recoveries)
+            RecoveryStore.Discard(candidate);
+
+        _recoveries = [];
+        OnPropertyChanged(nameof(HasRecovery));
+        OnPropertyChanged(nameof(RecoveryNotice));
+    }
+
+    /// <summary>The recents list as rows, with a cheap existence check per entry.</summary>
+    private static IReadOnlyList<RecentProjectRow> Rows(AppSettings settings) =>
+    [
+        .. settings.Recents.Select((recent, index) => new RecentProjectRow
+        {
+            Name = recent.Title.Length > 0 ? recent.Title : Path.GetFileNameWithoutExtension(recent.Path),
+            Path = recent.Path,
+            Contents = recent.Summary.Length > 0 ? recent.Summary : "—",
+            Opened = Ago(recent.LastOpened),
+            // File.Exists, not an open: the launcher must not stall on a disconnected volume, and
+            // "gone" is the only answer that changes what the row can do.
+            IsMissing = !File.Exists(recent.Path),
+            IsCurrent = index == 0,
+        }),
+    ];
+
+    /// <summary>"today 14:02", "yesterday", "Jul 28" — the resolution that is actually useful.</summary>
+    private static string Ago(DateTimeOffset when)
+    {
+        var local = when.ToLocalTime();
+        var today = DateTimeOffset.Now.Date;
+
+        if (local.Date == today)
+            return $"today {local:HH:mm}";
+
+        return local.Date == today.AddDays(-1) ? "yesterday" : local.ToString("MMM d");
+    }
+
+    /// <summary>
+    /// The cheap machine checks, before any project is chosen.
+    /// </summary>
+    /// <remarks>
+    /// Only audio can be answered today, and the rest say so rather than reporting a plausible number.
+    /// "not checked" is a different answer from "none found", and a launcher that claimed to have
+    /// verified NDI would be believed.
+    /// </remarks>
+    private static IReadOnlyList<LogLine> Checks(MachineFacts machine) =>
+    [
+        new("", "", "audio", machine.DevicesEnumerated
+            ? $"{machine.OutputDeviceNames.Count} output device(s)"
+            : "not checked — no backend"),
+        new("", "", "video", "not checked yet"),
+        new("", "", "ndi", "not checked yet"),
+        new("", "", "midi", "not checked yet"),
+    ];
 }
 
 /// <summary>
@@ -110,7 +246,7 @@ public partial class CurveEditorViewModel : ObservableObject
     private IReadOnlyList<CurveKnot> _knots;
     private readonly bool _supportsHold = true;
 
-    public IReadOnlyList<CurveOption> Curves { get; } = SampleShow.FadeCurves;
+    public IReadOnlyList<CurveOption> Curves { get; } = CurveLibrary.Curves;
 
     /// <summary>
     /// The handles, in CANVAS space: y is flipped, because a level of 1 is drawn at the top.
@@ -275,14 +411,37 @@ public partial class SettingsViewModel : ObservableObject
     /// </remarks>
     private readonly bool _loading = true;
 
+    private readonly AppSettings _app;
+
     public SettingsViewModel() : this(SampleProject.Create())
     {
     }
 
-    public SettingsViewModel(HaCueProject project, ProjectJournal? journal = null)
+    public SettingsViewModel(
+        HaCueProject project, ProjectJournal? journal = null, AppSettings? app = null)
     {
         _settings = project.Settings;
         _journal = journal;
+        _app = app ?? new AppSettings();
+
+        // The Remote API row says "project" only when this project actually overrides it. It used to
+        // say so on every project, including ones with no override at all.
+        ApplicationPanes =
+        [
+            new() { Name = "Appearance & layout" },
+            new() { Name = "Transport defaults" },
+            new() { Name = "Hotkeys" },
+            new() { Name = "New project defaults" },
+            new()
+            {
+                Name = "Remote API",
+                Tally = _settings.RemoteApi is null ? "" : "project",
+                TallyGel = Gel.Amber,
+            },
+            new() { Name = "Media cache" },
+            new() { Name = "Logging & crash reports" },
+        ];
+
         _selectedPane = ApplicationPanes[0];
 
         // The PROJECT half of this screen reads the document. The application half does not, and
@@ -314,8 +473,75 @@ public partial class SettingsViewModel : ObservableObject
             _ => "keep in place",
         };
 
+        // Application scope, from app-settings.json. These are MACHINE preferences: they are seeded
+        // here and written straight back, never journaled, because a show that carried the operator's
+        // font size to the next venue would be carrying the wrong thing.
+        _theme = _app.Theme;
+        _density = _app.Density;
+        _rowSize = _app.RowSize;
+        _fontScale = _app.FontScale;
+        _ballistic = _app.MeterBallistics;
+        _clipReset = _app.ClipReset;
+        _rememberInspectorTab = _app.RememberInspectorTab;
+        _rememberTimelineDock = _app.RememberTimelineDock;
+        _flatActiveList = _app.FlatActiveList;
+        _openDrawerOnLaunch = _app.OpenDrawerOnLaunch;
+        _spaceRule = _app.SpaceRule;
+        _doubleGoGuard = _app.DoubleGoGuard;
+        _confirmStopAll = _app.ConfirmStopAll;
+        _standbyFollowsClickDefault = _app.StandbyFollowsClick;
+        _autoRenumberDefault = _app.AutoRenumberDefault;
+        _remoteDefault = _app.RemoteDefault;
+        _remotePort = _app.RemotePort;
+        _remoteLanAllowed = _app.RemoteLanAllowed;
+        _cacheRoot = _app.CacheRoot.Length > 0 ? _app.CacheRoot : "(shared framework cache)";
+        _waveformBudget = _app.WaveformBudget;
+        _thumbnailBudget = _app.ThumbnailBudget;
+        _fileLogLevel = _app.FileLogLevel;
+        _logDirectory = _app.LogDirectory.Length > 0 ? _app.LogDirectory : StoragePaths.LogRoot;
+        _logRetention = _app.LogRetention;
+        _crashDumps = _app.CrashDumps;
+
         _loading = false;
     }
+
+    /// <summary>
+    /// Writes one application setting and saves immediately.
+    /// </summary>
+    /// <remarks>
+    /// No undo and no commit step, which is the scope split made concrete (register item 26): the
+    /// project half is journaled and travels in the file; this half is a machine preference that takes
+    /// effect when you change it. Saving on every keystroke is affordable — the file is small and the
+    /// write is atomic.
+    /// </remarks>
+    private void WriteApp(Action<AppSettings> change)
+    {
+        if (_loading)
+            return;
+
+        change(_app);
+        AppSettingsStore.Save(_app);
+    }
+
+    partial void OnBallisticChanged(string value) => WriteApp(app => app.MeterBallistics = value);
+    partial void OnClipResetChanged(string value) => WriteApp(app => app.ClipReset = value);
+    partial void OnRememberInspectorTabChanged(bool value) => WriteApp(app => app.RememberInspectorTab = value);
+    partial void OnRememberTimelineDockChanged(bool value) => WriteApp(app => app.RememberTimelineDock = value);
+    partial void OnFlatActiveListChanged(bool value) => WriteApp(app => app.FlatActiveList = value);
+    partial void OnOpenDrawerOnLaunchChanged(bool value) => WriteApp(app => app.OpenDrawerOnLaunch = value);
+    partial void OnSpaceRuleChanged(string value) => WriteApp(app => app.SpaceRule = value);
+    partial void OnDoubleGoGuardChanged(string value) => WriteApp(app => app.DoubleGoGuard = value);
+    partial void OnConfirmStopAllChanged(string value) => WriteApp(app => app.ConfirmStopAll = value);
+    partial void OnStandbyFollowsClickDefaultChanged(bool value) => WriteApp(app => app.StandbyFollowsClick = value);
+    partial void OnAutoRenumberDefaultChanged(bool value) => WriteApp(app => app.AutoRenumberDefault = value);
+    partial void OnRemoteDefaultChanged(string value) => WriteApp(app => app.RemoteDefault = value);
+    partial void OnRemotePortChanged(string value) => WriteApp(app => app.RemotePort = value);
+    partial void OnRemoteLanAllowedChanged(bool value) => WriteApp(app => app.RemoteLanAllowed = value);
+    partial void OnWaveformBudgetChanged(string value) => WriteApp(app => app.WaveformBudget = value);
+    partial void OnThumbnailBudgetChanged(string value) => WriteApp(app => app.ThumbnailBudget = value);
+    partial void OnFileLogLevelChanged(string value) => WriteApp(app => app.FileLogLevel = value);
+    partial void OnLogRetentionChanged(string value) => WriteApp(app => app.LogRetention = value);
+    partial void OnCrashDumpsChanged(bool value) => WriteApp(app => app.CrashDumps = value);
 
     // ── writing back (register items 26 and 28) ───────────────────────────────────────────────
     // Project-scope settings are JOURNALED: they travel in the file and ⌘Z works on them, exactly as
@@ -401,7 +627,16 @@ public partial class SettingsViewModel : ObservableObject
         return int.TryParse(digits, out var value) ? value : fallback;
     }
 
-    public IReadOnlyList<SettingsPane> ApplicationPanes { get; } = SampleShow.ApplicationPanes;
+    /// <summary>
+    /// The application-scope navigation — the inventory this screen is a contract for.
+    /// </summary>
+    /// <remarks>
+    /// Every pane listed here has to exist, or a nav row leads to nothing and the reader cannot tell
+    /// "not built" from "empty". The override tallies are DERIVED from the project rather than
+    /// authored, so a row saying "project" is one the loaded show actually defeats.
+    /// </remarks>
+    public IReadOnlyList<SettingsPane> ApplicationPanes { get; }
+
     public IReadOnlyList<SettingsPane> ProjectPanes { get; }
     public IReadOnlyList<OverrideRow> Overrides { get; } = SampleShow.Overrides;
 
@@ -498,20 +733,35 @@ public partial class SettingsViewModel : ObservableObject
     // dynamically, so the app re-lays-out as the operator moves the segment. That is the half of the
     // Appearance pane that can honestly work without a restart.
 
-    partial void OnDensityChanged(string value) => Appearance.Current.Set(value switch
+    partial void OnDensityChanged(string value)
     {
-        "compact" => Session.Density.Compact,
-        "relaxed" => Session.Density.Relaxed,
-        _ => Session.Density.Normal,
-    });
+        Appearance.Current.Set(value switch
+        {
+            "compact" => Session.Density.Compact,
+            "relaxed" => Session.Density.Relaxed,
+            _ => Session.Density.Normal,
+        });
 
-    partial void OnRowSizeChanged(string value) =>
+        WriteApp(app => app.Density = value);
+    }
+
+    partial void OnRowSizeChanged(string value)
+    {
         Appearance.Current.SetRowHeight(Appearance.ParseRowHeight(value));
+        WriteApp(app => app.RowSize = value);
+    }
 
-    partial void OnFontScaleChanged(string value) =>
+    partial void OnFontScaleChanged(string value)
+    {
         Appearance.Current.SetFontScale(Appearance.ParseFontScale(value));
+        WriteApp(app => app.FontScale = value);
+    }
 
-    partial void OnThemeChanged(string value) => Appearance.Current.Palette = value;
+    partial void OnThemeChanged(string value)
+    {
+        Appearance.Current.Palette = value;
+        WriteApp(app => app.Theme = value);
+    }
     [ObservableProperty] private string _ballistic = "PPM fast";
     [ObservableProperty] private string _clipReset = "on click";
     [ObservableProperty] private bool _rememberInspectorTab = true;

@@ -285,7 +285,9 @@ public partial class AudioViewModel : ObservableObject
 
     public string SelectedLineName => SelectedLine?.Name ?? "no line selected";
 
-    public string PatternTokens { get; } = SampleShow.RecordPatternTokens;
+    /// <summary>The insert tokens a recording file pattern understands (register item 30).</summary>
+    public string PatternTokens { get; } =
+        "{date} {time} {project} {list} {n} — preview: show-2026-08-01-3.flac";
 
     public IReadOnlyList<string> MixRates { get; } = ["44 100 Hz", "48 000 Hz", "96 000 Hz"];
 

@@ -411,7 +411,7 @@ public partial class InspectorViewModel : ObservableObject
     public void EndEdit() => _journal.CloseGroup();
 
     // ── the Audio pane ────────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<CurveOption> Curves { get; } = SampleShow.FadeCurves;
+    public IReadOnlyList<CurveOption> Curves { get; } = CurveLibrary.Curves;
 
     public IReadOnlyList<MatrixColumn> SendColumns => AudioPresentation.SendColumns(Project);
 
@@ -1037,7 +1037,7 @@ public sealed class CurvePickerViewModel(
     /// <summary>The index the list shows for a drawn shape — one past the last law.</summary>
     public const int CustomIndex = 4;
 
-    public IReadOnlyList<CurveOption> Curves { get; } = SampleShow.FadeCurves;
+    public IReadOnlyList<CurveOption> Curves { get; } = CurveLibrary.Curves;
 
     public bool HasCurve => spec is not null && cue is not null;
 

@@ -54,12 +54,18 @@
               <Border Grid.Column="0" Classes="badge clock"><TextBlock Text="RECOVERY" /></Border>
               <TextBlock Grid.Column="1" Classes="dim2 small" VerticalAlignment="Center"
                          TextWrapping="Wrap" Text="{Binding RecoveryNotice}" />
-              <Button Grid.Column="2" Classes="tight" Content="RECOVER" />
-              <Button Grid.Column="3" Classes="tight" Content="DISCARD" />
+              <Button Grid.Column="2" Classes="tight" Content="RECOVER" Click="OnRecover" />
+              <Button Grid.Column="3" Classes="tight" Content="DISCARD" Click="OnDiscardRecovery" />
             </Grid>
           </Border>
 
-          <ListBox ItemsSource="{Binding Recents}"
+          <!-- A first run has nothing to list, and says so rather than showing an empty box. -->
+          <c:EmptyState IsVisible="{Binding !HasRecents}"
+                        Headline="No recent projects"
+                        Detail="New project… seeds one with a Main L/R pair and a cue list. Open… finds an existing .hacue2proj." />
+
+          <ListBox IsVisible="{Binding HasRecents}"
+                   ItemsSource="{Binding Recents}"
                    SelectedItem="{Binding SelectedRecent}"
                    ItemContainerTheme="{StaticResource TableRowItem}"
                    DoubleTapped="OnRecentActivated">

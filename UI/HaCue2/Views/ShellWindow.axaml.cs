@@ -166,7 +166,10 @@ public partial class ShellWindow : Window
     private void OnSettings(object? sender, RoutedEventArgs e)
         => _settings = Reopen(
             _settings,
-            () => new SettingsWindow { DataContext = new SettingsViewModel(Shell.Project, Shell.Journal) });
+            () => new SettingsWindow
+            {
+                DataContext = new SettingsViewModel(Shell.Project, Shell.Journal, Shell.Settings),
+            });
 
     private void OnDiagnostics(object? sender, RoutedEventArgs e)
         => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = Shell.OpenDiagnostics() });
