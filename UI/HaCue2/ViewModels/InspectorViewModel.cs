@@ -187,6 +187,36 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CrossfadeValue));
         OnPropertyChanged(nameof(AtEndIndex));
         OnPropertyChanged(nameof(SubtitlePicker));
+
+        // The per-kind panes. Every one of these reads straight off the selected cue, so they all have
+        // to be re-announced whenever the selection or the document changes.
+        OnPropertyChanged(nameof(FadeTargets));
+        OnPropertyChanged(nameof(FadeToLevelValue));
+        OnPropertyChanged(nameof(FadeDurationValue));
+        OnPropertyChanged(nameof(FadeEverythingValue));
+        OnPropertyChanged(nameof(FadeStopsTargetsValue));
+        OnPropertyChanged(nameof(FadeTargetHint));
+        OnPropertyChanged(nameof(JumpTargets));
+        OnPropertyChanged(nameof(JumpTargetIndex));
+        OnPropertyChanged(nameof(JumpConditionIndex));
+        OnPropertyChanged(nameof(JumpPickAtRandomValue));
+        OnPropertyChanged(nameof(JumpFiresOnArrivalValue));
+        OnPropertyChanged(nameof(JumpHint));
+        OnPropertyChanged(nameof(ActionEndpoints));
+        OnPropertyChanged(nameof(ActionEndpointIndex));
+        OnPropertyChanged(nameof(ActionAddressValue));
+        OnPropertyChanged(nameof(ActionArgumentsValue));
+        OnPropertyChanged(nameof(ActionHint));
+        OnPropertyChanged(nameof(PatchSnapshots));
+        OnPropertyChanged(nameof(PatchSnapshotIndex));
+        OnPropertyChanged(nameof(PatchFadeValue));
+        OnPropertyChanged(nameof(PatchLevelChanges));
+        OnPropertyChanged(nameof(HasPatchLevelChanges));
+        OnPropertyChanged(nameof(PatchHint));
+        OnPropertyChanged(nameof(VisualizerPresetPackValue));
+        OnPropertyChanged(nameof(VisualizerHoldValue));
+        OnPropertyChanged(nameof(VisualizerBlendValue));
+        OnPropertyChanged(nameof(VisualizerLocksPresetValue));
     }
 
     private CueKind KindOf() => Cue is null ? CueKind.Comment : CuePresentation.KindOf(Cue);
@@ -729,6 +759,472 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
+    // ── the per-kind panes ────────────────────────────────────────────────────────────────────
+    // Every control-flow kind EXECUTES (the transport resolves them app-side), so every one of them
+    // has to be authorable. Until this landed the only working fade, jump, patch and action cues in
+    // existence were the ones the fixture generator wrote — the panes were literals, so the transport
+    // could fire a cue the editor could not create.
+
+    private FadeCueNode? Fade => Cue as FadeCueNode;
+    private JumpCueNode? Jump => Cue as JumpCueNode;
+    private ActionCueNode? Action => Cue as ActionCueNode;
+    private PatchCueNode? Patch => Cue as PatchCueNode;
+    private VisualizerCueNode? Visualizer => Cue as VisualizerCueNode;
+
+    // ── FADE ──────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The logical outputs this fade acts on, each with its own checkbox.
+    /// </summary>
+    /// <remarks>
+    /// A live list rather than a picker dialog: choosing which outputs a fade covers is something an
+    /// operator does WHILE looking at the patch, and a modal that hides the rest of the pane to ask
+    /// one question is the wrong shape for it.
+    /// </remarks>
+    public IReadOnlyList<TargetToggle> FadeTargets =>
+        Fade is not { } fade
+            ? []
+            : [.. Project.AudioPatch.LogicalChannels
+                .OrderBy(channel => channel.SortOrder)
+                .Select(channel => new TargetToggle(
+                    channel.Name,
+                    fade.TargetChannelIds.Contains(channel.Id),
+                    on => ToggleFadeTarget(fade, channel.Id, on)))];
+
+    private void ToggleFadeTarget(FadeCueNode fade, Guid channelId, bool on)
+    {
+        if (on == fade.TargetChannelIds.Contains(channelId))
+            return;
+
+        var target = fade;
+        var next = new List<Guid>(fade.TargetChannelIds);
+
+        if (on)
+            next.Add(channelId);
+        else
+            next.Remove(channelId);
+
+        Edit("fadeTargets", "cues",
+            () => target.TargetChannelIds, ids => target.TargetChannelIds = ids, next,
+            on ? "add fade target" : "remove fade target");
+    }
+
+    public string FadeToLevelValue
+    {
+        get => Fade is { } fade
+            ? fade.ToLevelDb <= GainRange.SilenceFloorDb ? "−inf" : CuePresentation.Db(fade.ToLevelDb)
+            : "—";
+        set
+        {
+            if (Fade is not { } fade)
+                return;
+
+            // "−inf", "-inf" and "off" all mean the silence floor. An operator typing the word is the
+            // commonest way to author a fade-out, and refusing it would send them to look up a number.
+            var level = value.Trim().Replace('−', '-');
+
+            var db = level.Equals("-inf", StringComparison.OrdinalIgnoreCase)
+                     || level.Equals("inf", StringComparison.OrdinalIgnoreCase)
+                     || level.Equals("off", StringComparison.OrdinalIgnoreCase)
+                ? GainRange.SilenceFloorDb
+                : TryParseDb(value, out var parsed) ? parsed : double.NaN;
+
+            if (double.IsNaN(db))
+                return;
+
+            var target = fade;
+            Edit("fadeLevel", "cues",
+                () => target.ToLevelDb, set => target.ToLevelDb = set,
+                Math.Clamp(db, GainRange.SilenceFloorDb, 12), "set fade level");
+        }
+    }
+
+    public string FadeDurationValue
+    {
+        get => Fade is { } fade ? CuePresentation.Seconds(fade.DurationMs) : "—";
+        set
+        {
+            if (Fade is { } fade && TryParseSeconds(value, out var ms))
+            {
+                var target = fade;
+                Edit("fadeDuration", "cues",
+                    () => target.DurationMs, set => target.DurationMs = set, ms, "set fade duration");
+            }
+        }
+    }
+
+    public bool FadeEverythingValue
+    {
+        get => Fade is { FadeEverythingSounding: true };
+        set
+        {
+            if (Fade is not { } fade || value == fade.FadeEverythingSounding)
+                return;
+
+            var target = fade;
+            Edit("fadeEverything", "cues",
+                () => target.FadeEverythingSounding, on => target.FadeEverythingSounding = on, value,
+                value ? "fade everything sounding" : "fade only the targets");
+        }
+    }
+
+    public bool FadeStopsTargetsValue
+    {
+        get => Fade is not { StopTargetsWhenComplete: false };
+        set
+        {
+            if (Fade is not { } fade || value == fade.StopTargetsWhenComplete)
+                return;
+
+            var target = fade;
+            Edit("fadeStops", "cues",
+                () => target.StopTargetsWhenComplete, on => target.StopTargetsWhenComplete = on, value,
+                value ? "stop targets when complete" : "leave targets running");
+        }
+    }
+
+    /// <summary>Whether the fade covers anything. A fade with no target is a cue that does nothing.</summary>
+    public string FadeTargetHint => Fade is not { } fade
+        ? ""
+        : fade.FadeEverythingSounding
+            ? "everything sounding — the per-output list below is ignored"
+            : fade.TargetChannelIds.Count + fade.TargetCueIds.Count == 0
+                ? "no target — this cue will do nothing"
+                : $"{fade.TargetChannelIds.Count + fade.TargetCueIds.Count} target(s)";
+
+    // ── JUMP ──────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Every cue in the show, as jump destinations. A jump may legitimately cross lists.</summary>
+    public IReadOnlyList<string> JumpTargets =>
+        Jump is null
+            ? []
+            : ["— none —", .. Project.AllCues()
+                .Where(cue => cue.Id != Jump.Id)
+                .Select(cue => $"Q{CuePresentation.Number(cue.Number)} · {cue.Label}")];
+
+    public int JumpTargetIndex
+    {
+        get
+        {
+            if (Jump is not { TargetCueIds.Count: > 0 } jump)
+                return 0;
+
+            var candidates = Candidates(jump);
+            var at = candidates.FindIndex(cue => cue.Id == jump.TargetCueIds[0]);
+
+            // A target that has been deleted reads as "none" rather than pointing at whatever now
+            // occupies that position — Project status reports the dangling reference separately.
+            return at < 0 ? 0 : at + 1;
+        }
+        set
+        {
+            if (Jump is not { } jump || value < 0)
+                return;
+
+            var candidates = Candidates(jump);
+            var chosen = value == 0 || value > candidates.Count
+                ? new List<Guid>()
+                : [candidates[value - 1].Id];
+
+            if (chosen.SequenceEqual(jump.TargetCueIds))
+                return;
+
+            var target = jump;
+            Edit("jumpTarget", "cues",
+                () => target.TargetCueIds, ids => target.TargetCueIds = ids, chosen,
+                chosen.Count == 0 ? "clear jump target" : "set jump target");
+        }
+    }
+
+    private List<CueNode> Candidates(JumpCueNode jump) =>
+        [.. Project.AllCues().Where(cue => cue.Id != jump.Id)];
+
+    public IReadOnlyList<string> JumpConditions { get; } =
+        ["always", "while the trigger is held", "n times, then continue"];
+
+    public int JumpConditionIndex
+    {
+        get => Jump is { } jump ? (int)jump.Condition : -1;
+        set
+        {
+            if (Jump is not { } jump || value < 0 || (JumpCondition)value == jump.Condition)
+                return;
+
+            var target = jump;
+            Edit("jumpCondition", "cues",
+                () => target.Condition, condition => target.Condition = condition, (JumpCondition)value,
+                $"jump {JumpConditions[value]}");
+        }
+    }
+
+    public bool JumpPickAtRandomValue
+    {
+        get => Jump is { PickAtRandom: true };
+        set
+        {
+            if (Jump is not { } jump || value == jump.PickAtRandom)
+                return;
+
+            var target = jump;
+            Edit("jumpRandom", "cues",
+                () => target.PickAtRandom, on => target.PickAtRandom = on, value,
+                value ? "pick at random" : "always the first target");
+        }
+    }
+
+    public bool JumpFiresOnArrivalValue
+    {
+        get => Jump is not { FireOnArrival: false };
+        set
+        {
+            if (Jump is not { } jump || value == jump.FireOnArrival)
+                return;
+
+            var target = jump;
+            Edit("jumpFires", "cues",
+                () => target.FireOnArrival, on => target.FireOnArrival = on, value,
+                value ? "fire on arrival" : "move standby only");
+        }
+    }
+
+    /// <summary>Said in the editor rather than left for Project status to find at a get-in.</summary>
+    public string JumpHint => Jump is not { } jump
+        ? ""
+        : jump.TargetCueIds.Count == 0
+            ? "no target — a jump with nowhere to go is an error on Project status, not a silent no-op"
+            : jump.TargetCueIds.Any(id => Project.FindCue(id) is null)
+                ? "a target no longer exists in this show"
+                : "";
+
+    // ── ACTION ────────────────────────────────────────────────────────────────────────────────
+
+    public IReadOnlyList<string> ActionEndpoints =>
+        Action is null
+            ? []
+            : ["— none —", .. Project.ActionEndpoints.Select(
+                endpoint => $"{endpoint.Name} · {Describe(endpoint.Kind)}")];
+
+    public int ActionEndpointIndex
+    {
+        get
+        {
+            if (Action?.EndpointId is not { } id)
+                return 0;
+
+            var at = Project.ActionEndpoints.FindIndex(endpoint => endpoint.Id == id);
+            return at < 0 ? 0 : at + 1;
+        }
+        set
+        {
+            if (Action is not { } action || value < 0)
+                return;
+
+            var chosen = value == 0 || value > Project.ActionEndpoints.Count
+                ? (Guid?)null
+                : Project.ActionEndpoints[value - 1].Id;
+
+            if (chosen == action.EndpointId)
+                return;
+
+            var target = action;
+            Edit("actionEndpoint", "cues",
+                () => target.EndpointId, id => target.EndpointId = id, chosen, "set action endpoint");
+        }
+    }
+
+    public string ActionAddressValue
+    {
+        get => Action?.Address ?? "";
+        set
+        {
+            if (Action is not { } action)
+                return;
+
+            var target = action;
+            Edit("actionAddress", "cues",
+                () => target.Address, address => target.Address = address, value, "set action address");
+        }
+    }
+
+    public string ActionArgumentsValue
+    {
+        get => Action?.Arguments ?? "";
+        set
+        {
+            if (Action is not { } action)
+                return;
+
+            var target = action;
+            Edit("actionArguments", "cues",
+                () => target.Arguments, args => target.Arguments = args, value, "set action arguments");
+        }
+    }
+
+    /// <summary>
+    /// What this action will actually do, including the one case that cannot work yet.
+    /// </summary>
+    /// <remarks>
+    /// MIDI output is not implemented; the sender refuses a MIDI endpoint out loud rather than
+    /// reporting success for a message that went nowhere. Saying so HERE means the operator finds out
+    /// while authoring rather than when the desk fails to respond.
+    /// </remarks>
+    public string ActionHint
+    {
+        get
+        {
+            if (Action is not { } action)
+                return "";
+
+            if (action.EndpointId is not { } id
+                || Project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == id) is not { } endpoint)
+                return "no endpoint — this cue will do nothing";
+
+            if (endpoint.Kind == EndpointKind.MidiOut)
+                return "MIDI output is not implemented yet — this cue will report a failure when fired";
+
+            return action.Address.Length == 0
+                ? "no address — this cue will do nothing"
+                : $"arguments are whitespace-separated and typed by shape: 3 is an int, 3.0 a float";
+        }
+    }
+
+    private static string Describe(EndpointKind kind) =>
+        kind == EndpointKind.MidiOut ? "MIDI out" : "OSC out";
+
+    // ── PATCH ─────────────────────────────────────────────────────────────────────────────────
+
+    public IReadOnlyList<string> PatchSnapshots =>
+        Patch is null
+            ? []
+            : ["— none —", .. Project.PatchSnapshots.Select(
+                snapshot => $"snapshot “{snapshot.Name}”")];
+
+    public int PatchSnapshotIndex
+    {
+        get
+        {
+            if (Patch?.SnapshotId is not { } id)
+                return 0;
+
+            var at = Project.PatchSnapshots.FindIndex(snapshot => snapshot.Id == id);
+            return at < 0 ? 0 : at + 1;
+        }
+        set
+        {
+            if (Patch is not { } patch || value < 0)
+                return;
+
+            var chosen = value == 0 || value > Project.PatchSnapshots.Count
+                ? (Guid?)null
+                : Project.PatchSnapshots[value - 1].Id;
+
+            if (chosen == patch.SnapshotId)
+                return;
+
+            var target = patch;
+            Edit("patchSnapshot", "cues",
+                () => target.SnapshotId, id => target.SnapshotId = id, chosen, "set patch snapshot");
+        }
+    }
+
+    public string PatchFadeValue
+    {
+        get => Patch is { } patch ? CuePresentation.Seconds(patch.FadeMs) : "—";
+        set
+        {
+            if (Patch is { } patch && TryParseSeconds(value, out var ms))
+            {
+                var target = patch;
+                Edit("patchFade", "cues",
+                    () => target.FadeMs, set => target.FadeMs = set, ms, "set patch fade");
+            }
+        }
+    }
+
+    /// <summary>The cue's inline level changes, as the pane lists them.</summary>
+    /// <remarks>
+    /// Read from the document rather than authored: the pane used to show two fixed rows ("Fold L/R",
+    /// "Sub") whatever the cue actually carried, so a patch cue with three changes showed two and one
+    /// with none still showed two.
+    /// </remarks>
+    public IReadOnlyList<string> PatchLevelChanges =>
+        Patch is null
+            ? []
+            : [.. Patch.Levels.Select(change =>
+                $"{Project.FindChannel(change.LogicalChannelId)?.Name ?? "(deleted output)"} → "
+                + (change.Muted ? "mute" : CuePresentation.Db(change.GainDb)))];
+
+    public bool HasPatchLevelChanges => PatchLevelChanges.Count > 0;
+
+    public string PatchHint => Patch is not { } patch
+        ? ""
+        : patch.SnapshotId is null && patch.Levels.Count == 0
+            ? "nothing to recall — this cue will do nothing"
+            : "";
+
+    // ── VISUALIZER ────────────────────────────────────────────────────────────────────────────
+
+    public string VisualizerPresetPackValue
+    {
+        get => Visualizer?.PresetPack ?? "";
+        set
+        {
+            if (Visualizer is not { } visualizer)
+                return;
+
+            var target = visualizer;
+            Edit("presetPack", "cues",
+                () => target.PresetPack, pack => target.PresetPack = pack, value, "set preset pack");
+        }
+    }
+
+    public string VisualizerHoldValue
+    {
+        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.HoldMs) : "—";
+        set
+        {
+            if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
+            {
+                var target = visualizer;
+                Edit("visualizerHold", "cues",
+                    () => target.HoldMs, set => target.HoldMs = set, ms, "set preset hold");
+            }
+        }
+    }
+
+    public string VisualizerBlendValue
+    {
+        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.BlendMs) : "—";
+        set
+        {
+            if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
+            {
+                var target = visualizer;
+                Edit("visualizerBlend", "cues",
+                    () => target.BlendMs, set => target.BlendMs = set, ms, "set preset blend");
+            }
+        }
+    }
+
+    public bool VisualizerLocksPresetValue
+    {
+        get => Visualizer is { LockPreset: true };
+        set
+        {
+            if (Visualizer is not { } visualizer || value == visualizer.LockPreset)
+                return;
+
+            var target = visualizer;
+            Edit("visualizerLock", "cues",
+                () => target.LockPreset, on => target.LockPreset = on, value,
+                value ? "lock the preset" : "auto-advance presets");
+        }
+    }
+
+    /// <summary>Visualizer cues do not run yet, and the editor says so rather than implying they do.</summary>
+    public string VisualizerHint =>
+        "the visualizer runtime is not wired yet — these settings are stored but nothing renders them";
+
     // ── media tracks ──────────────────────────────────────────────────────────────────────────
     // The options are a MACHINE fact and the choice is a DOCUMENT one, so the picker takes both: the
     // probe's track list and the cue it writes to.
@@ -1073,6 +1569,32 @@ public sealed class CurvePickerViewModel(
             }
 
             reload();
+        }
+    }
+}
+
+/// <summary>
+/// One toggleable target in a cue's target list.
+/// </summary>
+/// <remarks>
+/// A tiny view-model rather than a bound model object, because the LIST is derived (every logical
+/// output in the project) while the STATE is a membership test against the cue. Binding a checkbox
+/// straight to the document would need a property that does not exist on either side.
+/// </remarks>
+public sealed class TargetToggle(string name, bool selected, Action<bool> apply)
+{
+    public string Name { get; } = name;
+
+    public bool IsSelected
+    {
+        get => selected;
+        set
+        {
+            if (value == selected)
+                return;
+
+            selected = value;
+            apply(value);
         }
     }
 }

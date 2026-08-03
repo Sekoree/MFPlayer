@@ -282,6 +282,51 @@ jobs:
           HAPLAY_SETTINGS_PATH: ${{ runner.temp }}/haplay-windows-settings.json
         run: ./haplay-publish/HaPlayer.exe --media-log-level information
 
+      # The HaCue2 AOT gate. Without it an AOT regression in the cue player ships silently: the app is
+      # NativeAOT-clean by policy (source-generated JSON throughout, IsAotCompatible on every library),
+      # and nothing was checking. Pure compile/link, no runtime dependencies, so it gates on both OSes.
+      - name: HaCue2 AOT publish (the app deliverable)
+        run: >
+          dotnet publish UI/HaCue2.Desktop/HaCue2.Desktop.csproj
+          -c Release -r ${{ matrix.rid }} -o hacue2-publish
+
+      # Proves the fixture generator and the headless status pass agree, end to end, against files that
+      # exist — without committing anybody's media paths. A fixture holding absolute paths into one
+      # person's home directory works on exactly one machine, so CI makes its own.
+      #
+      # The expected exit code is 1, not 0: the seeded project deliberately carries one error (an output
+      # fed by a cue and patched to nothing — the condition register item 25 singles out). A 0 here would
+      # mean the status pass had stopped reporting it.
+      - name: HaCue2 seed + status check
+        shell: bash
+        run: |
+          media="${{ runner.temp }}/hacue2-media"
+          mkdir -p "$media/Music" "$media/Videos"
+          # 2 MB each: the scan skips anything under a megabyte, because a library is full of stingers
+          # and stray artwork and a cue list of those demonstrates nothing.
+          for n in 1 2 3 4 5 6 7 8; do
+            head -c 2097152 /dev/urandom > "$media/Music/track-$n.flac"
+          done
+          for n in 1 2 3 4; do
+            head -c 2097152 /dev/urandom > "$media/Videos/clip-$n.mp4"
+          done
+
+          dotnet run --project UI/HaCue2.Seed/HaCue2.Seed.csproj -c Release --no-build -- \
+            --out "${{ runner.temp }}/ci-fixture.hacue2proj" --title "CI fixture" \
+            "$media/Music" "$media/Videos"
+
+          set +e
+          dotnet run --project UI/HaCue2.Check/HaCue2.Check.csproj -c Release --no-build -- \
+            "${{ runner.temp }}/ci-fixture.hacue2proj"
+          status=$?
+          set -e
+
+          if [ "$status" -ne 1 ]; then
+            echo "::error title=HaCue2 status check::expected exit 1 (the fixture's one deliberate error), got $status"
+            exit 1
+          fi
+          echo "hacue2-check reported the expected single error"
+
   # ─────────────────────────────────────────────────────────────────────────────────────────────
   # Runnable AOT artifacts: build/stage the native libs the app P/Invokes (that don't come from
   # NuGet), AOT-publish HaPlay.Desktop, drop the natives next to the exe, and upload per platform.

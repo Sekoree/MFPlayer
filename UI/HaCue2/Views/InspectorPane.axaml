@@ -368,15 +368,12 @@
           <!-- ══ PATCH — snapshot recall AND inline level changes (register item 12) ════════ -->
           <StackPanel IsVisible="{Binding IsPatchPane}" Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Recall">
-              <ComboBox SelectedIndex="1">
-                <ComboBoxItem>— none —</ComboBoxItem>
-                <ComboBoxItem>snapshot “Act 1”</ComboBoxItem>
-                <ComboBoxItem>snapshot “Interval”</ComboBoxItem>
-              </ComboBox>
+              <ComboBox ItemsSource="{Binding PatchSnapshots}"
+                        SelectedIndex="{Binding PatchSnapshotIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade">
               <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                <TextBox Grid.Column="0" Text="4.0 s" />
+                <TextBox Grid.Column="0" Text="{Binding PatchFadeValue}" LostFocus="OnFieldCommitted" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding PatchCurve.Curves}"
                           SelectedIndex="{Binding PatchCurve.SelectedIndex}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
@@ -385,12 +382,17 @@
             </HeaderedContentControl>
 
             <ContentControl Theme="{StaticResource Subhead}" Content="Also change" />
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Fold L/R">
-              <TextBox Classes="ro" Text="−6.0 → 0.0 dB" />
-            </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Sub">
-              <TextBox Classes="ro" Text="mute → unmute" />
-            </HeaderedContentControl>
+            <!-- The cue's OWN level changes. This pane used to show two fixed rows whatever the cue
+                 carried, so one with three changes showed two and one with none still showed two. -->
+            <TextBlock Margin="10,2" Classes="mono dim3 small" IsVisible="{Binding !HasPatchLevelChanges}"
+                       Text="no inline level changes" />
+            <ItemsControl ItemsSource="{Binding PatchLevelChanges}" Margin="10,2">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="sys:String">
+                  <TextBlock Classes="mono dim2 small" Margin="0,2" Text="{Binding}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
             <ContentControl Theme="{StaticResource FieldWide}">
               <Button Classes="quiet" Content="+ add level change…" Click="OnAddLevelChange" />
             </ContentControl>
@@ -403,19 +405,20 @@
                            Text="applies to the patch and stays — stopping this cue undoes nothing" />
               </DockPanel>
             </Border>
+            <TextBlock Margin="10,6" Classes="mono warn small" TextWrapping="Wrap"
+                       IsVisible="{Binding PatchHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Text="{Binding PatchHint}" />
           </StackPanel>
 
           <!-- ══ FADE — targets, duration, curve, fade-everything ══════════════════════════ -->
           <StackPanel IsVisible="{Binding IsFadePane}" Margin="0,6,0,8">
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Targets">
-              <TextBox Text="Main L/R · Foldback L/R" />
-            </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="To level">
-              <TextBox Classes="short" Text="−inf dB" />
+              <TextBox Classes="short" Text="{Binding FadeToLevelValue}" LostFocus="OnFieldCommitted"
+                       ToolTip.Tip="A level in dB, or “-inf” / “off” for silence." />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Duration">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
-                <TextBox Grid.Column="0" Text="4.0 s" />
+                <TextBox Grid.Column="0" Text="{Binding FadeDurationValue}" LostFocus="OnFieldCommitted" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding FadeCurve.Curves}"
                           SelectedIndex="{Binding FadeCurve.SelectedIndex}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
@@ -423,75 +426,82 @@
                 <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fade" />
               </Grid>
             </HeaderedContentControl>
-            <CheckBox Margin="10,4" Content="Fade everything currently sounding" />
-            <CheckBox Margin="10,4" IsChecked="True" Content="Stop the targets when the fade completes" />
+            <CheckBox Margin="10,4" IsChecked="{Binding FadeEverythingValue}"
+                      Content="Fade everything currently sounding" />
+            <CheckBox Margin="10,4" IsChecked="{Binding FadeStopsTargetsValue}"
+                      Content="Stop the targets when the fade completes" />
+
+            <ContentControl Theme="{StaticResource Subhead}" Content="Logical outputs" />
+            <ItemsControl ItemsSource="{Binding FadeTargets}" Margin="10,2">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:TargetToggle">
+                  <CheckBox Margin="0,1" IsChecked="{Binding IsSelected}" Content="{Binding Name}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
+                       Text="{Binding FadeTargetHint}" />
           </StackPanel>
 
           <!-- ══ JUMP — targets, random pick, fire-on-jump ═════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsJumpPane}" Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Jump to">
-              <TextBox Text="Q12 · Preshow bed" />
+              <ComboBox ItemsSource="{Binding JumpTargets}" SelectedIndex="{Binding JumpTargetIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Condition">
-              <ComboBox SelectedIndex="1">
-                <ComboBoxItem>always</ComboBoxItem>
-                <ComboBoxItem>while the trigger is held</ComboBoxItem>
-                <ComboBoxItem>n times, then continue</ComboBoxItem>
-              </ComboBox>
+              <ComboBox ItemsSource="{Binding JumpConditions}"
+                        SelectedIndex="{Binding JumpConditionIndex}" />
             </HeaderedContentControl>
-            <CheckBox Margin="10,4" Content="Pick at random from a list of targets" />
-            <CheckBox Margin="10,4" IsChecked="True" Content="Fire the target cue on arrival" />
+            <CheckBox Margin="10,4" IsChecked="{Binding JumpPickAtRandomValue}"
+                      Content="Pick at random from a list of targets" />
+            <CheckBox Margin="10,4" IsChecked="{Binding JumpFiresOnArrivalValue}"
+                      Content="Fire the target cue on arrival" />
             <!-- A jump that lands somewhere no longer in the show is one of the checks Project status
                  runs; the editor says so rather than letting it become a get-in surprise. -->
-            <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
-                       Text="A jump with no live target is an error on Project status, not a silent no-op." />
+            <TextBlock Margin="10,6" Classes="mono warn small" TextWrapping="Wrap"
+                       IsVisible="{Binding JumpHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Text="{Binding JumpHint}" />
           </StackPanel>
 
           <!-- ══ VISUALIZER — the ONLY home of visualizer settings (register item 21) ═══════ -->
           <StackPanel IsVisible="{Binding IsVisualizerPane}" Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Preset pack">
-              <ComboBox SelectedIndex="0">
-                <ComboBoxItem>preset pack A</ComboBoxItem>
-                <ComboBoxItem>preset pack B · slow</ComboBoxItem>
-                <ComboBoxItem>single preset…</ComboBoxItem>
-              </ComboBox>
+              <TextBox Text="{Binding VisualizerPresetPackValue}" LostFocus="OnFieldCommitted"
+                       PlaceholderText="a preset directory under the projectM pack root" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Hold each">
-              <TextBox Classes="short" Text="24 s" />
+              <TextBox Classes="short" Text="{Binding VisualizerHoldValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Blend">
-              <TextBox Classes="short" Text="3.0 s" />
+              <TextBox Classes="short" Text="{Binding VisualizerBlendValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Audio feed">
               <TextBox Classes="ro" Text="program bus · upstream of per-line inserts" />
             </HeaderedContentControl>
-            <CheckBox Margin="10,4" IsChecked="True" Content="Lock to this preset (no auto-advance)" />
+            <CheckBox Margin="10,4" IsChecked="{Binding VisualizerLocksPresetValue}"
+                      Content="Lock to this preset (no auto-advance)" />
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
                        Text="Placement lives on the Video tab — a visualizer is a cue, and its canvas presence is an ordinary layer." />
+            <TextBlock Margin="10,2,10,6" Classes="mono warn small" TextWrapping="Wrap"
+                       Text="{Binding VisualizerHint}" />
           </StackPanel>
 
           <!-- ══ ACTION — endpoint, address, arguments ═════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsActionPane}" Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Endpoint">
-              <ComboBox SelectedIndex="0">
-                <ComboBoxItem>Eos · OSC out</ComboBoxItem>
-                <ComboBoxItem>X32 · OSC out</ComboBoxItem>
-                <ComboBoxItem>Hog wing · MIDI out</ComboBoxItem>
-              </ComboBox>
+              <ComboBox ItemsSource="{Binding ActionEndpoints}"
+                        SelectedIndex="{Binding ActionEndpointIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Address">
-              <TextBox Text="/eos/cue/2/fire" />
+              <TextBox Text="{Binding ActionAddressValue}" LostFocus="OnFieldCommitted"
+                       PlaceholderText="/eos/cue/2/fire" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Arguments">
-              <TextBox Text="—" />
+              <TextBox Text="{Binding ActionArgumentsValue}" LostFocus="OnFieldCommitted"
+                       PlaceholderText="whitespace-separated" />
             </HeaderedContentControl>
-            <Border Classes="chain">
-              <StackPanel Orientation="Horizontal" Spacing="7">
-                <Border Classes="badge"><TextBlock Text="TEST" /></Border>
-                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                           Text="send this endpoint's own configured test payload" />
-              </StackPanel>
-            </Border>
+            <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
+                       Text="{Binding ActionHint}" />
           </StackPanel>
 
         </Panel>
