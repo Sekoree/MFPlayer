@@ -107,4 +107,19 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     }
 
     public void Schedule(Guid cueId, TimeSpan when, int depth) => Scheduled.Add((cueId, when, depth));
+
+    /// <summary>What a probe would have said. Absent means nobody has looked, exactly as in the app.</summary>
+    public Dictionary<Guid, TimeSpan> Lengths { get; } = [];
+
+    /// <summary>Every seek, as (cue, position in FILE time).</summary>
+    public List<(Guid Cue, TimeSpan Position)> Seeks { get; } = [];
+
+    public TimeSpan? MediaLength(Guid cueId) =>
+        Lengths.TryGetValue(cueId, out var length) ? length : null;
+
+    public Task SeekCueAsync(Guid cueId, TimeSpan position)
+    {
+        Seeks.Add((cueId, position));
+        return Task.CompletedTask;
+    }
 }

@@ -67,4 +67,23 @@ public interface ICueExecutionHost
 
     /// <summary>Runs a cue later, on the show's own clock — a timeline group's children.</summary>
     void Schedule(Guid cueId, TimeSpan when, int depth);
+
+    /// <summary>
+    /// What the probe says a cue's media runs for, or null when nobody has looked.
+    /// </summary>
+    /// <remarks>
+    /// A MACHINE fact, which is why it comes from the host rather than the document: whether a clip
+    /// straddles the playhead depends on how long the file actually is, and only something that has
+    /// opened it knows.
+    /// </remarks>
+    TimeSpan? MediaLength(Guid cueId);
+
+    /// <summary>
+    /// Moves a sounding cue to a position inside its own media.
+    /// </summary>
+    /// <remarks>
+    /// In FILE time, not group time: the clip's in-point is already applied, so a caller starting a
+    /// clip part-way through has to add the trim itself. Doing it here would apply it twice.
+    /// </remarks>
+    Task SeekCueAsync(Guid cueId, TimeSpan position);
 }

@@ -110,6 +110,9 @@ public partial class VideoViewModel : ObservableObject
         ShowRecordPane();
         RaiseOutputFields();
 
+        // The refusal was about the output that was selected when it happened.
+        OutputProblem = "";
+
         // The composition pane follows the output's own composition: an operator who selects the
         // projector and then edits a size expects to be editing what the projector shows.
         SelectedCompositionId = MappedOutput?.CompositionId;
@@ -257,6 +260,20 @@ public partial class VideoViewModel : ObservableObject
                 value ? $"“{output.Name}” is required" : $"“{output.Name}” is optional");
         }
     }
+
+    /// <summary>
+    /// The last refusal from a press on this pane, or nothing.
+    /// </summary>
+    /// <remarks>
+    /// Held rather than shown in a dialog: IDENTIFY fails for ordinary, recoverable reasons — no show
+    /// running, no composition on the output — and a modal for each of them is a modal the operator
+    /// dismisses without reading. Cleared by selecting another output, because it was about that one.
+    /// </remarks>
+    [ObservableProperty]
+    private string _outputProblem = "";
+
+    /// <summary>Records a refusal so it survives the click that produced it.</summary>
+    public void NoteProblem(string problem) => OutputProblem = problem;
 
     /// <summary>What the mapping toggle means for this output, since "clean" has two causes.</summary>
     public string MappingNote => MappedOutput switch

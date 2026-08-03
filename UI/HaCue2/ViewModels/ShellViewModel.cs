@@ -314,6 +314,75 @@ public partial class ShellViewModel : ObservableObject
         return await engine.ToggleRecorderAsync(id).ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Flashes an output's name on it, reporting why it could not.
+    /// </summary>
+    /// <remarks>
+    /// Refuses rather than pretends with no show running, like arming a recorder does: there is no
+    /// window open to flash anything on, and a button that appeared to work over a dark projector
+    /// would send somebody to check a cable.
+    /// </remarks>
+    public async Task<string?> IdentifyAsync(Guid outputId)
+    {
+        if (_engine is not { } engine)
+            return "the show is not running — start it before identifying an output";
+
+        return await engine.IdentifyAsync(outputId).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Runs a timeline group from the sheet's playhead, reporting why it could not.
+    /// </summary>
+    /// <remarks>
+    /// Refuses with no show running, like the other engine verbs. The transport's GO deliberately still
+    /// works without one — it moves the cursor, which is the half that can be right with no devices —
+    /// but "play this from here" has no half that is meaningful without something to play it on.
+    /// </remarks>
+    public async Task<string?> PlayTimelineFromAsync(GroupCueNode group, TimeSpan from)
+    {
+        if (_engine is not { } engine)
+            return "the show is not running — start it before playing from the playhead";
+
+        await engine.PlayTimelineFromAsync(group, from).ConfigureAwait(true);
+        return null;
+    }
+
+    /// <summary>
+    /// Stops every child of one timeline group.
+    /// </summary>
+    /// <remarks>
+    /// Scoped to the group on purpose. Stop-all is a separate, deliberate verb in the transport bar;
+    /// an operator pressing ⏹ inside a scene's timeline is asking for that scene to stop, not for the
+    /// bed running under the whole act from another list.
+    /// </remarks>
+    public async Task<string?> StopTimelineAsync(GroupCueNode group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+
+        if (Host is not { } host)
+            return "the show is not running";
+
+        foreach (var child in group.Children)
+            await host.StopCueAsync(child.Id).ConfigureAwait(true);
+
+        return null;
+    }
+
+    /// <summary>
+    /// Solos one logical output to the audition monitor, or clears the solo.
+    /// </summary>
+    /// <remarks>
+    /// Monitoring, always allowed: it rewrites the MONITOR line's own patch row and nothing else, so it
+    /// never reaches the program mix and never appears in the Active list (register item 13).
+    /// </remarks>
+    public string? SoloToMonitor(Guid channelId) =>
+        _engine is { } engine
+            ? engine.SoloToMonitor(channelId)
+            : "the show is not running — start it before soloing an output";
+
+    /// <summary>What the monitor is carrying, or null.</summary>
+    public Guid? SoloedChannelId => _engine?.SoloedChannelId;
+
     /// <summary>The backend the shell was started with, kept so the engine can be restarted.</summary>
     private IAudioBackend? _backend;
 

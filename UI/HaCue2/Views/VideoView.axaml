@@ -140,7 +140,15 @@
                   <TextBlock Classes="mono dim3 small" TextWrapping="Wrap" Text="{Binding MappingNote}" />
                 </ContentControl>
                 <ContentControl Theme="{StaticResource FieldWide}">
-                  <Button Classes="block" Content="IDENTIFY — FLASH OUTPUT NAME ON SCREEN" />
+                  <Button Classes="block" Content="IDENTIFY — FLASH OUTPUT NAME ON SCREEN"
+                          Click="OnIdentify" />
+                </ContentControl>
+                <!-- Held rather than shown in a dialog: IDENTIFY refuses for ordinary reasons, and a
+                     modal for each of them is a modal nobody reads. -->
+                <ContentControl Theme="{StaticResource FieldWide}"
+                                IsVisible="{Binding OutputProblem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <TextBlock Classes="mono small warn" TextWrapping="Wrap"
+                             Text="{Binding OutputProblem}" />
                 </ContentControl>
 
                 <!-- Register item 30. The same editor the Audio view uses: a record output and a

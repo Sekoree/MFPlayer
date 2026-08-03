@@ -909,12 +909,12 @@ public sealed partial class TimelineViewModel : ObservableObject
     private IDisposable? _drag;
 
     /// <summary>
-    /// The group's length as it was when the drag started, held for the whole gesture.
+    /// The WINDOW's length as it was when the drag started, held for the whole gesture.
     /// </summary>
     /// <remarks>
-    /// The span is the furthest any child reaches, so dragging a clip to the right EXTENDS it — and if
-    /// each motion event divided by the new span, the lane would rescale under the pointer and the clip
-    /// would never catch up with it. Fractions are read against the picture the operator grabbed.
+    /// Dragging a clip to the right can extend the group, which re-clamps the window — and if each
+    /// motion event divided by the new one, the lane would rescale under the pointer and the clip would
+    /// never catch up with it. Fractions are read against the picture the operator grabbed.
     /// </remarks>
     private double _dragSpan;
 
@@ -990,9 +990,6 @@ public sealed partial class TimelineViewModel : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<TimelineLane> _lanes = [];
 
-    /// <summary>Where the transport is inside the group — a runtime fact, so zero until one exists.</summary>
-    public double Playhead { get; }
-
     /// <summary>The snap/free segment picker in the transport row.</summary>
     public IReadOnlyList<string> SnapModes { get; } = ["snap", "free"];
 
@@ -1037,12 +1034,14 @@ public sealed partial class TimelineViewModel : ObservableObject
 
         if (_drag is null)
         {
-            _dragSpan = TimelinePresentation.SpanMs(_group, _runtime);
+            _dragSpan = _view.LengthMs;
             _drag = _journal.Composite(
                 gesture.Edge == ClipEdge.Body ? "move clip" : "trim clip", "cues");
         }
 
-        var left = Snap(Math.Max(0, gesture.Left) * _dragSpan);
+        // Fractions of the WINDOW, so a drag means the same distance on screen however far in the
+        // operator has zoomed — which is the whole reason to zoom before making a fine adjustment.
+        var left = Snap(Math.Max(0, _view.StartMs + (gesture.Left * _dragSpan)));
         var width = Snap(Math.Max(0, gesture.Width) * _dragSpan);
 
         switch (gesture.Edge)
@@ -1180,11 +1179,103 @@ public sealed partial class TimelineViewModel : ObservableObject
         if (_group is null)
             return;
 
-        Lanes = TimelinePresentation.Lanes(_group, _project, _runtime);
+        // A clip dragged past the old end makes the group longer, so the window is re-clamped before
+        // anything is drawn against it — a view wider than the group would draw the lanes squashed
+        // into part of the sheet with nothing beside them.
+        _view = Clamp(_view);
 
-        // The ruler too: a clip dragged past the old end makes the group longer, and a ruler that kept
-        // its old ticks would label the new part with times it does not have.
-        Ruler = TimelinePresentation.Ruler(_group, _runtime);
+        Lanes = TimelinePresentation.Lanes(_group, _project, _runtime, _view);
+        Ruler = TimelinePresentation.Ruler(_group, _runtime, _view);
+
+        OnPropertyChanged(nameof(Playhead));
+        OnPropertyChanged(nameof(ZoomLabel));
+        OnPropertyChanged(nameof(PlayheadLabel));
+    }
+
+    // ── the view window (screen 05's zoom controls) ───────────────────────────────────────────
+
+    private TimelineView _view = TimelineView.Whole(60_000);
+
+    /// <summary>The group's whole length, which is what FIT fits to and what zoom is bounded by.</summary>
+    private double SpanMs => _group is { } group ? TimelinePresentation.SpanMs(group, _runtime) : 60_000;
+
+    /// <summary>Keeps a window inside the group it is a window ONTO.</summary>
+    private TimelineView Clamp(TimelineView view)
+    {
+        var span = Math.Max(TimelineView.MinimumLengthMs, SpanMs);
+        var length = Math.Clamp(view.LengthMs, TimelineView.MinimumLengthMs, span);
+
+        return new TimelineView(
+            Math.Clamp(view.StartMs, 0, Math.Max(0, span - length)), length);
+    }
+
+    /// <summary>Halves what is on screen, about its centre.</summary>
+    public void ZoomIn() => Show(_view.Zoom(0.5, SpanMs));
+
+    /// <summary>Doubles what is on screen, about its centre.</summary>
+    public void ZoomOut() => Show(_view.Zoom(2, SpanMs));
+
+    /// <summary>The whole group, edge to edge.</summary>
+    public void ZoomFit() => Show(TimelineView.Whole(SpanMs));
+
+    private void Show(TimelineView view)
+    {
+        _view = Clamp(view);
+        Refresh();
+    }
+
+    /// <summary>How much of the group is on screen, for the transport row.</summary>
+    public string ZoomLabel =>
+        _view.LengthMs >= SpanMs
+            ? "fit"
+            : $"{TimeSpan.FromMilliseconds(_view.LengthMs).TotalSeconds:0.#} s";
+
+    // ── the playhead ──────────────────────────────────────────────────────────────────────────
+
+    private double _playheadMs;
+
+    /// <summary>
+    /// Where the playhead sits IN THE WINDOW, as a fraction — which is what the sheet draws.
+    /// </summary>
+    /// <remarks>
+    /// Was a runtime fact that nothing wrote, so it sat at zero forever. It is an AUTHORING position:
+    /// where the operator has decided to start from, which is a question the show cannot answer.
+    /// </remarks>
+    public double Playhead => _view.Fraction(_playheadMs);
+
+    /// <summary>Where the playhead is, in the group's own time.</summary>
+    public TimeSpan PlayheadAt => TimeSpan.FromMilliseconds(_playheadMs);
+
+    /// <summary>The group the sheet is showing, for the verbs that act on the whole of it.</summary>
+    public GroupCueNode? Group => _group;
+
+    /// <summary>
+    /// The last refusal from the transport row, or nothing.
+    /// </summary>
+    /// <remarks>
+    /// Held beside the buttons rather than shown in a dialog: "the show is not running" is the answer
+    /// most of the time somebody presses ▶ on a laptop, and a modal for it is a modal they learn to
+    /// dismiss without reading.
+    /// </remarks>
+    [ObservableProperty]
+    private string _transportProblem = "";
+
+    public string PlayheadLabel =>
+        $"{(int)PlayheadAt.TotalMinutes}:{PlayheadAt.Seconds:00}.{PlayheadAt.Milliseconds / 100}";
+
+    /// <summary>
+    /// Puts the playhead where the operator clicked the ruler.
+    /// </summary>
+    /// <remarks>
+    /// Snapped like a clip drag is, and by the same toggle: a playhead half a frame off a cue's start
+    /// would play the first few milliseconds of a clip the operator meant to skip.
+    /// </remarks>
+    public void PlacePlayhead(double fractionOfWindow)
+    {
+        _playheadMs = Math.Clamp(Snap(_view.At(Math.Clamp(fractionOfWindow, 0, 1))), 0, SpanMs);
+
+        OnPropertyChanged(nameof(Playhead));
+        OnPropertyChanged(nameof(PlayheadLabel));
     }
 
     private void SetOffset(CueNode cue, double milliseconds) =>

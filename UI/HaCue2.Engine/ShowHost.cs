@@ -93,6 +93,15 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
     private readonly CancellationTokenSource _life = new();
     private HaCueProject _project;
 
+    /// <summary>
+    /// What the probe said, from the last reload.
+    /// </summary>
+    /// <remarks>
+    /// Kept rather than only compiled with, because "does this clip straddle the playhead" is a
+    /// question about the FILE's length, and the document does not carry one.
+    /// </remarks>
+    private IReadOnlyDictionary<Guid, TimeSpan>? _durations;
+
     private ShowHost(
         MediaRegistry registry,
         ProjectPatchBay bay,
@@ -218,6 +227,55 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
     /// for it either.
     /// </remarks>
     public IReadOnlySet<Guid> AbsentVideoOutputs => _screens.Unopened;
+
+    /// <summary>
+    /// Flashes an output's own name on it, so an operator can tell which screen is which.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A per-OUTPUT test pattern rather than a composition-wide one. The composition-wide layer appears
+    /// on every output bound to that canvas, which lights up the lobby TV and the stream while you are
+    /// trying to work out which projector is “Projector A” — the exact opposite of identifying one.
+    /// </para>
+    /// <para>
+    /// It sits upstream of the output's mapping stage, so a warped output shows the pattern warped —
+    /// which is what makes it useful for checking the warp as well as the wiring.
+    /// </para>
+    /// </remarks>
+    /// <returns>Null when it was shown; the reason otherwise.</returns>
+    public async Task<string?> IdentifyAsync(Guid outputId, TimeSpan duration)
+    {
+        if (_project.VideoOutputs.FirstOrDefault(item => item.Id == outputId) is not { } output)
+            return "that output is no longer in this show";
+
+        if (output.CompositionId is not { } compositionId
+            || _project.Compositions.FirstOrDefault(item => item.Id == compositionId) is not { } composition)
+            return $"“{output.Name}” shows no composition, so there is nothing to flash it on";
+
+        if (_screens.Unopened.Contains(outputId))
+            return $"“{output.Name}” is not open on this machine";
+
+        var id = compositionId.ToString();
+        var lease = outputId.ToString("N");
+
+        if (!await _session.SetOutputTestPatternAsync(
+                id, lease, IdentifyPattern.Render(output.Name, composition.Width, composition.Height))
+            .ConfigureAwait(false))
+            return $"“{output.Name}” could not show a pattern";
+
+        try
+        {
+            await Task.Delay(duration, _life.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The show is going down. Fall through and clear it anyway — a projector left showing a
+            // blue card is worse than one showing nothing.
+        }
+
+        await _session.SetOutputTestPatternAsync(id, lease, null).ConfigureAwait(false);
+        return null;
+    }
 
     /// <summary>What each action endpoint was last successfully sent, and when.</summary>
     public IReadOnlyDictionary<Guid, string> LastSent => _actions.LastSent;
@@ -348,6 +406,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
         {
             var previous = _project;
             _project = project;
+            _durations = durations ?? _durations;
             ForgetDetachedScreens(previous, project);
 
             await _session.LoadDocumentAsync(

@@ -89,6 +89,29 @@ public sealed class EngineRuntime : IAsyncDisposable
         return problem;
     }
 
+    /// <summary>
+    /// Flashes one video output's own name on it.
+    /// </summary>
+    /// <remarks>
+    /// Through the runtime, like the recorder verb and for the same reason: it is the only identify
+    /// verb an operator has, and routing it here keeps the session behind the one seam everything on
+    /// screen already goes through.
+    /// </remarks>
+    public Task<string?> IdentifyAsync(Guid outputId) =>
+        // Long enough to walk to the projector and look, short enough that forgetting to press it
+        // again does not leave a blue card in front of an audience.
+        _host.IdentifyAsync(outputId, TimeSpan.FromSeconds(4));
+
+    /// <summary>Runs a timeline group from where the operator put the playhead.</summary>
+    public Task PlayTimelineFromAsync(GroupCueNode group, TimeSpan from) =>
+        _host.FireTimelineFromAsync(group, from);
+
+    /// <summary>Solos one logical output to the audition monitor, or clears it. Toggles.</summary>
+    public string? SoloToMonitor(Guid channelId) => _host.SoloToMonitor(channelId);
+
+    /// <summary>What the monitor is carrying, so the button can say SOLO or CLEAR.</summary>
+    public Guid? SoloedChannelId => _host.SoloedChannelId;
+
     private async void Poll()
     {
         // One in flight at a time: a snapshot crosses the session dispatcher, and stacking them up

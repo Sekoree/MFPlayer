@@ -85,6 +85,20 @@ public sealed partial class ShowHost
         return true;
     }
 
+    /// <summary>
+    /// Sends one logical output to the audition monitor, or clears the solo.
+    /// </summary>
+    /// <remarks>
+    /// Toggling: soloing the line that is already soloed clears it, because the button is the same
+    /// button and an operator pressing it twice is asking for the monitor back.
+    /// </remarks>
+    /// <returns>Why it could not, or null on success.</returns>
+    public string? SoloToMonitor(Guid channelId) =>
+        _bay.Solo(_project, _bay.SoloedChannelId == channelId ? null : channelId);
+
+    /// <summary>Which logical output the monitor is carrying instead of its own patch, or null.</summary>
+    public Guid? SoloedChannelId => _bay.SoloedChannelId;
+
     /// <summary>Stops the audition. Never touches the program — that is the whole point of the rig.</summary>
     public async Task StopPreviewAsync()
     {

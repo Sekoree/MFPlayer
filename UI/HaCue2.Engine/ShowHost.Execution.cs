@@ -165,6 +165,30 @@ public sealed partial class ShowHost
         }
     }
 
+    /// <summary>What a probe said this cue's media runs for, from the last reload.</summary>
+    TimeSpan? ICueExecutionHost.MediaLength(Guid cueId) =>
+        _durations is { } durations && durations.TryGetValue(cueId, out var length) ? length : null;
+
+    /// <summary>Moves a sounding cue to a position inside its own media.</summary>
+    /// <remarks>
+    /// Addressed by the cue's OWN transport group. A timeline's children each have one — which is what
+    /// makes them layer, and also what makes it possible to move one of them without moving the rest.
+    /// </remarks>
+    Task ICueExecutionHost.SeekCueAsync(Guid cueId, TimeSpan position)
+    {
+        if (_project.ListOf(cueId) is not { } list)
+            return Task.CompletedTask;
+
+        var group = _project.AllCues().OfType<GroupCueNode>()
+            .FirstOrDefault(candidate => candidate.Children.Any(child => child.Id == cueId));
+
+        return _session.SeekAsync(
+            position,
+            group is null
+                ? ShowCompiler.GroupId(list)
+                : ShowCompiler.GroupId(list, group, _project.FindCue(cueId)!));
+    }
+
     /// <summary>Runs a cue later, on the show's own clock. Cancelled with the show.</summary>
     void ICueExecutionHost.Schedule(Guid cueId, TimeSpan when, int depth)
     {

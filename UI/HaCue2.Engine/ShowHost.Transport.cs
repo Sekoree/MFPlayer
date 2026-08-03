@@ -52,6 +52,17 @@ public sealed partial class ShowHost
         return _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
     }
 
+    /// <summary>
+    /// Runs a timeline group from a position inside it — the rehearsal verb.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from firing the group, which always starts at its top. What an operator rehearsing a
+    /// scene wants is the state the show would be in AT that moment, bed and all, which is why a clip
+    /// straddling the playhead is started part-way through rather than skipped.
+    /// </remarks>
+    public Task FireTimelineFromAsync(GroupCueNode group, TimeSpan from) =>
+        Executor.FireTimelineAsync(group, from);
+
     /// <summary>Fires one cue by id, whatever the cursor is doing.</summary>
     public Task<bool> FireAsync(Guid cueId) => Executor.FireAsync(cueId);
 

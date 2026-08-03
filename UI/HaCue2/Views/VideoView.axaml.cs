@@ -64,6 +64,24 @@ public partial class VideoView : UserControl
             video.Record.NoteProblem(problem);
     }
 
+    /// <summary>
+    /// Flashes the selected output's own name on it.
+    /// </summary>
+    /// <remarks>
+    /// The one reliable way to answer "which of these three projectors is Projector A" without
+    /// unplugging anything, which is how it otherwise gets answered at a get-in.
+    /// </remarks>
+    private async void OnIdentify(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not VideoViewModel video
+            || video.SelectedOutput is not { } row
+            || this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
+            return;
+
+        if (await shell.IdentifyAsync(row.Id) is { } problem)
+            video.NoteProblem(problem);
+    }
+
     private void OnEditMapping(object? sender, RoutedEventArgs e)
     {
         if (DataContext is VideoViewModel video)

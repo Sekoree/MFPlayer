@@ -37,6 +37,8 @@ public partial class AudioView : UserControl
             "line:record" => Dialogs.AddAudioLine(journal, AudioLineKind.FileRecord),
             "line:stream" => Dialogs.AddAudioLine(journal, AudioLineKind.Stream),
             "output" => Dialogs.AddLogicalOutput(journal),
+            "pair" => Dialogs.AddStereoPair(journal),
+            "reorder" => Dialogs.Reorder(journal, audio.SelectedOutput?.Id),
             "group" => Dialogs.AddOutputGroup(journal, audio.SelectedOutputIds),
             "rename" => audio.SelectedOutput is { } row ? Dialogs.Rename(journal, row.Id, row.Name, "audio") : null,
             "snapshot" => Dialogs.SaveSnapshot(journal),
@@ -46,6 +48,25 @@ public partial class AudioView : UserControl
         };
 
         PromptWindow.Show(this, prompt, audio.Refresh);
+    }
+
+    /// <summary>
+    /// Solos the selected logical output to the audition monitor, or clears it.
+    /// </summary>
+    /// <remarks>
+    /// Monitoring, so it is allowed whenever a show is running: it rewrites the MONITOR line's own
+    /// patch row and nothing else. "Why can I not hear Lobby" is the question it answers, and hearing
+    /// Lobby alone is the answer.
+    /// </remarks>
+    private void OnSolo(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AudioViewModel audio
+            || audio.SelectedOutput is not { } row
+            || this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
+            return;
+
+        var problem = shell.SoloToMonitor(row.Id);
+        audio.NoteSolo(shell.SoloedChannelId, problem);
     }
 
     /// <summary>

@@ -233,6 +233,97 @@ public sealed class ProjectPatchBay : IDisposable
         return failures;
     }
 
+    // ── solo to the monitor (register item 13) ────────────────────────────────────────────────
+
+    /// <summary>The logical output the monitor is soloing, or null when it carries its own patch.</summary>
+    public Guid? SoloedChannelId
+    {
+        get
+        {
+            lock (_solo)
+                return _soloed;
+        }
+    }
+
+    private readonly Lock _solo = new();
+    private Guid? _soloed;
+
+    /// <summary>
+    /// Sends ONE logical output to the audition monitor, or gives the monitor its own patch back.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The monitor's V×R row is rewritten, not tapped.</b> Everything audible arrives from the
+    /// program bus through a line's own matrix, so a matrix that is unity on one bus row and zero
+    /// everywhere else makes the monitor carry that output alone. That needs no new capability — it is
+    /// the same live reconciliation an ordinary patch edit uses, so it fades rather than clicks.
+    /// </para>
+    /// <para>
+    /// <b>A logical output, not a line.</b> "Why can I not hear Lobby" is a question about the bus
+    /// channel; a line carries several of them mixed together, and hearing that mix does not answer it.
+    /// The output is sent to EVERY monitor channel, because a mono bus heard in one ear reads as a
+    /// fault rather than as an answer.
+    /// </para>
+    /// <para>
+    /// It is monitoring: only the monitor line's own row changes, so the program mix is untouched and
+    /// nothing appears in the Active list. Clearing it puts that row back from the document.
+    /// </para>
+    /// </remarks>
+    /// <returns>Why it could not, or null on success.</returns>
+    public string? Solo(HaCueProject project, Guid? channelId)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        if (MonitorTerminalId is not { } monitor || !Guid.TryParse(monitor, out var monitorLineId))
+            return "this rig has no monitor line to solo to";
+
+        var channels = project.AudioPatch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+
+        if (channels.Count != LogicalChannelIds.Count)
+            return "the logical outputs changed — reopen the show before soloing";
+
+        if (_open.FirstOrDefault(open => open.LineId == monitorLineId) is not { Channels: > 0 } monitorLine)
+            return "the monitor line is not open on this machine";
+
+        float[,] matrix;
+
+        if (channelId is { } wanted)
+        {
+            var row = channels.FindIndex(channel => channel.Id == wanted);
+
+            if (row < 0)
+                return "that logical output is no longer in the show";
+
+            matrix = new float[channels.Count, monitorLine.Channels];
+
+            for (var column = 0; column < monitorLine.Channels; column++)
+                matrix[row, column] = 1;
+        }
+        else
+        {
+            // Cleared: the monitor line's OWN cells, straight from the document, which is where it
+            // started and where an operator pressing the button again expects to be.
+            matrix = Matrix(
+                [.. project.AudioPatch.Cells.Where(cell => cell.LineId == monitorLineId)],
+                channels,
+                monitorLine.Channels);
+        }
+
+        try
+        {
+            Bay.UpdatePatch(monitor, matrix);
+        }
+        catch (Exception failure) when (failure is ArgumentException or InvalidOperationException)
+        {
+            return $"the monitor line refused the solo — {failure.Message}";
+        }
+
+        lock (_solo)
+            _soloed = channelId;
+
+        return null;
+    }
+
     /// <summary>
     /// Joins an armed recorder's sink to the bay as that line's terminal.
     /// </summary>

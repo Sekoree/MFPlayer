@@ -29,14 +29,20 @@
 
       <Border Classes="transport" DockPanel.Dock="Top">
         <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
-          <Button Grid.Column="0" Classes="icon" Content="▶ FROM PLAYHEAD" />
-          <Button Grid.Column="1" Classes="icon" Content="⏹" />
-          <Button Grid.Column="2" Classes="icon" Content="ZOOM −" />
-          <Button Grid.Column="3" Classes="icon" Content="ZOOM +" />
-          <Button Grid.Column="4" Classes="icon" Content="FIT" />
+          <Button Grid.Column="0" Classes="icon" Content="▶ FROM PLAYHEAD" Click="OnPlayFrom" />
+          <Button Grid.Column="1" Classes="icon" Content="⏹" Click="OnStopTimeline" />
+          <Button Grid.Column="2" Classes="icon" Content="ZOOM −" Click="OnZoomOut" />
+          <Button Grid.Column="3" Classes="icon" Content="ZOOM +" Click="OnZoomIn" />
+          <Button Grid.Column="4" Classes="icon" Content="FIT" Click="OnZoomFit" />
           <ListBox Grid.Column="5" Theme="{StaticResource Segment}"
                    ItemsSource="{Binding SnapModes}" SelectedItem="{Binding SnapMode}" />
           <Button Grid.Column="6" Content="DUCK UNDER…" Click="OnDuck" />
+          <TextBlock Grid.Column="7" Classes="mono dim3 small" VerticalAlignment="Center"
+                     Margin="8,0" Text="{Binding PlayheadLabel, StringFormat='▮ {0}'}" />
+          <!-- The refusal sits beside the buttons: "the show is not running" is the usual answer on a
+               laptop, and a modal for it is one nobody reads. -->
+          <TextBlock Grid.Column="7" Classes="mono small warn" HorizontalAlignment="Right"
+                     VerticalAlignment="Center" Margin="8,0" Text="{Binding TransportProblem}" />
           <Button Grid.Column="8" Classes="icon" Content="{Binding DockLabel}" Click="OnUndock" />
           <Button Grid.Column="9" Classes="icon" Content="CLOSE ⎋" Click="OnClose" />
         </Grid>
@@ -49,7 +55,10 @@
           <Grid DockPanel.Dock="Top" ColumnDefinitions="168,*"
                 Background="{DynamicResource BoothBg}">
             <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,1" />
-            <ItemsControl Grid.Column="1" ItemsSource="{Binding Ruler}"
+            <!-- Clicking the ruler places the playhead: the ruler IS the time axis, so it is where
+                 somebody reaches to say "start here". -->
+            <ItemsControl Grid.Column="1" ItemsSource="{Binding Ruler}" Background="Transparent"
+                          PointerPressed="OnRulerPressed"
                           BorderBrush="{DynamicResource BoothRule}">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate><UniformGrid Rows="1" /></ItemsPanelTemplate>

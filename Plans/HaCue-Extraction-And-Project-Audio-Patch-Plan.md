@@ -2222,12 +2222,28 @@ cannot silently grow.
 
 | Control | What it needs |
 |---|---|
-| `+ ADD STEREO PAIR` | a one-step add of two linked logical outputs; the group model exists |
-| `REORDER` (logical outputs) | bus order is positional, so reordering needs a re-open path |
-| `SOLO THIS LINE TO AUDITION` | register item 13 — a bay monitor lease on one line, which the audition rig does not take yet |
-| `IDENTIFY` | a compositor overlay on one output, which no cue path currently asks for |
-| Timeline transport (5 buttons) | the timeline row is drawn in full and unimplemented in full |
-| Curve picker selection | choosing a curve is not yet wired to a document field |
+**EMPTY as of 2026-08-03.** Every control and every button drawn in the app now does something;
+`MarkupBindingGuardTests`' two exception lists are both empty, which is what enforces it. What each of
+the last ones turned out to need:
+
+| Was drawn but inert | What it turned out to be |
+| --- | --- |
+| `+ ADD STEREO PAIR` | two channels and the group that pairs them, as ONE undo step — a pair that is not grouped is two channels that happen to be called L and R |
+| `REORDER` (logical outputs) | renumbers every output rather than swapping two, and defers to "Apply & restart audio" like a rate change: bus width and order are fixed when the bay opens |
+| `SOLO THIS LINE TO AUDITION` | needed NO framework change. Everything audible reaches a line through its V×R row, so a matrix that is unity on one bus row makes the monitor carry that output alone. Solos a logical OUTPUT, not a line — "why can I not hear Lobby" is a question about the bus channel |
+| `IDENTIFY` | the session's per-output test pattern plus a 5×7 bitmap font in the engine: no window, no Skia, no font stack, and a booth machine's fonts differ from the authoring laptop's |
+| Timeline transport (5 buttons) | a view window (`TimelineView`) for ZOOM/FIT, a ruler-click playhead, and `CueExecutor.FireTimelineAsync(group, from)` for ▶ — see the layering fix below |
+| Curve picker selection | sets `CurveSpec.Law` AND clears the drawn points, in one command: `Resolve` follows preset → points → law, so setting the law alone is inaudible |
+
+### Timeline layering — a defect found while building ▶ FROM PLAYHEAD
+
+Every child of a timeline group compiled to ONE session group id, and a session group holds ONE active
+voice (`ActivateAsync` releases the displaced one with no crossfade). **A timeline could not layer**: a
+stab at 0:30 hard-cut the bed underneath it. Right for a playlist, where items are meant to replace each
+other; fatal for a timeline. Fixed — `ShowCompiler.GroupId(list, group, child)` gives a Timeline-mode
+group's children one transport each, which is also what lets ▶ FROM PLAYHEAD seek a straddling clip
+without moving its siblings. Playlist and simultaneous groups still share one, and a group nested inside
+a timeline is one layer of it whose own children share its transport.
 
 ### Subsystems
 

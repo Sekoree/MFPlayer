@@ -67,6 +67,18 @@ public static class ShowCompiler
     /// <summary>The runtime group id for a group cue inside a list.</summary>
     public static string GroupId(CueList list, GroupCueNode group) => $"{list.Id:N}:{group.Id:N}";
 
+    /// <summary>
+    /// The runtime group id for ONE cue that must not share a transport with its siblings.
+    /// </summary>
+    /// <remarks>
+    /// A session group holds exactly one active voice: firing a second cue into it releases the first.
+    /// That is right for a playlist, where the whole point is that items REPLACE each other — and wrong
+    /// for a timeline, where a stab at five seconds must play over the bed rather than cut it. So a
+    /// timeline's children get one group each.
+    /// </remarks>
+    public static string GroupId(CueList list, GroupCueNode group, CueNode child) =>
+        $"{list.Id:N}:{group.Id:N}:{child.Id:N}";
+
     private static void Append(
         HaCueProject project,
         CueList list,
@@ -78,34 +90,46 @@ public static class ShowCompiler
         var listGroup = GroupId(list);
         var running = number;
 
-        void Walk(IEnumerable<CueNode> nodes, string groupId, TimeSpan preEndNotify)
+        void Walk(
+            IEnumerable<CueNode> nodes,
+            string groupId,
+            TimeSpan preEndNotify,
+            GroupCueNode? layering = null)
         {
             foreach (var node in nodes)
             {
+                // A timeline's children each get their own transport, so they LAYER rather than
+                // replacing one another. Everything else shares its parent's, which is what makes a
+                // playlist a playlist. A LOCAL rather than reassigning the parameter: the shared id
+                // has to survive the loop for the siblings that still use it.
+                var id = layering is { } timeline ? GroupId(list, timeline, node) : groupId;
+
                 switch (node)
                 {
                     case GroupCueNode group:
                         // The GROUP ITSELF is a cue, so the cursor can stand on it and GO can reach it;
                         // what firing it MEANS is the fire mode's business and is resolved app-side.
-                        cues.Add(Definition(group, ++running, groupId));
+                        cues.Add(Definition(group, ++running, id));
 
                         // Nested groups collapse into their OUTERMOST ancestor, as HaPlay's mapper
                         // does: the whole tree moves on one clock rather than splitting across a clock
-                        // per subgroup.
+                        // per subgroup. A TIMELINE is the exception, and Walk gives its children one
+                        // group each — see the overload above for why.
                         Walk(
                             group.Children,
-                            groupId == listGroup ? GroupId(list, group) : groupId,
+                            id == listGroup ? GroupId(list, group) : id,
                             // A playlist's crossfade becomes its children's pre-end notify, so the
                             // session raises "approaching end" exactly that far before each out-point
                             // and the app can fire the next item early. Recomputed per group: a nested
                             // non-playlist group's children do not inherit it.
                             group is { FireMode: GroupFireMode.Playlist, CrossfadeMs: > 0 }
                                 ? TimeSpan.FromMilliseconds(group.CrossfadeMs)
-                                : TimeSpan.Zero);
+                                : TimeSpan.Zero,
+                            group.FireMode == GroupFireMode.Timeline ? group : null);
                         break;
 
                     case MediaCueNode media:
-                        cues.Add(Definition(media, ++running, groupId));
+                        cues.Add(Definition(media, ++running, id));
 
                         // A cue with no file yet still gets its CUE — numbering and order have to stay
                         // stable while a show is being built — but no clip. Emitting an empty
@@ -132,7 +156,7 @@ public static class ShowCompiler
                     // unknown id) and GO would step straight over it. A clipless CueDefinition is an
                     // already-exercised state — an unfinished media cue is one too.
                     default:
-                        cues.Add(Definition(node, ++running, groupId));
+                        cues.Add(Definition(node, ++running, id));
                         break;
                 }
             }

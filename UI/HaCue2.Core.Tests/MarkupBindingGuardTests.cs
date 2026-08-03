@@ -167,17 +167,10 @@ public class MarkupBindingGuardTests
     /// </remarks>
     private static readonly Dictionary<string, string> InertButtons = new(StringComparer.Ordinal)
     {
-        ["+ ADD STEREO PAIR"] = "adds two linked logical outputs; the group model exists, the one-step add does not",
-        ["REORDER"] = "drag-reorder of logical outputs; bus order is positional, so this needs a re-open path",
-        ["SOLO THIS LINE TO AUDITION"] =
-            "register item 13; needs a bay monitor lease on one line, which the audition rig does not take yet",
-        ["IDENTIFY — FLASH OUTPUT NAME ON SCREEN"] =
-            "needs the compositor to draw an overlay on one output, which no cue path currently asks for",
-        ["▶ FROM PLAYHEAD"] = "timeline transport row — drawn in full and unimplemented in full",
-        ["⏹"] = "timeline transport row — drawn in full and unimplemented in full",
-        ["ZOOM −"] = "timeline transport row — drawn in full and unimplemented in full",
-        ["ZOOM +"] = "timeline transport row — drawn in full and unimplemented in full",
-        ["FIT"] = "timeline transport row — drawn in full and unimplemented in full",
+        // EMPTY, and that is a result rather than a stub: every button drawn in the app now does
+        // something. The last out were the two audio-output verbs, IDENTIFY, and the timeline
+        // transport row — see the plan's "Interface drawn but unimplemented" table, which this list
+        // was the enforcement half of.
     };
 
     /// <summary>A self-closing button, which is the shape one with no handler takes.</summary>

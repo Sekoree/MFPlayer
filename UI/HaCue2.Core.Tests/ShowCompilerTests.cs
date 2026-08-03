@@ -265,4 +265,88 @@ public sealed class ShowCompilerTests
 
     private static ShowClipBinding Clip(ShowDocument document, CueNode cue) =>
         document.Clips.Single(clip => clip.ClipId == cue.Id.ToString());
+
+    [Fact]
+    public void EveryChildOfATimelineGroupGetsItsOwnTransportSoTheyLayer()
+    {
+        var bed = new MediaCueNode { Number = "1.1", Label = "Bed", MediaPath = "bed.wav" };
+        var stab = new MediaCueNode
+        {
+            Number = "1.2", Label = "Stab", MediaPath = "stab.wav", TimelineOffsetMs = 5_000,
+        };
+
+        var group = new GroupCueNode
+        {
+            Number = "1", Label = "Opening", FireMode = GroupFireMode.Timeline,
+            Children = [bed, stab],
+        };
+
+        var project = new HaCueProject { CueLists = [new CueList { Name = "Act 1", Cues = [group] }] };
+        var document = ShowCompiler.Compile(project);
+
+        var bedGroup = document.Cues.First(cue => cue.Id == bed.Id.ToString()).GroupId;
+        var stabGroup = document.Cues.First(cue => cue.Id == stab.Id.ToString()).GroupId;
+
+        // A session group holds ONE active voice: firing a second cue into it RELEASES the first. That
+        // is right for a playlist and fatal for a timeline — a stab at five seconds would hard-cut the
+        // bed underneath it. One transport each is what lets them overlap.
+        Assert.NotEqual(bedGroup, stabGroup);
+        Assert.Contains(group.Id.ToString("N"), bedGroup, StringComparison.Ordinal);
+        Assert.Contains(group.Id.ToString("N"), stabGroup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void APlaylistsChildrenStillShareOneTransportSoTheyReplaceEachOther()
+    {
+        var first = new MediaCueNode { Number = "1.1", Label = "Track 1", MediaPath = "a.wav" };
+        var second = new MediaCueNode { Number = "1.2", Label = "Track 2", MediaPath = "b.wav" };
+
+        var group = new GroupCueNode
+        {
+            Number = "1", Label = "Interval", FireMode = GroupFireMode.Playlist,
+            Children = [first, second],
+        };
+
+        var project = new HaCueProject { CueLists = [new CueList { Name = "Act 1", Cues = [group] }] };
+        var document = ShowCompiler.Compile(project);
+
+        // The whole point of a playlist is that items REPLACE one another, which is exactly what one
+        // shared transport does. Splitting these would leave a playlist playing all of itself at once.
+        Assert.Equal(
+            document.Cues.First(cue => cue.Id == first.Id.ToString()).GroupId,
+            document.Cues.First(cue => cue.Id == second.Id.ToString()).GroupId);
+    }
+
+    [Fact]
+    public void AGroupNESTEDInATimelineKeepsItsOwnChildrenTogether()
+    {
+        var inner = new MediaCueNode { Number = "1.1.1", Label = "A", MediaPath = "a.wav" };
+        var alsoInner = new MediaCueNode { Number = "1.1.2", Label = "B", MediaPath = "b.wav" };
+
+        var nested = new GroupCueNode
+        {
+            Number = "1.1", Label = "Interval", FireMode = GroupFireMode.Playlist,
+            Children = [inner, alsoInner],
+        };
+
+        var bed = new MediaCueNode { Number = "1.2", Label = "Bed", MediaPath = "bed.wav" };
+
+        var timeline = new GroupCueNode
+        {
+            Number = "1", Label = "Opening", FireMode = GroupFireMode.Timeline,
+            Children = [nested, bed],
+        };
+
+        var project = new HaCueProject { CueLists = [new CueList { Name = "Act 1", Cues = [timeline] }] };
+        var document = ShowCompiler.Compile(project);
+
+        string Group(CueNode cue) =>
+            document.Cues.First(item => item.Id == cue.Id.ToString()).GroupId ?? "";
+
+        // The nested playlist is one LAYER of the timeline, so it gets a transport of its own — and
+        // its own children share it, because within the playlist they still replace each other.
+        Assert.NotEqual(Group(nested), Group(bed));
+        Assert.Equal(Group(inner), Group(alsoInner));
+        Assert.NotEqual(Group(inner), Group(bed));
+    }
 }

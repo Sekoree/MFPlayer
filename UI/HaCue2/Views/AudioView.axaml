@@ -37,10 +37,10 @@
             <Border Classes="chain">
               <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
                 <Button Grid.Column="0" Classes="tight" Content="+ ADD" Click="OnDialog" Tag="output" />
-                <Button Grid.Column="1" Classes="tight" Content="+ ADD STEREO PAIR" />
+                <Button Grid.Column="1" Classes="tight" Content="+ ADD STEREO PAIR" Click="OnDialog" Tag="pair" />
                 <Button Grid.Column="2" Classes="tight" Content="+ NEW GROUP…" Click="OnDialog" Tag="group" />
                 <Button Grid.Column="3" Classes="tight" Content="RENAME" Click="OnDialog" Tag="rename" />
-                <Button Grid.Column="4" Classes="tight" Content="REORDER" />
+                <Button Grid.Column="4" Classes="tight" Content="REORDER" Click="OnDialog" Tag="reorder" />
                 <!-- Register item 11: no refuse-while-fed gate. Deleting strips the sends from every
                      cue as ONE undoable edit, which is the only version of this that an operator can
                      safely reverse. -->
@@ -211,10 +211,14 @@
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Carries">
                 <TextBox Classes="ro" Text="{Binding SelectedOutputCarries}" />
               </HeaderedContentControl>
-              <!-- Always allowed: it plays through the audition monitor path, so it never interrupts
+              <!-- Always allowed: it rewrites the MONITOR line's own patch row, so it never reaches
                    the program mix and never appears in the Active list (register item 13). -->
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="SOLO THIS LINE TO AUDITION" />
+                <Button Classes="block" Content="{Binding SoloLabel}" Click="OnSolo" />
+              </ContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}"
+                              IsVisible="{Binding SoloProblem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Classes="mono small warn" TextWrapping="Wrap" Text="{Binding SoloProblem}" />
               </ContentControl>
             </StackPanel>
           </c:PanelBox>

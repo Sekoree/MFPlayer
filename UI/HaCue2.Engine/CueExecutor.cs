@@ -125,9 +125,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 return await FireAsync(first.Id, depth + 1).ConfigureAwait(false);
 
             case GroupFireMode.Timeline:
-                foreach (var child in children)
-                    host.Schedule(child.Id, TimeSpan.FromMilliseconds(child.TimelineOffsetMs), depth);
-
+                await FireTimelineAsync(group, TimeSpan.Zero, depth).ConfigureAwait(false);
                 return true;
 
             default:
@@ -301,4 +299,68 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// <summary>Moves a list's cursor onward from the cue that just fired.</summary>
     public Task AdvanceAsync(CueList list, Guid fired) =>
         host.SetStandbyAsync(list, CueOrder.NextEnabled(list, fired)?.Id);
+
+    /// <summary>
+    /// Runs a timeline group from a position inside it — the whole of it when <paramref name="from"/>
+    /// is zero, which is what firing the group means.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three cases, and the third is the one that makes this worth having. A child entirely BEFORE the
+    /// playhead is skipped; one entirely after is scheduled at its own offset less the playhead; and
+    /// one that STRADDLES it is fired now and moved to the right place inside its own media. Skipping
+    /// the third would mean rehearsing the second half of a scene with no bed under it — which is the
+    /// half of the scene an operator is least able to judge without one.
+    /// </para>
+    /// <para>
+    /// The seek is in FILE time, so the clip's in-point is added back: a cue trimmed to start ten
+    /// seconds in, rehearsed from five seconds into the timeline, plays from fifteen seconds into the
+    /// file. Seeking to five would play material the show never contains.
+    /// </para>
+    /// <para>
+    /// A cue nobody has probed has no length, so whether it straddles cannot be known. It is treated as
+    /// starting at its offset — the answer that plays something rather than the one that silently
+    /// leaves a hole.
+    /// </para>
+    /// </remarks>
+    public async Task FireTimelineAsync(GroupCueNode group, TimeSpan from, int depth = 0)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+
+        var playhead = from < TimeSpan.Zero ? TimeSpan.Zero : from;
+
+        foreach (var child in group.Children.Where(child => child.Enabled))
+        {
+            var start = TimeSpan.FromMilliseconds(child.TimelineOffsetMs);
+
+            if (start >= playhead)
+            {
+                host.Schedule(child.Id, start - playhead, depth);
+                continue;
+            }
+
+            var into = playhead - start;
+
+            // No probe, no length, no way to tell whether it is still running. Firing it is the
+            // answer that plays something.
+            if (Length(child) is { } length && into >= length)
+                continue;
+
+            if (!await FireAsync(child.Id, depth + 1).ConfigureAwait(false))
+                continue;
+
+            await host.SeekCueAsync(
+                child.Id,
+                into + TimeSpan.FromMilliseconds(child is MediaCueNode media ? media.TrimInMs : 0))
+                .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>How long a child occupies the timeline: its TRIMMED length, not the file's.</summary>
+    private TimeSpan? Length(CueNode cue)
+    {
+        var probed = host.MediaLength(cue.Id);
+
+        return cue is MediaCueNode media ? media.TrimmedLength(probed) : probed;
+    }
 }

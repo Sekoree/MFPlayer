@@ -190,9 +190,42 @@ public partial class AudioViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(MeterInSummaryIndex))]
     [NotifyPropertyChangedFor(nameof(SelectedOutputHint))]
     [NotifyPropertyChangedFor(nameof(IsSelectedOutputUnpatched))]
+    // A refusal and a SOLO/CLEAR label are both about the output that was selected when they were
+    // produced, so both follow the selection.
+    [NotifyPropertyChangedFor(nameof(SoloLabel))]
     private LogicalOutputRow? _selectedOutput;
 
     public string SelectedOutputName => SelectedOutput?.Name ?? "no output selected";
+
+    // ── solo to the monitor (register item 13) ────────────────────────────────────────────────
+
+    /// <summary>What the monitor is carrying instead of its own patch. Set by the shell after a press.</summary>
+    private Guid? _soloed;
+
+    /// <summary>
+    /// The button's own label.
+    /// </summary>
+    /// <remarks>
+    /// One button, two verbs, because it is one decision: an operator who has soloed an output presses
+    /// the same place to stop. A second CLEAR button beside it would be a control that does nothing
+    /// most of the time.
+    /// </remarks>
+    public string SoloLabel =>
+        SelectedOutput is { } row && _soloed == row.Id
+            ? "CLEAR SOLO — MONITOR BACK TO ITS OWN PATCH"
+            : "SOLO THIS OUTPUT TO AUDITION";
+
+    /// <summary>The last refusal from the solo button, or nothing.</summary>
+    [ObservableProperty]
+    private string _soloProblem = "";
+
+    /// <summary>Records what the show answered, so the label and the refusal agree.</summary>
+    public void NoteSolo(Guid? soloed, string? problem)
+    {
+        _soloed = soloed;
+        SoloProblem = problem ?? "";
+        OnPropertyChanged(nameof(SoloLabel));
+    }
 
     /// <summary>The selected logical output's definition, or null when the selection is stale.</summary>
     private LogicalAudioChannel? SelectedChannel =>
@@ -512,16 +545,34 @@ public partial class AudioViewModel : ObservableObject
     public bool NeedsAudioRestart =>
         _appliedRate is { } rate
         && (rate != _project.AudioPatch.MixSampleRate
-            || _appliedMaster != _project.AudioPatch.ClockMasterLineId);
+            || _appliedMaster != _project.AudioPatch.ClockMasterLineId
+            || _appliedOrder != BusOrder());
 
     private int? _appliedRate;
     private Guid? _appliedMaster;
+    private string? _appliedOrder;
+
+    /// <summary>
+    /// The bus as an ordered list of ids.
+    /// </summary>
+    /// <remarks>
+    /// Order AND membership: adding an output widens the bus and reordering renumbers it, and both are
+    /// fixed when the bay opens. Comparing the names would miss a rename that changed nothing and catch
+    /// one that did.
+    /// </remarks>
+    private string BusOrder() =>
+        string.Join(
+            "|",
+            _project.AudioPatch.LogicalChannels
+                .OrderBy(channel => channel.SortOrder)
+                .Select(channel => channel.Id));
 
     /// <summary>Records what the running bay was opened with, so a later edit can be seen to differ.</summary>
     public void NoteAudioStarted()
     {
         _appliedRate = _project.AudioPatch.MixSampleRate;
         _appliedMaster = _project.AudioPatch.ClockMasterLineId;
+        _appliedOrder = BusOrder();
         OnPropertyChanged(nameof(NeedsAudioRestart));
     }
 

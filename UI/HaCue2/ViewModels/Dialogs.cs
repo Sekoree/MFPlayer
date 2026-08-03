@@ -95,6 +95,147 @@ public static class Dialogs
     /// this creates a name and nothing else. Membership is set by selecting outputs, which is where
     /// the operator can see what they are grouping.
     /// </remarks>
+    /// <summary>
+    /// Two linked logical outputs and the group that pairs them, in one step.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A stereo pair is the single most common thing to add and the fiddliest to add correctly: two
+    /// channels with the right suffixes, adjacent in bus order, and a group so a later gain nudge moves
+    /// them together. Doing it by hand is three dialogs and a chance to leave them ungrouped.
+    /// </para>
+    /// <para>
+    /// The group is NOT optional here. A pair that is not grouped is two channels that happen to be
+    /// called L and R — which is exactly the state an operator discovers when a trim moves one of them.
+    /// </para>
+    /// </remarks>
+    public static PromptViewModel AddStereoPair(ProjectJournal journal)
+    {
+        var patch = journal.Project.AudioPatch;
+
+        return new PromptViewModel(
+            "Add stereo pair",
+            "two logical outputs and the group that keeps them together",
+            [
+                new PromptField { Label = "Name", Value = "", Hint = "“Main” becomes Main L and Main R" },
+                new PromptField
+                {
+                    Label = "Meter",
+                    Kind = PromptFieldKind.Toggle,
+                    IsOn = true,
+                    Hint = "show both outputs in the summary meters",
+                },
+            ],
+            prompt =>
+            {
+                var name = prompt["Name"].Value.Trim();
+
+                if (name.Length == 0)
+                    return;
+
+                var left = new LogicalAudioChannel
+                {
+                    Name = $"{name} L",
+                    SortOrder = patch.LogicalChannels.Count,
+                    MeterInSummary = prompt["Meter"].IsOn,
+                };
+
+                var right = new LogicalAudioChannel
+                {
+                    Name = $"{name} R",
+                    SortOrder = patch.LogicalChannels.Count + 1,
+                    MeterInSummary = prompt["Meter"].IsOn,
+                };
+
+                // ONE undo step for all three. Undoing a stereo pair has to leave no half of one
+                // behind — a lone "Main R" is worse than never having pressed the button.
+                using var scope = journal.Composite($"add stereo pair “{name}”", "audio");
+
+                journal.Do(new AddItemCommand<LogicalAudioChannel>(
+                    patch.LogicalChannels, left, patch.LogicalChannels.Count, "audio", $"add “{left.Name}”"));
+
+                journal.Do(new AddItemCommand<LogicalAudioChannel>(
+                    patch.LogicalChannels, right, patch.LogicalChannels.Count, "audio", $"add “{right.Name}”"));
+
+                journal.Do(new AddItemCommand<OutputGroup>(
+                    patch.Groups,
+                    new OutputGroup { Name = name, MemberIds = [left.Id, right.Id] },
+                    patch.Groups.Count,
+                    "audio",
+                    $"group “{name}”"));
+            });
+    }
+
+    /// <summary>
+    /// Moves one logical output to another position in bus order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bus order is POSITIONAL: a logical output's index is its channel on the program bus, which is
+    /// what the V×R patch multiplies and what the meters are labelled from. So this renumbers every
+    /// output rather than swapping two — leaving a gap or a duplicate in SortOrder would put two
+    /// outputs on one bus channel.
+    /// </para>
+    /// <para>
+    /// <b>The running bay does not follow.</b> Bus width and order are fixed when it opens, so a
+    /// reorder is deferred exactly like a mix-rate change: the document changes now, the rig changes on
+    /// "Apply &amp; restart audio". Silently reordering a live bus would move the show to different
+    /// speakers mid-cue.
+    /// </para>
+    /// </remarks>
+    public static PromptViewModel? Reorder(ProjectJournal journal, Guid? outputId)
+    {
+        var patch = journal.Project.AudioPatch;
+
+        var ordered = patch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+
+        if (outputId is not { } id
+            || ordered.FindIndex(channel => channel.Id == id) is var from && from < 0)
+            return null;
+
+        return new PromptViewModel(
+            $"Move “{ordered[from].Name}”",
+            $"bus position, 1–{ordered.Count} · takes effect on the next audio restart",
+            [
+                new PromptField
+                {
+                    Label = "Position",
+                    Kind = PromptFieldKind.Number,
+                    Value = (from + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                },
+            ],
+            prompt =>
+            {
+                var to = Math.Clamp(prompt["Position"].Number(), 1, ordered.Count) - 1;
+
+                if (to == from)
+                    return;
+
+                var moved = ordered[from];
+                ordered.RemoveAt(from);
+                ordered.Insert(to, moved);
+
+                // One step for the whole renumbering: an undo that put back half the positions would
+                // leave a bus order nobody authored.
+                using var scope = journal.Composite(
+                    $"move “{moved.Name}” to position {to + 1}", "audio");
+
+                for (var index = 0; index < ordered.Count; index++)
+                {
+                    var channel = ordered[index];
+                    var position = index;
+
+                    if (channel.SortOrder == position)
+                        continue;
+
+                    journal.Do(new SetValueCommand<int>(
+                        channel.Id, "sortOrder", "audio",
+                        () => channel.SortOrder, value => channel.SortOrder = value, position,
+                        $"reorder “{channel.Name}”"));
+                }
+            });
+    }
+
     public static PromptViewModel AddOutputGroup(ProjectJournal journal, IReadOnlyList<Guid> members)
     {
         var patch = journal.Project.AudioPatch;
