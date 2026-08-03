@@ -1914,6 +1914,11 @@ somebody else's rig.
 Still open on external input: the parameter registry (cc → master trim is refused out loud rather than
 guessed), wall-clock schedules, MTC chase, and a Learn button.
 
+> **Superseded 2026-08-03.** The parameter registry (`ShowParameters` over `ParameterRegistry`) and
+> Learn both shipped in later slices; only wall-clock schedules and MTC chase remain. See
+> **Open items — the canonical list** at the end of this document, which supersedes every
+> "still open" note above it.
+
 **Trigger authoring and Learn (same day).** External input ran but a `TriggerBinding` could not be
 constructed anywhere in the app — the runtime worked and the authoring surface did not, the same shape
 of gap the control-flow inspector panes had. Closed: the Targets view can now LEARN (catches the FIRST
@@ -2150,6 +2155,9 @@ left the width — a canvas nobody authored, and every placement in the show is 
 been audited for the same dead-surface shape; the visualizer runtime, wall-clock schedules and MTC chase
 remain unimplemented; and Phase 6 (the HaPlay cutover) should still wait until HaCue2 has run a real show.
 
+> **Partly superseded 2026-08-03.** The Targets audit happened in the stub sweep below and found exactly
+> the predicted shape: the endpoint pane's host and port were literals. See the canonical list at the end.
+
 ### The full stub sweep, and a guard so it is the last one (2026-08-03)
 
 Six dead authoring surfaces had been found one at a time, each by asking "can you actually make one?" of
@@ -2194,3 +2202,48 @@ compiler had actually failed, and 133 tests broke with an unrelated-looking "no 
 message. `--no-incremental` is what tells the truth after a markup change.
 
 379 core + 162 app + 27 arch. AOT publish clean.
+
+---
+
+## Open items — the canonical list (2026-08-03)
+
+Five separate "still open" notes had accumulated in this document, written at the end of successive
+sessions, and two of them had gone stale — one listed a parameter registry and a Learn button that had
+both shipped, the other predicted a Targets audit that has since happened. A reader looking for "what is
+left" got contradicting answers depending on which note they found first.
+
+**This section supersedes every earlier "still open" note.** Add to it here rather than appending a new
+one; the older notes are kept, annotated, as a record of what was true when each slice was written.
+
+### Drawn but not implemented (enforced by `MarkupBindingGuardTests`)
+
+These are in the guard's exception lists with the same reasons, so they cannot be silently forgotten and
+cannot silently grow.
+
+| Control | What it needs |
+|---|---|
+| `+ ADD STEREO PAIR` | a one-step add of two linked logical outputs; the group model exists |
+| `REORDER` (logical outputs) | bus order is positional, so reordering needs a re-open path |
+| `SOLO THIS LINE TO AUDITION` | register item 13 — a bay monitor lease on one line, which the audition rig does not take yet |
+| `IDENTIFY` | a compositor overlay on one output, which no cue path currently asks for |
+| Timeline transport (5 buttons) | the timeline row is drawn in full and unimplemented in full |
+| Curve picker selection | choosing a curve is not yet wired to a document field |
+
+### Subsystems
+
+- **MIDI output** — action cues refuse a MIDI endpoint out loud rather than failing quietly
+  (`ActionSender`). OSC out works.
+- **Visualizer runtime** — visualizer cues compile and are addressable; nothing renders them.
+- **Wall-clock schedules** and **MTC chase** — the two remaining ways a cue can fire without a keypress.
+  The External-input master toggle (register item 3) already gates all three.
+
+### Tested-around, not tested
+
+- **`RemoteApiServer.HandleAsync`** — auth, 404/405 and every transport verb are untested because the
+  method takes a concrete `ShowHost`. The `ICueExecutionHost` seam covers the cue half; the transport
+  half still needs its own. Marked `KNOWN GAP` in the source.
+
+### Sequencing
+
+- **Phase 6 (the HaPlay cutover) should not start until HaCue2 has run a real show.** Nothing above is
+  a blocker for that run; they are what the run will make it obvious to prioritise.
