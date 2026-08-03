@@ -7,6 +7,7 @@ using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
 using HaCue2.Core.Timeline;
+using HaCue2.Engine;
 using HaCue2.Presentation;
 using HaCue2.Session;
 
@@ -193,6 +194,14 @@ public partial class CuesViewModel : ObservableObject
         if (ScopedList is not { } list)
             return;
 
+        // With a session, GO is the session's: it fires standby, advances its own cursor and reports
+        // back through the poll. Moving the cursor here as well would fight it.
+        if (Engine is { } host)
+        {
+            _ = host.GoAsync(list);
+            return;
+        }
+
         var order = list.Flatten().Where(cue => cue.Enabled).ToList();
         if (order.Count == 0)
             return;
@@ -202,6 +211,26 @@ public partial class CuesViewModel : ObservableObject
             : -1;
 
         SetStandby(list, at + 1 < order.Count ? order[at + 1].Id : null);
+    }
+
+    /// <summary>The running show, when there is one. Set by the shell after it starts the engine.</summary>
+    public ShowHost? Engine { get; set; }
+
+    /// <summary>What the transport row says about itself.</summary>
+    public string TransportHint => Engine is null
+        ? "GO always works — editing never blocks playback"
+        : "live · editing never blocks playback";
+
+    /// <summary>Stops everything. PANIC — and the only thing in the app that does.</summary>
+    public void Panic() => _ = Engine?.StopAsync();
+
+    public void Pause(bool paused) => _ = Engine?.PauseAsync(paused);
+
+    /// <summary>Fires the selected cue directly, whatever the cursor is doing.</summary>
+    public void FireSelected()
+    {
+        if (SelectedCue is { } row)
+            _ = Engine?.FireAsync(row.Id);
     }
 
     /// <summary>Moves standby without firing — the ↑/↓ keys.</summary>
@@ -238,6 +267,13 @@ public partial class CuesViewModel : ObservableObject
 
     private void SetStandby(CueList list, Guid? id)
     {
+        // The session owns the cursor once it is running; the document follows it, not the reverse.
+        if (Engine is { } host)
+        {
+            _ = host.StandbyAsync(list, id);
+            return;
+        }
+
         var target = list;
 
         _journal.Do(new SetValueCommand<Guid?>(

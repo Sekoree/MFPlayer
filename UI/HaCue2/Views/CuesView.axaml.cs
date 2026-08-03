@@ -55,6 +55,21 @@ public partial class CuesView : UserControl
     private void OnRemove(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.RemoveSelected();
 
+    // The transport. GO always works (register item 3) — with no session it moves the cursor, which
+    // is the half that can be right without one.
+    private void OnGo(object? sender, RoutedEventArgs e) => (DataContext as CuesViewModel)?.Go();
+
+    private void OnPause(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.Pause(true);
+
+    private void OnStop(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.Panic();
+
+    /// <summary>PANIC and STOP are the same verb today; PANIC keeps its own button because it is the
+    /// one an operator reaches for without reading, and it must never move.</summary>
+    private void OnPanic(object? sender, RoutedEventArgs e) =>
+        (DataContext as CuesViewModel)?.Panic();
+
     private void OnOpenTimeline(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.OpenTimeline();
 

@@ -18,7 +18,7 @@ namespace HaCue2.Session;
 /// which are invented.
 /// </para>
 /// <para>
-/// <b>Three members are now REAL:</b> <see cref="MediaDurations"/> and <see cref="Broken"/> are filled
+/// <b>Four members are now REAL:</b> <see cref="Sounding"/> comes from the live session, and <see cref="MediaDurations"/> and <see cref="Broken"/> are filled
 /// by <c>MediaFactsCache</c> from an actual probe, and <see cref="AbsentLines"/> by real device
 /// enumeration. Everything else here is still invented, and each
 /// one stops being so as Phase 5 lands. They are settable rather than init-only for exactly that
@@ -29,7 +29,7 @@ namespace HaCue2.Session;
 public sealed class ShowRuntime
 {
     /// <summary>Cues currently sounding, by document id.</summary>
-    public HashSet<Guid> Sounding { get; init; } = [];
+    public HashSet<Guid> Sounding { get; set; } = [];
 
     /// <summary>Cues whose media the document names but which cannot be resolved on this machine.</summary>
     public HashSet<Guid> Broken { get; set; } = [];

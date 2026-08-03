@@ -124,10 +124,20 @@ public sealed class ArchitectureTests
         // NoAppReferencesAnotherApp asserts separately.
         ["HaCue2"] =
         [
-            "HaCue2.Core", "HaCue2.Machine",
+            "HaCue2.Core", "HaCue2.Machine", "HaCue2.Engine",
             // Transitively, through HaCue2.Machine's decoder and HaCue2.Core's model.
             "S.Media.Decode.FFmpeg", "S.Media.Session", "S.Media.Core", "S.Media.Time",
             "S.Media.Routing", "S.Media.Players", "S.Media.Compositor", "S.Media.Gpu",
+        ],
+        // The running show: the session, the project patch bay and the program-audio target that
+        // joins them. Separate from HaCue2 because a session is long-lived, thread-affine and holds
+        // devices — the views must not be able to reach into it by accident, and they do not: they
+        // see it through `Session/ShowRuntime`, exactly as they saw the sample before it existed.
+        ["HaCue2.Engine"] =
+        [
+            "HaCue2.Core", "HaCue2.Machine", "S.Media.Session", "S.Media.Routing",
+            "S.Media.Decode.FFmpeg", "S.Media.Core", "S.Media.Time", "S.Media.Players",
+            "S.Media.Compositor", "S.Media.Gpu",
         ],
         // Machine facts: what this box has and what a file turned out to be. Separate from
         // HaCue2.Core because everything here needs real hardware or a real decoder, and Core has to
@@ -154,7 +164,7 @@ public sealed class ArchitectureTests
         // chooses to enumerate against — which backend is exactly the kind of decision a head makes.
         ["HaCue2.Desktop"] =
         [
-            "HaCue2", "HaCue2.Core", "HaCue2.Machine", "S.Media.Audio.PortAudio",
+            "HaCue2", "HaCue2.Core", "HaCue2.Machine", "HaCue2.Engine", "S.Media.Audio.PortAudio",
             "S.Media.Decode.FFmpeg", "S.Media.Session", "S.Media.Core", "S.Media.Time",
             "S.Media.Routing", "S.Media.Players", "S.Media.Compositor", "S.Media.Gpu",
         ],

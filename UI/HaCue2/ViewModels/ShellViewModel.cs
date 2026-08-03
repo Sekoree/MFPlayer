@@ -5,6 +5,8 @@ using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
 using HaCue2.Core.Validation;
+using HaCue2.Engine;
+using S.Media.Core.Audio;
 using HaCue2.Sample;
 using HaCue2.Session;
 
@@ -75,6 +77,77 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>The machine seam: what this box has, and what its files turned out to be.</summary>
     public MachineFacts Machine { get; }
+
+    /// <summary>The running show, once one has been started. Null until then, and on a machine
+    /// that has no engine to start.</summary>
+    public ShowHost? Host { get; private set; }
+
+    private EngineRuntime? _engine;
+
+    /// <summary>
+    /// Starts the engine for this project.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately NOT in the constructor. Opening devices and a decoder is slow and can fail, and a
+    /// view-model that cannot be constructed without hardware is one no test and no preview can build.
+    /// A shell with no engine is a fully working EDITOR — which is also what the app is on a laptop.
+    /// </para>
+    /// <para>
+    /// Every journal change reloads the compiled document. The session's preservation flags are what
+    /// make that safe to do on a keystroke: a group whose voices are all still described unchanged
+    /// keeps playing, and the GO cursors survive regardless.
+    /// </para>
+    /// </remarks>
+    public async Task StartEngineAsync(IAudioBackend? backend)
+    {
+        if (Host is not null)
+            return;
+
+        Host = await ShowHost.StartAsync(Project, backend).ConfigureAwait(true);
+        Cues.Engine = Host;
+
+        _engine = new EngineRuntime(Host, Runtime, Project);
+        _engine.Changed += () =>
+        {
+            Cues.Refresh();
+            OnPropertyChanged(nameof(TransportHint));
+        };
+
+        Journal.Changed += ReloadEngine;
+        OnPropertyChanged(nameof(IsLive));
+        OnPropertyChanged(nameof(TransportHint));
+    }
+
+    /// <summary>Whether a session is running behind the transport buttons.</summary>
+    public bool IsLive => Host is not null;
+
+    public string TransportHint => Host is null
+        ? "GO always works — editing never blocks playback"
+        : Host.Problems.Count == 0
+            ? "live · editing never blocks playback"
+            : $"live · {Host.Problems.Count} line(s) would not open";
+
+    private async void ReloadEngine()
+    {
+        if (Host is { } host)
+            await host.ReloadAsync(Project).ConfigureAwait(true);
+    }
+
+    /// <summary>Stops the show and releases the devices.</summary>
+    public async ValueTask StopEngineAsync()
+    {
+        if (_engine is not { } engine)
+            return;
+
+        Journal.Changed -= ReloadEngine;
+        _engine = null;
+        Host = null;
+        Cues.Engine = null;
+
+        await engine.DisposeAsync().ConfigureAwait(true);
+        OnPropertyChanged(nameof(IsLive));
+    }
 
     private void OnProbesLanded()
     {

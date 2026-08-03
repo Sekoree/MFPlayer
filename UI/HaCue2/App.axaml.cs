@@ -3,6 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using HaCue2.Sample;
 using HaCue2.Session;
+using S.Media.Core.Audio;
 using HaCue2.ViewModels;
 using HaCue2.Views;
 
@@ -61,15 +62,36 @@ public partial class App : Application
             if (path.Length > 0)
                 shell.AdoptPath(path);
 
-            new ShellWindow { DataContext = shell }.Show();
+            Live(shell).Show();
             window.Close();
         };
 
         return window;
     }
 
-    private static ShellWindow OpenShell() =>
-        new() { DataContext = new ShellViewModel(SampleProject.Create(), Machine) };
+    private static ShellWindow OpenShell() => Live(new ShellViewModel(SampleProject.Create(), Machine));
+
+    /// <summary>
+    /// Opens a shell and starts its engine.
+    /// </summary>
+    /// <remarks>
+    /// Started AFTER the window exists and without awaiting it: opening devices and a decoder takes
+    /// long enough to be visible, and an app that shows nothing until the audio interface answers
+    /// looks broken. The editor is fully usable in the meantime — the transport simply moves the
+    /// cursor until the session is up.
+    /// </remarks>
+    private static ShellWindow Live(ShellViewModel shell)
+    {
+        var window = new ShellWindow { DataContext = shell };
+
+        window.Opened += async (_, _) => await shell.StartEngineAsync(Backend);
+        window.Closed += async (_, _) => await shell.StopEngineAsync();
+
+        return window;
+    }
+
+    /// <summary>The audio backend the engine opens devices with. Set by the desktop head.</summary>
+    public static IAudioBackend? Backend { get; set; }
 
     /// <summary>
     /// What this box has, asked once.

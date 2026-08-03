@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5: the running show.
+
+         Owns the ShowSession, the project audio patch bay and the program-audio target that joins
+         them, and turns a HaCueProject into playback. Separate from HaCue2 (the UI) because a session
+         is a long-lived, thread-affine, device-holding thing and the views must not be able to reach
+         into it by accident — they see it through `Session/ShowRuntime`, exactly as they saw the
+         sample before this existed.
+
+         Separate from HaCue2.Machine too: that answers questions about the box without starting
+         anything. This one opens devices. -->
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>HaCue2.Engine</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
+        <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Session\S.Media.Session.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Routing\S.Media.Routing.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
+    </ItemGroup>
+
+</Project>

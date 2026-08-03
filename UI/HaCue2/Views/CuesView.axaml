@@ -16,10 +16,10 @@
          never gates GO. -->
     <Border Classes="transport" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
-        <Button Grid.Column="0" Classes="go" Content="GO" />
-        <Button Grid.Column="1" Content="PAUSE" />
-        <Button Grid.Column="2" Content="STOP" />
-        <Button Grid.Column="3" Classes="panic" Content="PANIC" />
+        <Button Grid.Column="0" Classes="go" Content="GO" Click="OnGo" />
+        <Button Grid.Column="1" Content="PAUSE" Click="OnPause" />
+        <Button Grid.Column="2" Content="STOP" Click="OnStop" />
+        <Button Grid.Column="3" Classes="panic" Content="PANIC" Click="OnPanic" />
         <Button Grid.Column="4" Classes="icon" Content="↑ STBY" />
         <Button Grid.Column="5" Classes="icon" Content="↓ STBY" />
         <!-- Multi-list transport is v1 (register item 5): the transport acts on the selected list and
@@ -68,7 +68,7 @@
         <Button Grid.Column="3" Content="REMOVE" Click="OnRemove" />
         <Button Grid.Column="4" Classes="icon" Content="RENUMBER…" Click="OnRenumber" />
         <TextBlock Grid.Column="6" Classes="mono dim3 small" VerticalAlignment="Center"
-                   Text="GO always works — editing never blocks playback" />
+                   Text="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).TransportHint}" />
       </Grid>
     </Border>
 

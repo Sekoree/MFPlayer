@@ -15,7 +15,12 @@ internal static class Program
     {
         // The composition root picks the backend. PortAudio matches what HaPlay checks against, so a
         // show authored in one and opened in the other reports the same devices present.
-        HaCue2.App.Machine = new MachineFacts(new AudioDevices(new PortAudioBackend()));
+        // One backend instance: the device list the status pass checks against and the one the engine
+        // opens outputs on must be the same, or a line can read "present" and then fail to open.
+        var backend = new PortAudioBackend();
+
+        HaCue2.App.Machine = new MachineFacts(new AudioDevices(backend));
+        HaCue2.App.Backend = backend;
 
         return Build();
     }

@@ -4,8 +4,8 @@
          Design source of truth: Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html (rev 3)
          and the 30-item decision register in Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md.
 
-         STATUS: the shell binds to the PROJECT MODEL (HaCue2.Core) and to MACHINE FACTS
-         (HaCue2.Machine — device enumeration, media probing) but not yet to the ENGINE. Views are
+         STATUS: the shell binds to the PROJECT MODEL (HaCue2.Core), to MACHINE FACTS
+         (HaCue2.Machine — device enumeration, media probing) and to the ENGINE (HaCue2.Engine). Views are
          projected from a real HaCueProject and edited through the undo journal; anything that is a
          runtime fact rather than a document one — which cues are sounding, meters, bay counters —
          comes from `Session/ShowRuntime`, the explicit stand-in for what ShowSession will supply.
@@ -49,6 +49,9 @@
         <!-- Machine facts: audio-device enumeration and media probing. Still NO engine — the shell
              projects a document and asks the machine what it has; it does not run a show yet. -->
         <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj"/>
+        <!-- Phase 5: the running show. The views still see it only through Session/ShowRuntime — the
+             seam does not change, its contents stop being invented. -->
+        <ProjectReference Include="..\HaCue2.Engine\HaCue2.Engine.csproj"/>
     </ItemGroup>
 
 </Project>
