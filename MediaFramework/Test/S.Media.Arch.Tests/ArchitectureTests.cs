@@ -154,6 +154,8 @@ public sealed class ArchitectureTests
             // Record and stream outputs, for the same reason: the encode session's sinks are attached
             // to the bay and the compositor directly.
             "S.Media.Encode.FFmpeg", "S.Media.FFmpeg.Common",
+            // NDI outputs and lines, likewise: the sender exposes the same two interfaces.
+            "S.Media.NDI", "NDILib",
             // External input. S.Control owns MIDI/OSC discovery, name matching and hot-plug; HaCue2
             // adds only the binding half. HaControl.Input, which the plan names for this, is likewise
             // not on this branch.

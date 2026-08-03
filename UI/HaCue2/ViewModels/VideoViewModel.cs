@@ -105,7 +105,15 @@ public partial class VideoViewModel : ObservableObject
 
     public string SelectedOutputName => SelectedOutput?.Name ?? "no output selected";
 
-    partial void OnSelectedOutputChanged(VideoOutputRow? value) => ShowRecordPane();
+    partial void OnSelectedOutputChanged(VideoOutputRow? value)
+    {
+        ShowRecordPane();
+        RaiseOutputFields();
+
+        // The composition pane follows the output's own composition: an operator who selects the
+        // projector and then edits a size expects to be editing what the projector shows.
+        SelectedCompositionId = MappedOutput?.CompositionId;
+    }
 
     /// <summary>
     /// The record pane for the selected output (register item 30).
@@ -142,13 +150,288 @@ public partial class VideoViewModel : ObservableObject
     public IReadOnlyList<string> CompositionNames =>
         [.. _project.Compositions.Select(composition => composition.Name)];
 
-    public IReadOnlyList<string> IdleImages { get; } = ["black", "logo.png", "venue-logo.png"];
+    // ── 09 · the selected output ──────────────────────────────────────────────────────────────
+
+    /// <summary>The composition this output shows, or -1 when it shows none.</summary>
+    public int OutputCompositionIndex
+    {
+        get => MappedOutput?.CompositionId is { } id
+            ? _project.Compositions.FindIndex(composition => composition.Id == id)
+            : -1;
+        set
+        {
+            if (MappedOutput is not { } output
+                || value < 0
+                || value >= _project.Compositions.Count)
+                return;
+
+            var chosen = _project.Compositions[value].Id;
+
+            Edit(output, "composition", () => output.CompositionId, id => output.CompositionId = id,
+                chosen, $"“{output.Name}” shows {_project.Compositions[value].Name}");
+        }
+    }
 
     /// <summary>
-    /// Screens this machine has — a MACHINE fact, so it will come from the runtime seam once screen
-    /// enumeration is real. Listed here meanwhile so the picker has something to offer.
+    /// Which screen the output opens on, one-based, or 0 for "wherever it opens".
     /// </summary>
-    public IReadOnlyList<string> Screens { get; } = ["1 · 2560×1440", "2 · 1920×1080", "3 · 1920×1080"];
+    /// <remarks>
+    /// Stored in <see cref="VideoOutputDefinition.TargetHint"/> as a number because it is a HINT like an
+    /// audio line's: a show carried to a venue with fewer screens finds nothing there, which is a
+    /// reported absence rather than a silent move to whichever display answered.
+    /// </remarks>
+    public int OutputScreenIndex
+    {
+        get => MappedOutput is { } output && int.TryParse(output.TargetHint, out var display) && display > 0
+            ? Math.Min(display, Screens.Count - 1)
+            : 0;
+        set
+        {
+            if (MappedOutput is not { } output || value < 0)
+                return;
+
+            var hint = value == 0 ? "" : value.ToString(CultureInfo.InvariantCulture);
+
+            Edit(output, "screen", () => output.TargetHint, text => output.TargetHint = text, hint,
+                value == 0 ? $"“{output.Name}” opens anywhere" : $"“{output.Name}” on screen {value}");
+        }
+    }
+
+    /// <summary>Fullscreen (0) or windowed (1).</summary>
+    public int OutputFullscreenIndex
+    {
+        get => MappedOutput?.Fullscreen == false ? 1 : 0;
+        set
+        {
+            if (MappedOutput is not { } output)
+                return;
+
+            Edit(output, "fullscreen", () => output.Fullscreen, flag => output.Fullscreen = flag,
+                value == 0, value == 0 ? $"“{output.Name}” fullscreen" : $"“{output.Name}” windowed");
+        }
+    }
+
+    /// <summary>Used only when the composition has no idle image of its own (register item 23).</summary>
+    public string OutputIdleFallback
+    {
+        get => MappedOutput?.IdleFallbackPath ?? "";
+        set
+        {
+            if (MappedOutput is not { } output)
+                return;
+
+            Edit(output, "idleFallback", () => output.IdleFallbackPath,
+                path => output.IdleFallbackPath = path, value, $"“{output.Name}” idle fallback");
+        }
+    }
+
+    /// <summary>Mapping in force (0) or clean (1).</summary>
+    /// <remarks>
+    /// A toggle, never a delete. Switching to clean keeps the authored sections, so an operator who
+    /// wants an unwarped feed tonight does not have to author the warp again tomorrow.
+    /// </remarks>
+    public int OutputMappingIndex
+    {
+        get => MappedOutput?.MappingEnabled == false ? 1 : 0;
+        set
+        {
+            if (MappedOutput is not { } output)
+                return;
+
+            Edit(output, "mappingEnabled", () => output.MappingEnabled,
+                flag => output.MappingEnabled = flag, value == 0,
+                value == 0 ? $"“{output.Name}” mapped" : $"“{output.Name}” clean");
+        }
+    }
+
+    /// <summary>Register item 25: an absent REQUIRED output is an error rather than a warning.</summary>
+    public bool OutputRequired
+    {
+        get => MappedOutput?.Required == true;
+        set
+        {
+            if (MappedOutput is not { } output)
+                return;
+
+            Edit(output, "required", () => output.Required, flag => output.Required = flag, value,
+                value ? $"“{output.Name}” is required" : $"“{output.Name}” is optional");
+        }
+    }
+
+    /// <summary>What the mapping toggle means for this output, since "clean" has two causes.</summary>
+    public string MappingNote => MappedOutput switch
+    {
+        null => "",
+        { Mapping.Count: 0 } => "no sections authored — this output shows a clean feed",
+        { MappingEnabled: false } output =>
+            $"{output.Mapping.Count} section(s) authored, bypassed — the feed is clean tonight",
+        var output => $"{output.Mapping.Count} section(s) in force",
+    };
+
+    /// <summary>Writes one output field through the journal and re-announces the pane.</summary>
+    private void Edit<T>(
+        VideoOutputDefinition output,
+        string field,
+        Func<T> read,
+        Action<T> write,
+        T value,
+        string label)
+    {
+        if (EqualityComparer<T>.Default.Equals(read(), value))
+            return;
+
+        _journal.Do(new SetValueCommand<T>(output.Id, field, "video", read, write, value, label));
+        _journal.CloseGroup();
+
+        RaiseOutputFields();
+    }
+
+    private void RaiseOutputFields()
+    {
+        OnPropertyChanged(nameof(OutputCompositionIndex));
+        OnPropertyChanged(nameof(OutputScreenIndex));
+        OnPropertyChanged(nameof(OutputFullscreenIndex));
+        OnPropertyChanged(nameof(OutputIdleFallback));
+        OnPropertyChanged(nameof(OutputMappingIndex));
+        OnPropertyChanged(nameof(OutputRequired));
+        OnPropertyChanged(nameof(MappingNote));
+    }
+
+    // ── 09 · the selected composition ─────────────────────────────────────────────────────────
+
+    /// <summary>The composition the output pane's canvas belongs to.</summary>
+    private CompositionDefinition? SelectedComposition =>
+        SelectedCompositionId is { } id
+            ? _project.Compositions.FirstOrDefault(composition => composition.Id == id)
+            : _project.Compositions.FirstOrDefault();
+
+    /// <summary>Which composition the second pane edits; null follows the first.</summary>
+    [ObservableProperty]
+    private Guid? _selectedCompositionId;
+
+    partial void OnSelectedCompositionIdChanged(Guid? value) => RaiseCompositionFields();
+
+    public string CompositionSize
+    {
+        get => SelectedComposition is { } composition
+            ? $"{composition.Width}×{composition.Height}"
+            : "";
+        set
+        {
+            if (SelectedComposition is not { } composition)
+                return;
+
+            // Accepts the × it renders and the x anybody types. Refusing the operator's own keyboard
+            // would be a strange thing for a field whose value is shown with a character they cannot
+            // easily produce.
+            var parts = value.Split(['×', 'x', 'X'], StringSplitOptions.TrimEntries);
+
+            if (parts.Length != 2
+                || !int.TryParse(parts[0], out var width)
+                || !int.TryParse(parts[1], out var height)
+                || width <= 0
+                || height <= 0)
+            {
+                OnPropertyChanged(nameof(CompositionSize));
+                return;
+            }
+
+            if (composition.Width == width && composition.Height == height)
+                return;
+
+            // ONE composite: a size is one edit, and an undo that took the width back without the
+            // height would leave a canvas nobody authored — and every placement in the show is
+            // expressed as a fraction of it.
+            using (_journal.Composite($"“{composition.Name}” {width}×{height}", "video"))
+            {
+                _journal.Do(new SetValueCommand<int>(
+                    composition.Id, "width", "video",
+                    () => composition.Width, number => composition.Width = number, width,
+                    $"“{composition.Name}” width"));
+                _journal.Do(new SetValueCommand<int>(
+                    composition.Id, "height", "video",
+                    () => composition.Height, number => composition.Height = number, height,
+                    $"“{composition.Name}” height"));
+            }
+
+            _journal.CloseGroup();
+
+            RaiseCompositionFields();
+        }
+    }
+
+    public string CompositionRate
+    {
+        get => SelectedComposition?.FramesPerSecond.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
+        set
+        {
+            if (SelectedComposition is not { } composition
+                || !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate)
+                || rate is <= 0 or > 240)
+            {
+                OnPropertyChanged(nameof(CompositionRate));
+                return;
+            }
+
+            if (Math.Abs(composition.FramesPerSecond - rate) < 0.001)
+                return;
+
+            _journal.Do(new SetValueCommand<double>(
+                composition.Id, "fps", "video",
+                () => composition.FramesPerSecond, number => composition.FramesPerSecond = number, rate,
+                $"“{composition.Name}” {rate:0.##} fps"));
+            _journal.CloseGroup();
+
+            RaiseCompositionFields();
+        }
+    }
+
+    /// <summary>Register item 21/23: shown when the canvas is empty, ahead of an output's fallback.</summary>
+    public string CompositionIdleImage
+    {
+        get => SelectedComposition?.IdleImagePath ?? "";
+        set
+        {
+            if (SelectedComposition is not { } composition || composition.IdleImagePath == value)
+                return;
+
+            _journal.Do(new SetValueCommand<string>(
+                composition.Id, "idleImage", "video",
+                () => composition.IdleImagePath, path => composition.IdleImagePath = path, value,
+                $"“{composition.Name}” idle image"));
+            _journal.CloseGroup();
+
+            RaiseCompositionFields();
+        }
+    }
+
+    public string CompositionHeader => SelectedComposition?.Name ?? "no composition";
+
+    private void RaiseCompositionFields()
+    {
+        OnPropertyChanged(nameof(CompositionSize));
+        OnPropertyChanged(nameof(CompositionRate));
+        OnPropertyChanged(nameof(CompositionIdleImage));
+        OnPropertyChanged(nameof(CompositionHeader));
+    }
+
+    /// <summary>
+    /// Screens this machine has, as the window manager reports them.
+    /// </summary>
+    /// <remarks>
+    /// Filled by the view from <c>TopLevel.Screens</c> rather than invented here: it is a MACHINE fact,
+    /// and the list used to be three hardcoded resolutions that matched no rig anybody would open this
+    /// on. Index 0 is "anywhere", which is a real answer and the one a show that does not care wants.
+    /// </remarks>
+    [ObservableProperty]
+    private IReadOnlyList<string> _screens = ["anywhere"];
+
+    /// <summary>Adopts the machine's real screen list, keeping "anywhere" first.</summary>
+    public void SetScreens(IEnumerable<string> screens)
+    {
+        Screens = ["anywhere", .. screens];
+        OnPropertyChanged(nameof(OutputScreenIndex));
+    }
 
     // ── 10 · mapping ──────────────────────────────────────────────────────────────────────────
     private VideoOutputDefinition? MappedOutput =>

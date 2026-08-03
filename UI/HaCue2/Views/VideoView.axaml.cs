@@ -12,6 +12,26 @@ public partial class VideoView : UserControl
 {
     public VideoView() => InitializeComponent();
 
+    /// <summary>
+    /// Hands the view-model the machine's real screen list.
+    /// </summary>
+    /// <remarks>
+    /// From the window manager rather than invented: the picker used to offer three hardcoded
+    /// resolutions that matched no rig it would ever be opened on, so choosing "2 · 1920×1080" told an
+    /// operator nothing about where their projector feed would land.
+    /// </remarks>
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+
+        if (DataContext is not VideoViewModel video || TopLevel.GetTopLevel(this)?.Screens is not { } screens)
+            return;
+
+        video.SetScreens(screens.All.Select((screen, index) =>
+            $"{index + 1} · {screen.Bounds.Width}×{screen.Bounds.Height}"
+            + (screen.IsPrimary ? " · primary" : "")));
+    }
+
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
     /// <summary>"Edit ›" beside an output's mapping toggle jumps to the Mapping tab already scoped to

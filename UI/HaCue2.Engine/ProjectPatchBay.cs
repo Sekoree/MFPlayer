@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using S.Media.Core.Audio;
+using S.Media.NDI;
 using S.Media.Routing;
 
 namespace HaCue2.Engine;
@@ -23,6 +24,9 @@ namespace HaCue2.Engine;
 public sealed class ProjectPatchBay : IDisposable
 {
     private readonly List<IAudioOutput> _outputs = [];
+
+    /// <summary>NDI senders this bay opened, disposed after the terminals that submit to them.</summary>
+    private readonly List<NDIOutput> _senders = [];
 
     /// <summary>The lines that actually opened, and how wide each one turned out to be.</summary>
     /// <remarks>
@@ -72,6 +76,7 @@ public sealed class ProjectPatchBay : IDisposable
 
         var failures = new List<string>();
         var opened = new List<IAudioOutput>();
+        var senders = new List<NDIOutput>();
         var openLines = new List<(Guid, int)>();
         string? monitor = null;
 
@@ -92,11 +97,18 @@ public sealed class ProjectPatchBay : IDisposable
             try
             {
                 var format = new AudioFormat(line.SampleRate ?? patch.MixSampleRate, line.Channels);
-                var output = backend.CreateOutput(line.DeviceHint.Length > 0 ? line.DeviceHint : null, format);
+
+                // An NDI line is a SENDER, not a device on this machine — asking the audio backend for
+                // one by name would look for a sound card called "HACUE-PROG" and report the show's own
+                // NDI feed as a missing interface.
+                var output = line.Kind == AudioLineKind.Ndi
+                    ? OpenNdi(line, format, senders)
+                    : backend.CreateOutput(line.DeviceHint.Length > 0 ? line.DeviceHint : null, format);
 
                 // The clock master paces the whole bay, so it must be a line that natively runs at the
                 // project rate — the document says which, and it is a real decision, not a default.
-                var isMaster = patch.ClockMasterLineId == line.Id;
+                // An NDI sender is never it: it paces on the network's terms, not the rig's.
+                var isMaster = patch.ClockMasterLineId == line.Id && line.Kind != AudioLineKind.Ndi;
 
                 bay.AddTerminal(
                     line.Id.ToString(),
@@ -128,7 +140,27 @@ public sealed class ProjectPatchBay : IDisposable
         var result = new ProjectPatchBay(bay, channelIds, monitor) { Failures = failures };
         result._outputs.AddRange(opened);
         result._open.AddRange(openLines);
+        result._senders.AddRange(senders);
         return result;
+    }
+
+    /// <summary>Opens an NDI sender's audio side as an ordinary bay terminal.</summary>
+    private static IAudioOutput OpenNdi(
+        AudioLineDefinition line, AudioFormat format, List<NDIOutput> senders)
+    {
+        var sender = new NDIOutput(line.DeviceHint.Length > 0 ? line.DeviceHint : line.Name);
+
+        try
+        {
+            var audio = sender.EnableAudio(format);
+            senders.Add(sender);
+            return audio;
+        }
+        catch
+        {
+            sender.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -301,5 +333,20 @@ public sealed class ProjectPatchBay : IDisposable
             output.Dispose();
 
         _outputs.Clear();
+
+        // After the terminals, which are the senders' own audio sides.
+        foreach (var sender in _senders)
+        {
+            try
+            {
+                sender.Dispose();
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                // One sender that will not close must not stop the others, or the show's teardown.
+            }
+        }
+
+        _senders.Clear();
     }
 }

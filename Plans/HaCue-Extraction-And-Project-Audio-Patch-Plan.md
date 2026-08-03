@@ -2108,3 +2108,44 @@ and a pattern of pure separators cleaning to `---` instead of falling back to a 
 - The rest of the Video view's output pane (composition, screen, mode, idle fallback, mapping toggle,
   IDENTIFY) is still drawn against literals. Pre-existing and out of this pass's scope, but it is the
   same dead-surface shape and should be treated as such.
+
+### NDI, and the video output pane (2026-08-03)
+
+**Both gaps named at the end of the recording pass are closed.**
+
+**NDI outputs and lines open.** `S.Media.NDI`'s `NDIOutput` exposes an `IVideoOutput` and an
+`IAudioOutput`, so a sender attaches exactly like a screen or an interface — which is what made this the
+obvious one to do next. Video NDI joins the compositor's lease list; audio NDI joins the bay as an
+ordinary terminal. Two things are deliberately NOT like a recorder: an NDI feed is never ARMED (it is
+live, and receivers connect when they choose, so an arm switch would have nothing behind it), and an NDI
+line is never the CLOCK MASTER, because it paces on the network's terms rather than the rig's. The same
+latent bug recording had was here too: the bay ignored `line.Kind`, so an NDI line was opened as a
+PortAudio device named `HACUE-PROG` and then reported as a missing interface. Tested against the
+machine's real NDI runtime, headless. With every kind now opening, the "not implemented yet" branch and
+its `Describe` helper are gone rather than left as misleading dead code.
+
+**The video output and composition panes were the sixth dead authoring surface.** Composition pinned to
+`SelectedIndex="0"`, a screen picker over three invented resolutions that matched no rig it would ever
+open on, fullscreen/windowed inert, idle fallback a read-only sentence, size a literal `1920×1080`. An
+operator could not point an output at a composition — the first thing anybody does. All of it now edits
+the document through the journal, plus `Required` (register item 25), which the model had and no pane
+offered. The screen list comes from `TopLevel.Screens`, and `ProjectVideoOutputs` applies the chosen
+display and fullscreen through SDL3's `ApplyWindowPlacement`, so the settings do something rather than
+merely persist.
+
+**One model addition, for a destructive control.** The mapping segment offered on/clean over
+`IsMapped => Mapping.Count > 0`, so "clean" could only have meant deleting the sections. Those are
+different questions and the difference is an hour of somebody's evening — "show this output clean
+tonight" is ordinary, and a warp should not have to be authored again to get it back. `MappingEnabled`
+separates them, `IsMapped` is `MappingEnabled && Mapping.Count > 0`, and `OutputMapping.Spec` honours it
+so clean is bypassed at the engine rather than only relabelled in the pane.
+
+**A defect the tests found:** a composition size was two undo steps, so undoing reverted the height and
+left the width — a canvas nobody authored, and every placement in the show is a fraction of it. Now one
+`Composite`. The comment claiming this was already true was written before the test that disproved it.
+
+18 new tests (374 core + 143 app). AOT publish still clean with the NDI interop added.
+
+**Still open**, and now the honest list for this area: the Targets view's endpoint/trigger panes have not
+been audited for the same dead-surface shape; the visualizer runtime, wall-clock schedules and MTC chase
+remain unimplemented; and Phase 6 (the HaPlay cutover) should still wait until HaCue2 has run a real show.

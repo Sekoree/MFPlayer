@@ -35,6 +35,9 @@
         <!-- Record and stream outputs: file/URL encode sessions whose sinks the bay and the
              compositor attach to exactly like any other output. -->
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Encode.FFmpeg\S.Media.Encode.FFmpeg.csproj" />
+        <!-- NDI outputs and lines: the sender exposes an IVideoOutput and an IAudioOutput, so it
+             attaches exactly like a screen or an interface. -->
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.NDI\S.Media.NDI.csproj" />
         <!-- Action cues send OSC. MIDI out would need S.Control's device layer, which HaCue2 has not
              adopted yet — ActionSender refuses a MIDI endpoint out loud rather than pretending. -->
         <ProjectReference Include="..\..\MediaFramework\OSC\OSCLib\OSCLib.csproj" />

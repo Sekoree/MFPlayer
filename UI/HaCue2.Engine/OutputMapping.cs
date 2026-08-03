@@ -33,7 +33,9 @@ public static class OutputMapping
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        if (output.Mapping.Count == 0 || width <= 0 || height <= 0)
+        // IsMapped, not Mapping.Count: an output switched to clean keeps its authored sections and
+        // must still render unwarped, or "clean" would be a setting that changed nothing.
+        if (!output.IsMapped || width <= 0 || height <= 0)
             return null;
 
         var sections = output.Mapping.Select(section => Section(section, width, height)).ToList();

@@ -45,7 +45,18 @@ public sealed record VideoOutputDefinition
     /// </summary>
     public List<MappingSection> Mapping { get; set; } = [];
 
-    public bool IsMapped => Mapping.Count > 0;
+    /// <summary>
+    /// Whether the mapping is in force, separately from whether one is authored.
+    /// </summary>
+    /// <remarks>
+    /// The two are different questions and the difference is an hour of somebody's evening. "Show this
+    /// output clean tonight" is an ordinary thing to want — a projector swapped for a flat screen, a
+    /// warp being checked against an unwarped feed — and if the only way to say it were to delete the
+    /// sections, the warp would have to be authored again to get it back.
+    /// </remarks>
+    public bool MappingEnabled { get; set; } = true;
+
+    public bool IsMapped => MappingEnabled && Mapping.Count > 0;
 
     /// <summary>
     /// Where a <see cref="VideoOutputKind.Record"/> output writes, or a

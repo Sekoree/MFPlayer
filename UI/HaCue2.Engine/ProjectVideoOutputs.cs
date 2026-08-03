@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using S.Media.Core.Video;
+using S.Media.NDI;
 using S.Media.Present.SDL3;
 using S.Media.Session;
 
@@ -13,7 +14,7 @@ internal sealed record OpenVideoOutput(Guid Id, Guid CompositionId, IVideoOutput
 }
 
 /// <summary>
-/// The project's video outputs, as real windows.
+/// The project's video outputs, opened.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,17 +24,19 @@ internal sealed record OpenVideoOutput(Guid Id, Guid CompositionId, IVideoOutput
 /// the video equivalent of playing the show into the wrong room.
 /// </para>
 /// <para>
-/// <b>Record and stream outputs open too</b>, as <see cref="RecordVideoOutput"/>s the compositor renders
-/// into from the moment the show loads. They hold no file until somebody arms them — the encode session
-/// is swapped in behind the output — because pressing record must not restart the clips on that
-/// composition. NDI remains named in the document and reported as not-yet-openable rather than quietly
-/// dropped: a video view that lists four outputs while one does nothing is worse than one that says so.
+/// <b>Every kind opens.</b> A local screen is a window; an NDI output is a sender's own
+/// <c>IVideoOutput</c>; a record or stream output is a <see cref="RecordVideoOutput"/> the compositor
+/// renders into from the moment the show loads, holding no file until somebody arms it — the encode
+/// session is swapped in behind it, because pressing record must not restart the clips on that
+/// composition. Only NDI and the recorders open when this machine has no display: neither is a window,
+/// and a booth box running headless is exactly where an unattended send or capture belongs.
 /// </para>
 /// </remarks>
 public sealed class ProjectVideoOutputs : IDisposable
 {
     private readonly List<OpenVideoOutput> _open = [];
     private readonly Dictionary<Guid, RecordVideoOutput> _recorders = [];
+    private readonly List<NDIOutput> _senders = [];
 
     private ProjectVideoOutputs()
     {
@@ -62,6 +65,7 @@ public sealed class ProjectVideoOutputs : IDisposable
         var failures = new List<string>();
         var opened = new List<OpenVideoOutput>();
         var recorders = new Dictionary<Guid, RecordVideoOutput>();
+        var senders = new List<NDIOutput>();
 
         foreach (var output in project.VideoOutputs)
         {
@@ -82,9 +86,25 @@ public sealed class ProjectVideoOutputs : IDisposable
                 continue;
             }
 
-            if (output.Kind != VideoOutputKind.LocalScreen)
+            if (output.Kind == VideoOutputKind.Ndi)
             {
-                failures.Add($"“{output.Name}” is a {Describe(output.Kind)} output — not implemented yet");
+                // Opened whether or not this machine has a display, like a recorder: an NDI feed is not
+                // a window. It is also NOT armed — an NDI source is a live feed that receivers connect
+                // to when they choose, so "armed" would be a switch with nothing behind it.
+                try
+                {
+                    var sender = new NDIOutput(
+                        output.TargetHint.Length > 0 ? output.TargetHint : output.Name);
+
+                    senders.Add(sender);
+                    opened.Add(new OpenVideoOutput(output.Id, compositionId, sender.Video));
+                }
+                catch (Exception failure) when (failure is not OutOfMemoryException)
+                {
+                    // Reported, not thrown: an NDI runtime this machine lacks must not stop the show.
+                    failures.Add($"“{output.Name}”: {failure.Message}");
+                }
+
                 continue;
             }
 
@@ -106,6 +126,15 @@ public sealed class ProjectVideoOutputs : IDisposable
                     initialWidth: composition.Width,
                     initialHeight: composition.Height);
 
+                // The document says which screen and whether to fill it, so a show carried to a venue
+                // puts its projector feed on the projector rather than on whichever display SDL opened
+                // first. An unparseable or absent hint leaves the window where it is rather than
+                // guessing — moving a feed to the wrong screen is worse than not moving it.
+                if (int.TryParse(output.TargetHint, out var display) && display > 0)
+                    window.ApplyWindowPlacement(display - 1, output.Fullscreen, null, null);
+                else if (output.Fullscreen)
+                    window.ApplyWindowPlacement(0, fullscreen: true, null, null);
+
                 opened.Add(new OpenVideoOutput(output.Id, compositionId, window));
             }
             catch (Exception failure) when (failure is not OutOfMemoryException)
@@ -120,6 +149,8 @@ public sealed class ProjectVideoOutputs : IDisposable
 
         foreach (var (id, recorder) in recorders)
             result._recorders[id] = recorder;
+
+        result._senders.AddRange(senders);
 
         return result;
     }
@@ -151,14 +182,6 @@ public sealed class ProjectVideoOutputs : IDisposable
         }
     }
 
-    private static string Describe(VideoOutputKind kind) => kind switch
-    {
-        VideoOutputKind.Ndi => "NDI",
-        VideoOutputKind.Record => "recording",
-        VideoOutputKind.Stream => "streaming",
-        _ => "screen",
-    };
-
     public void Dispose()
     {
         foreach (var open in _open.Select(item => item.Output).OfType<IDisposable>())
@@ -175,5 +198,22 @@ public sealed class ProjectVideoOutputs : IDisposable
         }
 
         _open.Clear();
+
+        // After the windows: a sender's own IVideoOutput is in the list above, so it must not be
+        // disposed until nothing is still submitting to it.
+        foreach (var sender in _senders)
+        {
+            try
+            {
+                sender.Dispose();
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                // One sender that will not close cleanly must not stop the others, and must not throw
+                // out of the show's own teardown.
+            }
+        }
+
+        _senders.Clear();
     }
 }

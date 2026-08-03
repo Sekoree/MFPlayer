@@ -103,13 +103,14 @@
             <ScrollViewer>
               <StackPanel Margin="0,6,0,8">
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
-                  <ComboBox ItemsSource="{Binding CompositionNames}" SelectedIndex="0" />
+                  <ComboBox ItemsSource="{Binding CompositionNames}"
+                            SelectedIndex="{Binding OutputCompositionIndex}" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Screen">
-                  <ComboBox ItemsSource="{Binding Screens}" SelectedIndex="1" />
+                  <ComboBox ItemsSource="{Binding Screens}" SelectedIndex="{Binding OutputScreenIndex}" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode">
-                  <ListBox Theme="{StaticResource Segment}" SelectedIndex="0">
+                  <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding OutputFullscreenIndex}">
                     <ListBoxItem>fullscreen</ListBoxItem>
                     <ListBoxItem>windowed</ListBoxItem>
                   </ListBox>
@@ -117,20 +118,26 @@
                 <!-- Idle images exist at both levels; the composition's wins when it has one
                      (register item 23). -->
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fallback">
-                  <TextBox Classes="ro" Text="venue-logo.png · used when comp has no idle" />
+                  <TextBox Text="{Binding OutputIdleFallback}"
+                           PlaceholderText="used when the composition has no idle image" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Mapping">
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                    <ListBox Grid.Column="0" Theme="{StaticResource Segment}" SelectedIndex="0">
+                    <!-- A toggle, never a delete: switching to clean keeps the authored sections. -->
+                    <ListBox Grid.Column="0" Theme="{StaticResource Segment}"
+                             SelectedIndex="{Binding OutputMappingIndex}">
                       <ListBoxItem>on</ListBoxItem>
                       <ListBoxItem>clean</ListBoxItem>
                     </ListBox>
                     <Button Grid.Column="1" Classes="tight" Content="EDIT ›" Click="OnEditMapping" />
                   </Grid>
                 </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Required">
+                  <CheckBox IsChecked="{Binding OutputRequired}"
+                            Content="the show cannot run without this output" />
+                </HeaderedContentControl>
                 <ContentControl Theme="{StaticResource FieldWide}">
-                  <TextBlock Classes="mono dim3 small" TextWrapping="Wrap"
-                             Text="mapping is per output — Lobby TV shows the same Cyc clean, no warp" />
+                  <TextBlock Classes="mono dim3 small" TextWrapping="Wrap" Text="{Binding MappingNote}" />
                 </ContentControl>
                 <ContentControl Theme="{StaticResource FieldWide}">
                   <Button Classes="block" Content="IDENTIFY — FLASH OUTPUT NAME ON SCREEN" />
@@ -215,16 +222,16 @@
             </ScrollViewer>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="2" Header="Selected composition">
+          <c:PanelBox Grid.Row="2" Header="{Binding CompositionHeader}" Hint="selected composition">
             <StackPanel Margin="0,6,0,8">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Size / rate">
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <TextBox Grid.Column="0" Classes="short" Text="1920×1080" />
-                  <TextBox Grid.Column="1" Text="29.97" />
+                  <TextBox Grid.Column="0" Classes="short" Text="{Binding CompositionSize}" />
+                  <TextBox Grid.Column="1" Text="{Binding CompositionRate}" />
                 </Grid>
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle image">
-                <ComboBox ItemsSource="{Binding IdleImages}" SelectedIndex="0" />
+                <TextBox Text="{Binding CompositionIdleImage}" PlaceholderText="black" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
                 <Button Classes="block" Content="+ ADD COMPOSITION…" Click="OnDialog" Tag="composition" />
