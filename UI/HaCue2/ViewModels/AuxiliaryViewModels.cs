@@ -1,3 +1,4 @@
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
@@ -400,6 +401,7 @@ public partial class CurveEditorViewModel : ObservableObject
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly ProjectSettings _settings;
+    private readonly HaCueProject _project;
     private readonly ProjectJournal? _journal;
 
     /// <summary>
@@ -421,6 +423,7 @@ public partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(
         HaCueProject project, ProjectJournal? journal = null, AppSettings? app = null)
     {
+        _project = project;
         _settings = project.Settings;
         _journal = journal;
         _app = app ?? new AppSettings();
@@ -858,6 +861,220 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty] private string _spaceRule = "GO unless typing";
     [ObservableProperty] private string _doubleGoGuard = "250 ms";
+
+    // ── durations, as the operator types them ─────────────────────────────────────────────────
+    // Every one of these boxes rendered a literal before: the pane looked like a settings screen and
+    // was a picture of one. They are plain properties over the settings record rather than observable
+    // fields, so the getter always reports what is actually stored — which is what makes refusing a
+    // value simply a matter of re-announcing it.
+
+    /// <summary>Reads "0.75 s", "750 ms" or "0.75". Null when it is none of those.</summary>
+    private static int? Milliseconds(string text)
+    {
+        var trimmed = text.Trim();
+        var isMs = trimmed.EndsWith("ms", StringComparison.OrdinalIgnoreCase);
+
+        var number = trimmed.TrimEnd('s', 'S', 'm', 'M', ' ').Replace(',', '.');
+
+        if (!double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            || value < 0)
+            return null;
+
+        var ms = (int)Math.Round(isMs ? value : value * 1000);
+        return ms is >= 0 and <= 600_000 ? ms : null;
+    }
+
+    /// <summary>
+    /// Applies a duration box, or leaves the setting alone and puts the stored value back.
+    /// </summary>
+    /// <remarks>
+    /// Refused rather than coerced to zero: a stop fade of 0 ms is a click on every stop in the show,
+    /// and it is not what somebody who typed "seven" meant.
+    /// </remarks>
+    private void Duration(string value, Action<int> write, string property)
+    {
+        if (Milliseconds(value) is { } ms)
+            WriteApp(_ => write(ms));
+
+        OnPropertyChanged(property);
+    }
+
+    public string PeakHold
+    {
+        get => Seconds(_app.PeakHoldMs);
+        set => Duration(value, ms => _app.PeakHoldMs = ms, nameof(PeakHold));
+    }
+
+    public string AppStopFade
+    {
+        get => Seconds(_app.StopFadeMs);
+        set => Duration(value, ms => _app.StopFadeMs = ms, nameof(AppStopFade));
+    }
+
+    public string AppPanicFade
+    {
+        get => Seconds(_app.PanicFadeMs);
+        set => Duration(value, ms => _app.PanicFadeMs = ms, nameof(AppPanicFade));
+    }
+
+    // ── new-project defaults ──────────────────────────────────────────────────────────────────
+
+    public string NewProjectMixRate
+    {
+        get => $"{_app.NewProjectMixRate:N0} Hz";
+        set
+        {
+            var digits = new string([.. value.Where(char.IsAsciiDigit)]);
+
+            if (int.TryParse(digits, out var rate) && rate is >= 8_000 and <= 384_000)
+                WriteApp(app => app.NewProjectMixRate = rate);
+
+            OnPropertyChanged(nameof(NewProjectMixRate));
+        }
+    }
+
+    public string NewProjectFadeIn
+    {
+        get => Seconds(_app.NewProjectFadeInMs);
+        set => Duration(value, ms => _app.NewProjectFadeInMs = ms, nameof(NewProjectFadeIn));
+    }
+
+    public string NewProjectFadeOut
+    {
+        get => Seconds(_app.NewProjectFadeOutMs);
+        set => Duration(value, ms => _app.NewProjectFadeOutMs = ms, nameof(NewProjectFadeOut));
+    }
+
+    // ── project scope ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The show's own stop fade. Journaled: it changes what every STOP in the show does.</summary>
+    public string ProjectStopFade
+    {
+        get => Seconds(_settings.StopFadeMs);
+        set
+        {
+            if (Milliseconds(value) is { } ms && ms != _settings.StopFadeMs)
+                Write("stopFade", () => _settings.StopFadeMs, number => _settings.StopFadeMs = number,
+                    ms, $"stop fade {Seconds(ms)}");
+
+            OnPropertyChanged(nameof(ProjectStopFade));
+        }
+    }
+
+    /// <summary>
+    /// The project's panic-fade OVERRIDE, or empty to inherit the machine's (register item 26).
+    /// </summary>
+    /// <remarks>
+    /// Empty is a real value here and the reason the model field is nullable: clearing the box gives
+    /// the machine's setting back rather than pinning whatever number happened to be showing. The
+    /// override ledger lists it exactly while it is set.
+    /// </remarks>
+    public string ProjectPanicFade
+    {
+        get => _settings.PanicFadeMs is { } ms ? Seconds(ms) : "";
+        set
+        {
+            var wanted = value.Trim().Length == 0 ? (int?)null : Milliseconds(value);
+
+            if (value.Trim().Length > 0 && wanted is null)
+            {
+                OnPropertyChanged(nameof(ProjectPanicFade));
+                return;
+            }
+
+            if (wanted != _settings.PanicFadeMs)
+                Write("panicFade", () => _settings.PanicFadeMs, number => _settings.PanicFadeMs = number,
+                    wanted, wanted is { } ms ? $"panic fade {Seconds(ms)}" : "panic fade follows the machine");
+
+            OnPropertyChanged(nameof(ProjectPanicFade));
+            OnPropertyChanged(nameof(PanicFadeNote));
+            OnPropertyChanged(nameof(Overrides));
+            OnPropertyChanged(nameof(HasOverrides));
+        }
+    }
+
+    /// <summary>Whether the panic box is overriding, and what it would inherit if cleared.</summary>
+    public string PanicFadeNote => _settings.PanicFadeMs is null
+        ? $"follows this machine — {Seconds(_app.PanicFadeMs)}"
+        : $"overrides this machine's {Seconds(_app.PanicFadeMs)} ⚑";
+
+    /// <summary>A new cue's default fade in, in the project's own settings.</summary>
+    public string ProjectFadeIn
+    {
+        get => Seconds(_settings.DefaultFadeInMs);
+        set
+        {
+            if (Milliseconds(value) is { } ms && ms != _settings.DefaultFadeInMs)
+                Write("fadeIn", () => _settings.DefaultFadeInMs, n => _settings.DefaultFadeInMs = n, ms,
+                    $"default fade in {Seconds(ms)}");
+
+            OnPropertyChanged(nameof(ProjectFadeIn));
+        }
+    }
+
+    public string ProjectFadeOut
+    {
+        get => Seconds(_settings.DefaultFadeOutMs);
+        set
+        {
+            if (Milliseconds(value) is { } ms && ms != _settings.DefaultFadeOutMs)
+                Write("fadeOut", () => _settings.DefaultFadeOutMs, n => _settings.DefaultFadeOutMs = n, ms,
+                    $"default fade out {Seconds(ms)}");
+
+            OnPropertyChanged(nameof(ProjectFadeOut));
+        }
+    }
+
+    /// <summary>The law the show's stop fade follows, named as the curve library names it.</summary>
+    public string StopFadeCurveName => _settings.StopFadeCurve.PresetId is not null
+        ? "project preset"
+        : _settings.StopFadeCurve.Law switch
+        {
+            S.Media.Session.FadeCurve.Linear => "linear",
+            S.Media.Session.FadeCurve.Exponential => "exponential",
+            S.Media.Session.FadeCurve.SCurve => "s-curve",
+            _ => "equal-power",
+        };
+
+    /// <summary>The nav's project heading — the show's own name, not a fixture's.</summary>
+    public string ProjectScopeHeading => $"PROJECT · {_project.Title.ToUpperInvariant()}";
+
+    /// <summary>
+    /// The remote token, masked.
+    /// </summary>
+    /// <remarks>
+    /// Never rendered in full. It is machine-scope and grants the ability to fire the show; a settings
+    /// pane left open on a booth machine should not be a way to read it off the screen.
+    /// </remarks>
+    public string RemoteTokenMask =>
+        _app.RemoteToken.Length == 0 ? "not yet minted" : new string('•', 8) + " · set";
+
+    /// <summary>Mints a new token, invalidating every client using the old one.</summary>
+    public void RotateRemoteToken()
+    {
+        WriteApp(app => app.RemoteToken = "");
+        _app.EnsureRemoteToken();
+        WriteApp(_ => { });
+
+        OnPropertyChanged(nameof(RemoteTokenMask));
+    }
+
+    /// <summary>Where the show's media lives; relative paths in the document resolve against it.</summary>
+    public string ProjectMediaRoot
+    {
+        get => _settings.MediaRoot;
+        set
+        {
+            if (_settings.MediaRoot == value)
+                return;
+
+            Write("mediaRoot", () => _settings.MediaRoot, path => _settings.MediaRoot = path, value,
+                "media root");
+
+            OnPropertyChanged(nameof(ProjectMediaRoot));
+        }
+    }
+
     [ObservableProperty] private string _confirmStopAll = "3 cues";
     [ObservableProperty] private bool _standbyFollowsClickDefault;
 
@@ -891,7 +1108,51 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _cacheRoot = "~/.local/share/hacue2/cache";
     [ObservableProperty] private string _waveformBudget = "2.0 GB";
     [ObservableProperty] private string _thumbnailBudget = "512 MB";
-    public string CacheInUse { get; } = "waveforms 1.2 GB · probes 44 MB · thumbnails 180 MB";
+    /// <summary>What the cache is actually using. Measured, not stated.</summary>
+    public string CacheInUse => MediaCache.Describe(_app);
+
+    /// <summary>What the last clear freed, beside the buttons that did it.</summary>
+    [ObservableProperty]
+    private string _cacheNote = "";
+
+    /// <summary>Deletes the waveform and probe caches — both re-derive from the media.</summary>
+    public void ClearWaveformCache() => ClearCache("waveforms", "probes");
+
+    public void ClearThumbnailCache() => ClearCache("thumbnails");
+
+    private void ClearCache(params string[] kinds)
+    {
+        CacheNote = MediaCache.Clear(_app, kinds);
+        OnPropertyChanged(nameof(CacheInUse));
+    }
+
+    /// <summary>
+    /// Opens the log folder in the machine's file manager.
+    /// </summary>
+    /// <remarks>
+    /// The one action in this pane that leaves the app, and the reason it is worth having: "send me
+    /// your logs" is otherwise a request to go hunting through a hidden data directory.
+    /// </remarks>
+    public string OpenLogFolder()
+    {
+        var path = _app.LogDirectory.Length > 0 ? _app.LogDirectory : StoragePaths.LogRoot;
+
+        try
+        {
+            StoragePaths.EnsureDirectory(path);
+
+            using var opened = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+
+            return path;
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // A headless or locked-down machine has no file manager to ask. Reporting the path is
+            // still useful — it is the thing the operator actually needs.
+            return $"{path} (could not open a file manager: {failure.Message})";
+        }
+    }
 
     // ── logging & crash reports ───────────────────────────────────────────────────────────────
     public IReadOnlyList<string> LogLevels { get; } =

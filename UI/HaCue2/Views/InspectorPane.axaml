@@ -344,7 +344,7 @@
           <!-- ══ PREVIEW ═══════════════════════════════════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsPreviewPane}" Margin="0,8,0,8">
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="primary block" Content="PREVIEW ON AUDITION OUTPUTS" />
+              <Button Classes="primary block" Content="PREVIEW ON AUDITION OUTPUTS" Click="OnPreview" />
             </ContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
                        Text="Plays into the audition rig — the monitor path. It never touches the patch or the program bus, and never appears in the Active list." />
@@ -503,7 +503,8 @@
               <TextBox Classes="short" Text="{Binding VisualizerBlendValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Audio feed">
-              <TextBox Classes="ro" Text="program bus · upstream of per-line inserts" />
+              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                         Text="program bus · upstream of per-line inserts" />
             </HeaderedContentControl>
             <CheckBox Margin="10,4" IsChecked="{Binding VisualizerLocksPresetValue}"
                       Content="Lock to this preset (no auto-advance)" />

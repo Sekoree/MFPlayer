@@ -74,13 +74,13 @@
         </c:PanelBox>
 
         <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
-          <c:PanelBox Grid.Row="0" Header="Eos" Hint="selected endpoint">
-            <StackPanel Margin="0,6,0,8">
+          <c:PanelBox Grid.Row="0" Header="{Binding SelectedEndpointName}" Hint="selected endpoint">
+            <StackPanel Margin="0,6,0,8" IsEnabled="{Binding HasEndpointSelected}">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Host">
-                <TextBox Text="10.0.1.20" />
+                <TextBox Text="{Binding EndpointHost}" PlaceholderText="10.0.1.20" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Port">
-                <TextBox Text="8000" />
+                <TextBox Text="{Binding EndpointPort}" PlaceholderText="8000" />
               </HeaderedContentControl>
               <!-- Register item 24: the test payload is stored PER endpoint. A generic ping proves the
                    socket is open; it does not prove the desk understood you. -->
@@ -200,11 +200,10 @@
                 <ComboBox ItemsSource="{Binding LearnTargets}"
                           SelectedIndex="{Binding LearnTargetIndex}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Filter">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <TextBox Grid.Column="0" Text="velocity ≥ 1" />
-                  <TextBox Grid.Column="1" Text="no repeat 250 ms" />
-                </Grid>
+              <!-- Only the repeat filter: a velocity threshold has no model field behind it, and a
+                   box that looked like one would be the thing this sweep is removing. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="No repeat">
+                <TextBox Text="{Binding LearnNoRepeat}" />
               </HeaderedContentControl>
             </StackPanel>
           </c:PanelBox>
@@ -244,7 +243,7 @@
                        SelectedItem="{Binding LanMode}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Token">
-              <TextBox Text="•••••••• · rotate" />
+              <TextBox Classes="ro" Text="{Binding RemoteTokenMask}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Last call">
               <TextBox Classes="ro" Text="{Binding LastCall}" />

@@ -24,5 +24,33 @@ public partial class SettingsWindow : Window
             settings.RevertOverride(which);
     }
 
+    /// <summary>
+    /// Mints a new remote token, invalidating every client using the old one.
+    /// </summary>
+    /// <remarks>
+    /// The token is the whole of the remote API's authentication, so a laptop that left the building
+    /// is a reason to make the old one stop working — and there was no way to say so.
+    /// </remarks>
+    private void OnRotateToken(object? sender, RoutedEventArgs e) =>
+        (DataContext as SettingsViewModel)?.RotateRemoteToken();
+
+    /// <summary>Clears one part of the media cache. Everything here re-derives from the media.</summary>
+    private void OnClearCache(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not SettingsViewModel settings || (sender as Control)?.Tag is not string kind)
+            return;
+
+        if (kind == "thumbnails")
+            settings.ClearThumbnailCache();
+        else
+            settings.ClearWaveformCache();
+    }
+
+    private void OnOpenLogs(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is SettingsViewModel settings)
+            settings.CacheNote = settings.OpenLogFolder();
+    }
+
     private void OnClose(object? sender, RoutedEventArgs e) => Close();
 }

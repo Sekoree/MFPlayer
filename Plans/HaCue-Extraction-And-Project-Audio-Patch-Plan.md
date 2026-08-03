@@ -2149,3 +2149,48 @@ left the width — a canvas nobody authored, and every placement in the show is 
 **Still open**, and now the honest list for this area: the Targets view's endpoint/trigger panes have not
 been audited for the same dead-surface shape; the visualizer runtime, wall-clock schedules and MTC chase
 remain unimplemented; and Phase 6 (the HaPlay cutover) should still wait until HaCue2 has run a real show.
+
+### The full stub sweep, and a guard so it is the last one (2026-08-03)
+
+Six dead authoring surfaces had been found one at a time, each by asking "can you actually make one?" of
+whatever pane was in front of us. That is not a method, so this pass swept every markup file in the app
+and then turned the result into a test.
+
+**What the sweep found and this pass fixed.**
+
+- **Settings — eleven literals**, including the fixture's own name (`PROJECT · MIDSUMMER-2026`) as the
+  nav heading on every project anybody opened. Peak hold, app stop/panic fade, new-project mix rate and
+  fades, project stop fade, project panic-fade override, media root: all now read and write. `AppSettings`
+  gained the five fields that had no home; the rest already existed and were simply never bound.
+- **`CacheInUse` was a constant string** — "waveforms 1.2 GB · probes 44 MB · thumbnails 180 MB" read
+  identically on an empty cache and a full disk, which is the exact situation somebody opens that pane
+  to find out about. `MediaCache` measures it, and the two CLEAR buttons and OPEN LOGS FOLDER now work.
+- **Action endpoints could not be edited at all.** Host and port were `10.0.1.20` and `8000` in the
+  markup, so an action cue could not be pointed at a desk. Worse, `TestMessage` was loaded once from the
+  FIRST endpoint and never written back: the box showed one desk's payload while SEND TEST sent
+  another's — it proved nothing and looked like it had.
+- **The remote token** was `••••••••  · rotate` in two places, with no rotate. It is now masked from the
+  stored value with a real ROTATE, because a laptop that left the building is a reason to invalidate it.
+- **Audio patch readout** showed a fixture's rig (`18i20 · Out 3`, `Fold L @ −3.0`) over every project —
+  on the pane that answers "why can I not hear Lobby". Meter-in-summary now writes its model field.
+- **PREVIEW ON AUDITION OUTPUTS** had a handler already written and was never attached to the button.
+
+**The guard.** `MarkupBindingGuardTests` scans every `.axaml` and fails when an input control — text
+box, selector, checkbox, slider — renders a value no binding can change, or when a button is drawn with
+no handler. Two documented exception lists carry the genuinely unimplemented controls WITH the reason
+each is a gap rather than a bug, and separate tests keep those lists short, reasoned, and free of
+entries whose control has since been fixed. The guard was verified by reintroducing a literal and
+watching it fail. `ListBox` is in the scanned set because this app's segmented controls are list
+boxes — omitting it would have exempted most of the selectors from a guard aimed at selectors.
+
+**Still unimplemented, now listed in the guard rather than rediscovered:** add-stereo-pair, reorder
+logical outputs, solo-to-audition (register item 13 — needs a bay monitor lease the audition rig does
+not take), IDENTIFY (needs a compositor overlay no cue path asks for), and the five timeline transport
+buttons. Beyond markup: MIDI output (honestly reported at the cue), the visualizer runtime, wall-clock
+schedules and MTC chase.
+
+**A process note worth keeping.** An incremental build reported `0 Errors` while the Avalonia XAML
+compiler had actually failed, and 133 tests broke with an unrelated-looking "no precompiled XAML"
+message. `--no-incremental` is what tells the truth after a markup change.
+
+379 core + 162 app + 27 arch. AOT publish clean.

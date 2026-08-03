@@ -45,7 +45,7 @@
           <ListBox Theme="{StaticResource NavList}"
                    ItemsSource="{Binding ApplicationPanes}" SelectedItem="{Binding SelectedPane}"
                    ItemTemplate="{StaticResource ScopeItemTemplate}" />
-          <TextBlock Classes="caps" Margin="12,12,12,4" Text="PROJECT · MIDSUMMER-2026" />
+          <TextBlock Classes="caps" Margin="12,12,12,4" Text="{Binding ProjectScopeHeading}" />
           <ListBox Theme="{StaticResource NavList}"
                    ItemsSource="{Binding ProjectPanes}" SelectedItem="{Binding SelectedPane}"
                    ItemTemplate="{StaticResource ScopeItemTemplate}" />
@@ -94,7 +94,7 @@
                            SelectedItem="{Binding Ballistic}" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Peak hold">
-                  <TextBox Classes="short" Text="1.5 s" />
+                  <TextBox Classes="short" Text="{Binding PeakHold}" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Clip resets">
                   <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding ClipResets}"
@@ -109,10 +109,10 @@
                       Header="Transport defaults" Hint="app-settings.json · not journaled">
             <StackPanel Margin="0,6,0,8">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Stop fade">
-                <TextBox Classes="short" Text="0.75 s" />
+                <TextBox Classes="short" Text="{Binding AppStopFade}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Panic fade">
-                <TextBox Classes="short" Text="0.15 s" />
+                <TextBox Classes="short" Text="{Binding AppPanicFade}" />
               </HeaderedContentControl>
               <!-- Two GOs inside the guard window are one GO. The alternative — trusting the operator's
                    finger under pressure — fires the next cue early, which is unrecoverable live. -->
@@ -200,7 +200,10 @@
               <CheckBox Margin="10,4" IsChecked="{Binding RemoteLanAllowed}"
                         Content="Allow calls from the LAN (otherwise local only)" />
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Token">
-                <TextBox Text="•••••••• · rotate" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Classes="ro" Text="{Binding RemoteTokenMask}" />
+                  <Button Grid.Column="1" Classes="tight" Content="ROTATE" Click="OnRotateToken" />
+                </Grid>
               </HeaderedContentControl>
             </StackPanel>
           </c:PanelBox>
@@ -222,10 +225,10 @@
                 <TextBox Classes="ro" Text="{Binding CacheInUse}" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="CLEAR WAVEFORM &amp; PROBE CACHE" />
+                <Button Classes="block" Content="CLEAR WAVEFORM &amp; PROBE CACHE" Click="OnClearCache" Tag="waveforms" />
               </ContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="CLEAR THUMBNAIL CACHE" />
+                <Button Classes="block" Content="CLEAR THUMBNAIL CACHE" Click="OnClearCache" Tag="thumbnails" />
               </ContentControl>
               <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
                          Text="Everything here is re-derivable from the media. Clearing costs time on the next open, never show data." />
@@ -251,7 +254,11 @@
               <CheckBox Margin="10,4" IsChecked="{Binding CrashDumps}"
                         Content="Write a crash report when the app faults" />
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="OPEN LOGS FOLDER" />
+                <StackPanel>
+                  <Button Classes="block" Content="OPEN LOGS FOLDER" Click="OnOpenLogs" />
+                  <TextBlock Classes="mono dim3 micro" Margin="10,4" TextWrapping="Wrap"
+                             Text="{Binding CacheNote}" />
+                </StackPanel>
               </ContentControl>
             </StackPanel>
           </c:PanelBox>
@@ -284,15 +291,18 @@
               <CheckBox Margin="10,3" IsChecked="{Binding AutoRenumberDefault}"
                         Content="Auto-renumber on insert" />
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Seed audio">
-                <TextBox Text="system default device → Main L/R" />
+                <!-- What LibrarySeeder actually does, so this is a description rather than a value:
+                     a TextBox would invite an edit that goes nowhere. -->
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                           Text="system default device → Main L/R" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Mix rate">
-                <TextBox Classes="short" Text="48 000 Hz" />
+                <TextBox Classes="short" Text="{Binding NewProjectMixRate}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Default fades">
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <TextBox Grid.Column="0" Text="in 0.1 s" />
-                  <TextBox Grid.Column="1" Text="out 2.0 s" />
+                  <TextBox Grid.Column="0" Text="{Binding NewProjectFadeIn}" />
+                  <TextBox Grid.Column="1" Text="{Binding NewProjectFadeOut}" />
                 </Grid>
               </HeaderedContentControl>
               <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
@@ -318,12 +328,17 @@
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Stop fade">
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <TextBox Grid.Column="0" Classes="short" Text="0.75 s" />
-                  <TextBox Grid.Column="1" Text="equal-power" />
+                  <TextBox Grid.Column="0" Classes="short" Text="{Binding ProjectStopFade}" />
+                  <TextBox Grid.Column="1" Classes="ro" Text="{Binding StopFadeCurveName}" />
                 </Grid>
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Panic fade">
-                <TextBox Classes="override" Text="0.25 s · overrides app ⚑" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Classes="override" Text="{Binding ProjectPanicFade}"
+                           PlaceholderText="follows this machine" />
+                  <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
+                             Text="{Binding PanicFadeNote}" />
+                </Grid>
               </HeaderedContentControl>
               <CheckBox Margin="10,3" IsChecked="{Binding ExternalInputOffOnOpen}"
                         Content="External input off when the project opens" />
@@ -342,14 +357,14 @@
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Default fades">
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <TextBox Grid.Column="0" Text="in 0.1 s" />
-                  <TextBox Grid.Column="1" Text="out 2.0 s" />
+                  <TextBox Grid.Column="0" Text="{Binding ProjectFadeIn}" />
+                  <TextBox Grid.Column="1" Text="{Binding ProjectFadeOut}" />
                 </Grid>
               </HeaderedContentControl>
               <CheckBox Margin="10,3" IsChecked="{Binding AutoRenumber}"
                         Content="Auto-renumber on insert — inherited on (app default) · step 1, children .1" />
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Media root">
-                <TextBox Text="~/shows/midsummer-media · relative paths" />
+                <TextBox Text="{Binding ProjectMediaRoot}" PlaceholderText="relative paths resolve against this folder" />
               </HeaderedContentControl>
               <!-- Media outside the root is ALLOWED (register item 26): adding one warns and offers
                    move/copy, and this picks the default answer. -->

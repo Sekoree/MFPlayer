@@ -1,3 +1,4 @@
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Engine;
@@ -37,7 +38,6 @@ public partial class TargetsViewModel : ObservableObject
         Sources = TargetPresentation.Sources(project, runtime);
         _selectedSource = Sources.FirstOrDefault();
 
-        _testMessage = project.ActionEndpoints.FirstOrDefault()?.TestMessage ?? "";
         _port = (project.Settings.RemoteApi?.Port ?? 8420).ToString();
         _serverState = project.Settings.RemoteApi?.Enabled == true ? "on" : "off";
         _lanMode = project.Settings.RemoteApi?.LanAllowed == true ? "allowed" : "local only";
@@ -101,6 +101,8 @@ public partial class TargetsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(SelectedEndpointName))]
     [NotifyPropertyChangedFor(nameof(EndpointHost))]
     [NotifyPropertyChangedFor(nameof(EndpointPort))]
+    [NotifyPropertyChangedFor(nameof(TestMessage))]
+    [NotifyPropertyChangedFor(nameof(HasEndpointSelected))]
     private TriggerSourceRow? _selectedEndpoint;
 
     private ActionEndpoint? Endpoint => SelectedEndpoint is null
@@ -108,12 +110,95 @@ public partial class TargetsViewModel : ObservableObject
         : _project.ActionEndpoints.FirstOrDefault(item => item.Id == SelectedEndpoint.Id);
 
     public string SelectedEndpointName => Endpoint?.Name ?? "no endpoint selected";
-    public string EndpointHost => Endpoint?.Host ?? "—";
-    public string EndpointPort => Endpoint?.Port.ToString() ?? "—";
 
-    /// <summary>Register item 24 — each endpoint stores its own test payload.</summary>
-    [ObservableProperty]
-    private string _testMessage;
+    public bool HasEndpointSelected => Endpoint is not null;
+
+    /// <summary>Where the endpoint sends. Editable: an action cue is useless pointed at nothing.</summary>
+    public string EndpointHost
+    {
+        get => Endpoint?.Host ?? "";
+        set
+        {
+            if (Endpoint is not { } endpoint || endpoint.Host == value)
+                return;
+
+            Write(endpoint, "host", () => endpoint.Host, text => endpoint.Host = text, value,
+                $"“{endpoint.Name}” host {value}");
+        }
+    }
+
+    public string EndpointPort
+    {
+        get => Endpoint?.Port.ToString(CultureInfo.InvariantCulture) ?? "";
+        set
+        {
+            if (Endpoint is not { } endpoint)
+                return;
+
+            // Refused rather than coerced. A port of 0 is not "unset" to a socket, it is "pick one for
+            // me", and an action cue that quietly sent to an arbitrary port would be worse than one
+            // that reported a bad number.
+            if (!int.TryParse(value, out var port) || port is < 1 or > 65_535)
+            {
+                OnPropertyChanged(nameof(EndpointPort));
+                return;
+            }
+
+            if (endpoint.Port == port)
+                return;
+
+            Write(endpoint, "port", () => endpoint.Port, number => endpoint.Port = number, port,
+                $"“{endpoint.Name}” port {port}");
+        }
+    }
+
+    /// <summary>
+    /// Register item 24 — each endpoint stores its own test payload.
+    /// </summary>
+    /// <remarks>
+    /// Reads and writes the SELECTED endpoint's own message. It used to be loaded once from the first
+    /// endpoint in the project and never written back, so typing a payload and pressing SEND TEST sent
+    /// the stored one — the box proved nothing about the desk and lied about what it had proved.
+    /// </remarks>
+    public string TestMessage
+    {
+        get => Endpoint?.TestMessage ?? "";
+        set
+        {
+            if (Endpoint is not { } endpoint || endpoint.TestMessage == value)
+                return;
+
+            Write(endpoint, "testMessage", () => endpoint.TestMessage,
+                text => endpoint.TestMessage = text, value, $"“{endpoint.Name}” test message");
+        }
+    }
+
+    /// <summary>Writes one endpoint field through the journal, when there is one.</summary>
+    private void Write<T>(
+        ActionEndpoint endpoint, string field, Func<T> read, Action<T> write, T value, string label)
+    {
+        if (_journal is null)
+        {
+            write(value);
+        }
+        else
+        {
+            _journal.Do(new SetValueCommand<T>(endpoint.Id, field, "targets", read, write, value, label));
+            _journal.CloseGroup();
+        }
+
+        RaiseEndpointFields();
+        Refresh();
+    }
+
+    private void RaiseEndpointFields()
+    {
+        OnPropertyChanged(nameof(EndpointHost));
+        OnPropertyChanged(nameof(EndpointPort));
+        OnPropertyChanged(nameof(TestMessage));
+        OnPropertyChanged(nameof(SelectedEndpointName));
+        OnPropertyChanged(nameof(HasEndpointSelected));
+    }
 
     // ── trigger inputs ────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<TriggerSourceRow> Sources { get; private set; }
@@ -162,6 +247,31 @@ public partial class TargetsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(LearnConflict))]
     [NotifyPropertyChangedFor(nameof(LearnState))]
     private string _learnCaught = "";
+
+    /// <summary>
+    /// The repeat filter a newly bound input gets, in ms.
+    /// </summary>
+    /// <remarks>
+    /// A controller that sends a note on every scan tick would otherwise fire a cue as fast as the
+    /// wire allows. 250 ms is the default because it is longer than a bounce and shorter than a
+    /// deliberate second press.
+    /// </remarks>
+    [ObservableProperty]
+    private string _learnNoRepeat = "250 ms";
+
+    /// <summary>The parsed filter, or the default when the box says something unusable.</summary>
+    private int NoRepeatMs
+    {
+        get
+        {
+            var digits = new string([.. LearnNoRepeat.Where(char.IsAsciiDigit)]);
+            return int.TryParse(digits, out var ms) && ms is >= 0 and <= 10_000 ? ms : 250;
+        }
+    }
+
+    /// <summary>The remote token, masked — it is never rendered in full.</summary>
+    public string RemoteTokenMask =>
+        _project.Settings.RemoteApi is null ? "machine setting · see Settings" : "•••••••• · see Settings";
 
     public string LearnState => IsLearning
         ? "● waiting for input — press something on any device"
@@ -284,7 +394,7 @@ public partial class TargetsViewModel : ObservableObject
         var binding = new TriggerBinding
         {
             Input = LearnCaught,
-            NoRepeatMs = 250,
+            NoRepeatMs = NoRepeatMs,
         };
 
         var verbs = new[] { "go", "stop", "pause", "panic" };

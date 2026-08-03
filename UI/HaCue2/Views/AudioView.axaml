@@ -110,7 +110,7 @@
               <!-- With the permanent strip gone, this flag picks what appears in the Output info
                    drawer's compact row and in the status-bar health token. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Meter in summary">
-                <ListBox Theme="{StaticResource Segment}" SelectedIndex="0">
+                <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding MeterInSummaryIndex}">
                   <ListBoxItem>yes</ListBoxItem>
                   <ListBoxItem>no</ListBoxItem>
                 </ListBox>
@@ -206,10 +206,10 @@
           <c:PanelBox Grid.Row="1" Header="Selected line">
             <StackPanel Margin="0,6,0,8">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Line">
-                <TextBox Classes="ro" Text="18i20 · Out 3" />
+                <TextBox Classes="ro" Text="{Binding SelectedOutputLines}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Carries">
-                <TextBox Classes="ro" Text="Fold L @ −3.0" />
+                <TextBox Classes="ro" Text="{Binding SelectedOutputCarries}" />
               </HeaderedContentControl>
               <!-- Always allowed: it plays through the audition monitor path, so it never interrupts
                    the program mix and never appears in the Active list (register item 13). -->

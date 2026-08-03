@@ -185,11 +185,92 @@ public partial class AudioViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Senders))]
     [NotifyPropertyChangedFor(nameof(SelectedOutputName))]
+    [NotifyPropertyChangedFor(nameof(SelectedOutputLines))]
+    [NotifyPropertyChangedFor(nameof(SelectedOutputCarries))]
+    [NotifyPropertyChangedFor(nameof(MeterInSummaryIndex))]
     [NotifyPropertyChangedFor(nameof(SelectedOutputHint))]
     [NotifyPropertyChangedFor(nameof(IsSelectedOutputUnpatched))]
     private LogicalOutputRow? _selectedOutput;
 
     public string SelectedOutputName => SelectedOutput?.Name ?? "no output selected";
+
+    /// <summary>The selected logical output's definition, or null when the selection is stale.</summary>
+    private LogicalAudioChannel? SelectedChannel =>
+        SelectedOutput is { } row
+            ? _project.AudioPatch.LogicalChannels.FirstOrDefault(channel => channel.Id == row.Id)
+            : null;
+
+    /// <summary>
+    /// Where the selected logical output is patched, line by line.
+    /// </summary>
+    /// <remarks>
+    /// Was a literal "18i20 · Out 3" — a fixture's rig, shown over every project. This is the answer to
+    /// "why can I not hear Lobby", so it has to be the truth about THIS document.
+    /// </remarks>
+    public string SelectedOutputLines
+    {
+        get
+        {
+            if (SelectedChannel is not { } channel)
+                return "—";
+
+            var cells = _project.AudioPatch.Cells
+                .Where(cell => cell.LogicalChannelId == channel.Id)
+                .Select(cell => $"{_project.FindLine(cell.LineId)?.Name ?? "?"} · {cell.LineChannel + 1}")
+                .ToList();
+
+            return cells.Count == 0 ? "not patched on this machine" : string.Join(" · ", cells);
+        }
+    }
+
+    /// <summary>What the selected output carries, at what gain.</summary>
+    public string SelectedOutputCarries
+    {
+        get
+        {
+            if (SelectedChannel is not { } channel)
+                return "—";
+
+            var cells = _project.AudioPatch.Cells
+                .Where(cell => cell.LogicalChannelId == channel.Id)
+                .ToList();
+
+            if (cells.Count == 0)
+                return "nothing — no device channel receives it";
+
+            var muted = cells.Count(cell => cell.Muted);
+            var loudest = cells.Max(cell => cell.GainDb);
+
+            return muted == cells.Count
+                ? "muted on every line"
+                : $"{channel.Name} @ {loudest:+0.0;-0.0;0.0} dB"
+                    + (muted > 0 ? $" · {muted} muted" : "");
+        }
+    }
+
+    /// <summary>Register item: which outputs appear in the Output info drawer's compact row.</summary>
+    public int MeterInSummaryIndex
+    {
+        get => SelectedChannel?.MeterInSummary == false ? 1 : 0;
+        set
+        {
+            if (SelectedChannel is not { } channel)
+                return;
+
+            var wanted = value == 0;
+
+            if (channel.MeterInSummary == wanted)
+                return;
+
+            _journal.Do(new SetValueCommand<bool>(
+                channel.Id, "meterInSummary", "outputs",
+                () => channel.MeterInSummary, flag => channel.MeterInSummary = flag, wanted,
+                wanted ? $"“{channel.Name}” meters in summary" : $"“{channel.Name}” hidden from summary"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(MeterInSummaryIndex));
+        }
+    }
 
     public string SelectedOutputHint => SelectedOutput is null
         ? ""

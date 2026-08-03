@@ -73,6 +73,20 @@ public sealed record AppSettings
     /// </remarks>
     public int PanicFadeMs { get; set; } = 250;
 
+    /// <summary>The machine's default STOP fade, in ms. A project may pin its own.</summary>
+    public int StopFadeMs { get; set; } = 750;
+
+    /// <summary>How long a meter holds its peak marker, in ms.</summary>
+    public int PeakHoldMs { get; set; } = 1_500;
+
+    /// <summary>What a NEW project's first audio line and mix rate are seeded with.</summary>
+    public int NewProjectMixRate { get; set; } = 48_000;
+
+    /// <summary>A new cue's default fade in/out, in ms.</summary>
+    public int NewProjectFadeInMs { get; set; } = 100;
+
+    public int NewProjectFadeOutMs { get; set; } = 2_000;
+
     // ── new project defaults (register item 20) ───────────────────────────────────────────────
     public bool AutoRenumberDefault { get; set; } = true;
 
