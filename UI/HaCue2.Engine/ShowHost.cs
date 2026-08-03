@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
+using HaCue2.Machine;
 using HaCue2.Core.Patch;
 using S.Media.Core.Audio;
 using S.Media.Core.Registry;
@@ -54,18 +55,8 @@ public sealed record ShowState(
 /// when they fire — the session has no vocabulary for them and should not grow one.
 /// </para>
 /// </remarks>
-public sealed class ShowHost : IAsyncDisposable
+public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
 {
-    /// <summary>
-    /// How deep a chain of auto-continues and jumps may run from one GO.
-    /// </summary>
-    /// <remarks>
-    /// A jump back to its own list plus auto-continue is a legal way to author a loop and an equally
-    /// legal way to author an infinite one. The bound turns "the app hangs on GO" into one reported
-    /// line, which is the difference between a bug somebody can see and one they cannot.
-    /// </remarks>
-    private const int MaxChainDepth = 64;
-
     private readonly MediaRegistry _registry;
     private readonly ProjectPatchBay _bay;
     private readonly ProjectVideoOutputs _screens;
@@ -74,6 +65,7 @@ public sealed class ShowHost : IAsyncDisposable
     private readonly ActionSender _actions = new();
     private readonly TriggerInputs _triggers;
     private readonly ParameterRegistry _parameters;
+    private readonly ProjectRecorders _recorders;
 
     /// <summary>One binding object per parameter, so soft takeover has somewhere to keep its latch.</summary>
     private readonly Dictionary<string, ContinuousBinding> _continuous = [];
@@ -101,6 +93,8 @@ public sealed class ShowHost : IAsyncDisposable
         _session = session;
         _project = project;
         _triggers = new TriggerInputs(project);
+        _recorders = new ProjectRecorders(
+            project, bay, screens.Recorders, StoragePaths.RecordingRoot);
 
         // The registry holds delegates, so a fader always compares itself against what is true NOW.
         // A cached value would latch against something the show had already moved past.
@@ -293,6 +287,9 @@ public sealed class ShowHost : IAsyncDisposable
     /// </remarks>
     public AudioPatchBayDiagnostics Diagnostics() => _bay.Bay.SnapshotDiagnostics();
 
+    /// <summary>The show's recorders and streams — what is armed, where it is writing, and how it fares.</summary>
+    public ProjectRecorders Recorders => _recorders;
+
     /// <summary>The whole bay as plain text — what "Copy report" puts on the clipboard.</summary>
     public string Report() =>
         AudioPatchBayReport.Render(Diagnostics(), $"HaCue2 · {_project.Title}")
@@ -352,6 +349,14 @@ public sealed class ShowHost : IAsyncDisposable
         foreach (var failure in screens.Failures)
             host.Report(failure);
 
+        // A rig that records every performance says so in the document; everything else waits for the
+        // operator. Arming here rather than in ReloadAsync means an edit mid-show never re-arms a
+        // recording the operator deliberately stopped.
+        host._recorders.ArmStartupTargets();
+
+        foreach (var row in host._recorders.Status().Where(row => row.Problem is not null))
+            host.Report($"“{row.Name}”: {row.Problem}");
+
         // Sounding is tracked HERE rather than queried: the session's sounding bus is keyed by label,
         // and the events that matter carry the cue id. A fire adds, a natural end removes, and a stop
         // clears — which is the whole life of a cue as far as the cue list is concerned.
@@ -408,6 +413,7 @@ public sealed class ShowHost : IAsyncDisposable
 
         await AttachScreensAsync().ConfigureAwait(false);
         await _triggers.ReloadAsync(project).ConfigureAwait(false);
+        _recorders.Adopt(project);
     }
 
     /// <summary>
@@ -488,8 +494,8 @@ public sealed class ShowHost : IAsyncDisposable
         if (standby is null || !Guid.TryParse(standby.Id, out var id))
             return null;
 
-        await AdvanceAsync(list, id).ConfigureAwait(false);
-        await FireAsync(id, depth: 0).ConfigureAwait(false);
+        await Executor.AdvanceAsync(list, id).ConfigureAwait(false);
+        await Executor.FireAsync(id).ConfigureAwait(false);
         return id;
     }
 
@@ -501,7 +507,7 @@ public sealed class ShowHost : IAsyncDisposable
     }
 
     /// <summary>Fires one cue by id, whatever the cursor is doing.</summary>
-    public Task<bool> FireAsync(Guid cueId) => FireAsync(cueId, depth: 0);
+    public Task<bool> FireAsync(Guid cueId) => Executor.FireAsync(cueId);
 
     /// <summary>
     /// Fires one cue, resolved by what kind of cue it is.
@@ -510,81 +516,55 @@ public sealed class ShowHost : IAsyncDisposable
     /// How many cues deep into one operator GO this is. Auto-continue and jump-on-arrival both recurse
     /// through here, and <see cref="MaxChainDepth"/> is what stops an authored loop becoming a hang.
     /// </param>
-    private async Task<bool> FireAsync(Guid cueId, int depth)
+    /// <summary>
+    /// What firing a cue means, for every kind — extracted so it can be tested without devices.
+    /// </summary>
+    /// <remarks>
+    /// This class stays the DEVICE half: it owns the session, the bay, the sockets and the windows,
+    /// and implements <see cref="ICueExecutionHost"/> over them. The decisions live in
+    /// <see cref="CueExecutor"/>, which is the code with the most at stake and had no test behind it
+    /// while it could only be reached through a running session.
+    /// </remarks>
+    private CueExecutor Executor => _executor ??= new CueExecutor(this);
+
+    private CueExecutor? _executor;
+
+    // ── ICueExecutionHost ─────────────────────────────────────────────────────────────────────
+
+    HaCueProject ICueExecutionHost.Project => _project;
+
+    IReadOnlyList<Guid> ICueExecutionHost.Sounding => SoundingIds();
+
+    void ICueExecutionHost.Report(string problem) => Report(problem);
+
+    void ICueExecutionHost.MarkFading(Guid cueId) => MarkFading(cueId);
+
+    void ICueExecutionHost.Forget(Guid cueId) => Forget(cueId.ToString());
+
+    Task ICueExecutionHost.SetStandbyAsync(CueList list, Guid? cueId) =>
+        _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
+
+    Task ICueExecutionHost.StopCueAsync(Guid cueId) => _session.StopCueAsync(cueId.ToString());
+
+    Task<string?> ICueExecutionHost.SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint) =>
+        _actions.SendAsync(action, endpoint);
+
+    /// <summary>A wait that reports whether it completed, so a cancelled show stops its chains.</summary>
+    async Task<bool> ICueExecutionHost.DelayAsync(TimeSpan duration)
     {
-        if (depth > MaxChainDepth)
+        try
         {
-            Report($"the chain from this GO ran past {MaxChainDepth} cues and was stopped — check for a jump loop");
+            await Task.Delay(duration, _life.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
             return false;
         }
-
-        if (_project.FindCue(cueId) is not { } cue)
-            return false;
-
-        // A disabled cue is stepped over wherever it is reached from, not only by GO: an auto-follow
-        // chain and a jump have to agree with the cue list about what is in the show tonight.
-        if (!cue.Enabled)
-            return false;
-
-        var list = _project.ListOf(cueId);
-
-        // The pre-wait belongs to every kind, not just the ones that play something: "wait two seconds,
-        // then tell the lighting desk" is an ordinary thing to author.
-        if (cue.PreWaitMs > 0)
-        {
-            try
-            {
-                await Task.Delay(cue.PreWaitMs, _life.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return false;
-            }
-        }
-
-        var fired = cue switch
-        {
-            MediaCueNode or VisualizerCueNode => await PlayAsync(cue, list).ConfigureAwait(false),
-            GroupCueNode group => await FireGroupAsync(group, list, depth).ConfigureAwait(false),
-            JumpCueNode jump => await JumpAsync(jump, depth).ConfigureAwait(false),
-            PatchCueNode patch => await PatchAsync(patch).ConfigureAwait(false),
-            FadeCueNode fade => await FadeAsync(fade).ConfigureAwait(false),
-            ActionCueNode action => await ActAsync(action).ConfigureAwait(false),
-            // A comment cue is its note. Firing one is a no-op that still SUCCEEDS, so an
-            // auto-continue chain runs straight through it rather than stopping on a marker.
-            _ => true,
-        };
-
-        if (!fired)
-            return false;
-
-        // Auto-continue is resolved here for every kind. The session chains on a clip's natural end,
-        // which a jump or a comment never has — left to the session those chains would simply stall.
-        if (cue.Trigger == CueTrigger.Continue
-            && list is not null
-            && CueOrder.NextEnabled(list, cueId) is { } next)
-        {
-            if (cue.PostWaitMs > 0)
-            {
-                try
-                {
-                    await Task.Delay(cue.PostWaitMs, _life.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return true;
-                }
-            }
-
-            await AdvanceAsync(list, next.Id).ConfigureAwait(false);
-            await FireAsync(next.Id, depth + 1).ConfigureAwait(false);
-        }
-
-        return true;
     }
 
     /// <summary>Hands a playable cue to the session and starts its clock.</summary>
-    private async Task<bool> PlayAsync(CueNode cue, CueList? list)
+    async Task<bool> ICueExecutionHost.PlayAsync(CueNode cue, CueList? list)
     {
         var status = await _session.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
 
@@ -601,168 +581,45 @@ public sealed class ShowHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Fires a group according to its fire mode.
+    /// Rewrites a sounding cue's send gains to a new level.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// The group itself holds no voice — its CHILDREN do — so the group is not remembered as sounding.
-    /// The Active panel shows the children, which is what is actually making noise.
-    /// </para>
-    /// <para>
-    /// <b>All together</b> fires every enabled child at once. <b>Playlist</b> fires the first and lets
-    /// each child's natural end chain to the next. <b>Timeline</b> fires each child at its authored
-    /// offset, on the show's own clock rather than by chaining, because a timeline's whole point is
-    /// that its cues do not depend on each other's lengths.
-    /// </para>
+    /// This is the live send path, so it changes what a voice is doing without reopening it. The cue's
+    /// authored per-send gains are kept as the SHAPE — the fade moves the whole cue, so a send trimmed
+    /// 6 dB below its neighbour stays 6 dB below it.
     /// </remarks>
-    private async Task<bool> FireGroupAsync(GroupCueNode group, CueList? list, int depth)
+    async Task ICueExecutionHost.SetCueLevelAsync(Guid cueId, double levelDb)
     {
-        var children = group.Children.Where(child => child.Enabled).ToList();
-
-        if (children.Count == 0)
-            return true;
-
-        switch (group.FireMode)
-        {
-            case GroupFireMode.Playlist:
-                var first = group.Shuffle ? children[Random.Shared.Next(children.Count)] : children[0];
-                return await FireAsync(first.Id, depth + 1).ConfigureAwait(false);
-
-            case GroupFireMode.Timeline:
-                foreach (var child in children)
-                    Schedule(child, TimeSpan.FromMilliseconds(child.TimelineOffsetMs), depth);
-
-                return true;
-
-            default:
-                // Sequentially awaited rather than fanned out with Task.WhenAll: the session runs
-                // commands on one dispatcher, so concurrent fires queue behind each other anyway, and
-                // in order means the group's layer order is the order the canvas receives them in.
-                foreach (var child in children)
-                    await FireAsync(child.Id, depth + 1).ConfigureAwait(false);
-
-                return true;
-        }
-    }
-
-    /// <summary>Fires a cue later, on the group's own clock. Cancelled with the show.</summary>
-    private void Schedule(CueNode cue, TimeSpan when, int depth)
-    {
-        if (when <= TimeSpan.Zero)
-        {
-            _ = FireAsync(cue.Id, depth + 1);
+        if (_project.FindCue(cueId) is not MediaCueNode media)
             return;
-        }
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(when, _life.Token).ConfigureAwait(false);
-                await FireAsync(cue.Id, depth + 1).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // The show stopped before this cue's moment arrived. Nothing to report.
-            }
-            catch (ObjectDisposedException)
-            {
-            }
-        });
-    }
-
-    /// <summary>
-    /// Moves a list's cursor, and optionally fires what it lands on.
-    /// </summary>
-    /// <remarks>
-    /// The target may be in ANOTHER list — jumping from a preshow list into act one is the ordinary
-    /// use — so the list is resolved from the target cue rather than assumed to be the jump's own.
-    /// </remarks>
-    private async Task<bool> JumpAsync(JumpCueNode jump, int depth)
-    {
-        var targets = jump.TargetCueIds
-            .Select(_project.FindCue)
-            .OfType<CueNode>()
-            .Where(cue => cue.Enabled)
+        var sends = media.Sends
+            .Select(send => new ShowClipLogicalSend(
+                send.SourceChannel,
+                send.LogicalChannelId.ToString(),
+                send.Muted || levelDb <= GainRange.SilenceFloorDb
+                    ? 0f
+                    : (float)Math.Pow(10, (send.GainDb + levelDb) / 20)))
             .ToList();
 
-        if (targets.Count == 0)
-        {
-            Report($"“{jump.Label}” has no live target — the jump did nothing");
-            return false;
-        }
-
-        var target = jump.PickAtRandom ? targets[Random.Shared.Next(targets.Count)] : targets[0];
-
-        if (_project.ListOf(target.Id) is not { } list)
-            return false;
-
-        await AdvanceAsync(list, target.Id).ConfigureAwait(false);
-
-        if (jump.FireOnArrival)
-            await FireAsync(target.Id, depth + 1).ConfigureAwait(false);
-
-        return true;
-    }
-
-    /// <summary>
-    /// Applies a patch cue: a snapshot recall, inline level changes, or both.
-    /// </summary>
-    /// <remarks>
-    /// The document is written ONCE, with the destination values, and the audible move is a ramp the
-    /// bay is fed frame by frame. The write is deliberately not journaled — firing a cue during a show
-    /// is not an edit, and an undo stack full of "the show changed the patch" would bury every real
-    /// change the operator made. It is the same rule the standby cursor already follows.
-    /// </remarks>
-    private async Task<bool> PatchAsync(PatchCueNode patch)
-    {
-        // The state to ramp FROM has to be copied before the recall overwrites it — the cells are live
-        // objects, and holding references would give us the destination twice.
-        var origin = _project.AudioPatch.Cells.Select(cell => cell with { }).ToList();
-
-        var applied = 0;
-        var broken = new List<BrokenBinding>();
-
-        if (patch.SnapshotId is { } snapshotId)
-        {
-            var recall = PatchOperations.Recall(_project, snapshotId);
-            applied += recall.CellsApplied;
-            broken.AddRange(recall.Broken);
-        }
-
-        if (patch.Levels.Count > 0)
-        {
-            var levels = PatchOperations.ApplyLevels(_project, patch.Levels);
-            applied += levels.CellsApplied;
-            broken.AddRange(levels.Broken);
-        }
-
-        foreach (var failure in broken)
-            Report($"“{patch.Label}”: {failure.Reason}");
-
-        if (applied == 0)
-            return broken.Count == 0;
-
-        var destination = _project.AudioPatch.Cells.Select(cell => cell with { }).ToList();
-        DocumentChangedByCue?.Invoke();
-
-        await RampPatchAsync(origin, destination, TimeSpan.FromMilliseconds(patch.FadeMs))
-            .ConfigureAwait(false);
-
-        return true;
+        await _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends).ConfigureAwait(false);
     }
 
     /// <summary>Feeds the bay a series of intermediate patches, landing exactly on the destination.</summary>
-    private async Task RampPatchAsync(
+    async Task ICueExecutionHost.ApplyPatchAsync(
         IReadOnlyList<PatchCell> origin, IReadOnlyList<PatchCell> destination, TimeSpan duration)
     {
+        DocumentChangedByCue?.Invoke();
+
         var steps = PatchRamp.StepsFor(duration);
 
         for (var step = 1; step <= steps; step++)
         {
             // The LAST step pushes the destination itself rather than a blend at progress 1, so the
             // live patch is bit-for-bit what the document says however the arithmetic rounded.
-            var cells = step == steps ? destination : PatchRamp.Blend(origin, destination, (double)step / steps);
+            var cells = step == steps
+                ? destination
+                : PatchRamp.Blend(origin, destination, (double)step / steps);
 
             foreach (var failure in _bay.Apply(_project, cells))
                 Report(failure);
@@ -781,111 +638,27 @@ public sealed class ShowHost : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Runs a fade cue over its targets.
-    /// </summary>
-    /// <remarks>
-    /// Two kinds of target, two mechanisms. CUES ride the session's own stop, which fades the voice and
-    /// releases it — and when the fade is to something audible rather than to silence, the level is
-    /// what changes and the voice keeps playing. LOGICAL OUTPUTS are the patch, so they ramp through
-    /// the same path a patch cue uses; the two cannot disagree because they are the same code.
-    /// </remarks>
-    private async Task<bool> FadeAsync(FadeCueNode fade)
+    /// <summary>Runs a cue later, on the show's own clock. Cancelled with the show.</summary>
+    void ICueExecutionHost.Schedule(Guid cueId, TimeSpan when, int depth)
     {
-        var duration = TimeSpan.FromMilliseconds(fade.DurationMs);
-        var toSilence = fade.ToLevelDb <= GainRange.SilenceFloorDb;
-
-        var cues = fade.FadeEverythingSounding
-            ? SoundingIds()
-            : [.. fade.TargetCueIds.Where(id => _project.FindCue(id) is not null)];
-
-        if (fade.TargetChannelIds.Count > 0)
+        if (when <= TimeSpan.Zero)
         {
-            var origin = _project.AudioPatch.Cells.Select(cell => cell with { }).ToList();
-            var destination = origin
-                .Select(cell => fade.TargetChannelIds.Contains(cell.LogicalChannelId)
-                    ? cell with { GainDb = fade.ToLevelDb, Muted = toSilence }
-                    : cell)
-                .ToList();
-
-            // The document keeps what the fade landed on: a fade cue that left the patch at a level
-            // the file disagrees with would be undone by the next unrelated reload.
-            foreach (var cell in _project.AudioPatch.Cells.Where(
-                cell => fade.TargetChannelIds.Contains(cell.LogicalChannelId)))
-            {
-                cell.GainDb = fade.ToLevelDb;
-                cell.Muted = toSilence;
-            }
-
-            DocumentChangedByCue?.Invoke();
-            await RampPatchAsync(origin, destination, duration).ConfigureAwait(false);
-        }
-
-        foreach (var cueId in cues)
-        {
-            MarkFading(cueId);
-
-            if (toSilence && fade.StopTargetsWhenComplete)
-            {
-                await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
-                Forget(cueId.ToString());
-            }
-            else
-            {
-                await SetCueLevelAsync(cueId, fade.ToLevelDb).ConfigureAwait(false);
-            }
-        }
-
-        return cues.Count > 0 || fade.TargetChannelIds.Count > 0;
-    }
-
-    /// <summary>
-    /// Rewrites a sounding cue's send gains to a new level.
-    /// </summary>
-    /// <remarks>
-    /// This is the live send path, so it changes what a voice is doing without reopening it. The cue's
-    /// authored per-send gains are kept as the SHAPE — the fade moves the whole cue, so a send trimmed
-    /// 6 dB below its neighbour stays 6 dB below it.
-    /// </remarks>
-    private async Task SetCueLevelAsync(Guid cueId, double levelDb)
-    {
-        if (_project.FindCue(cueId) is not MediaCueNode media)
+            _ = Executor.FireAsync(cueId, depth + 1);
             return;
-
-        var sends = media.Sends
-            .Select(send => new ShowClipLogicalSend(
-                send.SourceChannel,
-                send.LogicalChannelId.ToString(),
-                send.Muted || levelDb <= GainRange.SilenceFloorDb
-                    ? 0f
-                    : (float)Math.Pow(10, (send.GainDb + levelDb) / 20)))
-            .ToList();
-
-        await _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends).ConfigureAwait(false);
-    }
-
-    /// <summary>Sends an action cue, reporting a refusal rather than swallowing it.</summary>
-    private async Task<bool> ActAsync(ActionCueNode action)
-    {
-        var endpoint = action.EndpointId is { } id
-            ? _project.ActionEndpoints.FirstOrDefault(item => item.Id == id)
-            : null;
-
-        if (await _actions.SendAsync(action, endpoint).ConfigureAwait(false) is { } failure)
-        {
-            Report(failure);
-            return false;
         }
 
-        return true;
-    }
-
-    /// <summary>Moves a list's cursor onward from the cue that just fired.</summary>
-    private async Task AdvanceAsync(CueList list, Guid fired)
-    {
-        var next = CueOrder.NextEnabled(list, fired);
-        await _session.SetStandbyCueAsync(next?.Id.ToString(), ShowCompiler.GroupId(list))
-            .ConfigureAwait(false);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(when, _life.Token).ConfigureAwait(false);
+                await Executor.FireAsync(cueId, depth + 1).ConfigureAwait(false);
+            }
+            catch (Exception failure) when (failure is OperationCanceledException or ObjectDisposedException)
+            {
+                // The show stopped before this cue's moment arrived. Nothing to report.
+            }
+        });
     }
 
     // ── audition (register item 15) ────────────────────────────────────────────────────────────
@@ -1194,6 +967,11 @@ public sealed class ShowHost : IAsyncDisposable
 
         // Before the session: a trigger arriving mid-teardown would reach for a disposed transport.
         await _triggers.DisposeAsync().ConfigureAwait(false);
+
+        // Before the bay and the session that feed them: disarming flushes each encoder and writes the
+        // file's trailer, and a recording finalized after its audio terminal had gone would be short its
+        // last seconds. This is the one part of teardown worth waiting for.
+        await _recorders.DisposeAsync().ConfigureAwait(false);
 
         await _session.DisposeAsync().ConfigureAwait(false);
         _actions.Dispose();

@@ -42,6 +42,7 @@ public static class LibrarySeeder
         var (mainL, mainR, foldL, foldR, sub) = Channels(project);
         var line = Line(project);
         Patch(project, line, mainL, mainR, foldL, foldR, sub);
+        Archive(project, mainL, mainR);
 
         var composition = new CompositionDefinition { Name = "Main screen", FramesPerSecond = 30 };
         project.Compositions.Add(composition);
@@ -100,6 +101,45 @@ public static class LibrarySeeder
         project.AudioLines.Add(line);
         project.AudioPatch.ClockMasterLineId = line.Id;
         return line;
+    }
+
+    /// <summary>
+    /// A record line fed by the main pair, disarmed (register item 30).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// In the fixture because a recorder nobody can find is a recorder nobody uses — the pane only
+    /// appears for a record or stream line, so a fixture without one hides the whole feature behind
+    /// "add a line first".
+    /// </para>
+    /// <para>
+    /// It is patched from the main pair and NOT armed. Patched, because a record line with no cells
+    /// records silence and teaches that recording is broken; disarmed, because a fixture that started
+    /// writing files the moment it was opened would be a surprise on somebody's disk.
+    /// </para>
+    /// </remarks>
+    private static void Archive(
+        HaCueProject project, LogicalAudioChannel mainL, LogicalAudioChannel mainR)
+    {
+        var archive = new AudioLineDefinition
+        {
+            Name = "Archive",
+            Kind = AudioLineKind.FileRecord,
+            Channels = 2,
+            Record = new RecordTarget
+            {
+                // Lossless, because an archive is the copy everything else is cut from. FLAC in
+                // Matroska rather than a raw .flac: the encode library muxes no raw FLAC container.
+                Pattern = "{project}-{date}-{n}.mka",
+            },
+        };
+
+        project.AudioLines.Add(archive);
+
+        project.AudioPatch.Cells.Add(
+            new PatchCell { LogicalChannelId = mainL.Id, LineId = archive.Id, LineChannel = 0 });
+        project.AudioPatch.Cells.Add(
+            new PatchCell { LogicalChannelId = mainR.Id, LineId = archive.Id, LineChannel = 1 });
     }
 
     private static void Patch(

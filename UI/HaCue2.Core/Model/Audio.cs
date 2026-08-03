@@ -103,6 +103,16 @@ public sealed record AudioLineDefinition
     /// main PA" instead of asking every optional output to excuse itself.
     /// </summary>
     public bool Required { get; set; }
+
+    /// <summary>
+    /// Where a <see cref="AudioLineKind.FileRecord"/> line writes, or a
+    /// <see cref="AudioLineKind.Stream"/> line pushes. Null on the kinds that address a device.
+    /// </summary>
+    /// <remarks>
+    /// Nullable rather than always-present so a project full of ordinary interface lines does not
+    /// carry a recording block per line that nothing reads.
+    /// </remarks>
+    public RecordTarget? Record { get; set; }
 }
 
 public enum AudioLineKind
@@ -111,6 +121,53 @@ public enum AudioLineKind
     Ndi,
     FileRecord,
     Stream,
+}
+
+/// <summary>
+/// Where a recording or a stream goes.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Shared by audio lines and video outputs, because "record" means the same thing on both sides and a
+/// second copy would drift. The FORMAT is the pattern's own extension (register item 30's patterns are
+/// written as whole filenames — <c>show-{date}.mka</c>), so there is no separate container picker to
+/// contradict the name the operator typed.
+/// </para>
+/// <para>
+/// <b>Arming is an operator action, not a property of existing.</b> A record line that merely appears
+/// in a show writes nothing until somebody arms it; the alternative — a show that starts recording
+/// because it was opened — fills disks during rehearsal and overwrites nothing anybody wanted.
+/// <see cref="ArmWithShow"/> is the opt-in for the rig where recording every performance IS the point.
+/// </para>
+/// </remarks>
+public sealed record RecordTarget
+{
+    /// <summary>The folder files land in. Empty means the machine's own recordings folder.</summary>
+    public string Directory { get; set; } = "";
+
+    /// <summary>The filename, with insert tokens and its extension (register item 30).</summary>
+    public string Pattern { get; set; } = "";
+
+    /// <summary>The push URL for a stream (rtmp://, srt://, rtsp://). Unused when recording to file.</summary>
+    public string Url { get; set; } = "";
+
+    /// <summary>Arms as soon as the show opens, for a rig that records every performance.</summary>
+    public bool ArmWithShow { get; set; }
+
+    /// <summary>
+    /// Fills idle time with black and silence instead of collapsing it.
+    /// </summary>
+    /// <remarks>
+    /// The difference between an ARCHIVE and a REEL. A continuous recording runs on wall clock, so the
+    /// gap between act one and act two is in the file and a timecode taken off the recording still
+    /// matches the show. Content-only collapses those gaps, which is what somebody cutting a montage
+    /// wants and what would make an archive useless for finding anything.
+    /// <para>
+    /// Streams are always continuous whatever this says — an ingest drops a connection that stops
+    /// sending, so a stream that went quiet between cues would simply die.
+    /// </para>
+    /// </remarks>
+    public bool Continuous { get; set; }
 }
 
 /// <summary>

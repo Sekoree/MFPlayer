@@ -76,6 +76,16 @@ public static class StoragePaths
     /// <summary>The default log directory, when the operator has not chosen one.</summary>
     public static string LogRoot => Path.Combine(Root, "logs");
 
+    /// <summary>
+    /// Where a recording lands when its line names no folder of its own.
+    /// </summary>
+    /// <remarks>
+    /// Under the data root rather than the user's Videos folder: a show's recordings belong with the
+    /// show's own state, and a default that scattered files into a personal media library would be
+    /// found by surprise. A line that wants them elsewhere says so.
+    /// </remarks>
+    public static string RecordingRoot => Path.Combine(Root, "recordings");
+
     /// <summary>Creates a directory if it is missing, and reports whether it can be written to.</summary>
     /// <remarks>
     /// Returns false rather than throwing. A read-only or full disk must not stop the app starting —

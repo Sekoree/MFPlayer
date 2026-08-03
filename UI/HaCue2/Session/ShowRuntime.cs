@@ -1,3 +1,4 @@
+using HaCue2.Engine;
 using HaCue2.ViewModels;
 
 namespace HaCue2.Session;
@@ -84,6 +85,16 @@ public sealed class ShowRuntime
 
     /// <summary>Audio-bay telemetry for the Diagnostics window.</summary>
     public IReadOnlyList<BayRow> BayRows { get; set; } = [];
+
+    /// <summary>
+    /// Every record and stream target: armed or not, where it is writing, and how it fares.
+    /// </summary>
+    /// <remarks>
+    /// Read on the tick rather than on a change, for the same reason the meters are: a recording that
+    /// starts dropping frames does so quietly, and a status that only refreshed when somebody armed or
+    /// disarmed would show "armed, fine" over a file that had been gapping for ten minutes.
+    /// </remarks>
+    public IReadOnlyList<RecorderStatus> Recorders { get; set; } = [];
 
     public IReadOnlyList<CompositionStatsRow> CompositionStats { get; init; } = [];
 

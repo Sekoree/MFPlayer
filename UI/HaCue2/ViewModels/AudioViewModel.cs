@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
+using HaCue2.Engine;
 using HaCue2.Controls;
 using HaCue2.Presentation;
 using HaCue2.Sample;
@@ -32,6 +33,9 @@ public partial class AudioViewModel : ObservableObject
         Lines = AudioPresentation.Lines(project, runtime);
         _selectedLine = Lines.FirstOrDefault(row => row.Kind.StartsWith("File", StringComparison.Ordinal))
                         ?? Lines.FirstOrDefault();
+
+        Record = new RecordEditor(journal, project, runtime);
+        ShowRecordPane();
 
         // One rig object, shared with the Video view's copy of the pane: it is a single thing, and two
         // view-models over it would drift the moment either was edited.
@@ -287,11 +291,46 @@ public partial class AudioViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(SelectedLineName))]
     private AudioLineRow? _selectedLine;
 
+    partial void OnSelectedLineChanged(AudioLineRow? value) => ShowRecordPane();
+
     public string SelectedLineName => SelectedLine?.Name ?? "no line selected";
 
-    /// <summary>The insert tokens a recording file pattern understands (register item 30).</summary>
-    public string PatternTokens { get; } =
-        "{date} {time} {project} {list} {n} — preview: show-2026-08-01-3.flac";
+    // ── 08 · the selected line's recording ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The record pane for the selected line (register item 30).
+    /// </summary>
+    /// <remarks>
+    /// Shared with the Video view rather than reimplemented: an audio line and a video output hold the
+    /// same recording block, and two copies of this pane would drift into a recording that behaved
+    /// differently depending on which view configured it.
+    /// </remarks>
+    public RecordEditor Record { get; }
+
+    private AudioLineDefinition? SelectedDefinition =>
+        SelectedLine is { } row ? _project.AudioLines.FirstOrDefault(line => line.Id == row.Id) : null;
+
+    /// <summary>Points the record pane at the selection, or at nothing when it is not a recorder.</summary>
+    private void ShowRecordPane()
+    {
+        if (SelectedDefinition is not { Kind: AudioLineKind.FileRecord or AudioLineKind.Stream } line)
+        {
+            Record.Show(null);
+            return;
+        }
+
+        Record.Show(new RecordSubject(
+            line.Id,
+            line.Name,
+            () => line.Record,
+            () => line.Record ??= new RecordTarget(),
+            CarriesVideo: false,
+            IsStream: line.Kind == AudioLineKind.Stream,
+            line.Channels));
+    }
+
+    /// <summary>Re-announces what only the running show knows, on every tick.</summary>
+    public void RefreshRecorders() => Record.RefreshRunning();
 
     public IReadOnlyList<string> MixRates { get; } = ["44 100 Hz", "48 000 Hz", "96 000 Hz"];
 

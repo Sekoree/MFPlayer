@@ -23,14 +23,17 @@ internal sealed record OpenVideoOutput(Guid Id, Guid CompositionId, IVideoOutput
 /// the video equivalent of playing the show into the wrong room.
 /// </para>
 /// <para>
-/// <b>Local screens only, for now.</b> NDI, record and stream outputs are named in the document and
-/// are deliberately reported as not-yet-openable instead of being quietly dropped — a video view that
-/// lists four outputs while two of them do nothing is worse than one that says so.
+/// <b>Record and stream outputs open too</b>, as <see cref="RecordVideoOutput"/>s the compositor renders
+/// into from the moment the show loads. They hold no file until somebody arms them — the encode session
+/// is swapped in behind the output — because pressing record must not restart the clips on that
+/// composition. NDI remains named in the document and reported as not-yet-openable rather than quietly
+/// dropped: a video view that lists four outputs while one does nothing is worse than one that says so.
 /// </para>
 /// </remarks>
 public sealed class ProjectVideoOutputs : IDisposable
 {
     private readonly List<OpenVideoOutput> _open = [];
+    private readonly Dictionary<Guid, RecordVideoOutput> _recorders = [];
 
     private ProjectVideoOutputs()
     {
@@ -40,6 +43,9 @@ public sealed class ProjectVideoOutputs : IDisposable
     public IReadOnlyList<string> Failures { get; private init; } = [];
 
     internal IReadOnlyList<OpenVideoOutput> Open => _open;
+
+    /// <summary>The record and stream outputs, for <see cref="ProjectRecorders"/> to arm.</summary>
+    internal IReadOnlyDictionary<Guid, RecordVideoOutput> Recorders => _recorders;
 
     /// <summary>
     /// Opens every video output the project defines and this machine can provide.
@@ -55,6 +61,7 @@ public sealed class ProjectVideoOutputs : IDisposable
 
         var failures = new List<string>();
         var opened = new List<OpenVideoOutput>();
+        var recorders = new Dictionary<Guid, RecordVideoOutput>();
 
         foreach (var output in project.VideoOutputs)
         {
@@ -62,6 +69,16 @@ public sealed class ProjectVideoOutputs : IDisposable
                 || project.Compositions.All(item => item.Id != compositionId))
             {
                 failures.Add($"“{output.Name}” shows no composition");
+                continue;
+            }
+
+            if (output.Kind is VideoOutputKind.Record or VideoOutputKind.Stream)
+            {
+                // Opened whether or not this machine has a display: a recording is not a window, and a
+                // booth box running headless is exactly where an unattended capture belongs.
+                var recorder = new RecordVideoOutput();
+                recorders[output.Id] = recorder;
+                opened.Add(new OpenVideoOutput(output.Id, compositionId, recorder));
                 continue;
             }
 
@@ -100,6 +117,10 @@ public sealed class ProjectVideoOutputs : IDisposable
 
         var result = new ProjectVideoOutputs { Failures = failures };
         result._open.AddRange(opened);
+
+        foreach (var (id, recorder) in recorders)
+            result._recorders[id] = recorder;
+
         return result;
     }
 

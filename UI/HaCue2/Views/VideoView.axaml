@@ -4,6 +4,7 @@
              xmlns:sys="using:System"
              xmlns:v="using:HaCue2.Views"
              xmlns:vm="using:HaCue2.ViewModels"
+             xmlns:m="using:HaCue2.Core.Model"
              x:Class="HaCue2.Views.VideoView"
              x:DataType="vm:VideoViewModel">
 
@@ -134,6 +135,82 @@
                 <ContentControl Theme="{StaticResource FieldWide}">
                   <Button Classes="block" Content="IDENTIFY — FLASH OUTPUT NAME ON SCREEN" />
                 </ContentControl>
+
+                <!-- Register item 30. The same editor the Audio view uses: a record output and a
+                     record line hold the same block and answer the same questions. -->
+                <StackPanel IsVisible="{Binding Record.IsRecording}">
+                  <HeaderedContentControl Theme="{StaticResource Field}" Header="Directory"
+                                          IsVisible="{Binding Record.IsFile}">
+                    <TextBox Text="{Binding Record.Directory}"
+                             PlaceholderText="the machine's recordings folder" />
+                  </HeaderedContentControl>
+                  <HeaderedContentControl Theme="{StaticResource Field}" Header="Pattern"
+                                          IsVisible="{Binding Record.IsFile}">
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
+                      <TextBox Grid.Column="0" Text="{Binding Record.Pattern}" />
+                      <!-- {}-escaped: a value starting with "{" is otherwise read as a markup extension. -->
+                      <Button Grid.Column="1" Classes="icon" Content="{}{ } ▾">
+                        <Button.Flyout>
+                          <Flyout>
+                            <ItemsControl ItemsSource="{Binding Record.Tokens}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="m:RecordPattern+RecordToken">
+                                  <Button Classes="tight block" HorizontalAlignment="Stretch"
+                                          Click="OnInsertToken" Tag="{Binding Token}">
+                                    <StackPanel>
+                                      <TextBlock Classes="mono" Text="{Binding Token}" />
+                                      <TextBlock Classes="mono dim3 micro" Text="{Binding Meaning}" />
+                                    </StackPanel>
+                                  </Button>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </Flyout>
+                        </Button.Flyout>
+                      </Button>
+                      <Button Grid.Column="2" Classes="icon" Content="?">
+                        <Button.Flyout>
+                          <Flyout>
+                            <TextBlock Classes="mono dim3 micro" MaxWidth="320" TextWrapping="Wrap"
+                                       Text="{Binding Record.TokenHelp}" />
+                          </Flyout>
+                        </Button.Flyout>
+                      </Button>
+                    </Grid>
+                  </HeaderedContentControl>
+                  <HeaderedContentControl Theme="{StaticResource Field}" Header="URL"
+                                          IsVisible="{Binding Record.IsStream}">
+                    <TextBox Text="{Binding Record.Url}" PlaceholderText="rtmp://host/app/key" />
+                  </HeaderedContentControl>
+                  <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding Record.IsFile}">
+                    <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding Record.Preview}" />
+                  </ContentControl>
+                  <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding Record.HasProblem}">
+                    <TextBlock Classes="mono small" Foreground="{DynamicResource GelRed}"
+                               TextWrapping="Wrap" Text="{Binding Record.Problem}" />
+                  </ContentControl>
+                  <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode"
+                                          IsVisible="{Binding Record.IsFile}">
+                    <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding Record.ModeIndex}">
+                      <ListBoxItem>continuous</ListBoxItem>
+                      <ListBoxItem>content only</ListBoxItem>
+                    </ListBox>
+                  </HeaderedContentControl>
+                  <HeaderedContentControl Theme="{StaticResource Field}" Header="Format">
+                    <TextBox Classes="ro" Text="{Binding Record.FormatSummary}" />
+                  </HeaderedContentControl>
+                  <HeaderedContentControl Theme="{StaticResource Field}" Header="Arm">
+                    <CheckBox IsChecked="{Binding Record.ArmWithShow}" Content="arm when the show opens" />
+                  </HeaderedContentControl>
+                  <ContentControl Theme="{StaticResource FieldWide}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
+                      <Button Grid.Column="0" Classes="primary" Content="{Binding Record.ArmLabel}"
+                              Click="OnToggleRecorder" />
+                      <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
+                                 TextWrapping="Wrap" Text="{Binding Record.Readout}" />
+                    </Grid>
+                  </ContentControl>
+                </StackPanel>
               </StackPanel>
             </ScrollViewer>
           </c:PanelBox>

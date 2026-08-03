@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.VisualTree;
 using HaCue2.Controls;
 using HaCue2.Core.Model;
 using HaCue2.ViewModels;
@@ -15,6 +16,34 @@ public partial class VideoView : UserControl
 
     /// <summary>"Edit ›" beside an output's mapping toggle jumps to the Mapping tab already scoped to
     /// that output — mapping is always the mapping OF one output, never a global mode.</summary>
+    /// <summary>Inserts a filename token from the pattern dropdown (register item 30).</summary>
+    private void OnInsertToken(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is VideoViewModel video && (sender as Control)?.Tag as string is { } token)
+            video.Record.InsertToken(token);
+    }
+
+    /// <summary>
+    /// Arms or disarms the selected recording.
+    /// </summary>
+    /// <remarks>
+    /// A press, never a consequence of an edit: a recording that armed itself because somebody typed a
+    /// pattern would fill a disk during rehearsal.
+    /// </remarks>
+    private async void OnToggleRecorder(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not VideoViewModel video
+            || video.SelectedOutput is not { } row
+            || this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
+            return;
+
+        var problem = await shell.ToggleRecorderAsync(row.Id);
+        video.Record.RefreshRunning();
+
+        if (problem is not null)
+            video.Record.NoteProblem(problem);
+    }
+
     private void OnEditMapping(object? sender, RoutedEventArgs e)
     {
         if (DataContext is VideoViewModel video)

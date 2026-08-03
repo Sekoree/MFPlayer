@@ -46,6 +46,12 @@ public sealed record VideoOutputDefinition
     public List<MappingSection> Mapping { get; set; } = [];
 
     public bool IsMapped => Mapping.Count > 0;
+
+    /// <summary>
+    /// Where a <see cref="VideoOutputKind.Record"/> output writes, or a
+    /// <see cref="VideoOutputKind.Stream"/> output pushes. Null on the kinds that address a screen.
+    /// </summary>
+    public RecordTarget? Record { get; set; }
 }
 
 public enum VideoOutputKind

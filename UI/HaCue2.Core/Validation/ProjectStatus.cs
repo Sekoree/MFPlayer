@@ -124,6 +124,7 @@ public static class ProjectStatus
             CheckAudioLines(project, environment),
             CheckVideoOutputs(project, environment, documentIssues),
             CheckAudition(project),
+            CheckRecordings(project),
             CheckCompiles(project),
         };
 
@@ -223,6 +224,78 @@ public static class ProjectStatus
 
         return Summarise("Audio devices", issues, unchecked_, project.AudioLines.Count,
             "Relink ›", "line");
+    }
+
+    /// <summary>
+    /// Every record and stream target can actually write.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Checked HERE, at the get-in, because the alternative is finding out at arm time — which is the
+    /// moment the operator has least room to fix it. A pattern ending <c>.flac</c> is a five-second
+    /// edit hours beforehand and a lost recording on the night.
+    /// </para>
+    /// <para>
+    /// An unwritable pattern is an ERROR on a required target and a warning otherwise, following
+    /// register item 25: a rig whose whole purpose is capturing the performance says so with
+    /// <see cref="VideoOutputDefinition.Required"/>, and for everyone else a recording that will not
+    /// arm must not block a show that does not depend on it.
+    /// </para>
+    /// </remarks>
+    private static StatusCheck CheckRecordings(HaCueProject project)
+    {
+        var issues = new List<ShowValidationIssue>();
+        var targets = 0;
+
+        foreach (var line in project.AudioLines
+                     .Where(line => line.Kind is AudioLineKind.FileRecord or AudioLineKind.Stream))
+        {
+            targets++;
+            Inspect(line.Record, line.Kind == AudioLineKind.Stream, line.Name, line.Required,
+                carriesVideo: false, "audioLine", line.Id);
+        }
+
+        foreach (var output in project.VideoOutputs
+                     .Where(output => output.Kind is VideoOutputKind.Record or VideoOutputKind.Stream))
+        {
+            targets++;
+            Inspect(output.Record, output.Kind == VideoOutputKind.Stream, output.Name, output.Required,
+                carriesVideo: true, "videoOutput", output.Id);
+        }
+
+        if (targets == 0)
+            return new StatusCheck("Recordings", CheckOutcome.Passed, "none in this show", "", []);
+
+        return Summarise("Recordings", issues, 0, targets, "Fix ›", "target");
+
+        void Inspect(
+            RecordTarget? target, bool streaming, string name, bool required,
+            bool carriesVideo, string subject, Guid id)
+        {
+            var severity = required ? ShowValidationSeverity.Error : ShowValidationSeverity.Warning;
+
+            if (target is null)
+            {
+                issues.Add(new ShowValidationIssue(
+                    severity, $"“{name}” has nowhere to write.", subject, id.ToString()));
+                return;
+            }
+
+            if (streaming)
+            {
+                // A stream's container follows its protocol, so the only thing to check is that it has
+                // somewhere to push to.
+                if (target.Url.Length == 0)
+                    issues.Add(new ShowValidationIssue(
+                        severity, $"“{name}” has no URL to stream to.", subject, id.ToString()));
+
+                return;
+            }
+
+            if (RecordFormatNames.Problem(target.Pattern, carriesVideo) is { } problem)
+                issues.Add(new ShowValidationIssue(
+                    severity, $"“{name}”: {problem}.", subject, id.ToString()));
+        }
     }
 
     /// <summary>

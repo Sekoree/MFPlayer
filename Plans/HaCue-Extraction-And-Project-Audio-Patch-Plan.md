@@ -2019,3 +2019,92 @@ With that, **`SampleShow` is deleted.** Every value the shell displays now comes
 the machine, or a running session. `Sample/` holds only `SampleProject` (a demo document, reachable
 via `HACUE2_START=main`) and `SampleRuntime` (guarded so any project but the demo gets an idle
 runtime).
+
+**The cue-execution seam (same day) — and what it found immediately.** Coverage in this assembly had
+split by CONSTRUCTABILITY rather than importance: every pure helper was tested and every device-holding
+class was not, purely because it could not be built without hardware. The code that decides what every
+cue does was on the wrong side of that line.
+
+`ICueExecutionHost` is the seam — every effect firing a cue can have, and nothing about a session, a
+bay or a socket. `CueExecutor` holds the decisions (fire modes, jump chains, auto-continue, the loop
+bound, patch recall, fade targeting); `ShowHost` stays the device half and implements the interface
+over its session and bay. Behaviour-neutral: the full suite passed unchanged after the move.
+
+**33 tests, and the first run found a real defect.** `FadeAsync` iterated `host.Sounding` while
+stopping targets, and stopping one calls `Forget`, which removes it from that list — a
+collection-modified throw. It had never bitten only because `ShowHost` happens to return a copy; the
+interface never promised one, and a "fade everything sounding" cue crashing mid-show is not a bug to
+leave to luck. Fixed by snapshotting in the executor, where the contract lives.
+
+That is the argument for the seam, made by the seam: three defects have now been found in this logic
+(the depth-first `Flatten` double-fire, the `TrimOutMs` lane drop, and this), and this is the first one
+a test found rather than a reading.
+
+Still uncovered and worth the same treatment: `RemoteApiServer.HandleAsync` (see the known gap above —
+the seam it needs is the transport-verb half, not this one) and the device classes themselves.
+
+### Recording and streaming (2026-08-03)
+
+**Register item 30 is implemented, and the model it needed did not exist.** A Record output and a
+FileRecord line carried a name and a hint and nothing else — no folder, no pattern, no format. The
+runtime matched: `ProjectVideoOutputs` reported record and stream outputs as "not implemented yet", and
+`ProjectPatchBay.Open` ignored `line.Kind` entirely, so a record line was opened as a PORTAUDIO DEVICE
+named `show-{date}.flac` and then reported as a missing interface. That last one is fixed as a
+by-product; it was never going to be found by reading the devices list, which said exactly what a
+genuinely absent interface says.
+
+`RecordTarget` (folder, pattern, URL, arm-with-show, continuous) hangs off both an audio line and a
+video output, because "record" means the same thing on both sides.
+
+**The extension is the format**, matching how the mockup drew patterns (`show-{date}.flac`) — whole
+filenames, no separate container picker to contradict the name the operator typed. Split in two on
+purpose: `RecordFormatNames` (Core) holds which extensions are legal, so **project status can validate
+a pattern with no encoder, no session and no machine** — a bad extension is findable at the get-in
+rather than at arm time, when the operator has least room to fix it. `RecordFormats` (Engine) maps each
+to its container and codecs. A test holds the two lists to each other.
+
+**The mockup's `.flac` is not achievable and is refused rather than approximated.** The encode library
+muxes five containers and none is a raw FLAC or WAV stream; lossless audio is FLAC inside Matroska,
+`.mka`. Every extension somebody would plausibly type is mapped to the closest one that works, and the
+suggestion respects what is being recorded — offering `.mka` to a VIDEO output would answer one refusal
+with another.
+
+**What was built.** `ProjectRecorders` owns one encode session per armed target. Audio recorders join
+the bay as ORDINARY TERMINALS with the line's own patch cells, so what lands in the file is what the
+operator patched to it — "record the foldback mix" needs no feature, only a different patch — and a
+patch edit made mid-recording reaches the recording. `AudioPatchBay.AddTerminal` is running-safe and
+fades in, so arming mid-show neither interrupts the program nor starts the file with a click. Video
+recorders sit behind a `RecordVideoOutput` the compositor has been rendering into since the show
+loaded; arming swaps a session in behind it, so **pressing record never restarts the clips on that
+composition**. Continuous mode (the archive/reel choice the mockup drew) is wired to
+`ContinuousEncodeCarrier`; streams are always continuous whatever the document says, because an ingest
+drops a connection that stops sending.
+
+**The UI half was the fifth dead authoring surface on this branch.** The record pane was drawn
+complete — Directory, Pattern, an insert-token dropdown, a `?` popover, a Mode segment, a Format
+line — with every value a literal in the markup and every button inert. `RecordEditor` is the real one,
+shared by the Audio and Video views rather than written twice, and the preview renders through the
+recorder's own expander so it cannot promise a name the recorder would not write.
+
+**Tested, including against a real encoder.** 47 new tests. The end-to-end ones write real files and
+assert what came back: `ffprobe` confirms 25 frames at 25 fps produce exactly 1.000 s of H.264 in
+Matroska. That mattered — the first version of that test asserted only "the file is over 1 kB" and
+passed while the bounded encode queue silently dropped two thirds of the frames. The queue dropping
+under a burst is correct (a recording must never stall the show it is recording), so the honest fix was
+to pace the producer, test the drop path separately, and **surface the drop count to the operator** —
+the mockup's own diagnostics row says "12 dropped", and it is the only warning before a file gaps.
+
+Two defects the tests found rather than confirmed: the audio-only suggestion handed to video outputs,
+and a pattern of pure separators cleaning to `---` instead of falling back to a readable name.
+
+**Deliberate refusals and gaps.**
+- Filename expansion is a security boundary: a pattern becomes a path, and both it and the values
+  substituted in are operator text. Separators and the characters Windows refuses are stripped from
+  every substituted value AND the result, so a project named `../../../etc/passwd` yields an odd
+  filename in the right folder rather than a write outside it.
+- A stream URL's last segment is a credential; it is redacted everywhere it is displayed or logged.
+- NDI outputs remain reported as not-implemented. They are the same wiring — an `IVideoOutput` and an
+  `IAudioOutput` behind the same arm/disarm — and are the obvious next one.
+- The rest of the Video view's output pane (composition, screen, mode, idle fallback, mapping toggle,
+  IDENTIFY) is still drawn against literals. Pre-existing and out of this pass's scope, but it is the
+  same dead-surface shape and should be treated as such.

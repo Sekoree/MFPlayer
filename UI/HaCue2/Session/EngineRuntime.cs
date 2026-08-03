@@ -60,6 +60,28 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// <summary>Raised on every poll, for the surfaces whose values move continuously.</summary>
     public event Action? Ticked;
 
+    /// <summary>
+    /// Arms or disarms a record or stream target.
+    /// </summary>
+    /// <remarks>
+    /// Exposed here rather than handing the views the host: this is the only recorder verb an operator
+    /// has, and routing it through the runtime keeps the session behind the same seam everything else
+    /// on screen goes through.
+    /// </remarks>
+    public async Task<string?> ToggleRecorderAsync(Guid id)
+    {
+        if (_host.Recorders.IsArmed(id))
+        {
+            await _host.Recorders.DisarmAsync(id).ConfigureAwait(true);
+            AdoptBay();
+            return null;
+        }
+
+        var problem = _host.Recorders.Arm(id);
+        AdoptBay();
+        return problem;
+    }
+
     private async void Poll()
     {
         // One in flight at a time: a snapshot crosses the session dispatcher, and stacking them up
@@ -122,6 +144,7 @@ public sealed class EngineRuntime : IAsyncDisposable
         _runtime.Levels = BayPresentation.Levels(_project, bay);
         _runtime.BaySummary = BayPresentation.Summary(bay);
         _runtime.BayClock = BayPresentation.Clock(_project, bay);
+        _runtime.Recorders = _host.Recorders.Status();
     }
 
     private bool StandbyChanged(ShowState state) =>

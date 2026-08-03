@@ -151,6 +151,9 @@ public sealed class ArchitectureTests
             // is no shared output engine here to consume (gap analysis §7.1 describes one that lives
             // on next-fix-enhance-round).
             "S.Media.Present.SDL3",
+            // Record and stream outputs, for the same reason: the encode session's sinks are attached
+            // to the bay and the compositor directly.
+            "S.Media.Encode.FFmpeg", "S.Media.FFmpeg.Common",
             // External input. S.Control owns MIDI/OSC discovery, name matching and hot-plug; HaCue2
             // adds only the binding half. HaControl.Input, which the plan names for this, is likewise
             // not on this branch.

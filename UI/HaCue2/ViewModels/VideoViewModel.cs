@@ -32,6 +32,8 @@ public partial class VideoViewModel : ObservableObject
         _runtime = runtime;
         _journal = journal;
 
+        Record = new RecordEditor(journal, project, runtime);
+
         CompositionsTab = $"COMPOSITIONS · {project.Compositions.Count}";
         OutputsTab = $"OUTPUTS · {project.VideoOutputs.Count}";
         Tabs = [CompositionsTab, MappingTab, OutputsTab, AuditionTab];
@@ -102,6 +104,40 @@ public partial class VideoViewModel : ObservableObject
     private VideoOutputRow? _selectedOutput;
 
     public string SelectedOutputName => SelectedOutput?.Name ?? "no output selected";
+
+    partial void OnSelectedOutputChanged(VideoOutputRow? value) => ShowRecordPane();
+
+    /// <summary>
+    /// The record pane for the selected output (register item 30).
+    /// </summary>
+    /// <remarks>
+    /// The same editor the Audio view uses. A record output and a record line hold the same block and
+    /// answer the same questions, so they are configured by the same pane rather than by two that would
+    /// drift.
+    /// </remarks>
+    public RecordEditor Record { get; private set; } = null!;
+
+    /// <summary>Points the record pane at the selection, or at nothing when it is a screen.</summary>
+    private void ShowRecordPane()
+    {
+        if (MappedOutput is not { Kind: VideoOutputKind.Record or VideoOutputKind.Stream } output)
+        {
+            Record.Show(null);
+            return;
+        }
+
+        Record.Show(new RecordSubject(
+            output.Id,
+            output.Name,
+            () => output.Record,
+            () => output.Record ??= new RecordTarget(),
+            CarriesVideo: true,
+            IsStream: output.Kind == VideoOutputKind.Stream,
+            Channels: 0));
+    }
+
+    /// <summary>Re-announces what only the running show knows, on every tick.</summary>
+    public void RefreshRecorders() => Record.RefreshRunning();
 
     public IReadOnlyList<string> CompositionNames =>
         [.. _project.Compositions.Select(composition => composition.Name)];

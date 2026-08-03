@@ -64,6 +64,41 @@ public partial class AudioView : UserControl
         await shell.RestartAudioAsync();
     }
 
+    /// <summary>
+    /// Inserts a filename token from the pattern dropdown (register item 30).
+    /// </summary>
+    /// <remarks>
+    /// The tokens are unguessable, which is the whole reason the dropdown exists — an operator who has
+    /// to already know that <c>{n}</c> is the counter has not been helped by anything.
+    /// </remarks>
+    private void OnInsertToken(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is AudioViewModel audio && (sender as Control)?.Tag as string is { } token)
+            audio.Record.InsertToken(token);
+    }
+
+    /// <summary>
+    /// Arms or disarms the selected recording.
+    /// </summary>
+    /// <remarks>
+    /// A press, never a consequence of an edit: opening a file and starting an encoder is something an
+    /// operator decides to do, and a recording that armed itself because somebody typed in a pattern
+    /// would fill a disk during rehearsal.
+    /// </remarks>
+    private async void OnToggleRecorder(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AudioViewModel audio
+            || audio.SelectedLine is not { } row
+            || this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
+            return;
+
+        var problem = await shell.ToggleRecorderAsync(row.Id);
+        audio.Record.RefreshRunning();
+
+        if (problem is not null)
+            audio.Record.NoteProblem(problem);
+    }
+
     private void OnRecall(object? sender, RoutedEventArgs e) =>
         (DataContext as AudioViewModel)?.RecallSelected();
 

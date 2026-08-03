@@ -202,6 +202,10 @@ public partial class ShellViewModel : ObservableObject
         // thread — the pane only has to know what arrived, not when.
         _engine.Ticked += () => Targets.Observe(Runtime.LastSignal);
         _engine.Ticked += OutputInfo.Refresh;
+        // A recording that starts dropping frames does so quietly, so the readout is polled rather
+        // than updated on arm and disarm — the drop count is the only warning before the file gaps.
+        _engine.Ticked += Audio.RefreshRecorders;
+        _engine.Ticked += Video.RefreshRecorders;
         _engine.Ticked += () => Diagnostics?.Refresh();
 
         // A patch or fade cue writes real cell gains that travel in the file. They are not undoable
@@ -293,6 +297,21 @@ public partial class ShellViewModel : ObservableObject
 
         await StopEngineAsync().ConfigureAwait(true);
         await StartEngineAsync(backend).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Arms or disarms a record or stream target, reporting what stopped it.
+    /// </summary>
+    /// <remarks>
+    /// Refuses rather than pretends when no show is running: arming is opening a file and starting an
+    /// encoder, and there is nothing to record from until the engine is up.
+    /// </remarks>
+    public async Task<string?> ToggleRecorderAsync(Guid id)
+    {
+        if (_engine is not { } engine)
+            return "the show is not running — start it before arming a recording";
+
+        return await engine.ToggleRecorderAsync(id).ConfigureAwait(true);
     }
 
     /// <summary>The backend the shell was started with, kept so the engine can be restarted.</summary>

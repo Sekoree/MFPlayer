@@ -81,6 +81,14 @@ public sealed class ProjectPatchBay : IDisposable
             if (cells.Count == 0 || backend is null)
                 continue;
 
+            // Record and stream lines are not devices. They are encode sessions, and they open when the
+            // operator ARMS them rather than when the show opens — so they join the bay through
+            // AttachRecorder, not here. Opening one here would hand a recording's filename pattern to
+            // the audio backend as a device name and then report the show's own recorder as a missing
+            // interface, which is exactly what happened before recording was implemented.
+            if (line.Kind is AudioLineKind.FileRecord or AudioLineKind.Stream)
+                continue;
+
             try
             {
                 var format = new AudioFormat(line.SampleRate ?? patch.MixSampleRate, line.Channels);
@@ -191,6 +199,65 @@ public sealed class ProjectPatchBay : IDisposable
         }
 
         return failures;
+    }
+
+    /// <summary>
+    /// Joins an armed recorder's sink to the bay as that line's terminal.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A recorder is patched exactly like an interface — same cells, same matrix, same code — so what
+    /// gets recorded is what the operator patched to it, and "record the foldback mix" needs no feature
+    /// of its own. The bay takes a terminal while running and fades it in, so arming mid-show neither
+    /// interrupts the program nor starts the file with a click.
+    /// </para>
+    /// <para>
+    /// The line is registered as open so <see cref="Apply"/> keeps its matrix current: a patch change
+    /// made while recording has to reach the recording, or the file stops matching the show halfway
+    /// through.
+    /// </para>
+    /// </remarks>
+    /// <returns>Why it could not be attached, or null on success.</returns>
+    public string? AttachRecorder(HaCueProject project, Guid lineId, IAudioOutput sink)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(sink);
+
+        if (_open.Any(item => item.LineId == lineId))
+            return "that line is already attached";
+
+        var channels = project.AudioPatch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+
+        if (channels.Count != LogicalChannelIds.Count)
+            return "the logical outputs changed — reopen the show before arming";
+
+        var cells = project.AudioPatch.Cells.Where(cell => cell.LineId == lineId).ToList();
+
+        try
+        {
+            Bay.AddTerminal(lineId.ToString(), sink, Matrix(cells, channels, sink.Format.Channels));
+        }
+        catch (Exception failure) when (failure is ArgumentException or InvalidOperationException)
+        {
+            return failure.Message;
+        }
+
+        _open.Add((lineId, sink.Format.Channels));
+        return null;
+    }
+
+    /// <summary>
+    /// Removes an armed recorder's terminal, on disarm.
+    /// </summary>
+    /// <remarks>
+    /// The sink is BORROWED, as every terminal is: the recorder owns the encode session and flushes it
+    /// after this returns. Detaching first is what makes the trailer complete — a session still
+    /// attached to a running bay would be written to while it was being finalized.
+    /// </remarks>
+    public void DetachRecorder(Guid lineId)
+    {
+        Bay.RemoveTerminal(lineId.ToString());
+        _open.RemoveAll(item => item.LineId == lineId);
     }
 
     /// <summary>

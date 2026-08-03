@@ -155,4 +155,22 @@ public class LibrarySeederTests
             Assert.Equal(numbers.Count, numbers.Distinct(StringComparer.Ordinal).Count());
         }
     }
+
+    [Fact]
+    public void ItCarriesAPatchedButDisarmedRecorder()
+    {
+        var project = LibrarySeeder.Build(Seed());
+
+        var archive = Assert.Single(project.AudioLines, line => line.Kind == AudioLineKind.FileRecord);
+
+        // Patched, or it would record silence and teach that recording is broken.
+        Assert.Equal(2, project.AudioPatch.Cells.Count(cell => cell.LineId == archive.Id));
+
+        // Disarmed, because a fixture that wrote files the moment it opened would be a surprise on
+        // somebody's disk.
+        Assert.False(archive.Record!.ArmWithShow);
+
+        // And writable: a fixture whose own recorder is refused would be the first thing anybody hit.
+        Assert.Null(RecordFormatNames.Problem(archive.Record.Pattern, carriesVideo: false));
+    }
 }

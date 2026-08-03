@@ -4,6 +4,7 @@
              xmlns:sys="using:System"
              xmlns:v="using:HaCue2.Views"
              xmlns:vm="using:HaCue2.ViewModels"
+             xmlns:m="using:HaCue2.Core.Model"
              x:Class="HaCue2.Views.AudioView"
              x:DataType="vm:AudioViewModel">
 
@@ -297,42 +298,89 @@
           </c:PanelBox>
 
           <c:PanelBox Grid.Row="1" Header="{Binding SelectedLineName}" Hint="selected line">
-            <c:PanelBox.Footer>
-              <Border Classes="chain">
-                <DockPanel LastChildFill="True">
-                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge clock"><TextBlock Text="RESAMPLED" /></Border>
-                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                             Text="44.1 k sink on a 48 k mix — fine, but never eligible as clock master" />
-              </DockPanel>
-              </Border>
-            </c:PanelBox.Footer>
-
             <StackPanel Margin="0,6,0,8">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Directory">
-                <TextBox Text="~/shows/recordings" />
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Pattern">
-                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
-                  <TextBox Grid.Column="0" Text="show-{date}-{n}.flac" />
-                  <!-- Register item 30: insert-token dropdown plus a "?" listing every token with a
-                       rendered example — the tokens are unguessable otherwise. -->
-                  <!-- {}-escaped: a value starting with "{" is otherwise read as a markup extension. -->
-                  <Button Grid.Column="1" Classes="icon" Content="{}{ } ▾" />
-                  <Button Grid.Column="2" Classes="icon" Content="?" />
-                </Grid>
-              </HeaderedContentControl>
-              <ContentControl Theme="{StaticResource FieldWide}">
-                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding PatternTokens}" />
-              </ContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode">
-                <ListBox Theme="{StaticResource Segment}" SelectedIndex="0">
-                  <ListBoxItem>continuous</ListBoxItem>
-                  <ListBoxItem>content only</ListBoxItem>
-                </ListBox>
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Format">
-                <TextBox Classes="ro" Text="FLAC · 44 100 · 2ch" />
-              </HeaderedContentControl>
+              <!-- Hidden rather than disabled for an interface line: a directory and a filename
+                   pattern are not dimmed-out properties of a sound card, they are meaningless for one. -->
+              <StackPanel IsVisible="{Binding Record.IsRecording}">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Directory"
+                                        IsVisible="{Binding Record.IsFile}">
+                  <TextBox Text="{Binding Record.Directory}" PlaceholderText="the machine's recordings folder" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Pattern"
+                                        IsVisible="{Binding Record.IsFile}">
+                  <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
+                    <TextBox Grid.Column="0" Text="{Binding Record.Pattern}" />
+                    <!-- Register item 30: insert-token dropdown plus a "?" listing every token with a
+                         rendered example — the tokens are unguessable otherwise. -->
+                    <!-- {}-escaped: a value starting with "{" is otherwise read as a markup extension. -->
+                    <Button Grid.Column="1" Classes="icon" Content="{}{ } ▾">
+                      <Button.Flyout>
+                        <Flyout>
+                          <ItemsControl ItemsSource="{Binding Record.Tokens}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="m:RecordPattern+RecordToken">
+                                <Button Classes="tight block" HorizontalAlignment="Stretch"
+                                        Click="OnInsertToken" Tag="{Binding Token}">
+                                  <StackPanel>
+                                    <TextBlock Classes="mono" Text="{Binding Token}" />
+                                    <TextBlock Classes="mono dim3 micro" Text="{Binding Meaning}" />
+                                  </StackPanel>
+                                </Button>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                    <Button Grid.Column="2" Classes="icon" Content="?">
+                      <Button.Flyout>
+                        <Flyout>
+                          <TextBlock Classes="mono dim3 micro" MaxWidth="320" TextWrapping="Wrap"
+                                     Text="{Binding Record.TokenHelp}" />
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                  </Grid>
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="URL"
+                                        IsVisible="{Binding Record.IsStream}">
+                  <TextBox Text="{Binding Record.Url}" PlaceholderText="rtmp://host/app/key" />
+                </HeaderedContentControl>
+                <!-- Rendered by the same expander that names the file, so the preview cannot promise a
+                     name the recorder would not write. -->
+                <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding Record.IsFile}">
+                  <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding Record.Preview}" />
+                </ContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding Record.HasProblem}">
+                  <TextBlock Classes="mono small" Foreground="{DynamicResource GelRed}"
+                             TextWrapping="Wrap" Text="{Binding Record.Problem}" />
+                </ContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode"
+                                        IsVisible="{Binding Record.IsFile}">
+                  <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding Record.ModeIndex}">
+                    <ListBoxItem>continuous</ListBoxItem>
+                    <ListBoxItem>content only</ListBoxItem>
+                  </ListBox>
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Format">
+                  <TextBox Classes="ro" Text="{Binding Record.FormatSummary}" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Arm">
+                  <CheckBox IsChecked="{Binding Record.ArmWithShow}" Content="arm when the show opens" />
+                </HeaderedContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
+                    <Button Grid.Column="0" Classes="primary" Content="{Binding Record.ArmLabel}"
+                            Click="OnToggleRecorder" />
+                    <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
+                               TextWrapping="Wrap" Text="{Binding Record.Readout}" />
+                  </Grid>
+                </ContentControl>
+              </StackPanel>
+
+              <TextBlock IsVisible="{Binding !Record.IsRecording}" Classes="mono dim3 small" TextWrapping="Wrap"
+                         Margin="0,4,0,0"
+                         Text="Recording settings appear here for a Record or Stream line." />
             </StackPanel>
           </c:PanelBox>
         </Grid>
