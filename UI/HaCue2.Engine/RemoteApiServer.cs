@@ -148,6 +148,15 @@ public sealed class RemoteApiServer : IAsyncDisposable
     /// Resolves and carries out one request. Public so it can be tested without a socket.
     /// </summary>
     /// <remarks>
+    /// <b>KNOWN GAP (2026-08-03): dispatch is not under test.</b> The route TABLE is covered
+    /// exhaustively (<c>RemoteApiRouteTests</c>) but everything below the resolve — auth, the
+    /// 404/405 split, and every transport call — is not, because this class takes a concrete
+    /// <see cref="ShowHost"/> and a host needs devices. Closing it means giving the host a seam (an
+    /// interface over the transport verbs, or a fake) so a request can be driven end to end without
+    /// hardware. Worth doing before anyone points a show-control system at this: it is the one
+    /// surface where a defect fires cues from off the machine.
+    /// </remarks>
+    /// <remarks>
     /// The 404/405 distinction is deliberate: an unknown path is a caller's mistake about WHAT exists,
     /// a known path with the wrong verb is a mistake about HOW to call it, and collapsing them into one
     /// answer sends people looking in the wrong place.

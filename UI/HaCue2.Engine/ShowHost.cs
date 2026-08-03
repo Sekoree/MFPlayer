@@ -7,6 +7,7 @@ using S.Media.Core.Registry;
 using S.Media.Core.Video;
 using S.Media.Present.SDL3;
 using S.Media.Decode.FFmpeg;
+using S.Control;
 using S.Media.Routing;
 using S.Media.Session;
 
@@ -72,6 +73,11 @@ public sealed class ShowHost : IAsyncDisposable
     private readonly HashSet<string> _attached = [];
     private readonly ActionSender _actions = new();
     private readonly TriggerInputs _triggers;
+    private readonly ParameterRegistry _parameters;
+
+    /// <summary>One binding object per parameter, so soft takeover has somewhere to keep its latch.</summary>
+    private readonly Dictionary<string, ContinuousBinding> _continuous = [];
+    private double _masterTrimDb;
     private readonly Dictionary<Guid, Sounding> _sounding = [];
     private readonly List<string> _runtimeProblems = [];
     private readonly Lock _gate = new();
@@ -95,7 +101,29 @@ public sealed class ShowHost : IAsyncDisposable
         _session = session;
         _project = project;
         _triggers = new TriggerInputs(project);
+
+        // The registry holds delegates, so a fader always compares itself against what is true NOW.
+        // A cached value would latch against something the show had already moved past.
+        _parameters = ShowParameters.Build(
+            () => _masterTrimDb,
+            db =>
+            {
+                _masterTrimDb = db;
+                // The session takes a linear scale; the operator's parameter is decibels, and the
+                // conversion belongs here rather than in the registry, which is unit-agnostic.
+                _ = _session.SetMasterTrimAsync(
+                    db <= GainRange.SilenceFloorDb ? 0f : (float)Math.Pow(10, db / 20));
+            },
+            () => _project,
+            db =>
+            {
+                _project.Audition.LevelDb = db;
+                DocumentChangedByCue?.Invoke();
+            });
     }
+
+    /// <summary>The values a control surface may ride (register item 24).</summary>
+    public ParameterRegistry Parameters => _parameters;
 
     /// <summary>
     /// The external-input sources, and the one master gate over them (register item 3).
@@ -124,13 +152,59 @@ public sealed class ShowHost : IAsyncDisposable
                 await TransportAsync(action.ParameterId).ConfigureAwait(false);
                 break;
 
+            case TriggerTarget.Parameter when action.Value is { } value:
+                ApplyParameter(action.ParameterId, value);
+                break;
+
             case TriggerTarget.Parameter:
-                // The parameter registry is not wired yet: cc → master trim needs a registry of
-                // writable parameters, which is its own piece of work. Reported rather than dropped,
-                // so a binding that does nothing says so instead of looking like a dead controller.
-                Report($"“{action.Describe}” — parameter bindings are not implemented yet");
+                // A note-on bound to a fader-shaped parameter. Reported rather than dropped, because a
+                // binding that quietly does nothing reads as a dead controller.
+                Report($"“{action.Describe}” carries no value to write");
                 break;
         }
+    }
+
+    /// <summary>
+    /// Rides one parameter from a control surface.
+    /// </summary>
+    /// <remarks>
+    /// <b>Soft takeover, by default.</b> A physical fader has its own position, and after a cue or the
+    /// mouse has moved a parameter the two disagree — applying the fader's value on its first move
+    /// would jump the level audibly, mid-show. The binding ignores the control until it passes close to
+    /// the current value and only then latches on. The binding object is kept per parameter because the
+    /// latch is state: rebuilt per message, it would never latch at all.
+    /// </remarks>
+    private void ApplyParameter(string parameterId, double value)
+    {
+        if (!_parameters.TryGetTarget(parameterId, out var target))
+        {
+            Report($"“{parameterId}” is not a parameter this show offers");
+            return;
+        }
+
+        ContinuousBinding binding;
+
+        lock (_gate)
+        {
+            if (!_continuous.TryGetValue(parameterId, out var existing))
+            {
+                // The trigger layer has already scaled into the binding's own range, so the spec's
+                // input range is that range rather than a raw 0..127.
+                existing = new ContinuousBinding(
+                    new ContinuousBindingSpec(
+                        parameterId,
+                        InputMin: target.Minimum,
+                        InputMax: target.Maximum,
+                        SoftTakeover: true),
+                    _parameters);
+
+                _continuous[parameterId] = existing;
+            }
+
+            binding = existing;
+        }
+
+        binding.Apply(value);
     }
 
     /// <summary>The transport verbs a trigger can name. Unknown names are reported, never guessed.</summary>

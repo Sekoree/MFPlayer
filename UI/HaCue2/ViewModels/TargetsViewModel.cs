@@ -198,10 +198,29 @@ public partial class TargetsViewModel : ObservableObject
         IsLearning = false;
     }
 
-    /// <summary>What the new binding will fire — every cue in the show, plus the transport verbs.</summary>
+    /// <summary>The parameters a control surface may ride, when a session is running.</summary>
+    /// <remarks>
+    /// Read from the running host rather than a list authored here: the registry is what a binding
+    /// actually writes through, so a picker built from anything else could offer a parameter nothing
+    /// would accept.
+    /// </remarks>
+    private IReadOnlyList<S.Control.ParameterTarget> Parameters =>
+        Host is { } host ? ShowParameters.Describe(host.Parameters) : [];
+
+    /// <summary>The running show, when there is one. Set by the shell.</summary>
+    public ShowHost? Host { get; set; }
+
+    /// <summary>
+    /// What the new binding will act on — transport verbs, parameters, then every cue.
+    /// </summary>
+    /// <remarks>
+    /// Parameters sit between the verbs and the cues because a continuous control is almost always
+    /// meant for one: somebody who has just moved a fader is not looking for a cue to fire.
+    /// </remarks>
     public IReadOnlyList<string> LearnTargets =>
     [
         "transport · go", "transport · stop", "transport · pause", "transport · panic",
+        .. Parameters.Select(target => $"parameter · {target.DisplayName}"),
         .. _project.AllCues().Select(cue => $"Q{CuePresentation.Number(cue.Number)} · {cue.Label}"),
     ];
 
@@ -269,16 +288,30 @@ public partial class TargetsViewModel : ObservableObject
         };
 
         var verbs = new[] { "go", "stop", "pause", "panic" };
+        var parameters = Parameters;
 
         if (LearnTargetIndex < verbs.Length)
         {
             binding.Target = TriggerTarget.Transport;
             binding.ParameterId = verbs[LearnTargetIndex];
         }
+        else if (LearnTargetIndex - verbs.Length < parameters.Count)
+        {
+            var target = parameters[LearnTargetIndex - verbs.Length];
+
+            binding.Target = TriggerTarget.Parameter;
+            binding.ParameterId = target.Id;
+            // The parameter's OWN range, so the trigger layer scales the controller into decibels
+            // rather than into an arbitrary 0..1 the writer would then have to reinterpret.
+            binding.RangeMin = target.Minimum;
+            binding.RangeMax = target.Maximum;
+            // A fader sends a stream; a repeat filter on one would make it lurch.
+            binding.NoRepeatMs = 0;
+        }
         else
         {
             var cues = _project.AllCues().ToList();
-            var at = LearnTargetIndex - verbs.Length;
+            var at = LearnTargetIndex - verbs.Length - parameters.Count;
 
             if (at < 0 || at >= cues.Count)
                 return;

@@ -184,6 +184,7 @@ public partial class ShellViewModel : ObservableObject
         if (IsExternalInputEnabled)
             await Host.Triggers.SetEnabledAsync(true).ConfigureAwait(true);
         Cues.Engine = Host;
+        Targets.Host = Host;
         Audio.NoteAudioStarted();
 
         _engine = new EngineRuntime(Host, Runtime, Project);
@@ -318,6 +319,7 @@ public partial class ShellViewModel : ObservableObject
         _engine = null;
         Host = null;
         Cues.Engine = null;
+        Targets.Host = null;
 
         // Dropped rather than kept: it captured the host it was built with, and a Diagnostics window
         // reporting a session that no longer exists is worse than one saying there is none.

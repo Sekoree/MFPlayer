@@ -1975,3 +1975,29 @@ and the build refused them. They are named records with a source-generated conte
 contract deserved anyway.
 
 `SampleShow` is down to **34 lines and one member** — the project override ledger.
+
+**Known gap to close later — remote API dispatch is untested.** `RemoteApiRoutes` is covered
+exhaustively; `RemoteApiServer.HandleAsync` is not. It takes a concrete `ShowHost`, and a host needs
+devices, so auth, the 404/405 split and every transport call are currently exercised only by hand.
+Closing it means a seam over the transport verbs — an interface `ShowHost` implements, or a fake — so
+a request can be driven end to end without hardware. This is the one surface where a defect fires cues
+from off the machine, so it should be closed before a show-control system is pointed at it.
+
+**Parameter bindings (same day) — register item 24 completed.** External input could fire cues and
+transport verbs but REFUSED parameter bindings out loud, which was honest and incomplete. Closed over
+the framework's own `ParameterRegistry` / `ContinuousBinding`, which had landed and had no consumer.
+
+`ShowParameters` is HaCue2's answer to "which values does a cue player offer": master trim and the
+audition level, both in decibels over the same −60..+12 range the app's own level fields accept, so a
+fader and a typed value cannot disagree about what the ends mean. Deliberately few — exposing every
+number in the document would produce a list nobody could search and invite binding a surface to what
+are really authoring decisions.
+
+The registry holds **delegates, not values**, so a parameter always reads what is true now. That is
+what makes soft takeover work: a control latches against the live value rather than a cached one it
+had already moved past. Soft takeover is on by default, so a fader that is out of position is ignored
+until it catches up instead of jumping the level audibly mid-show — and the binding object is kept per
+parameter, because the latch is state that would never form if it were rebuilt per message.
+
+A parameter binding carries the target's own range and **no repeat filter**: a fader sends a stream,
+and the 250 ms filter that stops a button bouncing would make one lurch.
