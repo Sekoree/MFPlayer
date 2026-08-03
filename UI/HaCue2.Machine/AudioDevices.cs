@@ -48,6 +48,25 @@ public sealed class AudioDevices
     public IReadOnlyList<AudioDeviceInfo> Outputs => _devices;
 
     /// <summary>
+    /// The driver families the devices came from, in the order they were enumerated.
+    /// </summary>
+    /// <remarks>
+    /// Empty for a backend with no such concept, which is why a caller must treat "no host APIs" as
+    /// "do not offer the filter" rather than "no devices". On a typical Linux box this is ALSA, JACK
+    /// and OSS, and the SAME interface appears under two of them with different names — which is the
+    /// whole reason a picker needs to group by it.
+    /// </remarks>
+    public IReadOnlyList<string> HostApis =>
+        [.. _devices.Select(device => device.HostApi).Where(name => name.Length > 0).Distinct()];
+
+    /// <summary>The outputs belonging to one driver family, or all of them when it is empty.</summary>
+    public IReadOnlyList<AudioDeviceInfo> OutputsFor(string hostApi) =>
+        hostApi.Length == 0
+            ? _devices
+            : [.. _devices.Where(device =>
+                string.Equals(device.HostApi, hostApi, StringComparison.OrdinalIgnoreCase))];
+
+    /// <summary>
     /// Whether a line's device hint matches something here.
     /// </summary>
     /// <remarks>

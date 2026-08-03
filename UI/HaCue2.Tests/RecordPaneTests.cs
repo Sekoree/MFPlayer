@@ -30,7 +30,7 @@ public class RecordPaneTests
     [Fact]
     public Task ThePaneOnlyAppliesToRecordAndStreamLines() => ShellFixture.WithShell(shell =>
     {
-        var (audio, _) = WithRecordLine(shell, AudioLineKind.PortAudio);
+        var (audio, _) = WithRecordLine(shell, AudioLineKind.LocalAudio);
         Assert.False(audio.Record.IsRecording);
 
         var (record, _) = WithRecordLine(shell);

@@ -22,7 +22,10 @@ public partial class AudioViewModel : ObservableObject
         _runtime = runtime;
         var project = journal.Project;
 
-        // The counts in the tab labels are the real ones: add a logical output and the tab says so.
+        // The counts are the real ones AT CONSTRUCTION and deliberately stay that way: these strings
+        // are also the tab IDENTITIES (IsDevicesPane compares SelectedTab against them), so rewriting a
+        // label when a line is added would leave SelectedTab pointing at a tab that no longer exists
+        // and blank the pane. The live counts are on the lists themselves.
         OutputsTab = $"LOGICAL OUTPUTS · {project.AudioPatch.LogicalChannels.Count}";
         DevicesTab = $"DEVICES · {project.AudioLines.Count}";
         Tabs = [OutputsTab, PatchTab, DevicesTab, AuditionTab];
@@ -401,6 +404,21 @@ public partial class AudioViewModel : ObservableObject
     /// <summary>A brand-new project has no lines until somebody adds one.</summary>
     public bool HasNoLines => Lines.Count == 0;
 
+    /// <summary>
+    /// Whether there is anything to patch a logical output ONTO.
+    /// </summary>
+    /// <remarks>
+    /// A new project has logical outputs and no lines, deliberately — a line is one machine's sound
+    /// card and does not belong in a travelling document. That made the patch button a dead end: it
+    /// opened nothing, said nothing, and looked broken. It is disabled with a reason now.
+    /// </remarks>
+    public bool CanPatchToDevice => _project.AudioLines.Count > 0;
+
+    public string PatchHint =>
+        CanPatchToDevice
+            ? ""
+            : "no audio lines yet — add one under DEVICES, then patch this output onto its channels";
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedLineName))]
     private AudioLineRow? _selectedLine;
@@ -499,7 +517,7 @@ public partial class AudioViewModel : ObservableObject
     private List<AudioLineDefinition> EligibleMasters() =>
     [
         .. _project.AudioLines.Where(line =>
-            line.Kind == AudioLineKind.PortAudio
+            line.Kind == AudioLineKind.LocalAudio
             && (line.SampleRate is null || line.SampleRate == _project.AudioPatch.MixSampleRate)),
     ];
 
@@ -654,6 +672,9 @@ public partial class AudioViewModel : ObservableObject
 
         OnPropertyChanged(nameof(Outputs));
         OnPropertyChanged(nameof(Lines));
+        OnPropertyChanged(nameof(HasNoLines));
+        OnPropertyChanged(nameof(CanPatchToDevice));
+        OnPropertyChanged(nameof(PatchHint));
         OnPropertyChanged(nameof(PatchRows));
         OnPropertyChanged(nameof(PatchColumns));
         OnPropertyChanged(nameof(Senders));

@@ -9,6 +9,19 @@ public enum PromptFieldKind
     Number,
     Choice,
     Toggle,
+
+    /// <summary>
+    /// A folder on this machine, with a browse button beside it.
+    /// </summary>
+    /// <remarks>
+    /// Typing a path is how a media root ends up off by one directory and nothing resolves at the
+    /// venue. Still typable, because pasting one is faster than clicking through to it and because a
+    /// path that does not exist yet cannot be picked.
+    /// </remarks>
+    Folder,
+
+    /// <summary>A file on this machine, with a browse button beside it.</summary>
+    File,
 }
 
 /// <summary>One line of a prompt: a label, a value, and how to edit it.</summary>
@@ -18,8 +31,21 @@ public sealed partial class PromptField : ObservableObject
 
     public PromptFieldKind Kind { get; init; } = PromptFieldKind.Text;
 
-    /// <summary>Options for <see cref="PromptFieldKind.Choice"/>.</summary>
-    public IReadOnlyList<string> Options { get; init; } = [];
+    /// <summary>
+    /// Options for <see cref="PromptFieldKind.Choice"/>.
+    /// </summary>
+    /// <remarks>
+    /// Settable rather than init-only so one field can NARROW another: picking a host API refills the
+    /// device list, which is the difference between choosing from four devices and reading fifteen
+    /// near-identical names to find the one that is actually the interface.
+    /// </remarks>
+    [ObservableProperty]
+    private IReadOnlyList<string> _options = [];
+
+    /// <summary>Raised when the operator picks a different option — how a dependent field is refilled.</summary>
+    public event Action<PromptField>? Picked;
+
+    partial void OnSelectedIndexChanged(int value) => Picked?.Invoke(this);
 
     /// <summary>A line under the field, for the thing that is not obvious from its name.</summary>
     public string Hint { get; init; } = "";
@@ -36,6 +62,11 @@ public sealed partial class PromptField : ObservableObject
     public bool IsText => Kind is PromptFieldKind.Text or PromptFieldKind.Number;
     public bool IsChoice => Kind == PromptFieldKind.Choice;
     public bool IsToggle => Kind == PromptFieldKind.Toggle;
+
+    /// <summary>Whether this field takes a path — a text box plus a browse button.</summary>
+    public bool IsPath => Kind is PromptFieldKind.Folder or PromptFieldKind.File;
+
+    public bool IsFolder => Kind == PromptFieldKind.Folder;
     public bool HasHint => Hint.Length > 0;
 
     /// <summary>The value as a number, or <paramref name="fallback"/> when it is not one.</summary>

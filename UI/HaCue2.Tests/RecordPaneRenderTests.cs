@@ -136,7 +136,7 @@ public class RecordPaneRenderTests
     [Fact]
     public Task TheRecordPaneIsAbsentForAnInterfaceLine() => ShellFixture.WithShell(shell =>
     {
-        var line = new AudioLineDefinition { Name = "Main", Kind = AudioLineKind.PortAudio };
+        var line = new AudioLineDefinition { Name = "Main", Kind = AudioLineKind.LocalAudio };
         shell.Project.AudioLines.Add(line);
 
         var audio = new AudioViewModel(shell.Journal, shell.Runtime);

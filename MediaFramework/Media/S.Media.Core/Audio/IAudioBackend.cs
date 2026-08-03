@@ -6,12 +6,19 @@ namespace S.Media.Core.Audio;
 /// <see cref="IAudioBackend.CreateOutput"/> / <see cref="IAudioBackend.CreateInput"/>; pass <c>null</c>
 /// there for the system default device.
 /// </summary>
+/// <param name="HostApi">
+/// The driver family this device was enumerated through (ALSA, JACK, WASAPI, …), or empty for a
+/// backend that has no such concept. The SAME physical interface appears under several of them with
+/// different names and different channel counts, so a picker that cannot group by this makes the
+/// operator guess which of two identical-looking rows is the one they want.
+/// </param>
 public sealed record AudioDeviceInfo(
     string Id,
     string Name,
     int MaxChannels,
     double DefaultSampleRate,
-    bool IsDefault);
+    bool IsDefault,
+    string HostApi = "");
 
 /// <summary>
 /// Backend-neutral knobs for opening a device. Leave a value <c>null</c>/<c>0</c> to take the backend's

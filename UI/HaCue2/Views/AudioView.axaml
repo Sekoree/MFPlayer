@@ -131,7 +131,14 @@
                          Classes="err" IsVisible="{Binding IsSelectedOutputUnpatched}"
                          Text="No device channel receives Lobby on this machine. Cues sending here run silent — never redirected to a default device." />
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="primary block" Content="PATCH → PICK DEVICE CHANNELS…" Click="OnDialog" Tag="patch" />
+                <Button Classes="primary block" Content="PATCH → PICK DEVICE CHANNELS…" Click="OnDialog"
+                        Tag="patch" IsEnabled="{Binding CanPatchToDevice}" />
+              </ContentControl>
+              <!-- A new project has logical outputs and no LINES on purpose, which used to make this
+                   button open nothing and say nothing. -->
+              <ContentControl Theme="{StaticResource FieldWide}"
+                              IsVisible="{Binding PatchHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding PatchHint}" />
               </ContentControl>
             </StackPanel>
           </ScrollViewer>
@@ -232,7 +239,7 @@
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6">
-                <Button Grid.Column="0" Classes="tight" Content="+ PORTAUDIO…" Click="OnDialog" Tag="line:device" />
+                <Button Grid.Column="0" Classes="tight" Content="+ LOCAL AUDIO…" Click="OnDialog" Tag="line:device" />
                 <Button Grid.Column="1" Classes="tight" Content="+ NDI AUDIO…" Click="OnDialog" Tag="line:ndi" />
                 <Button Grid.Column="2" Classes="tight" Content="+ RECORD…" Click="OnDialog" Tag="line:record" />
                 <Button Grid.Column="3" Classes="tight" Content="+ STREAM…" Click="OnDialog" Tag="line:stream" />

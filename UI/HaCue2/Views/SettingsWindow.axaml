@@ -212,6 +212,16 @@
           <c:PanelBox IsVisible="{Binding IsCachePane}" VerticalAlignment="Top"
                       Header="Media cache" Hint="derived data only — never show content">
             <StackPanel Margin="0,6,0,8">
+              <!-- Advanced, and grouped with the cache because both are about how this MACHINE is set
+                   up rather than about the show. The two backends see different devices, so this
+                   changes what the whole app thinks the rig is — hence the note about restarting. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Local audio backend">
+                <ComboBox ItemsSource="{Binding AudioBackends}" SelectedItem="{Binding AudioBackend}" />
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
+                           Text="{Binding AudioBackendNote}" />
+              </ContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Location">
                 <TextBox Text="{Binding CacheRoot}" />
               </HeaderedContentControl>

@@ -190,7 +190,10 @@ public sealed class ArchitectureTests
         // and which context are exactly the kind of decision a head makes.
         ["HaCue2.Desktop"] =
         [
-            "HaCue2", "HaCue2.Core", "HaCue2.Machine", "HaCue2.Engine", "S.Media.Audio.PortAudio",
+            "HaCue2", "HaCue2.Core", "HaCue2.Machine", "HaCue2.Engine",
+            // Both local-audio backends: which one opens a device is a machine setting, and choosing
+            // between them is exactly the kind of decision a composition root makes.
+            "S.Media.Audio.PortAudio", "S.Media.Audio.MiniAudio",
             "S.Media.Decode.FFmpeg", "S.Media.Session", "S.Media.Core", "S.Media.Time",
             "S.Media.Routing", "S.Media.Players", "S.Media.Compositor", "S.Media.Gpu",
             "S.Media.Present.SDL3", "S.Media.Present.SDL3.Compositor", "S.Media.Visualizer.ProjectM",

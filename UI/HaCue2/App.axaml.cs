@@ -28,7 +28,9 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        Settings = AppSettingsStore.Load();
+        // Touched rather than assigned: the desktop head has already loaded these to pick an audio
+        // backend from them, and loading again would discard that choice.
+        _ = Settings;
 
         // Before anything that logs, and before the framework is touched: MediaDiagnostics resolves
         // per-category loggers from whatever factory is installed at the moment it is asked, so a
@@ -106,7 +108,22 @@ public partial class App : Application
     /// Read before any window so the operator's theme and density are in place for the FIRST layout —
     /// applying them afterwards makes the app visibly re-flow on the first look at it.
     /// </remarks>
-    public static AppSettings Settings { get; private set; } = new();
+    private static AppSettings? _settings;
+
+    /// <summary>
+    /// The machine's settings.
+    /// </summary>
+    /// <remarks>
+    /// Set by the desktop head, which must read them BEFORE this class runs: which audio backend to
+    /// open is one of them, and the backend is chosen at the composition root. Loaded lazily when
+    /// nothing set them — a preview or a headless capture has no head — and never loaded twice, so a
+    /// second read cannot discard the choice the backend was picked from.
+    /// </remarks>
+    public static AppSettings Settings
+    {
+        get => _settings ??= AppSettingsStore.Load();
+        set => _settings = value;
+    }
 
     /// <summary>
     /// Opens a shell and starts its engine.

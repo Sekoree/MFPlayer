@@ -1,6 +1,7 @@
 using Avalonia;
 using HaCue2.Machine;
 using HaCue2.Session;
+using S.Media.Core.Audio;
 using S.Media.Audio.PortAudio;
 
 namespace HaCue2.Desktop;
@@ -13,12 +14,24 @@ internal static class Program
 
     public static AppBuilder BuildAvaloniaApp()
     {
-        // The composition root picks the backend. PortAudio matches what HaPlay checks against, so a
-        // show authored in one and opened in the other reports the same devices present.
-        // One backend instance: the device list the status pass checks against and the one the engine
-        // opens outputs on must be the same, or a line can read "present" and then fail to open.
-        var backend = new PortAudioBackend();
+        // The composition root picks the backend, from the MACHINE's setting — the two see different
+        // devices on the same box, so this is a property of the rig and never of the show. PortAudio is
+        // the default because it is what the status pass and HaPlay both check against; miniaudio is
+        // the answer when a box's PortAudio build is itself the problem.
+        //
+        // ONE backend instance either way: the device list the status pass checks against and the one
+        // the engine opens outputs on must be the same, or a line reads "present" and then fails to open.
+        // Loaded HERE rather than read off the app: OnFrameworkInitializationCompleted runs after
+        // this, so App.Settings would still be the defaults and the operator's choice would be
+        // silently ignored. Handed over below so it is read from disk exactly once.
+        var settings = AppSettingsStore.Load();
 
+        IAudioBackend backend =
+            settings.AudioBackend.Equals("miniaudio", StringComparison.OrdinalIgnoreCase)
+                ? new S.Media.Audio.MiniAudio.MiniAudioBackend()
+                : new PortAudioBackend();
+
+        HaCue2.App.Settings = settings;
         HaCue2.App.Machine = new MachineFacts(new AudioDevices(backend));
         HaCue2.App.Backend = backend;
 

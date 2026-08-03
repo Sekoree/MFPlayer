@@ -83,7 +83,7 @@ public sealed record AudioLineDefinition
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "";
-    public AudioLineKind Kind { get; set; } = AudioLineKind.PortAudio;
+    public AudioLineKind Kind { get; set; } = AudioLineKind.LocalAudio;
 
     /// <summary>
     /// How this line is found on a machine — a device name, an NDI source name, a file pattern. It is
@@ -117,7 +117,15 @@ public sealed record AudioLineDefinition
 
 public enum AudioLineKind
 {
-    PortAudio,
+    /// <summary>
+    /// A sound device on this machine.
+    /// </summary>
+    /// <remarks>
+    /// NOT named after a backend. Which library opens the device — PortAudio or miniaudio — is a
+    /// MACHINE setting, so a line called "PortAudio" played through miniaudio would be a document
+    /// contradicting itself. What the document means is "a local sound card", and that is stable.
+    /// </remarks>
+    LocalAudio,
     Ndi,
     FileRecord,
     Stream,

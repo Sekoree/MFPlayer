@@ -22,21 +22,21 @@ public sealed class ImplementationRegressionTests
             AutoRenumberDefault = false,
             StandbyFollowsClick = true,
         };
-        var devices = new AudioDevices(new FakeBackend());
-
-        var project = ProjectFiles.Create("Show", "/media", settings, new MachineFacts(devices));
+        var project = ProjectFiles.Create("Show", "/media", settings);
 
         Assert.Equal(96_000, project.AudioPatch.MixSampleRate);
         Assert.Equal(321, project.Settings.DefaultFadeInMs);
         Assert.Equal(4_567, project.Settings.DefaultFadeOutMs);
         Assert.False(project.Settings.AutoRenumberOnInsert);
         Assert.True(project.Settings.ClickMovesStandby);
-        var line = Assert.Single(project.AudioLines);
-        Assert.Equal("Default Device", line.DeviceHint);
-        Assert.True(line.Required);
-        Assert.Equal(line.Id, project.AudioPatch.ClockMasterLineId);
-        Assert.Equal(2, project.AudioPatch.Cells.Count);
-        Assert.Equal([0, 1], project.AudioPatch.Cells.Select(cell => cell.LineChannel));
+
+        // LOGICAL outputs, and no audio line. Main L/R are what the show calls its destinations and
+        // travel with it; a line is a device on ONE machine, so adopting whatever the authoring laptop
+        // had would put that laptop's sound card into a document bound for a venue.
+        Assert.Equal(["Main L", "Main R"], project.AudioPatch.LogicalChannels.Select(item => item.Name));
+        Assert.Empty(project.AudioLines);
+        Assert.Empty(project.AudioPatch.Cells);
+        Assert.Null(project.AudioPatch.ClockMasterLineId);
     }
 
     [Fact]
@@ -149,4 +149,81 @@ public sealed class ImplementationRegressionTests
         public IAudioSource CreateInput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
             throw new NotSupportedException();
     }
+
+    // ── the local-audio device picker ─────────────────────────────────────────────────────────
+
+    private sealed class PickerBackend : S.Media.Core.Audio.IAudioBackend
+    {
+        public string Name => "fake";
+
+        public IReadOnlyList<S.Media.Core.Audio.AudioDeviceInfo> EnumerateOutputDevices() =>
+        [
+            new("0", "HD-Audio Generic: HDMI 0 (hw:0,3)", 8, 48_000, false, "ALSA"),
+            new("1", "default", 128, 48_000, true, "ALSA"),
+            new("2", "Scarlett 2i2 3rd Gen Pro", 2, 48_000, false, "JACK"),
+        ];
+
+        public IReadOnlyList<S.Media.Core.Audio.AudioDeviceInfo> EnumerateInputDevices() => [];
+
+        public S.Media.Core.Audio.IAudioOutput CreateOutput(
+            string? id, S.Media.Core.Audio.AudioFormat format,
+            S.Media.Core.Audio.AudioBackendOptions? options = null) => throw new NotSupportedException();
+
+        public S.Media.Core.Audio.IAudioSource CreateInput(
+            string? id, S.Media.Core.Audio.AudioFormat format,
+            S.Media.Core.Audio.AudioBackendOptions? options = null) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void TheLocalAudioDialogPicksADeviceRatherThanAskingForItsName()
+    {
+        var journal = new ProjectJournal(new HaCueProject());
+        var devices = new AudioDevices(new PickerBackend());
+
+        var prompt = Dialogs.AddAudioLine(journal, AudioLineKind.LocalAudio, devices);
+        var driver = prompt.Fields.Single(field => field.Label == "Driver");
+        var device = prompt.Fields.Single(field => field.Label == "Device");
+        var channels = prompt.Fields.Single(field => field.Label == "Channels");
+
+        // "any" plus the families that were actually enumerated.
+        Assert.Equal(["any", "ALSA", "JACK"], driver.Options);
+
+        // It opens on the machine's DEFAULT device, which is the one an operator most often wants and
+        // the only one they could otherwise have typed from memory.
+        Assert.Equal(3, device.Options.Count);
+        Assert.StartsWith("default · 128ch · default", device.Choice, StringComparison.Ordinal);
+
+        // Picking a driver narrows the list — the difference between choosing from one device and
+        // reading fifteen near-identical names to find the interface.
+        driver.SelectedIndex = 2;
+        Assert.Equal(["Scarlett 2i2 3rd Gen Pro · 2ch"], device.Options);
+
+        // The channel count follows the device, because it is the number the patch is built against
+        // and the one an operator would otherwise look up and get wrong.
+        device.SelectedIndex = 0;
+        Assert.Equal("2", channels.Value);
+
+        prompt.Commit();
+
+        // What travels in the document is the NAME, because that is what the hint matches at the
+        // venue. The driver narrowed the list and is deliberately not stored.
+        var line = Assert.Single(journal.Project.AudioLines);
+        Assert.Equal("Scarlett 2i2 3rd Gen Pro", line.DeviceHint);
+        Assert.Equal(AudioLineKind.LocalAudio, line.Kind);
+        Assert.Equal(2, line.Channels);
+    }
+
+    [Fact]
+    public void WithNoBackendToAskTheDialogFallsBackToATypedHint()
+    {
+        var journal = new ProjectJournal(new HaCueProject());
+
+        // A preview, a headless capture, or a show authored on a laptop for a rig it has never seen.
+        var prompt = Dialogs.AddAudioLine(journal, AudioLineKind.LocalAudio, devices: null);
+
+        Assert.DoesNotContain(prompt.Fields, field => field.Label == "Driver");
+        var device = prompt.Fields.Single(field => field.Label == "Device");
+        Assert.Equal(PromptFieldKind.Text, device.Kind);
+    }
 }
+

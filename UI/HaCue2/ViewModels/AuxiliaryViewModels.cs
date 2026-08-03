@@ -62,6 +62,7 @@ public partial class LauncherViewModel : ObservableObject
                 new PromptField
                 {
                     Label = "Media root",
+                    Kind = PromptFieldKind.Folder,
                     Value = "",
                     Hint = "where this show's media lives · relinking searches under it",
                 },
@@ -70,8 +71,7 @@ public partial class LauncherViewModel : ObservableObject
                 ProjectFiles.Create(
                     prompt["Name"].Value.Trim(),
                     prompt["Media root"].Value.Trim(),
-                    _settings,
-                    _machine),
+                    _settings),
                 ""),
             confirm: "CREATE");
 
@@ -570,6 +570,7 @@ public partial class SettingsViewModel : ObservableObject
         _remoteDefault = _app.RemoteDefault;
         _remotePort = _app.RemotePort;
         _remoteLanAllowed = _app.RemoteLanAllowed;
+        _audioBackend = _app.AudioBackend;
         _cacheRoot = _app.CacheRoot.Length > 0 ? _app.CacheRoot : "(shared framework cache)";
         _waveformBudget = _app.WaveformBudget;
         _thumbnailBudget = _app.ThumbnailBudget;
@@ -616,6 +617,20 @@ public partial class SettingsViewModel : ObservableObject
     partial void OnRemoteLanAllowedChanged(bool value) => WriteApp(app => app.RemoteLanAllowed = value);
     partial void OnWaveformBudgetChanged(string value) => WriteApp(app => app.WaveformBudget = value);
     partial void OnThumbnailBudgetChanged(string value) => WriteApp(app => app.ThumbnailBudget = value);
+    /// <summary>
+    /// Records the backend choice WITHOUT changing the running one.
+    /// </summary>
+    /// <remarks>
+    /// The note beside it goes stale on purpose the moment these differ: swapping the backend under a
+    /// running show would close every device mid-cue, so the honest behaviour is to save the choice and
+    /// say when it applies.
+    /// </remarks>
+    partial void OnAudioBackendChanged(string value)
+    {
+        WriteApp(app => app.AudioBackend = value);
+        OnPropertyChanged(nameof(AudioBackendNote));
+    }
+
     partial void OnFileLogLevelChanged(string value) => WriteApp(app => app.FileLogLevel = value);
     partial void OnLogRetentionChanged(string value) => WriteApp(app => app.LogRetention = value);
     partial void OnCrashDumpsChanged(bool value) => WriteApp(app => app.CrashDumps = value);
@@ -1177,6 +1192,25 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _remotePort = "8420";
     [ObservableProperty] private bool _remoteLanAllowed;
 
+    // ── advanced ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Which library opens local sound devices.</summary>
+    /// <remarks>
+    /// The two enumerate DIFFERENT devices on the same box, so this changes what the whole app thinks
+    /// the rig is. It is read at start-up, before a window exists, which is why the pane says so
+    /// instead of pretending the change is live.
+    /// </remarks>
+    public IReadOnlyList<string> AudioBackends { get; } = ["portaudio", "miniaudio"];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AudioBackendNote))]
+    private string _audioBackend = "portaudio";
+
+    public string AudioBackendNote =>
+        string.Equals(AudioBackend, _app.AudioBackend, StringComparison.OrdinalIgnoreCase)
+            ? "the backend this session opened devices with"
+            : "restart HaCue2 for this to take effect";
+
     // ── media cache ───────────────────────────────────────────────────────────────────────────
     [ObservableProperty] private string _cacheRoot = "~/.local/share/hacue2/cache";
     [ObservableProperty] private string _waveformBudget = "2.0 GB";
@@ -1344,7 +1378,13 @@ public partial class ProjectStatusViewModel : ObservableObject
             "Relink under a new root",
             "only MISSING files are touched",
             [
-                new PromptField { Label = "Root", Value = Project.Settings.MediaRoot, Hint = "the folder to search" },
+                new PromptField
+                {
+                    Label = "Root",
+                    Kind = PromptFieldKind.Folder,
+                    Value = Project.Settings.MediaRoot,
+                    Hint = "the folder to search",
+                },
                 new PromptField
                 {
                     Label = "Match",

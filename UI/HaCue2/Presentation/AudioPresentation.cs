@@ -237,7 +237,7 @@ public static class AudioPresentation
 
     private static string KindLabel(AudioLineKind kind) => kind switch
     {
-        AudioLineKind.PortAudio => "PortAudio",
+        AudioLineKind.LocalAudio => "local audio",
         AudioLineKind.Ndi => "NDI audio",
         AudioLineKind.FileRecord => "File",
         _ => "Live stream",

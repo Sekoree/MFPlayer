@@ -342,7 +342,7 @@ public sealed class RecorderTests : IDisposable
         var (recorders, project, _, _) = Show("show.mkv");
 
         project.VideoOutputs.Add(new VideoOutputDefinition { Name = "Projector", Kind = VideoOutputKind.LocalScreen });
-        project.AudioLines.Add(new AudioLineDefinition { Name = "Main", Kind = AudioLineKind.PortAudio });
+        project.AudioLines.Add(new AudioLineDefinition { Name = "Main", Kind = AudioLineKind.LocalAudio });
         recorders.Adopt(project);
 
         var row = Assert.Single(recorders.Status());

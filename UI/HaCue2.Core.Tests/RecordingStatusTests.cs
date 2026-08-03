@@ -111,7 +111,7 @@ public class RecordingStatusTests
     {
         var project = new HaCueProject
         {
-            AudioLines = [new AudioLineDefinition { Name = "Main", Kind = AudioLineKind.PortAudio }],
+            AudioLines = [new AudioLineDefinition { Name = "Main", Kind = AudioLineKind.LocalAudio }],
             VideoOutputs = [new VideoOutputDefinition { Name = "Projector", Kind = VideoOutputKind.LocalScreen }],
         };
 

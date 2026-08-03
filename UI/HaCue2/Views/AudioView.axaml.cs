@@ -32,7 +32,7 @@ public partial class AudioView : UserControl
 
         var prompt = verb switch
         {
-            "line:device" => Dialogs.AddAudioLine(journal, AudioLineKind.PortAudio),
+            "line:device" => Dialogs.AddAudioLine(journal, AudioLineKind.LocalAudio, App.Machine.Devices),
             "line:ndi" => Dialogs.AddAudioLine(journal, AudioLineKind.Ndi),
             "line:record" => Dialogs.AddAudioLine(journal, AudioLineKind.FileRecord),
             "line:stream" => Dialogs.AddAudioLine(journal, AudioLineKind.Stream),

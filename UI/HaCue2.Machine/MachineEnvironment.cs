@@ -27,7 +27,7 @@ public sealed class MachineEnvironment(AudioDevices devices) : IProjectEnvironme
     {
         // Only host audio devices are enumerable here. An NDI sender or a record file is reachable or
         // not for reasons this class cannot see, so it does not pretend to know.
-        AudioLineKind.PortAudio => Devices.Match(line),
+        AudioLineKind.LocalAudio => Devices.Match(line),
         _ => DeviceAvailability.Unknown,
     };
 

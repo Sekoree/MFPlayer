@@ -13,17 +13,50 @@ public sealed class PortAudioBackend : IAudioBackend
 {
     public string Name => "PortAudio";
 
-    public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices() =>
-        PortAudioDeviceCatalog.EnumerateOutputDevices()
-            .Select(d => new AudioDeviceInfo(
-                DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxOutputChannels, d.DefaultSampleRate, d.IsDefault))
-            .ToArray();
+    public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices()
+    {
+        var hosts = HostApiNames();
 
-    public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices() =>
-        PortAudioDeviceCatalog.EnumerateInputDevices()
-            .Select(d => new AudioDeviceInfo(
-                DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxInputChannels, d.DefaultSampleRate, d.IsDefault))
-            .ToArray();
+        return
+        [
+            .. PortAudioDeviceCatalog.EnumerateOutputDevices()
+                .Select(d => new AudioDeviceInfo(
+                    DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxOutputChannels, d.DefaultSampleRate,
+                    d.IsDefault, HostApi(hosts, d.HostApiIndex))),
+        ];
+    }
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices()
+    {
+        var hosts = HostApiNames();
+
+        return
+        [
+            .. PortAudioDeviceCatalog.EnumerateInputDevices()
+                .Select(d => new AudioDeviceInfo(
+                    DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxInputChannels, d.DefaultSampleRate,
+                    d.IsDefault, HostApi(hosts, d.HostApiIndex))),
+        ];
+    }
+
+    /// <summary>Host API names by index, so each device can carry the family it came from.</summary>
+    private static Dictionary<int, string> HostApiNames()
+    {
+        try
+        {
+            return PortAudioDeviceCatalog.EnumerateHostApis()
+                .ToDictionary(host => host.Index, host => host.Name);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // A device list without its host API names is still a device list. Enumeration must not
+            // fail because the grouping label could not be read.
+            return [];
+        }
+    }
+
+    private static string HostApi(Dictionary<int, string> hosts, int index) =>
+        hosts.GetValueOrDefault(index, "");
 
     public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)
     {

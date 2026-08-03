@@ -91,7 +91,7 @@ public sealed class AudioDeviceTests
     }
 
     private static AudioLineDefinition Line(string hint) =>
-        new() { Name = "line", Kind = AudioLineKind.PortAudio, DeviceHint = hint };
+        new() { Name = "line", Kind = AudioLineKind.LocalAudio, DeviceHint = hint };
 
     private sealed class FakeBackend(params string[] names) : IAudioBackend
     {
@@ -127,4 +127,59 @@ public sealed class AudioDeviceTests
         public IAudioSource CreateInput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
             throw new NotSupportedException();
     }
+
+    // ── the device picker's data (host APIs) ──────────────────────────────────────────────────
+
+    private sealed class HostBackend : IAudioBackend
+    {
+        public string Name => "fake";
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices() =>
+        [
+            new("0", "Scarlett 2i2 USB: Audio (hw:3,0)", 2, 48_000, false, "ALSA"),
+            new("1", "default", 128, 48_000, true, "ALSA"),
+            new("2", "Scarlett 2i2 3rd Gen Pro", 2, 48_000, false, "JACK"),
+        ];
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices() => [];
+
+        public IAudioOutput CreateOutput(
+            string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
+            throw new NotSupportedException();
+
+        public IAudioSource CreateInput(
+            string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
+            throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void HostApisAreListedInTheOrderTheyWereEnumerated() =>
+        // The picker's first control. Distinct, because a family with a dozen devices is still one
+        // choice, and ordered, because the operator reads them as a list.
+        Assert.Equal(["ALSA", "JACK"], new AudioDevices(new HostBackend()).HostApis);
+
+    [Fact]
+    public void OneHostApisDevicesAreWhatNarrowingMeans()
+    {
+        var devices = new AudioDevices(new HostBackend());
+
+        Assert.Equal(
+            ["Scarlett 2i2 USB: Audio (hw:3,0)", "default"],
+            devices.OutputsFor("ALSA").Select(device => device.Name));
+
+        // The SAME interface under another driver, with another name. Picking the wrong one is how a
+        // show ends up on the wrong driver, which is the whole reason the filter exists.
+        Assert.Equal(["Scarlett 2i2 3rd Gen Pro"], devices.OutputsFor("JACK").Select(d => d.Name));
+    }
+
+    [Fact]
+    public void AnEmptyFilterIsEveryDevice() =>
+        Assert.Equal(3, new AudioDevices(new HostBackend()).OutputsFor("").Count);
+
+    [Fact]
+    public void ABackendWithNoHostApiConceptOffersNoFilter() =>
+        // miniaudio has no such notion, and a picker must read that as "do not offer the control"
+        // rather than as "no devices".
+        Assert.Empty(new AudioDevices(new FakeBackend()).HostApis);
 }
+

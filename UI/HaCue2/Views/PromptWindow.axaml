@@ -37,6 +37,13 @@
                   <ComboBox IsVisible="{Binding IsChoice}" HorizontalAlignment="Stretch"
                             ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" />
                   <CheckBox IsVisible="{Binding IsToggle}" IsChecked="{Binding IsOn}" />
+                  <!-- Still typable beside the button: pasting a path is faster than clicking to it,
+                       and one that does not exist yet cannot be picked at all. -->
+                  <Grid IsVisible="{Binding IsPath}" ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                    <TextBox Grid.Column="0" Text="{Binding Value}" />
+                    <Button Grid.Column="1" Classes="tight" Content="BROWSE…" Click="OnBrowse"
+                            Tag="{Binding}" />
+                  </Grid>
                 </Panel>
               </HeaderedContentControl>
               <TextBlock Classes="mono dim3 micro" Margin="115,0,10,4" TextWrapping="Wrap"

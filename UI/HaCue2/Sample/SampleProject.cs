@@ -25,12 +25,12 @@ public static class SampleProject
     public static HaCueProject Create()
     {
         // ── audio lines ────────────────────────────────────────────────────────────────────────
-        var interface18i20 = Line("18i20", AudioLineKind.PortAudio, 8, 48_000, "Scarlett 18i20 (ALSA)");
+        var interface18i20 = Line("18i20", AudioLineKind.LocalAudio, 8, 48_000, "Scarlett 18i20 (ALSA)");
         var ndi = Line("NDI Prog", AudioLineKind.Ndi, 2, 48_000, "HACUE-PROG");
         // 44.1 k sink on a 48 k mix: legal, resampled, and never eligible as clock master.
         var record = Line("Record", AudioLineKind.FileRecord, 2, 44_100, "show-{date}.flac");
         var stream = Line("Stream", AudioLineKind.Stream, 2, 48_000, "rtmp://…");
-        var wedge = Line("Wedge", AudioLineKind.PortAudio, 2, null, "Behringer UCA222");
+        var wedge = Line("Wedge", AudioLineKind.LocalAudio, 2, null, "Behringer UCA222");
 
         // ── logical outputs ────────────────────────────────────────────────────────────────────
         var mainL = Channel("Main L", 0);

@@ -50,6 +50,24 @@ public sealed record AppSettings
     public string Density { get; set; } = "normal";
     public string RowSize { get; set; } = "26 px";
     public string FontScale { get; set; } = "100 %";
+    /// <summary>
+    /// Which library opens local sound devices: <c>portaudio</c> or <c>miniaudio</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A MACHINE setting, never a project one — the two see different devices on the same box (this one
+    /// enumerates fifteen outputs through PortAudio and two through miniaudio), so a show carrying its
+    /// own choice would arrive at a venue and change what that venue's rig looks like.
+    /// </para>
+    /// <para>
+    /// The backend is chosen at the composition root, before a window exists, so changing it takes
+    /// effect on the next start. Advanced on purpose: PortAudio is the default because it is what the
+    /// status pass and HaPlay both check against, and miniaudio is the answer when a box's PortAudio
+    /// build is the thing that is broken.
+    /// </para>
+    /// </remarks>
+    public string AudioBackend { get; set; } = "portaudio";
+
     public string MeterBallistics { get; set; } = "PPM fast";
     public string ClipReset { get; set; } = "on click";
     public bool RememberInspectorTab { get; set; } = true;

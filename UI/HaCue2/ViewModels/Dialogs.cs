@@ -1,5 +1,6 @@
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
+using HaCue2.Machine;
 using HaCue2.Core.Patch;
 
 namespace HaCue2.ViewModels;
@@ -25,38 +26,144 @@ public static class Dialogs
     // ── audio ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>A new audio line: a device this show sends to.</summary>
-    public static PromptViewModel AddAudioLine(ProjectJournal journal, AudioLineKind kind)
+    public static PromptViewModel AddAudioLine(ProjectJournal journal, AudioLineKind kind) =>
+        AddAudioLine(journal, kind, devices: null);
+
+    /// <summary>
+    /// A new output line, with a real device picker when the machine could be asked.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The device is CHOSEN, not typed.</b> This box enumerates fifteen outputs across three driver
+    /// families with names like <c>HD-Audio Generic: HDMI 0 (hw:0,3)</c> — nobody types that from
+    /// memory, and a hint that does not match is a silent absence at the venue rather than an error
+    /// here. With no backend to ask (a preview, a headless capture) it falls back to a free-text hint,
+    /// which is also the honest thing for a show authored on a laptop for a rig it has never seen.
+    /// </para>
+    /// <para>
+    /// <b>The host API narrows the list rather than being stored.</b> The same interface appears as
+    /// "Scarlett 2i2 USB: Audio (hw:3,0)" under ALSA and "Scarlett 2i2 3rd Gen Pro" under JACK — two
+    /// different names for one box, and picking the wrong one is how a show ends up on the wrong
+    /// driver. What travels in the document is the NAME, because that is what the hint matches on.
+    /// </para>
+    /// </remarks>
+    public static PromptViewModel AddAudioLine(
+        ProjectJournal journal, AudioLineKind kind, AudioDevices? devices)
     {
         var name = new PromptField { Label = "Name", Value = Suggest(kind) };
-        var hint = new PromptField
+        var local = kind == AudioLineKind.LocalAudio;
+        var catalog = local && devices is { Enumerated: true } ? devices : null;
+
+        var channels = new PromptField
+        {
+            Label = "Channels", Kind = PromptFieldKind.Number, Value = "2",
+        };
+
+        if (catalog is null)
+        {
+            var typed = new PromptField
+            {
+                Label = "Device",
+                Value = "",
+                // The hint is deliberately not an identity (see AudioLineDefinition): on another
+                // machine it may match nothing, and that is a reported absence, never a silent redirect.
+                Hint = "matched by name · leave empty for the default device",
+            };
+
+            return Build(journal, kind, name, () => typed.Value.Trim(), channels, [name, typed, channels]);
+        }
+
+        var hosts = catalog.HostApis;
+
+        // "Any" first, so a rig with one driver family needs no decision — and so a show authored
+        // against a name that exists under several of them can still be pointed at any of them.
+        var hostOptions = new List<string> { "any" };
+        hostOptions.AddRange(hosts);
+
+        var host = new PromptField
+        {
+            Label = "Driver",
+            Kind = PromptFieldKind.Choice,
+            Options = hostOptions,
+            Hint = "narrows the list below · not stored in the show",
+        };
+
+        var device = new PromptField
         {
             Label = "Device",
-            Value = "",
-            // The hint is deliberately not an identity (see AudioLineDefinition): on another machine
-            // it may match nothing, and that is a reported absence rather than a silent redirect.
-            Hint = "matched by name · leave empty for the default device",
+            Kind = PromptFieldKind.Choice,
+            Hint = "the name the show will match on at the venue",
         };
-        var channels = new PromptField { Label = "Channels", Kind = PromptFieldKind.Number, Value = "2" };
 
-        return new PromptViewModel(
+        void Fill()
+        {
+            var chosen = host.Choice == "any" ? "" : host.Choice;
+            var found = catalog.OutputsFor(chosen);
+
+            // The channel count follows the device, because it is the number an operator would
+            // otherwise have to look up and get wrong — the patch is built against it.
+            device.Options = [.. found.Select(Label)];
+            device.SelectedIndex = Math.Max(0, found.ToList().FindIndex(item => item.IsDefault));
+        }
+
+        Fill();
+        host.Picked += _ => Fill();
+
+        device.Picked += _ =>
+        {
+            var chosen = host.Choice == "any" ? "" : host.Choice;
+            var found = catalog.OutputsFor(chosen);
+
+            if (device.SelectedIndex >= 0 && device.SelectedIndex < found.Count)
+                channels.Value = Math.Clamp(found[device.SelectedIndex].MaxChannels, 1, 64)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        };
+
+        return Build(
+            journal,
+            kind,
+            name,
+            () =>
+            {
+                var chosen = host.Choice == "any" ? "" : host.Choice;
+                var found = catalog.OutputsFor(chosen);
+
+                return device.SelectedIndex >= 0 && device.SelectedIndex < found.Count
+                    ? found[device.SelectedIndex].Name
+                    : "";
+            },
+            channels,
+            [name, host, device, channels]);
+    }
+
+    /// <summary>One device row: its name, its width, and whether the machine calls it the default.</summary>
+    private static string Label(S.Media.Core.Audio.AudioDeviceInfo device) =>
+        $"{device.Name} · {device.MaxChannels}ch{(device.IsDefault ? " · default" : "")}";
+
+    private static PromptViewModel Build(
+        ProjectJournal journal,
+        AudioLineKind kind,
+        PromptField name,
+        Func<string> hint,
+        PromptField channels,
+        IReadOnlyList<PromptField> fields) =>
+        new(
             $"Add {Describe(kind)} line",
             "an output this show can patch to",
-            [name, hint, channels],
-            prompt => journal.Do(new AddItemCommand<AudioLineDefinition>(
+            fields,
+            _ => journal.Do(new AddItemCommand<AudioLineDefinition>(
                 journal.Project.AudioLines,
                 new AudioLineDefinition
                 {
-                    Name = prompt["Name"].Value.Trim(),
+                    Name = name.Value.Trim(),
                     Kind = kind,
-                    DeviceHint = prompt["Device"].Value.Trim(),
-                    Channels = Math.Clamp(prompt["Channels"].Number(2), 1, 64),
+                    DeviceHint = hint(),
+                    Channels = Math.Clamp(channels.Number(2), 1, 64),
                 },
                 journal.Project.AudioLines.Count,
                 "audio",
-                $"add line “{prompt["Name"].Value.Trim()}”")));
-    }
+                $"add line “{name.Value.Trim()}”")));
 
-    /// <summary>A new logical output — the show's own name for a destination.</summary>
     public static PromptViewModel AddLogicalOutput(ProjectJournal journal)
     {
         var patch = journal.Project.AudioPatch;
@@ -609,7 +716,7 @@ public static class Dialogs
 
     private static string Describe(AudioLineKind kind) => kind switch
     {
-        AudioLineKind.PortAudio => "device",
+        AudioLineKind.LocalAudio => "local audio",
         AudioLineKind.Ndi => "NDI",
         AudioLineKind.FileRecord => "record",
         _ => "stream",
@@ -625,7 +732,7 @@ public static class Dialogs
 
     private static string Suggest(AudioLineKind kind) => kind switch
     {
-        AudioLineKind.PortAudio => "Interface",
+        AudioLineKind.LocalAudio => "Local output",
         AudioLineKind.Ndi => "NDI audio",
         AudioLineKind.FileRecord => "Record",
         _ => "Stream",
