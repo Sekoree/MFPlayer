@@ -3,6 +3,7 @@ using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Engine;
 using HaCue2.Presentation;
+using HaCue2.ViewModels;
 
 namespace HaCue2.Session;
 
@@ -33,11 +34,21 @@ public sealed class EngineRuntime : IAsyncDisposable
     private readonly DispatcherTimer _timer;
     private bool _polling;
 
+    /// <summary>The wire monitor's depth. Enough to see what just happened, bounded so a controller
+    /// spraying CC never grows without limit.</summary>
+    private const int MonitorDepth = 60;
+
+    private readonly List<LogLine> _monitor = [];
+
     public EngineRuntime(ShowHost host, ShowRuntime runtime, HaCueProject project)
     {
         _host = host;
         _runtime = runtime;
         _project = project;
+
+        // Every inbound message, matched or not. Raised on the I/O thread, so nothing here does more
+        // than append — a PortMIDI poll that blocks is a poll that drops messages.
+        host.Triggers.Observed += OnObserved;
 
         _timer = new DispatcherTimer(Tick, DispatcherPriority.Background, (_, _) => Poll());
         _timer.Start();
@@ -134,8 +145,35 @@ public sealed class EngineRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>Records one arrived message for the monitor, the source row and Learn.</summary>
+    private void OnObserved(TriggerSignal signal)
+    {
+        var described = signal.Describe();
+
+        lock (_monitor)
+        {
+            _monitor.Insert(0, new LogLine(
+                DateTime.Now.ToString("HH:mm:ss"),
+                signal.IsMidi ? "MIDI in" : "OSC in",
+                "",
+                described,
+                signal.IsMidi ? Gel.Congo : Gel.Steel));
+
+            if (_monitor.Count > MonitorDepth)
+                _monitor.RemoveRange(MonitorDepth, _monitor.Count - MonitorDepth);
+
+            _runtime.TriggerMonitor = [.. _monitor];
+        }
+
+        _runtime.LastSignal = described;
+
+        if (signal.SourceId != Guid.Empty)
+            _runtime.LastSeen[signal.SourceId] = $"{described} · {DateTime.Now:HH:mm}";
+    }
+
     public async ValueTask DisposeAsync()
     {
+        _host.Triggers.Observed -= OnObserved;
         _timer.Stop();
         await _host.DisposeAsync().ConfigureAwait(false);
     }

@@ -196,6 +196,9 @@ public partial class ShellViewModel : ObservableObject
         // The Active panel's clocks move continuously; the tree does not. Two signals rather than one
         // keeps a 250 ms poll from rebuilding the cue tree under the operator's selection.
         _engine.Ticked += Cues.Tick;
+        // Learn watches the same stream the wire monitor does, on the UI tick rather than the I/O
+        // thread — the pane only has to know what arrived, not when.
+        _engine.Ticked += () => Targets.Observe(Runtime.LastSignal);
         _engine.Ticked += OutputInfo.Refresh;
         _engine.Ticked += () => Diagnostics?.Refresh();
 

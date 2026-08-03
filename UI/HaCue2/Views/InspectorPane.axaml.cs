@@ -32,6 +32,20 @@ public partial class InspectorPane : UserControl
     /// The sheet had no way in at all: it existed and drew the first timeline group in the show, but
     /// nothing opened it and nothing pointed it at a group the operator had chosen.
     /// </remarks>
+    /// <summary>
+    /// Auditions the selected cue — the same verb the cue context menu and Ctrl+P use.
+    /// </summary>
+    /// <remarks>
+    /// Reached through the CUE view rather than the inspector's own journal, because auditioning is a
+    /// transport action and the transport lives there. An inspector that grew its own preview path
+    /// would be a second answer to "what does previewing mean".
+    /// </remarks>
+    private void OnPreview(object? sender, RoutedEventArgs e)
+    {
+        if (this.FindAncestorOfType<CuesView>()?.DataContext is CuesViewModel cues)
+            cues.PreviewSelected();
+    }
+
     private void OnOpenTimeline(object? sender, RoutedEventArgs e)
     {
         if (this.FindAncestorOfType<CuesView>()?.DataContext is CuesViewModel cues)

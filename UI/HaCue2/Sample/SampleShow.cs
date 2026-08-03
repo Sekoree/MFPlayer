@@ -20,7 +20,7 @@ namespace HaCue2.Sample;
 /// <para>
 /// Remaining, with what each is waiting for: <see cref="Overrides"/> needs the project override
 /// ledger, <see cref="RemoteEndpoints"/> needs the remote API server, <see cref="LogTail"/> needs the
-/// log ring provider wired up, and <see cref="TriggerMonitor"/> needs external input.
+/// log ring provider wired up, and external input's wire monitor is now live.
 /// </para>
 /// </remarks>
 public static class SampleShow
@@ -58,10 +58,4 @@ public static class SampleShow
         new("13:44:02", "INFO", "S.Media.Session", "clock master 18i20 epoch 7 · 48 000 native"),
     ];
 
-    public static IReadOnlyList<LogLine> TriggerMonitor { get; } =
-    [
-        new("14:01:22", "MIDI in", "", "APC mini · note-on 3 ch 1 vel 127 → Q16", Gel.Congo),
-        new("13:58:41", "OSC in", "", ":9000 · /hacue/go → GO", Gel.Steel),
-        new("13:58:12", "key", "", "Space → GO"),
-    ];
 }

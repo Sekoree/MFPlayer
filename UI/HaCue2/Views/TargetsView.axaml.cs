@@ -31,4 +31,34 @@ public partial class TargetsView : UserControl
 
         PromptWindow.Show(this, prompt, targets.Refresh);
     }
+
+    /// <summary>Starts listening for the next message on any enabled source.</summary>
+    private void OnLearn(object? sender, RoutedEventArgs e) =>
+        (DataContext as TargetsViewModel)?.BeginLearn();
+
+    /// <summary>Creates the binding from what was caught. The only path that constructs one.</summary>
+    private void OnBind(object? sender, RoutedEventArgs e) =>
+        (DataContext as TargetsViewModel)?.Bind();
+
+    private void OnRemoveBinding(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is TargetsViewModel targets)
+            targets.RemoveBinding(targets.SelectedBindingIndex);
+    }
+
+    /// <summary>
+    /// Sends the selected endpoint's own configured test payload.
+    /// </summary>
+    /// <remarks>
+    /// A sender of its own rather than the show's: testing an endpoint has to work while no session is
+    /// running, which is exactly when somebody is setting the desk up.
+    /// </remarks>
+    private async void OnSendTest(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TargetsViewModel targets)
+            return;
+
+        using var probe = new HaCue2.Engine.ActionSender();
+        await targets.SendTestAsync(probe);
+    }
 }

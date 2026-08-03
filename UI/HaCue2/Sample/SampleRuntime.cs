@@ -127,14 +127,6 @@ public static class SampleRuntime
             BayClock = "clock 01:12:44.318 · epoch 7 · adv",
             ChaseReadout = "MTC 01:12:44:07",
 
-            LastSeen = project.TriggerInputs.Count >= 2
-                ? new Dictionary<Guid, string>
-                {
-                    [project.TriggerInputs[0].Id] = "note 3 ch 1 · 14:01",
-                    [project.TriggerInputs[1].Id] = "/hacue/go · 13:44",
-                }
-                : [],
-
             LastSent = project.ActionEndpoints.Count >= 2
                 ? new Dictionary<Guid, string>
                 {
@@ -145,7 +137,6 @@ public static class SampleRuntime
 
             CompositionStats = CompositionStats(project),
             Log = SampleShow.LogTail,
-            TriggerMonitor = SampleShow.TriggerMonitor,
         };
     }
 

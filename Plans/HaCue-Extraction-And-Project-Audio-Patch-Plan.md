@@ -1913,3 +1913,15 @@ somebody else's rig.
 
 Still open on external input: the parameter registry (cc → master trim is refused out loud rather than
 guessed), wall-clock schedules, MTC chase, and a Learn button.
+
+**Trigger authoring and Learn (same day).** External input ran but a `TriggerBinding` could not be
+constructed anywhere in the app — the runtime worked and the authoring surface did not, the same shape
+of gap the control-flow inspector panes had. Closed: the Targets view can now LEARN (catches the FIRST
+message and stops, because a fader sends a stream), choose what it fires (any cue, or a transport
+verb), report a conflict BEFORE the bind rather than after, replace a clashing binding as one undo
+step, and remove one. New bindings carry a repeat filter by default, because a hardware button bounces.
+
+The wire monitor is live off `TriggerInputs.Observed`, and Learn watches the same stream — so what an
+operator sees printed is literally the text that gets bound. `SampleShow.TriggerMonitor` and the
+invented `LastSeen` are retired; `SampleShow` is down to 61 lines and four members (override ledger,
+remote API routes, log tail, curve preview leftovers).

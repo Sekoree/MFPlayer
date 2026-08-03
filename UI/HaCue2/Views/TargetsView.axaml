@@ -88,7 +88,7 @@
                 <TextBox Text="{Binding TestMessage}" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="SEND TEST" />
+                <Button Classes="block" Content="SEND TEST" Click="OnSendTest" />
               </ContentControl>
             </StackPanel>
           </c:PanelBox>
@@ -134,7 +134,13 @@
             </DockPanel>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="1" Header="Bindings on APC mini" Hint="selected device">
+          <c:PanelBox Grid.Row="1" Header="{Binding BindingsHeader}" Hint="selected device">
+            <c:PanelBox.Footer>
+              <Border Classes="chain">
+                <Button Classes="tight" Content="REMOVE BINDING" Click="OnRemoveBinding"
+                        IsEnabled="{Binding HasBindings}" />
+              </Border>
+            </c:PanelBox.Footer>
             <DockPanel>
               <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                       BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
@@ -144,7 +150,12 @@
                   <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="FILTER" />
                 </Grid>
               </Border>
-              <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Bindings}">
+              <c:EmptyState IsVisible="{Binding !HasBindings}"
+                            Headline="No bindings on this source"
+                            Detail="Press LEARN, then a button on the controller, choose what it fires, and BIND." />
+              <ListBox Theme="{StaticResource TableRows}" IsVisible="{Binding HasBindings}"
+                       ItemsSource="{Binding Bindings}"
+                       SelectedIndex="{Binding SelectedBindingIndex}">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:BindingRow">
                     <Grid ColumnDefinitions="110,*,180" ColumnSpacing="8" Margin="8,4">
@@ -165,22 +176,29 @@
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="6">
-                  <Button Grid.Column="0" Classes="primary tight" Content="BIND" />
-                  <Button Grid.Column="1" Classes="tight" Content="CANCEL" />
+                  <Button Grid.Column="0" Classes="primary tight" Content="BIND" Click="OnBind"
+                          IsEnabled="{Binding CanBind}" />
+                  <Button Grid.Column="1" Classes="tight" Content="LEARN" Click="OnLearn" />
                   <!-- Conflicts are shown BEFORE the bind, not after: rebinding a note that already
                        fires something is how a show loses a cue silently. -->
                   <TextBlock Grid.Column="2" Classes="mono dim3 small" HorizontalAlignment="Right"
-                             VerticalAlignment="Center" Text="conflicts shown before bind — note 3 is free" />
+                             VerticalAlignment="Center" Text="{Binding LearnConflict}" />
                 </Grid>
               </Border>
             </c:PanelBox.Footer>
 
             <StackPanel Margin="0,6,0,8">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Listening">
-                <TextBox Classes="warn ro" Text="● waiting for input — press something on any device" />
+                <TextBox Classes="ro" Classes.warn="{Binding IsLearning}" Text="{Binding LearnState}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Caught">
                 <TextBox Classes="ro" Text="{Binding LearnCaught}" />
+              </HeaderedContentControl>
+              <!-- The target is chosen BEFORE the bind, so one gesture produces a working binding
+                   rather than one that has to be edited afterwards. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Fires">
+                <ComboBox ItemsSource="{Binding LearnTargets}"
+                          SelectedIndex="{Binding LearnTargetIndex}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Filter">
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="6">

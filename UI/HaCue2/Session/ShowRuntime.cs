@@ -91,13 +91,23 @@ public sealed class ShowRuntime
     public IReadOnlyList<LogLine> Log { get; init; } = [];
 
     /// <summary>When each trigger input last spoke, by document id.</summary>
-    public Dictionary<Guid, string> LastSeen { get; init; } = [];
+    public Dictionary<Guid, string> LastSeen { get; set; } = [];
+
+    /// <summary>
+    /// The most recent thing that arrived on any enabled source, as a binding pattern.
+    /// </summary>
+    /// <remarks>
+    /// What Learn captures. Stored as the PATTERN rather than the raw message because that is what a
+    /// binding holds — and because the wire monitor prints the same text, so what the operator sees is
+    /// literally what gets bound.
+    /// </remarks>
+    public string LastSignal { get; set; } = "";
 
     /// <summary>When each action endpoint was last sent to, by document id.</summary>
     public Dictionary<Guid, string> LastSent { get; init; } = [];
 
     /// <summary>Inbound wire traffic for the Targets monitor.</summary>
-    public IReadOnlyList<LogLine> TriggerMonitor { get; init; } = [];
+    public IReadOnlyList<LogLine> TriggerMonitor { get; set; } = [];
 
     /// <summary>Nothing running: what the shell shows before a show starts.</summary>
     public static ShowRuntime Idle { get; } = new();
