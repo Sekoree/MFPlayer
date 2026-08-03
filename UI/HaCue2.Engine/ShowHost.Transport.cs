@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
+using S.Media.Session;
 
 namespace HaCue2.Engine;
 
@@ -35,21 +36,31 @@ public sealed partial class ShowHost
     {
         ArgumentNullException.ThrowIfNull(list);
 
-        var standby = await _session.GetStandbyCueAsync(ShowCompiler.GroupId(list)).ConfigureAwait(false);
+        if (_project.CueLists.FirstOrDefault(candidate => candidate.Id == list.Id) is not { } runtimeList)
+            return null;
+
+        var standby = await _session.GetStandbyCueAsync(ShowCompiler.GroupId(runtimeList)).ConfigureAwait(false);
 
         if (standby is null || !Guid.TryParse(standby.Id, out var id))
             return null;
 
-        await Executor.AdvanceAsync(list, id).ConfigureAwait(false);
+        await Executor.AdvanceAsync(runtimeList, id).ConfigureAwait(false);
         await Executor.FireAsync(id).ConfigureAwait(false);
         return id;
     }
 
     /// <summary>Puts a list's cursor on a cue without firing it.</summary>
-    public Task<bool> StandbyAsync(CueList list, Guid? cueId)
+    public async Task<bool> StandbyAsync(CueList list, Guid? cueId)
     {
         ArgumentNullException.ThrowIfNull(list);
-        return _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
+        if (_project.CueLists.FirstOrDefault(candidate => candidate.Id == list.Id) is not { } runtimeList)
+            return false;
+
+        var moved = await _session.SetStandbyCueAsync(
+            cueId?.ToString(), ShowCompiler.GroupId(runtimeList)).ConfigureAwait(false);
+        if (moved)
+            runtimeList.StandbyCueId = cueId;
+        return moved;
     }
 
     /// <summary>
@@ -87,7 +98,9 @@ public sealed partial class ShowHost
 
     /// <summary>Stops everything, fading over the project's stop fade.</summary>
     public Task StopAllAsync() =>
-        StopEverythingAsync(TimeSpan.FromMilliseconds(_project.Settings.StopFadeMs));
+        StopEverythingAsync(
+            TimeSpan.FromMilliseconds(_project.Settings.StopFadeMs),
+            _project.Settings.StopFadeCurve.Resolve(_project));
 
     /// <summary>
     /// PANIC: stops everything over the project's panic fade.
@@ -99,20 +112,29 @@ public sealed partial class ShowHost
     /// </remarks>
     public Task PanicAsync() =>
         StopEverythingAsync(TimeSpan.FromMilliseconds(
-            _project.Settings.EffectivePanicFadeMs(MachinePanicFadeMs)));
+            _project.Settings.EffectivePanicFadeMs(MachinePanicFadeMs)),
+            new FadeShape(FadeCurve.Linear));
 
-    private async Task StopEverythingAsync(TimeSpan fade)
+    private async Task StopEverythingAsync(TimeSpan fade, FadeShape curve)
     {
+        List<Guid> active;
         lock (_gate)
         {
-            foreach (var id in _sounding.Keys.ToList())
+            active = [.. _sounding.Keys];
+            foreach (var id in active)
                 _sounding[id] = _sounding[id] with { IsFading = true };
         }
+
+        // OSC/MIDI effect lanes are not session voices. Interrupt them explicitly so a global
+        // stop still sends each lane's authored final value instead of leaving external gear at
+        // the last intermediate value it received.
+        foreach (var id in active)
+            _outbound.Interrupt(id);
 
         // Visualizers do not fade: a projectM renderer has no level, and holding a canvas lit for the
         // stop fade while everything audible came down would read as a rig that had not stopped.
         await _visualizers.StopAllAsync().ConfigureAwait(false);
-        await _session.StopAllAsync(fade).ConfigureAwait(false);
+        await _session.StopAllAsync(fade, curve).ConfigureAwait(false);
 
         lock (_gate)
             _sounding.Clear();
@@ -158,6 +180,7 @@ public sealed partial class ShowHost
         if (!Guid.TryParse(cueId, out var id))
             return;
 
+        _outbound.Interrupt(id);
         lock (_gate)
             _sounding.Remove(id);
     }

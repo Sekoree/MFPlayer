@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Core.Compile;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
@@ -38,8 +39,14 @@ public partial class ShellViewModel : ObservableObject
     {
     }
 
-    public ShellViewModel(HaCueProject project, MachineFacts machine)
+    public ShellViewModel(
+        HaCueProject project,
+        MachineFacts machine,
+        string path = "",
+        AppSettings? settings = null)
     {
+        Settings = settings ?? new AppSettings();
+        Path = path;
         Journal = new ProjectJournal(project);
         Machine = machine;
 
@@ -49,18 +56,23 @@ public partial class ShellViewModel : ObservableObject
         Runtime = SampleRuntime.For(project);
         AdoptProbeResults();
 
-        Environment = machine.Environment ?? new RuntimeEnvironment(Runtime, project);
+        Environment = machine.Environment ?? new RuntimeEnvironment(Runtime, project, () => ProjectPath);
 
         Cues = new CuesViewModel(Journal, Runtime)
         {
             // The inspector's track lists come from the probe. A cue whose file has not been looked at
             // yet still shows the choice it already holds — opening a show on a machine without the
             // media must not look like the choice was lost.
-            MediaFacts = media => machine.Media.Facts(MediaPaths.Resolve(project, media.MediaPath, null)),
+            MediaFacts = media => machine.Media.Facts(MediaPaths.Resolve(project, media.MediaPath, ProjectPath)),
+            ProjectPath = () => ProjectPath,
         };
+        Cues.Inspector.ProjectPath = () => ProjectPath;
+        Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseSettingNumber(Settings.DoubleGoGuard, 250));
+        Cues.ConfirmStopAllThreshold = ParseSettingNumber(Settings.ConfirmStopAll, 3);
+        Cues.AfterGo = SaveAfterGoAsync;
         Audio = new AudioViewModel(Journal, Runtime);
         Video = new VideoViewModel(project, Runtime, Journal) { Audition = Audio.Audition };
-        Targets = new TargetsViewModel(project, Runtime, Journal);
+        Targets = new TargetsViewModel(project, Runtime, Journal, Settings);
         OutputInfo = new OutputInfoViewModel(Runtime);
 
         // A project as loaded is clean, whatever its contents. The dirty flag answers "does this
@@ -68,12 +80,12 @@ public partial class ShellViewModel : ObservableObject
         Journal.MarkSaved();
         Journal.Changed += OnJournalChanged;
 
-        _status = ProjectStatus.Run(project, environment: Environment);
+        _status = ProjectStatus.Run(project, ProjectPath, Environment);
 
         // Fire and forget: the views draw now and the answers arrive later. Until a file has been
         // looked at its length reads "—", which is the truth rather than a guess.
         machine.Media.Changed += OnProbesLanded;
-        machine.Media.Refresh(project);
+        machine.Media.Refresh(project, ProjectPath);
     }
 
     /// <summary>The machine seam: what this box has, and what its files turned out to be.</summary>
@@ -81,6 +93,34 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>The machine-scope settings, for the panes and windows that read them.</summary>
     public AppSettings Settings { get; init; } = new();
+
+    private static int ParseSettingNumber(string value, int fallback)
+    {
+        var digits = new string([.. value.Where(char.IsAsciiDigit)]);
+        return int.TryParse(digits, out var parsed) ? Math.Max(0, parsed) : fallback;
+    }
+
+    private async Task SaveAfterGoAsync()
+    {
+        if (!Project.Settings.SaveOnGo)
+            return;
+
+        if (!HasPath)
+        {
+            FileMessage = "save on GO is enabled, but this project has not been saved yet";
+            return;
+        }
+
+        await SaveAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Whether Space is an operator GO under the machine's hotkey policy.</summary>
+    public bool AllowsSpaceGo(bool isTyping) => Settings.SpaceRule switch
+    {
+        "always GO" => true,
+        "never" => false,
+        _ => !isTyping,
+    };
 
     // ── autosave and recovery ─────────────────────────────────────────────────────────────────
 
@@ -175,7 +215,7 @@ public partial class ShellViewModel : ObservableObject
             return;
 
         _backend = backend;
-        Host = await ShowHost.StartAsync(Project, backend, Runtime.MediaDurations).ConfigureAwait(true);
+        Host = await ShowHost.StartAsync(Project, backend, CompileContext()).ConfigureAwait(true);
 
         // Register item 3: external input is OFF when a project opens, unless the show says otherwise.
         // A show that starts answering MIDI the instant it loads fires cues during a get-in.
@@ -210,22 +250,37 @@ public partial class ShellViewModel : ObservableObject
 
         // A patch or fade cue writes real cell gains that travel in the file. They are not undoable
         // and must not be, but the title bar has to stop claiming the project matches its file.
-        Host.DocumentChangedByCue += () => Dispatcher.UIThread.Post(() =>
+        Host.DocumentChangedByCue += change => Dispatcher.UIThread.Post(() =>
         {
-            Journal.MarkDirty();
+            if (change.Patch is { } patch)
+            {
+                foreach (var destination in patch)
+                {
+                    var cell = Project.AudioPatch.Cells.FirstOrDefault(candidate =>
+                        candidate.LogicalChannelId == destination.LogicalChannelId
+                        && candidate.LineId == destination.LineId
+                        && candidate.LineChannel == destination.LineChannel);
+                    if (cell is null)
+                        continue;
+
+                    cell.GainDb = destination.GainDb;
+                    cell.Muted = destination.Muted;
+                }
+            }
+
+            if (change.AuditionLevelDb is { } auditionLevel)
+                Project.Audition.LevelDb = auditionLevel;
+
+            // The engine already executed this state. Marking it dirty must update the title without
+            // scheduling a document reload into the middle of its own fade ramp.
+            Journal.MarkDirty(documentChanged: false);
             Audio.Refresh();
+            Refresh();
         });
 
         // Register item 24: the remote API is off unless the project asks for it. A cue player that
         // answers the network by default can be fired by anything on the venue wifi.
-        if (Project.Settings.RemoteApi is { Enabled: true } remote)
-        {
-            Remote = new RemoteApiServer(Host, () => Project, Settings.EnsureRemoteToken());
-            Remote.Problem += problem => Dispatcher.UIThread.Post(() => FileMessage = problem);
-            await Remote.StartAsync(remote.Port, remote.LanAllowed).ConfigureAwait(true);
-            Targets.Remote = Remote;
-            AppSettingsStore.Save(Settings);
-        }
+        await EnsureRemoteApiAsync().ConfigureAwait(true);
 
         Journal.Changed += ScheduleReload;
         OnPropertyChanged(nameof(IsLive));
@@ -272,7 +327,8 @@ public partial class ShellViewModel : ObservableObject
             // Durations go with the document: without them the compiler cannot convert an out-point
             // into the engine's end-offset, and an effect lane on an untrimmed cue has no length to
             // stretch over and is dropped.
-            await host.ReloadAsync(Project, Runtime.MediaDurations).ConfigureAwait(true);
+            await host.ReloadAsync(Project, CompileContext()).ConfigureAwait(true);
+            await EnsureRemoteApiAsync().ConfigureAwait(true);
             OnPropertyChanged(nameof(TransportHint));
         }
     }
@@ -389,26 +445,118 @@ public partial class ShellViewModel : ObservableObject
     /// <summary>The remote API, when the project turned it on.</summary>
     public RemoteApiServer? Remote { get; private set; }
 
+    private RemoteConfiguration? _remoteConfiguration;
+    private readonly SemaphoreSlim _remoteLifecycle = new(1, 1);
+
+    private sealed record RemoteConfiguration(int Port, bool LanAllowed, string Token);
+
+    private RemoteConfiguration? EffectiveRemoteConfiguration()
+    {
+        if (Project.Settings.RemoteApi is { } project)
+            return project.Enabled
+                ? new RemoteConfiguration(project.Port, project.LanAllowed, Settings.EnsureRemoteToken())
+                : null;
+
+        if (!string.Equals(Settings.RemoteDefault, "on", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!int.TryParse(Settings.RemotePort, out var port) || port is < 1 or > 65_535)
+        {
+            FileMessage = $"remote API port “{Settings.RemotePort}” is invalid — use 1–65535";
+            return null;
+        }
+
+        return new RemoteConfiguration(port, Settings.RemoteLanAllowed, Settings.EnsureRemoteToken());
+    }
+
+    /// <summary>Applies machine settings that affect an already-open transport.</summary>
+    public void ApplyApplicationSettings()
+    {
+        Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseSettingNumber(Settings.DoubleGoGuard, 250));
+        Cues.ConfirmStopAllThreshold = ParseSettingNumber(Settings.ConfirmStopAll, 3);
+        _ = ApplyRemoteSettingsAsync();
+    }
+
+    private async Task ApplyRemoteSettingsAsync()
+    {
+        try
+        {
+            await EnsureRemoteApiAsync().ConfigureAwait(true);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            FileMessage = $"the remote API could not apply its settings — {failure.Message}";
+        }
+    }
+
+    private async Task EnsureRemoteApiAsync()
+    {
+        await _remoteLifecycle.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (Host is not { } host)
+                return;
+
+            var wanted = EffectiveRemoteConfiguration();
+            if (Equals(wanted, _remoteConfiguration)
+                && (Remote is not null) == (wanted is not null))
+                return;
+
+            if (Remote is { } old)
+            {
+                await old.DisposeAsync().ConfigureAwait(true);
+                Remote = null;
+                Targets.Remote = null;
+            }
+
+            _remoteConfiguration = wanted;
+            if (wanted is null)
+                return;
+
+            Remote = new RemoteApiServer(host, host.SnapshotProject, wanted.Token);
+            Remote.Problem += problem => Dispatcher.UIThread.Post(() => FileMessage = problem);
+            await Remote.StartAsync(wanted.Port, wanted.LanAllowed).ConfigureAwait(true);
+            Targets.Remote = Remote;
+            AppSettingsStore.Save(Settings);
+        }
+        finally
+        {
+            _remoteLifecycle.Release();
+        }
+    }
+
     /// <summary>Stops the show and releases the devices.</summary>
     public async ValueTask StopEngineAsync()
     {
         if (_engine is not { } engine)
             return;
 
-        if (Remote is { } remote)
+        // Make queued settings notifications observe a stopped host before they enter the serialized
+        // remote lifecycle and accidentally recreate a listener during shutdown.
+        _engine = null;
+        Host = null;
+        Cues.Engine = null;
+        Targets.Host = null;
+
+        await _remoteLifecycle.WaitAsync().ConfigureAwait(true);
+        try
         {
-            await remote.DisposeAsync().ConfigureAwait(true);
-            Remote = null;
-            Targets.Remote = null;
+            if (Remote is { } remote)
+            {
+                await remote.DisposeAsync().ConfigureAwait(true);
+                Remote = null;
+                Targets.Remote = null;
+            }
+            _remoteConfiguration = null;
+        }
+        finally
+        {
+            _remoteLifecycle.Release();
         }
 
         Journal.Changed -= ScheduleReload;
         _reload?.Stop();
         _reload = null;
-        _engine = null;
-        Host = null;
-        Cues.Engine = null;
-        Targets.Host = null;
 
         // Dropped rather than kept: it captured the host it was built with, and a Diagnostics window
         // reporting a session that no longer exists is worse than one saying there is none.
@@ -424,7 +572,7 @@ public partial class ShellViewModel : ObservableObject
         Dispatcher.UIThread.Post(() =>
         {
             AdoptProbeResults();
-            Status = ProjectStatus.Run(Project, environment: Environment);
+            Status = ProjectStatus.Run(Project, ProjectPath, Environment);
             Refresh();
 
             // A probe that has just landed changes what the COMPILED document should say — an
@@ -444,8 +592,8 @@ public partial class ShellViewModel : ObservableObject
     /// </remarks>
     private void AdoptProbeResults()
     {
-        Runtime.MediaDurations = new Dictionary<Guid, TimeSpan>(Machine.Media.DurationsIn(Project, null));
-        Runtime.Broken = [.. Machine.Media.BrokenIn(Project, null)];
+        Runtime.MediaDurations = new Dictionary<Guid, TimeSpan>(Machine.Media.DurationsIn(Project, ProjectPath));
+        Runtime.Broken = [.. Machine.Media.BrokenIn(Project, ProjectPath)];
 
         // Only a DEFINITE absence counts. A line whose devices nobody could enumerate stays present
         // here and is reported as unchecked by the status pass — a red row nobody verified is the
@@ -496,6 +644,15 @@ public partial class ShellViewModel : ObservableObject
     /// </remarks>
     public string Path { get; private set; } = "";
 
+    private string? ProjectPath => HasPath ? Path : null;
+
+    private ShowCompileContext CompileContext() => new()
+    {
+        ProjectPath = ProjectPath,
+        Durations = Runtime.MediaDurations,
+        Tracks = Machine.Media.TracksIn(Project, ProjectPath),
+    };
+
     public bool HasPath => Path.Length > 0;
 
     /// <summary>The title bar's project name, with the mockup's unsaved marker.</summary>
@@ -535,6 +692,7 @@ public partial class ShellViewModel : ObservableObject
             return;
 
         Path = result.Path;
+        Machine.Media.Refresh(Project, ProjectPath);
         // Clean means "matches the file", so this is the ONE place the flag may be cleared: after a
         // write that actually happened.
         Journal.MarkSaved();
@@ -567,7 +725,16 @@ public partial class ShellViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ModeLabel))]
+    [NotifyPropertyChangedFor(nameof(CanEdit))]
     private bool _isLocked;
+
+    public bool CanEdit => !IsLocked;
+
+    partial void OnIsLockedChanged(bool value)
+    {
+        Journal.IsReadOnly = value;
+        Refresh();
+    }
 
     /// <summary>
     /// One master toggle over MIDI/OSC/hotkey triggers, wall-clock schedules and MTC chase
@@ -649,8 +816,8 @@ public partial class ShellViewModel : ObservableObject
         ? $"undo: {command.Domain} — {command.Description}"
         : null;
 
-    public bool CanUndo => Journal.CanUndo;
-    public bool CanRedo => Journal.CanRedo;
+    public bool CanUndo => !IsLocked && Journal.CanUndo;
+    public bool CanRedo => !IsLocked && Journal.CanRedo;
 
     public void Undo()
     {
@@ -668,7 +835,7 @@ public partial class ShellViewModel : ObservableObject
     {
         // Re-running the status pass on every keystroke would be wasteful on a big show; it is cheap
         // here and the honest behaviour, and the real app debounces it the same way it debounces save.
-        Status = ProjectStatus.Run(Project, environment: Environment);
+        Status = ProjectStatus.Run(Project, ProjectPath, Environment);
         Refresh();
     }
 

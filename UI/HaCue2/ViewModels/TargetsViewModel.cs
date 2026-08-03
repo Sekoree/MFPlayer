@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Engine;
 using HaCue2.Core.Model;
+using HaCue2.Machine;
 using HaCue2.Presentation;
 using HaCue2.Sample;
 using HaCue2.Session;
@@ -21,12 +22,19 @@ public partial class TargetsViewModel : ObservableObject
     private readonly HaCueProject _project;
     private readonly ShowRuntime _runtime;
     private readonly ProjectJournal? _journal;
+    private readonly AppSettings _app;
+    private bool _loading = true;
 
-    public TargetsViewModel(HaCueProject project, ShowRuntime runtime, ProjectJournal? journal = null)
+    public TargetsViewModel(
+        HaCueProject project,
+        ShowRuntime runtime,
+        ProjectJournal? journal = null,
+        AppSettings? app = null)
     {
         _project = project;
         _runtime = runtime;
         _journal = journal;
+        _app = app ?? new AppSettings();
 
         EndpointsTab = $"ACTION ENDPOINTS · {project.ActionEndpoints.Count}";
         TriggersTab = $"TRIGGER INPUTS · {project.TriggerInputs.Count}";
@@ -38,9 +46,13 @@ public partial class TargetsViewModel : ObservableObject
         Sources = TargetPresentation.Sources(project, runtime);
         _selectedSource = Sources.FirstOrDefault();
 
-        _port = (project.Settings.RemoteApi?.Port ?? 8420).ToString();
-        _serverState = project.Settings.RemoteApi?.Enabled == true ? "on" : "off";
-        _lanMode = project.Settings.RemoteApi?.LanAllowed == true ? "allowed" : "local only";
+        var inheritedPort = int.TryParse(_app.RemotePort, out var parsedPort) ? parsedPort : 8420;
+        _port = (project.Settings.RemoteApi?.Port ?? inheritedPort).ToString();
+        _serverState = project.Settings.RemoteApi?.Enabled == true
+            || project.Settings.RemoteApi is null && _app.RemoteDefault == "on" ? "on" : "off";
+        _lanMode = (project.Settings.RemoteApi?.LanAllowed ?? _app.RemoteLanAllowed)
+            ? "allowed" : "local only";
+        _loading = false;
     }
 
     /// <summary>The journal, for the dialogs the view opens.</summary>
@@ -578,11 +590,64 @@ public partial class TargetsViewModel : ObservableObject
     [ObservableProperty] private string _lanMode;
     [ObservableProperty] private string _port;
 
+    partial void OnServerStateChanged(string value) => WriteRemote(remote => remote.Enabled = value == "on");
+
+    partial void OnLanModeChanged(string value) => WriteRemote(remote => remote.LanAllowed = value == "allowed");
+
+    partial void OnPortChanged(string value)
+    {
+        if (_loading)
+            return;
+
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var port)
+            || port is < 1 or > 65_535)
+        {
+            OnPropertyChanged(nameof(Port));
+            return;
+        }
+
+        WriteRemote(remote => remote.Port = port);
+    }
+
+    private void WriteRemote(Action<RemoteApiOverride> change)
+    {
+        if (_loading || _journal is null)
+            return;
+
+        var before = _project.Settings.RemoteApi;
+        var inheritedPort = int.TryParse(_app.RemotePort, out var port) && port is >= 1 and <= 65_535
+            ? port : 8420;
+        var after = before is null
+            ? new RemoteApiOverride
+            {
+                Enabled = _app.RemoteDefault == "on",
+                Port = inheritedPort,
+                LanAllowed = _app.RemoteLanAllowed,
+            }
+            : before with { };
+        change(after);
+
+        if (before == after)
+            return;
+
+        _journal.Do(new SetValueCommand<RemoteApiOverride?>(
+            Guid.Empty,
+            "settings:remoteApi",
+            "targets",
+            () => _project.Settings.RemoteApi,
+            value => _project.Settings.RemoteApi = value,
+            after,
+            "change remote API settings"));
+        _journal.CloseGroup();
+        OnPropertyChanged(nameof(RemoteTokenMask));
+        OnPropertyChanged(nameof(ServedAt));
+    }
+
     public string LastCall => Remote?.LastCall is { Length: > 0 } call ? call : "no calls yet";
     /// <summary>Where it is answering, or why it is not.</summary>
     public string ServedAt => Remote is { IsRunning: true, Address: { Length: > 0 } address }
         ? $"served at {address}"
-        : _project.Settings.RemoteApi is { Enabled: true }
+        : ServerState == "on"
             ? "not listening — see the status bar"
-            : "off — turn it on in project settings";
+            : "off — turn it on here or in application settings";
 }

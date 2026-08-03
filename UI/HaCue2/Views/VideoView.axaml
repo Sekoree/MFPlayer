@@ -316,6 +316,25 @@
                 <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding WarpModes}"
                          SelectedIndex="{Binding WarpIndex}" />
               </HeaderedContentControl>
+              <StackPanel IsVisible="{Binding HasWarp}">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Mesh point">
+                  <ComboBox ItemsSource="{Binding WarpPoints}" SelectedIndex="{Binding SelectedWarpPoint}" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Offset x / y">
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                    <TextBox Grid.Column="0" Text="{Binding WarpOffsetX}" LostFocus="OnSectionFieldCommitted" />
+                    <TextBox Grid.Column="1" Text="{Binding WarpOffsetY}" LostFocus="OnSectionFieldCommitted" />
+                  </Grid>
+                </HeaderedContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <WrapPanel HorizontalAlignment="Center" ItemSpacing="4">
+                    <Button Classes="icon" Content="←" Click="OnWarpNudge" Tag="left" />
+                    <Button Classes="icon" Content="↑" Click="OnWarpNudge" Tag="up" />
+                    <Button Classes="icon" Content="↓" Click="OnWarpNudge" Tag="down" />
+                    <Button Classes="icon" Content="→" Click="OnWarpNudge" Tag="right" />
+                  </WrapPanel>
+                </ContentControl>
+              </StackPanel>
               <ContentControl Theme="{StaticResource FieldWide}">
                 <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
                            Text="drag with the mouse · numeric x/y/w/h · arrow-key nudge of the selected box" />

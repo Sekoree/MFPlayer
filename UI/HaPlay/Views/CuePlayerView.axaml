@@ -10,6 +10,12 @@
              mc:Ignorable="d" d:DesignWidth="980" d:DesignHeight="760"
              x:Class="HaPlay.Views.CuePlayerView"
              x:DataType="vm:CuePlayerViewModel">
+  <UserControl.Resources>
+    <!-- The view is also hosted directly by its headless interaction/layout tests, without App.axaml
+         merging Tokens.axaml. Keep the typed converter sentinel at the point of use so standalone
+         hosting has the same int-vs-string semantics as the full application. -->
+    <x:Int32 x:Key="IntZero">0</x:Int32>
+  </UserControl.Resources>
   <UserControl.Styles>
     <!-- Now Playing position readout + its low-time warning (same look as the deck clock's
          warning). Styled via classes so the warning can override the dimmed idle opacity. -->

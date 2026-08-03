@@ -288,7 +288,7 @@ jobs:
       - name: HaCue2 AOT publish (the app deliverable)
         run: >
           dotnet publish UI/HaCue2.Desktop/HaCue2.Desktop.csproj
-          -c Release -r ${{ matrix.rid }} -o hacue2-publish
+          -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o hacue2-publish
 
       # Proves the fixture generator and the headless status pass agree, end to end, against files that
       # exist — without committing anybody's media paths. A fixture holding absolute paths into one

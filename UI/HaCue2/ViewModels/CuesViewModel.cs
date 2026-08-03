@@ -1,10 +1,12 @@
 using System.Globalization;
+using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
+using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
 using HaCue2.Core.Timeline;
@@ -60,12 +62,25 @@ public partial class CuesViewModel : ObservableObject
             SetProperty(ref _selectedCue, CueSource.RowSelection.SelectedItem, nameof(SelectedCue));
             Inspector.Facts = FactsFor(CueSource.RowSelection.SelectedItem);
             Inspector.Show([.. CueSource.RowSelection.SelectedItems.OfType<CueRow>().Select(row => row.Id)]);
+
+            if (!_restoringSelection
+                && Project.Settings.ClickMovesStandby
+                && CueSource.RowSelection.SelectedItem is CueRow selected
+                && ScopedList is { } list)
+                SetStandby(list, selected.Id);
         };
 
-        SelectedCue = Cues.FirstOrDefault();
+        RestoreSelection(Cues.FirstOrDefault());
     }
 
     private HaCueProject Project => _journal.Project;
+
+    /// <summary>The project file used to resolve a relative media root.</summary>
+    public Func<string?>? ProjectPath { get; set; }
+
+    /// <summary>The last media import failure. Import continues with the other selected files.</summary>
+    [ObservableProperty]
+    private string _mediaImportProblem = "";
 
     /// <summary>The journal, for the dialogs the view opens.</summary>
     public ProjectJournal Journal => _journal;
@@ -124,6 +139,7 @@ public partial class CuesViewModel : ObservableObject
     }
 
     private CueRow? _selectedCue;
+    private bool _restoringSelection;
 
     /// <summary>
     /// The lead selected row. Setting it drives the TREE's selection, which then reports back.
@@ -146,6 +162,24 @@ public partial class CuesViewModel : ObservableObject
                 CueSource.RowSelection!.Clear();
             else if (IndexOf(value) is { } path)
                 CueSource.RowSelection!.SelectedIndex = path;
+        }
+    }
+
+    /// <summary>
+    /// Restores an app-selected row without treating it as an operator click. Rebuilds replace row
+    /// objects, so their selection event is unavoidable; suppressing its transport side effect keeps
+    /// an ordinary edit from moving standby (and from recursively journalling another refresh).
+    /// </summary>
+    private void RestoreSelection(CueRow? value)
+    {
+        _restoringSelection = true;
+        try
+        {
+            SelectedCue = value;
+        }
+        finally
+        {
+            _restoringSelection = false;
         }
     }
 
@@ -195,23 +229,43 @@ public partial class CuesViewModel : ObservableObject
     /// where standby lands after a GO is the thing an operator watches all night.
     /// </para>
     /// </remarks>
-    public void Go()
+    public void Go() => _ = GoCoreAsync();
+
+    private async Task GoCoreAsync()
     {
         if (ScopedList is not { } list)
             return;
+
+        var now = Stopwatch.GetTimestamp();
+        if (_lastGoTicks != 0
+            && Stopwatch.GetElapsedTime(_lastGoTicks, now) < DoubleGoGuard)
+            return;
+        _lastGoTicks = now;
 
         // With a session, GO is the session's: it fires standby, advances its own cursor and reports
         // back through the poll. Moving the cursor here as well would fight it.
         if (Engine is { } host)
         {
-            _ = host.GoAsync(list);
+            if (await host.GoAsync(list).ConfigureAwait(true) is not null
+                && AfterGo is { } afterGo)
+                await afterGo().ConfigureAwait(true);
             return;
         }
 
         // The same rule the running transport uses, from the same place: a cursor that behaved one way
         // with a session and another way without one is a rehearsal that does not match the show.
         SetStandby(list, CueOrder.NextEnabled(list, list.StandbyCueId)?.Id);
+        if (AfterGo is { } afterCursorGo)
+            await afterCursorGo().ConfigureAwait(true);
     }
+
+    private long _lastGoTicks;
+
+    /// <summary>Minimum interval between operator GO gestures; cue-driven follows do not pass here.</summary>
+    public TimeSpan DoubleGoGuard { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Optional persistence hook used by Save-on-GO.</summary>
+    public Func<Task>? AfterGo { get; set; }
 
     /// <summary>The running show, when there is one. Set by the shell after it starts the engine.</summary>
     public ShowHost? Engine { get; set; }
@@ -252,6 +306,12 @@ public partial class CuesViewModel : ObservableObject
 
     /// <summary>Stops everything, over the project's stop fade. The split-menu half of STOP.</summary>
     public void StopAll() => _ = Engine?.StopAllAsync();
+
+    /// <summary>Whether the operator-facing Stop All command should ask before firing.</summary>
+    public bool StopAllNeedsConfirmation =>
+        ConfirmStopAllThreshold > 0 && _runtime.ActiveCues.Count >= ConfirmStopAllThreshold;
+
+    public int ConfirmStopAllThreshold { get; set; } = 3;
 
     /// <summary>
     /// Stops everything as fast as the project's panic fade allows.
@@ -383,6 +443,9 @@ public partial class CuesViewModel : ObservableObject
 
     private void SetStandby(CueList list, Guid? id)
     {
+        if (list.StandbyCueId == id)
+            return;
+
         // The session owns the cursor once it is running; the document follows it, not the reverse.
         if (Engine is { } host)
         {
@@ -437,18 +500,27 @@ public partial class CuesViewModel : ObservableObject
                     ? Path.GetFileNameWithoutExtension(mediaPath)
                     : "Media",
                 MediaPath = mediaPath,
+                FadeInMs = Math.Max(0, Project.Settings.DefaultFadeInMs),
+                FadeOutMs = Math.Max(0, Project.Settings.DefaultFadeOutMs),
             },
         };
+
+        cue.Trigger = Project.Settings.NewCueTrigger;
 
         var (siblings, at) = InsertionPoint(list);
         cue.Number = AutoNumber(siblings, at);
 
-        _journal.Do(new AddItemCommand<CueNode>(
-            siblings, cue, at, "cues", $"add {kind.ToString().ToLowerInvariant()} cue"));
-        _journal.CloseGroup();
+        using (_journal.Composite($"add {kind.ToString().ToLowerInvariant()} cue", "cues"))
+        {
+            _journal.Do(new AddItemCommand<CueNode>(
+                siblings, cue, at, "cues", $"add {kind.ToString().ToLowerInvariant()} cue"));
+
+            if (Project.Settings.AutoRenumberOnInsert)
+                Renumber(siblings);
+        }
 
         Refresh();
-        SelectedCue = AllRows.FirstOrDefault(row => row.Id == cue.Id);
+        RestoreSelection(AllRows.FirstOrDefault(row => row.Id == cue.Id));
         return cue;
     }
 
@@ -461,11 +533,93 @@ public partial class CuesViewModel : ObservableObject
         using (_journal.Composite(
             paths.Count == 1 ? "add media cue" : $"add {paths.Count} media cues", "cues"))
         {
+            MediaImportProblem = "";
+
             foreach (var path in paths)
-                AddCue(CueKind.Media, path);
+            {
+                try
+                {
+                    AddCue(CueKind.Media, ImportMedia(path));
+                }
+                catch (Exception failure) when (
+                    failure is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    MediaImportProblem = $"could not import {Path.GetFileName(path)} — {failure.Message}";
+                }
+            }
         }
 
         Refresh();
+    }
+
+    private string ImportMedia(string path)
+    {
+        var absolute = Path.GetFullPath(path);
+        var root = MediaPaths.RootOf(Project, ProjectPath?.Invoke());
+
+        if (root is null)
+            return absolute;
+
+        root = Path.GetFullPath(root);
+        if (IsWithin(absolute, root))
+            return MediaPaths.Store(Project, absolute, ProjectPath?.Invoke());
+
+        if (Project.Settings.OutsideMedia == OutsideMediaPolicy.KeepInPlace)
+            return absolute;
+
+        Directory.CreateDirectory(root);
+        var target = AvailableDestination(root, Path.GetFileName(absolute));
+
+        if (Project.Settings.OutsideMedia == OutsideMediaPolicy.MoveToRoot)
+            File.Move(absolute, target);
+        else
+            File.Copy(absolute, target);
+
+        return MediaPaths.Store(Project, target, ProjectPath?.Invoke());
+    }
+
+    private static bool IsWithin(string path, string directory)
+    {
+        var relative = Path.GetRelativePath(directory, path);
+        return relative != ".."
+               && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+               && !Path.IsPathRooted(relative);
+    }
+
+    private static string AvailableDestination(string directory, string fileName)
+    {
+        var target = Path.Combine(directory, fileName);
+        if (!File.Exists(target))
+            return target;
+
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var extension = Path.GetExtension(fileName);
+        for (var suffix = 2; ; suffix++)
+        {
+            target = Path.Combine(directory, $"{stem} ({suffix}){extension}");
+            if (!File.Exists(target))
+                return target;
+        }
+    }
+
+    private void Renumber(IReadOnlyList<CueNode> siblings)
+    {
+        for (var index = 0; index < siblings.Count; index++)
+        {
+            var cue = siblings[index];
+            var number = new CueNumber((index + 1).ToString(CultureInfo.InvariantCulture));
+            if (cue.Number == number)
+                continue;
+
+            _journal.Do(new SetValueCommand<CueNumber>(
+                cue.Id,
+                "number",
+                "cues",
+                () => cue.Number,
+                value => cue.Number = value,
+                number,
+                "renumber cues"));
+        }
     }
 
     /// <summary>Removes every selected cue — a group takes its children with it.</summary>
@@ -647,7 +801,7 @@ public partial class CuesViewModel : ObservableObject
         Rebuild();
         // By ID, not by reference: Rebuild replaces every row object, so the old instance is gone even
         // though the cue it stood for is still there.
-        SelectedCue = AllRows.FirstOrDefault(row => row.Id == selected);
+        RestoreSelection(AllRows.FirstOrDefault(row => row.Id == selected));
         Inspector.Facts = FactsFor(SelectedCue);
         Inspector.Reload();
         Timeline.Refresh();

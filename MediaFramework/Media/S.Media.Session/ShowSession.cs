@@ -177,7 +177,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         ShowClipBinding? binding,
         CancellationToken cancellationToken,
         Func<Task>? waitForStartBarrier,
-        (TimeSpan Duration, FadeCurve Curve)? crossfade) =>
+        (TimeSpan Duration, FadeShape Curve)? crossfade) =>
         PlayClipAsync(groupId, binding, cancellationToken, waitForStartBarrier, crossfade);
 
     Task<CueExecutionStatus> ICueRunnerHost.FireCueIndependentAtBarrierAsync(
@@ -865,7 +865,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         ShowClipBinding? binding,
         CancellationToken cancellationToken,
         Func<Task>? waitForStartBarrier = null,
-        (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+        (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (binding is null)
@@ -926,7 +926,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         CancellationToken cancellationToken,
         (int generation, TransportGroup group, long ticket) setup,
         IArmedClip armed,
-        (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+        (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         // Superseded by a later open on the same group (see TransportGroup.OpenSequence), cancelled, or
         // straddling a reload - discard without touching the live show.
@@ -1259,10 +1259,11 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 ChromaKey: p.ChromaKey,
                 ColorAdjust: p.ColorAdjust);
     /// <see cref="StopPreviewAsync"/> / a replacing preview cancels it mid-open.</summary>
-    public Task<bool> PreviewCueAsync(string cueId, string? previewDeviceId = null)
+    public Task<bool> PreviewCueAsync(
+        string cueId, string? previewDeviceId = null, float gain = 1f)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return _previewPlayer.PreviewCueAsync(cueId, previewDeviceId);
+        return _previewPlayer.PreviewCueAsync(cueId, previewDeviceId, gain);
     }
 
     /// <summary>Stops the current preview, if any (the GUI's <c>StopPreview</c>) - including one still opening
@@ -1390,7 +1391,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// stop-all and Panic the same reach over a crossfade tail as over the clip transport points at.</summary>
     private async ValueTask CommitVoiceAsync(
         string groupId, TransportGroup group, TransportVoice voice,
-        (TimeSpan Duration, FadeCurve Curve)? crossfade)
+        (TimeSpan Duration, FadeShape Curve)? crossfade)
     {
         await group.ActivateAsync(voice, crossfade).ConfigureAwait(false);
         voice.SoundingId = _sounding.RegisterProgram(

@@ -32,6 +32,8 @@ public sealed partial class ShowHost
 
     HaCueProject ICueExecutionHost.Project => _project;
 
+    bool ICueExecutionHost.IsExternalTriggerActive => Volatile.Read(ref _externalTriggerDepth) > 0;
+
     IReadOnlyList<Guid> ICueExecutionHost.Sounding => SoundingIds();
 
     void ICueExecutionHost.Report(string problem) => Report(problem);
@@ -40,12 +42,17 @@ public sealed partial class ShowHost
 
     void ICueExecutionHost.Forget(Guid cueId) => Forget(cueId.ToString());
 
-    Task ICueExecutionHost.SetStandbyAsync(CueList list, Guid? cueId) =>
-        _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list));
+    async Task ICueExecutionHost.SetStandbyAsync(CueList list, Guid? cueId)
+    {
+        await _session.SetStandbyCueAsync(cueId?.ToString(), ShowCompiler.GroupId(list)).ConfigureAwait(false);
+        if (_project.CueLists.FirstOrDefault(candidate => candidate.Id == list.Id) is { } runtimeList)
+            runtimeList.StandbyCueId = cueId;
+    }
 
     /// <summary>The executor's route to a stop. Same two halves as the operator's, for the same reason.</summary>
     async Task ICueExecutionHost.StopCueAsync(Guid cueId)
     {
+        _outbound.Interrupt(cueId);
         await _visualizers.StopAsync(cueId).ConfigureAwait(false);
         await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
     }
@@ -75,7 +82,11 @@ public sealed partial class ShowHost
     /// takes the composition-visualizer seam instead. It still counts as sounding — it is holding a
     /// canvas, it appears in the Active panel, and STOP has to be able to take it down.
     /// </remarks>
-    async Task<bool> ICueExecutionHost.PlayAsync(CueNode cue, CueList? list)
+    async Task<bool> ICueExecutionHost.PlayAsync(
+        CueNode cue,
+        CueList? list,
+        TimeSpan? crossfade,
+        FadeShape crossfadeCurve)
     {
         if (cue is VisualizerCueNode visualizer)
         {
@@ -90,10 +101,12 @@ public sealed partial class ShowHost
                 return false;
 
             Remember(cue.Id, list?.Id ?? Guid.Empty);
+            _outbound.Start(cue, TimeSpan.FromMilliseconds(Math.Max(1, visualizer.HoldMs)));
             return true;
         }
 
-        var status = await _session.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
+        var status = await _session.FireCueAsync(
+            cue.Id.ToString(), crossfade, crossfadeCurve).ConfigureAwait(false);
 
         if (status != CueExecutionStatus.Fired)
         {
@@ -104,7 +117,20 @@ public sealed partial class ShowHost
         }
 
         Remember(cue.Id, list?.Id ?? Guid.Empty);
+        if (PlayedLength(cue) is { } duration)
+            _outbound.Start(cue, duration);
         return true;
+    }
+
+    private TimeSpan? PlayedLength(CueNode cue)
+    {
+        if (cue is not MediaCueNode media
+            || _durations is null
+            || !_durations.TryGetValue(cue.Id, out var fileLength))
+            return null;
+
+        return media.TrimmedLength(fileLength) is { } duration && duration > TimeSpan.Zero
+            ? duration : null;
     }
 
     /// <summary>
@@ -132,11 +158,45 @@ public sealed partial class ShowHost
         await _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends).ConfigureAwait(false);
     }
 
+    async Task ICueExecutionHost.FadeCueAsync(
+        Guid cueId,
+        double levelDb,
+        TimeSpan duration,
+        FadeShape curve,
+        bool stopWhenSilent)
+    {
+        var linear = levelDb <= GainRange.SilenceFloorDb
+            ? 0f
+            : (float)Math.Pow(10, levelDb / 20);
+        await _session.FadeClipAsync(
+                cueId.ToString(), linear, duration, curve, stopWhenSilent, alsoFadeVideo: true)
+            .ConfigureAwait(false);
+    }
+
     /// <summary>Feeds the bay a series of intermediate patches, landing exactly on the destination.</summary>
     async Task ICueExecutionHost.ApplyPatchAsync(
-        IReadOnlyList<PatchCell> origin, IReadOnlyList<PatchCell> destination, TimeSpan duration)
+        IReadOnlyList<PatchCell> origin,
+        IReadOnlyList<PatchCell> destination,
+        TimeSpan duration,
+        FadeShape curve)
     {
-        DocumentChangedByCue?.Invoke();
+        var before = origin.ToDictionary(
+            cell => (cell.LogicalChannelId, cell.LineId, cell.LineChannel));
+        var changed = destination
+            .Where(cell => !before.TryGetValue(
+                               (cell.LogicalChannelId, cell.LineId, cell.LineChannel), out var old)
+                           || old.GainDb != cell.GainDb
+                           || old.Muted != cell.Muted)
+            .Select(cell => new RuntimePatchChange(
+                cell.LogicalChannelId,
+                cell.LineId,
+                cell.LineChannel,
+                cell.GainDb,
+                cell.Muted))
+            .ToArray();
+
+        if (changed.Length > 0)
+            DocumentChangedByCue?.Invoke(new RuntimeDocumentChange(Patch: changed));
 
         var steps = PatchRamp.StepsFor(duration);
 
@@ -146,7 +206,7 @@ public sealed partial class ShowHost
             // live patch is bit-for-bit what the document says however the arithmetic rounded.
             var cells = step == steps
                 ? destination
-                : PatchRamp.Blend(origin, destination, (double)step / steps);
+                : PatchRamp.Blend(origin, destination, (double)step / steps, curve);
 
             foreach (var failure in _bay.Apply(_project, cells))
                 Report(failure);

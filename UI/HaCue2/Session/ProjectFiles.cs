@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
+using HaCue2.Machine;
 
 namespace HaCue2.Session;
 
@@ -39,13 +40,48 @@ public static class ProjectFiles
     /// Seeded with a Main L/R pair and one cue list, not empty: a genuinely empty project cannot have
     /// a cue added to it without visiting three other screens first, which is a bad first minute.
     /// </remarks>
-    public static HaCueProject Create(string title, string mediaRoot = "")
+    public static HaCueProject Create(string title, string mediaRoot = "") =>
+        Create(title, mediaRoot, new AppSettings(), MachineFacts.Nothing);
+
+    /// <summary>
+    /// Creates a project from the operator's application defaults and the machine's preferred output.
+    /// </summary>
+    public static HaCueProject Create(
+        string title,
+        string mediaRoot,
+        AppSettings app,
+        MachineFacts machine)
     {
-        var project = new HaCueProject { Title = title };
-        project.Settings.MediaRoot = mediaRoot;
+        ArgumentNullException.ThrowIfNull(app);
+        ArgumentNullException.ThrowIfNull(machine);
+
+        var mixRate = Math.Clamp(app.NewProjectMixRate, 8_000, 384_000);
+        var project = new HaCueProject
+        {
+            Title = title,
+            Settings = new ProjectSettings
+            {
+                MediaRoot = mediaRoot,
+                DefaultFadeInMs = Math.Max(0, app.NewProjectFadeInMs),
+                DefaultFadeOutMs = Math.Max(0, app.NewProjectFadeOutMs),
+                AutoRenumberOnInsert = app.AutoRenumberDefault,
+                ClickMovesStandby = app.StandbyFollowsClick,
+            },
+            AudioPatch = new ProjectAudioPatch { MixSampleRate = mixRate },
+        };
 
         var left = new LogicalAudioChannel { Name = "Main L", SortOrder = 0 };
         var right = new LogicalAudioChannel { Name = "Main R", SortOrder = 1 };
+        var preferred = machine.Devices?.Outputs.FirstOrDefault(device => device.IsDefault)
+                        ?? machine.Devices?.Outputs.FirstOrDefault();
+        var line = new AudioLineDefinition
+        {
+            Name = preferred is null ? "Main output" : $"Main output · {preferred.Name}",
+            DeviceHint = preferred?.Name ?? "",
+            Channels = Math.Max(2, Math.Min(preferred?.MaxChannels ?? 2, 64)),
+            SampleRate = mixRate,
+            Required = true,
+        };
 
         project.AudioPatch.LogicalChannels.Add(left);
         project.AudioPatch.LogicalChannels.Add(right);
@@ -53,6 +89,20 @@ public static class ProjectFiles
         {
             Name = "Main",
             MemberIds = [left.Id, right.Id],
+        });
+        project.AudioLines.Add(line);
+        project.AudioPatch.ClockMasterLineId = line.Id;
+        project.AudioPatch.Cells.Add(new PatchCell
+        {
+            LogicalChannelId = left.Id,
+            LineId = line.Id,
+            LineChannel = 0,
+        });
+        project.AudioPatch.Cells.Add(new PatchCell
+        {
+            LogicalChannelId = right.Id,
+            LineId = line.Id,
+            LineChannel = 1,
         });
 
         project.CueLists.Add(new CueList { Name = "Cue list 1" });

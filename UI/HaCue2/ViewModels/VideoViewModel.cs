@@ -662,13 +662,98 @@ public partial class VideoViewModel : ObservableObject
             if (grid == section.WarpGrid)
                 return;
 
-            _journal.Do(new SetValueCommand<int>(
-                section.Id, "warp", "mapping",
-                () => section.WarpGrid, number => section.WarpGrid = number, grid,
-                grid == 0 ? "warp off" : $"warp {grid}×{grid}"));
-            _journal.CloseGroup();
+            using (_journal.Composite(grid == 0 ? "warp off" : $"warp {grid}×{grid}", "mapping"))
+            {
+                _journal.Do(new SetValueCommand<int>(
+                    section.Id, "warp", "mapping",
+                    () => section.WarpGrid, number => section.WarpGrid = number, grid,
+                    grid == 0 ? "warp off" : $"warp {grid}×{grid}"));
+                var offsets = grid == 0 ? new List<double>() : Enumerable.Repeat(0d, grid * grid * 2).ToList();
+                _journal.Do(new SetValueCommand<List<double>>(
+                    section.Id, "warpOffsets", "mapping",
+                    () => section.WarpOffsets, values => section.WarpOffsets = values,
+                    offsets, grid == 0 ? "clear warp mesh" : "initialize warp mesh"));
+            }
+            SelectedWarpPoint = 0;
             Refresh();
         }
+    }
+
+    public bool HasWarp => Section is { WarpGrid: >= 2 } section
+                           && section.WarpOffsets.Count == section.WarpGrid * section.WarpGrid * 2;
+
+    public IReadOnlyList<string> WarpPoints => Section is not { WarpGrid: >= 2 } section
+        ? []
+        : [.. Enumerable.Range(0, section.WarpGrid * section.WarpGrid)
+            .Select(index => $"r{index / section.WarpGrid + 1} c{index % section.WarpGrid + 1}")];
+
+    private int _selectedWarpPoint;
+    public int SelectedWarpPoint
+    {
+        get => _selectedWarpPoint;
+        set
+        {
+            var maximum = Math.Max(0, WarpPoints.Count - 1);
+            if (!SetProperty(ref _selectedWarpPoint, Math.Clamp(value, 0, maximum)))
+                return;
+            OnPropertyChanged(nameof(WarpOffsetX));
+            OnPropertyChanged(nameof(WarpOffsetY));
+        }
+    }
+
+    public string WarpOffsetX
+    {
+        get => WarpOffset(0);
+        set => WriteWarpOffset(0, value);
+    }
+
+    public string WarpOffsetY
+    {
+        get => WarpOffset(1);
+        set => WriteWarpOffset(1, value);
+    }
+
+    private string WarpOffset(int axis)
+    {
+        if (!HasWarp || Section is not { } section)
+            return "—";
+        var at = SelectedWarpPoint * 2 + axis;
+        return at < section.WarpOffsets.Count ? Percent(section.WarpOffsets[at]) : "—";
+    }
+
+    private void WriteWarpOffset(int axis, string text)
+    {
+        if (!HasWarp || Section is not { } section || !TryFraction(text, out var value))
+            return;
+
+        var at = SelectedWarpPoint * 2 + axis;
+        var changed = section.WarpOffsets.ToList();
+        if (at >= changed.Count || Math.Abs(changed[at] - value) < 0.000001)
+            return;
+        changed[at] = Math.Clamp(value, -1, 1);
+        _journal.Do(new SetValueCommand<List<double>>(
+            section.Id, $"warpPoint:{SelectedWarpPoint}:{axis}", "mapping",
+            () => section.WarpOffsets, values => section.WarpOffsets = values,
+            changed, "move warp point"));
+        _journal.CloseGroup();
+        Refresh();
+    }
+
+    /// <summary>Nudges the selected mesh handle by one half-percent of the destination rectangle.</summary>
+    public void NudgeWarp(double dx, double dy)
+    {
+        if (!HasWarp || Section is not { } section)
+            return;
+        var changed = section.WarpOffsets.ToList();
+        var at = SelectedWarpPoint * 2;
+        changed[at] = Math.Clamp(changed[at] + dx, -1, 1);
+        changed[at + 1] = Math.Clamp(changed[at + 1] + dy, -1, 1);
+        _journal.Do(new SetValueCommand<List<double>>(
+            section.Id, $"warpPoint:{SelectedWarpPoint}", "mapping",
+            () => section.WarpOffsets, values => section.WarpOffsets = values,
+            changed, "nudge warp point"));
+        _journal.CloseGroup();
+        Refresh();
     }
 
     private enum RectPart
@@ -804,6 +889,13 @@ public partial class VideoViewModel : ObservableObject
                 pane.Layers = VideoPresentation.Layers(_project, composition);
         }
 
+        // Changing outputs/sections can replace a 5×5 mesh with a 3×3 one. Keep the selected handle
+        // inside the new mesh before a keyboard nudge indexes its offset pair.
+        var warpPointCount = Section is { WarpGrid: >= 2 } section
+            ? section.WarpGrid * section.WarpGrid
+            : 0;
+        _selectedWarpPoint = Math.Clamp(_selectedWarpPoint, 0, Math.Max(0, warpPointCount - 1));
+
         OnPropertyChanged(nameof(MappingSource));
         OnPropertyChanged(nameof(MappingTarget));
         OnPropertyChanged(nameof(Sections));
@@ -825,6 +917,11 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(OpacityValue));
         OnPropertyChanged(nameof(BrightnessValue));
         OnPropertyChanged(nameof(WarpIndex));
+        OnPropertyChanged(nameof(HasWarp));
+        OnPropertyChanged(nameof(WarpPoints));
+        OnPropertyChanged(nameof(SelectedWarpPoint));
+        OnPropertyChanged(nameof(WarpOffsetX));
+        OnPropertyChanged(nameof(WarpOffsetY));
     }
 }
 

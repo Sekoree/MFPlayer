@@ -174,11 +174,22 @@ public sealed partial class ShowSession
     /// false keeps it running silently.</param>
     /// <param name="alsoFadeVideo">Ramp the clip's composition-layer opacities in step (toward the
     /// authored opacity × target level); false fades audio only.</param>
-    public async Task FadeClipAsync(
+    public Task FadeClipAsync(
         string cueId,
         float targetLevel,
         TimeSpan duration,
         FadeCurve curve = FadeCurve.Linear,
+        bool stopWhenSilent = true,
+        bool alsoFadeVideo = true) =>
+        FadeClipAsync(
+            cueId, targetLevel, duration, new FadeShape(curve), stopWhenSilent, alsoFadeVideo);
+
+    /// <summary>The custom-shape form of the fade-cue entry point.</summary>
+    public async Task FadeClipAsync(
+        string cueId,
+        float targetLevel,
+        TimeSpan duration,
+        FadeShape curve,
         bool stopWhenSilent = true,
         bool alsoFadeVideo = true)
     {
@@ -229,7 +240,8 @@ public sealed partial class ShowSession
                         || !ReferenceEquals(fade.Group.ActiveVoice, fade.Voice) // replaced/ended mid-ramp
                         || fade.Voice.IsFadeOutClaimed)              // an operator stop preempts the fade cue
                         continue;
-                    var audioLevel = LevelBetween(fade.StartLevel, targetLevel, elapsed, duration, curve);
+                    var audioLevel = FadeCurves.LevelBetween(
+                        fade.StartLevel, targetLevel, elapsed, duration, curve);
                     float[]? opacities = null;
                     if (alsoFadeVideo)
                     {
@@ -237,7 +249,7 @@ public sealed partial class ShowSession
                         for (var i = 0; i < opacities.Length; i++)
                         {
                             var baseOpacity = i < fade.BaseLayerFadeLevels.Count ? fade.BaseLayerFadeLevels[i] : 0f;
-                            opacities[i] = LevelBetween(
+                            opacities[i] = FadeCurves.LevelBetween(
                                 fade.StartLayerOpacities[i], baseOpacity * targetLevel, elapsed, duration, curve);
                         }
                     }
@@ -281,6 +293,11 @@ public sealed partial class ShowSession
     /// final detach safe when a new visualizer is fired onto the same composition while the old one is fading.</summary>
     private async Task FadeOutAndRemoveVisualizersAsync(
         string? compositionId, TimeSpan duration, FadeCurve curve = FadeCurve.Linear)
+        => await FadeOutAndRemoveVisualizersAsync(
+            compositionId, duration, new FadeShape(curve)).ConfigureAwait(false);
+
+    private async Task FadeOutAndRemoveVisualizersAsync(
+        string? compositionId, TimeSpan duration, FadeShape curve)
     {
         try
         {

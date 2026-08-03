@@ -115,6 +115,21 @@ public partial class VideoView : UserControl
     /// </remarks>
     private void OnSectionFieldCommitted(object? sender, RoutedEventArgs e) => Video?.Refresh();
 
+    private void OnWarpNudge(object? sender, RoutedEventArgs e)
+    {
+        if (Video is not { } video || (sender as Control)?.Tag is not string direction)
+            return;
+        var (dx, dy) = direction switch
+        {
+            "left" => (-0.005, 0d),
+            "right" => (0.005, 0d),
+            "up" => (0d, -0.005),
+            "down" => (0d, 0.005),
+            _ => (0d, 0d),
+        };
+        video.NudgeWarp(dx, dy);
+    }
+
     /// <summary>Opens whichever dialog the button asked for, by its Tag.</summary>
     private void OnDialog(object? sender, RoutedEventArgs e)
     {

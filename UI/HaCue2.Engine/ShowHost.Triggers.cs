@@ -18,6 +18,7 @@ public sealed partial class ShowHost
 
     /// <summary>The program master trim in decibels, as the parameter registry reads and writes it.</summary>
     private double _masterTrimDb;
+    private int _externalTriggerDepth;
 
     /// <summary>Carries out what a trigger asked for.</summary>
     /// <remarks>
@@ -30,7 +31,15 @@ public sealed partial class ShowHost
         switch (action.Target)
         {
             case TriggerTarget.Cue when action.CueId is { } cueId:
-                await FireAsync(cueId).ConfigureAwait(false);
+                Interlocked.Increment(ref _externalTriggerDepth);
+                try
+                {
+                    await FireAsync(cueId).ConfigureAwait(false);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _externalTriggerDepth);
+                }
                 break;
 
             case TriggerTarget.Transport:

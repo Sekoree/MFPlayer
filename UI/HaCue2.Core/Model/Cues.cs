@@ -230,6 +230,8 @@ public sealed record JumpCueNode : CueNode
 {
     public List<Guid> TargetCueIds { get; set; } = [];
     public JumpCondition Condition { get; set; } = JumpCondition.Always;
+    /// <summary>For CountThenContinue: how many visits jump before the next visit falls through.</summary>
+    public int JumpCount { get; set; } = 1;
     public bool PickAtRandom { get; set; }
     public bool FireOnArrival { get; set; } = true;
 }

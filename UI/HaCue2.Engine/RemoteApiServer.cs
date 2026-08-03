@@ -8,6 +8,21 @@ namespace HaCue2.Engine;
 /// <summary>What a request resolved to. Separated from the socket so it can be tested without one.</summary>
 public readonly record struct RemoteApiResult(int Status, string Body, string ContentType = "application/json");
 
+/// <summary>The transport surface exposed remotely, separated so routing can be tested without devices.</summary>
+public interface IRemoteApiTransport
+{
+    Guid? Previewing { get; }
+    bool IsPaused { get; }
+    Task<ShowState> SnapshotAsync();
+    Task<Guid?> GoAsync(CueList list);
+    Task<bool> FireAsync(Guid cueId);
+    Task StopCueAsync(Guid cueId);
+    Task<bool> StandbyAsync(CueList list, Guid? cueId);
+    Task StopAllAsync();
+    Task PanicAsync();
+    Task SetPausedAsync(bool paused);
+}
+
 /// <summary>
 /// The remote API: an HTTP surface over the same transport verbs the buttons use.
 /// </summary>
@@ -30,14 +45,16 @@ public readonly record struct RemoteApiResult(int Status, string Body, string Co
 /// </remarks>
 public sealed class RemoteApiServer : IAsyncDisposable
 {
-    private readonly ShowHost _host;
+    private readonly IRemoteApiTransport _host;
     private readonly Func<HaCueProject> _project;
     private readonly string _token;
     private HttpListener? _listener;
     private CancellationTokenSource? _life;
     private Task? _loop;
+    private readonly object _handlersGate = new();
+    private readonly HashSet<Task> _handlers = [];
 
-    public RemoteApiServer(ShowHost host, Func<HaCueProject> project, string token)
+    public RemoteApiServer(IRemoteApiTransport host, Func<HaCueProject> project, string token)
     {
         _host = host;
         _project = project;
@@ -68,16 +85,24 @@ public sealed class RemoteApiServer : IAsyncDisposable
         if (IsRunning)
             return Task.CompletedTask;
 
+        if (port is < 1 or > 65_535)
+        {
+            Problem?.Invoke($"the remote API port {port} is outside 1–65535");
+            return Task.CompletedTask;
+        }
+
         var listener = new HttpListener();
         var wildcard = lanAllowed ? "+" : "localhost";
-        listener.Prefixes.Add($"http://{wildcard}:{port}/");
 
         try
         {
+            listener.Prefixes.Add($"http://{wildcard}:{port}/");
             listener.Start();
         }
-        catch (Exception failure) when (failure is HttpListenerException or ObjectDisposedException)
+        catch (Exception failure) when (
+            failure is HttpListenerException or ObjectDisposedException or ArgumentException)
         {
+            listener.Close();
             Problem?.Invoke(
                 $"the remote API could not listen on port {port} — {failure.Message}"
                 + (lanAllowed ? " (a LAN binding may need elevation)" : ""));
@@ -87,6 +112,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
         _listener = listener;
         _life = new CancellationTokenSource();
         Address = $"http://{(lanAllowed ? Dns.GetHostName() : "localhost")}:{port}{RemoteApiRoutes.Prefix}";
+        RemoteApiRoutes.ResetCounters();
         _loop = Task.Run(() => AcceptAsync(_life.Token));
 
         return Task.CompletedTask;
@@ -107,9 +133,20 @@ public sealed class RemoteApiServer : IAsyncDisposable
                 return;
             }
 
-            // Not awaited: one slow request must not stop the next being accepted, and every handler
-            // below is short.
-            _ = Task.Run(() => ServeAsync(context), cancellationToken);
+            // A slow request must not stop acceptance, but handlers remain tracked so shutdown can
+            // wait for every response that already entered the server.
+            var handler = Task.Run(() => ServeAsync(context), CancellationToken.None);
+            lock (_handlersGate)
+                _handlers.Add(handler);
+            _ = handler.ContinueWith(
+                completed =>
+                {
+                    lock (_handlersGate)
+                        _handlers.Remove(completed);
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
     }
 
@@ -132,6 +169,23 @@ public sealed class RemoteApiServer : IAsyncDisposable
         {
             // The caller hung up. Nothing to report and nothing to do.
         }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            Problem?.Invoke($"remote request failed — {failure.Message}");
+            try
+            {
+                var result = Error(500, "the request could not be completed");
+                var bytes = Encoding.UTF8.GetBytes(result.Body);
+                context.Response.StatusCode = result.Status;
+                context.Response.ContentType = result.ContentType;
+                context.Response.ContentLength64 = bytes.Length;
+                await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+            }
+            catch (Exception responseFailure) when (
+                responseFailure is HttpListenerException or IOException or ObjectDisposedException)
+            {
+            }
+        }
         finally
         {
             try
@@ -147,15 +201,6 @@ public sealed class RemoteApiServer : IAsyncDisposable
     /// <summary>
     /// Resolves and carries out one request. Public so it can be tested without a socket.
     /// </summary>
-    /// <remarks>
-    /// <b>KNOWN GAP (2026-08-03): dispatch is not under test.</b> The route TABLE is covered
-    /// exhaustively (<c>RemoteApiRouteTests</c>) but everything below the resolve — auth, the
-    /// 404/405 split, and every transport call — is not, because this class takes a concrete
-    /// <see cref="ShowHost"/> and a host needs devices. Closing it means giving the host a seam (an
-    /// interface over the transport verbs, or a fake) so a request can be driven end to end without
-    /// hardware. Worth doing before anyone points a show-control system at this: it is the one
-    /// surface where a defect fires cues from off the machine.
-    /// </remarks>
     /// <remarks>
     /// The 404/405 distinction is deliberate: an unknown path is a caller's mistake about WHAT exists,
     /// a known path with the wrong verb is a mistake about HOW to call it, and collapsing them into one
@@ -237,7 +282,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
                     return Error(404, $"no cue list '{segments[3]}'");
 
                 var fired = await _host.GoAsync(list).ConfigureAwait(false);
-                return Ack(new RemoteAck(Fired: fired?.ToString(), Ok: true));
+                return Ack(new RemoteAck(Fired: fired?.ToString(), Ok: fired is not null));
             }
 
             case "/api/v1/cues/{cue}/go":
@@ -251,7 +296,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
 
             case "/api/v1/cues/{cue}/stop":
             {
-                if (!Guid.TryParse(segments[3], out var cueId))
+                if (!Guid.TryParse(segments[3], out var cueId) || project.FindCue(cueId) is null)
                     return Error(404, $"no cue '{segments[3]}'");
 
                 await _host.StopCueAsync(cueId).ConfigureAwait(false);
@@ -264,8 +309,11 @@ public sealed class RemoteApiServer : IAsyncDisposable
                     || project.ListOf(cueId) is not { } owner)
                     return Error(404, $"no cue '{segments[3]}'");
 
-                await _host.StandbyAsync(owner, cueId).ConfigureAwait(false);
-                return Ack(new RemoteAck(Standby: cueId.ToString(), List: owner.Id.ToString(), Ok: true));
+                var moved = await _host.StandbyAsync(owner, cueId).ConfigureAwait(false);
+                return Ack(new RemoteAck(
+                    Standby: moved ? cueId.ToString() : null,
+                    List: owner.Id.ToString(),
+                    Ok: moved));
             }
 
             case "/api/v1/transport/stop":
@@ -336,6 +384,19 @@ public sealed class RemoteApiServer : IAsyncDisposable
             }
 
             _loop = null;
+        }
+
+        Task[] handlers;
+        lock (_handlersGate)
+            handlers = [.. _handlers];
+
+        try
+        {
+            await Task.WhenAll(handlers).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (
+            failure is HttpListenerException or IOException or ObjectDisposedException)
+        {
         }
     }
 }

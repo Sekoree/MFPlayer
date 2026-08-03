@@ -2267,11 +2267,12 @@ a timeline is one layer of it whose own children share its transport.
 Still open on this line: nothing FIRES from a `TimecodeChase` reading other than through a Timecode
 source's bindings — there is no per-cue "start at this timecode" field, and none is planned.
 
-### Tested-around, not tested
+### Tested end to end
 
-- **`RemoteApiServer.HandleAsync`** — auth, 404/405 and every transport verb are untested because the
-  method takes a concrete `ShowHost`. The `ICueExecutionHost` seam covers the cue half; the transport
-  half still needs its own. Marked `KNOWN GAP` in the source.
+- **`RemoteApiServer.HandleAsync`** now depends on `IRemoteApiTransport`, so authentication, routing,
+  status serialization and transport dispatch run in tests without devices. Listener restart also
+  follows effective project/application settings (including token rotation), and shutdown drains
+  admitted handlers before the host is disposed.
 
 ### Sequencing
 

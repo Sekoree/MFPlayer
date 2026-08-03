@@ -80,8 +80,9 @@ internal sealed class CuePreviewPlayer
     // --- preview ------------------------------------------------------------------------------------
 
     /// <summary>See <see cref="ShowSession.PreviewCueAsync"/> (the public doc lives there).</summary>
-    public async Task<bool> PreviewCueAsync(string cueId, string? previewDeviceId)
+    public async Task<bool> PreviewCueAsync(string cueId, string? previewDeviceId, float gain = 1f)
     {
+        gain = float.IsFinite(gain) ? Math.Clamp(gain, 0f, VolumeEnvelopes.MaxLevel) : 1f;
         // --- SETUP (dispatcher): stop any current preview / pending preview open, resolve the binding, claim.
         var setup = await _host.InvokeAsync<(ClipSpec Spec, CancellationTokenSource Cts)?>(async () =>
         {
@@ -174,7 +175,7 @@ internal sealed class CuePreviewPlayer
                         var lease = monitorTarget.AcquireMonitorOutput(
                             previewDeviceId, new AudioFormat(rate, AuditionChannels(previewDeviceId)));
                         outputs.Add(new PreviewSink(lease.Output, lease.Dispose));
-                        player.AttachAudioOutput(lease.Output, "_preview");
+                        player.AttachAudioOutput(lease.Output, "_preview", gain: gain);
                     }
                     else
                     {
@@ -182,7 +183,7 @@ internal sealed class CuePreviewPlayer
                         var output = _audioBackend!.CreateOutput(
                             auditionDevice, new AudioFormat(rate, AuditionChannels(auditionDevice)));
                         outputs.Add(new PreviewSink(output, null));
-                        player.AttachAudioOutput(output, "_preview");
+                        player.AttachAudioOutput(output, "_preview", gain: gain);
                     }
                 }
 
@@ -209,7 +210,7 @@ internal sealed class CuePreviewPlayer
                 _previewLayers = layers;
                 _previewMonitor = new PreviewMonitor(cueId, player, s.Cts.Token);
                 _previewSoundingId = _host.SoundingSources.RegisterMonitoring(
-                    $"preview:{cueId}", () => _previewClip is not null, () => 1f);
+                    $"preview:{cueId}", () => _previewClip is not null, () => gain);
                 _host.NotifyCompletionWorkAvailable();
                 return true;
             }

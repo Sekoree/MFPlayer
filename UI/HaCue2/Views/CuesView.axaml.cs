@@ -66,8 +66,26 @@ public partial class CuesView : UserControl
     /// <summary>Bare STOP: the selected active cue, not the show.</summary>
     private void OnStop(object? sender, RoutedEventArgs e) => (DataContext as CuesViewModel)?.Stop();
 
-    private void OnStopAll(object? sender, RoutedEventArgs e) =>
-        (DataContext as CuesViewModel)?.StopAll();
+    private void OnStopAll(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuesViewModel cues)
+            return;
+
+        if (!cues.StopAllNeedsConfirmation)
+        {
+            cues.StopAll();
+            return;
+        }
+
+        PromptWindow.Show(
+            this,
+            new PromptViewModel(
+                "Stop all sounding cues?",
+                "This stops every active cue in the show.",
+                [],
+                _ => cues.StopAll(),
+                confirm: "STOP ALL"));
+    }
 
     private void OnStandbyUp(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.StepStandby(-1);

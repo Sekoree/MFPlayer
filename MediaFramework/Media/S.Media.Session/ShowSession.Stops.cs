@@ -55,6 +55,10 @@ public sealed partial class ShowSession
     /// <see cref="DefaultStopFade"/>. A non-positive value is a hard cut (Panic with a 0 ms setting) - clips
     /// release and visualizers detach without a ramp.</param>
     public async Task StopAllAsync(TimeSpan? fadeDuration = null, FadeCurve curve = FadeCurve.Linear)
+        => await StopAllAsync(fadeDuration, new FadeShape(curve)).ConfigureAwait(false);
+
+    /// <summary>Stops every program source using a built-in or authored custom fade shape.</summary>
+    public async Task StopAllAsync(TimeSpan? fadeDuration, FadeShape curve)
     {
         _fires.CancelActiveFire();
         var request = new SoundingStopRequest(fadeDuration ?? DefaultStopFade, curve);
@@ -178,7 +182,7 @@ public sealed partial class ShowSession
         Func<IReadOnlyList<(TransportGroup Group, TransportVoice Voice)>> selectVoices,
         bool fade,
         TimeSpan? fadeDuration = null,
-        FadeCurve curve = FadeCurve.Linear)
+        FadeShape curve = default)
     {
         var claims = await InvokeAsync(() =>
         {
@@ -204,7 +208,7 @@ public sealed partial class ShowSession
                         duration,
                         clipFadeWins
                             ? new FadeShape(voice.Binding.FadeOutCurve, voice.Binding.FadeOutShape)
-                            : curve,
+                            : curve == default ? new FadeShape(FadeCurve.Linear) : curve,
                         voice.ClipLevel,
                         voice.CaptureLayerFadeLevels(),
                         voice.RouteTargets,

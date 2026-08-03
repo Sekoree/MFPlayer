@@ -36,7 +36,7 @@ internal interface ICueRunnerHost
         ShowClipBinding? binding,
         CancellationToken cancellationToken,
         Func<Task>? waitForStartBarrier,
-        (TimeSpan Duration, FadeCurve Curve)? crossfade);
+        (TimeSpan Duration, FadeShape Curve)? crossfade);
 
     /// <summary>Fires one cue on a caller-owned transport group, waiting at the batch barrier before commit.</summary>
     Task<CueExecutionStatus> FireCueIndependentAtBarrierAsync(

@@ -23,13 +23,41 @@ namespace HaCue2.Engine;
 public sealed class ActionSender : IDisposable
 {
     private readonly Dictionary<Guid, OSCClient> _clients = [];
+    private readonly Dictionary<Guid, (string Host, int Port)> _clientAddresses = [];
     private readonly Dictionary<Guid, string> _sent = [];
     private readonly MidiOut _midi = new();
     private readonly Lock _gate = new();
     private bool _disposed;
 
-    /// <summary>Adopts the show's MIDI endpoints. Called on every reload, cheap when nothing changed.</summary>
-    public void Adopt(HaCueProject project) => _midi.Adopt(project);
+    /// <summary>Adopts endpoints, retiring sockets whose destination changed or disappeared.</summary>
+    public void Adopt(HaCueProject project)
+    {
+        _midi.Adopt(project);
+
+        List<OSCClient> retired = [];
+        lock (_gate)
+        {
+            // Validation reports duplicate ids, but adopting a malformed project must not take the
+            // running transport down while the operator is fixing it.
+            var current = project.ActionEndpoints
+                .GroupBy(endpoint => endpoint.Id)
+                .ToDictionary(group => group.Key, group => group.Last());
+            foreach (var id in _clients.Keys.ToList())
+            {
+                if (current.TryGetValue(id, out var endpoint)
+                    && endpoint.Kind == EndpointKind.OscOut
+                    && _clientAddresses.GetValueOrDefault(id) == (endpoint.Host, endpoint.Port))
+                    continue;
+
+                retired.Add(_clients[id]);
+                _clients.Remove(id);
+                _clientAddresses.Remove(id);
+            }
+        }
+
+        foreach (var client in retired)
+            client.Dispose();
+    }
 
     /// <summary>
     /// What each endpoint was last sent, and when — the Targets screen's "Last seen" column.
@@ -124,6 +152,7 @@ public sealed class ActionSender : IDisposable
             var client = new OSCClient(new IPEndPoint(host, endpoint.Port));
 
             _clients[endpoint.Id] = client;
+            _clientAddresses[endpoint.Id] = (endpoint.Host, endpoint.Port);
             return client;
         }
     }
@@ -162,6 +191,7 @@ public sealed class ActionSender : IDisposable
             _disposed = true;
             clients = [.. _clients.Values];
             _clients.Clear();
+            _clientAddresses.Clear();
         }
 
         foreach (var client in clients)

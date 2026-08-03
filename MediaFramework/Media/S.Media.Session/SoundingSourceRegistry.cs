@@ -21,8 +21,13 @@ public enum SoundingSourceRole
 
 /// <summary>What stop-all and Panic ask of one program source. Both issue the SAME request - the difference
 /// is only the duration the host resolved (Panic's default is 0 ms = the hard cut), never the reach.</summary>
-public readonly record struct SoundingStopRequest(TimeSpan FadeDuration, FadeCurve Curve = FadeCurve.Linear)
+public readonly record struct SoundingStopRequest(TimeSpan FadeDuration, FadeShape Curve)
 {
+    public SoundingStopRequest(TimeSpan fadeDuration, FadeCurve curve = FadeCurve.Linear)
+        : this(fadeDuration, new FadeShape(curve))
+    {
+    }
+
     /// <summary>True when the source ramps down; false = hard cut (a non-positive duration).</summary>
     public bool Fade => FadeDuration > TimeSpan.Zero;
 }

@@ -48,10 +48,10 @@ public static class ShowParameters
 
         var registry = new ParameterRegistry();
 
-        // −60..+12 dB: the same range the app's own level fields accept, so a fader and a typed value
-        // cannot disagree about what the ends mean.
+        // Master trim is attenuation, not makeup gain. The session contract is [0, 1], so advertising
+        // positive dB here would make every value above zero silently collapse to unity.
         registry.Register(
-            new ParameterTarget(MasterTrim, "Master trim", GainRange.SilenceFloorDb, 12, "dB"),
+            new ParameterTarget(MasterTrim, "Master trim", GainRange.SilenceFloorDb, 0, "dB"),
             readMasterTrim,
             writeMasterTrim);
 

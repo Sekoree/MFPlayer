@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using HaCue2.Engine;
+using S.Media.Session;
 
 namespace HaCue2.Core.Tests;
 
@@ -21,6 +22,7 @@ namespace HaCue2.Core.Tests;
 internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
 {
     public HaCueProject Project { get; } = project;
+    public bool IsExternalTriggerActive { get; set; }
 
     /// <summary>Cues handed to the session, in the order they were fired.</summary>
     public List<Guid> Played { get; } = [];
@@ -30,11 +32,13 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
 
     public List<Guid> Stopped { get; } = [];
     public List<(Guid Cue, double LevelDb)> Levels { get; } = [];
+    public List<(Guid Cue, double LevelDb, TimeSpan Duration, FadeShape Curve, bool Stop)> CueFades { get; } = [];
     public List<(Guid Cue, TimeSpan When, int Depth)> Scheduled { get; } = [];
     public List<(ActionCueNode Cue, ActionEndpoint? Endpoint)> Actions { get; } = [];
     public List<TimeSpan> Waits { get; } = [];
     public List<string> Problems { get; } = [];
     public List<Guid> Faded { get; } = [];
+    public List<(Guid Cue, TimeSpan? Duration, FadeShape Curve)> Transitions { get; } = [];
 
     /// <summary>Every patch ramp, as the cells it landed on and how long it took.</summary>
     public List<(IReadOnlyList<PatchCell> Destination, TimeSpan Duration)> Patches { get; } = [];
@@ -53,12 +57,17 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
 
     IReadOnlyList<Guid> ICueExecutionHost.Sounding => SoundingCues;
 
-    public Task<bool> PlayAsync(CueNode cue, CueList? list)
+    public Task<bool> PlayAsync(
+        CueNode cue,
+        CueList? list,
+        TimeSpan? crossfade = null,
+        FadeShape crossfadeCurve = default)
     {
         if (PlayFails)
             return Task.FromResult(false);
 
         Played.Add(cue.Id);
+        Transitions.Add((cue.Id, crossfade, crossfadeCurve));
         SoundingCues.Add(cue.Id);
         return Task.FromResult(true);
     }
@@ -81,8 +90,26 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
         return Task.CompletedTask;
     }
 
+    public Task FadeCueAsync(
+        Guid cueId,
+        double levelDb,
+        TimeSpan duration,
+        FadeShape curve,
+        bool stopWhenSilent)
+    {
+        CueFades.Add((cueId, levelDb, duration, curve, stopWhenSilent));
+        if (stopWhenSilent)
+            Stopped.Add(cueId);
+        else
+            Levels.Add((cueId, levelDb));
+        return Task.CompletedTask;
+    }
+
     public Task ApplyPatchAsync(
-        IReadOnlyList<PatchCell> origin, IReadOnlyList<PatchCell> destination, TimeSpan duration)
+        IReadOnlyList<PatchCell> origin,
+        IReadOnlyList<PatchCell> destination,
+        TimeSpan duration,
+        FadeShape curve)
     {
         Patches.Add((destination, duration));
         return Task.CompletedTask;

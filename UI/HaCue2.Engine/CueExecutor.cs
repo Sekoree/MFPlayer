@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
+using S.Media.Session;
 
 namespace HaCue2.Engine;
 
@@ -21,6 +22,13 @@ namespace HaCue2.Engine;
 /// </remarks>
 public sealed class CueExecutor(ICueExecutionHost host)
 {
+    private sealed record PlaylistRun(Guid GroupId, IReadOnlyList<Guid> Order, int Index);
+
+    private readonly Lock _stateGate = new();
+    private readonly Dictionary<Guid, PlaylistRun> _playlistRuns = [];
+    private readonly Dictionary<Guid, IReadOnlyList<Guid>> _stableShuffleOrders = [];
+    private readonly Dictionary<Guid, int> _jumpVisits = [];
+
     /// <summary>
     /// How deep a chain of auto-continues and jumps may run from one GO.
     /// </summary>
@@ -40,7 +48,11 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// How many cues deep into one operator GO this is. Auto-continue and jump-on-arrival both recurse
     /// through here, and <see cref="MaxChainDepth"/> is what stops an authored loop becoming a hang.
     /// </param>
-    public async Task<bool> FireAsync(Guid cueId, int depth)
+    public async Task<bool> FireAsync(
+        Guid cueId,
+        int depth,
+        TimeSpan? crossfade = null,
+        FadeShape crossfadeCurve = default)
     {
         if (depth > MaxChainDepth)
         {
@@ -67,7 +79,8 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         var fired = cue switch
         {
-            MediaCueNode or VisualizerCueNode => await host.PlayAsync(cue, list).ConfigureAwait(false),
+            MediaCueNode or VisualizerCueNode =>
+                await host.PlayAsync(cue, list, crossfade, crossfadeCurve).ConfigureAwait(false),
             GroupCueNode group => await FireGroupAsync(group, depth).ConfigureAwait(false),
             JumpCueNode jump => await JumpAsync(jump, depth).ConfigureAwait(false),
             PatchCueNode patch => await PatchAsync(patch).ConfigureAwait(false),
@@ -83,16 +96,17 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         // Auto-continue is resolved here for every kind. The session chains on a clip's natural end,
         // which a jump or a comment never has — left to the session those chains would simply stall.
-        if (cue.Trigger == CueTrigger.Continue
-            && list is not null
-            && CueOrder.NextEnabled(list, cueId) is { } next)
+        if (cue.Trigger == CueTrigger.Continue && list is not null)
         {
-            if (cue.PostWaitMs > 0
-                && !await host.DelayAsync(TimeSpan.FromMilliseconds(cue.PostWaitMs)).ConfigureAwait(false))
-                return true;
-
-            await AdvanceAsync(list, next.Id).ConfigureAwait(false);
-            await FireAsync(next.Id, depth + 1).ConfigureAwait(false);
+            await ContinueFromAsync(cue, list, depth, follow: false).ConfigureAwait(false);
+        }
+        else if (cue.Trigger == CueTrigger.Follow
+                 && cue is not MediaCueNode
+                 && cue is not VisualizerCueNode
+                 && list is not null)
+        {
+            // Instant cues have no natural-end event. Their successful completion is their end.
+            await ContinueFromAsync(cue, list, depth, follow: true).ConfigureAwait(false);
         }
 
         return true;
@@ -121,8 +135,10 @@ public sealed class CueExecutor(ICueExecutionHost host)
         switch (group.FireMode)
         {
             case GroupFireMode.Playlist:
-                var first = group.Shuffle ? children[Random.Shared.Next(children.Count)] : children[0];
-                return await FireAsync(first.Id, depth + 1).ConfigureAwait(false);
+                var order = PlaylistOrder(group, children);
+                lock (_stateGate)
+                    _playlistRuns[group.Id] = new PlaylistRun(group.Id, order, 0);
+                return await FireAsync(order[0], depth + 1).ConfigureAwait(false);
 
             case GroupFireMode.Timeline:
                 await FireTimelineAsync(group, TimeSpan.Zero, depth).ConfigureAwait(false);
@@ -139,6 +155,214 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
     }
 
+    /// <summary>Advances Follow and playlist runs from the framework's authoritative natural-end edge.</summary>
+    public async Task OnNaturalEndAsync(Guid cueId)
+    {
+        host.Forget(cueId);
+
+        if (await AdvancePlaylistAsync(cueId, approaching: false).ConfigureAwait(false))
+            return;
+
+        if (Project.FindCue(cueId) is { Trigger: CueTrigger.Follow } cue
+            && Project.ListOf(cueId) is { } list)
+            await ContinueFromAsync(cue, list, depth: 0, follow: true).ConfigureAwait(false);
+    }
+
+    /// <summary>Starts the next playlist item early when the current clip enters its crossfade window.</summary>
+    public Task OnApproachingEndAsync(Guid cueId) => AdvancePlaylistAsync(cueId, approaching: true);
+
+    private async Task<bool> AdvancePlaylistAsync(Guid ended, bool approaching)
+    {
+        PlaylistRun? run = null;
+        var position = -1;
+        GroupCueNode? group;
+
+        lock (_stateGate)
+        {
+            foreach (var candidate in _playlistRuns.Values)
+            {
+                for (var index = 0; index <= candidate.Index && index < candidate.Order.Count; index++)
+                {
+                    if (candidate.Order[index] != ended)
+                        continue;
+
+                    run = candidate;
+                    position = index;
+                    break;
+                }
+
+                if (run is not null)
+                    break;
+            }
+        }
+
+        if (run is null || Project.FindCue(run.GroupId) is not GroupCueNode found)
+            return false;
+
+        group = found;
+
+        // A positive crossfade advances the run while the outgoing item is still alive. Its later
+        // natural-end edge belongs to this playlist, but must not advance the new item or fall through
+        // to the outgoing cue's ordinary Follow rule and fire the successor a second time.
+        if (position < run.Index)
+            return true;
+
+        // A zero-window playlist has no useful pre-end edge. For a positive window, natural end is
+        // still a fallback if a backend could not issue pre-end notification.
+        if (approaching && group.CrossfadeMs <= 0)
+            return false;
+
+        var nextIndex = run.Index + 1;
+        if (nextIndex >= run.Order.Count)
+        {
+            if (approaching)
+                return true; // the final item must reach natural end before its end policy runs
+
+            return await FinishPlaylistAsync(group, run).ConfigureAwait(false);
+        }
+
+        var advanced = run with { Index = nextIndex };
+        lock (_stateGate)
+            _playlistRuns[group.Id] = advanced;
+
+        var fired = await FireAsync(
+            advanced.Order[nextIndex],
+            depth: 1,
+            approaching ? TimeSpan.FromMilliseconds(group.CrossfadeMs) : null,
+            group.CrossfadeCurve.Resolve(Project)).ConfigureAwait(false);
+
+        if (!fired)
+        {
+            lock (_stateGate)
+                _playlistRuns[group.Id] = run;
+        }
+
+        return true;
+    }
+
+    private async Task<bool> FinishPlaylistAsync(GroupCueNode group, PlaylistRun completed)
+    {
+        switch (group.AtEnd)
+        {
+            case AtListEnd.Loop:
+            {
+                var children = group.Children.Where(cue => cue.Enabled).ToList();
+                if (children.Count == 0)
+                    return true;
+
+                var order = PlaylistOrder(group, children);
+                var next = new PlaylistRun(group.Id, order, 0);
+                lock (_stateGate)
+                    _playlistRuns[group.Id] = next;
+                await FireAsync(order[0], depth: 1).ConfigureAwait(false);
+                return true;
+            }
+
+            case AtListEnd.NextList:
+                lock (_stateGate)
+                    _playlistRuns.Remove(group.Id);
+                if (Project.ListOf(group.Id) is { } owner)
+                    await ContinueAtListEndAsync(owner, depth: 0, AtListEnd.NextList).ConfigureAwait(false);
+                return true;
+
+            default:
+                lock (_stateGate)
+                    _playlistRuns.Remove(group.Id);
+                return true;
+        }
+    }
+
+    private IReadOnlyList<Guid> PlaylistOrder(GroupCueNode group, IReadOnlyList<CueNode> children)
+    {
+        if (!group.Shuffle)
+            return [.. children.Select(cue => cue.Id)];
+
+        lock (_stateGate)
+        {
+            if (!group.ReshuffleEachPass
+                && _stableShuffleOrders.TryGetValue(group.Id, out var existing)
+                && existing.Count == children.Count
+                && existing.All(id => children.Any(cue => cue.Id == id)))
+                return existing;
+
+            var shuffled = children.Select(cue => cue.Id).ToArray();
+            Random.Shared.Shuffle(shuffled);
+
+            if (!group.ReshuffleEachPass)
+                _stableShuffleOrders[group.Id] = shuffled;
+
+            return shuffled;
+        }
+    }
+
+    private async Task ContinueFromAsync(CueNode cue, CueList list, int depth, bool follow)
+    {
+        CueNode? next;
+
+        if (follow && Project.Settings.DisabledCueFollow == DisabledCueFollow.StopTheChain)
+        {
+            next = NextAfterSubtree(list, cue.Id);
+            if (next is { Enabled: false })
+                return;
+        }
+        else
+        {
+            next = CueOrder.NextEnabled(list, cue.Id);
+        }
+
+        if (cue.PostWaitMs > 0
+            && !await host.DelayAsync(TimeSpan.FromMilliseconds(cue.PostWaitMs)).ConfigureAwait(false))
+            return;
+
+        if (next is null)
+        {
+            await ContinueAtListEndAsync(list, depth, Project.Settings.AtListEnd).ConfigureAwait(false);
+            return;
+        }
+
+        await AdvanceAsync(list, next.Id).ConfigureAwait(false);
+        await FireAsync(next.Id, depth + 1).ConfigureAwait(false);
+    }
+
+    private async Task ContinueAtListEndAsync(CueList list, int depth, AtListEnd policy)
+    {
+        CueList? targetList = policy switch
+        {
+            AtListEnd.Loop => list,
+            AtListEnd.NextList => NextList(list),
+            _ => null,
+        };
+
+        if (targetList is null || CueOrder.NextEnabled(targetList, null) is not { } first)
+        {
+            await host.SetStandbyAsync(list, null).ConfigureAwait(false);
+            return;
+        }
+
+        if (!ReferenceEquals(targetList, list))
+            await host.SetStandbyAsync(list, null).ConfigureAwait(false);
+
+        await AdvanceAsync(targetList, first.Id).ConfigureAwait(false);
+        await FireAsync(first.Id, depth + 1).ConfigureAwait(false);
+    }
+
+    private CueList? NextList(CueList list)
+    {
+        var at = Project.CueLists.FindIndex(candidate => candidate.Id == list.Id);
+        return at >= 0 && at + 1 < Project.CueLists.Count ? Project.CueLists[at + 1] : null;
+    }
+
+    private static CueNode? NextAfterSubtree(CueList list, Guid after)
+    {
+        var order = list.Flatten().ToList();
+        var at = order.FindIndex(cue => cue.Id == after);
+        if (at < 0)
+            return null;
+
+        var index = at + CueOrder.Subtree(order[at]);
+        return index < order.Count && order[index].Enabled ? order[index] : null;
+    }
+
     /// <summary>
     /// Moves a list's cursor, and optionally fires what it lands on.
     /// </summary>
@@ -148,6 +372,23 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// </remarks>
     private async Task<bool> JumpAsync(JumpCueNode jump, int depth)
     {
+        if (jump.Condition == JumpCondition.WhileTriggerHeld && !host.IsExternalTriggerActive)
+            return true;
+
+        if (jump.Condition == JumpCondition.CountThenContinue)
+        {
+            lock (_stateGate)
+            {
+                var visits = _jumpVisits.GetValueOrDefault(jump.Id) + 1;
+                if (visits > Math.Max(1, jump.JumpCount))
+                {
+                    _jumpVisits.Remove(jump.Id);
+                    return true;
+                }
+                _jumpVisits[jump.Id] = visits;
+            }
+        }
+
         var targets = jump.TargetCueIds
             .Select(Project.FindCue)
             .OfType<CueNode>()
@@ -213,7 +454,11 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         var destination = Project.AudioPatch.Cells.Select(cell => cell with { }).ToList();
 
-        await host.ApplyPatchAsync(origin, destination, TimeSpan.FromMilliseconds(patch.FadeMs))
+        await host.ApplyPatchAsync(
+                origin,
+                destination,
+                TimeSpan.FromMilliseconds(patch.FadeMs),
+                patch.FadeCurve.Resolve(Project))
             .ConfigureAwait(false);
 
         return true;
@@ -259,22 +504,23 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 cell.Muted = toSilence;
             }
 
-            await host.ApplyPatchAsync(origin, destination, duration).ConfigureAwait(false);
+            await host.ApplyPatchAsync(origin, destination, duration, fade.Curve.Resolve(Project))
+                .ConfigureAwait(false);
         }
 
         foreach (var cueId in cues)
         {
             host.MarkFading(cueId);
 
+            await host.FadeCueAsync(
+                cueId,
+                fade.ToLevelDb,
+                duration,
+                fade.Curve.Resolve(Project),
+                toSilence && fade.StopTargetsWhenComplete).ConfigureAwait(false);
+
             if (toSilence && fade.StopTargetsWhenComplete)
-            {
-                await host.StopCueAsync(cueId).ConfigureAwait(false);
                 host.Forget(cueId);
-            }
-            else
-            {
-                await host.SetCueLevelAsync(cueId, fade.ToLevelDb).ConfigureAwait(false);
-            }
         }
 
         return cues.Count > 0 || fade.TargetChannelIds.Count > 0;

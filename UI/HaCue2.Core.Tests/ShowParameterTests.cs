@@ -51,7 +51,7 @@ public class ShowParameterTests
         Assert.True(registry.TryGetTarget(ShowParameters.MasterTrim, out var trim));
         // A fader and a typed value must not disagree about what the ends mean.
         Assert.Equal(GainRange.SilenceFloorDb, trim.Minimum, 3);
-        Assert.Equal(12, trim.Maximum, 3);
+        Assert.Equal(0, trim.Maximum, 3);
         Assert.Equal("dB", trim.Unit);
     }
 
@@ -87,7 +87,7 @@ public class ShowParameterTests
 
         registry.TrySet(ShowParameters.MasterTrim, 999);
 
-        Assert.Equal(12, readTrim(), 3);
+        Assert.Equal(0, readTrim(), 3);
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class ShowParameterTests
 
         var binding = new ContinuousBinding(
             new ContinuousBindingSpec(
-                ShowParameters.MasterTrim, InputMin: GainRange.SilenceFloorDb, InputMax: 12),
+                ShowParameters.MasterTrim, InputMin: GainRange.SilenceFloorDb, InputMax: 0),
             registry);
 
         // The fader is down at the floor while the trim sits at 0 dB. Applying its position on the

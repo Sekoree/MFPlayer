@@ -46,7 +46,7 @@ public partial class ShellWindow : Window
             // Register item 3: GO always works. It is deliberately NOT gated on focus being anywhere
             // in particular, and deliberately not swallowed while a text box has focus either — see
             // the guard below, which is the one exception.
-            case Key.Space when !control && !IsTyping():
+            case Key.Space when !control && shell.AllowsSpaceGo(IsTyping()):
                 shell.Cues.Go();
                 e.Handled = true;
                 return;
@@ -180,14 +180,27 @@ public partial class ShellWindow : Window
             _settings,
             () => new SettingsWindow
             {
-                DataContext = new SettingsViewModel(Shell.Project, Shell.Journal, Shell.Settings),
+                DataContext = new SettingsViewModel(
+                    Shell.Project,
+                    Shell.Journal,
+                    Shell.Settings,
+                    Shell.ApplyApplicationSettings),
             });
 
     private void OnDiagnostics(object? sender, RoutedEventArgs e)
         => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = Shell.OpenDiagnostics() });
 
     private void OnProjectStatus(object? sender, RoutedEventArgs e)
-        => _projectStatus = Reopen(_projectStatus, () => new ProjectStatusWindow { DataContext = new ProjectStatusViewModel(Shell.Project, Shell.Environment, Shell.Journal) });
+        => _projectStatus = Reopen(
+            _projectStatus,
+            () => new ProjectStatusWindow
+            {
+                DataContext = new ProjectStatusViewModel(
+                    Shell.Project,
+                    Shell.Environment,
+                    Shell.Journal,
+                    Shell.HasPath ? Shell.Path : null),
+            });
 
     /// <summary>
     /// Bring an already-open auxiliary window forward instead of stacking a second copy. Diagnostics

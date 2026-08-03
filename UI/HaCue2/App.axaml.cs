@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
@@ -48,6 +49,7 @@ public partial class App : Application
             desktop.MainWindow = Environment.GetEnvironmentVariable(StartVariable) == "main"
                 ? OpenShell()
                 : OpenLauncher();
+            desktop.Exit += (_, _) => AppLogging.Current?.Dispose();
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -73,11 +75,10 @@ public partial class App : Application
     /// <summary>Opens a project in the shell and records it as the most recent.</summary>
     private static ShellWindow Open(HaCueProject project, string path)
     {
-        var shell = new ShellViewModel(project, Machine) { Settings = Settings };
+        var shell = new ShellViewModel(project, Machine, path, Settings);
 
         if (path.Length > 0)
         {
-            shell.AdoptPath(path);
             Settings.NoteOpened(path, project.Title, Summarize(project), DateTimeOffset.Now);
             AppSettingsStore.Save(Settings);
         }
@@ -119,17 +120,42 @@ public partial class App : Application
     private static ShellWindow Live(ShellViewModel shell)
     {
         var window = new ShellWindow { DataContext = shell };
+        var shutdownStarted = false;
+        var shutdownComplete = false;
 
         window.Opened += async (_, _) =>
         {
-            shell.StartAutosave();
-            await shell.StartEngineAsync(Backend);
+            try
+            {
+                shell.StartAutosave();
+                await shell.StartEngineAsync(Backend);
+            }
+            catch (Exception failure)
+            {
+                shell.FileMessage = $"the show engine could not start — {failure.Message}";
+            }
         };
 
-        window.Closed += async (_, _) =>
+        window.Closing += async (_, closing) =>
         {
+            if (shutdownComplete)
+                return;
+
+            closing.Cancel = true;
+            if (shutdownStarted)
+                return;
+
+            shutdownStarted = true;
             shell.StopAutosave();
-            await shell.StopEngineAsync();
+            try
+            {
+                await shell.StopEngineAsync();
+            }
+            finally
+            {
+                shutdownComplete = true;
+                window.Close();
+            }
         };
 
         return window;

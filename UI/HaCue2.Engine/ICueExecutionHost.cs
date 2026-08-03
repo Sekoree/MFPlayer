@@ -1,4 +1,5 @@
 using HaCue2.Core.Model;
+using S.Media.Session;
 
 namespace HaCue2.Engine;
 
@@ -25,8 +26,15 @@ public interface ICueExecutionHost
     /// <summary>The document as it stands. Read per call — an edit lands between two cues in a chain.</summary>
     HaCueProject Project { get; }
 
+    /// <summary>True while a cue is being fired by an external input binding.</summary>
+    bool IsExternalTriggerActive { get; }
+
     /// <summary>Hands a playable cue to the session. False when it did not start.</summary>
-    Task<bool> PlayAsync(CueNode cue, CueList? list);
+    Task<bool> PlayAsync(
+        CueNode cue,
+        CueList? list,
+        TimeSpan? crossfade = null,
+        FadeShape crossfadeCurve = default);
 
     /// <summary>Moves a list's cursor, or clears it when the cue is null.</summary>
     Task SetStandbyAsync(CueList list, Guid? cueId);
@@ -37,9 +45,20 @@ public interface ICueExecutionHost
     /// <summary>Rewrites a sounding cue's send gains — a fade to a level that is not silence.</summary>
     Task SetCueLevelAsync(Guid cueId, double levelDb);
 
+    /// <summary>Ramps one sounding cue with the fade cue's own duration and resolved shape.</summary>
+    Task FadeCueAsync(
+        Guid cueId,
+        double levelDb,
+        TimeSpan duration,
+        FadeShape curve,
+        bool stopWhenSilent);
+
     /// <summary>Writes the project's patch cells and ramps the bay toward them over the duration.</summary>
     Task ApplyPatchAsync(
-        IReadOnlyList<PatchCell> origin, IReadOnlyList<PatchCell> destination, TimeSpan duration);
+        IReadOnlyList<PatchCell> origin,
+        IReadOnlyList<PatchCell> destination,
+        TimeSpan duration,
+        FadeShape curve);
 
     /// <summary>Sends an action cue. Returns null on success, or the reason it could not.</summary>
     Task<string?> SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint);

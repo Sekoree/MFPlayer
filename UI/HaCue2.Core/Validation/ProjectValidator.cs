@@ -28,6 +28,7 @@ public static class ProjectValidator
     {
         var issues = new List<ShowValidationIssue>();
 
+        ValidateDefinitions(project, issues);
         ValidateLogicalChannels(project, issues);
         ValidateGroups(project, issues);
         ValidatePatch(project, issues);
@@ -37,6 +38,102 @@ public static class ProjectValidator
         ValidateTriggers(project, issues);
 
         return issues;
+    }
+
+    private static void ValidateDefinitions(HaCueProject project, List<ShowValidationIssue> issues)
+    {
+        var identities = new Dictionary<Guid, string>();
+        void Identity(Guid id, string kind, string? subjectId = null)
+        {
+            if (id == Guid.Empty)
+                issues.Add(Error(kind, subjectId, $"A {kind} has an empty id."));
+            else if (!identities.TryAdd(id, kind))
+                issues.Add(Error(kind, subjectId ?? id.ToString(),
+                    $"The id {id} is shared by a {identities[id]} and a {kind}."));
+        }
+
+        foreach (var list in project.CueLists)
+            Identity(list.Id, "cueList", list.Id.ToString());
+        foreach (var cue in project.AllCues())
+        {
+            Identity(cue.Id, "cue", cue.Id.ToString());
+            var lanes = cue switch
+            {
+                MediaCueNode media => media.EffectLanes,
+                VisualizerCueNode visualizer => visualizer.EffectLanes,
+                GroupCueNode group => group.EffectLanes,
+                _ => [],
+            };
+            foreach (var lane in lanes)
+                Identity(lane.Id, "effectLane", cue.Id.ToString());
+        }
+        foreach (var channel in project.AudioPatch.LogicalChannels)
+            Identity(channel.Id, "logicalOutput", channel.Id.ToString());
+        foreach (var group in project.AudioPatch.Groups)
+            Identity(group.Id, "outputGroup", group.Id.ToString());
+        foreach (var line in project.AudioLines)
+        {
+            Identity(line.Id, "audioLine", line.Id.ToString());
+            if (string.IsNullOrWhiteSpace(line.Name))
+                issues.Add(Error("audioLine", line.Id.ToString(), "An audio line has no name."));
+            if (line.Channels is < 1 or > 64)
+                issues.Add(Error("audioLine", line.Id.ToString(),
+                    $"Audio line “{line.Name}” has {line.Channels} channels; use 1–64."));
+            if (line.SampleRate is <= 0)
+                issues.Add(Error("audioLine", line.Id.ToString(),
+                    $"Audio line “{line.Name}” has a zero or negative sample rate."));
+        }
+        foreach (var snapshot in project.PatchSnapshots)
+            Identity(snapshot.Id, "snapshot", snapshot.Id.ToString());
+        foreach (var composition in project.Compositions)
+            Identity(composition.Id, "composition", composition.Id.ToString());
+        foreach (var output in project.VideoOutputs)
+        {
+            Identity(output.Id, "videoOutput", output.Id.ToString());
+            foreach (var section in output.Mapping)
+                Identity(section.Id, "mappingSection", output.Id.ToString());
+        }
+
+        var endpointNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var endpoint in project.ActionEndpoints)
+        {
+            Identity(endpoint.Id, "endpoint", endpoint.Id.ToString());
+            if (string.IsNullOrWhiteSpace(endpoint.Name))
+                issues.Add(Error("endpoint", endpoint.Id.ToString(), "An action endpoint has no name."));
+            else if (!endpointNames.Add(endpoint.Name))
+                issues.Add(Error("endpoint", endpoint.Id.ToString(),
+                    $"More than one action endpoint is called “{endpoint.Name}”."));
+            if (endpoint.Kind == EndpointKind.OscOut
+                && (endpoint.Port is < 1 or > 65_535 || string.IsNullOrWhiteSpace(endpoint.Host)))
+                issues.Add(Error("endpoint", endpoint.Id.ToString(),
+                    $"OSC endpoint “{endpoint.Name}” needs a host and a port from 1–65535."));
+        }
+
+        foreach (var input in project.TriggerInputs)
+        {
+            Identity(input.Id, "triggerInput", input.Id.ToString());
+            if (string.IsNullOrWhiteSpace(input.Name))
+                issues.Add(Error("triggerInput", input.Id.ToString(), "A trigger input has no name."));
+            if (input.Kind == TriggerInputKind.OscIn && input.Port is < 1 or > 65_535)
+                issues.Add(Error("triggerInput", input.Id.ToString(),
+                    $"OSC input “{input.Name}” needs a port from 1–65535."));
+            foreach (var binding in input.Bindings)
+                Identity(binding.Id, "triggerBinding", input.Id.ToString());
+        }
+
+        foreach (var preset in project.CurvePresets)
+        {
+            Identity(preset.Id, "curvePreset", preset.Id.ToString());
+            if (string.IsNullOrWhiteSpace(preset.Name))
+                issues.Add(Error("curvePreset", preset.Id.ToString(), "A curve preset has no name."));
+            ValidateCurvePoints(preset.Points, "curvePreset", preset.Id.ToString(), preset.Name, issues);
+        }
+
+        if (project.AudioPatch.MixSampleRate is < 8_000 or > 384_000)
+            issues.Add(Error("document", null,
+                $"The mix sample rate {project.AudioPatch.MixSampleRate} Hz is outside 8,000–384,000 Hz."));
+        if (project.Settings.RemoteApi is { Port: < 1 or > 65_535 } remote)
+            issues.Add(Error("document", null, $"The project remote API port {remote.Port} is invalid."));
     }
 
     /// <summary>True when nothing would stop the show opening. Warnings do not.</summary>
@@ -212,15 +309,49 @@ public static class ProjectValidator
                 issues.Add(Error("composition", id, $"“{composition.Name}” has a zero or negative size."));
             if (composition.FramesPerSecond <= 0)
                 issues.Add(Error("composition", id, $"“{composition.Name}” has a zero or negative frame rate."));
+            else if (!double.IsFinite(composition.FramesPerSecond))
+                issues.Add(Error("composition", id, $"“{composition.Name}” has a non-finite frame rate."));
         }
 
         foreach (var output in project.VideoOutputs)
         {
             var id = output.Id.ToString();
+            if (string.IsNullOrWhiteSpace(output.Name))
+                issues.Add(Error("videoOutput", id, "A video output has no name."));
             if (output.CompositionId is { } compositionId
                 && project.Compositions.All(composition => composition.Id != compositionId))
                 issues.Add(Error("videoOutput", id,
                     $"“{output.Name}” shows a composition that no longer exists."));
+
+            foreach (var section in output.Mapping)
+            {
+                var values = new[]
+                {
+                    section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight,
+                    section.TargetX, section.TargetY, section.TargetWidth, section.TargetHeight,
+                    section.RotationDegrees, section.Opacity, section.Brightness,
+                };
+                if (values.Any(value => !double.IsFinite(value)))
+                    issues.Add(Error("videoOutput", id,
+                        $"Mapping section “{section.Name}” contains a non-finite number."));
+                if (section.SourceWidth <= 0 || section.SourceHeight <= 0
+                    || section.TargetWidth <= 0 || section.TargetHeight <= 0)
+                    issues.Add(Error("videoOutput", id,
+                        $"Mapping section “{section.Name}” has a zero or negative size."));
+                if (section.Opacity is < 0 or > 1 || section.Brightness is < 0 or > 2)
+                    issues.Add(Error("videoOutput", id,
+                        $"Mapping section “{section.Name}” opacity must be in 0–1 and brightness in 0–2."));
+                if (section.WarpGrid is < 0 or > 32)
+                    issues.Add(Error("videoOutput", id,
+                        $"Mapping section “{section.Name}” has an unsupported warp grid {section.WarpGrid}."));
+                var wanted = section.WarpGrid == 0 ? 0 : section.WarpGrid * section.WarpGrid * 2;
+                if (section.WarpOffsets.Count is not 0 && section.WarpOffsets.Count != wanted)
+                    issues.Add(Error("videoOutput", id,
+                        $"Mapping section “{section.Name}” has {section.WarpOffsets.Count} warp values; expected {wanted}."));
+                if (section.WarpOffsets.Any(value => !double.IsFinite(value)))
+                    issues.Add(Error("videoOutput", id,
+                        $"Mapping section “{section.Name}” contains a non-finite warp offset."));
+            }
         }
     }
 
@@ -283,13 +414,13 @@ public static class ProjectValidator
 
                 foreach (var placement in media.Placements)
                     ValidatePlacement(project, placement, cue, issues);
-                ValidateLanes(media.EffectLanes, cue, issues);
+                ValidateLanes(project, media.EffectLanes, cue, issues);
                 ValidateCurve(project, media.FadeInCurve, cue, issues);
                 ValidateCurve(project, media.FadeOutCurve, cue, issues);
                 break;
 
             case GroupCueNode group:
-                ValidateLanes(group.EffectLanes, cue, issues);
+                ValidateLanes(project, group.EffectLanes, cue, issues);
                 ValidateCurve(project, group.CrossfadeCurve, cue, issues);
                 break;
 
@@ -325,6 +456,8 @@ public static class ProjectValidator
                 break;
 
             case JumpCueNode jump:
+                if (jump.Condition == JumpCondition.CountThenContinue && jump.JumpCount <= 0)
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has an invalid jump count."));
                 foreach (var targetId in jump.TargetCueIds.Where(target => !cueIds.Contains(target)))
                     issues.Add(Error("cue", id, $"Q{cue.Number} jumps to a cue that is no longer in the show."));
                 break;
@@ -332,7 +465,7 @@ public static class ProjectValidator
             case VisualizerCueNode visualizer:
                 foreach (var placement in visualizer.Placements)
                     ValidatePlacement(project, placement, cue, issues);
-                ValidateLanes(visualizer.EffectLanes, cue, issues);
+                ValidateLanes(project, visualizer.EffectLanes, cue, issues);
                 break;
 
             case PatchCueNode patchCue:
@@ -367,21 +500,36 @@ public static class ProjectValidator
         if (project.Compositions.All(composition => composition.Id != placement.CompositionId))
             issues.Add(Error("cue", cue.Id.ToString(),
                 $"Q{cue.Number} is placed on a composition that no longer exists."));
+        if (new[] { placement.X, placement.Y, placement.Width, placement.Height, placement.Opacity }
+            .Any(value => !double.IsFinite(value)))
+            issues.Add(Error("cue", cue.Id.ToString(),
+                $"Q{cue.Number} has a placement containing a non-finite number."));
+        if (placement.Width <= 0 || placement.Height <= 0 || placement.Opacity is < 0 or > 1)
+            issues.Add(Error("cue", cue.Id.ToString(),
+                $"Q{cue.Number} has a placement with invalid size or opacity."));
     }
 
     private static void ValidateLanes(
-        IReadOnlyList<EffectLane> lanes, CueNode cue, List<ShowValidationIssue> issues)
+        HaCueProject project,
+        IReadOnlyList<EffectLane> lanes,
+        CueNode cue,
+        List<ShowValidationIssue> issues)
     {
         var id = cue.Id.ToString();
+        foreach (var duplicate in lanes.GroupBy(lane => lane.Kind).Where(group => group.Count() > 1))
+            issues.Add(Error("cue", id, $"Q{cue.Number} has more than one {duplicate.Key} lane."));
 
         foreach (var lane in lanes)
         {
+            if (lane.Points.Count < 2)
+                issues.Add(Error("cue", id, $"Q{cue.Number} has a {lane.Kind} lane with fewer than two points."));
             // Points must advance. A lane whose X went backwards would evaluate differently depending
             // on how it was walked, which is the kind of ambiguity that shows up once, live.
             var previousX = double.NegativeInfinity;
             foreach (var point in lane.Points)
             {
-                if (point.X < 0 || point.X > 1 || point.Y < 0 || point.Y > 1)
+                if (!double.IsFinite(point.X) || !double.IsFinite(point.Y)
+                    || point.X < 0 || point.X > 1 || point.Y < 0 || point.Y > 1)
                     issues.Add(Error("cue", id,
                         $"Q{cue.Number} has a {lane.Kind} lane point outside the 0–1 range."));
                 if (point.X < previousX)
@@ -392,13 +540,38 @@ public static class ProjectValidator
             if (lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp && lane.EndpointId is null)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} has an outbound {lane.Kind} lane with no endpoint."));
+            else if (lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp)
+            {
+                var endpoint = project.ActionEndpoints.FirstOrDefault(candidate => candidate.Id == lane.EndpointId);
+                var expected = lane.Kind == EffectLaneKind.OscRamp ? EndpointKind.OscOut : EndpointKind.MidiOut;
+                if (endpoint is null)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has an outbound lane whose endpoint no longer exists."));
+                else if (endpoint.Kind != expected)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has a {lane.Kind} lane pointed at a {endpoint.Kind} endpoint."));
+                if (string.IsNullOrWhiteSpace(lane.Address))
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has an outbound lane with no address/message."));
+                else if (lane.Kind == EffectLaneKind.MidiRamp
+                         && MidiActions.TryParse(lane.Address, "0", out _) is { } wrong)
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has a MIDI ramp that sends {wrong}"));
+            }
         }
     }
 
     private static void ValidateCurve(
         HaCueProject project, CurveSpec? curve, CueNode cue, List<ShowValidationIssue> issues)
     {
-        if (curve?.PresetId is not { } presetId)
+        if (curve is null)
+            return;
+
+        if (!Enum.IsDefined(curve.Law))
+            issues.Add(Error("cue", cue.Id.ToString(), $"Q{cue.Number} uses an unknown fade law."));
+
+        if (curve.Points is { } inline)
+            ValidateCurvePoints(inline, "cue", cue.Id.ToString(), $"Q{cue.Number}", issues);
+
+        if (curve.PresetId is not { } presetId)
             return;
 
         if (project.CurvePresets.All(preset => preset.Id != presetId))
@@ -406,11 +579,42 @@ public static class ProjectValidator
                 $"Q{cue.Number} uses a curve preset that no longer exists."));
     }
 
+    private static void ValidateCurvePoints(
+        IReadOnlyList<FadeCurvePoint> points,
+        string kind,
+        string? id,
+        string label,
+        List<ShowValidationIssue> issues)
+    {
+        if (points.Count < 2)
+            issues.Add(Error(kind, id, $"{label} curve has fewer than two points."));
+
+        var previous = double.NegativeInfinity;
+        foreach (var point in points)
+        {
+            if (!double.IsFinite(point.Progress) || !double.IsFinite(point.Level)
+                || point.Progress is < 0 or > 1 || point.Level is < 0 or > 1)
+                issues.Add(Error(kind, id, $"{label} curve has a point outside the finite 0–1 range."));
+            if (point.Progress < previous)
+                issues.Add(Error(kind, id, $"{label} curve points are out of order."));
+            previous = point.Progress;
+        }
+    }
+
     private static void ValidateTriggers(HaCueProject project, List<ShowValidationIssue> issues)
     {
         foreach (var input in project.TriggerInputs)
             foreach (var binding in input.Bindings)
             {
+                if (string.IsNullOrWhiteSpace(binding.Input))
+                    issues.Add(Error("triggerInput", input.Id.ToString(),
+                        $"“{input.Name}” has a binding with no input pattern."));
+                if (!double.IsFinite(binding.RangeMin) || !double.IsFinite(binding.RangeMax))
+                    issues.Add(Error("triggerInput", input.Id.ToString(),
+                        $"“{input.Name}” has a binding with a non-finite parameter range."));
+                if (binding.NoRepeatMs is < 0 or > 60_000)
+                    issues.Add(Error("triggerInput", input.Id.ToString(),
+                        $"“{input.Name}” has an invalid repeat filter."));
                 // A clock binding whose time will not parse is a cue that can never fire, and unlike a
                 // wire binding there is no device to blame for it — so it is found here, while the show
                 // is being written, rather than by its absence on the night.

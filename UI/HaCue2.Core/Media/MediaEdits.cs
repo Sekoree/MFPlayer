@@ -93,7 +93,8 @@ public static class MediaEdits
     /// was renamed. Every reference to the SAME old path moves together — two cues pointing at one
     /// missing file are one problem, and fixing it twice is a way to fix it inconsistently.
     /// </remarks>
-    public static MediaEditResult RelinkOne(ProjectJournal journal, string oldPath, string newPath)
+    public static MediaEditResult RelinkOne(
+        ProjectJournal journal, string oldPath, string newPath, string? projectPath = null)
     {
         ArgumentNullException.ThrowIfNull(journal);
 
@@ -106,13 +107,15 @@ public static class MediaEdits
 
         using var scope = journal.Composite($"relink {System.IO.Path.GetFileName(oldPath)}", "media");
 
+        var stored = MediaPaths.Store(journal.Project, newPath, projectPath);
+
         foreach (var reference in references)
         {
             journal.Do(new RewriteMediaPathCommand(
-                reference, newPath, $"relink {reference.Describe}"));
+                reference, stored, $"relink {reference.Describe}"));
         }
 
-        return new MediaEditResult([newPath], []);
+        return new MediaEditResult([stored], []);
     }
 
     public static MediaEditResult Relink(

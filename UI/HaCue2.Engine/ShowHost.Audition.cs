@@ -62,10 +62,16 @@ public sealed partial class ShowHost
         await EnsureAuditionSurfaceAsync().ConfigureAwait(false);
 
         var endpoint = _project.Audition.AudioLineId?.ToString();
+        var levelDb = _project.Audition.LevelDb;
+        if (_project.Audition.DuckWhenProgramSounds && SoundingIds().Count > 0)
+            levelDb -= 12;
+        var gain = levelDb <= GainRange.SilenceFloorDb
+            ? 0f
+            : (float)Math.Pow(10, levelDb / 20);
 
         try
         {
-            if (!await _session.PreviewCueAsync(cueId.ToString(), endpoint).ConfigureAwait(false))
+            if (!await _session.PreviewCueAsync(cueId.ToString(), endpoint, gain).ConfigureAwait(false))
             {
                 Report($"“{media.Label}” could not be auditioned");
                 return false;

@@ -1,4 +1,5 @@
 using HaCue2.Core.Model;
+using HaCue2.Core.Media;
 using S.Media.Session;
 
 namespace HaCue2.Core.Compile;
@@ -40,15 +41,22 @@ public static class ShowCompiler
     /// </param>
     public static ShowDocument Compile(
         HaCueProject project, IReadOnlyDictionary<Guid, TimeSpan>? durations = null)
+        => Compile(project, new ShowCompileContext { Durations = durations });
+
+    /// <summary>
+    /// Compiles with the machine facts belonging to the currently opened project file.
+    /// </summary>
+    public static ShowDocument Compile(HaCueProject project, ShowCompileContext context)
     {
         ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(context);
 
         var cues = new List<CueDefinition>();
         var clips = new List<ShowClipBinding>();
         var number = 0;
 
         foreach (var list in project.CueLists)
-            Append(project, list, cues, clips, durations, ref number);
+            Append(project, list, cues, clips, context, ref number);
 
         return new ShowDocument(
             DocumentVersion,
@@ -84,7 +92,7 @@ public static class ShowCompiler
         CueList list,
         List<CueDefinition> cues,
         List<ShowClipBinding> clips,
-        IReadOnlyDictionary<Guid, TimeSpan>? durations,
+        ShowCompileContext context,
         ref int number)
     {
         var listGroup = GroupId(list);
@@ -94,7 +102,8 @@ public static class ShowCompiler
             IEnumerable<CueNode> nodes,
             string groupId,
             TimeSpan preEndNotify,
-            GroupCueNode? layering = null)
+            GroupCueNode? layering = null,
+            IReadOnlyList<EffectLane>? inheritedLanes = null)
         {
             foreach (var node in nodes)
             {
@@ -125,7 +134,8 @@ public static class ShowCompiler
                             group is { FireMode: GroupFireMode.Playlist, CrossfadeMs: > 0 }
                                 ? TimeSpan.FromMilliseconds(group.CrossfadeMs)
                                 : TimeSpan.Zero,
-                            group.FireMode == GroupFireMode.Timeline ? group : null);
+                            group.FireMode == GroupFireMode.Timeline ? group : null,
+                            MergeLanes(group.EffectLanes, inheritedLanes));
                         break;
 
                     case MediaCueNode media:
@@ -138,7 +148,12 @@ public static class ShowCompiler
                         // validator reports it by name instead.
                         if (media.MediaPath.Length > 0)
                         {
-                            clips.Add(Clip(project, media, Duration(durations, media)) with
+                            clips.Add(Clip(
+                                project,
+                                media,
+                                Duration(context.Durations, media),
+                                context,
+                                inheritedLanes) with
                             {
                                 PreEndNotify = preEndNotify,
                             });
@@ -187,17 +202,26 @@ public static class ShowCompiler
             Number: number,
             Label: cue.Label.Length > 0 ? cue.Label : cue.Number.Text,
             Enabled: cue.Enabled,
-            PreWait: TimeSpan.FromMilliseconds(cue.PreWaitMs),
-            PostWait: TimeSpan.FromMilliseconds(cue.PostWaitMs),
+            // HaCue2's executor owns waits for every cue kind. Leaving a second copy in the playback
+            // graph made media waits run once here and once in CueExecutor.
+            PreWait: TimeSpan.Zero,
+            PostWait: TimeSpan.Zero,
             GroupId: groupId,
-            AutoContinue: cue.Trigger == CueTrigger.Continue);
+            // The application executor owns Continue and Follow for every cue kind; the framework
+            // graph intentionally receives no second, media-only chain.
+            AutoContinue: false);
 
     /// <summary>What the probe says this cue's file runs for, or null when nobody has looked.</summary>
     private static TimeSpan? Duration(
         IReadOnlyDictionary<Guid, TimeSpan>? durations, MediaCueNode media) =>
         durations is not null && durations.TryGetValue(media.Id, out var length) ? length : null;
 
-    private static ShowClipBinding Clip(HaCueProject project, MediaCueNode media, TimeSpan? fileLength)
+    private static ShowClipBinding Clip(
+        HaCueProject project,
+        MediaCueNode media,
+        TimeSpan? fileLength,
+        ShowCompileContext context,
+        IReadOnlyList<EffectLane>? inheritedLanes = null)
     {
         // The FIRST placement is the primary; the rest ride along as ExtraPlacements, which is how the
         // engine fans one DECODED source to several canvases. Playing the file again for a mirror
@@ -205,19 +229,25 @@ public static class ShowCompiler
         var placements = media.Placements.OrderBy(item => item.LayerIndex).ToList();
         var placement = placements.FirstOrDefault();
 
+        var hasCheckedTracks = context.Tracks.TryGetValue(media.Id, out var tracks);
+        var fadeIn = media.FadeInCurve.Resolve(project);
+        var fadeOut = media.FadeOutCurve.Resolve(project);
+
         return new ShowClipBinding(
             ClipId: media.Id.ToString(),
-            MediaPath: media.MediaPath,
+            MediaPath: MediaPaths.Resolve(project, media.MediaPath, context.ProjectPath),
             CompositionId: placement?.CompositionId.ToString(),
             LayerIndex: placement?.LayerIndex ?? 0,
             // Null means "elect one", which is also what the document's null means, so an unmade
             // choice stays unmade all the way down rather than being frozen into an index here.
-            AudioStreamIndex: media.AudioTrackIndex,
-            Subtitles: Subtitles(media))
+            // A checked null is meaningful: the saved signature no longer exists, so asking the
+            // decoder to elect a stream is safer than silently reusing the stale numeric index.
+            AudioStreamIndex: hasCheckedTracks ? tracks!.AudioStreamIndex : media.AudioTrackIndex,
+            Subtitles: Subtitles(project, media, context, tracks))
         {
             // −1 is "no video", which is a real choice and not the same as electing one; the engine
             // reads it exactly that way.
-            VideoStreamIndex = media.VideoTrackIndex,
+            VideoStreamIndex = hasCheckedTracks ? tracks!.VideoStreamIndex : media.VideoTrackIndex,
             StartOffset = TimeSpan.FromMilliseconds(media.TrimInMs),
             // The document's EndOffset is measured from the SOURCE END; the project stores an ABSOLUTE
             // out-point, so converting one to the other needs the file's length. With a probed length
@@ -225,9 +255,11 @@ public static class ShowCompiler
             // guessed length would cut the cue somewhere nobody chose.
             EndOffset = EndOffset(media, fileLength),
             FadeIn = TimeSpan.FromMilliseconds(media.FadeInMs),
-            FadeInCurve = media.FadeInCurve.Law,
+            FadeInCurve = fadeIn.Law,
+            FadeInShape = fadeIn.Custom,
             FadeOut = TimeSpan.FromMilliseconds(media.FadeOutMs),
-            FadeOutCurve = media.FadeOutCurve.Law,
+            FadeOutCurve = fadeOut.Law,
+            FadeOutShape = fadeOut.Custom,
             Loop = media.Loop,
             Placement = placement is null ? null : Placement(placement),
             ExtraPlacements = placements.Count < 2
@@ -237,8 +269,8 @@ public static class ShowCompiler
                     extra.LayerIndex,
                     Placement(extra)))],
             LogicalSends = [.. Sends(media)],
-            VolumeEnvelope = Envelope(media, EffectLaneKind.Volume, fileLength),
-            OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity, fileLength),
+            VolumeEnvelope = Envelope(media, EffectLaneKind.Volume, fileLength, inheritedLanes),
+            OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity, fileLength, inheritedLanes),
         };
     }
 
@@ -266,12 +298,20 @@ public static class ShowCompiler
     /// Null rather than an empty list: <see cref="ShowClipBinding.GetSubtitleSelections"/> treats an
     /// empty list and a null the same, and null is the shape that says "this cue never had any".
     /// </remarks>
-    private static IReadOnlyList<ShowSubtitleSelection>? Subtitles(MediaCueNode media) =>
+    private static IReadOnlyList<ShowSubtitleSelection>? Subtitles(
+        HaCueProject project,
+        MediaCueNode media,
+        ShowCompileContext context,
+        ResolvedMediaTracks? tracks) =>
         media.Subtitles.Count == 0
             ? null
-            : [.. media.Subtitles.Select(selection => new ShowSubtitleSelection(
-                selection.Path.Length > 0 ? selection.Path : null,
-                selection.StreamIndex))];
+            : [.. media.Subtitles.Select((selection, index) => new ShowSubtitleSelection(
+                selection.Path.Length > 0
+                    ? MediaPaths.Resolve(project, selection.Path, context.ProjectPath)
+                    : null,
+                tracks is not null && index < tracks.SubtitleStreamIndices.Count
+                    ? tracks.SubtitleStreamIndices[index]
+                    : selection.StreamIndex))];
 
     /// <summary>
     /// The clip's N×V matrix: which source channel feeds which logical output, at what gain.
@@ -323,9 +363,14 @@ public static class ShowCompiler
     /// </para>
     /// </remarks>
     private static IReadOnlyList<ShowEnvelopePoint>? Envelope(
-        MediaCueNode media, EffectLaneKind kind, TimeSpan? fileLength)
+        MediaCueNode media,
+        EffectLaneKind kind,
+        TimeSpan? fileLength,
+        IReadOnlyList<EffectLane>? inheritedLanes = null)
     {
-        if (media.EffectLanes.FirstOrDefault(lane => lane.Kind == kind) is not { Points.Count: > 1 } lane)
+        var lane = media.EffectLanes.FirstOrDefault(candidate => candidate.Kind == kind)
+                   ?? inheritedLanes?.FirstOrDefault(candidate => candidate.Kind == kind);
+        if (lane is not { Points.Count: > 1 })
             return null;
 
         if (media.TrimmedLength(fileLength) is not { } span || span <= TimeSpan.Zero)
@@ -338,6 +383,14 @@ public static class ShowCompiler
                 (float)Math.Clamp(point.Y, 0, 1))),
         ];
     }
+
+    private static IReadOnlyList<EffectLane> MergeLanes(
+        IReadOnlyList<EffectLane> nearest,
+        IReadOnlyList<EffectLane>? inherited) =>
+        [
+            .. nearest,
+            .. (inherited ?? []).Where(parent => nearest.All(lane => lane.Kind != parent.Kind)),
+        ];
 
     private static ShowComposition Composition(CompositionDefinition composition) =>
         new(

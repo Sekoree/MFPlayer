@@ -12,7 +12,10 @@ namespace HaCue2.Session;
 /// It exists so <c>HaCue2.Core</c> never has to know what a session is, and so the same status pass
 /// runs identically here and under <c>hacue2-check</c> — only the answers differ.
 /// </remarks>
-public sealed class RuntimeEnvironment(ShowRuntime runtime, HaCueProject project) : IProjectEnvironment
+public sealed class RuntimeEnvironment(
+    ShowRuntime runtime,
+    HaCueProject project,
+    Func<string?>? projectPath = null) : IProjectEnvironment
 {
     /// <summary>
     /// Media presence comes from the runtime's broken set rather than from the disk.
@@ -25,7 +28,7 @@ public sealed class RuntimeEnvironment(ShowRuntime runtime, HaCueProject project
     public bool MediaExists(string resolvedPath) =>
         !MediaPaths.ReferencesIn(project)
             .Where(reference => runtime.Broken.Contains(Guid.TryParse(reference.SubjectId, out var id) ? id : Guid.Empty))
-            .Any(reference => MediaPaths.Resolve(project, reference.Path, null) == resolvedPath);
+            .Any(reference => MediaPaths.Resolve(project, reference.Path, projectPath?.Invoke()) == resolvedPath);
 
     public DeviceAvailability AudioLine(AudioLineDefinition line) =>
         runtime.AbsentLines.Contains(line.Id) ? DeviceAvailability.Absent : DeviceAvailability.Present;

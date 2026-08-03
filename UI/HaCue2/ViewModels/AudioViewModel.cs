@@ -348,7 +348,7 @@ public partial class AudioViewModel : ObservableObject
     /// </remarks>
     public void RecallSelected()
     {
-        if (SelectedSnapshot is not { } row)
+        if (_journal.IsReadOnly || SelectedSnapshot is not { } row)
             return;
 
         var result = PatchOperations.Recall(_project, row.Id);

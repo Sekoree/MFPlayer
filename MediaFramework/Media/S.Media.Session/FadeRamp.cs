@@ -52,6 +52,13 @@ public static class FadeCurves
             ? target + (start - target) * LevelDown(elapsed, duration, curve)
             : start + (target - start) * LevelUp(elapsed, duration, curve);
 
+    /// <summary>Interpolates through either a built-in law or a user-drawn shape.</summary>
+    public static float LevelBetween(
+        float start, float target, TimeSpan elapsed, TimeSpan duration, FadeShape shape) =>
+        target < start
+            ? target + (start - target) * LevelDown(elapsed, duration, shape)
+            : start + (target - start) * LevelUp(elapsed, duration, shape);
+
     /// <summary>The down-ramp level shaped by <paramref name="shape"/>, which may be a user-drawn curve.
     /// A custom shape is normalized (0 = fade start, 1 = fade end), so the same drawing applies to a fade
     /// of any duration.</summary>

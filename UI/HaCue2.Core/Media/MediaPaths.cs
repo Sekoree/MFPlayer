@@ -7,7 +7,12 @@ namespace HaCue2.Core.Media;
 /// <param name="SubjectKind">What holds it, for the status view's navigation target.</param>
 /// <param name="SubjectId">That thing's id.</param>
 /// <param name="Describe">How to name it to an operator: "Q15 Interval music".</param>
-public sealed record MediaReference(string Path, string SubjectKind, string SubjectId, string Describe);
+public sealed record MediaReference(
+    string Path,
+    string SubjectKind,
+    string SubjectId,
+    string Describe,
+    int Slot = -1);
 
 /// <summary>
 /// Resolving the document's media paths against the project's media root.
@@ -71,9 +76,22 @@ public static class MediaPaths
         var found = new List<MediaReference>();
 
         foreach (var cue in project.AllCues().OfType<MediaCueNode>())
+        {
             if (!string.IsNullOrWhiteSpace(cue.MediaPath))
                 found.Add(new MediaReference(cue.MediaPath, "cue", cue.Id.ToString(),
                     $"Q{cue.Number} {cue.Label}".TrimEnd()));
+
+            for (var index = 0; index < cue.Subtitles.Count; index++)
+            {
+                if (!string.IsNullOrWhiteSpace(cue.Subtitles[index].Path))
+                    found.Add(new MediaReference(
+                        cue.Subtitles[index].Path,
+                        "subtitle",
+                        cue.Id.ToString(),
+                        $"Q{cue.Number} {cue.Label} subtitle".TrimEnd(),
+                        index));
+            }
+        }
 
         foreach (var composition in project.Compositions)
             if (!string.IsNullOrWhiteSpace(composition.IdleImagePath))
@@ -95,6 +113,12 @@ public static class MediaPaths
         {
             case "cue" when project.FindCue(Guid.Parse(reference.SubjectId)) is MediaCueNode cue:
                 cue.MediaPath = newPath;
+                return true;
+
+            case "subtitle" when project.FindCue(Guid.Parse(reference.SubjectId)) is MediaCueNode cue
+                                 && reference.Slot >= 0
+                                 && reference.Slot < cue.Subtitles.Count:
+                cue.Subtitles[reference.Slot].Path = newPath;
                 return true;
 
             case "composition":

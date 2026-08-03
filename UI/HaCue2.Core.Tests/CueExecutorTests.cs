@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using HaCue2.Engine;
+using S.Media.Session;
 using Xunit;
 
 namespace HaCue2.Core.Tests;
@@ -233,6 +234,55 @@ public class CueExecutorTests
 
         // Each child's natural end chains to the next; firing them all would play the set at once.
         Assert.Equal([group.Children[0].Id], host.Played);
+    }
+
+    [Fact]
+    public async Task APlaylistNaturalEndAdvancesToItsNextChild()
+    {
+        var group = new GroupCueNode { Number = new CueNumber("1"), FireMode = GroupFireMode.Playlist };
+        group.Children.AddRange([Media("1.1"), Media("1.2")]);
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+
+        Assert.Equal(group.Children.Select(child => child.Id), host.Played);
+    }
+
+    [Fact]
+    public async Task APlaylistCrossfadeUsesItsCustomCurveAndConsumesTheOutgoingEnd()
+    {
+        var first = Media("1.1");
+        first.Trigger = CueTrigger.Follow;
+        var second = Media("1.2");
+        var group = new GroupCueNode
+        {
+            Number = new CueNumber("1"),
+            FireMode = GroupFireMode.Playlist,
+            CrossfadeMs = 1_250,
+            CrossfadeCurve = new CurveSpec
+            {
+                Points =
+                [
+                    new FadeCurvePoint(0, 0),
+                    new FadeCurvePoint(0.4, 0.15),
+                    new FadeCurvePoint(1, 1),
+                ],
+            },
+            Children = [first, second],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+
+        var transition = Assert.Single(host.Transitions, item => item.Cue == second.Id);
+        Assert.Equal(TimeSpan.FromMilliseconds(1_250), transition.Duration);
+        Assert.True(transition.Curve.IsCustom);
+
+        await executor.OnNaturalEndAsync(first.Id);
+
+        Assert.Equal(1, host.Played.Count(id => id == second.Id));
     }
 
     [Fact]

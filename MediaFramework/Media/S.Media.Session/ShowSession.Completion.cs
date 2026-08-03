@@ -322,7 +322,7 @@ public sealed partial class ShowSession
     /// (<see cref="TransportVoice.TryClaimFadeOut"/>) or a hard release cancels the ramp and owns the
     /// release instead.</summary>
     private void StartVoiceReleaseRamp(
-        string groupId, TransportVoice voice, TimeSpan duration, FadeCurve curve)
+        string groupId, TransportVoice voice, TimeSpan duration, FadeShape curve)
     {
         var ct = voice.BeginReleaseRamp();
         var startLevel = voice.ClipLevel;

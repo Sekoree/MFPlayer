@@ -39,6 +39,9 @@ public partial class LauncherViewModel : ObservableObject
         MachineChecks = Checks(machine);
     }
 
+    /// <summary>The application's real settings object, shared with the launcher settings window.</summary>
+    public AppSettings Settings => _settings;
+
     /// <summary>Raised with a project the launcher loaded or created, and where it came from.</summary>
     public event Action<HaCueProject, string>? ProjectOpened;
 
@@ -64,7 +67,11 @@ public partial class LauncherViewModel : ObservableObject
                 },
             ],
             prompt => Adopt(
-                ProjectFiles.Create(prompt["Name"].Value.Trim(), prompt["Media root"].Value.Trim()),
+                ProjectFiles.Create(
+                    prompt["Name"].Value.Trim(),
+                    prompt["Media root"].Value.Trim(),
+                    _settings,
+                    _machine),
                 ""),
             confirm: "CREATE");
 
@@ -475,18 +482,23 @@ public partial class SettingsViewModel : ObservableObject
     private readonly bool _loading = true;
 
     private readonly AppSettings _app;
+    private readonly Action? _applicationChanged;
 
     public SettingsViewModel() : this(SampleProject.Create())
     {
     }
 
     public SettingsViewModel(
-        HaCueProject project, ProjectJournal? journal = null, AppSettings? app = null)
+        HaCueProject project,
+        ProjectJournal? journal = null,
+        AppSettings? app = null,
+        Action? applicationChanged = null)
     {
         _project = project;
         _settings = project.Settings;
         _journal = journal;
         _app = app ?? new AppSettings();
+        _applicationChanged = applicationChanged;
 
         // The Remote API row says "project" only when this project actually overrides it. It used to
         // say so on every project, including ones with no override at all.
@@ -585,6 +597,7 @@ public partial class SettingsViewModel : ObservableObject
 
         change(_app);
         AppSettingsStore.Save(_app);
+        _applicationChanged?.Invoke();
     }
 
     partial void OnBallisticChanged(string value) => WriteApp(app => app.MeterBallistics = value);
@@ -1268,16 +1281,19 @@ public partial class ProjectStatusViewModel : ObservableObject
 {
     private readonly ProjectJournal? _journal;
     private readonly IProjectEnvironment? _environment;
+    private readonly string? _projectPath;
 
     public ProjectStatusViewModel(
         HaCueProject project,
         IProjectEnvironment? environment = null,
-        ProjectJournal? journal = null)
+        ProjectJournal? journal = null,
+        string? projectPath = null)
     {
         _journal = journal;
         _environment = environment;
+        _projectPath = projectPath;
         Project = project;
-        Report = ProjectStatus.Run(project, environment: environment);
+        Report = ProjectStatus.Run(project, projectPath, environment);
         Title = $"Project status — {project.Title}";
         Checks = RowsOf(Report);
 
@@ -1348,7 +1364,8 @@ public partial class ProjectStatusViewModel : ObservableObject
                     root,
                     prompt["Match"].SelectedIndex == 0
                         ? RelinkStrategy.ByFileName
-                        : RelinkStrategy.BySubPath);
+                        : RelinkStrategy.BySubPath,
+                    _projectPath);
 
                 Rerun();
             },
@@ -1361,7 +1378,7 @@ public partial class ProjectStatusViewModel : ObservableObject
         if (_journal is null || chosen.Length == 0)
             return;
 
-        MediaEdits.RelinkOne(_journal, cuePath, chosen);
+        MediaEdits.RelinkOne(_journal, cuePath, chosen, _projectPath);
         Rerun();
     }
 
@@ -1370,7 +1387,7 @@ public partial class ProjectStatusViewModel : ObservableObject
         MediaPaths.ReferencesIn(Project)
             .Select(reference => reference.Path)
             .FirstOrDefault(path => !FileSystemEnvironment.Instance.MediaExists(
-                MediaPaths.Resolve(Project, path, null)))
+                MediaPaths.Resolve(Project, path, _projectPath)))
         ?? "";
 
     /// <summary>What the last relink changed and what it could not find.</summary>
@@ -1403,7 +1420,7 @@ public partial class ProjectStatusViewModel : ObservableObject
     public void Rerun()
     {
         HasCopied = false;
-        Report = ProjectStatus.Run(Project, environment: _environment);
+        Report = ProjectStatus.Run(Project, _projectPath, _environment);
         Checks = RowsOf(Report);
         OnPropertyChanged(nameof(Report));
         OnPropertyChanged(nameof(Checks));
@@ -1442,7 +1459,7 @@ public partial class ProjectStatusViewModel : ObservableObject
         if (_journal is null || ConsolidateInto.Trim().Length == 0)
             return;
 
-        var result = MediaEdits.Consolidate(_journal, ConsolidateInto.Trim());
+        var result = MediaEdits.Consolidate(_journal, ConsolidateInto.Trim(), _projectPath);
 
         ConsolidateNote = result.IsComplete
             ? $"copied {result.Changed.Count} file{(result.Changed.Count == 1 ? "" : "s")}"

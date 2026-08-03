@@ -68,5 +68,13 @@ public partial class LauncherWindow : Window
     }
 
     private void OnSettings(object? sender, RoutedEventArgs e)
-        => new SettingsWindow { DataContext = new SettingsViewModel() }.Show(this);
+    {
+        if (DataContext is LauncherViewModel vm)
+            new SettingsWindow
+            {
+                // There is no open project in the launcher. The sample supplies the inert project
+                // half of the screen; the application half edits the actual shared settings object.
+                DataContext = new SettingsViewModel(HaCue2.Sample.SampleProject.Create(), app: vm.Settings),
+            }.Show(this);
+    }
 }

@@ -1,5 +1,6 @@
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
+using HaCue2.Core.Compile;
 using HaCue2.Machine;
 
 namespace HaCue2.Session;
@@ -80,6 +81,58 @@ public sealed class MediaFactsCache
         }
 
         return broken;
+    }
+
+    /// <summary>
+    /// Stream indices checked against the content signatures in the file currently on this machine.
+    /// </summary>
+    public IReadOnlyDictionary<Guid, ResolvedMediaTracks> TracksIn(
+        HaCueProject project, string? projectPath)
+    {
+        var resolved = new Dictionary<Guid, ResolvedMediaTracks>();
+
+        foreach (var cue in project.AllCues().OfType<MediaCueNode>())
+        {
+            if (cue.MediaPath.Length == 0
+                || Facts(MediaPaths.Resolve(project, cue.MediaPath, projectPath)) is not { } facts)
+                continue;
+
+            var audio = Resolve(
+                facts.AudioTracks, cue.AudioTrackIndex, cue.AudioTrackSignature, cue.AudioTrackIndex);
+            var video = cue.VideoTrackIndex == -1
+                ? -1
+                : Resolve(facts.VideoTracks, cue.VideoTrackIndex, cue.VideoTrackSignature, cue.VideoTrackIndex);
+
+            var subtitles = cue.Subtitles.Select(selection =>
+            {
+                if (selection.Path.Length > 0 || selection.StreamIndex < 0)
+                    return selection.StreamIndex;
+
+                return Resolve(
+                    facts.SubtitleTracks,
+                    selection.StreamIndex,
+                    selection.Signature,
+                    selection.StreamIndex) ?? -1;
+            }).ToArray();
+
+            resolved[cue.Id] = new ResolvedMediaTracks(audio, video, subtitles);
+        }
+
+        return resolved;
+    }
+
+    private static int? Resolve(
+        IReadOnlyList<MediaTrack> tracks,
+        int? index,
+        string signature,
+        int? unsignedFallback)
+    {
+        // Old projects have no signature. Their explicit choice remains authoritative; there is no
+        // remembered identity with which to prove that the index moved.
+        if (string.IsNullOrEmpty(signature))
+            return unsignedFallback;
+
+        return MediaFacts.Resolve(tracks, index, signature)?.Index;
     }
 
     /// <summary>Whether a stored path names a place on this machine at all.</summary>

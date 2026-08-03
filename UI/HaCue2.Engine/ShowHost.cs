@@ -34,6 +34,19 @@ public sealed record ShowState(
         new HashSet<Guid>(), new Dictionary<Guid, Guid>(), [], false, []);
 }
 
+/// <summary>One patch-cell destination written by a performance cue.</summary>
+public sealed record RuntimePatchChange(
+    Guid LogicalChannelId,
+    Guid LineId,
+    int LineChannel,
+    double GainDb,
+    bool Muted);
+
+/// <summary>A runtime action that also changes values persisted in the authoring document.</summary>
+public sealed record RuntimeDocumentChange(
+    IReadOnlyList<RuntimePatchChange>? Patch = null,
+    double? AuditionLevelDb = null);
+
 /// <summary>
 /// The running show: a session, the project patch bay, and the document that joins them.
 /// </summary>
@@ -64,7 +77,7 @@ public sealed record ShowState(
 /// one of them should not have to walk the other four.
 /// </para>
 /// </remarks>
-public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
+public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, IAsyncDisposable
 {
     private readonly MediaRegistry _registry;
     private readonly ProjectPatchBay _bay;
@@ -72,6 +85,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
     private readonly ShowSession _session;
     private readonly HashSet<string> _attached = [];
     private readonly ActionSender _actions = new();
+    private readonly OutboundEffects _outbound;
     private readonly TriggerInputs _triggers;
     private readonly ParameterRegistry _parameters;
     private readonly ProjectRecorders _recorders;
@@ -101,6 +115,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
     /// question about the FILE's length, and the document does not carry one.
     /// </remarks>
     private IReadOnlyDictionary<Guid, TimeSpan>? _durations;
+    private ShowCompileContext _compileContext = new();
+    private bool _standbyRestored;
 
     private ShowHost(
         MediaRegistry registry,
@@ -114,6 +130,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
         _screens = screens;
         _session = session;
         _project = project;
+        _outbound = new OutboundEffects(_actions, () => _project, Report, _life.Token);
         _triggers = new TriggerInputs(project);
         _recorders = new ProjectRecorders(
             project, bay, screens.Recorders, StoragePaths.RecordingRoot);
@@ -135,7 +152,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
             db =>
             {
                 _project.Audition.LevelDb = db;
-                DocumentChangedByCue?.Invoke();
+                DocumentChangedByCue?.Invoke(new RuntimeDocumentChange(AuditionLevelDb: db));
             });
     }
 
@@ -186,7 +203,10 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
     /// But they do travel in the file, so the shell has to learn that the project now differs from it —
     /// a document that changed and still reports itself clean is how a night's patch work is lost.
     /// </remarks>
-    public event Action? DocumentChangedByCue;
+    public event Action<RuntimeDocumentChange>? DocumentChangedByCue;
+
+    /// <summary>A detached document for remote/status readers that may run off the UI thread.</summary>
+    public HaCueProject SnapshotProject() => ProjectSnapshot.Copy(_project);
 
     /// <summary>Forgets the runtime half of <see cref="Problems"/> — the Diagnostics reset.</summary>
     public void ClearProblems()
@@ -326,13 +346,27 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
         HaCueProject project,
         IAudioBackend? backend,
         IReadOnlyDictionary<Guid, TimeSpan>? durations = null,
+        bool headless = false) =>
+        await StartAsync(
+            project,
+            backend,
+            new ShowCompileContext { Durations = durations },
+            headless).ConfigureAwait(false);
+
+    /// <summary>Starts a session with resolved paths and probed stream identities for this machine.</summary>
+    public static async Task<ShowHost> StartAsync(
+        HaCueProject project,
+        IAudioBackend? backend,
+        ShowCompileContext context,
         bool headless = false)
     {
         ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(context);
 
+        var runtimeProject = ProjectSnapshot.Copy(project);
         var registry = MediaRegistry.Build(builder => builder.Use(new FFmpegModule()));
-        var bay = ProjectPatchBay.Open(project, backend);
-        var screens = ProjectVideoOutputs.OpenAll(project, headless);
+        var bay = ProjectPatchBay.Open(runtimeProject, backend);
+        var screens = ProjectVideoOutputs.OpenAll(runtimeProject, headless);
 
         var target = new PatchBayShowProgramAudioTarget(
             bay.Bay,
@@ -340,7 +374,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
             defaultMonitorTerminalId: bay.MonitorTerminalId);
 
         var session = new ShowSession(registry, backend, programAudioTarget: target);
-        var host = new ShowHost(registry, bay, screens, session, project);
+        var host = new ShowHost(registry, bay, screens, session, runtimeProject);
 
         // External input drives the show through the SAME verbs the buttons do — a triggered GO is a
         // GO, not a second code path that can drift from the one an operator tested with.
@@ -361,7 +395,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
         // Sounding is tracked HERE rather than queried: the session's sounding bus is keyed by label,
         // and the events that matter carry the cue id. A fire adds, a natural end removes, and a stop
         // clears — which is the whole life of a cue as far as the cue list is concerned.
-        session.ClipNaturallyEnded += id => host.Forget(id);
+        session.ClipNaturallyEnded += id => host.OnClipNaturallyEnded(id);
+        session.ClipApproachingEnd += id => host.OnClipApproachingEnd(id);
         session.VoiceEnded += id => host.Forget(id);
 
         // A preview that runs to its end releases itself, so the host has to stop claiming it is
@@ -378,8 +413,36 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
             }
         };
 
-        await host.ReloadAsync(project, durations).ConfigureAwait(false);
+        await host.ReloadAsync(runtimeProject, context, alreadyDetached: true).ConfigureAwait(false);
         return host;
+    }
+
+    private void OnClipNaturallyEnded(string cueId)
+    {
+        if (!Guid.TryParse(cueId, out var id))
+            return;
+
+        _ = ObserveLifecycleAsync(Executor.OnNaturalEndAsync(id), "natural-end follow");
+    }
+
+    private void OnClipApproachingEnd(string cueId)
+    {
+        if (!Guid.TryParse(cueId, out var id))
+            return;
+
+        _ = ObserveLifecycleAsync(Executor.OnApproachingEndAsync(id), "playlist crossfade");
+    }
+
+    private async Task ObserveLifecycleAsync(Task operation, string action)
+    {
+        try
+        {
+            await operation.ConfigureAwait(false);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            Report($"{action} failed — {failure.Message}");
+        }
     }
 
     /// <summary>
@@ -397,31 +460,58 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
     /// </remarks>
     public async Task ReloadAsync(
         HaCueProject project, IReadOnlyDictionary<Guid, TimeSpan>? durations = null)
+        => await ReloadAsync(
+            project,
+            new ShowCompileContext
+            {
+                ProjectPath = _compileContext.ProjectPath,
+                Durations = durations,
+                Tracks = _compileContext.Tracks,
+            }).ConfigureAwait(false);
+
+    /// <summary>Recompiles using the current machine's resolved media context.</summary>
+    public async Task ReloadAsync(HaCueProject project, ShowCompileContext context)
+        => await ReloadAsync(project, context, alreadyDetached: false).ConfigureAwait(false);
+
+    private async Task ReloadAsync(
+        HaCueProject project, ShowCompileContext context, bool alreadyDetached)
     {
         ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(context);
 
         await _reloading.WaitAsync().ConfigureAwait(false);
 
         try
         {
             var previous = _project;
-            _project = project;
-            _durations = durations ?? _durations;
-            ForgetDetachedScreens(previous, project);
+            var next = alreadyDetached ? project : ProjectSnapshot.Copy(project);
+            _project = next;
+            _compileContext = context;
+            _durations = context.Durations ?? _durations;
+            ForgetDetachedScreens(previous, next);
 
             await _session.LoadDocumentAsync(
-                ShowCompiler.Compile(project, durations),
+                ShowCompiler.Compile(next, context),
                 preserveMatchingCompositions: true,
                 preserveActiveGroups: true).ConfigureAwait(false);
 
-            foreach (var failure in _bay.Apply(project))
+            if (!_standbyRestored)
+            {
+                foreach (var list in next.CueLists.Where(list => list.StandbyCueId is not null))
+                    await _session.SetStandbyCueAsync(
+                        list.StandbyCueId!.Value.ToString(), ShowCompiler.GroupId(list)).ConfigureAwait(false);
+                _standbyRestored = true;
+            }
+
+            foreach (var failure in _bay.Apply(next))
                 Report(failure);
 
             await AttachScreensAsync().ConfigureAwait(false);
-            await RetireDeletedVisualizersAsync(project).ConfigureAwait(false);
-            await _triggers.ReloadAsync(project).ConfigureAwait(false);
-            _recorders.Adopt(project);
-            _actions.Adopt(project);
+            await ApplyIdleFramesAsync(next, context.ProjectPath).ConfigureAwait(false);
+            await RetireDeletedVisualizersAsync(next).ConfigureAwait(false);
+            await _triggers.ReloadAsync(next).ConfigureAwait(false);
+            _recorders.Adopt(next);
+            _actions.Adopt(next);
         }
         finally
         {
@@ -545,6 +635,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IAsyncDisposable
         // file's trailer, and a recording finalized after its audio terminal had gone would be short its
         // last seconds. This is the one part of teardown worth waiting for.
         await _recorders.DisposeAsync().ConfigureAwait(false);
+        await _outbound.DisposeAsync().ConfigureAwait(false);
 
         await _session.DisposeAsync().ConfigureAwait(false);
         _actions.Dispose();

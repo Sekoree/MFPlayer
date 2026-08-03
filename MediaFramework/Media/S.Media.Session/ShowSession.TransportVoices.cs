@@ -437,7 +437,7 @@ public sealed partial class ShowSession
         /// INSIDE the handoff, so a voice can never sit in <see cref="VoiceState.Releasing"/> with no ramp:
         /// that window (a commit-path fault between the handoff and a later ramp start) is what used to
         /// orphan a tail at a frozen level with nothing left able to reach it.</summary>
-        public required Action<TransportVoice, TimeSpan, FadeCurve> StartReleaseRamp { get; init; }
+        public required Action<TransportVoice, TimeSpan, FadeShape> StartReleaseRamp { get; init; }
 
         /// <summary>Drops a voice's level/stop-bus registration. Invoked as the voice retires, BEFORE its
         /// player goes away, so the bus can never write to a dead player.</summary>
@@ -507,7 +507,7 @@ public sealed partial class ShowSession
         /// voice is released here (the historical butt splice, byte for byte); with one it moves to
         /// <see cref="VoiceState.Releasing"/> with its ramp armed in the SAME step, and only the tails beyond
         /// <see cref="MaxReleasingVoices"/> are hard-released.</summary>
-        public async ValueTask ActivateAsync(TransportVoice voice, (TimeSpan Duration, FadeCurve Curve)? crossfade)
+        public async ValueTask ActivateAsync(TransportVoice voice, (TimeSpan Duration, FadeShape Curve)? crossfade)
         {
             var displaced = DetachActiveVoice();
             var handoff = false;

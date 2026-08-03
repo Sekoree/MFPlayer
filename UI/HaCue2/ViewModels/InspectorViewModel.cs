@@ -204,6 +204,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(JumpTargets));
         OnPropertyChanged(nameof(JumpTargetIndex));
         OnPropertyChanged(nameof(JumpConditionIndex));
+        OnPropertyChanged(nameof(JumpCountValue));
+        OnPropertyChanged(nameof(IsCountedJump));
         OnPropertyChanged(nameof(JumpPickAtRandomValue));
         OnPropertyChanged(nameof(JumpFiresOnArrivalValue));
         OnPropertyChanged(nameof(JumpHint));
@@ -972,6 +974,25 @@ public partial class InspectorViewModel : ObservableObject
             Edit("jumpCondition", "cues",
                 () => target.Condition, condition => target.Condition = condition, (JumpCondition)value,
                 $"jump {JumpConditions[value]}");
+            OnPropertyChanged(nameof(IsCountedJump));
+        }
+    }
+
+    public bool IsCountedJump => Jump?.Condition == JumpCondition.CountThenContinue;
+
+    public string JumpCountValue
+    {
+        get => Jump?.JumpCount.ToString(CultureInfo.CurrentCulture) ?? "1";
+        set
+        {
+            if (Jump is not { } jump
+                || !int.TryParse(value, NumberStyles.Integer, CultureInfo.CurrentCulture, out var count))
+                return;
+
+            count = Math.Clamp(count, 1, 10_000);
+            Edit("jumpCount", "cues",
+                () => jump.JumpCount, number => jump.JumpCount = number, count,
+                $"jump {count} times, then continue");
         }
     }
 
@@ -1283,6 +1304,9 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>Where derived files live, so the clip editor can cache a scan. Set by the shell.</summary>
     public string CacheRoot { get; set; } = "";
 
+    /// <summary>The current project filename, read lazily so Save As immediately changes resolution.</summary>
+    public Func<string?> ProjectPath { get; set; } = static () => null;
+
     /// <summary>Whether there is a file to open a clip editor on.</summary>
     public bool CanEditClip => Cue is MediaCueNode { MediaPath.Length: > 0 };
 
@@ -1300,7 +1324,7 @@ public partial class InspectorViewModel : ObservableObject
             : new ClipEditorViewModel(
                 _journal,
                 media,
-                MediaPaths.Resolve(Project, media.MediaPath, null),
+                MediaPaths.Resolve(Project, media.MediaPath, ProjectPath()),
                 Facts?.Duration,
                 CacheRoot);
 
@@ -1532,7 +1556,8 @@ public partial class InspectorViewModel : ObservableObject
             : [.. lanes.Select((lane, index) => new EffectLaneRow(
                 index,
                 lane.Kind.ToString().ToLowerInvariant(),
-                Describe(lane)))];
+                Describe(lane),
+                lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp))];
 
     public bool HasEffectLanes => EffectLanes.Count > 0;
 
@@ -1638,6 +1663,65 @@ public partial class InspectorViewModel : ObservableObject
             _journal,
             new EffectLaneTarget(cue.Id, lane),
             $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane");
+    }
+
+    /// <summary>Configures the endpoint and address for an outbound lane.</summary>
+    public PromptViewModel? ConfigureLane(int index)
+    {
+        if (Lanes is not { } lanes || Cue is not { } cue || index < 0 || index >= lanes.Count)
+            return null;
+
+        var lane = lanes[index];
+        if (lane.Kind is not (EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp))
+            return null;
+
+        var kind = lane.Kind == EffectLaneKind.OscRamp ? EndpointKind.OscOut : EndpointKind.MidiOut;
+        var endpoints = _journal.Project.ActionEndpoints.Where(endpoint => endpoint.Kind == kind).ToList();
+        var options = endpoints.Count == 0 ? ["(no compatible endpoints)"] : endpoints.Select(e => e.Name).ToList();
+        var selected = Math.Max(0, endpoints.FindIndex(endpoint => endpoint.Id == lane.EndpointId));
+
+        return new PromptViewModel(
+            $"Configure {lane.Kind.ToString().ToLowerInvariant()} lane",
+            endpoints.Count == 0
+                ? $"Add a {kind} endpoint in Targets first."
+                : "The lane appends its current value to this address/message.",
+            [
+                new PromptField
+                {
+                    Label = "Endpoint",
+                    Kind = PromptFieldKind.Choice,
+                    Options = options,
+                    SelectedIndex = selected,
+                },
+                new PromptField
+                {
+                    Label = "Address",
+                    Value = lane.Address,
+                    Hint = lane.Kind == EffectLaneKind.OscRamp
+                        ? "/osc/address — the normalized value is its argument"
+                        : "cc <channel> <controller> — the lane supplies value 0–127",
+                },
+            ],
+            prompt =>
+            {
+                if (endpoints.Count == 0)
+                    return;
+
+                var endpointIndex = Math.Clamp(prompt["Endpoint"].SelectedIndex, 0, endpoints.Count - 1);
+                using (_journal.Composite("configure outbound lane", "cues"))
+                {
+                    _journal.Do(new SetValueCommand<Guid?>(
+                        cue.Id, $"lane:{lane.Id}:endpoint", "cues",
+                        () => lane.EndpointId, value => lane.EndpointId = value,
+                        endpoints[endpointIndex].Id, "choose lane endpoint"));
+                    _journal.Do(new SetValueCommand<string>(
+                        cue.Id, $"lane:{lane.Id}:address", "cues",
+                        () => lane.Address, value => lane.Address = value,
+                        prompt["Address"].Value.Trim(), "set lane address"));
+                }
+                Reload();
+            },
+            confirm: "APPLY");
     }
 
     // ── edit plumbing ─────────────────────────────────────────────────────────────────────────
@@ -1786,4 +1870,4 @@ public sealed class TargetToggle(string name, bool selected, Action<bool> apply)
 
 /// <summary>One automation lane, as the Effects pane lists it.</summary>
 /// <param name="Index">Its position in the cue's lane list — what edit and remove act on.</param>
-public sealed record EffectLaneRow(int Index, string Kind, string Detail);
+public sealed record EffectLaneRow(int Index, string Kind, string Detail, bool IsOutbound);

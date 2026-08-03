@@ -62,6 +62,13 @@ public partial class InspectorPane : UserControl
             inspector.RemoveLane(index);
     }
 
+    private void OnConfigureLane(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector
+            && (sender as Control)?.Tag is int index)
+            PromptWindow.Show(this, inspector.ConfigureLane(index), inspector.Reload);
+    }
+
     /// <summary>Opens the shared curve editor over one lane's points.</summary>
     private void OnEditLane(object? sender, RoutedEventArgs e)
     {

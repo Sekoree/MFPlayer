@@ -24,11 +24,14 @@ namespace HaCue2.Session;
 /// </remarks>
 public sealed class AppLogging : IDisposable
 {
-    private AppLogging(ILoggerFactory factory, LogRingProvider ring)
+    private AppLogging(ILoggerFactory factory, LogRingProvider ring, IDisposable? crashReports)
     {
         Factory = factory;
         Ring = ring;
+        _crashReports = crashReports;
     }
+
+    private readonly IDisposable? _crashReports;
 
     /// <summary>The in-memory tail the Diagnostics window reads.</summary>
     public LogRingProvider Ring { get; }
@@ -62,16 +65,18 @@ public sealed class AppLogging : IDisposable
             return already;
 
         var ring = new LogRingProvider(minimumLevel: LogLevel.Debug);
+        var file = new FileLogProvider(settings);
 
         var factory = LoggerFactory.Create(builder =>
         {
             builder.SetMinimumLevel(LogLevel.Debug);
             builder.AddProvider(ring);
+            builder.AddProvider(file);
         });
 
         MediaDiagnostics.LoggerFactory = factory;
 
-        var logging = new AppLogging(factory, ring);
+        var logging = new AppLogging(factory, ring, CrashReports.Install(settings, factory));
         Current = logging;
 
         factory.CreateLogger("HaCue2").LogInformation(
@@ -86,7 +91,7 @@ public sealed class AppLogging : IDisposable
             Current = null;
 
         MediaDiagnostics.LoggerFactory = Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+        _crashReports?.Dispose();
         Factory.Dispose();
-        Ring.Dispose();
     }
 }

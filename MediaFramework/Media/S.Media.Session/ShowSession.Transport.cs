@@ -35,6 +35,11 @@ public sealed partial class ShowSession
     /// failure leaves the current clip untouched (fail loud via the returned status).</summary>
     public Task<CueExecutionStatus> FireCueAsync(
         string cueId, TimeSpan? crossfade, FadeCurve crossfadeCurve = FadeCurve.Linear)
+        => FireCueAsync(cueId, crossfade, new FadeShape(crossfadeCurve));
+
+    /// <summary>Fires a cue with a dual-voice crossfade using a built-in or custom shape.</summary>
+    public Task<CueExecutionStatus> FireCueAsync(
+        string cueId, TimeSpan? crossfade, FadeShape crossfadeCurve)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _fires.FireCueAsync(

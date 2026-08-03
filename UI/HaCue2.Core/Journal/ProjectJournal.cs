@@ -40,6 +40,12 @@ public sealed class ProjectJournal
 
     public HaCueProject Project { get; private set; }
 
+    /// <summary>
+    /// Blocks authoring commands while permitting the cue Note field. Transport/runtime state does
+    /// not enter the journal and is therefore unaffected.
+    /// </summary>
+    public bool IsReadOnly { get; set; }
+
     /// <summary>Raised after any change to the document, the stacks, or the dirty flag.</summary>
     public event Action? Changed;
 
@@ -72,13 +78,14 @@ public sealed class ProjectJournal
     /// file does not have".
     /// </para>
     /// </remarks>
-    public void MarkDirty()
+    public void MarkDirty(bool documentChanged = true)
     {
         if (_dirtyOutsideTheStack)
             return;
 
         _dirtyOutsideTheStack = true;
-        Changed?.Invoke();
+        if (documentChanged)
+            Changed?.Invoke();
     }
 
     /// <summary>
@@ -86,6 +93,12 @@ public sealed class ProjectJournal
     /// </summary>
     public void Do(IProjectCommand command)
     {
+        ArgumentNullException.ThrowIfNull(command);
+        if (IsReadOnly
+            && (command is not ICoalescingCommand edit
+                || !string.Equals(edit.Key.Property, "note", StringComparison.Ordinal)))
+            return;
+
         command.Apply(Project);
 
         if (_scope is { } scope)
@@ -135,6 +148,9 @@ public sealed class ProjectJournal
     /// </remarks>
     public IDisposable Composite(string description, string domain)
     {
+        if (IsReadOnly)
+            return NestedScope.Instance;
+
         // A nested composite JOINS the open one rather than throwing. Callers compose: a group-linked
         // patch nudge inside a drag, a delete-with-cleanup inside a multi-selection edit. The outer
         // scope is what the operator did, so it is what one undo should take back.
@@ -149,6 +165,8 @@ public sealed class ProjectJournal
 
     public bool Undo()
     {
+        if (IsReadOnly)
+            return false;
         if (_scope is not null)
             throw new InvalidOperationException("Cannot undo while a composite edit is open.");
         if (_undo.Count == 0)
@@ -165,6 +183,8 @@ public sealed class ProjectJournal
 
     public bool Redo()
     {
+        if (IsReadOnly)
+            return false;
         if (_scope is not null)
             throw new InvalidOperationException("Cannot redo while a composite edit is open.");
         if (_redo.Count == 0)

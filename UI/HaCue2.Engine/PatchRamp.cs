@@ -1,4 +1,5 @@
 using HaCue2.Core.Model;
+using S.Media.Session;
 
 namespace HaCue2.Engine;
 
@@ -44,11 +45,18 @@ public static class PatchRamp
     /// </remarks>
     public static List<PatchCell> Blend(
         IReadOnlyList<PatchCell> origin, IReadOnlyList<PatchCell> destination, double progress)
+        => Blend(origin, destination, progress, new FadeShape(FadeCurve.Linear));
+
+    public static List<PatchCell> Blend(
+        IReadOnlyList<PatchCell> origin,
+        IReadOnlyList<PatchCell> destination,
+        double progress,
+        FadeShape curve)
     {
         ArgumentNullException.ThrowIfNull(origin);
         ArgumentNullException.ThrowIfNull(destination);
 
-        var eased = Math.Clamp(progress, 0, 1);
+        var eased = curve.Evaluate(Math.Clamp(progress, 0, 1));
 
         return
         [

@@ -36,7 +36,7 @@ internal sealed class CueRunner
     // The one in-flight explicit crossfade fire's window: published just before the graph action runs and
     // consumed by it. A field rather than a parameter because the action closure is built at load time,
     // long before any particular fire knows whether it carries a crossfade.
-    private Tuple<TimeSpan, FadeCurve>? _pendingFireCrossfade;
+    private Tuple<TimeSpan, FadeShape>? _pendingFireCrossfade;
 
     public CueRunner(ICueRunnerHost host) => _host = host;
 
@@ -86,14 +86,14 @@ internal sealed class CueRunner
     public void Commit(CueGraph graph) => _graph = graph;
 
     /// <summary>Consumes the pending crossfade window, if any. Read once per graph action.</summary>
-    private (TimeSpan Duration, FadeCurve Curve)? TakePendingFireCrossfade() =>
+    private (TimeSpan Duration, FadeShape Curve)? TakePendingFireCrossfade() =>
         Interlocked.Exchange(ref _pendingFireCrossfade, null) is { } pending
             ? (pending.Item1, pending.Item2)
             : null;
 
     /// <summary>Runs a cue's fire against the live graph, publishing its crossfade window first.</summary>
     private async Task<CueExecutionStatus> FireOnGraphAsync(
-        string cueId, CancellationToken token, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+        string cueId, CancellationToken token, (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         if (crossfade is { } window)
             Interlocked.Exchange(ref _pendingFireCrossfade, Tuple.Create(window.Duration, window.Curve));
@@ -158,7 +158,7 @@ internal sealed class CueRunner
     /// <paramref name="crossfade"/> is the optional dual-voice window of the crossfade overload; null is the
     /// historical butt-splice fire, untouched.</summary>
     public async Task<CueExecutionStatus> FireCueAsync(
-        string cueId, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+        string cueId, (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         await _fireLock.WaitAsync().ConfigureAwait(false);
         try { return await FireCoreAsync(cueId, crossfade).ConfigureAwait(false); }
@@ -172,7 +172,7 @@ internal sealed class CueRunner
     /// <see cref="CancelActiveFire"/> aborts it; cancellation propagates as
     /// <see cref="OperationCanceledException"/> (callers map it to a non-advancing result).</summary>
     private async Task<CueExecutionStatus> FireCoreAsync(
-        string cueId, (TimeSpan Duration, FadeCurve Curve)? crossfade = null)
+        string cueId, (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         using var cts = new CancellationTokenSource();
         _activeFireCts = cts;
