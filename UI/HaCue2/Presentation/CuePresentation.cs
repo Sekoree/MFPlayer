@@ -114,6 +114,15 @@ public static class CuePresentation
 
         var rows = new List<ActiveCueRow>();
 
+        // Every cue that is inside a group, gathered ONCE. This was a full walk of the show per active
+        // cue — on a 600-cue show with five sounding, three thousand node visits four times a second
+        // to answer a question whose answer does not change between rows.
+        var children = project.AllCues()
+            .OfType<GroupCueNode>()
+            .SelectMany(group => group.Children)
+            .Select(child => child.Id)
+            .ToHashSet();
+
         foreach (var state in states.OrderByDescending(state => state.Elapsed))
         {
             if (project.FindCue(state.CueId) is not { } cue)
@@ -142,8 +151,7 @@ public static class CuePresentation
                     ? Math.Clamp(state.Elapsed / span, 0, 1)
                     : 0,
                 Destination = Destination(project, cue),
-                IsChild = project.AllCues().OfType<GroupCueNode>()
-                    .Any(group => group.Children.Any(child => child.Id == cue.Id)),
+                IsChild = children.Contains(cue.Id),
                 IsFading = state.IsFading,
                 // Ten seconds, not a fraction: what matters to the person driving is how long they
                 // have, and that is the same ten seconds on a 30-second sting and a 6-minute bed.

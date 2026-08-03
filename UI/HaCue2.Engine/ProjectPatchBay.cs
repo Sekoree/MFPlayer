@@ -308,9 +308,17 @@ public sealed class ProjectPatchBay : IDisposable
     {
         var matrix = new float[Math.Max(1, channels.Count), Math.Max(1, lineChannels)];
 
+        // Built ONCE. This was a ToList().FindIndex per cell — a fresh list allocated and scanned for
+        // every cell of every line, on every reload, and a reload happens every 300 ms while somebody
+        // drags a patch cell.
+        var rows = new Dictionary<Guid, int>(channels.Count);
+
+        for (var index = 0; index < channels.Count; index++)
+            rows[channels[index].Id] = index;
+
         foreach (var cell in cells)
         {
-            var row = channels.ToList().FindIndex(channel => channel.Id == cell.LogicalChannelId);
+            var row = rows.GetValueOrDefault(cell.LogicalChannelId, -1);
 
             if (row < 0 || cell.LineChannel < 0 || cell.LineChannel >= lineChannels)
                 continue;

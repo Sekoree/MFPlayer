@@ -119,4 +119,44 @@ public class RemoteApiRouteTests
         foreach (var route in RemoteApiRoutes.All)
             Assert.True(seen.Add($"{route.Method} {route.Pattern}"), route.Pattern);
     }
+
+    /// <summary>
+    /// A server with no token configured refuses everything.
+    /// </summary>
+    /// <remarks>
+    /// The check used to be skipped when the configured token was empty, which meant a server built
+    /// without one served every route unauthenticated. `LanAllowed` binds a wildcard prefix, so that
+    /// combination put the transport on the network for anybody. A credential check that disappears
+    /// when the credential is absent is the wrong way to fail — 503 says "not configured", which is
+    /// what is actually wrong, rather than 401's "you got it wrong".
+    /// </remarks>
+    [Fact]
+    public async Task WithNoTokenConfigured_EveryCallIsRefused()
+    {
+        var server = new RemoteApiServer(null!, () => new TestProject().Project, token: "");
+
+        foreach (var supplied in new[] { null, "", "guess", "anything" })
+        {
+            var result = await server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", supplied);
+            Assert.Equal(503, result.Status);
+        }
+    }
+
+    [Fact]
+    public async Task AWrongTokenIsRefusedAndTheRightOneIsNot()
+    {
+        var server = new RemoteApiServer(null!, () => new TestProject().Project, token: "correct-horse");
+
+        Assert.Equal(401, (await server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", "wrong")).Status);
+        Assert.Equal(401, (await server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", null)).Status);
+
+        // A shorter guess must not pass either — FixedTimeEquals rejects unequal lengths outright.
+        Assert.Equal(401, (await server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", "correct")).Status);
+
+        // The right token gets PAST the gate — proven by reaching dispatch, which this server cannot
+        // survive because it was built with no host. What the route would answer is another test's
+        // business; that the gate opened is this one's.
+        await Assert.ThrowsAsync<NullReferenceException>(
+            () => server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", "correct-horse"));
+    }
 }

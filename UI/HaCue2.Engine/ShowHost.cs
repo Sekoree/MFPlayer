@@ -73,6 +73,17 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
     private readonly Dictionary<Guid, Sounding> _sounding = [];
     private readonly List<string> _runtimeProblems = [];
     private readonly Lock _gate = new();
+
+    /// <summary>
+    /// Serializes reloads.
+    /// </summary>
+    /// <remarks>
+    /// The app debounces edits by 300 ms, which is NOT a guarantee: a reload that attaches screens or
+    /// loads a large document can outlast the interval, and a continuous edit stream — dragging a
+    /// matrix cell, dragging a placement — keeps re-arming the timer behind it. Two overlapping
+    /// reloads would interleave <c>_project</c>, the attached-output set and the trigger reload.
+    /// </remarks>
+    private readonly SemaphoreSlim _reloading = new(1, 1);
     private readonly CancellationTokenSource _life = new();
     private HaCueProject _project;
     private bool _paused;
@@ -399,21 +410,30 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(project);
 
-        var previous = _project;
-        _project = project;
-        ForgetDetachedScreens(previous, project);
+        await _reloading.WaitAsync().ConfigureAwait(false);
 
-        await _session.LoadDocumentAsync(
-            ShowCompiler.Compile(project, durations),
-            preserveMatchingCompositions: true,
-            preserveActiveGroups: true).ConfigureAwait(false);
+        try
+        {
+            var previous = _project;
+            _project = project;
+            ForgetDetachedScreens(previous, project);
 
-        foreach (var failure in _bay.Apply(project))
-            Report(failure);
+            await _session.LoadDocumentAsync(
+                ShowCompiler.Compile(project, durations),
+                preserveMatchingCompositions: true,
+                preserveActiveGroups: true).ConfigureAwait(false);
 
-        await AttachScreensAsync().ConfigureAwait(false);
-        await _triggers.ReloadAsync(project).ConfigureAwait(false);
-        _recorders.Adopt(project);
+            foreach (var failure in _bay.Apply(project))
+                Report(failure);
+
+            await AttachScreensAsync().ConfigureAwait(false);
+            await _triggers.ReloadAsync(project).ConfigureAwait(false);
+            _recorders.Adopt(project);
+        }
+        finally
+        {
+            _reloading.Release();
+        }
     }
 
     /// <summary>
@@ -981,5 +1001,6 @@ public sealed class ShowHost : ICueExecutionHost, IAsyncDisposable
         _screens.Dispose();
         _registry.Dispose();
         _life.Dispose();
+        _reloading.Dispose();
     }
 }

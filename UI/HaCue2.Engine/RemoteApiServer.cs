@@ -163,9 +163,17 @@ public sealed class RemoteApiServer : IAsyncDisposable
     /// </remarks>
     public async Task<RemoteApiResult> HandleAsync(string method, string path, string? token)
     {
+        // A missing configured token REFUSES every call rather than waving them through. The app
+        // always supplies one (AppSettings.EnsureRemoteToken mints it), so this can only be reached by
+        // a hand-edited settings file or a future call site — and either of those combined with
+        // LanAllowed, which binds a wildcard prefix, would leave anyone on the network able to fire
+        // cues. A credential check that disappears when the credential is absent is the wrong way to
+        // fail.
+        if (_token.Length == 0)
+            return Error(503, "the remote API has no token configured");
+
         // Compared in fixed time so the token cannot be probed a character at a time.
-        if (_token.Length > 0
-            && !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
                 Encoding.UTF8.GetBytes(token ?? ""), Encoding.UTF8.GetBytes(_token)))
             return Error(401, "a valid X-HaCue2-Token header is required");
 

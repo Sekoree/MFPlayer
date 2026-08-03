@@ -19,12 +19,21 @@ namespace HaCue2.Session;
 /// which are invented.
 /// </para>
 /// <para>
-/// <b>Four members are now REAL:</b> <see cref="Sounding"/> comes from the live session, and <see cref="MediaDurations"/> and <see cref="Broken"/> are filled
-/// by <c>MediaFactsCache</c> from an actual probe, and <see cref="AbsentLines"/> by real device
-/// enumeration. Everything else here is still invented, and each
-/// one stops being so as Phase 5 lands. They are settable rather than init-only for exactly that
-/// reason — an answer that arrives after the views were built has to reach the instance they already
-/// hold, and replacing the object would leave every view-model looking at the old one.
+/// <b>MOST of this is now real.</b> The live session fills <see cref="Sounding"/>,
+/// <see cref="ActiveCues"/>, <see cref="IsPaused"/>, <see cref="Levels"/>, <see cref="Meters"/>,
+/// <see cref="BayRows"/>, <see cref="BaySummary"/>, <see cref="BayClock"/>,
+/// <see cref="Recorders"/>, <see cref="TriggerMonitor"/> and <see cref="LastSignal"/>;
+/// <c>MediaFactsCache</c> fills <see cref="MediaDurations"/> and <see cref="Broken"/> from a probe,
+/// and device enumeration fills <see cref="AbsentLines"/>.
+/// <para>
+/// <b>Still invented, and the list to shorten:</b> <see cref="AbsentVideoOutputs"/>,
+/// <see cref="LineChips"/>, <see cref="ChaseReadout"/>, <see cref="CompositionStats"/>,
+/// <see cref="Log"/> and <see cref="LastSent"/>. Keep this paragraph current — it is the one place a
+/// reader can tell which values on screen are facts.
+/// </para>
+/// They are settable rather than init-only because an answer that arrives after the views were built
+/// has to reach the instance they already hold; replacing the object would leave every view-model
+/// looking at the old one.
 /// </para>
 /// </remarks>
 public sealed class ShowRuntime
