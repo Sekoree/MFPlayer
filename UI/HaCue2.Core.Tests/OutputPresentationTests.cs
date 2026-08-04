@@ -299,4 +299,30 @@ public class OutputPresentationTests
         // frozen readout and a lying one.
         Assert.Equal("MTC 01:12:44:07 · held", held);
     }
+
+    /// <summary>
+    /// The curve table is readable without a renderer — which is what makes every view-model that
+    /// offers a fade picker constructible without one.
+    /// </summary>
+    /// <remarks>
+    /// This assembly has no Avalonia platform at all, which is exactly the environment that caught the
+    /// original defect: <c>CurveOption</c> parsed its thumbnail geometry in its CONSTRUCTOR, so
+    /// <see cref="CurveLibrary"/>'s static initializer needed <c>IPlatformRenderInterface</c>. When it
+    /// ran first from a test that had no session, .NET cached the resulting
+    /// <see cref="TypeInitializationException"/> for the whole process and every later view-model test
+    /// in that assembly failed with it — 227 of them on one CI leg, none on the other, decided purely by
+    /// which test happened to run first. Reading the table here would throw again the moment the parse
+    /// moves back into the constructor.
+    /// </remarks>
+    [Fact]
+    public void TheCurveTableIsReadableWithoutARenderer()
+    {
+        var curves = CurveLibrary.Curves;
+
+        // The order is load-bearing (the index IS the FadeCurve enum value), so pin the list, not a count.
+        Assert.Equal(
+            ["linear", "eq-power", "expo", "s-curve", "custom ✎"],
+            curves.Select(curve => curve.Name));
+        Assert.All(curves, curve => Assert.StartsWith("M", curve.PathData, StringComparison.Ordinal));
+    }
 }

@@ -35,12 +35,19 @@ public sealed class ImplementationRegressionTests
             },
         });
 
+        // Path.GetFullPath, because that is what the compiler resolves media through — and on Windows a
+        // path rooted at the separator alone is relative to the CURRENT DRIVE, so "\shows\media\film.mp4"
+        // comes back as "D:\shows\media\film.mp4". Comparing against the unrooted spelling failed there
+        // while passing on Linux, where the two are the same string.
         var clip = Assert.Single(document.Clips);
-        Assert.Equal(Path.Combine(Path.DirectorySeparatorChar.ToString(), "shows", "media", "film.mp4"), clip.MediaPath);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(Path.DirectorySeparatorChar.ToString(), "shows", "media", "film.mp4")),
+            clip.MediaPath);
         Assert.Equal(4, clip.AudioStreamIndex);
         Assert.Equal(-1, clip.VideoStreamIndex);
         Assert.Equal(
-            Path.Combine(Path.DirectorySeparatorChar.ToString(), "shows", "media", "captions", "show.srt"),
+            Path.GetFullPath(Path.Combine(
+                Path.DirectorySeparatorChar.ToString(), "shows", "media", "captions", "show.srt")),
             Assert.Single(clip.GetSubtitleSelections()).Path);
         Assert.Equal(7, Assert.Single(clip.GetSubtitleSelections()).StreamIndex);
     }

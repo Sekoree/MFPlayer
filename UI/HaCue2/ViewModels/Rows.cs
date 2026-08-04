@@ -557,13 +557,26 @@ public sealed record TimelineClip
 
 /// <summary>A fade curve option in the picker (screen 04), including the drawn thumbnail.</summary>
 /// <remarks>
-/// The geometry is parsed once here rather than bound as a string: Avalonia will not convert a bound
-/// <see cref="string"/> to a <see cref="Media.Geometry"/> the way it converts a literal XAML attribute,
-/// so a string-typed property would silently render nothing.
+/// <para>
+/// The thumbnail is a <see cref="Media.Geometry"/> rather than the path string it is written as:
+/// Avalonia will not convert a BOUND <see cref="string"/> to a geometry the way it converts a literal
+/// XAML attribute, so a string-typed property would silently render nothing.
+/// </para>
+/// <para>
+/// <b>Parsed on access, not in the constructor.</b> <see cref="Media.Geometry.Parse"/> resolves
+/// <c>IPlatformRenderInterface</c>, so a constructor-parsed geometry made this record — and therefore
+/// <see cref="Presentation.CurveLibrary"/>, and therefore every view-model that offers a curve picker —
+/// unconstructible without a running renderer. That is the wrong dependency for a row of data, and it
+/// broke as badly as it sounds: <c>CurveLibrary</c>'s static initializer threw the first time a
+/// view-model was built outside Avalonia's headless session scope, .NET cached the
+/// <see cref="TypeInitializationException"/> for the life of the process, and every later test in that
+/// assembly failed with it — 227 of them, on whichever runs happened to order a plain fact first.
+/// Re-parsing per access costs nothing at five curves read once per bind.
+/// </para>
 /// </remarks>
 public sealed record CurveOption(string Name, string PathData)
 {
-    public Geometry Shape { get; } = Geometry.Parse(PathData);
+    public Geometry Shape => Geometry.Parse(PathData);
 }
 
 /// <summary>A draggable point on the custom-curve editor, in fractions of the canvas.</summary>

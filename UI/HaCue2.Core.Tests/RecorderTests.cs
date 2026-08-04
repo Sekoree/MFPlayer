@@ -70,7 +70,7 @@ public sealed class RecorderTests : IDisposable
         return (recorders, project, output, sink);
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task ArmingWritesAFileAndDisarmingFinishesIt()
     {
         var (recorders, _, output, sink) = Show("act-{n}.mkv");
@@ -124,7 +124,7 @@ public sealed class RecorderTests : IDisposable
         }
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task AProducerFasterThanTheEncoderDropsFramesRatherThanStalling()
     {
         var (recorders, _, output, sink) = Show("burst.mkv");
@@ -153,7 +153,7 @@ public sealed class RecorderTests : IDisposable
         File.Copy(path, Path.Combine(destination, Path.GetFileName(path)), overwrite: true);
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task FramesArrivingBeforeAnyArmAreDropped()
     {
         var (recorders, _, output, sink) = Show("idle.mkv");
@@ -172,7 +172,7 @@ public sealed class RecorderTests : IDisposable
         await recorders.DisposeAsync();
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task ArmingTwiceKeepsTheFirstRecording()
     {
         var (recorders, _, output, _) = Show("once-{n}.mkv");
@@ -188,7 +188,7 @@ public sealed class RecorderTests : IDisposable
         await recorders.DisposeAsync();
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task EachArmTakesTheNextFreeName()
     {
         var (recorders, _, output, _) = Show("take-{n}.mkv");
@@ -210,7 +210,7 @@ public sealed class RecorderTests : IDisposable
         await recorders.DisposeAsync();
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task APatternWithNoCounterStillNeverOverwrites()
     {
         var (recorders, _, output, _) = Show("fixed.mkv");
@@ -227,7 +227,7 @@ public sealed class RecorderTests : IDisposable
         await recorders.DisposeAsync();
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task DisposingFinishesAnArmedRecording()
     {
         var (recorders, _, output, sink) = Show("closing.mkv");
@@ -247,7 +247,7 @@ public sealed class RecorderTests : IDisposable
         Assert.True(new FileInfo(path).Length > 1_000, $"only {new FileInfo(path).Length} bytes");
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task AContinuousRecordingWritesThroughIdleTime()
     {
         var (recorders, _, output, sink) = Show("archive.mkv", continuous: true);
@@ -319,7 +319,7 @@ public sealed class RecorderTests : IDisposable
         Assert.NotNull(row.Problem);
     }
 
-    [Fact]
+    [RecordingFact]
     public async Task ASuccessfulArmClearsAnEarlierProblem()
     {
         var (recorders, project, output, _) = Show("show.flac");

@@ -28,7 +28,7 @@ public class NdiOutputTests
         return (new HaCueProject { Compositions = [composition], VideoOutputs = [output] }, output);
     }
 
-    [Fact]
+    [NdiRuntimeFact]
     public void AnNdiOutputOpensEvenHeadless()
     {
         var (project, output) = Show("HACUE2-TEST-PROG");
@@ -41,7 +41,7 @@ public class NdiOutputTests
         Assert.Contains(outputs.Open, open => open.Id == output.Id);
     }
 
-    [Fact]
+    [NdiRuntimeFact]
     public void ItSendsTheCompositionItWasPointedAt()
     {
         var (project, output) = Show("HACUE2-TEST-SHOWS");
@@ -65,7 +65,7 @@ public class NdiOutputTests
         Assert.Single(outputs.Failures);
     }
 
-    [Fact]
+    [NdiRuntimeFact]
     public void TheSourceNameFallsBackToTheOutputsName()
     {
         // A hint is optional; an NDI source without a name is not a thing that can exist, so the

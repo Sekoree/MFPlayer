@@ -18,7 +18,7 @@ public sealed class MediaEditTests
         var result = MediaEdits.Relink(journal, "/new/root", RelinkStrategy.ByFileName, store: store);
 
         Assert.True(result.IsComplete);
-        Assert.Equal("/new/root/audio/effects/storm-bed.flac", fixture.Track.MediaPath);
+        Assert.Equal(Local("/new/root/audio/effects/storm-bed.flac"), fixture.Track.MediaPath);
     }
 
     [Fact]
@@ -31,7 +31,7 @@ public sealed class MediaEditTests
         var result = MediaEdits.Relink(journal, "/new/root", RelinkStrategy.BySubPath, store: store);
 
         Assert.True(result.IsComplete);
-        Assert.Equal("/new/root/sfx/storm-bed.flac", fixture.Track.MediaPath);
+        Assert.Equal(Local("/new/root/sfx/storm-bed.flac"), fixture.Track.MediaPath);
     }
 
     /// <summary>
@@ -103,8 +103,8 @@ public sealed class MediaEditTests
         Assert.True(result.IsComplete);
         Assert.Equal("track.flac", fixture.Track.MediaPath);
         Assert.Equal("logo.png", fixture.Project.Compositions[0].IdleImagePath);
-        Assert.Contains("/tour/media/track.flac", store.Copied);
-        Assert.Contains("/tour/media/logo.png", store.Copied);
+        Assert.Contains(Local("/tour/media/track.flac"), store.Copied);
+        Assert.Contains(Local("/tour/media/logo.png"), store.Copied);
     }
 
     /// <summary>
@@ -184,28 +184,59 @@ public sealed class MediaEditTests
         return fixture;
     }
 
+    /// <summary>
+    /// The same path, spelled the way this machine's filesystem spells it.
+    /// </summary>
+    /// <remarks>
+    /// The cases here are written with POSIX paths because they read as paths that way, but the code
+    /// under test hands the store whatever <see cref="Path.GetFullPath"/> and <see cref="Path.Combine"/>
+    /// produced — which on Windows is <c>D:\new\root\sfx\storm-bed.flac</c>, drive and backslashes and
+    /// all. A real filesystem does not care which of the two a caller wrote; the fake did, and the two
+    /// relink/consolidate cases that build a destination path rather than echoing a stored one failed on
+    /// the Windows leg for that reason alone. Normalising both what the store HOLDS and what it is ASKED
+    /// makes the fake agree with a filesystem, and is a no-op on Linux.
+    /// </remarks>
+    private static string Local(string path) => Path.GetFullPath(path);
+
     private sealed class FakeStore : IMediaStore, IEnumerable<string>
     {
         private readonly HashSet<string> _files = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _refused = new(StringComparer.Ordinal);
 
         public HashSet<string> RefuseToCopy { get; } = new(StringComparer.Ordinal);
         public List<string> Copied { get; } = [];
 
-        public void Add(string path) => _files.Add(path);
+        public void Add(string path) => _files.Add(Local(path));
 
-        public bool Exists(string path) => _files.Contains(path);
+        public bool Exists(string path) => _files.Contains(Local(path));
 
         public IEnumerable<string> Enumerate(string directory) =>
-            _files.Where(file => file.StartsWith(directory, StringComparison.Ordinal));
+            _files.Where(file => file.StartsWith(Local(directory), StringComparison.Ordinal));
 
         public bool Copy(string sourcePath, string destinationPath)
         {
-            if (RefuseToCopy.Contains(sourcePath))
+            if (Refused(sourcePath))
                 return false;
 
-            Copied.Add(destinationPath);
-            _files.Add(destinationPath);
+            Copied.Add(Local(destinationPath));
+            _files.Add(Local(destinationPath));
             return true;
+        }
+
+        /// <summary>
+        /// <see cref="RefuseToCopy"/> is filled by the test with a POSIX path and read here with
+        /// whatever the code under test resolved it to, so it is normalised on the way in as well.
+        /// </summary>
+        private bool Refused(string sourcePath)
+        {
+            if (_refused.Count != RefuseToCopy.Count)
+            {
+                _refused.Clear();
+                foreach (var path in RefuseToCopy)
+                    _refused.Add(Local(path));
+            }
+
+            return _refused.Contains(Local(sourcePath));
         }
 
         public IEnumerator<string> GetEnumerator() => _files.GetEnumerator();

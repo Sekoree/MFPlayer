@@ -23,6 +23,31 @@
     <ItemGroup>
         <PackageReference Include="Avalonia.Desktop"/>
         <PackageReference Include="Avalonia.Fonts.Inter"/>
+        <!-- SDL3's platform native runtimes are app-owned deployment assets: the framework libraries
+             carry only the SDL3-CS binding so a packaged library never drags a native runtime in
+             transitively. This head asks for an SDL3 GL context below, so it is the level that has to
+             ship one — without these a publish contained no libSDL3 at all and the offscreen context
+             silently fell back on every machine that had no system SDL3. Same pair as HaPlay.Desktop. -->
+        <PackageReference Include="SDL3-CS.Linux"/>
+        <PackageReference Include="SDL3-CS.Windows" GeneratePathProperty="true"/>
+    </ItemGroup>
+
+    <!-- FFmpeg 8.x native runtime (avcodec-62/avformat-62/…) as a NuGet native asset. win-x64 only:
+         Linux takes FFmpeg from the system (or the CI-staged build). Kept at the final app level so no
+         framework package carries a GPL native runtime. Without it a Windows publish had no decoder at
+         all — every media cue would fail to open on the one platform that cannot fall back on a
+         package manager. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+        <PackageReference Include="FFmpeg.GPL"/>
+    </ItemGroup>
+
+    <!-- RID-less Windows build (IDE Debug/run): the native package only places SDL3.dll through
+         runtimes/<rid>/native RID resolution, so copy it next to the app for the no-RID case. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(PkgSDL3-CS_Windows)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>SDL3.dll</Link>
+        </None>
     </ItemGroup>
 
     <ItemGroup>
